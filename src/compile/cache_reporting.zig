@@ -84,33 +84,14 @@ pub fn getUnitString(unit: DataSizeUnit) []const u8 {
 
 /// Create a cache statistics report using the Roc reporting framework.
 pub fn createCacheStatsReport(allocator: Allocator, stats: CacheStats) Allocator.Error!Report {
-    var report = Report.init(allocator, "CACHE STATISTICS", .info);
-
     const total_ops = stats.getTotalOps();
     if (total_ops == 0) {
-        try report.document.addReflowingText("INFO: No cache operations performed");
-        return report;
+        return try Report.init(allocator, "Cache Statistics", "No cache operations performed.", .info);
     }
 
-    // Total operations
-    const total_ops_str = try std.fmt.allocPrint(allocator, "{}", .{total_ops});
-    defer allocator.free(total_ops_str);
-    const hits_str = try std.fmt.allocPrint(allocator, "{}", .{stats.hits});
-    defer allocator.free(hits_str);
-    const misses_str = try std.fmt.allocPrint(allocator, "{}", .{stats.misses});
-    defer allocator.free(misses_str);
-    const owned_total = try report.addOwnedString(total_ops_str);
-    const owned_hits = try report.addOwnedString(hits_str);
-    const owned_misses = try report.addOwnedString(misses_str);
-
-    try report.document.addText("INFO: Total operations: ");
-    try report.document.addAnnotated(owned_total, .emphasized);
-    try report.document.addText(" (");
-    try report.document.addAnnotated(owned_hits, .emphasized);
-    try report.document.addText(" hits, ");
-    try report.document.addAnnotated(owned_misses, .emphasized);
-    try report.document.addText(" misses)");
-    try report.document.addLineBreak();
+    const headline = try std.fmt.allocPrint(allocator, "Total operations: {} ({} hits, {} misses).", .{ total_ops, stats.hits, stats.misses });
+    defer allocator.free(headline);
+    var report = try Report.init(allocator, "Cache Statistics", headline, .info);
 
     // Hit rate
     const hit_rate_str = try std.fmt.allocPrint(allocator, "{d:.1}%", .{stats.getHitRate()});

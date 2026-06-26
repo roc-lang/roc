@@ -116,6 +116,10 @@ pub const VTable = struct {
 
     /// Return `true` if stdout is connected to a TTY.
     isTty: *const fn (?*anyopaque, std.Io) bool,
+
+    /// Return the width (in columns) of the stderr terminal, or `null` if it
+    /// is not a terminal or the width cannot be determined.
+    terminalWidth: *const fn (?*anyopaque, std.Io) ?u16,
 };
 
 // --- Filesystem wrapper methods ---
@@ -251,6 +255,11 @@ pub fn readStdin(self: Self, buf: []u8) StdioError!usize {
 /// Return true if stdout is connected to a TTY.
 pub fn isTty(self: Self) bool {
     return self.vtable.isTty(self.ctx, self.std_io);
+}
+
+/// Return the stderr terminal width in columns, or null if unavailable.
+pub fn terminalWidth(self: Self) ?u16 {
+    return self.vtable.terminalWidth(self.ctx, self.std_io);
 }
 
 // --- Error types ---
@@ -438,6 +447,7 @@ const os_vtable = VTable{
     .writeStderr = &osWriteStderr,
     .readStdin = &osReadStdin,
     .isTty = &osIsTty,
+    .terminalWidth = &osTerminalWidth,
 };
 
 const testing_vtable = VTable{
@@ -465,6 +475,7 @@ const testing_vtable = VTable{
     .writeStderr = &testingWriteStderr,
     .readStdin = &testingReadStdin,
     .isTty = &testingIsTty,
+    .terminalWidth = &testingTerminalWidth,
 };
 
 const freestanding_vtable = VTable{
@@ -492,6 +503,7 @@ const freestanding_vtable = VTable{
     .writeStderr = &freestandingWriteStderr,
     .readStdin = &freestandingReadStdin,
     .isTty = &freestandingIsTty,
+    .terminalWidth = &freestandingTerminalWidth,
 };
 
 /// Get the default implementation for the current target.
@@ -516,7 +528,7 @@ pub fn testing(gpa: Allocator, arena: Allocator) Self {
 
 /// Write data to a file path relative to the current working directory.
 /// Exposed so backend/eval code can write files without a full CoreCtx instance.
-pub fn writeFileCwd(io: std.Io, sub_path: []const u8, data: []const u8) anyerror!void {
+pub fn writeFileCwd(io: std.Io, sub_path: []const u8, data: []const u8) std.Io.Dir.WriteFileError!void {
     return std.Io.Dir.cwd().writeFile(io, .{ .sub_path = sub_path, .data = data });
 }
 
@@ -686,6 +698,34 @@ fn osIsTty(_: ?*anyopaque, std_io: std.Io) bool {
     return std.Io.File.stdout().isTty(std_io) catch false;
 }
 
+fn osTerminalWidth(_: ?*anyopaque, std_io: std.Io) ?u16 {
+    return switch (builtin.os.tag) {
+        .windows => winTerminalWidth(std_io),
+        .wasi, .freestanding => null,
+        else => posixTerminalWidth(),
+    };
+}
+
+/// POSIX (macOS, Linux, BSD): query stderr's window size via TIOCGWINSZ.
+fn posixTerminalWidth() ?u16 {
+    var ws: std.posix.winsize = undefined;
+    const rc = std.c.ioctl(std.Io.File.stderr().handle, std.posix.T.IOCGWINSZ, @intFromPtr(&ws));
+    if (rc != 0 or ws.col == 0) return null;
+    return ws.col;
+}
+
+/// Windows: query the console screen buffer for the visible window width.
+fn winTerminalWidth(std_io: std.Io) ?u16 {
+    var info = std.os.windows.CONSOLE.USER_IO.GET_SCREEN_BUFFER_INFO;
+    switch (info.operate(std_io, std.Io.File.stderr()) catch return null) {
+        .SUCCESS => {
+            const cols = info.Data.dwWindowSize.X;
+            return if (cols > 0) @intCast(cols) else null;
+        },
+        else => return null,
+    }
+}
+
 fn osDeleteFile(_: ?*anyopaque, std_io: std.Io, path: []const u8) DeleteError!void {
     std.Io.Dir.cwd().deleteFile(std_io, path) catch |err| return switch (err) {
         error.FileNotFound => error.FileNotFound,
@@ -809,6 +849,10 @@ fn testingIsTty(_: ?*anyopaque, _: std.Io) bool {
     return false;
 }
 
+fn testingTerminalWidth(_: ?*anyopaque, _: std.Io) ?u16 {
+    return null;
+}
+
 fn testingDeleteFile(_: ?*anyopaque, _: std.Io, _: []const u8) DeleteError!void {
     @panic("deleteFile should not be called in this test");
 }
@@ -930,6 +974,10 @@ fn freestandingReadStdin(_: ?*anyopaque, _: std.Io, _: []u8) StdioError!usize {
 
 fn freestandingIsTty(_: ?*anyopaque, _: std.Io) bool {
     return false;
+}
+
+fn freestandingTerminalWidth(_: ?*anyopaque, _: std.Io) ?u16 {
+    return null;
 }
 
 fn freestandingDeleteFile(_: ?*anyopaque, _: std.Io, _: []const u8) DeleteError!void {

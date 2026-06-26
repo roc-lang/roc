@@ -80,6 +80,52 @@ var snapshot_temp_counter = std.atomic.Value(usize).init(0);
 
 const rand = prng.random();
 
+const SnapshotError =
+    Allocator.Error ||
+    Error ||
+    fmt.FormatAstError ||
+    eval_mod.BuiltinModules.InitError ||
+    eval_mod.test_helpers.TestHelperError ||
+    compile.build.InitError ||
+    compile.build.BuildError ||
+    compile.build.CompileDiscoveredError ||
+    compile.package.TypeCheckModuleError ||
+    docs_mod.render_html.RenderError ||
+    std.Thread.SpawnError ||
+    std.process.Args.ToSliceError ||
+    std.process.CurrentPathError ||
+    std.Io.Dir.AccessError ||
+    std.Io.Dir.CreateDirPathError ||
+    std.Io.Dir.DeleteFileError ||
+    std.Io.Dir.Iterator.Error ||
+    std.Io.Dir.OpenError ||
+    std.Io.Dir.ReadFileAllocError ||
+    std.Io.Dir.StatFileError ||
+    std.Io.Dir.WriteFileError ||
+    std.Io.File.OpenError ||
+    std.Io.File.ReadPositionalError ||
+    std.Io.File.Reader.Error ||
+    std.Io.File.StatError ||
+    std.Io.File.Writer.Error ||
+    error{
+        BuiltinModuleLeakedInSnapshots,
+        BufferTooSmall,
+        CacheRoundTripValidationFailed,
+        CacheVersionHashMismatch,
+        ErrFinalizingHTMLWriter,
+        InvalidMagicNumber,
+        MissingBuiltinModule,
+        MonoFormattingFailed,
+        MonoValidationFailed,
+        NoSpaceLeft,
+        NotDir,
+        ParseFailed,
+        SnapshotValidationFailed,
+        TempDirUnavailable,
+        TypeCheckError,
+        WriteFailed,
+    };
+
 /// Logs a message if verbose logging is enabled.
 fn log(comptime fmt_str: []const u8, args: anytype) void {
     if (verbose_log) {
@@ -88,7 +134,7 @@ fn log(comptime fmt_str: []const u8, args: anytype) void {
 }
 
 /// Returns an absolute, normalized path without calling libc `realpath`.
-fn absolutePathAlloc(io: std.Io, sub_path: []const u8, allocator: Allocator) anyerror![]u8 {
+fn absolutePathAlloc(io: std.Io, sub_path: []const u8, allocator: Allocator) SnapshotError![]u8 {
     if (std.fs.path.isAbsolute(sub_path)) {
         return std.fs.path.resolve(allocator, &.{sub_path});
     }
@@ -98,7 +144,7 @@ fn absolutePathAlloc(io: std.Io, sub_path: []const u8, allocator: Allocator) any
     return std.fs.path.resolve(allocator, &.{ cwd, sub_path });
 }
 
-fn currentPathAllocSafe(io: std.Io, allocator: Allocator) anyerror![]u8 {
+fn currentPathAllocSafe(io: std.Io, allocator: Allocator) SnapshotError![]u8 {
     var buffer: [std.fs.max_path_bytes]u8 = @splat(0);
     const n = try std.process.currentPath(io, &buffer);
     return allocator.dupe(u8, buffer[0..n]);
@@ -125,7 +171,7 @@ fn getTempRoot(allocator: Allocator) (Allocator.Error || error{TempDirUnavailabl
     return error.TempDirUnavailable;
 }
 
-fn makeSnapshotTempDir(allocator: Allocator, prefix: []const u8, output_path: []const u8) anyerror![]u8 {
+fn makeSnapshotTempDir(allocator: Allocator, prefix: []const u8, output_path: []const u8) SnapshotError![]u8 {
     const temp_root = try getTempRoot(allocator);
     defer allocator.free(temp_root);
 
@@ -176,254 +222,6 @@ const ProblemEntry = struct {
         });
     }
 };
-
-/// Parse a PROBLEMS entry to extract problem type and location
-fn parseProblemEntry(allocator: std.mem.Allocator, content: []const u8, start_idx: usize) Allocator.Error!?struct { entry: ?ProblemEntry, next_idx: usize } {
-    var idx = start_idx;
-
-    // Skip whitespace and empty lines
-    while (idx < content.len and (content[idx] == ' ' or content[idx] == '\t' or content[idx] == '\n' or content[idx] == '\r')) {
-        idx += 1;
-    }
-
-    if (idx >= content.len) return null;
-
-    // Check if we're at the start of a problem header
-    if (idx + 2 > content.len or !std.mem.eql(u8, content[idx .. idx + 2], "**")) {
-        return null;
-    }
-
-    // Find the end of the problem type
-    const type_start = idx + 2;
-    const type_end_search = std.mem.findPos(u8, content, type_start, "**");
-    if (type_end_search == null) return null;
-    const type_end = type_end_search.?;
-
-    // Check if this is a problem header (all uppercase, no lowercase letters)
-    const potential_type = content[type_start..type_end];
-    var has_lowercase = false;
-    for (potential_type) |c| {
-        if (c >= 'a' and c <= 'z') {
-            has_lowercase = true;
-            break;
-        }
-    }
-
-    // If it has lowercase letters, this is not a problem header
-    if (has_lowercase) {
-        return null;
-    }
-
-    var problem_type = std.mem.trim(u8, potential_type, " \t\r\n");
-
-    // Handle compound error types like "NOT IMPLEMENTED - UNDEFINED VARIABLE"
-    // We only want the last part after the last " - "
-    if (std.mem.findLast(u8, problem_type, " - ")) |dash_idx| {
-        problem_type = std.mem.trim(u8, problem_type[dash_idx + 3 ..], " \t\r\n");
-    }
-
-    // Skip past the closing ** of the problem type
-    var current_idx = type_end + 2;
-
-    // Skip the rest of the line after the problem type
-    while (current_idx < content.len and content[current_idx] != '\n') {
-        current_idx += 1;
-    }
-    if (current_idx < content.len) current_idx += 1; // Skip the newline
-
-    // Now look for optional location on the next few lines
-    // We'll look until we hit another problem header or end of content
-    var location_file: []const u8 = "";
-    var location_start_line: u32 = 0;
-    var location_start_col: u32 = 0;
-    var location_end_line: u32 = 0;
-    var location_end_col: u32 = 0;
-    var found_location = false;
-
-    while (current_idx < content.len) {
-        // Skip whitespace at start of line
-        const line_start = current_idx;
-        while (current_idx < content.len and (content[current_idx] == ' ' or content[current_idx] == '\t')) {
-            current_idx += 1;
-        }
-
-        // Check if this line starts with ** (potential new problem or location)
-        if (current_idx + 2 <= content.len and std.mem.eql(u8, content[current_idx .. current_idx + 2], "**")) {
-            const inner_start = current_idx + 2;
-            const inner_end_search = std.mem.findPos(u8, content, inner_start, "**");
-
-            if (inner_end_search) |inner_end| {
-                const inner_content = content[inner_start..inner_end];
-
-                // Check if this is a new problem header (no lowercase)
-                var inner_has_lowercase = false;
-                for (inner_content) |c| {
-                    if (c >= 'a' and c <= 'z') {
-                        inner_has_lowercase = true;
-                        break;
-                    }
-                }
-
-                if (!inner_has_lowercase) {
-                    // This is a new problem header, we're done
-                    break;
-                }
-
-                // Check if this looks like a location (contains .md: pattern)
-                if (std.mem.find(u8, inner_content, ".md:")) |_| {
-                    var location = inner_content;
-                    // Strip trailing colon and whitespace
-                    location = std.mem.trimEnd(u8, location, ": \t");
-
-                    // Count colons to determine format
-                    var colon_count: usize = 0;
-                    for (location) |c| {
-                        if (c == ':') colon_count += 1;
-                    }
-
-                    if (colon_count == 2) {
-                        // Format: file:line:col
-                        var parts = std.mem.tokenizeScalar(u8, location, ':');
-
-                        if (parts.next()) |file| {
-                            if (parts.next()) |line_str| {
-                                if (parts.next()) |col_str| {
-                                    if (std.fmt.parseInt(u32, line_str, 10) catch null) |line| {
-                                        if (std.fmt.parseInt(u32, col_str, 10) catch null) |col| {
-                                            location_file = file;
-                                            location_start_line = line;
-                                            location_start_col = col;
-                                            location_end_line = line;
-                                            location_end_col = col;
-                                            found_location = true;
-                                            current_idx = inner_end + 2;
-                                            break;
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    } else if (colon_count == 4) {
-                        // Format: file:start_line:start_col:end_line:end_col
-                        var parts = std.mem.tokenizeScalar(u8, location, ':');
-
-                        if (parts.next()) |file| {
-                            if (parts.next()) |start_line_str| {
-                                if (parts.next()) |start_col_str| {
-                                    if (parts.next()) |end_line_str| {
-                                        if (parts.next()) |end_col_str| {
-                                            if (std.fmt.parseInt(u32, start_line_str, 10) catch null) |start_line| {
-                                                if (std.fmt.parseInt(u32, start_col_str, 10) catch null) |start_col| {
-                                                    if (std.fmt.parseInt(u32, end_line_str, 10) catch null) |end_line| {
-                                                        if (std.fmt.parseInt(u32, end_col_str, 10) catch null) |end_col| {
-                                                            location_file = file;
-                                                            location_start_line = start_line;
-                                                            location_start_col = start_col;
-                                                            location_end_line = end_line;
-                                                            location_end_col = end_col;
-                                                            found_location = true;
-                                                            current_idx = inner_end + 2;
-                                                            break;
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // Skip to next line
-        current_idx = line_start;
-        while (current_idx < content.len and content[current_idx] != '\n') {
-            current_idx += 1;
-        }
-        if (current_idx < content.len) current_idx += 1;
-    }
-
-    // Find the next problem header to determine where this problem ends
-    var next_idx = current_idx;
-    while (next_idx < content.len) {
-        // Skip whitespace at start of line
-        while (next_idx < content.len and (content[next_idx] == ' ' or content[next_idx] == '\t')) {
-            next_idx += 1;
-        }
-
-        if (next_idx + 2 <= content.len and std.mem.eql(u8, content[next_idx .. next_idx + 2], "**")) {
-            const check_start = next_idx + 2;
-            const check_end = std.mem.findPos(u8, content, check_start, "**");
-
-            if (check_end) |end| {
-                const check_content = content[check_start..end];
-
-                // Check if this is a problem header (no lowercase)
-                var check_has_lowercase = false;
-                for (check_content) |c| {
-                    if (c >= 'a' and c <= 'z') {
-                        check_has_lowercase = true;
-                        break;
-                    }
-                }
-
-                if (!check_has_lowercase) {
-                    // Found next problem header
-                    break;
-                }
-            }
-        }
-
-        // Move to next character
-        next_idx += 1;
-    }
-
-    return .{ .entry = ProblemEntry{
-        .problem_type = try allocator.dupe(u8, problem_type),
-        .file = try allocator.dupe(u8, location_file),
-        .start_line = location_start_line,
-        .start_col = location_start_col,
-        .end_line = location_end_line,
-        .end_col = location_end_col,
-    }, .next_idx = next_idx };
-}
-
-/// Parse all problems from PROBLEMS section
-fn parseProblemsSection(allocator: std.mem.Allocator, content: []const u8) Allocator.Error!std.array_list.Managed(ProblemEntry) {
-    var problems = std.array_list.Managed(ProblemEntry).init(allocator);
-    errdefer {
-        for (problems.items) |p| {
-            allocator.free(p.problem_type);
-            allocator.free(p.file);
-        }
-        problems.deinit();
-    }
-
-    // Check if the entire content is just NIL
-    const trimmed_content = std.mem.trim(u8, content, " \t\r\n");
-    if (std.mem.eql(u8, trimmed_content, "NIL")) {
-        // NIL means there are no problems
-        return problems;
-    }
-
-    var idx: usize = 0;
-    while (idx < content.len) {
-        const result = try parseProblemEntry(allocator, content, idx);
-        if (result) |r| {
-            if (r.entry) |entry| {
-                try problems.append(entry);
-            }
-            idx = r.next_idx;
-        } else {
-            break;
-        }
-    }
-
-    return problems;
-}
 
 /// Generate EXPECTED content from problems
 fn generateExpectedContent(allocator: std.mem.Allocator, problems: []const ProblemEntry) (Allocator.Error || error{WriteFailed})![]const u8 {
@@ -525,9 +323,9 @@ fn renderReportsToProblemsSection(output: *DualOutput, reports: *const std.array
         }
         log("reported NIL problems", .{});
     } else {
-        // Render all reports in order
-        for (reports.items) |report| {
-            report.render(&output.md_writer.writer, .markdown) catch |err| {
+        // Render all reports in order, as plain-text boxes.
+        for (reports.items) |*report| {
+            reporting.renderReportToBoxPlain(report, &output.md_writer.writer, reporting.ReportingConfig.initMarkdown()) catch |err| {
                 std.debug.panic("Failed to render report: {s}", .{@errorName(err)});
             };
 
@@ -549,39 +347,93 @@ fn renderReportsToProblemsSection(output: *DualOutput, reports: *const std.array
     }
 }
 
-/// Render reports to EXPECTED section format (parsed problem entries)
+/// For snapshot files, the EXPECTED `file` field is just the basename.
+fn sanitiseSnapshotPath(path: []const u8) []const u8 {
+    if (std.mem.find(u8, path, "/snapshots/") != null or
+        std.mem.find(u8, path, "\\snapshots\\") != null)
+    {
+        return std.fs.path.basename(path);
+    }
+    return path;
+}
+
+/// A report title may be compound (e.g. "NOT IMPLEMENTED - UNDEFINED
+/// VARIABLE"); EXPECTED uses only the final segment after the last " - ".
+fn lastTitleSegment(title: []const u8) []const u8 {
+    if (std.mem.findLast(u8, title, " - ")) |i| {
+        return std.mem.trim(u8, title[i + 3 ..], " \t\r\n");
+    }
+    return std.mem.trim(u8, title, " \t\r\n");
+}
+
+/// Dupe `s` with ASCII letters uppercased. The EXPECTED section shouts titles
+/// in ALL CAPS, matching the box renderer, even though titles are authored in
+/// title case.
+fn asciiUpperDupe(allocator: std.mem.Allocator, s: []const u8) Allocator.Error![]u8 {
+    const out = try allocator.dupe(u8, s);
+    for (out) |*c| c.* = std.ascii.toUpper(c.*);
+    return out;
+}
+
+const RegionLoc = struct { file: []const u8, sl: u32, sc: u32, el: u32, ec: u32 };
+
+/// Pull the first source region out of a report for the EXPECTED location.
+fn reportRegionLoc(report: *const reporting.Report) RegionLoc {
+    for (report.document.elements.items) |el| {
+        switch (el) {
+            .source_code_region => |r| return .{
+                .file = sanitiseSnapshotPath(r.filename orelse ""),
+                .sl = r.start_line,
+                .sc = r.start_column,
+                .el = r.end_line,
+                .ec = r.end_column,
+            },
+            .source_code_with_underlines => |d| {
+                const dr = d.display_region;
+                return .{
+                    .file = sanitiseSnapshotPath(dr.filename orelse ""),
+                    .sl = dr.start_line,
+                    .sc = dr.start_column,
+                    .el = dr.start_line,
+                    .ec = dr.start_column,
+                };
+            },
+            else => {},
+        }
+    }
+    return .{ .file = "", .sl = 0, .sc = 0, .el = 0, .ec = 0 };
+}
+
+/// Render reports to EXPECTED section format, generated directly from the
+/// report data (title + first source region) rather than by parsing the
+/// rendered PROBLEMS output.
 fn renderReportsToExpectedContent(allocator: std.mem.Allocator, reports: *const std.array_list.Managed(reporting.Report)) (Allocator.Error || error{WriteFailed})![]const u8 {
     if (reports.items.len == 0) {
         return try allocator.dupe(u8, "NIL");
     }
 
-    // Render all reports to markdown and then parse the problems
-    var problems_buffer_unmanaged = std.ArrayList(u8).empty;
-    var problems_writer_allocating: std.Io.Writer.Allocating = .fromArrayList(allocator, &problems_buffer_unmanaged);
-    defer problems_buffer_unmanaged.deinit(allocator);
-
-    // Render all reports to markdown
-    for (reports.items) |report| {
-        report.render(&problems_writer_allocating.writer, .markdown) catch |err| {
-            std.debug.panic("Failed to render report for EXPECTED: {s}", .{@errorName(err)});
-        };
-    }
-
-    // Transfer contents from writer back to buffer before parsing
-    problems_buffer_unmanaged = problems_writer_allocating.toArrayList();
-
-    // Parse the rendered problems and convert to EXPECTED format
-    // TODO: rather than parsing markdown, we should directly generate EXPECTED format from the reports
-    var parsed_problems = try parseProblemsSection(allocator, problems_buffer_unmanaged.items);
+    var entries = std.array_list.Managed(ProblemEntry).init(allocator);
     defer {
-        for (parsed_problems.items) |p| {
-            allocator.free(p.problem_type);
-            allocator.free(p.file);
+        for (entries.items) |e| {
+            allocator.free(e.problem_type);
+            allocator.free(e.file);
         }
-        parsed_problems.deinit();
+        entries.deinit();
     }
 
-    return try generateExpectedContent(allocator, parsed_problems.items);
+    for (reports.items) |*report| {
+        const loc = reportRegionLoc(report);
+        try entries.append(.{
+            .problem_type = try asciiUpperDupe(allocator, lastTitleSegment(report.title)),
+            .file = try allocator.dupe(u8, loc.file),
+            .start_line = loc.sl,
+            .start_col = loc.sc,
+            .end_line = loc.el,
+            .end_col = loc.ec,
+        });
+    }
+
+    return try generateExpectedContent(allocator, entries.items);
 }
 
 var debug_allocator: std.heap.DebugAllocator(.{}) = .{
@@ -596,7 +448,7 @@ fn defaultSnapshotThreadCount() usize {
 }
 
 /// cli entrypoint for snapshot tool
-pub fn main(init: std.process.Init) anyerror!void {
+pub fn main(init: std.process.Init) SnapshotError!void {
     app_io = init.io;
 
     // Always use the debug allocator with the snapshot tool to help find allocation bugs.
@@ -804,7 +656,7 @@ pub fn main(init: std.process.Init) anyerror!void {
     }
 }
 
-fn checkSnapshotExpectations(gpa: Allocator) anyerror!bool {
+fn checkSnapshotExpectations(gpa: Allocator) SnapshotError!bool {
     // Load builtin modules using the same code path as roc check
     const builtin_modules_ptr = try gpa.create(eval_mod.BuiltinModules);
     defer gpa.destroy(builtin_modules_ptr);
@@ -858,7 +710,7 @@ fn getMultiFileSnapshotType(path: []const u8) NodeType {
     return .file; // unreachable if isMultiFileSnapshot was checked first
 }
 
-fn processMultiFileSnapshot(allocator: Allocator, dir_path: []const u8, config: *const Config) anyerror!bool {
+fn processMultiFileSnapshot(allocator: Allocator, dir_path: []const u8, config: *const Config) SnapshotError!bool {
     var success: bool = true;
     log("Processing multi-file snapshot directory: {s}", .{dir_path});
 
@@ -991,7 +843,7 @@ fn processSnapshotContent(
     content: Content,
     output_path: []const u8,
     config: *const Config,
-) anyerror!bool {
+) SnapshotError!bool {
     var success = true;
     log("Generating snapshot for: {s}", .{output_path});
 
@@ -1410,7 +1262,7 @@ fn processRocFileAsSnapshotWithExpected(
     meta: Meta,
     expected_content: ?[]const u8,
     config: *const Config,
-) anyerror!bool {
+) SnapshotError!bool {
     // Create content structure
     const content = Content{
         .meta = meta,
@@ -1525,7 +1377,7 @@ fn processWorkItems(gpa: Allocator, work_list: WorkList, max_threads: usize, deb
 }
 
 /// Stage 1: Walk directory tree and collect work items
-fn collectWorkItems(gpa: Allocator, path: []const u8, work_list: *WorkList) anyerror!void {
+fn collectWorkItems(gpa: Allocator, path: []const u8, work_list: *WorkList) SnapshotError!void {
     const canonical_path = absolutePathAlloc(app_io, path, gpa) catch |err| {
         std.log.err("failed to resolve path '{s}': {s}", .{ path, @errorName(err) });
         return;
@@ -2327,7 +2179,7 @@ fn generateParseSection(output: *DualOutput, content: *const Content, parse_ast:
 }
 
 /// Generate FORMATTED section for both markdown and HTML
-fn generateFormattedSection(output: *DualOutput, content: *const Content, parse_ast: *AST) anyerror!void {
+fn generateFormattedSection(output: *DualOutput, content: *const Content, parse_ast: *AST) SnapshotError!void {
     var formatted: std.Io.Writer.Allocating = .init(output.gpa);
     defer formatted.deinit();
 
@@ -3074,7 +2926,7 @@ fn validateMonoFormatting(allocator: Allocator, mono_source: []const u8, source_
 }
 
 /// Parse Roc source and return formatted output.
-fn parseAndFormat(gpa: std.mem.Allocator, input: []const u8) anyerror![]const u8 {
+fn parseAndFormat(gpa: std.mem.Allocator, input: []const u8) SnapshotError![]const u8 {
     var module_env = try ModuleEnv.init(gpa, input);
     defer module_env.deinit();
 
@@ -3557,7 +3409,7 @@ fn processDocsSnapshot(
     content: Content,
     output_path: []const u8,
     config: *const Config,
-) anyerror!bool {
+) SnapshotError!bool {
     log("Processing docs snapshot: {s}", .{output_path});
 
     // 1. Parse multi-file source
@@ -4005,7 +3857,7 @@ fn processDevObjectSnapshot(
     content: Content,
     output_path: []const u8,
     config: *const Config,
-) anyerror!bool {
+) SnapshotError!bool {
     log("Processing dev_object snapshot: {s}", .{output_path});
 
     const source_files = try parseMultiFileSource(allocator, content.source);
@@ -4551,7 +4403,7 @@ fn compileSnapshotReplInspectedModule(
     allocator: Allocator,
     source: []const u8,
     config: *const Config,
-) anyerror!eval_mod.test_helpers.CompiledProgram {
+) SnapshotError!eval_mod.test_helpers.CompiledProgram {
     if (config.builtin_modules_ref) |bm| {
         return eval_mod.test_helpers.compileInspectedProgramWithBuiltin(
             allocator,
@@ -4569,7 +4421,7 @@ fn compileSnapshotReplInspectedModule(
     return eval_mod.test_helpers.compileInspectedProgram(allocator, app_io, .module, source, &.{});
 }
 
-fn compileSnapshotReplInspectedExpr(allocator: Allocator, source: []const u8) anyerror!eval_mod.test_helpers.CompiledProgram {
+fn compileSnapshotReplInspectedExpr(allocator: Allocator, source: []const u8) SnapshotError!eval_mod.test_helpers.CompiledProgram {
     return eval_mod.test_helpers.compileInspectedProgram(allocator, app_io, .expr, source, &.{});
 }
 
@@ -4578,7 +4430,7 @@ fn renderSnapshotReplTypeProblems(
     source_kind: eval_mod.test_helpers.SourceKind,
     source: []const u8,
     config: *const Config,
-) anyerror![]const u8 {
+) SnapshotError![]const u8 {
     const builtin_env = config.builtin_module orelse return error.MissingBuiltinModule;
 
     var module_env = try single_module.ModuleEnv.init(allocator, source);
@@ -4670,7 +4522,7 @@ fn renderSnapshotReplTypeProblems(
     checker.fixupTypeWriter();
     defer checker.deinit();
 
-    const check_result: anyerror!void = switch (source_kind) {
+    const check_result: SnapshotError!void = switch (source_kind) {
         .expr => if (repl_expr) |expr| checker.checkExprRepl(expr.idx) else {},
         .module => checker.checkFile(),
     };
@@ -4724,7 +4576,7 @@ fn snapshotReplDefinitionStep(
     session: *SnapshotReplSession,
     input: []const u8,
     config: *const Config,
-) anyerror![]const u8 {
+) SnapshotError![]const u8 {
     const maybe_identity = try snapshotReplDefinitionIdentity(allocator, input);
     const identity = maybe_identity orelse
         return try allocator.dupe(u8, "Parse error: REPL definitions must bind a top-level identifier");
@@ -4773,7 +4625,7 @@ fn compileAndEvaluateSnapshotReplExpr(
     allocator: Allocator,
     input: []const u8,
     config: *const Config,
-) anyerror![]const u8 {
+) SnapshotError![]const u8 {
     var expr_compiled = compileSnapshotReplInspectedExpr(allocator, input) catch |expr_err| {
         return switch (expr_err) {
             error.TypeCheckError => renderSnapshotReplTypeProblems(allocator, .expr, input, config),
@@ -4793,7 +4645,7 @@ fn snapshotReplExpressionStep(
     input: []const u8,
     config: *const Config,
     statement_body: bool,
-) anyerror![]const u8 {
+) SnapshotError![]const u8 {
     const main_source = if (statement_body)
         try std.fmt.allocPrint(allocator, "main = {{\n    {s}\n}}", .{input})
     else
@@ -4824,9 +4676,12 @@ fn snapshotReplExpressionStep(
                 errdefer allocator.free(module_problems);
 
                 if (use_expr_fallback) {
+                    // These titles are matched against markdown output, which
+                    // preserves the authored title case (the box/snapshot output
+                    // shouts them to ALL CAPS, but this is the markdown render).
                     const is_top_level_wrapper_problem =
-                        std.mem.find(u8, module_problems, "EFFECTFUL TOP-LEVEL VALUE") != null or
-                        std.mem.find(u8, module_problems, "POLYMORPHIC VALUE") != null;
+                        std.mem.find(u8, module_problems, "Effectful Top-level Value") != null or
+                        std.mem.find(u8, module_problems, "Polymorphic Value") != null;
                     if (is_top_level_wrapper_problem) {
                         allocator.free(module_problems);
                         return compileAndEvaluateSnapshotReplExpr(allocator, input, config);
@@ -4853,7 +4708,7 @@ fn snapshotReplStep(
     session: *SnapshotReplSession,
     input: []const u8,
     config: *const Config,
-) anyerror![]const u8 {
+) SnapshotError![]const u8 {
     const trimmed = std.mem.trim(u8, input, " \t\r\n");
     if (trimmed.len == 0) return try allocator.dupe(u8, "Parse error: UNEXPECTED TOKEN");
 
@@ -4868,7 +4723,7 @@ fn snapshotReplStep(
     };
 }
 
-fn processReplSnapshot(allocator: Allocator, content: Content, output_path: []const u8, config: *const Config) anyerror!bool {
+fn processReplSnapshot(allocator: Allocator, content: Content, output_path: []const u8, config: *const Config) SnapshotError!bool {
     if (gpa_poisoned) return false;
 
     var success = true;
@@ -4916,7 +4771,7 @@ fn processReplSnapshot(allocator: Allocator, content: Content, output_path: []co
     return success;
 }
 
-fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, content: *const Content, config: *const Config) anyerror!bool {
+fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, content: *const Content, config: *const Config) SnapshotError!bool {
     if (gpa_poisoned) return false;
 
     var success = true;
@@ -5122,7 +4977,7 @@ fn searchDirectoryForBuiltin(
     dir: *std.Io.Dir,
     relative_path: []const u8,
     files_with_builtin: *std.array_list.Managed([]const u8),
-) anyerror!void {
+) SnapshotError!void {
     var iter = dir.iterate();
     while (try iter.next(std.testing.io)) |entry| {
         const full_path = if (relative_path.len > 0)

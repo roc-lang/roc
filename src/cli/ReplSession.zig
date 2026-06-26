@@ -17,6 +17,16 @@ const ModuleEnv = can.ModuleEnv;
 
 const ReplSession = @This();
 
+const RenderError = Allocator.Error || error{WriteFailed};
+const ModuleRenderError = eval.test_helpers.TestHelperError || RenderError;
+const ReplInitError = eval.BuiltinModules.InitError;
+const ReplStepError = eval.test_helpers.TestHelperError || RenderError;
+const ReplTestError = ReplStepError || ReplInitError || error{
+    ParseError,
+    TestExpectedEqual,
+    TestUnexpectedResult,
+};
+
 allocator: Allocator,
 io: std.Io,
 backend_kind: eval.EvalBackend,
@@ -42,7 +52,7 @@ pub const StepResult = union(enum) {
     }
 };
 
-pub fn init(allocator: Allocator, io: std.Io, backend_kind: eval.EvalBackend) anyerror!ReplSession {
+pub fn init(allocator: Allocator, io: std.Io, backend_kind: eval.EvalBackend) ReplInitError!ReplSession {
     const builtin_modules = try allocator.create(eval.BuiltinModules);
     errdefer allocator.destroy(builtin_modules);
     builtin_modules.* = try eval.BuiltinModules.init(allocator);
@@ -93,7 +103,7 @@ fn prePublishedBuiltin(self: *ReplSession) eval.test_helpers.PrePublishedBuiltin
 }
 
 /// Process one complete REPL statement or command and return the user-visible output.
-pub fn step(self: *ReplSession, input: []const u8) anyerror![]u8 {
+pub fn step(self: *ReplSession, input: []const u8) ReplStepError![]u8 {
     const result = try self.stepWithConfig(input, reporting.ReportingConfig.initColorTerminal());
     return switch (result) {
         .output => |bytes| bytes,
@@ -104,7 +114,7 @@ pub fn step(self: *ReplSession, input: []const u8) anyerror![]u8 {
 }
 
 /// Process one complete REPL statement or command and keep stdout/stderr output separate.
-pub fn stepWithConfig(self: *ReplSession, input: []const u8, report_config: reporting.ReportingConfig) anyerror!StepResult {
+pub fn stepWithConfig(self: *ReplSession, input: []const u8, report_config: reporting.ReportingConfig) ReplStepError!StepResult {
     const line = std.mem.trim(u8, input, " \t\r\n");
     if (line.len == 0) return .none;
 
@@ -139,7 +149,7 @@ pub fn stepWithConfig(self: *ReplSession, input: []const u8, report_config: repo
                 self.definitions.restore(self.allocator, &snapshot);
                 // Drop any pending annotation for this name. A `y : Str` typed before a
                 // failed `y = 5` would otherwise survive and poison every subsequent
-                // REPL turn with "DECLARATION HAS NO VALUE".
+                // REPL turn with "Declaration Has No Value".
                 if (input_info.definition_kind == .value and !self.definitions.hasKind(name, .value)) {
                     self.definitions.removeByNameAndKind(self.allocator, name, .annotation);
                 }
@@ -308,7 +318,7 @@ fn validateDefinitions(self: *ReplSession, report_config: reporting.ReportingCon
     }
 }
 
-fn evaluateExpression(self: *ReplSession, expr: []const u8, report_config: reporting.ReportingConfig) anyerror!StepResult {
+fn evaluateExpression(self: *ReplSession, expr: []const u8, report_config: reporting.ReportingConfig) ReplStepError!StepResult {
     const definitions = try self.definitionsSource();
     defer self.allocator.free(definitions);
 
@@ -342,7 +352,7 @@ fn evaluateExpression(self: *ReplSession, expr: []const u8, report_config: repor
     };
 }
 
-fn renderModuleProblems(self: *ReplSession, source: []const u8, report_config: reporting.ReportingConfig) anyerror![]u8 {
+fn renderModuleProblems(self: *ReplSession, source: []const u8, report_config: reporting.ReportingConfig) ModuleRenderError![]u8 {
     return eval.test_helpers.renderProblemsWithConfig(self.allocator, .module, source, report_config) catch |err| switch (err) {
         error.ParseError => self.renderModuleParseDiagnostics(source, report_config),
         else => err,
@@ -407,11 +417,9 @@ fn renderAstDiagnostics(
 }
 
 fn renderFallbackParseDiagnostic(self: *ReplSession, source: []const u8, report_config: reporting.ReportingConfig) (Allocator.Error || error{WriteFailed})![]u8 {
-    var report = reporting.Report.init(self.allocator, "PARSE ERROR", .runtime_error);
+    var report = try reporting.Report.init(self.allocator, "Parse Error", "The REPL input could not be parsed.", .runtime_error);
     defer report.deinit();
-    try report.document.addReflowingText("The REPL input could not be parsed.");
     if (source.len > 0) {
-        try report.document.addLineBreak();
         try report.document.addLineBreak();
         try report.document.addCodeBlock(source);
     }
@@ -714,7 +722,7 @@ const testing = std.testing;
 /// The cli_test runner is single-threaded, so lazy init needs no locking.
 var shared_test_builtins: ?eval.BuiltinModules = null;
 
-fn sharedTestBuiltins() Allocator.Error!*eval.BuiltinModules {
+fn sharedTestBuiltins() ReplInitError!*eval.BuiltinModules {
     if (shared_test_builtins == null) {
         shared_test_builtins = try eval.BuiltinModules.init(std.heap.page_allocator);
     }
@@ -723,7 +731,7 @@ fn sharedTestBuiltins() Allocator.Error!*eval.BuiltinModules {
 
 /// Build a test session that borrows the shared Builtin (see
 /// `shared_test_builtins`) instead of publishing its own.
-fn testRepl(backend_kind: eval.EvalBackend) Allocator.Error!ReplSession {
+fn testRepl(backend_kind: eval.EvalBackend) ReplInitError!ReplSession {
     return ReplSession.initBorrowingBuiltins(
         testing.allocator,
         std.testing.io,
@@ -750,7 +758,7 @@ fn backendName(backend: TestBackend) []const u8 {
     };
 }
 
-fn expectBackend(backend: TestBackend, expr: []const u8, expected: []const u8) anyerror!void {
+fn expectBackend(backend: TestBackend, expr: []const u8, expected: []const u8) ReplTestError!void {
     const eval_backend = toEvalBackend(backend);
     if (!eval.backendAvailable(eval_backend)) return;
 
@@ -765,13 +773,13 @@ fn expectBackend(backend: TestBackend, expr: []const u8, expected: []const u8) a
     };
 }
 
-fn expectInterpreter(expr: []const u8, expected: []const u8) anyerror!void {
+fn expectInterpreter(expr: []const u8, expected: []const u8) ReplTestError!void {
     try expectBackend(.interpreter, expr, expected);
 }
 
 /// Build the wrapped module source (`<defs>\nmain = <expr>`) for `expr` and
 /// confirm it is an expression. Caller owns the returned source.
-fn replExprSource(repl: *ReplSession, expr: []const u8) Allocator.Error![]u8 {
+fn replExprSource(repl: *ReplSession, expr: []const u8) ReplTestError![]u8 {
     const line = std.mem.trim(u8, expr, " \t\r\n");
     const input_info = switch (try repl.inputStatus(line)) {
         .complete => |info| info,
@@ -789,7 +797,7 @@ fn replExprSource(repl: *ReplSession, expr: []const u8) Allocator.Error![]u8 {
 /// both render `expected`. Only the native target is lowered — wasm coverage is
 /// exercised explicitly by `expectAllBackends` on a representative subset, so it
 /// is not re-run for every native assertion.
-fn expectAllNative(expr: []const u8, expected: []const u8) Allocator.Error!void {
+fn expectAllNative(expr: []const u8, expected: []const u8) ReplTestError!void {
     var repl = try testRepl(.interpreter);
     defer repl.deinit();
 
@@ -814,7 +822,7 @@ fn expectAllNative(expr: []const u8, expected: []const u8) Allocator.Error!void 
 /// Evaluate `expr` on all backends — interpreter, dev, and wasm. Lowers both the
 /// native and wasm targets, so reserve this for a representative subset rather
 /// than every assertion.
-fn expectAllBackends(expr: []const u8, expected: []const u8) Allocator.Error!void {
+fn expectAllBackends(expr: []const u8, expected: []const u8) ReplTestError!void {
     var repl = try testRepl(.interpreter);
     defer repl.deinit();
 
@@ -841,7 +849,7 @@ fn expectCompiledBackend(
     expr: []const u8,
     expected: []const u8,
     lowered: *eval.test_helpers.LoweredProgram,
-) anyerror!void {
+) ReplTestError!void {
     const eval_backend = toEvalBackend(backend);
     if (!eval.backendAvailable(eval_backend)) return;
 
@@ -858,7 +866,7 @@ fn expectCompiledBackend(
     };
 }
 
-fn expectStateful(backend: TestBackend, steps: []const [2][]const u8) anyerror!void {
+fn expectStateful(backend: TestBackend, steps: []const [2][]const u8) ReplTestError!void {
     const eval_backend = toEvalBackend(backend);
     if (!eval.backendAvailable(eval_backend)) return;
 
@@ -875,7 +883,7 @@ fn expectStateful(backend: TestBackend, steps: []const [2][]const u8) anyerror!v
     }
 }
 
-fn expectStepsFinal(backend: TestBackend, steps: []const []const u8, expected: []const u8) anyerror!void {
+fn expectStepsFinal(backend: TestBackend, steps: []const []const u8, expected: []const u8) ReplTestError!void {
     const eval_backend = toEvalBackend(backend);
     if (!eval.backendAvailable(eval_backend)) return;
 

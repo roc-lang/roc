@@ -6,6 +6,7 @@
 //! Reports combine a title, severity level, and formatted document content.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const base = @import("base");
 
 const Allocator = std.mem.Allocator;
@@ -20,22 +21,104 @@ const truncateUtf8 = @import("config.zig").truncateUtf8;
 /// Default maximum message size in bytes for truncation
 const DEFAULT_MAX_MESSAGE_BYTES: usize = 4096;
 
+/// True if `title` contains `needle` (which must be lowercase) as a substring,
+/// compared case-insensitively.
+fn titleContainsIgnoreCase(title: []const u8, needle: []const u8) bool {
+    if (needle.len == 0 or title.len < needle.len) return false;
+    var i: usize = 0;
+    while (i + needle.len <= title.len) : (i += 1) {
+        var matches = true;
+        for (needle, 0..) |nc, j| {
+            const tc = title[i + j];
+            const lowered = if (tc >= 'A' and tc <= 'Z') tc + ('a' - 'A') else tc;
+            if (lowered != nc) {
+                matches = false;
+                break;
+            }
+        }
+        if (matches) return true;
+    }
+    return false;
+}
+
+/// In debug builds, enforce the house style for error-report titles. These are
+/// compiled out of release builds.
+///
+/// A title must be:
+///   - all ASCII;
+///   - title case: every word begins with a capital letter (or a non-letter,
+///     e.g. a digit), and the title has at least one lowercase letter (so it
+///     reads as `Title Case`, not `ALL CAPS` — the box/HTML/LSP renderers shout
+///     it back to ALL CAPS, while markdown keeps the authored case);
+///   - free of the word "comptime", which is a Zig term, not a Roc one, and so
+///     must never reach user-facing text;
+///   - free of any pairing of "annotation" with "need" or "miss" — Roc never
+///     tells users they must annotate their types (see the panic below).
+fn assertValidTitle(title: []const u8) void {
+    if (builtin.mode != .Debug) return;
+
+    var has_lower = false;
+    var at_word_start = true;
+    for (title) |c| {
+        std.debug.assert(c < 0x80); // titles are ASCII
+        if (c == ' ') {
+            at_word_start = true;
+            continue;
+        }
+        if (at_word_start) {
+            // A word may not begin with a lowercase letter.
+            std.debug.assert(!(c >= 'a' and c <= 'z'));
+        }
+        at_word_start = false;
+        if (c >= 'a' and c <= 'z') has_lower = true;
+    }
+    std.debug.assert(has_lower);
+    std.debug.assert(!titleContainsIgnoreCase(title, "comptime"));
+
+    if (titleContainsIgnoreCase(title, "annotation") and
+        (titleContainsIgnoreCase(title, "need") or titleContainsIgnoreCase(title, "miss")))
+    {
+        @panic(
+            "Error-report title pairs \"annotation\" with \"need\"/\"miss\". Roc never tells " ++
+                "users they NEED to annotate their types: unlike many languages, type annotations " ++
+                "are never required as a matter of course, so no part of a diagnostic report should " ++
+                "say a type needs, or is missing, an annotation. When a type is ambiguous, explain " ++
+                "the ambiguity itself; at most, note that one way to make it unambiguous is to " ++
+                "introduce a type annotation somewhere. Reword this report's title, headline, and " ++
+                "body to describe the ambiguity rather than to demand an annotation.",
+        );
+    }
+}
+
 /// A structured report containing error information and formatted content.
 pub const Report = struct {
     title: []const u8,
+    /// One-sentence summary shown in the report's headline slot: the box's top
+    /// edge in the terminal/snapshot layout, or a line under the title in the
+    /// markdown/HTML/LSP renderers. Rich content, so inline code, type names,
+    /// and operators keep their styling. Builders with a plain headline pass it
+    /// as the `headline` string to `init`; builders that need inline styling
+    /// pass `""` and add to this document directly.
+    headline: Document,
     severity: Severity,
     document: Document,
     allocator: Allocator,
     owned_strings: std.array_list.Managed([]const u8),
 
-    pub fn init(allocator: Allocator, title: []const u8, severity: Severity) Report {
-        return Report{
+    pub fn init(allocator: Allocator, title: []const u8, headline: []const u8, severity: Severity) Allocator.Error!Report {
+        assertValidTitle(title);
+        var report = Report{
             .title = title,
+            .headline = Document.init(allocator),
             .severity = severity,
             .document = Document.init(allocator),
             .allocator = allocator,
             .owned_strings = std.array_list.Managed([]const u8).init(allocator),
         };
+        if (headline.len > 0) {
+            try report.headline.addReflowingText(headline);
+        }
+        return report;
     }
 
     pub fn deinit(self: *Report) void {
@@ -43,6 +126,7 @@ pub const Report = struct {
             self.allocator.free(@constCast(owned_string));
         }
         self.owned_strings.deinit();
+        self.headline.deinit();
         self.document.deinit();
     }
 
@@ -246,61 +330,11 @@ pub const Report = struct {
     }
 };
 
-/// Builder for creating reports with a fluent interface.
-pub const ReportBuilder = struct {
-    report: Report,
-
-    pub fn init(allocator: Allocator, title: []const u8, severity: Severity) ReportBuilder {
-        return ReportBuilder{
-            .report = Report.init(allocator, title, severity),
-        };
-    }
-
-    pub fn deinit(self: *ReportBuilder) void {
-        self.report.deinit();
-    }
-
-    pub fn header(self: *ReportBuilder, text: []const u8) std.mem.Allocator.Error!*ReportBuilder {
-        try self.report.addHeader(text);
-        return self;
-    }
-
-    pub fn message(self: *ReportBuilder, text: []const u8) std.mem.Allocator.Error!*ReportBuilder {
-        try self.report.document.addText(text);
-        try self.report.document.addLineBreak();
-        return self;
-    }
-
-    pub fn code(self: *ReportBuilder, code_text: []const u8) Allocator.Error!*ReportBuilder {
-        try self.report.addCodeSnippet(code_text, null);
-        return self;
-    }
-
-    pub fn suggestion(self: *ReportBuilder, text: []const u8) std.mem.Allocator.Error!*ReportBuilder {
-        try self.report.addSuggestion(text);
-        return self;
-    }
-
-    pub fn note(self: *ReportBuilder, text: []const u8) std.mem.Allocator.Error!*ReportBuilder {
-        try self.report.addNote(text);
-        return self;
-    }
-
-    pub fn typeComparison(self: *ReportBuilder, expected: []const u8, actual: []const u8) std.mem.Allocator.Error!*ReportBuilder {
-        try self.report.addTypeComparison(expected, actual);
-        return self;
-    }
-
-    pub fn build(self: *ReportBuilder) Report {
-        return self.report;
-    }
-};
-
 // Tests
 const testing = std.testing;
 
 test "Report basic functionality" {
-    var report = Report.init(testing.allocator, "TEST ERROR", .runtime_error);
+    var report = try Report.init(testing.allocator, "Test Error", "Something went wrong in the test.", .runtime_error);
     defer report.deinit();
 
     try report.document.addText("This is a test error message.");

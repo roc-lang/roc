@@ -23,16 +23,16 @@ main! = process!(42)
 # EXPECTED
 UNDEFINED VARIABLE - function_no_annotation.md:9:21:9:33
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `line!` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
-**function_no_annotation.md:9:21:9:33:**
-```roc
-print_number! = |n| Stdout.line!(n)
-```
-                    ^^^^^^^^^^^^
+┌────────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `line!` in this scope. ──────────────┐
+└┬───────────────────┘                                                        │
+ │                                                                            │
+ │  print_number! = |n| Stdout.line!(n)                                       │
+ │                      ‾‾‾‾‾‾‾‾‾‾‾‾                                          │
+ └──────────────────────────────────────────── function_no_annotation.md:9:21 ┘
 
+    Is there an `import` or `exposing` missing up-top?
 
 # TOKENS
 ~~~zig

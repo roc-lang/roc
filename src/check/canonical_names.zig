@@ -437,6 +437,10 @@ pub const CanonicalNameStore = struct {
         return lookupId(MethodNameId, &self.method_names, text);
     }
 
+    pub fn lookupExportName(self: *const CanonicalNameStore, text: []const u8) ?ExportNameId {
+        return lookupId(ExportNameId, &self.export_names, text);
+    }
+
     pub fn internProcBase(self: *CanonicalNameStore, key: ProcBaseKey) Allocator.Error!ProcBaseKeyRef {
         self.scratch_key.clearRetainingCapacity();
         try self.scratch_key.print(self.allocator, "proc:{d}:{s}:{d}:{d}:{d}|", .{

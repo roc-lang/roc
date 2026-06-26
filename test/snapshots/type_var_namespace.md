@@ -25,17 +25,17 @@ main! = |_| {}
 # EXPECTED
 UNUSED VARIABLE - type_var_namespace.md:7:5:7:9
 # PROBLEMS
-**UNUSED VARIABLE**
-Variable `item` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_item` to suppress this warning.
-The unused variable is declared here:
-**type_var_namespace.md:7:5:7:9:**
-```roc
-    item = 42
-```
-    ^^^^
+┌─────────────────┐
+│ UNUSED VARIABLE ├─ Variable `item` is defined here and then never used. ────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  item = 42                                                                 │
+ │  ‾‾‾‾                                                                      │
+ └───────────────────────────────────────────────── type_var_namespace.md:7:5 ┘
 
+    If you don't need this variable, prefix it with an underscore like `_item`
+    to suppress this warning.
 
 # TOKENS
 ~~~zig
@@ -136,9 +136,9 @@ main! = |_| {}
 					(e-num (value "42")))
 				(s-let
 					(p-assign (ident "result"))
-					(e-dispatch-call (method "ok_or") (constraint-fn-var 102)
+					(e-dispatch-call (method "ok_or") (constraint-fn-var 103)
 						(receiver
-							(e-call (constraint-fn-var 101)
+							(e-call (constraint-fn-var 102)
 								(e-lookup-external
 									(builtin))
 								(e-lookup-local

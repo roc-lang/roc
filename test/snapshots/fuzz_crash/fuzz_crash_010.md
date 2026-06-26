@@ -19,76 +19,77 @@ PARSE ERROR - fuzz_crash_010.md:1:3:1:4
 PARSE ERROR - fuzz_crash_010.md:1:4:1:5
 PARSE ERROR - fuzz_crash_010.md:2:6:2:7
 # PROBLEMS
-**ASCII CONTROL CHARACTER**
+
+ASCII CONTROL CHARACTER
+
 ASCII control characters are not allowed in Roc source code.
 
 
 
-**UNCLOSED STRING**
-This string is missing a closing quote.
-
-**fuzz_crash_010.md:5:5:5:35:**
-```roc
-    "on        (string 'onmo %')))
-```
-    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
-**PARSE ERROR**
-Type applications require parentheses around their type arguments.
-
-I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
-
-Instead of:
-    **List U8**
-
-Use:
-    **List(U8)**
-
-Other valid examples:
-    `Dict(Str, Num)`
-    `Try(a, Str)`
-    `Maybe(List(U64))`
-
-**fuzz_crash_010.md:1:2:1:3:**
-```roc
-H{o,
-```
- ^
+┌─────────────────┐
+│ UNCLOSED STRING ├─ This string is missing a closing quote. ─────────────────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  "on        (string 'onmo %')))                                            │
+ │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                            │
+ └───────────────────────────────────────────────────── fuzz_crash_010.md:5:5 ┘
 
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
 
-**fuzz_crash_010.md:1:3:1:4:**
-```roc
-H{o,
-```
-  ^
+┌─────────────┐
+│ PARSE ERROR ├─ Type applications require parentheses around their type ─────┐
+└┬────────────┘  arguments.                                                   │
+ │                                                                            │
+ │  H{o,                                                                      │
+ │   ‾                                                                        │
+ └───────────────────────────────────────────────────── fuzz_crash_010.md:1:2 ┘
+
+    I found a type followed by what looks like a type argument, but they need
+    to be connected with parentheses.
+
+    Instead of:
+        List U8
+
+    Use:
+        List(U8)
+
+    Other valid examples:
+        Dict(Str, Num)
+        Try(a, Str)
+        Maybe(List(U64))
 
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  H{o,                                                                      │
+ │    ‾                                                                       │
+ └───────────────────────────────────────────────────── fuzz_crash_010.md:1:3 ┘
 
-**fuzz_crash_010.md:1:4:1:5:**
-```roc
-H{o,
-```
-   ^
+    This is an unexpected parsing error. Please check your syntax.
 
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  H{o,                                                                      │
+ │     ‾                                                                      │
+ └───────────────────────────────────────────────────── fuzz_crash_010.md:1:4 ┘
 
-**fuzz_crash_010.md:2:6:2:7:**
-```roc
-    ]
-```
-     ^
+    This is an unexpected parsing error. Please check your syntax.
 
+
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │    ]                                                                      │
+ │     ‾                                                                      │
+ └───────────────────────────────────────────────────── fuzz_crash_010.md:2:6 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
 
 # TOKENS
 ~~~zig

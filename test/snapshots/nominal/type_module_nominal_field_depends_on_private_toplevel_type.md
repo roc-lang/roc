@@ -14,20 +14,23 @@ ModuleType := {
 # EXPECTED
 PRIVATE TYPE IN EXPOSED FIELD - type_module_nominal_field_depends_on_private_toplevel_type.md:4:13:4:25
 # PROBLEMS
-**PRIVATE TYPE IN EXPOSED FIELD**
-The `field` field of _ModuleType_ refers to _InternalType_, but _InternalType_ is private to this module.
 
-Other modules can see this field because _ModuleType_ is exposed and not opaque, but they cannot name this private type.
+┌───────────────────────────────┐
+│ PRIVATE TYPE IN EXPOSED FIELD ├─ The `field` field of `ModuleType` refers ──┐
+└┬──────────────────────────────┘  to `InternalType`, but `InternalType` is   │
+ │                                 private to this module.                    │
+ │                                                                            │
+ │  field : InternalType,                                                     │
+ │          ‾‾‾‾‾‾‾‾‾‾‾‾                                                      │
+ └──────── type_module_nominal_field_depends_on_private_toplevel_type.md:4:13 ┘
 
-It's referenced here:
-**type_module_nominal_field_depends_on_private_toplevel_type.md:4:13:4:25:**
-```roc
-    field : InternalType,
-```
-            ^^^^^^^^^^^^
+    Other modules can see this field because ModuleType is exposed and not
+    opaque, but they cannot name this private type.
 
 
-**Hint:** Expose the referenced type, make _ModuleType_ opaque with `::`, or move the type into _ModuleType_'s associated block.
+
+    Hint: Expose the referenced type, make ModuleType opaque with `::`, or move
+    the type into ModuleType's associated block.
 
 # TOKENS
 ~~~zig

@@ -38,6 +38,7 @@ pub const RecursiveDispatch = types.RecursiveDispatch;
 pub const NumberDoesNotFit = types.NumberDoesNotFit;
 pub const NegativeUnsignedInt = types.NegativeUnsignedInt;
 pub const InvalidNumericLiteral = types.InvalidNumericLiteral;
+pub const TupleAccessNeedsAnnotation = types.TupleAccessNeedsAnnotation;
 pub const LiteralDefaulted = types.LiteralDefaulted;
 pub const UnusedValue = types.UnusedValue;
 
@@ -48,6 +49,7 @@ pub const RedundantPattern = types.RedundantPattern;
 pub const UnmatchablePattern = types.UnmatchablePattern;
 pub const UnreachableCode = types.UnreachableCode;
 pub const ComptimeUnusedBranch = types.ComptimeUnusedBranch;
+pub const ComptimeCondition = types.ComptimeCondition;
 
 // Type declaration errors
 pub const TypeApplyArityMismatch = types.TypeApplyArityMismatch;

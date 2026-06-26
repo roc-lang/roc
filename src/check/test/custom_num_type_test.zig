@@ -78,14 +78,12 @@ test "Custom number type with from_numeral: exact huge fractional suffix unifies
         \\      Value({ is_negative: Bool, before: List(U8), after: List(U8), count: U64 }),
         \\  ].{
         \\      from_numeral : Numeral -> Try(Big, [InvalidNumeral(Str)])
-        \\      from_numeral = |numeral| match numeral {
-        \\          Literal(parts) => Ok(Value({
-        \\              is_negative: parts.is_negative,
-        \\              before: parts.digits_before_pt,
-        \\              after: parts.digits_after_pt,
-        \\              count: parts.digits_after_pt_count,
-        \\          }))
-        \\      }
+        \\      from_numeral = |numeral| Ok(Value({
+        \\          is_negative: numeral.is_negative(),
+        \\          before: numeral.digits_before_pt(),
+        \\          after: numeral.digits_after_pt(),
+        \\          count: numeral.digits_after_pt_count(),
+        \\      }))
         \\  }
         \\
         \\  main = {
@@ -118,7 +116,7 @@ test "Custom number type without from_numeral: integer literal does not unify" {
     defer test_env.deinit();
 
     // Should fail - MyType doesn't have from_numeral, so number literal can't be used
-    try test_env.assertOneTypeError("TYPE MISMATCH");
+    try test_env.assertOneTypeError("Type Mismatch");
 }
 
 test "Custom number type with negate: unary minus works" {
@@ -164,7 +162,7 @@ test "Custom number type without negate: unary minus fails" {
     defer test_env.deinit();
 
     // Should fail - MyNum doesn't have negate method
-    try test_env.assertOneTypeError("MISSING METHOD");
+    try test_env.assertOneTypeError("Missing Method");
 }
 
 test "Custom type with from_numeral and heterogeneous plus: literal + literal works" {

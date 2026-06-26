@@ -13,6 +13,17 @@ const LIR = lir.LIR;
 const layout_mod = @import("layout");
 const LayoutIdx = layout_mod.Idx;
 
+const TestError = helpers.TestHelperError || eval.BuiltinModules.InitError || error{
+    TestExpectedEqual,
+    TestUnexpectedResult,
+    MissingRootProcedure,
+    MissingProcSpec,
+    MissingCallable,
+    MissingDbgRoot,
+    MissingIterCollectWorker,
+    MissingSpecializedWorker,
+};
+
 var shared_test_builtins: ?eval.BuiltinModules = null;
 var shared_test_builtins_mutex: std.Io.Mutex = .init;
 
@@ -36,7 +47,7 @@ const LiftedSource = struct {
     }
 };
 
-fn sharedPrePublishedBuiltin() anyerror!helpers.PrePublishedBuiltin {
+fn sharedPrePublishedBuiltin() TestError!helpers.PrePublishedBuiltin {
     shared_test_builtins_mutex.lockUncancelable(std.testing.io);
     defer shared_test_builtins_mutex.unlock(std.testing.io);
 
@@ -55,7 +66,7 @@ fn lowerModule(
     allocator: Allocator,
     source: []const u8,
     inline_mode: lir.CheckedPipeline.InlineMode,
-) anyerror!LoweredSource {
+) TestError!LoweredSource {
     return lowerModuleWithOptions(allocator, source, inline_mode, .{});
 }
 
@@ -70,7 +81,7 @@ fn lowerModuleWithOptions(
     source: []const u8,
     inline_mode: lir.CheckedPipeline.InlineMode,
     options: LowerModuleOptions,
-) anyerror!LoweredSource {
+) TestError!LoweredSource {
     var resources = try helpers.parseAndCanonicalizeProgramWithBuiltin(allocator, .module, source, options.imports, try sharedPrePublishedBuiltin());
     errdefer helpers.cleanupParseAndCanonical(allocator, resources);
 
@@ -115,7 +126,7 @@ fn lowerModuleWithDebugEffects(
     source: []const u8,
     inline_mode: lir.CheckedPipeline.InlineMode,
     debug_effects: lir.CheckedPipeline.DebugEffectMode,
-) anyerror!LoweredSource {
+) TestError!LoweredSource {
     return lowerModuleWithOptions(allocator, source, inline_mode, .{ .debug_effects = debug_effects });
 }
 
@@ -124,14 +135,14 @@ fn lowerModuleWithProcDebugNames(
     source: []const u8,
     inline_mode: lir.CheckedPipeline.InlineMode,
     proc_debug_names: bool,
-) anyerror!LoweredSource {
+) TestError!LoweredSource {
     return lowerModuleWithOptions(allocator, source, inline_mode, .{ .proc_debug_names = proc_debug_names });
 }
 
 fn mainProcArgLayouts(
     allocator: Allocator,
     lowered: *const lir.CheckedPipeline.LoweredProgram,
-) anyerror![]LayoutIdx {
+) TestError![]LayoutIdx {
     const proc = lowered.lir_result.store.getProcSpec(try rootProc(lowered));
     const arg_locals = lowered.lir_result.store.getLocalSpan(proc.args);
     const arg_layouts = try allocator.alloc(LayoutIdx, arg_locals.len);
@@ -147,7 +158,7 @@ fn mainProcArgLayouts(
 fn runLoweredWithHostEvents(
     allocator: Allocator,
     lowered: *const lir.CheckedPipeline.LoweredProgram,
-) anyerror!eval.RuntimeHostEnv.RecordedRun {
+) TestError!eval.RuntimeHostEnv.RecordedRun {
     var runtime_env = eval.RuntimeHostEnv.init(allocator);
     defer runtime_env.deinit();
 
@@ -176,7 +187,7 @@ fn runLoweredWithHostEvents(
     return runtime_env.snapshot(allocator);
 }
 
-fn expectOptimizedDbgEvents(source: []const u8, expected: []const []const u8) anyerror!void {
+fn expectOptimizedDbgEvents(source: []const u8, expected: []const []const u8) TestError!void {
     const allocator = std.testing.allocator;
 
     var optimized = try lowerModule(allocator, source, .wrappers);
@@ -402,7 +413,7 @@ test "nominal record with a parenthesized backing still honors declared order an
 fn liftModuleAfterSpecConstr(
     allocator: Allocator,
     source: []const u8,
-) anyerror!LiftedSource {
+) TestError!LiftedSource {
     var resources = try helpers.parseAndCanonicalizeProgramWithBuiltin(allocator, .module, source, &.{}, try sharedPrePublishedBuiltin());
     errdefer helpers.cleanupParseAndCanonical(allocator, resources);
 
@@ -449,7 +460,7 @@ fn expectInlinePlanDecision(
     source: []const u8,
     fn_name: []const u8,
     expected: bool,
-) anyerror!void {
+) TestError!void {
     const allocator = std.testing.allocator;
     var resources = try helpers.parseAndCanonicalizeProgramWithBuiltin(allocator, .module, source, &.{}, try sharedPrePublishedBuiltin());
     defer helpers.cleanupParseAndCanonical(allocator, resources);
@@ -509,7 +520,7 @@ fn expectInlinePlanDecision(
     try std.testing.expect(found);
 }
 
-fn rootProc(lowered: *const lir.CheckedPipeline.LoweredProgram) anyerror!LIR.LirProcSpecId {
+fn rootProc(lowered: *const lir.CheckedPipeline.LoweredProgram) TestError!LIR.LirProcSpecId {
     try std.testing.expectEqual(@as(usize, 1), lowered.lir_result.root_procs.items.len);
     return lowered.lir_result.root_procs.items[0];
 }
@@ -518,7 +529,7 @@ fn collectAssignCallProcs(
     allocator: Allocator,
     lowered: *const lir.CheckedPipeline.LoweredProgram,
     proc_id: LIR.LirProcSpecId,
-) anyerror![]LIR.LirProcSpecId {
+) TestError![]LIR.LirProcSpecId {
     const proc = lowered.lir_result.store.getProcSpec(proc_id);
     const body = proc.body orelse return allocator.alloc(LIR.LirProcSpecId, 0);
 
@@ -618,7 +629,7 @@ fn collectProcShape(
     allocator: Allocator,
     lowered: *const lir.CheckedPipeline.LoweredProgram,
     proc_id: LIR.LirProcSpecId,
-) anyerror!ProcShape {
+) TestError!ProcShape {
     const proc = lowered.lir_result.store.getProcSpec(proc_id);
     var shape = ProcShape{
         .arg_count = lowered.lir_result.store.getLocalSpan(proc.args).len,
@@ -757,7 +768,7 @@ fn reachableIterCollectShape(
     allocator: Allocator,
     lowered: *const lir.CheckedPipeline.LoweredProgram,
     wanted: IterCollectShape,
-) anyerror!bool {
+) TestError!bool {
     var work = std.ArrayList(LIR.LirProcSpecId).empty;
     defer work.deinit(allocator);
     try work.append(allocator, try rootProc(lowered));
@@ -783,7 +794,7 @@ fn reachableProcShapeCount(
     allocator: Allocator,
     lowered: *const lir.CheckedPipeline.LoweredProgram,
     comptime matches: fn (ProcShape) bool,
-) anyerror!usize {
+) TestError!usize {
     var work = std.ArrayList(LIR.LirProcSpecId).empty;
     defer work.deinit(allocator);
     try work.append(allocator, try rootProc(lowered));
@@ -810,7 +821,7 @@ fn reachableProcShape(
     allocator: Allocator,
     lowered: *const lir.CheckedPipeline.LoweredProgram,
     comptime matches: fn (ProcShape) bool,
-) anyerror!bool {
+) TestError!bool {
     return (try reachableProcShapeCount(allocator, lowered, matches)) > 0;
 }
 
@@ -884,6 +895,10 @@ fn markReachableLiftedExpr(
             markReachableLiftedExpr(program, eq.lhs, reachable);
             markReachableLiftedExpr(program, eq.rhs, reachable);
         },
+        .structural_hash => |h| {
+            markReachableLiftedExpr(program, h.value, reachable);
+            markReachableLiftedExpr(program, h.hasher, reachable);
+        },
         .match_ => |match| {
             markReachableLiftedExpr(program, match.scrutinee, reachable);
             for (program.branchSpan(match.branches)) |branch| {
@@ -931,7 +946,7 @@ fn markReachableLiftedStmt(
 fn countUnreachableLiftedDirectCalls(
     allocator: Allocator,
     program: *const postcheck.MonotypeLifted.Ast.Program,
-) anyerror!usize {
+) TestError!usize {
     const reachable = try allocator.alloc(bool, program.exprs.items.len);
     defer allocator.free(reachable);
     @memset(reachable, false);
@@ -1053,7 +1068,7 @@ fn hasGroupedStrMatchSet(shape: ProcShape) bool {
     return shape.str_match_set_count == 1;
 }
 
-fn expectIterCollectWorkerSpecialized(source: []const u8) anyerror!void {
+fn expectIterCollectWorkerSpecialized(source: []const u8) TestError!void {
     const allocator = std.testing.allocator;
 
     var optimized = try lowerModule(allocator, source, .wrappers);
@@ -1072,7 +1087,7 @@ fn expectIterCollectWorkerSpecialized(source: []const u8) anyerror!void {
 fn rootDirectCallTarget(
     allocator: Allocator,
     lowered: *const lir.CheckedPipeline.LoweredProgram,
-) anyerror!LIR.LirProcSpecId {
+) TestError!LIR.LirProcSpecId {
     const root = try rootProc(lowered);
     const root_calls = try collectAssignCallProcs(allocator, lowered, root);
     defer allocator.free(root_calls);
@@ -1085,7 +1100,7 @@ fn expectRootDirectCallCount(
     source: []const u8,
     inline_mode: lir.CheckedPipeline.InlineMode,
     expected: usize,
-) anyerror!void {
+) TestError!void {
     const allocator = std.testing.allocator;
     var lowered_source = try lowerModule(allocator, source, inline_mode);
     defer lowered_source.deinit(allocator);
@@ -1099,7 +1114,7 @@ fn expectRootDirectCallCount(
 fn expectRootTargetHasCalls(
     source: []const u8,
     inline_mode: lir.CheckedPipeline.InlineMode,
-) anyerror!void {
+) TestError!void {
     const allocator = std.testing.allocator;
     var lowered_source = try lowerModule(allocator, source, inline_mode);
     defer lowered_source.deinit(allocator);
@@ -1275,7 +1290,7 @@ test "capturing direct wrapper is not inlined" {
 fn expectRootTargetTailTransform(
     source: []const u8,
     expected: LIR.TailTransform,
-) anyerror!void {
+) TestError!void {
     const allocator = std.testing.allocator;
     var lowered_source = try lowerModule(allocator, source, .none);
     defer lowered_source.deinit(allocator);

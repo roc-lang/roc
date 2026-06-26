@@ -23,18 +23,20 @@ main = {
 # EXPECTED
 MODULE HEADER DEPRECATED - shorthand_polymorphic_method.md:1:1:1:14
 # PROBLEMS
-**MODULE HEADER DEPRECATED**
-The `module` header is deprecated.
 
-Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
+┌──────────────────────────┐
+│ MODULE HEADER DEPRECATED ├─ The `module` header is deprecated. ─────────────┐
+└┬─────────────────────────┘                                                  │
+ │                                                                            │
+ │  module [main]                                                             │
+ │  ‾‾‾‾‾‾‾‾‾‾‾‾‾                                                             │
+ └─────────────────────────────────────── shorthand_polymorphic_method.md:1:1 ┘
 
-Remove the `module` header and ensure your file defines a type that matches the filename.
-**shorthand_polymorphic_method.md:1:1:1:14:**
-```roc
-module [main]
-```
-^^^^^^^^^^^^^
+    Type modules (headerless files with a top-level type matching the filename)
+    are now the preferred way to define modules.
 
+    Remove the `module` header and ensure your file defines a type that matches
+    the filename.
 
 # TOKENS
 ~~~zig
@@ -134,7 +136,7 @@ main = {
 		(e-lambda
 			(args
 				(p-assign (ident "list")))
-			(e-dispatch-call (method "len") (constraint-fn-var 64)
+			(e-dispatch-call (method "len") (constraint-fn-var 65)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "list"))))
@@ -153,7 +155,7 @@ main = {
 		(e-block
 			(s-let
 				(p-assign (ident "int_list"))
-				(e-call (constraint-fn-var 189)
+				(e-call (constraint-fn-var 190)
 					(e-lookup-local
 						(p-assign (ident "shorthand")))
 					(e-list
@@ -163,7 +165,7 @@ main = {
 							(e-num (value "3"))))))
 			(s-let
 				(p-assign (ident "string_list"))
-				(e-call (constraint-fn-var 243)
+				(e-call (constraint-fn-var 244)
 					(e-lookup-local
 						(p-assign (ident "shorthand")))
 					(e-list

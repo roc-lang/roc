@@ -1751,6 +1751,22 @@ attaches an `is_eq` constraint to the pattern's type so this lowering is
 total. Literal patterns on builtin types keep their direct literal-pattern
 encoding.
 
+### Constructing Nominal Values
+
+Nominal construction is expression-directed, not a unification side effect.
+Explicit construction syntax — `Type.(value)`, `Type.(a, b)`, `Type.{ field }`,
+`Type.Tag(payload)` — canonicalizes to a single `e_nominal` (or
+`e_nominal_external`) expression whose `backing_type` records the surface form
+(`value`, `tuple`, `record`, `tag`). Checking instantiates the nominal
+declaration, unifies the user-written backing expression against the
+declaration's backing variable, and gives the whole expression the nominal type.
+The backing variable is read **only** during this unification; nominal identity
+is defined by origin, name, and arguments, and two nominals of different identity
+never unify. A value already typed as a different nominal or primitive therefore
+does not silently lift into a nominal — the implicit path is reserved for
+literals, which convert through the `from_numeral` / `from_quote` mechanism above
+(walking transparent newtype chains to reach the builtin backing).
+
 ### String Interpolation
 
 An interpolated string literal is its own CIR expression. It is not
@@ -3984,6 +4000,165 @@ generated translation shim defines the exported entrypoints, marshals their
 natural C ABI arguments into interpreter calls, and fills the interpreter's
 internal dispatch table with the extern host symbols' addresses. Hosted
 dispatch order for that table is the `hosted` section's declaration order.
+
+## Watch Mode For Check And Test
+
+`roc check --watch` and `roc test --watch` are long-running compiler commands.
+They run once immediately, then watch the exact source inputs discovered by that
+run. A later filesystem event causes a new run only when at least one watched
+input's source file state changes: its bytes change, it appears after being
+missing, disappears after existing, or changes between readable and unreadable.
+Metadata-only changes such as `touch` do not rerun checking or tests and do not
+reprint diagnostics.
+
+The watch set is exact-file based. The implementation may watch directories
+because operating systems expose directory-level notification APIs, but directory
+events are filtered against the explicit file input set. Files merely present in
+a filesystem package or platform directory are not watched unless the compiler
+read them as part of the current run. If a source edit adds a new import, the
+importing file is already in the watch set; the next run discovers the new input
+and refreshes the watch set. URL package files are excluded even when they live
+in the local package cache, because their source identity is immutable.
+
+Watch inputs are explicit compiler output. A watch consumer must not recover
+module dependencies by scanning source text or reconstruct file imports from
+diagnostics. `BuildEnv` owns the shared watch-input collection used by
+`roc check --watch` and `roc test --watch`, because both commands already use
+`BuildEnv` and because compilation results are transferred there after the
+coordinator finishes. After every run, successful or failed, watch mode replaces
+the active watch set with the newly discovered explicit input set. Early
+failures still include the root source path and any other inputs discovered
+before the failure. Missing file imports are included so creating the missing
+file can trigger the next run.
+
+File imports are stored in `ModuleEnv` as source-relative dependencies. The
+stored path is the literal file-import path interpreted relative to that
+module's source directory. It must not be an absolute path, a realpath, a
+symlink-resolved path, a cwd-dependent path, or any other host-specific value.
+Checked module cache entries include these relative file dependencies so a cache
+hit can contribute watch inputs with string concatenation only:
+
+```text
+module_source_dir + cached_relative_file_dependency
+```
+
+Because file imports are source input to the checked module, their content
+identity also participates in the checked module cache key. Changing an imported
+file while the importing `.roc` source bytes stay unchanged must miss the
+checked module cache and produce fresh checked module data. The cache key input is
+the ordered source-relative dependency list plus each dependency's content
+digest, never an absolute path or resolved filesystem identity.
+
+When a watched file's parent directory no longer exists, or when a missing file's
+parent directory does not exist yet, the watcher registers the nearest existing
+ancestor directory and filters events by the unresolved relative suffix. This
+keeps watch coverage for later directory creation without widening the logical
+watch set.
+
+Filesystem event bursts are debounced for 25ms before re-reading watched inputs.
+If another filesystem event with changed bytes arrives while a check/test rerun
+is in progress, the in-progress run is cancelled and superseded by the newest
+run. Diagnostics and test output are printed for completed runs only. Repeated
+runs print a separator before their output instead of clearing the terminal.
+
+## Hot Loading For Default Dev-Shim Runs
+
+The default `roc` command hot loads automatically on the dev backend execution
+path: running `roc app.roc` watches the app's source inputs and reloads on
+change, with no `--watch` flag and no run subcommand. Non-dev `--opt` levels keep
+the existing one-shot behavior, as do apps that cannot use the shared-memory shim
+(see below).
+
+The initial compile lowers checked modules to LIR in the compiler process, then
+serializes only the dev backend `RunImage` bytes into shared memory. LIR and
+compiler IR are never allocated into the shared-memory allocator on this path.
+The shared memory contains `RunImage` code section bytes, readonly data bytes,
+entrypoint metadata, relocation records, symbol names, and hot-load metadata.
+The fixed shared-memory header padding stores only the small atomic hot-load
+control block: magic/version fields, the latest descriptor offset, the latest
+generation, and host acknowledgement state. It must not contain a fixed table of
+loaded-image slots. Loaded images are described by per-image descriptor slots in
+the shared-memory mapping plus separately reclaimable image byte ranges, so the
+number of retained old generations is limited only by shared-memory capacity.
+
+The compiler launches the host shim first, then installs directory watches for
+the exact file input set reported by the coordinator. Coordinator watch inputs
+are normalized through the same watch-input collector used by `roc check
+--watch` and `roc test --watch`, so relative module paths become logical
+absolute paths before reaching the watcher. URL package files are excluded;
+filesystem modules, platform/package files, and file imports discovered by the
+latest compile are included. After each completed rebuild, the parent refreshes
+the watch set from the rebuild worker's serialized watch-input file.
+
+Rebuilds run in short-lived internal compiler child processes. This keeps
+cancellation at a process boundary: when a byte-changing filesystem event
+arrives while a rebuild is active, the parent kills that rebuild, discards its
+captured stdout/stderr text and any uncommitted `RunImage` bytes, and starts a newer generation. A
+successful rebuild validates that the checked host interface identity still
+matches the already-linked host shim. If the interface changes, the rebuild
+reports that the user must restart `roc --watch` and leaves the previous
+`RunImage` active.
+
+Successful rebuild workers write a fresh shared-memory image descriptor plus a
+new dev `RunImage` into either a compiler-selected free image region or the
+append position of the same mapping. Descriptor slots are managed separately
+from image bytes and are reused only as descriptors, never as code or data. The
+descriptor records the generation, `RunImage` header offset, image bound, image
+allocation start/end, lifecycle state, and atomic reference count. The worker
+commits the descriptor offset through the hot-load control block with
+release/acquire atomics. The host shim checks that control
+block at Roc entrypoint boundaries. If a newer generation is available, the shim
+retains the latest descriptor, validates and relocates the replacement
+`RunImage` in place, marks its code pages read/execute in the shared mapping,
+swaps the active entrypoint reference to the new image under the runtime-state
+mutex, and acknowledges the generation as accepted. If validation or loading
+fails, it acknowledges rejection and keeps using the previous `RunImage`.
+
+Loaded machine-code images are reference-counted by the host shim. Each active
+image starts with one reference owned by the active entrypoint table. Entering a
+host-callable Roc function increments that image's atomic live count, and
+returning from that function decrements it. Swapping to a new image drops the
+old image's active-entrypoint reference and moves the old process-local program
+descriptor to a retired list. The shim never frees shared-memory image bytes; it
+only retains and releases descriptor references. Calls that entered old code
+before the swap keep executing old code safely while new entrypoint calls use
+the new image.
+
+The compiler parent process is the sole owner of shared-memory image-byte
+reclamation. It keeps unbounded process-local lists of descriptor offsets,
+reclaimed descriptor slots, and reclaimed image regions. After a rebuild commits
+a descriptor, after the host acknowledges, and before choosing storage for
+another rebuild, the parent sweeps all known descriptors. The current descriptor
+remains live regardless of its reference count. A non-current descriptor with a
+nonzero reference count is marked retired and left in place. A non-current
+descriptor whose reference count is zero is marked reclaimed, removed from the
+live descriptor list, its descriptor slot is returned to the descriptor-slot free
+list, and its image allocation range is added to the image free-region list. The
+parent coalesces free image regions and rewinds the shared-memory header's
+used-size high-water mark to the highest still-live image allocation. New
+rebuilds prefer suitably sized reclaimed image regions and otherwise append
+below the descriptor-slot area. If filesystem changes arrive faster than the host
+can enter the shim, the newest rebuild can still commit a descriptor as long as
+shared memory has capacity; there is no small fixed "loaded slot" cap.
+
+This lifetime rule also covers boxed Roc closures that cross the host boundary.
+The dev backend generates real erased-callable procedures; it does not insert
+trampolines. In shim execution mode, packed erased-callable payloads reserve a
+small shim-only prefix before the ordinary capture bytes. The prefix stores a
+reference to the owning loaded image and the original capture-drop callback.
+Generated erased-callable procedures skip this prefix before reading their
+capture, increment the owning image on entry, and decrement it before returning.
+The payload's final-drop callback first runs the original capture-drop callback
+with the adjusted capture pointer, then releases the payload's retained image
+reference. That retained reference keeps an old image alive while a host stores
+a boxed Roc closure and later calls it after one or more hot reloads.
+
+Headerless default apps never hot reload. They compile through synthetic
+temporary source files that are discarded after each run, so there is nothing
+stable to reload; they always run once, even where the shared-memory shim is
+available. Hot loading therefore applies only to apps with a real platform
+header. Windows uses explicit shared-memory handle inheritance for both the host
+shim child and the internal rebuild worker.
 
 ## Relationship To Cor LSS
 

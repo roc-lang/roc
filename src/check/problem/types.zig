@@ -54,6 +54,7 @@ pub const Problem = union(enum) {
     comptime_expect_failed: ComptimeExpectFailed,
     comptime_eval_error: ComptimeEvalError,
     invalid_numeric_literal: InvalidNumericLiteral,
+    tuple_access_needs_annotation: TupleAccessNeedsAnnotation,
     literal_defaulted: LiteralDefaulted,
     non_exhaustive_match: NonExhaustiveMatch,
     non_exhaustive_destructure: NonExhaustiveDestructure,
@@ -61,6 +62,7 @@ pub const Problem = union(enum) {
     unmatchable_pattern: UnmatchablePattern,
     unreachable_code: UnreachableCode,
     comptime_unused_branch: ComptimeUnusedBranch,
+    comptime_condition: ComptimeCondition,
 
     pub const Idx = enum(u32) { _ };
     pub const Tag = std.meta.Tag(@This());
@@ -196,6 +198,12 @@ pub const InvalidNumericLiteral = struct {
     region: base.Region,
 };
 
+/// Tuple access on an unconstrained value cannot infer the tuple's full arity.
+pub const TupleAccessNeedsAnnotation = struct {
+    region: base.Region,
+    elem_index: u32,
+};
+
 /// Warning (the Haskell §4.3.4 / `-Wtype-defaults` analogue): an open literal
 /// (number or string) unreachable from its definition's type was defaulted at the
 /// generalization boundary. Such a literal is shared by every instantiation of the
@@ -283,6 +291,16 @@ pub const ComptimeUnusedBranch = struct {
     branch_region: base.Region,
 };
 
+/// A conditional expression was known while checking, so it will always make the same choice.
+pub const ComptimeCondition = struct {
+    kind: enum {
+        if_condition,
+        if_guard,
+        match_scrutinee,
+    },
+    region: base.Region,
+};
+
 /// Problem data for a redundant pattern in a match
 pub const RedundantPattern = struct {
     match_expr: CIR.Expr.Idx,
@@ -341,6 +359,9 @@ pub const UnresolvedDispatcher = struct {
     is_binop: bool,
     /// For desugared equality (`==`/`!=`), whether the source operator was `!=`.
     binop_negated: bool,
+    /// True when checking inserted an explicit runtime-error node for this
+    /// diagnostic, so post-check lowering can safely continue through it.
+    runtime_error_inserted: bool,
 };
 
 /// Error when you try to static dispatch on something that's not a nominal type

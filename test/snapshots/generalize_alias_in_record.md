@@ -12,19 +12,20 @@ r = { f: id }
 main = (r.f(1), r.f("a"))
 ~~~
 # EXPECTED
-MISSING METHOD - generalize_alias_in_record.md:5:11:5:12
+TYPE MISMATCH - generalize_alias_in_record.md:5:21:5:24
 # PROBLEMS
-**MISSING METHOD**
-This **f** method is being called on a value whose type doesn't have that method:
-**generalize_alias_in_record.md:5:11:5:12:**
-```roc
-main = (r.f(1), r.f("a"))
-```
-          ^
 
-The value's type, which does not have a method named **f**, is:
+┌───────────────┐
+│ TYPE MISMATCH ├─ This string literal is being used where a non-string ──────┐
+└┬──────────────┘  type is needed.                                            │
+ │                                                                            │
+ │  main = (r.f(1), r.f("a"))                                                 │
+ │                      ‾‾‾                                                   │
+ └──────────────────────────────────────── generalize_alias_in_record.md:5:21 ┘
 
-    { f: a -> a }
+    The type was determined to be:
+
+        Dec
 
 # TOKENS
 ~~~zig
@@ -87,17 +88,31 @@ NO CHANGE
 						(p-assign (ident "id")))))))
 	(d-let
 		(p-assign (ident "main"))
-		(e-runtime-error (tag "erroneous_value_expr"))))
+		(e-tuple
+			(elems
+				(e-call (constraint-fn-var 67)
+					(e-field-access (field "f")
+						(receiver
+							(e-lookup-local
+								(p-assign (ident "r")))))
+					(e-num (value "1")))
+				(e-call (constraint-fn-var 87)
+					(e-field-access (field "f")
+						(receiver
+							(e-lookup-local
+								(p-assign (ident "r")))))
+					(e-string
+						(e-literal (string "a"))))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
 		(patt (type "a -> a"))
-		(patt (type "{ f: a -> a }"))
-		(patt (type "(Error, Error)")))
+		(patt (type "{ f: Dec -> Dec }"))
+		(patt (type "(Dec, Dec)")))
 	(expressions
 		(expr (type "a -> a"))
-		(expr (type "{ f: a -> a }"))
-		(expr (type "(Error, Error)"))))
+		(expr (type "{ f: Dec -> Dec }"))
+		(expr (type "(Dec, Dec)"))))
 ~~~

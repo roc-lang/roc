@@ -30,7 +30,8 @@ pub const Constants = struct {
     ///    node, diagnostic, and type-annotation payloads.
     /// 6: merge with typed node/static-dispatch payload layout changes.
     /// 7: field-order layout metadata moved from nominal-only to general field-order.
-    pub const CACHE_VERSION = 7;
+    /// 8: ModuleEnv stores source-relative file-import dependency metadata.
+    pub const CACHE_VERSION = 8;
 };
 
 /// Configuration for the Roc cache system.

@@ -206,932 +206,954 @@ TYPE MISMATCH - fuzz_crash_019.md:119:2:119:10
 MISSING METHOD - fuzz_crash_019.md:105:55:105:66
 MISSING METHOD - fuzz_crash_019.md:105:55:105:72
 # PROBLEMS
-**PARSE ERROR**
-A parsing error occurred: `match_branch_missing_arrow`
-This is an unexpected parsing error. Please check your syntax.
 
-**fuzz_crash_019.md:52:16:52:16:**
-```roc
-	match a {lue  {
-```
-	              ^
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: match_branch_missing_arrow ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  match a {lue  {                                                           │
+ │                ‾                                                           │
+ └─────────────────────────────────────────────────── fuzz_crash_019.md:52:16 ┘
 
+    This is an unexpected parsing error. Please check your syntax.
 
-**PARSE ERROR**
-A parsing error occurred: `match_branch_missing_arrow`
-This is an unexpected parsing error. Please check your syntax.
 
-**fuzz_crash_019.md:58:4:58:4:**
-```roc
-			1	"for" => 20[1, ] # t
-```
-			^
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: match_branch_missing_arrow ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  1 "for" => 20[1, ] # t                                                    │
+ │  ‾                                                                         │
+ └──────────────────────────────────────────────────── fuzz_crash_019.md:58:4 ┘
 
+    This is an unexpected parsing error. Please check your syntax.
 
-**PARSE ERROR**
-A parsing error occurred: `match_branch_missing_arrow`
-This is an unexpected parsing error. Please check your syntax.
 
-**fuzz_crash_019.md:59:3:59:3:**
-```roc
-		ment
-```
-		^
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: match_branch_missing_arrow ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  ment                                                                      │
+ │  ‾                                                                         │
+ └──────────────────────────────────────────────────── fuzz_crash_019.md:59:3 ┘
 
+    This is an unexpected parsing error. Please check your syntax.
 
-**PARSE ERROR**
-A parsing error occurred: `match_branch_missing_arrow`
-This is an unexpected parsing error. Please check your syntax.
 
-**fuzz_crash_019.md:60:16:60:16:**
-```roc
-		[1, 2, 3,est]123
-```
-		             ^
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: match_branch_missing_arrow ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  [1, 2, 3,est]123                                                          │
+ │               ‾                                                            │
+ └─────────────────────────────────────────────────── fuzz_crash_019.md:60:16 ┘
 
+    This is an unexpected parsing error. Please check your syntax.
 
-**PARSE ERROR**
-A parsing error occurred: `match_branch_missing_arrow`
-This is an unexpected parsing error. Please check your syntax.
 
-**fuzz_crash_019.md:62:5:62:5:**
-```roc
-		] 23
-```
-		  ^
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: match_branch_missing_arrow ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  ] 23                                                                      │
+ │    ‾                                                                       │
+ └──────────────────────────────────────────────────── fuzz_crash_019.md:62:5 ┘
 
+    This is an unexpected parsing error. Please check your syntax.
 
-**PARSE ERROR**
-A parsing error occurred: `match_branch_missing_arrow`
-This is an unexpected parsing error. Please check your syntax.
 
-**fuzz_crash_019.md:63:7:63:7:**
-```roc
-		3.1 314
-```
-		    ^
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: match_branch_missing_arrow ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  3.1 314                                                                   │
+ │      ‾                                                                     │
+ └──────────────────────────────────────────────────── fuzz_crash_019.md:63:7 ┘
 
+    This is an unexpected parsing error. Please check your syntax.
 
-**PARSE ERROR**
-A parsing error occurred: `match_branch_missing_arrow`
-This is an unexpected parsing error. Please check your syntax.
 
-**fuzz_crash_019.md:66:12:66:12:**
-```roc
-		(1, 2, 3)123
-```
-		         ^
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: match_branch_missing_arrow ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  (1, 2, 3)123                                                              │
+ │           ‾                                                                │
+ └─────────────────────────────────────────────────── fuzz_crash_019.md:66:12 ┘
 
+    This is an unexpected parsing error. Please check your syntax.
 
-**MODULE NOT FOUND**
-The module `Stdot` was not found in this Roc project.
 
-You're attempting to use this module here:
-**fuzz_crash_019.md:6:1:8:6:**
-```roc
-import Stdot
-		exposing [ #tem
-Cust]
-```
+┌──────────────────┐
+│ MODULE NOT FOUND ├─ The module `Stdot` was not found in this Roc project. ──┐
+└┬─────────────────┘                                                          │
+ │                                                                            │
+ │  import Stdot                                                              │
+ │          exposing [ #tem                                                   │
+ │  Cust]                                                                     │
+ │                                                                            │
+ └───────────────────────────────────────────────────── fuzz_crash_019.md:6:1 ┘
 
 
-**MODULE NOT FOUND**
-The module `Bae` was not found in this Roc project.
 
-You're attempting to use this module here:
-**fuzz_crash_019.md:10:1:10:19:**
-```roc
-import Bae as Gooe
-```
-^^^^^^^^^^^^^^^^^^
+┌──────────────────┐
+│ MODULE NOT FOUND ├─ The module `Bae` was not found in this Roc project. ────┐
+└┬─────────────────┘                                                          │
+ │                                                                            │
+ │  import Bae as Gooe                                                        │
+ │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                        │
+ └──────────────────────────────────────────────────── fuzz_crash_019.md:10:1 ┘
 
 
-**MODULE NOT FOUND**
-The module `Ba` was not found in this Roc project.
 
-You're attempting to use this module here:
-**fuzz_crash_019.md:11:1:12:4:**
-```roc
-import
-	Ba
-```
+┌──────────────────┐
+│ MODULE NOT FOUND ├─ The module `Ba` was not found in this Roc project. ─────┐
+└┬─────────────────┘                                                          │
+ │                                                                            │
+ │  import                                                                    │
+ │      Ba                                                                    │
+ │                                                                            │
+ └──────────────────────────────────────────────────── fuzz_crash_019.md:11:1 ┘
 
 
-**UNDECLARED TYPE**
-The type _Lis_ is not declared in this scope.
 
-This type is referenced here:
-**fuzz_crash_019.md:13:13:13:16:**
-```roc
-Map(a, b) : Lis, (ab) -> List(b)
-```
-            ^^^
+┌─────────────────┐
+│ UNDECLARED TYPE ├─ The type `Lis` is not declared in this scope. ───────────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  Map(a, b) : Lis, (ab) -> List(b)                                          │
+ │              ‾‾‾                                                           │
+ └─────────────────────────────────────────────────── fuzz_crash_019.md:13:13 ┘
 
 
-**UNDECLARED TYPE VARIABLE**
-The type variable _ab_ is not declared in this scope.
 
-Type variables must be introduced in a type annotation before they can be used.
+┌──────────────────────────┐
+│ UNDECLARED TYPE VARIABLE ├─ The type variable `ab` is not declared in ──────┐
+└┬─────────────────────────┘  this scope.                                     │
+ │                                                                            │
+ │  Map(a, b) : Lis, (ab) -> List(b)                                          │
+ │                    ‾‾                                                      │
+ └─────────────────────────────────────────────────── fuzz_crash_019.md:13:19 ┘
 
-This type variable is referenced here:
-**fuzz_crash_019.md:13:19:13:21:**
-```roc
-Map(a, b) : Lis, (ab) -> List(b)
-```
-                  ^^
+    Type variables must be introduced in a type annotation before they can be
+    used.
 
 
-**UNDECLARED TYPE VARIABLE**
-The type variable _ab_ is not declared in this scope.
+┌──────────────────────────┐
+│ UNDECLARED TYPE VARIABLE ├─ The type variable `ab` is not declared in ──────┐
+└┬─────────────────────────┘  this scope.                                     │
+ │                                                                            │
+ │  (ab) -> # row                                                             │
+ │   ‾‾                                                                       │
+ └──────────────────────────────────────────────────── fuzz_crash_019.md:19:4 ┘
 
-Type variables must be introduced in a type annotation before they can be used.
+    Type variables must be introduced in a type annotation before they can be
+    used.
 
-This type variable is referenced here:
-**fuzz_crash_019.md:19:4:19:6:**
-```roc
-		(ab) -> # row
-```
-		 ^^
 
+┌──────────────────────────┐
+│ UNDECLARED TYPE VARIABLE ├─ The type variable `b` is not declared in this ──┐
+└┬─────────────────────────┘  scope.                                          │
+ │                                                                            │
+ │  List(   b ) #z)                                                           │
+ │          ‾                                                                 │
+ └─────────────────────────────────────────────────── fuzz_crash_019.md:20:12 ┘
 
-**UNDECLARED TYPE VARIABLE**
-The type variable _b_ is not declared in this scope.
+    Type variables must be introduced in a type annotation before they can be
+    used.
 
-Type variables must be introduced in a type annotation before they can be used.
 
-This type variable is referenced here:
-**fuzz_crash_019.md:20:12:20:13:**
-```roc
-			List(			b	) #z)
-```
-			     			^
+┌─────────────────┐
+│ UNDECLARED TYPE ├─ The type `O` is not declared in this scope. ─────────────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  Som : { foo : O, bar : g }                                                │
+ │                ‾                                                           │
+ └─────────────────────────────────────────────────── fuzz_crash_019.md:24:15 ┘
 
 
-**UNDECLARED TYPE**
-The type _O_ is not declared in this scope.
 
-This type is referenced here:
-**fuzz_crash_019.md:24:15:24:16:**
-```roc
-Som : { foo : O, bar : g }
-```
-              ^
+┌──────────────────────────┐
+│ UNDECLARED TYPE VARIABLE ├─ The type variable `g` is not declared in this ──┐
+└┬─────────────────────────┘  scope.                                          │
+ │                                                                            │
+ │  Som : { foo : O, bar : g }                                                │
+ │                         ‾                                                  │
+ └─────────────────────────────────────────────────── fuzz_crash_019.md:24:24 ┘
 
+    Type variables must be introduced in a type annotation before they can be
+    used.
 
-**UNDECLARED TYPE VARIABLE**
-The type variable _g_ is not declared in this scope.
 
-Type variables must be introduced in a type annotation before they can be used.
+┌─────────────────┐
+│ UNDECLARED TYPE ├─ The type `U6` is not declared in this scope. ────────────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  one : U6                                                                  │
+ │        ‾‾                                                                  │
+ └──────────────────────────────────────────────────── fuzz_crash_019.md:37:7 ┘
 
-This type variable is referenced here:
-**fuzz_crash_019.md:24:24:24:25:**
-```roc
-Som : { foo : O, bar : g }
-```
-                       ^
 
 
-**UNDECLARED TYPE**
-The type _U6_ is not declared in this scope.
+┌────────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `s` in this scope. ──────────────────┐
+└┬───────────────────┘                                                        │
+ │                                                                            │
+ │  s exp0                                                                    │
+ │  ‾                                                                         │
+ └──────────────────────────────────────────────────── fuzz_crash_019.md:42:4 ┘
 
-This type is referenced here:
-**fuzz_crash_019.md:37:7:37:9:**
-```roc
-one : U6
-```
-      ^^
+    Is there an `import` or `exposing` missing up-top?
 
 
-**UNDEFINED VARIABLE**
-Nothing is named `s` in this scope.
-Is there an `import` or `exposing` missing up-top?
+┌────────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `exp0` in this scope. ───────────────┐
+└┬───────────────────┘                                                        │
+ │                                                                            │
+ │  s exp0                                                                    │
+ │    ‾‾‾‾                                                                    │
+ └──────────────────────────────────────────────────── fuzz_crash_019.md:42:6 ┘
 
-**fuzz_crash_019.md:42:4:42:5:**
-```roc
-			s exp0
-```
-			^
+    Is there an `import` or `exposing` missing up-top?
 
 
-**UNDEFINED VARIABLE**
-Nothing is named `exp0` in this scope.
-Is there an `import` or `exposing` missing up-top?
+┌────────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `r` in this scope. ──────────────────┐
+└┬───────────────────┘                                                        │
+ │                                                                            │
+ │  r                                                                         │
+ │  ‾                                                                         │
+ └──────────────────────────────────────────────────── fuzz_crash_019.md:45:3 ┘
 
-**fuzz_crash_019.md:42:6:42:10:**
-```roc
-			s exp0
-```
-			  ^^^^
+    Is there an `import` or `exposing` missing up-top?
 
 
-**UNDEFINED VARIABLE**
-Nothing is named `r` in this scope.
-Is there an `import` or `exposing` missing up-top?
+┌────────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `x` in this scope. ──────────────────┐
+└┬───────────────────┘                                                        │
+ │                                                                            │
+ │  x                                                                         │
+ │  ‾                                                                         │
+ └──────────────────────────────────────────────────── fuzz_crash_019.md:53:2 ┘
 
-**fuzz_crash_019.md:45:3:45:4:**
-```roc
-		r
-```
-		^
+    Is there an `import` or `exposing` missing up-top?
 
 
-**UNDEFINED VARIABLE**
-Nothing is named `x` in this scope.
-Is there an `import` or `exposing` missing up-top?
+┌─────────────────┐
+│ UNUSED VARIABLE ├─ Variable `lue` is defined here and then never used. ─────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  match a {lue  {                                                           │
+ │           ‾‾‾                                                              │
+ └─────────────────────────────────────────────────── fuzz_crash_019.md:52:11 ┘
 
-**fuzz_crash_019.md:53:2:53:3:**
-```roc
-	x
-```
-	^
+    If you don't need this variable, prefix it with an underscore like `_lue`
+    to suppress this warning.
 
 
-**UNUSED VARIABLE**
-Variable `lue` is not used anywhere in your code.
+┌────────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `x` in this scope. ──────────────────┐
+└┬───────────────────┘                                                        │
+ │                                                                            │
+ │  Blue=> {x                                                                 │
+ │          ‾                                                                 │
+ └─────────────────────────────────────────────────── fuzz_crash_019.md:55:11 ┘
 
-If you don't need this variable, prefix it with an underscore like `_lue` to suppress this warning.
-The unused variable is declared here:
-**fuzz_crash_019.md:52:11:52:14:**
-```roc
-	match a {lue  {
-```
-	         ^^^
+    Is there an `import` or `exposing` missing up-top?
 
 
-**UNDEFINED VARIABLE**
-Nothing is named `x` in this scope.
-Is there an `import` or `exposing` missing up-top?
+┌─────────────────┐
+│ UNUSED VARIABLE ├─ Variable `er` is defined here and then never used. ──────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  er #ent                                                                   │
+ │  ‾‾                                                                        │
+ └──────────────────────────────────────────────────── fuzz_crash_019.md:57:2 ┘
 
-**fuzz_crash_019.md:55:11:55:12:**
-```roc
-		Blue=> {x
-```
-		        ^
+    If you don't need this variable, prefix it with an underscore like `_er` to
+    suppress this warning.
 
 
-**UNUSED VARIABLE**
-Variable `er` is not used anywhere in your code.
+┌────────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `ment` in this scope. ───────────────┐
+└┬───────────────────┘                                                        │
+ │                                                                            │
+ │  ment                                                                      │
+ │  ‾‾‾‾                                                                      │
+ └──────────────────────────────────────────────────── fuzz_crash_019.md:59:3 ┘
 
-If you don't need this variable, prefix it with an underscore like `_er` to suppress this warning.
-The unused variable is declared here:
-**fuzz_crash_019.md:57:2:57:4:**
-```roc
-	er #ent
-```
-	^^
+    Is there an `import` or `exposing` missing up-top?
 
 
-**UNDEFINED VARIABLE**
-Nothing is named `ment` in this scope.
-Is there an `import` or `exposing` missing up-top?
+┌─────────────────┐
+│ UNUSED VARIABLE ├─ Variable `est` is defined here and then never used. ─────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  [1, 2, 3,est]123                                                          │
+ │           ‾‾‾                                                              │
+ └─────────────────────────────────────────────────── fuzz_crash_019.md:60:12 ┘
 
-**fuzz_crash_019.md:59:3:59:7:**
-```roc
-		ment
-```
-		^^^^
+    If you don't need this variable, prefix it with an underscore like `_est`
+    to suppress this warning.
 
 
-**UNUSED VARIABLE**
-Variable `est` is not used anywhere in your code.
+┌────────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `nt` in this scope. ─────────────────┐
+└┬───────────────────┘                                                        │
+ │                                                                            │
+ │  nt                                                                        │
+ │  ‾‾                                                                        │
+ └──────────────────────────────────────────────────── fuzz_crash_019.md:72:2 ┘
 
-If you don't need this variable, prefix it with an underscore like `_est` to suppress this warning.
-The unused variable is declared here:
-**fuzz_crash_019.md:60:12:60:15:**
-```roc
-		[1, 2, 3,est]123
-```
-		         ^^^
+    Is there an `import` or `exposing` missing up-top?
 
 
-**UNDEFINED VARIABLE**
-Nothing is named `nt` in this scope.
-Is there an `import` or `exposing` missing up-top?
+┌─────────────────┐
+│ UNDECLARED TYPE ├─ The type `Listlt` is not declared in this scope. ────────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  main! : Listlt({}, _)                                                     │
+ │          ‾‾‾‾‾‾                                                            │
+ └──────────────────────────────────────────────────── fuzz_crash_019.md:74:9 ┘
 
-**fuzz_crash_019.md:72:2:72:4:**
-```roc
-	nt
-```
-	^^
 
 
-**UNDECLARED TYPE**
-The type _Listlt_ is not declared in this scope.
+┌────────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `blaue` in this scope. ──────────────┐
+└┬───────────────────┘                                                        │
+ │                                                                            │
+ │  expect blaue                                                              │
+ │         ‾‾‾‾‾                                                              │
+ └──────────────────────────────────────────────────── fuzz_crash_019.md:78:9 ┘
 
-This type is referenced here:
-**fuzz_crash_019.md:74:9:74:15:**
-```roc
-main! : Listlt({}, _)
-```
-        ^^^^^^
+    Is there an `import` or `exposing` missing up-top?
 
 
-**UNDEFINED VARIABLE**
-Nothing is named `blaue` in this scope.
-Is there an `import` or `exposing` missing up-top?
+┌────────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `tag` in this scope. ────────────────┐
+└┬───────────────────┘                                                        │
+ │                                                                            │
+ │  tag                                                                       │
+ │  ‾‾‾                                                                       │
+ └──────────────────────────────────────────────────── fuzz_crash_019.md:80:3 ┘
 
-**fuzz_crash_019.md:78:9:78:14:**
-```roc
-	expect blaue
-```
-	       ^^^^^
+    Is there an `import` or `exposing` missing up-top?
 
 
-**UNDEFINED VARIABLE**
-Nothing is named `tag` in this scope.
-Is there an `import` or `exposing` missing up-top?
+┌──────────────────────┐
+│ CRASH EXPECTS STRING ├─ The `crash` keyword expects a string literal as ────┐
+└┬─────────────────────┘  its argument.                                       │
+ │                                                                            │
+ │  )crash ke"Unr!" #)                                                        │
+ │   ‾‾‾‾‾‾‾‾                                                                 │
+ └──────────────────────────────────────────────────── fuzz_crash_019.md:86:3 ┘
 
-**fuzz_crash_019.md:80:3:80:6:**
-```roc
-		tag
-```
-		^^^
+    For example: `crash "Something went wrong"`
 
 
-**CRASH EXPECTS STRING**
-The `crash` keyword expects a string literal as its argument.
-For example: `crash "Something went wrong"`
-**fuzz_crash_019.md:86:3:86:11:**
-```roc
-	)crash ke"Unr!" #)
-```
-	 ^^^^^^^^
+┌────────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `d` in this scope. ──────────────────┐
+└┬───────────────────┘                                                        │
+ │                                                                            │
+ │  i= "H, ${d}"                                                              │
+ │           ‾                                                                │
+ └─────────────────────────────────────────────────── fuzz_crash_019.md:87:11 ┘
 
+    Is there an `import` or `exposing` missing up-top?
 
-**UNDEFINED VARIABLE**
-Nothing is named `d` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
-**fuzz_crash_019.md:87:11:87:12:**
-```roc
-	i= "H, ${d}"
-```
-	         ^
+┌────────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `list` in this scope. ───────────────┐
+└┬───────────────────┘                                                        │
+ │                                                                            │
+ │  for n in list {                                                           │
+ │           ‾‾‾‾                                                             │
+ └─────────────────────────────────────────────────── fuzz_crash_019.md:92:11 ┘
 
+    Is there an `import` or `exposing` missing up-top?
 
-**UNDEFINED VARIABLE**
-Nothing is named `list` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
-**fuzz_crash_019.md:92:11:92:15:**
-```roc
-	for n in list {
-```
-	         ^^^^
+┌────────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `line!` in this scope. ──────────────┐
+└┬───────────────────┘                                                        │
+ │                                                                            │
+ │  line!("Ag ${n} to ${er}")                                                 │
+ │  ‾‾‾‾‾                                                                     │
+ └──────────────────────────────────────────────────── fuzz_crash_019.md:93:2 ┘
 
+    Is there an `import` or `exposing` missing up-top?
 
-**UNDEFINED VARIABLE**
-Nothing is named `line!` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
-**fuzz_crash_019.md:93:2:93:7:**
-```roc
-	line!("Ag ${n} to ${er}")
-```
-	^^^^^
+┌────────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `ber` in this scope. ────────────────┐
+└┬───────────────────┘                                                        │
+ │                                                                            │
+ │  ber + n                                                                   │
+ │  ‾‾‾                                                                       │
+ └──────────────────────────────────────────────────── fuzz_crash_019.md:94:3 ┘
 
+    Is there an `import` or `exposing` missing up-top?
 
-**UNDEFINED VARIABLE**
-Nothing is named `ber` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
-**fuzz_crash_019.md:94:3:94:6:**
-```roc
-		ber + n
-```
-		^^^
+┌────────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `tag` in this scope. ────────────────┐
+└┬───────────────────┘                                                        │
+ │                                                                            │
+ │  rd = { foo: 123, bar: "H", baz: tag, qux: Ok(world),ned }                 │
+ │                                  ‾‾‾                                       │
+ └─────────────────────────────────────────────────── fuzz_crash_019.md:96:34 ┘
 
+    Is there an `import` or `exposing` missing up-top?
 
-**UNDEFINED VARIABLE**
-Nothing is named `tag` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
-**fuzz_crash_019.md:96:34:96:37:**
-```roc
-	rd = { foo: 123, bar: "H", baz: tag, qux: Ok(world),ned }
-```
-	                                ^^^
+┌────────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `world` in this scope. ──────────────┐
+└┬───────────────────┘                                                        │
+ │                                                                            │
+ │  rd = { foo: 123, bar: "H", baz: tag, qux: Ok(world),ned }                 │
+ │                                               ‾‾‾‾‾                        │
+ └─────────────────────────────────────────────────── fuzz_crash_019.md:96:47 ┘
 
+    Is there an `import` or `exposing` missing up-top?
 
-**UNDEFINED VARIABLE**
-Nothing is named `world` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
-**fuzz_crash_019.md:96:47:96:52:**
-```roc
-	rd = { foo: 123, bar: "H", baz: tag, qux: Ok(world),ned }
-```
-	                                             ^^^^^
+┌────────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `ned` in this scope. ────────────────┐
+└┬───────────────────┘                                                        │
+ │                                                                            │
+ │  rd = { foo: 123, bar: "H", baz: tag, qux: Ok(world),ned }                 │
+ │                                                      ‾‾‾                   │
+ └─────────────────────────────────────────────────── fuzz_crash_019.md:96:54 ┘
 
+    Is there an `import` or `exposing` missing up-top?
 
-**UNDEFINED VARIABLE**
-Nothing is named `ned` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
-**fuzz_crash_019.md:96:54:96:57:**
-```roc
-	rd = { foo: 123, bar: "H", baz: tag, qux: Ok(world),ned }
-```
-	                                                    ^^^
+┌──────────────────────┐
+│ DUPLICATE DEFINITION ├─ The name `t` is being redeclared here. ─────────────┐
+└┬─────────────────────┘                                                      │
+ │                                                                            │
+ │  t = (123, "World", tag, O, (nd, t), [1, 2, 3])                            │
+ │  ‾                                                                         │
+ └──────────────────────────────────────────────────── fuzz_crash_019.md:97:2 ┘
 
+    In this scope, `t` was already defined here:
+       ┌──────────────────────────────────────────────────────────────────────┐
+    88 │  t = [                                                               │
+       │  ‾                                                                   │
+       └────────────────────────────────────────────── fuzz_crash_019.md:88:1 ┘
 
-**DUPLICATE DEFINITION**
-The name `t` is being redeclared in this scope.
 
-The redeclaration is here:
-**fuzz_crash_019.md:97:2:97:3:**
-```roc
-	t = (123, "World", tag, O, (nd, t), [1, 2, 3])
-```
-	^
+┌────────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `tag` in this scope. ────────────────┐
+└┬───────────────────┘                                                        │
+ │                                                                            │
+ │  t = (123, "World", tag, O, (nd, t), [1, 2, 3])                            │
+ │                     ‾‾‾                                                    │
+ └─────────────────────────────────────────────────── fuzz_crash_019.md:97:21 ┘
 
-But `t` was already defined here:
-**fuzz_crash_019.md:88:1:88:2:**
-```roc
-t = [
-```
-^
+    Is there an `import` or `exposing` missing up-top?
 
 
-**UNDEFINED VARIABLE**
-Nothing is named `tag` in this scope.
-Is there an `import` or `exposing` missing up-top?
+┌────────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `nd` in this scope. ─────────────────┐
+└┬───────────────────┘                                                        │
+ │                                                                            │
+ │  t = (123, "World", tag, O, (nd, t), [1, 2, 3])                            │
+ │                              ‾‾                                            │
+ └─────────────────────────────────────────────────── fuzz_crash_019.md:97:30 ┘
 
-**fuzz_crash_019.md:97:21:97:24:**
-```roc
-	t = (123, "World", tag, O, (nd, t), [1, 2, 3])
-```
-	                   ^^^
+    Is there an `import` or `exposing` missing up-top?
 
 
-**UNDEFINED VARIABLE**
-Nothing is named `nd` in this scope.
-Is there an `import` or `exposing` missing up-top?
+┌──────────────────────────────┐
+│ INVALID ASSIGNMENT TO ITSELF ├─ The value `t` is assigned to itself, ───────┐
+└┬─────────────────────────────┘  which would cause an infinite loop at       │
+ │                                runtime.                                    │
+ │                                                                            │
+ │  t = (123, "World", tag, O, (nd, t), [1, 2, 3])                            │
+ │                                  ‾                                         │
+ └─────────────────────────────────────────────────── fuzz_crash_019.md:97:34 ┘
 
-**fuzz_crash_019.md:97:30:97:32:**
-```roc
-	t = (123, "World", tag, O, (nd, t), [1, 2, 3])
-```
-	                            ^^
+    Only functions can reference themselves (for recursion). For non-function
+    values, the right-hand side must be fully computable without referring to
+    the value being assigned.
 
 
-**INVALID ASSIGNMENT TO ITSELF**
-The value `t` is assigned to itself, which would cause an infinite loop at runtime.
+┌────────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `m` in this scope. ──────────────────┐
+└┬───────────────────┘                                                        │
+ │                                                                            │
+ │  m (                                                                       │
+ │  ‾                                                                         │
+ └──────────────────────────────────────────────────── fuzz_crash_019.md:98:2 ┘
 
-Only functions can reference themselves (for recursion). For non-function values, the right-hand side must be fully computable without referring to the value being assigned.
+    Is there an `import` or `exposing` missing up-top?
 
-**fuzz_crash_019.md:97:34:97:35:**
-```roc
-	t = (123, "World", tag, O, (nd, t), [1, 2, 3])
-```
-	                                ^
 
+┌────────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `ag1` in this scope. ────────────────┐
+└┬───────────────────┘                                                        │
+ │                                                                            │
+ │  "World",ag1,                                                              │
+ │          ‾‾‾                                                               │
+ └────────────────────────────────────────────────── fuzz_crash_019.md:100:11 ┘
 
-**UNDEFINED VARIABLE**
-Nothing is named `m` in this scope.
-Is there an `import` or `exposing` missing up-top?
+    Is there an `import` or `exposing` missing up-top?
 
-**fuzz_crash_019.md:98:2:98:3:**
-```roc
-	m (
-```
-	^
 
+┌────────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `ne` in this scope. ─────────────────┐
+└┬───────────────────┘                                                        │
+ │                                                                            │
+ │  (ne, tuple),                                                              │
+ │   ‾‾                                                                       │
+ └─────────────────────────────────────────────────── fuzz_crash_019.md:102:4 ┘
 
-**UNDEFINED VARIABLE**
-Nothing is named `ag1` in this scope.
-Is there an `import` or `exposing` missing up-top?
+    Is there an `import` or `exposing` missing up-top?
 
-**fuzz_crash_019.md:100:11:100:14:**
-```roc
-		"World",ag1,
-```
-		        ^^^
 
+┌────────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `tuple` in this scope. ──────────────┐
+└┬───────────────────┘                                                        │
+ │                                                                            │
+ │  (ne, tuple),                                                              │
+ │       ‾‾‾‾‾                                                                │
+ └─────────────────────────────────────────────────── fuzz_crash_019.md:102:8 ┘
 
-**UNDEFINED VARIABLE**
-Nothing is named `ne` in this scope.
-Is there an `import` or `exposing` missing up-top?
+    Is there an `import` or `exposing` missing up-top?
 
-**fuzz_crash_019.md:102:4:102:6:**
-```roc
-		(ne, tuple),
-```
-		 ^^
 
+┌────────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `b` in this scope. ──────────────────┐
+└┬───────────────────┘                                                        │
+ │                                                                            │
+ │  b?? 12 > 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 e_fn(arg1)?.od()?.n… │
+ │  ‾                                                                         │
+ └─────────────────────────────────────────────────── fuzz_crash_019.md:105:2 ┘
 
-**UNDEFINED VARIABLE**
-Nothing is named `tuple` in this scope.
-Is there an `import` or `exposing` missing up-top?
+    Is there an `import` or `exposing` missing up-top?
 
-**fuzz_crash_019.md:102:8:102:13:**
-```roc
-		(ne, tuple),
-```
-		     ^^^^^
 
+┌────────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `e_fn` in this scope. ───────────────┐
+└┬───────────────────┘                                                        │
+ │                                                                            │
+ │  …12 <= 3 e_fn(arg1)?.od()?.ned()?.recd?                                   │
+ │           ‾‾‾‾                                                             │
+ └────────────────────────────────────────────────── fuzz_crash_019.md:105:55 ┘
 
-**UNDEFINED VARIABLE**
-Nothing is named `b` in this scope.
-Is there an `import` or `exposing` missing up-top?
+    Is there an `import` or `exposing` missing up-top?
 
-**fuzz_crash_019.md:105:2:105:3:**
-```roc
-	b?? 12 > 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 e_fn(arg1)?.od()?.ned()?.recd?
-```
-	^
 
+┌────────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `arg1` in this scope. ───────────────┐
+└┬───────────────────┘                                                        │
+ │                                                                            │
+ │  … 3 e_fn(arg1)?.od()?.ned()?.recd?                                        │
+ │           ‾‾‾‾                                                             │
+ └────────────────────────────────────────────────── fuzz_crash_019.md:105:60 ┘
 
-**UNDEFINED VARIABLE**
-Nothing is named `e_fn` in this scope.
-Is there an `import` or `exposing` missing up-top?
+    Is there an `import` or `exposing` missing up-top?
 
-**fuzz_crash_019.md:105:55:105:59:**
-```roc
-	b?? 12 > 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 e_fn(arg1)?.od()?.ned()?.recd?
-```
-	                                                     ^^^^
 
+┌────────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `r` in this scope. ──────────────────┐
+└┬───────────────────┘                                                        │
+ │                                                                            │
+ │  r(nu) # xpr                                                               │
+ │  ‾                                                                         │
+ └─────────────────────────────────────────────────── fuzz_crash_019.md:108:4 ┘
 
-**UNDEFINED VARIABLE**
-Nothing is named `arg1` in this scope.
-Is there an `import` or `exposing` missing up-top?
+    Is there an `import` or `exposing` missing up-top?
 
-**fuzz_crash_019.md:105:60:105:64:**
-```roc
-	b?? 12 > 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 e_fn(arg1)?.od()?.ned()?.recd?
-```
-	                                                          ^^^^
 
+┌────────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `nu` in this scope. ─────────────────┐
+└┬───────────────────┘                                                        │
+ │                                                                            │
+ │  r(nu) # xpr                                                               │
+ │    ‾‾                                                                      │
+ └─────────────────────────────────────────────────── fuzz_crash_019.md:108:6 ┘
 
-**UNDEFINED VARIABLE**
-Nothing is named `r` in this scope.
-Is there an `import` or `exposing` missing up-top?
+    Is there an `import` or `exposing` missing up-top?
 
-**fuzz_crash_019.md:108:4:108:5:**
-```roc
-			r(nu) # xpr
-```
-			^
 
+┌─────────────────┐
+│ UNUSED VARIABLE ├─ Variable `w` is defined here and then never used. ───────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  w = "d"                                                                   │
+ │  ‾                                                                         │
+ └──────────────────────────────────────────────────── fuzz_crash_019.md:76:2 ┘
 
-**UNDEFINED VARIABLE**
-Nothing is named `nu` in this scope.
-Is there an `import` or `exposing` missing up-top?
+    If you don't need this variable, prefix it with an underscore like `_w` to
+    suppress this warning.
 
-**fuzz_crash_019.md:108:6:108:8:**
-```roc
-			r(nu) # xpr
-```
-			  ^^
 
+┌─────────────────┐
+│ UNUSED VARIABLE ├─ Variable `i` is defined here and then never used. ───────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  i= "H, ${d}"                                                              │
+ │  ‾                                                                         │
+ └──────────────────────────────────────────────────── fuzz_crash_019.md:87:2 ┘
 
-**UNUSED VARIABLE**
-Variable `w` is not used anywhere in your code.
+    If you don't need this variable, prefix it with an underscore like `_i` to
+    suppress this warning.
 
-If you don't need this variable, prefix it with an underscore like `_w` to suppress this warning.
-The unused variable is declared here:
-**fuzz_crash_019.md:76:2:76:3:**
-```roc
-	w = "d"
-```
-	^
 
+┌─────────────────┐
+│ UNUSED VARIABLE ├─ Variable `rd` is defined here and then never used. ──────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  rd = { foo: 123, bar: "H", baz: tag, qux: Ok(world),ned }                 │
+ │  ‾‾                                                                        │
+ └──────────────────────────────────────────────────── fuzz_crash_019.md:96:2 ┘
 
-**UNUSED VARIABLE**
-Variable `i` is not used anywhere in your code.
+    If you don't need this variable, prefix it with an underscore like `_rd` to
+    suppress this warning.
 
-If you don't need this variable, prefix it with an underscore like `_i` to suppress this warning.
-The unused variable is declared here:
-**fuzz_crash_019.md:87:2:87:3:**
-```roc
-	i= "H, ${d}"
-```
-	^
 
+┌─────────────────┐
+│ UNUSED VARIABLE ├─ Variable `t` is defined here and then never used. ───────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  t = (123, "World", tag, O, (nd, t), [1, 2, 3])                            │
+ │  ‾                                                                         │
+ └──────────────────────────────────────────────────── fuzz_crash_019.md:97:2 ┘
 
-**UNUSED VARIABLE**
-Variable `rd` is not used anywhere in your code.
+    If you don't need this variable, prefix it with an underscore like `_t` to
+    suppress this warning.
 
-If you don't need this variable, prefix it with an underscore like `_rd` to suppress this warning.
-The unused variable is declared here:
-**fuzz_crash_019.md:96:2:96:4:**
-```roc
-	rd = { foo: 123, bar: "H", baz: tag, qux: Ok(world),ned }
-```
-	^^
 
+┌─────────────────┐
+│ UNDECLARED TYPE ├─ The type `V` is not declared in this scope. ─────────────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  t : V((a,c))                                                              │
+ │      ‾                                                                     │
+ └─────────────────────────────────────────────────── fuzz_crash_019.md:116:5 ┘
 
-**UNUSED VARIABLE**
-Variable `t` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_t` to suppress this warning.
-The unused variable is declared here:
-**fuzz_crash_019.md:97:2:97:3:**
-```roc
-	t = (123, "World", tag, O, (nd, t), [1, 2, 3])
-```
-	^
 
+┌────────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `foo` in this scope. ────────────────┐
+└┬───────────────────┘                                                        │
+ │                                                                            │
+ │  foo == 1                                                                  │
+ │  ‾‾‾                                                                       │
+ └─────────────────────────────────────────────────── fuzz_crash_019.md:119:2 ┘
 
-**UNDECLARED TYPE**
-The type _V_ is not declared in this scope.
+    Is there an `import` or `exposing` missing up-top?
 
-This type is referenced here:
-**fuzz_crash_019.md:116:5:116:6:**
-```roc
-t : V((a,c))
-```
-    ^
 
+┌────────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `h` in this scope. ──────────────────┐
+└┬───────────────────┘                                                        │
+ │                                                                            │
+ │  h == foo                                                                  │
+ │  ‾                                                                         │
+ └─────────────────────────────────────────────────── fuzz_crash_019.md:120:1 ┘
 
-**UNDEFINED VARIABLE**
-Nothing is named `foo` in this scope.
-Is there an `import` or `exposing` missing up-top?
+    Is there an `import` or `exposing` missing up-top?
 
-**fuzz_crash_019.md:119:2:119:5:**
-```roc
-	foo == 1
-```
-	^^^
 
+┌────────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `foo` in this scope. ────────────────┐
+└┬───────────────────┘                                                        │
+ │                                                                            │
+ │  h == foo                                                                  │
+ │       ‾‾‾                                                                  │
+ └─────────────────────────────────────────────────── fuzz_crash_019.md:120:6 ┘
 
-**UNDEFINED VARIABLE**
-Nothing is named `h` in this scope.
-Is there an `import` or `exposing` missing up-top?
+    Is there an `import` or `exposing` missing up-top?
 
-**fuzz_crash_019.md:120:1:120:2:**
-```roc
-h == foo
-```
-^
 
+┌─────────────────────────┐
+│ EXPOSED BUT NOT DEFINED ├─ The module header says that `main!` is ──────────┐
+└┬────────────────────────┘  exposed, but it is not defined anywhere in       │
+ │                           this module.                                     │
+ │                                                                            │
+ │  app [main!] { pf: platform "c" }                                          │
+ │       ‾‾‾‾‾                                                                │
+ └───────────────────────────────────────────────────── fuzz_crash_019.md:2:6 ┘
 
-**UNDEFINED VARIABLE**
-Nothing is named `foo` in this scope.
-Is there an `import` or `exposing` missing up-top?
+    You can fix this by either defining `main!` in this module, or by removing
+    it from the list of exposed values.
 
-**fuzz_crash_019.md:120:6:120:9:**
-```roc
-h == foo
-```
-     ^^^
 
+┌──────────────┐
+│ TOO FEW ARGS ├─ The type List expects 1 argument, but got 0 instead. ───────┐
+└┬─────────────┘                                                              │
+ │                                                                            │
+ │  List( #rg                                                                 │
+ │  ),                                                                        │
+ │                                                                            │
+ └──────────────────────────────────────────────────── fuzz_crash_019.md:17:3 ┘
 
-**EXPOSED BUT NOT DEFINED**
-The module header says that `main!` is exposed, but it is not defined anywhere in this module.
 
-**fuzz_crash_019.md:2:6:2:11:**
-```roc
-app [main!] { pf: platform "c" }
-```
-     ^^^^^
-You can fix this by either defining `main!` in this module, or by removing it from the list of exposed values.
 
-**TOO FEW ARGS**
-The type _List_ expects 1 argument, but got 0 instead.
-**fuzz_crash_019.md:17:3:18:4:**
-```roc
-		List( #rg
-		),
-```
+┌──────────────────────────┐
+│ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
+└┬─────────────────────────┘  implementation.                                 │
+ │                                                                            │
+ │  line : ( # Cm                                                             │
+ │  ) # Co                                                                    │
+ │                                                                            │
+ └──────────────────────────────────────────────────── fuzz_crash_019.md:22:1 ┘
 
+    Add a value body here, or put hosted functions in a platform type module so
+    they are published through the host boundary.
 
-**DECLARATION HAS NO VALUE**
-This declaration has a type annotation but no implementation.
-**fuzz_crash_019.md:22:1:23:2:**
-```roc
-line : ( # Cm
-) # Co
-```
 
+┌──────────────────────────┐
+│ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
+└┬─────────────────────────┘  implementation.                                 │
+ │                                                                            │
+ │  one : U6                                                                  │
+ │  ‾‾‾‾‾‾‾‾                                                                  │
+ └──────────────────────────────────────────────────── fuzz_crash_019.md:37:1 ┘
 
-Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+    Add a value body here, or put hosted functions in a platform type module so
+    they are published through the host boundary.
 
-**DECLARATION HAS NO VALUE**
-This declaration has a type annotation but no implementation.
-**fuzz_crash_019.md:37:1:37:9:**
-```roc
-one : U6
-```
-^^^^^^^^
 
+┌────────────────┐
+│ MISSING METHOD ├─ This `from_numeral` method is being called on a value ────┐
+└┬───────────────┘  whose type doesn't have that method.                      │
+ │                                                                            │
+ │  1                                                                         │
+ │  ‾                                                                         │
+ └──────────────────────────────────────────────────── fuzz_crash_019.md:39:2 ┘
 
-Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+    The value's type, which does not have a method named `from_numeral`, is:
 
-**MISSING METHOD**
-This **from_numeral** method is being called on a value whose type doesn't have that method:
-**fuzz_crash_019.md:39:2:39:3:**
-```roc
-	1
-```
-	^
+        {}
 
-The value's type, which does not have a method named **from_numeral**, is:
 
-    {}
+┌────────────────┐
+│ MISSING METHOD ├─ This `from_quote` method is being called on a value ──────┐
+└┬───────────────┘  whose type doesn't have that method.                      │
+ │                                                                            │
+ │  1 "for" => 20[1, ] # t                                                    │
+ │    ‾‾‾‾‾                                                                   │
+ └──────────────────────────────────────────────────── fuzz_crash_019.md:58:6 ┘
 
-**MISSING METHOD**
-This **from_quote** method is being called on a value whose type doesn't have that method:
-**fuzz_crash_019.md:58:6:58:11:**
-```roc
-			1	"for" => 20[1, ] # t
-```
-			 	^^^^^
+    The value's type, which does not have a method named `from_quote`, is:
 
-The value's type, which does not have a method named **from_quote**, is:
+        [Blue, ..]
 
-    [Blue, ..]
 
-**TYPE MISMATCH**
-The fifth branch of this `match` does not match the previous ones:
-**fuzz_crash_019.md:52:2:**
-```roc
-	match a {lue  {
-	x
-		}
-		Blue=> {x
-			}
-	er #ent
-			1	"for" => 20[1, ] # t
-		ment
-		[1, 2, 3,est]123
-		[
-		] 23
-		3.1 314
-		3.14 | 6.28 => 314
-		(1, ) => 123
-		(1, 2, 3)123
-		{ 	} => 12
-		Ok(123) => 12
-	}
-```
-                ^^^^^
+┌───────────────┐
+│ TYPE MISMATCH ├─ The fifth branch of this `match` does not match the ───────┐
+└┬──────────────┘  previous ones.                                             │
+ │                                                                            │
+ │  match a {lue  {                                                           │
+ │  x                                                                         │
+ │      }                                                                     │
+ │      Blue=> {x                                                             │
+ │          }                                                                 │
+ │  er #ent                                                                   │
+ │          1 "for" => 20[1, ] # t                                            │
+ │      ment                                                                  │
+ │      [1, 2, 3,est]123                                                      │
+ │      [                                                                     │
+ │      ] 23                                                                  │
+ │      3.1 314                                                               │
+ │      3.14 | 6.28 => 314                                                    │
+ │      (1, ) => 123                                                          │
+ │      (1, 2, 3)123                                                          │
+ │      {  } => 12                                                            │
+ │      Ok(123) => 12                                                         │
+ │  }                                                                         │
+ │                                                                            │
+ └─────────────────────────────────────────────────── fuzz_crash_019.md:52:17 ┘
 
-This fifth branch is trying to match:
+    This fifth branch is trying to match:
 
-    List(f)
-      where [
-        f.from_numeral : Numeral -> Try(f, [InvalidNumeral(Str)]),
-        f.is_eq : f, f -> Bool,
-      ]
+        List(f)
+          where [
+            f.from_numeral : Numeral -> Try(f, [InvalidNumeral(Str)]),
+            f.is_eq : f, f -> Bool,
+          ]
 
-But the expression between the `match` parenthesis has the type:
+    But the expression between the `match` parenthesis has the type:
 
-    [Blue, ..]
+        [Blue, ..]
 
-These can never match! Either the pattern or expression has a problem.
+    These can never match! Either the pattern or expression has a problem.
 
-**DECLARATION HAS NO VALUE**
-This declaration has a type annotation but no implementation.
-**fuzz_crash_019.md:74:1:74:22:**
-```roc
-main! : Listlt({}, _)
-```
-^^^^^^^^^^^^^^^^^^^^^
 
+┌──────────────────────────┐
+│ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
+└┬─────────────────────────┘  implementation.                                 │
+ │                                                                            │
+ │  main! : Listlt({}, _)                                                     │
+ │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                     │
+ └──────────────────────────────────────────────────── fuzz_crash_019.md:74:1 ┘
 
-Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+    Add a value body here, or put hosted functions in a platform type module so
+    they are published through the host boundary.
 
-**TOO FEW ARGS**
-The `me` function expects 2 arguments, but it got 1 instead:
-**fuzz_crash_019.md:84:2:86:3:**
-```roc
-	me(
-		..., # r
-	)crash ke"Unr!" #)
-```
 
-The `me` function has the type:
+┌──────────────┐
+│ TOO FEW ARGS ├─ The `me` function expects 2 arguments, but it got 1 ────────┐
+└┬─────────────┘  instead.                                                    │
+ │                                                                            │
+ │  me(                                                                       │
+ │      ..., # r                                                              │
+ │  )crash ke"Unr!" #)                                                        │
+ │                                                                            │
+ └──────────────────────────────────────────────────── fuzz_crash_019.md:84:2 ┘
 
-    [Blue, ..], [Tb] -> Error
+    The `me` function has the type:
 
-Are there any missing commas?
+        [Blue, ..], [Tb] -> Error
 
-**MISSING METHOD**
-This **from_quote** method is being called on a value whose type doesn't have that method:
-**fuzz_crash_019.md:86:11:86:17:**
-```roc
-	)crash ke"Unr!" #)
-```
-	         ^^^^^^
+    Are there any missing commas?
 
-The value's type, which does not have a method named **from_quote**, is:
 
-    {}
+┌────────────────┐
+│ MISSING METHOD ├─ This `from_quote` method is being called on a value ──────┐
+└┬───────────────┘  whose type doesn't have that method.                      │
+ │                                                                            │
+ │  )crash ke"Unr!" #)                                                        │
+ │           ‾‾‾‾‾‾                                                           │
+ └─────────────────────────────────────────────────── fuzz_crash_019.md:86:11 ┘
 
-**TYPE MISMATCH**
-This expression produces a value, but it's not being used:
-**fuzz_crash_019.md:98:4:104:3:**
-```roc
-	m (
-		123,
-		"World",ag1,
-		O, # nt
-		(ne, tuple),
-		[1, 2, 3],
-	)
-```
+    The value's type, which does not have a method named `from_quote`, is:
 
-It has the type:
+        {}
 
-    (f, j, Error, [O, ..], (Error, Error), List(k))
-      where [
-        f.from_numeral : Numeral -> Try(f, [InvalidNumeral(Str)]),
-        j.from_quote : Str -> Try(j, [BadQuotedBytes(Str)]),
-        k.from_numeral : Numeral -> Try(k, [InvalidNumeral(Str)]),
-      ]
 
-Since this expression is used as a statement, it must evaluate to `{}`.
-If you don't need the value, you can ignore it with `_ =`.
+┌───────────────┐
+│ TYPE MISMATCH ├─ This expression produces a value, but it's not being ──────┐
+└┬──────────────┘  used.                                                      │
+ │                                                                            │
+ │  m (                                                                       │
+ │      123,                                                                  │
+ │      "World",ag1,                                                          │
+ │      O, # nt                                                               │
+ │      (ne, tuple),                                                          │
+ │      [1, 2, 3],                                                            │
+ │  )                                                                         │
+ │                                                                            │
+ └──────────────────────────────────────────────────── fuzz_crash_019.md:98:4 ┘
 
-**TYPE MISMATCH**
-This expression produces a value, but it's not being used:
-**fuzz_crash_019.md:105:2:105:54:**
-```roc
-	b?? 12 > 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 e_fn(arg1)?.od()?.ned()?.recd?
-```
-	^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    It has the type:
 
-It has the type:
+        (f, j, Error, [O, ..], (Error, Error), List(k))
+          where [
+            f.from_numeral : Numeral -> Try(f, [InvalidNumeral(Str)]),
+            j.from_quote : Str -> Try(j, [BadQuotedBytes(Str)]),
+            k.from_numeral : Numeral -> Try(k, [InvalidNumeral(Str)]),
+          ]
 
-    Bool
+    Since this expression is used as a statement, it must evaluate to `{}`.
+    If you don't need the value, you can ignore it with `_ =`.
 
-Since this expression is used as a statement, it must evaluate to `{}`.
-If you don't need the value, you can ignore it with `_ =`.
 
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**fuzz_crash_019.md:93:22:93:24:**
-```roc
-	line!("Ag ${n} to ${er}")
-```
-	                    ^^
+┌───────────────┐
+│ TYPE MISMATCH ├─ This expression produces a value, but it's not being ──────┐
+└┬──────────────┘  used.                                                      │
+ │                                                                            │
+ │  b?? 12 > 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 e_fn(arg1)?.od()?.n… │
+ │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                      │
+ └─────────────────────────────────────────────────── fuzz_crash_019.md:105:2 ┘
 
-It has the type:
+    It has the type:
 
-    Dec
+        Bool
 
-But you are trying to use it as:
+    Since this expression is used as a statement, it must evaluate to `{}`.
+    If you don't need the value, you can ignore it with `_ =`.
 
-    Str
 
-**DECLARATION HAS NO VALUE**
-This declaration has a type annotation but no implementation.
-**fuzz_crash_019.md:113:1:113:7:**
-```roc
-y : {}
-```
-^^^^^^
+┌───────────────┐
+│ TYPE MISMATCH ├─ This expression is used in an unexpected way. ─────────────┐
+└┬──────────────┘                                                             │
+ │                                                                            │
+ │  line!("Ag ${n} to ${er}")                                                 │
+ │                      ‾‾                                                    │
+ └─────────────────────────────────────────────────── fuzz_crash_019.md:93:22 ┘
 
+    It has the type:
 
-Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+        Dec
 
-**DECLARATION HAS NO VALUE**
-This declaration has a type annotation but no implementation.
-**fuzz_crash_019.md:116:1:116:13:**
-```roc
-t : V((a,c))
-```
-^^^^^^^^^^^^
+    But you are trying to use it as:
 
+        Str
 
-Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
 
-**TYPE MISMATCH**
-This expression produces a value, but it's not being used:
-**fuzz_crash_019.md:119:2:119:10:**
-```roc
-	foo == 1
-```
-	^^^^^^^^
+┌──────────────────────────┐
+│ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
+└┬─────────────────────────┘  implementation.                                 │
+ │                                                                            │
+ │  y : {}                                                                    │
+ │  ‾‾‾‾‾‾                                                                    │
+ └─────────────────────────────────────────────────── fuzz_crash_019.md:113:1 ┘
 
-It has the type:
+    Add a value body here, or put hosted functions in a platform type module so
+    they are published through the host boundary.
 
-    Bool
 
-Since this expression is used as a statement, it must evaluate to `{}`.
-If you don't need the value, you can ignore it with `_ =`.
+┌──────────────────────────┐
+│ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
+└┬─────────────────────────┘  implementation.                                 │
+ │                                                                            │
+ │  t : V((a,c))                                                              │
+ │  ‾‾‾‾‾‾‾‾‾‾‾‾                                                              │
+ └─────────────────────────────────────────────────── fuzz_crash_019.md:116:1 ┘
 
-**MISSING METHOD**
-This is trying to dispatch a method named `od` on an unresolved type variable, but unresolved type variables have no methods.
-**fuzz_crash_019.md:105:55:105:66:**
-```roc
-	b?? 12 > 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 e_fn(arg1)?.od()?.ned()?.recd?
-```
-	                                                     ^^^^^^^^^^^
+    Add a value body here, or put hosted functions in a platform type module so
+    they are published through the host boundary.
 
-**Hint:** You can replace this static dispatch call with an ordinary function call, or force the type variable to become more concrete—for example, by adding a type annotation that narrows its type to something that actually has methods.
 
-**MISSING METHOD**
-This is trying to dispatch a method named `ned` on an unresolved type variable, but unresolved type variables have no methods.
-**fuzz_crash_019.md:105:55:105:72:**
-```roc
-	b?? 12 > 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 e_fn(arg1)?.od()?.ned()?.recd?
-```
-	                                                     ^^^^^^^^^^^^^^^^^
+┌───────────────┐
+│ TYPE MISMATCH ├─ This expression produces a value, but it's not being ──────┐
+└┬──────────────┘  used.                                                      │
+ │                                                                            │
+ │  foo == 1                                                                  │
+ │  ‾‾‾‾‾‾‾‾                                                                  │
+ └─────────────────────────────────────────────────── fuzz_crash_019.md:119:2 ┘
 
-**Hint:** You can replace this static dispatch call with an ordinary function call, or force the type variable to become more concrete—for example, by adding a type annotation that narrows its type to something that actually has methods.
+    It has the type:
+
+        Bool
+
+    Since this expression is used as a statement, it must evaluate to `{}`.
+    If you don't need the value, you can ignore it with `_ =`.
+
+
+┌────────────────┐
+│ MISSING METHOD ├─ This is trying to dispatch a method named `od` on an ─────┐
+└┬───────────────┘  unresolved type variable, but unresolved type variables   │
+ │                  have no methods.                                          │
+ │                                                                            │
+ │  …12 <= 3 e_fn(arg1)?.od()?.ned()?.recd?                                   │
+ │           ‾‾‾‾‾‾‾‾‾‾‾                                                      │
+ └────────────────────────────────────────────────── fuzz_crash_019.md:105:55 ┘
+
+    Hint: You can replace this static dispatch call with an ordinary function
+    call, or force the type variable to become more concrete—for example, by
+    adding a type annotation that narrows its type to something that actually
+    has methods.
+
+
+┌────────────────┐
+│ MISSING METHOD ├─ This is trying to dispatch a method named `ned` on an ────┐
+└┬───────────────┘  unresolved type variable, but unresolved type variables   │
+ │                  have no methods.                                          │
+ │                                                                            │
+ │  …12 <= 3 e_fn(arg1)?.od()?.ned()?.recd?                                   │
+ │           ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                │
+ └────────────────────────────────────────────────── fuzz_crash_019.md:105:55 ┘
+
+    Hint: You can replace this static dispatch call with an ordinary function
+    call, or force the type variable to become more concrete—for example, by
+    adding a type annotation that narrows its type to something that actually
+    has methods.
 
 # TOKENS
 ~~~zig
@@ -1918,7 +1940,7 @@ expect {
 				(s-expr
 					(e-not-implemented))
 				(s-expr
-					(e-call (constraint-fn-var 2309)
+					(e-call (constraint-fn-var 2311)
 						(e-lookup-local
 							(p-assign (ident "me")))
 						(e-not-implemented)))
@@ -1966,7 +1988,7 @@ expect {
 										(p-assign (ident "#interp_2"))
 										(e-lookup-local
 											(p-assign (ident "er"))))
-									(e-interpolation (constraint-fn-var 2593)
+									(e-interpolation (constraint-fn-var 2595)
 										(first
 											(e-literal (string "Ag ")))
 										(parts
@@ -1976,7 +1998,7 @@ expect {
 											(e-lookup-local
 												(p-assign (ident "#interp_2")))
 											(e-literal (string "")))))))
-						(e-dispatch-call (method "plus") (constraint-fn-var 2596)
+						(e-dispatch-call (method "plus") (constraint-fn-var 2598)
 							(receiver
 								(e-runtime-error (tag "ident_not_in_scope")))
 							(args
@@ -2040,7 +2062,7 @@ expect {
 					(e-if
 						(if-branches
 							(if-branch
-								(e-dispatch-call (method "is_gt") (constraint-fn-var 3042)
+								(e-dispatch-call (method "is_gt") (constraint-fn-var 3044)
 									(receiver
 										(e-match
 											(match
@@ -2074,18 +2096,18 @@ expect {
 										(e-if
 											(if-branches
 												(if-branch
-													(e-dispatch-call (method "is_lt") (constraint-fn-var 3159)
+													(e-dispatch-call (method "is_lt") (constraint-fn-var 3161)
 														(receiver
-															(e-dispatch-call (method "plus") (constraint-fn-var 3121)
+															(e-dispatch-call (method "plus") (constraint-fn-var 3123)
 																(receiver
 																	(e-num (value "13")))
 																(args
 																	(e-num (value "2")))))
 														(args
 															(e-num (value "5"))))
-													(e-dispatch-call (method "is_gte") (constraint-fn-var 3268)
+													(e-dispatch-call (method "is_gte") (constraint-fn-var 3270)
 														(receiver
-															(e-dispatch-call (method "minus") (constraint-fn-var 3230)
+															(e-dispatch-call (method "minus") (constraint-fn-var 3232)
 																(receiver
 																	(e-num (value "10")))
 																(args
@@ -2100,7 +2122,7 @@ expect {
 											(builtin)
 											(e-tag (name "True")))))
 								(if-else
-									(e-dispatch-call (method "is_lte") (constraint-fn-var 3352)
+									(e-dispatch-call (method "is_lte") (constraint-fn-var 3354)
 										(receiver
 											(e-num (value "12")))
 										(args
@@ -2114,12 +2136,12 @@ expect {
 										(e-match
 											(match
 												(cond
-													(e-dispatch-call (method "ned") (constraint-fn-var 3419)
+													(e-dispatch-call (method "ned") (constraint-fn-var 3421)
 														(receiver
 															(e-match
 																(match
 																	(cond
-																		(e-dispatch-call (method "od") (constraint-fn-var 3386)
+																		(e-dispatch-call (method "od") (constraint-fn-var 3388)
 																			(receiver
 																				(e-match
 																					(match

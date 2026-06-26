@@ -23,21 +23,22 @@ answer = composed([42])
 # EXPECTED
 TYPE MISMATCH - test_nested_instantiation_crash.md:12:16:12:41
 # PROBLEMS
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**test_nested_instantiation_crash.md:12:16:12:41:**
-```roc
-composed = |n| get_value(make_record(n))
-```
-               ^^^^^^^^^^^^^^^^^^^^^^^^^
 
-It has the type:
+┌───────────────┐
+│ TYPE MISMATCH ├─ This expression is used in an unexpected way. ─────────────┐
+└┬──────────────┘                                                             │
+ │                                                                            │
+ │  composed = |n| get_value(make_record(n))                                  │
+ │                 ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                  │
+ └────────────────────────────────── test_nested_instantiation_crash.md:12:16 ┘
 
-    List(a)
+    It has the type:
 
-But the annotation says it should be:
+        List(a)
 
-    Str
+    But the annotation says it should be:
+
+        Str
 
 # TOKENS
 ~~~zig

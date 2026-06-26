@@ -22,7 +22,9 @@ pub const ImportContext = struct {
 
 /// Callback type for extracting imports from a module.
 /// Returns a slice of imported module names (caller owns memory).
-pub const ImportExtractor = *const fn (context: ImportContext, module_name: []const u8) anyerror![][]const u8;
+pub fn ImportExtractor(comptime ExtractorError: type) type {
+    return *const fn (context: ImportContext, module_name: []const u8) ExtractorError![][]const u8;
+}
 
 /// Sort modules by their import dependencies using Kahn's algorithm.
 /// Returns modules in compilation order (dependencies first, dependents last).
@@ -36,11 +38,12 @@ pub const ImportExtractor = *const fn (context: ImportContext, module_name: []co
 /// Returns: Sorted list of module names (caller owns memory)
 /// Returns error.CyclicDependency if modules have circular imports.
 pub fn sortByDependency(
+    comptime ExtractorError: type,
     gpa: Allocator,
     module_names: []const []const u8,
-    extractor: ImportExtractor,
+    extractor: ImportExtractor(ExtractorError),
     extractor_ctx: *anyopaque,
-) anyerror![][]const u8 {
+) (Allocator.Error || CyclicDependencyError || ExtractorError)![][]const u8 {
     const n = module_names.len;
 
     // Early return for trivial cases

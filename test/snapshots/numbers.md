@@ -30,68 +30,75 @@ INVALID NUMBER - numbers.md:9:5:9:11
 INVALID NUMBER - numbers.md:10:5:10:10
 INVALID NUMBER - numbers.md:11:5:11:10
 # PROBLEMS
-**UPPERCASE BASE**
+
+UPPERCASE BASE
+
 Number base prefixes must be lowercase (0x, 0o, 0b).
 
 
 
-**UPPERCASE BASE**
+UPPERCASE BASE
+
 Number base prefixes must be lowercase (0x, 0o, 0b).
 
 
 
-**UPPERCASE BASE**
+UPPERCASE BASE
+
 Number base prefixes must be lowercase (0x, 0o, 0b).
 
 
 
-**INVALID NUMBER**
-This number literal does not fit in the inferred type:
-**numbers.md:8:5:8:11:**
-```roc
-    0.1e42,
-```
-    ^^^^^^
+┌────────────────┐
+│ INVALID NUMBER ├─ This number literal does not fit in the inferred type. ───┐
+└┬───────────────┘                                                            │
+ │                                                                            │
+ │  0.1e42,                                                                   │
+ │  ‾‾‾‾‾‾                                                                    │
+ └──────────────────────────────────────────────────────────── numbers.md:8:5 ┘
 
-The inferred type is:
+    The inferred type is:
 
-    Dec
+        Dec
 
-**INVALID NUMBER**
-This number literal does not fit in the inferred type:
-**numbers.md:9:5:9:11:**
-```roc
-    0.1E42,
-```
-    ^^^^^^
 
-The inferred type is:
+┌────────────────┐
+│ INVALID NUMBER ├─ This number literal does not fit in the inferred type. ───┐
+└┬───────────────┘                                                            │
+ │                                                                            │
+ │  0.1E42,                                                                   │
+ │  ‾‾‾‾‾‾                                                                    │
+ └──────────────────────────────────────────────────────────── numbers.md:9:5 ┘
 
-    Dec
+    The inferred type is:
 
-**INVALID NUMBER**
-This number literal does not fit in the inferred type:
-**numbers.md:10:5:10:10:**
-```roc
-    1.e42,
-```
-    ^^^^^
+        Dec
 
-The inferred type is:
 
-    Dec
+┌────────────────┐
+│ INVALID NUMBER ├─ This number literal does not fit in the inferred type. ───┐
+└┬───────────────┘                                                            │
+ │                                                                            │
+ │  1.e42,                                                                    │
+ │  ‾‾‾‾‾                                                                     │
+ └─────────────────────────────────────────────────────────── numbers.md:10:5 ┘
 
-**INVALID NUMBER**
-This number literal does not fit in the inferred type:
-**numbers.md:11:5:11:10:**
-```roc
-    1.E42,
-```
-    ^^^^^
+    The inferred type is:
 
-The inferred type is:
+        Dec
 
-    Dec
+
+┌────────────────┐
+│ INVALID NUMBER ├─ This number literal does not fit in the inferred type. ───┐
+└┬───────────────┘                                                            │
+ │                                                                            │
+ │  1.E42,                                                                    │
+ │  ‾‾‾‾‾                                                                     │
+ └─────────────────────────────────────────────────────────── numbers.md:11:5 ┘
+
+    The inferred type is:
+
+        Dec
 
 # TOKENS
 ~~~zig

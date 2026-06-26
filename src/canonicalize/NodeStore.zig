@@ -417,9 +417,9 @@ pub fn relocate(store: *NodeStore, offset: isize) void {
 /// when adding/removing variants from ModuleEnv unions. Update these when modifying the unions.
 ///
 /// Count of the diagnostic nodes in the ModuleEnv
-pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 82;
+pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 83;
 /// Count of the expression nodes in the ModuleEnv
-pub const MODULEENV_EXPR_NODE_COUNT = 54;
+pub const MODULEENV_EXPR_NODE_COUNT = 55;
 /// Count of the statement nodes in the ModuleEnv
 pub const MODULEENV_STATEMENT_NODE_COUNT = 20;
 /// Count of the type annotation nodes in the ModuleEnv
@@ -1214,6 +1214,13 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
                 .negated = p.negated != 0,
             } };
         },
+        .expr_structural_hash => {
+            const p = payload.expr_structural_hash;
+            return CIR.Expr{ .e_structural_hash = .{
+                .value = @enumFromInt(p.value),
+                .hasher = @enumFromInt(p.hasher),
+            } };
+        },
         .expr_method_eq => {
             const p = payload.expr_method_eq;
             return CIR.Expr{ .e_method_eq = .{
@@ -1330,6 +1337,24 @@ pub fn replaceExprWithStructuralEq(
         .lhs = @intFromEnum(lhs),
         .rhs = @intFromEnum(rhs),
         .negated = @intFromBool(negated),
+    } });
+    store.nodes.set(node_idx, node);
+}
+
+/// Replaces an existing expression with an explicit structural hash node.
+/// This is used when the checker has decided that `to_hash` is satisfied
+/// structurally rather than via an attached method dispatch.
+pub fn replaceExprWithStructuralHash(
+    store: *NodeStore,
+    expr_idx: CIR.Expr.Idx,
+    value: CIR.Expr.Idx,
+    hasher: CIR.Expr.Idx,
+) void {
+    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
+    var node = Node.init(.expr_structural_hash);
+    node.setPayload(.{ .expr_structural_hash = .{
+        .value = @intFromEnum(value),
+        .hasher = @intFromEnum(hasher),
     } });
     store.nodes.set(node_idx, node);
 }
@@ -2503,6 +2528,13 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
                 .lhs = @intFromEnum(e.lhs),
                 .rhs = @intFromEnum(e.rhs),
                 .negated = @intFromBool(e.negated),
+            } });
+        },
+        .e_structural_hash => |e| {
+            node.tag = .expr_structural_hash;
+            node.setPayload(.{ .expr_structural_hash = .{
+                .value = @intFromEnum(e.value),
+                .hasher = @intFromEnum(e.hasher),
             } });
         },
         .e_method_eq => |e| {
@@ -4171,6 +4203,11 @@ pub fn addDiagnosticUnregistered(store: *NodeStore, reason: CIR.Diagnostic) Allo
             region = r.region;
             node.setPayload(.{ .diag_single_value = .{ .value = @intFromEnum(r.path) } });
         },
+        .file_import_absolute_path => |r| {
+            node.tag = .diag_file_import_absolute_path;
+            region = r.region;
+            node.setPayload(.{ .diag_single_value = .{ .value = @intFromEnum(r.path) } });
+        },
         .file_import_not_utf8 => |r| {
             node.tag = .diag_file_import_not_utf8;
             region = r.region;
@@ -4519,6 +4556,10 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
             .region = store.getRegionAt(node_idx),
         } },
         .diag_file_import_io_error => return CIR.Diagnostic{ .file_import_io_error = .{
+            .path = @enumFromInt(payload.diag_single_value.value),
+            .region = store.getRegionAt(node_idx),
+        } },
+        .diag_file_import_absolute_path => return CIR.Diagnostic{ .file_import_absolute_path = .{
             .path = @enumFromInt(payload.diag_single_value.value),
             .region = store.getRegionAt(node_idx),
         } },

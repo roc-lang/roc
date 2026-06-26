@@ -15,19 +15,20 @@ bag = { run: FooBar.myfunc }
 main = (bag.run([1, 2, 3]), bag.run(["a", "b"]))
 ~~~
 # EXPECTED
-MISSING METHOD - generalize_alias_assoc_fn_record.md:8:13:8:16
+TYPE MISMATCH - generalize_alias_assoc_fn_record.md:8:38:8:41
 # PROBLEMS
-**MISSING METHOD**
-This **run** method is being called on a value whose type doesn't have that method:
-**generalize_alias_assoc_fn_record.md:8:13:8:16:**
-```roc
-main = (bag.run([1, 2, 3]), bag.run(["a", "b"]))
-```
-            ^^^
 
-The value's type, which does not have a method named **run**, is:
+┌───────────────┐
+│ TYPE MISMATCH ├─ This string literal is being used where a non-string ──────┐
+└┬──────────────┘  type is needed.                                            │
+ │                                                                            │
+ │  main = (bag.run([1, 2, 3]), bag.run(["a", "b"]))                          │
+ │                                       ‾‾‾                                  │
+ └────────────────────────────────── generalize_alias_assoc_fn_record.md:8:38 ┘
 
-    { run: List(a) -> U64 }
+    The type was determined to be:
+
+        Dec
 
 # TOKENS
 ~~~zig
@@ -109,7 +110,7 @@ main = (bag.run([1, 2, 3]), bag.run(["a", "b"]))
 		(e-lambda
 			(args
 				(p-assign (ident "list")))
-			(e-dispatch-call (method "len") (constraint-fn-var 56)
+			(e-dispatch-call (method "len") (constraint-fn-var 59)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "list"))))
@@ -128,7 +129,29 @@ main = (bag.run([1, 2, 3]), bag.run(["a", "b"]))
 						(p-assign (ident "generalize_alias_assoc_fn_record.FooBar.myfunc")))))))
 	(d-let
 		(p-assign (ident "main"))
-		(e-runtime-error (tag "erroneous_value_expr")))
+		(e-tuple
+			(elems
+				(e-call (constraint-fn-var 185)
+					(e-field-access (field "run")
+						(receiver
+							(e-lookup-local
+								(p-assign (ident "bag")))))
+					(e-list
+						(elems
+							(e-num (value "1"))
+							(e-num (value "2"))
+							(e-num (value "3")))))
+				(e-call (constraint-fn-var 223)
+					(e-field-access (field "run")
+						(receiver
+							(e-lookup-local
+								(p-assign (ident "bag")))))
+					(e-list
+						(elems
+							(e-string
+								(e-literal (string "a")))
+							(e-string
+								(e-literal (string "b")))))))))
 	(s-nominal-decl
 		(ty-header (name "FooBar"))
 		(ty-record)))
@@ -138,13 +161,13 @@ main = (bag.run([1, 2, 3]), bag.run(["a", "b"]))
 (inferred-types
 	(defs
 		(patt (type "List(a) -> U64"))
-		(patt (type "{ run: List(a) -> U64 }"))
-		(patt (type "(Error, Error)")))
+		(patt (type "{ run: List(Dec) -> U64 }"))
+		(patt (type "(U64, U64)")))
 	(type_decls
 		(nominal (type "FooBar")
 			(ty-header (name "FooBar"))))
 	(expressions
 		(expr (type "List(a) -> U64"))
-		(expr (type "{ run: List(a) -> U64 }"))
-		(expr (type "(Error, Error)"))))
+		(expr (type "{ run: List(Dec) -> U64 }"))
+		(expr (type "(U64, U64)"))))
 ~~~

@@ -232,12 +232,34 @@ pub const LinkError = error{
     DarwinSysrootNotFound,
 } || std.zig.system.DetectError;
 
+const SelfExePathError = std.Io.Dir.ReadLinkError || error{
+    NameTooLong,
+    UnsupportedOs,
+};
+
+const SelfExeDirError = Allocator.Error || SelfExePathError;
+
+const PatchMachoStackSizeError = std.Io.File.OpenError || std.Io.File.ReadPositionalError || std.Io.File.WritePositionalError || error{
+    NotMacho64,
+    UnexpectedEof,
+};
+
+const ResignMachoError = Allocator.Error || CodeSignature.WriteError || std.Io.File.OpenError || std.Io.File.ReadPositionalError || std.Io.File.WritePositionalError || error{
+    CodeSignatureNotAtEnd,
+    InvalidCodeSignatureSize,
+    MissingLinkeditSegment,
+    MissingTextSegment,
+    NonResizable,
+    NotMacho64,
+    UnexpectedEof,
+};
+
 /// Resolve the path of the currently running executable, host-OS specific.
 ///
 /// Zig 0.16 removed `std.fs.selfExePath` and the private std helpers live inside
 /// `std.Io.Threaded` / `std.Io.Dispatch`. We need a cross-host implementation
 /// because the linker runs on Linux/macOS/Windows but may target any OS.
-fn selfExePath(std_io: std.Io, buf: []u8) anyerror![]const u8 {
+fn selfExePath(std_io: std.Io, buf: []u8) SelfExePathError![]const u8 {
     switch (comptime builtin.os.tag) {
         .macos, .ios, .tvos, .watchos, .visionos => {
             var n: u32 = @intCast(buf.len);
@@ -260,7 +282,7 @@ fn selfExePath(std_io: std.Io, buf: []u8) anyerror![]const u8 {
 }
 
 /// Get the directory containing the currently running executable.
-fn getSelfExeDir(allocator: std.mem.Allocator, std_io: std.Io) anyerror![]const u8 {
+fn getSelfExeDir(allocator: std.mem.Allocator, std_io: std.Io) SelfExeDirError![]const u8 {
     var symlink_path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const symlink_path = try selfExePath(std_io, &symlink_path_buf);
     var real_path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
@@ -386,7 +408,6 @@ fn appendPlatformFile(
 
 /// Build the linker command arguments for the given configuration.
 /// Returns the args array that would be passed to LLD.
-/// This is used both by link() and formatLinkCommand().
 fn buildLinkArgs(ctx: *CliCtx, config: LinkConfig) LinkError!std.array_list.Managed([]const u8) {
     // Use arena allocator for all temporary allocations
     // Pre-allocate capacity to avoid reallocations (typical command has 20-40 args)
@@ -425,6 +446,12 @@ fn buildLinkArgs(ctx: *CliCtx, config: LinkConfig) LinkError!std.array_list.Mana
                 .x86_64 => try args.append("x86_64"),
                 else => try args.append("arm64"), // default to arm64
             }
+
+            // Roc rewrites the ad-hoc code signature after patching Mach-O
+            // load commands. Suppress lld's content-derived LC_UUID so the
+            // final executable bytes do not depend on lld's pre-patch view of
+            // the output, which includes the output basename in the signature.
+            try args.append("-no_uuid");
 
             // Add platform version metadata required by Mach-O links.
             try args.append("-platform_version");
@@ -834,9 +861,11 @@ pub fn link(ctx: *CliCtx, config: LinkConfig) LinkError!void {
 
 const macho = std.macho;
 
+const deterministic_macho_code_signature_identifier = "roc";
+
 /// Patch a freshly-linked macOS executable's LC_MAIN stacksize field. See the
 /// callsite in `link` for why this is needed.
-fn patchMachoStackSize(path: []const u8, stacksize: u64, io: std.Io) anyerror!void {
+fn patchMachoStackSize(path: []const u8, stacksize: u64, io: std.Io) PatchMachoStackSizeError!void {
     var file = try std.Io.Dir.cwd().openFile(io, path, .{ .mode = .read_write });
     defer file.close(io);
 
@@ -866,7 +895,7 @@ fn patchMachoStackSize(path: []const u8, stacksize: u64, io: std.Io) anyerror!vo
 /// blob is the last content in the file, recorded by LC_CODE_SIGNATURE; we
 /// recompute the page hashes over everything before it and write a fresh
 /// linker-style ad-hoc signature into that extent.
-fn resignMachoAdHoc(ctx: *CliCtx, path: []const u8) anyerror!void {
+fn resignMachoAdHoc(ctx: *CliCtx, path: []const u8) ResignMachoError!void {
     const io = ctx.io.std_io;
     const gpa = ctx.gpa;
 
@@ -914,21 +943,31 @@ fn resignMachoAdHoc(ctx: *CliCtx, path: []const u8) anyerror!void {
     const linkedit = linkedit_seg orelse return error.MissingLinkeditSegment;
 
     const page_size: u16 = if (header.cputype == macho.CPU_TYPE_ARM64) 0x4000 else 0x1000;
-    const ident = std.fs.path.basename(path);
+    const ident = deterministic_macho_code_signature_identifier;
 
     // The signature hashes every page before LC_CODE_SIGNATURE's dataoff,
     // including page 0 with the load commands. Its exact size is known up
     // front (one CodeDirectory blob, no special slots), so any load command
-    // growth must be written back before hashing.
+    // size changes must be written back before hashing.
     const hash_size = std.crypto.hash.sha2.Sha256.digest_length;
     const total_pages = std.mem.alignForward(usize, cs.dataoff, page_size) / page_size;
     const exact_size = @sizeOf(macho.SuperBlob) + @sizeOf(macho.BlobIndex) +
         @sizeOf(macho.CodeDirectory) + ident.len + 1 + total_pages * hash_size;
 
-    if (exact_size > cs.datasize) {
-        const grow = exact_size - cs.datasize;
+    const old_datasize = cs.datasize;
+    const old_sig_end: u64 = @as(u64, cs.dataoff) + @as(u64, old_datasize);
+    if (try file.length(io) != old_sig_end) return error.CodeSignatureNotAtEnd;
+
+    if (exact_size != old_datasize) {
         cs.datasize = @intCast(exact_size);
-        linkedit.filesize += grow;
+        if (exact_size > old_datasize) {
+            const grow: u64 = @intCast(exact_size - old_datasize);
+            linkedit.filesize += grow;
+        } else {
+            const shrink: u64 = @intCast(old_datasize - exact_size);
+            if (linkedit.filesize < shrink) return error.InvalidCodeSignatureSize;
+            linkedit.filesize -= shrink;
+        }
         linkedit.vmsize = std.mem.alignForward(u64, linkedit.filesize, page_size);
         try file.writePositionalAll(io, cmds_buf, @sizeOf(macho.mach_header_64));
     }
@@ -950,13 +989,8 @@ fn resignMachoAdHoc(ctx: *CliCtx, path: []const u8) anyerror!void {
     const sig = sig_bytes.written();
     std.debug.assert(sig.len == exact_size);
     try file.writePositionalAll(io, sig, cs.dataoff);
-    if (sig.len < cs.datasize) {
-        // Zero the slack so stale signature bytes cannot survive within the
-        // load command's extent.
-        const slack = try ctx.arena.alloc(u8, cs.datasize - sig.len);
-        @memset(slack, 0);
-        try file.writePositionalAll(io, slack, cs.dataoff + sig.len);
-    }
+    const new_sig_end: u64 = @as(u64, cs.dataoff) + @as(u64, @intCast(sig.len));
+    try file.setLength(io, new_sig_end);
 }
 
 fn findArg(args: []const []const u8, needle: []const u8) ?usize {
@@ -964,38 +998,6 @@ fn findArg(args: []const []const u8, needle: []const u8) ?usize {
         if (std.mem.eql(u8, arg, needle)) return i;
     }
     return null;
-}
-
-/// Format link configuration as a shell command string for manual reproduction.
-/// Useful for debugging linking issues by allowing users to run the linker manually.
-pub fn formatLinkCommand(ctx: *CliCtx, config: LinkConfig) LinkError![]const u8 {
-    const args = try buildLinkArgs(ctx, config);
-
-    // Join args with spaces, quoting paths that contain spaces or special chars
-    var result = std.array_list.Managed(u8).init(ctx.arena);
-
-    for (args.items, 0..) |arg, i| {
-        if (i > 0) result.append(' ') catch return LinkError.OutOfMemory;
-
-        // Quote if contains spaces or shell metacharacters
-        const needs_quoting = std.mem.findAny(u8, arg, " \t'\"\\$`") != null;
-        if (needs_quoting) {
-            result.append('\'') catch return LinkError.OutOfMemory;
-            // Escape single quotes within the string
-            for (arg) |c| {
-                if (c == '\'') {
-                    result.appendSlice("'\\''") catch return LinkError.OutOfMemory;
-                } else {
-                    result.append(c) catch return LinkError.OutOfMemory;
-                }
-            }
-            result.append('\'') catch return LinkError.OutOfMemory;
-        } else {
-            result.appendSlice(arg) catch return LinkError.OutOfMemory;
-        }
-    }
-
-    return result.toOwnedSlice() catch return LinkError.OutOfMemory;
 }
 
 /// Convenience function to link two object files into an executable

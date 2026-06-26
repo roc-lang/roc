@@ -179,6 +179,28 @@ pub fn echoHostedFn(str: RocStr) callconv(.c) void {
     // Returns {} (ZST) — no bytes to write to ret_bytes
 }
 
+/// wasm uniform-ABI entry for `Echo.line!`. On wasm32 the interpreter cannot
+/// synthesize a dynamic-signature C call (see `host_trampoline.available`), so
+/// it invokes hosted functions through a uniform `(args_buf, ret_buf)` ABI. The
+/// interpreter packs `line!`'s single `Str` argument at offset 0 of `args` and
+/// expects no return value, so this reads the RocStr back out and forwards to
+/// `echoHostedFn`, which owns and decrefs it exactly as on native.
+pub fn echoHostedFnWasm(args: [*]u8, _: [*]u8) callconv(.c) void {
+    const str: *const RocStr = @ptrCast(@alignCast(args));
+    echoHostedFn(str.*);
+}
+
+/// The hosted function pointer the echo platform registers for `Echo.line!`,
+/// selected for the current target's hosted-call ABI: the natural-C-ABI
+/// `echoHostedFn` on architectures with a register-image trampoline, or the
+/// uniform-ABI `echoHostedFnWasm` shim where one is unavailable (wasm).
+pub fn echoLineHostedFn() host_abi.HostedFn {
+    return if (comptime is_wasm)
+        host_abi.hostedFn(&echoHostedFnWasm)
+    else
+        host_abi.hostedFn(&echoHostedFn);
+}
+
 fn appendTemporaryNewline(str: *RocStr) ?[]u8 {
     const len = str.len();
     if (len >= str.getCapacity()) return null;
@@ -191,7 +213,7 @@ fn appendTemporaryNewline(str: *RocStr) ?[]u8 {
 
 /// Handle stdout write errors: exit cleanly on broken pipe (standard
 /// Unix behavior), crash on other errors.
-fn handleStdoutError(err: anyerror) noreturn {
+fn handleStdoutError(err: std.Io.File.Writer.Error) noreturn {
     if (comptime is_wasm) {
         @trap();
     } else {

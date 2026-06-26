@@ -21,18 +21,19 @@ type=expr
 # EXPECTED
 MISSING METHOD - tag_applications_simple.md:2:10:2:12
 # PROBLEMS
-**MISSING METHOD**
-This **from_numeral** method is being called on a value whose type doesn't have that method:
-**tag_applications_simple.md:2:10:2:12:**
-```roc
-    Some(42),
-```
-         ^^
 
-The value's type, which does not have a method named **from_numeral**, is:
+┌────────────────┐
+│ MISSING METHOD ├─ This `from_numeral` method is being called on a value ────┐
+└┬───────────────┘  whose type doesn't have that method.                      │
+ │                                                                            │
+ │  Some(42),                                                                 │
+ │       ‾‾                                                                   │
+ └─────────────────────────────────────────── tag_applications_simple.md:2:10 ┘
 
-    [Ok([Just(a), ..]), ..]
-      where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]
+    The value's type, which does not have a method named `from_numeral`, is:
+
+        [Ok([Just(a), ..]), ..]
+          where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]
 
 # TOKENS
 ~~~zig

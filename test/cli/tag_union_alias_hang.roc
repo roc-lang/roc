@@ -5,4 +5,6 @@ x = [One("x")]
 
 test = x == [One("a")]
 
-main! = |_| test
+main! = |_| {
+    Ok({})
+}

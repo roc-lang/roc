@@ -10,7 +10,7 @@
 //! - Compiles Roc source through ARC-inserted LIR and publishes a viewable LIR image in shared memory
 //! - Spawns interpreter host as child process that maps the shared memory
 //! - Fast startup, same-architecture only
-//! - See: `buildLirImageWithCoordinator`, `rocRunInterpreter`
+//! - See: `buildLirImageWithCoordinator`
 //!
 //! ### Embedded Interpreter Mode (`roc build --opt=interpreter path/to/app.roc`)
 //! - Compiles Roc source through the same checked-artifact to LIR path as IPC mode
@@ -65,6 +65,27 @@ const echo_platform = @import("echo_platform");
 const lsp = @import("lsp");
 const ansi_term = @import("ansi_term.zig");
 const progress = @import("progress.zig");
+const watch_mod = if (builtin.target.cpu.arch == .wasm32) struct {
+    pub const WatchEvent = struct { path: []const u8 };
+    pub const WatchCallbackWithContext = *const fn (context: ?*anyopaque, event: WatchEvent) void;
+    pub const Watcher = struct {
+        pub fn initAllFiles(
+            _: std.mem.Allocator,
+            _: std.Io,
+            _: []const []const u8,
+            _: ?*anyopaque,
+            _: WatchCallbackWithContext,
+        ) error{OutOfMemory}!*Watcher {
+            return error.OutOfMemory;
+        }
+
+        pub fn start(_: *Watcher) error{UnsupportedWatchMode}!void {
+            return error.UnsupportedWatchMode;
+        }
+
+        pub fn deinit(_: *Watcher) void {}
+    };
+} else @import("watch");
 
 const cli_args = @import("cli_args.zig");
 const host_symbols = @import("host_symbols.zig");
@@ -96,7 +117,6 @@ comptime {
         std.testing.refAllDecls(@import("ReplLine.zig"));
     }
 }
-const bench = @import("bench.zig");
 const libc_finder = @import("libc_finder.zig");
 const linker = @import("linker.zig");
 const builder = @import("builder.zig");
@@ -107,6 +127,7 @@ const llvm_available = builder.isLLVMAvailable();
 
 const SharedMemoryAllocator = ipc.SharedMemoryAllocator;
 const CoreCtx = ctx_mod.CoreCtx;
+const CIR = can.CIR;
 const ModuleEnv = can.ModuleEnv;
 const BuildEnv = compile.BuildEnv;
 const Coordinator = compile.coordinator.Coordinator;
@@ -119,6 +140,145 @@ const backend = @import("backend");
 const layout = @import("layout");
 const docs = @import("docs");
 const RocTarget = @import("target.zig").RocTarget;
+
+const CliMainError =
+    cli_problem.ReportedError ||
+    CliError ||
+    Allocator.Error ||
+    cli_args.ParseError ||
+    libc_finder.FindLibcError ||
+    linker.LinkError ||
+    bundle.BundleError ||
+    unbundle.UnbundleError ||
+    unbundle.download.DownloadError ||
+    fmt.FormatPathError ||
+    fmt.FormatStdinError ||
+    ReplLine.ReadLineError ||
+    eval.BuiltinModules.InitError ||
+    eval.test_helpers.TestHelperError ||
+    ipc.CoordinationError ||
+    ipc.platform.SharedMemoryError ||
+    lir.LirImage.ImageError ||
+    lir.CheckedPipeline.LowerResourceError ||
+    backend.wasm.WasmModule.NoLinkObjectContractError ||
+    backend.wasm.WasmModule.RelocatableEncodeError ||
+    backend.wasm.WasmModule.SymbolLookupError ||
+    backend.RunImage.WriteError ||
+    backend.RunImage.ImageError ||
+    backend.CompilationError ||
+    compile.build.InitError ||
+    compile.build.BuildError ||
+    compile.build.CompileDiscoveredError ||
+    compile.build.BuildWithMainError ||
+    compile.package.TypeCheckModuleError ||
+    compile.package_resolution.FetchError ||
+    CoreCtx.ReadError ||
+    CoreCtx.WriteError ||
+    CoreCtx.FetchUrlError ||
+    CoreCtx.MakePathError ||
+    lsp.server.RunWithStdIoError ||
+    glue.GlueError ||
+    RocCheckError ||
+    RocTestError ||
+    WatchCommandError ||
+    std.Thread.SpawnError ||
+    std.process.SpawnError ||
+    std.process.Child.WaitError ||
+    std.process.RunError ||
+    std.process.Args.Iterator.InitError ||
+    std.process.Args.ToSliceError ||
+    std.process.ExecutablePathError ||
+    std.Io.Dir.AccessError ||
+    std.Io.Dir.CopyFileError ||
+    std.Io.Dir.CreateDirError ||
+    std.Io.Dir.CreateDirPathError ||
+    std.Io.Dir.DeleteFileError ||
+    std.Io.Dir.Iterator.Error ||
+    std.Io.Dir.OpenError ||
+    std.Io.Dir.ReadFileAllocError ||
+    std.Io.Dir.RealPathFileAllocError ||
+    std.Io.Dir.StatFileError ||
+    std.Io.Dir.WriteFileError ||
+    std.Io.File.OpenError ||
+    std.Io.File.ReadPositionalError ||
+    std.Io.File.ReadStreamingError ||
+    std.Io.File.Reader.Error ||
+    std.Io.File.StatError ||
+    std.Io.File.SyncError ||
+    std.Io.File.Writer.Error ||
+    std.Io.File.MultiReader.UnendingError ||
+    std.Io.net.Ip4Address.ParseError ||
+    std.Io.net.Ip6Address.ParseError ||
+    std.Io.net.IpAddress.ListenError ||
+    std.Io.net.Server.AcceptError ||
+    std.Io.net.Stream.Reader.Error ||
+    std.Io.net.Stream.Writer.Error ||
+    std.Io.Reader.Error ||
+    std.Io.Timeout.Error ||
+    std.Io.Writer.Error ||
+    error{
+        ArchiveWriteFailed,
+        BrokenDocLinks,
+        BuiltinsExtractionFailed,
+        CheckFailed,
+        CompilationFailed,
+        ComptimeExhaustiveness,
+        Crash,
+        DivisionByZero,
+        DocsFailed,
+        EmptyArchive,
+        EntrypointNotFound,
+        ExpectErr,
+        ExpectedAppHeader,
+        ExpectedPlatformString,
+        ExpectedString,
+        FailedToCreateUniqueTempDir,
+        FdConfigFailed,
+        FileNotFound,
+        FormattingFailed,
+        HandleInheritanceFailed,
+        HashMismatch,
+        Internal,
+        InvalidArguments,
+        InvalidDependency,
+        InvalidFilename,
+        InvalidLirImage,
+        InvalidMagic,
+        InvalidPackageName,
+        InvalidPath,
+        InvalidSharedMemory,
+        InvalidTarget,
+        LLVMCompilationFailed,
+        LLVMNotAvailable,
+        MissingBundleFiles,
+        MissingFilesDirectory,
+        MissingTargetFile,
+        MissingTargetsSection,
+        NativeCompilationFailed,
+        NoCacheDir,
+        NoPlatformSource,
+        NotAnAppHeader,
+        PathAlreadyExists,
+        PlatformNotSupported,
+        ProcessCreationFailed,
+        ProcessExitCodeFailed,
+        ProcessWaitFailed,
+        ReadFailed,
+        ResolutionFailed,
+        RuntimeError,
+        TempDirCreation,
+        TestsFailed,
+        TypeCheckingFailed,
+        UnbundleFailed,
+        Unexpected,
+        UnresolvedBuiltinImport,
+        UnsupportedCrossCompilation,
+        UnsupportedHeader,
+        UnsupportedTarget,
+        UnsupportedWatchMode,
+        WasmOutputWriteFailed,
+        WriteFailed,
+    };
 
 /// Shim archive kind used by cached host executables.
 const ShimLibraryKind = enum {
@@ -449,9 +609,6 @@ const windows = if (is_windows) struct {
     const INFINITE = 0xFFFFFFFF;
 } else struct {};
 
-const benchTokenizer = bench.benchTokenizer;
-const benchParse = bench.benchParse;
-
 const Allocator = std.mem.Allocator;
 const ColorPalette = reporting.ColorPalette;
 
@@ -527,8 +684,13 @@ else
 /// image. Tries the preferred size first and halves down to
 /// `SHARED_MEMORY_MIN_SIZE` if the OS rejects the reservation; see
 /// `SharedMemoryAllocator.createWithMinSize` for details.
-fn createSharedMemory(io: std.Io, page_size: usize) error{ CreateFileMappingFailed, FtruncateFailed, InvalidHandle, MapViewOfFileFailed, MemfdCreateFailed, MmapFailed, OpenFileMappingFailed, OutOfMemory, ShmOpenFailed, ShmUnlinkFailed, UnsupportedPlatform }!SharedMemoryAllocator {
+fn createSharedMemory(io: std.Io, page_size: usize) error{ CreateFileMappingFailed, FtruncateFailed, InvalidHandle, MapViewOfFileFailed, MemfdCreateFailed, MmapFailed, OpenFileMappingFailed, OutOfMemory, ShmOpenFailed, ShmUnlinkFailed, TempFileOpenFailed, TempFileUnlinkFailed, UnsupportedPlatform }!SharedMemoryAllocator {
     return SharedMemoryAllocator.createWithMinSize(io, SHARED_MEMORY_SIZE, SHARED_MEMORY_MIN_SIZE, page_size);
+}
+
+/// Create the shared-memory arena used for dev-shim machine code.
+fn createExecutableSharedMemory(io: std.Io, page_size: usize) error{ CreateFileMappingFailed, FtruncateFailed, InvalidHandle, MapViewOfFileFailed, MemfdCreateFailed, MmapFailed, OpenFileMappingFailed, OutOfMemory, ShmOpenFailed, ShmUnlinkFailed, TempFileOpenFailed, TempFileUnlinkFailed, UnsupportedPlatform }!SharedMemoryAllocator {
+    return SharedMemoryAllocator.createExecutableWithMinSize(io, SHARED_MEMORY_SIZE, SHARED_MEMORY_MIN_SIZE, page_size);
 }
 
 /// Cross-platform hardlink creation
@@ -592,7 +754,7 @@ fn generateRandomSuffix(ctx: *CliCtx) Allocator.Error![]u8 {
 /// Create a unique temporary directory under roc/{version}/{random}/.
 /// Returns the path to the directory (allocated from arena, no need to free).
 /// Uses system temp directory to avoid race conditions when cache is cleared.
-pub fn createUniqueTempDir(ctx: *CliCtx) anyerror![]const u8 {
+pub fn createUniqueTempDir(ctx: *CliCtx) (Allocator.Error || std.Io.Dir.CreateDirPathError || std.Io.Dir.CreateDirError || error{FailedToCreateUniqueTempDir})![]const u8 {
     // Get the version-specific temp directory: {temp}/roc/{version}
     const version_temp_dir = try cache_config_mod.getVersionTempDir(ctx.coreCtx(), ctx.arena);
 
@@ -626,7 +788,10 @@ pub fn createUniqueTempDir(ctx: *CliCtx) anyerror![]const u8 {
 
 /// Write shared memory coordination file (.txt) next to the executable.
 /// This is the file that the child process reads to find the shared memory fd.
-pub fn writeFdCoordinationFile(ctx: *CliCtx, temp_exe_path: []const u8, shm_handle: SharedMemoryHandle) anyerror!void {
+const WriteFdCoordinationFileError = Allocator.Error || std.Io.File.OpenError || std.Io.File.Writer.Error || std.Io.File.SyncError || error{InvalidPath};
+
+/// Write the shared memory coordination file used by POSIX fd inheritance.
+pub fn writeFdCoordinationFile(ctx: *CliCtx, temp_exe_path: []const u8, shm_handle: SharedMemoryHandle) WriteFdCoordinationFileError!void {
     // The coordination file is at {temp_dir}.txt where temp_dir is the directory containing the exe
     const temp_dir = std.fs.path.dirname(temp_exe_path) orelse return error.InvalidPath;
 
@@ -869,7 +1034,7 @@ fn startBackgroundCacheCleanup(gpa: Allocator, arena: Allocator, std_io: std.Io)
     }
 }
 
-fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8, std_io: std.Io) anyerror!void {
+fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8, std_io: std.Io) CliMainError!void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -877,6 +1042,13 @@ fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8, std_io: 
 
     // Create I/O interface - this is passed to all command handlers via ctx
     var io = Io.create(std_io);
+
+    if (args.len >= 2 and std.mem.eql(u8, args[1], hot_reload_dev_command)) {
+        var ctx = CliCtx.init(gpa, arena, &io, .run);
+        ctx.initIo();
+        defer ctx.deinit();
+        return rocInternalHotReloadDev(&ctx, args[2..]);
+    }
 
     const parsed_args = try cli_args.parse(arena, std_io, args[1..]);
     if (parsedArgsStartBackgroundCleanup(parsed_args)) {
@@ -932,15 +1104,15 @@ fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8, std_io: 
                 };
             }
 
-            rocRun(&ctx, run_args) catch |err| switch (err) {
+            rocRun(&ctx, run_args, args[0]) catch |err| switch (err) {
                 error.CliError => {
                     // Problems already recorded in context, render them below
                 },
                 else => return err,
             };
         },
-        .check => |check_args| rocCheck(&ctx, check_args),
-        .build => |build_args| rocBuild(&ctx, build_args) catch |err| switch (err) {
+        .check => |check_args| rocCheck(&ctx, check_args, args[0]),
+        .build => |build_args| rocBuild(&ctx, build_args, args[0]) catch |err| switch (err) {
             error.CliError => {
                 // Problems already recorded in context, render them below
             },
@@ -949,7 +1121,7 @@ fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8, std_io: 
         .bundle => |bundle_args| rocBundle(&ctx, bundle_args),
         .unbundle => |unbundle_args| rocUnbundle(&ctx, unbundle_args),
         .fmt => |format_args| rocFormat(&ctx, format_args),
-        .test_cmd => |test_args| try rocTest(&ctx, test_args),
+        .test_cmd => |test_args| try rocTest(&ctx, test_args, args[0]),
         .repl => |repl_args| rocRepl(&ctx, repl_args),
         .glue => |glue_args| try rocGlue(&ctx, glue_args),
         .version => ctx.io.stdout().print("Roc compiler version {s}\n", .{build_options.compiler_version}),
@@ -1205,7 +1377,7 @@ fn generatePlatformHostShim(
     );
 }
 
-fn ensureCompilerCacheDirExists(std_io: std.Io, path: []const u8) anyerror!void {
+fn ensureCompilerCacheDirExists(std_io: std.Io, path: []const u8) std.Io.Dir.CreateDirPathError!void {
     // This helper is only for compiler-owned internal cache directories.
     // User-facing output paths should still fail normally if the parent directory is missing.
     std.Io.Dir.cwd().createDirPath(std_io, path) catch |err| switch (err) {
@@ -1467,18 +1639,171 @@ fn checkedHostedTable(
     };
 }
 
-fn checkedInterpreterHostIdentity(
+const LayoutHashContext = struct {
+    layouts: *const layout.Store,
+    seen: std.AutoHashMap(layout.Idx, u32),
+    next_seen: u32 = 0,
+
+    fn init(allocator: Allocator, layouts: *const layout.Store) LayoutHashContext {
+        return .{
+            .layouts = layouts,
+            .seen = std.AutoHashMap(layout.Idx, u32).init(allocator),
+        };
+    }
+
+    fn deinit(self: *LayoutHashContext) void {
+        self.seen.deinit();
+    }
+
+    fn hashIdx(
+        self: *LayoutHashContext,
+        hasher: *std.crypto.hash.sha2.Sha256,
+        idx: layout.Idx,
+    ) Allocator.Error!void {
+        if (idx == layout.Idx.none) {
+            updateHashBytes(hasher, "layout-none");
+            return;
+        }
+
+        if (self.seen.get(idx)) |seen_index| {
+            updateHashBytes(hasher, "layout-ref");
+            updateHashU32(hasher, seen_index);
+            return;
+        }
+
+        const seen_index = self.next_seen;
+        self.next_seen += 1;
+        try self.seen.put(idx, seen_index);
+
+        const layout_val = self.layouts.getLayout(idx);
+        const size_align = self.layouts.layoutSizeAlign(layout_val);
+        updateHashBytes(hasher, "layout-node");
+        updateHashU32(hasher, seen_index);
+        updateHashU32(hasher, @intCast(@intFromEnum(layout_val.tag)));
+        updateHashU32(hasher, @intCast(size_align.size));
+        updateHashU32(hasher, @intCast(size_align.alignment.toByteUnits()));
+        updateHashBool(hasher, self.layouts.layoutContainsRefcounted(layout_val));
+
+        switch (layout_val.tag) {
+            .scalar => {
+                const scalar = layout_val.getScalar();
+                updateHashU32(hasher, @intCast(@intFromEnum(scalar.tag)));
+                switch (scalar.tag) {
+                    .int => updateHashU32(hasher, @intCast(@intFromEnum(scalar.getInt()))),
+                    .frac => updateHashU32(hasher, @intCast(@intFromEnum(scalar.getFrac()))),
+                    .str, .opaque_ptr => {},
+                }
+            },
+            .box, .list, .ptr => try self.hashIdx(hasher, layout_val.getIdx()),
+            .box_of_zst, .list_of_zst, .erased_callable, .zst => {},
+            .closure => try self.hashIdx(hasher, layout_val.getClosure().captures_layout_idx),
+            .struct_ => {
+                const info = self.layouts.getStructInfo(layout_val);
+                updateHashU32(hasher, @intCast(info.alignment.toByteUnits()));
+                updateHashU32(hasher, info.size());
+                updateHashU32(hasher, @intCast(info.fields.len));
+                for (0..info.fields.len) |i| {
+                    const field = info.fields.get(i);
+                    updateHashU32(hasher, @intCast(field.index));
+                    updateHashBool(hasher, field.is_padding);
+                    try self.hashIdx(hasher, field.layout);
+                }
+            },
+            .tag_union => {
+                const info = self.layouts.getTagUnionInfo(layout_val);
+                updateHashU32(hasher, @intCast(info.alignment.toByteUnits()));
+                updateHashU32(hasher, info.size());
+                updateHashU32(hasher, @intCast(info.data.discriminant_offset));
+                updateHashU32(hasher, @intCast(info.data.discriminant_size));
+                updateHashU32(hasher, @intCast(info.variants.len));
+                for (0..info.variants.len) |i| {
+                    const variant = info.variants.get(i);
+                    try self.hashIdx(hasher, variant.payload_layout);
+                }
+            },
+        }
+    }
+};
+
+fn updateLayoutFingerprint(
+    allocator: Allocator,
+    hasher: *std.crypto.hash.sha2.Sha256,
+    layouts: *const layout.Store,
+    layout_idx: layout.Idx,
+) Allocator.Error!void {
+    var ctx = LayoutHashContext.init(allocator, layouts);
+    defer ctx.deinit();
+    try ctx.hashIdx(hasher, layout_idx);
+}
+
+fn updatePlatformAppRelationIdentity(
+    hasher: *std.crypto.hash.sha2.Sha256,
     root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+) void {
+    updateHashBytes(hasher, "platform-app-relations-v1");
+
+    const relations = root_artifact.platform_requirement_relations.relations;
+    updateHashU32(hasher, @intCast(relations.len));
+    for (relations) |relation| {
+        updateHashU32(hasher, @intFromEnum(relation.declaration));
+        updateHashU32(hasher, relation.requires_idx);
+        hasher.update(&relation.declared_source_ty.bytes);
+        hasher.update(&relation.requested_source_ty.bytes);
+        hasher.update(&relation.app_value_source_scheme.bytes);
+        updateHashU32(hasher, @intFromEnum(relation.value_kind));
+    }
+
+    const bindings = root_artifact.platform_required_bindings.bindings;
+    updateHashU32(hasher, @intCast(bindings.len));
+    for (bindings) |binding| {
+        updateHashU32(hasher, @intFromEnum(binding.declaration));
+        updateHashU32(hasher, binding.requires_idx);
+        hasher.update(&binding.requested_source_ty.bytes);
+        updateHashU32(hasher, @intFromEnum(binding.checked_relation));
+        updateHashU32(hasher, @intFromEnum(std.meta.activeTag(binding.value_use)));
+    }
+}
+
+fn updateHostCallableLayoutIdentity(
+    allocator: Allocator,
+    hasher: *std.crypto.hash.sha2.Sha256,
+    store: *const lir.LirStore,
+    layouts: *const layout.Store,
+    platform_entrypoints: []const lir.LirImage.PlatformEntrypoint,
+) Allocator.Error!void {
+    updateHashBytes(hasher, "host-callable-layouts-v1");
+    updateHashU32(hasher, @intCast(platform_entrypoints.len));
+    for (platform_entrypoints) |entrypoint| {
+        updateHashU32(hasher, entrypoint.ordinal);
+        const proc = store.getProcSpec(entrypoint.root_proc);
+        const arg_layouts = try argLayoutsForProc(allocator, store, entrypoint.root_proc);
+        defer allocator.free(arg_layouts);
+        updateHashU32(hasher, @intCast(arg_layouts.len));
+        for (arg_layouts) |arg_layout| {
+            try updateLayoutFingerprint(allocator, hasher, layouts, arg_layout);
+        }
+        try updateLayoutFingerprint(allocator, hasher, layouts, proc.ret_layout);
+    }
+}
+
+fn checkedInterpreterHostIdentity(
+    allocator: Allocator,
+    root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+    store: *const lir.LirStore,
+    layouts: *const layout.Store,
+    platform_entrypoints: []const lir.LirImage.PlatformEntrypoint,
     entrypoint_names: []const []const u8,
     target_usize: base.target.TargetUsize,
     hosted_table: CheckedHostedTable,
-) [32]u8 {
+) Allocator.Error![32]u8 {
     var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-    updateHashBytes(&hasher, "roc-run-checked-host-interface-v1");
+    updateHashBytes(&hasher, "roc-run-checked-host-interface-v2");
     updateHashU32(&hasher, @intFromEnum(target_usize));
 
     const declarations_hash = root_artifact.platform_required_declarations.identityHash(&root_artifact.canonical_names);
     hasher.update(&declarations_hash);
+    updatePlatformAppRelationIdentity(&hasher, root_artifact);
+    try updateHostCallableLayoutIdentity(allocator, &hasher, store, layouts, platform_entrypoints);
 
     updateHashU32(&hasher, @intCast(entrypoint_names.len));
     for (entrypoint_names) |name| {
@@ -1496,6 +1821,17 @@ fn checkedInterpreterHostIdentity(
     }
 
     return hasher.finalResult();
+}
+
+fn currentCompilerWatchInputState(ctx: *CliCtx, path: []const u8) Allocator.Error!compile.watch_inputs.State {
+    const bytes = ctx.coreCtx().readFile(path, ctx.gpa) catch |err| switch (err) {
+        error.FileNotFound => return .missing,
+        error.AccessDenied, error.StreamTooLong, error.IoError => return .unreadable,
+        error.OutOfMemory => return error.OutOfMemory,
+    };
+    defer ctx.gpa.free(bytes);
+
+    return .{ .hash = compile.watch_inputs.hashBytes(bytes) };
 }
 
 fn updateInterpreterExeFileLinkInput(
@@ -1800,28 +2136,39 @@ fn rejectRunTargetNotExecutable(ctx: *CliCtx, target: RocTarget) error{ WriteFai
     return error.UnsupportedTarget;
 }
 
-fn rocRun(ctx: *CliCtx, args: cli_args.RunArgs) anyerror!void {
+fn rocRun(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8) CliMainError!void {
+    if (args.watch and args.opt != .dev) {
+        try ctx.io.stderr().print(
+            "Error: `roc --watch` currently supports only the dev backend.\n",
+            .{},
+        );
+        return error.UnsupportedWatchMode;
+    }
+
     return switch (args.opt) {
-        .interpreter, .dev => rocRunSharedMemoryShim(ctx, args),
-        .size, .speed => rocRunBuildAndExec(ctx, args),
+        .interpreter, .dev => rocRunSharedMemoryShim(ctx, args, arg0),
+        .size, .speed => rocRunBuildAndExec(ctx, args, arg0),
     };
 }
 
-fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs) anyerror!void {
+fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8) CliMainError!void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
     // Check if this is a default_app (headerless file with main!) before
     // linking the platform host shim.
     if (try readDefaultAppSource(ctx, args.path)) |source| {
+        // Headerless default apps never hot reload; they just run once. The shared-memory
+        // shim is the run mechanism where the default platform runtime exists (Linux native,
+        // or any cross-target run); elsewhere we use the plain run-once path.
         if (useDefaultAppSharedMemoryShim(args)) {
             return rocRunDefaultAppSharedMemoryShim(ctx, args, source);
         }
         return rocRunDefaultApp(ctx, args, source);
     }
 
-    if (args.opt == .dev and args.no_cache) {
-        return rocRunBuildAndExec(ctx, args);
+    if (args.opt == .dev and args.no_cache and !args.watch) {
+        return rocRunBuildAndExec(ctx, args, arg0);
     }
 
     // Initialize cache - used to store our shim, and linked interpreter executables in cache
@@ -1958,7 +2305,9 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs) anyerror!void {
                 args.max_threads,
                 debugEffectsForOpt(args.opt),
                 resolutionConfigFromLimits(args.resolve_limits),
+                &cache_manager,
                 &reporter,
+                true,
             );
             const result = if (lowered_result) |*value| value else unreachable;
             entrypoint_names = result.entrypoint_names;
@@ -1975,7 +2324,9 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs) anyerror!void {
                 args.max_threads,
                 debugEffectsForOpt(args.opt),
                 resolutionConfigFromLimits(args.resolve_limits),
+                &cache_manager,
                 &reporter,
+                true,
             );
             shm_handle_opt = shm_result.handle;
             entrypoint_names = shm_result.entrypoint_names;
@@ -1987,7 +2338,7 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs) anyerror!void {
         .size, .speed => unreachable,
     }
 
-    if (error_count > 0) {
+    if (error_count > 0 and entrypoint_names.len == 0) {
         reporter.fail();
         if (args.allow_errors) return;
         return error.TypeCheckingFailed;
@@ -2283,7 +2634,7 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs) anyerror!void {
     if (args.opt == .dev) {
         const result = if (lowered_result) |*value| value else unreachable;
         const lowered = successfulLoweredProgram(result, "default roc command");
-        shm_handle_opt = try publishDevRunImage(ctx, selected_target, entrypoint_names, lowered);
+        shm_handle_opt = try publishDevRunImage(ctx, selected_target, entrypoint_names, lowered, args.watch);
     }
 
     const shm_handle = shm_handle_opt orelse {
@@ -2294,7 +2645,26 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs) anyerror!void {
     };
 
     std.log.debug("Launching shim executable: {s}", .{exe_path});
-    if (comptime is_windows) {
+    if (args.watch) {
+        const result = if (lowered_result) |*value| value else {
+            if (builtin.mode == .Debug) {
+                std.debug.panic("hot reload invariant violated: missing lowered result for dev shim watch run", .{});
+            }
+            unreachable;
+        };
+        try runHotReloadDevShim(
+            ctx,
+            arg0,
+            exe_path,
+            shm_handle,
+            args,
+            selected_target,
+            checked_host_identity,
+            result.watch_inputs,
+            null,
+            warning_count,
+        );
+    } else if (comptime is_windows) {
         // Windows: Use handle inheritance approach
         std.log.debug("Using Windows handle inheritance approach", .{});
         try runWithWindowsHandleInheritance(ctx, exe_path, shm_handle, args.app_args);
@@ -2312,7 +2682,7 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs) anyerror!void {
     }
 }
 
-fn rocRunBuildAndExec(ctx: *CliCtx, args: cli_args.RunArgs) anyerror!void {
+fn rocRunBuildAndExec(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8) CliMainError!void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -2340,9 +2710,6 @@ fn rocRunBuildAndExec(ctx: *CliCtx, args: cli_args.RunArgs) anyerror!void {
         .max_threads = args.max_threads,
         .wasm_memory = null,
         .wasm_stack_size = null,
-        .z_bench_tokenize = null,
-        .z_bench_parse = null,
-        .z_dump_linker = false,
         .exit_on_warnings = false,
         .warning_count_out = &warning_count,
         .require_executable_output = true,
@@ -2351,7 +2718,7 @@ fn rocRunBuildAndExec(ctx: *CliCtx, args: cli_args.RunArgs) anyerror!void {
         .resolve_limits = args.resolve_limits,
         .synthetic_default_platform = false,
         .source_dir_override = null,
-    });
+    }, arg0);
 
     const term = try runCompiledExecutable(ctx, exe_path, args.app_args);
 
@@ -2516,10 +2883,30 @@ fn readDefaultAppSource(ctx: *CliCtx, file_path: []const u8) std.mem.Allocator.E
 
 /// State for the CLI echo platform's virtual I/O context.
 /// Intercepts reads for the synthetic app source and embedded platform files.
+const default_app_run_header =
+    "app [main!] { pf: platform \"./.roc_echo_platform/main.roc\" }\n\n" ++
+    "import pf.Echo\n\n" ++
+    "echo! = |msg| Echo.line!(msg)\n\n";
+
+fn writeDefaultAppSyntheticRunSource(ctx: *CliCtx, app_path: []const u8, original_source: []const u8) CliMainError!void {
+    const synthetic_source = try std.mem.concat(ctx.gpa, u8, &.{ default_app_run_header, original_source });
+    defer ctx.gpa.free(synthetic_source);
+
+    try std.Io.Dir.cwd().writeFile(ctx.io.std_io, .{ .sub_path = app_path, .data = synthetic_source });
+}
+
+fn rewriteDefaultAppSyntheticRunSourceFromFile(ctx: *CliCtx, app_path: []const u8, original_source_path: []const u8) CliMainError!void {
+    const max_source_size = 256 * 1024 * 1024;
+    const original_source = try std.Io.Dir.cwd().readFileAlloc(ctx.io.std_io, original_source_path, ctx.gpa, .limited(max_source_size));
+    defer ctx.gpa.free(original_source);
+
+    try writeDefaultAppSyntheticRunSource(ctx, app_path, original_source);
+}
+
 /// Run a default_app (headerless file with main! and echo platform).
 /// This compiles the app through checked artifacts and executes the resulting
 /// LIR image with the echo platform host function.
-fn rocRunDefaultApp(ctx: *CliCtx, args: cli_args.RunArgs, original_source: []const u8) anyerror!void {
+fn rocRunDefaultApp(ctx: *CliCtx, args: cli_args.RunArgs, original_source: []const u8) CliMainError!void {
     defer ctx.gpa.free(original_source);
 
     // Write synthetic app + echo platform files into a unique temp directory.
@@ -2543,14 +2930,7 @@ fn rocRunDefaultApp(ctx: *CliCtx, args: cli_args.RunArgs, original_source: []con
     const platform_main_path = std.fs.path.join(ctx.arena, &.{ platform_dir, "main.roc" }) catch return error.OutOfMemory;
     const echo_module_path = std.fs.path.join(ctx.arena, &.{ platform_dir, "Echo.roc" }) catch return error.OutOfMemory;
 
-    const header =
-        "app [main!] { pf: platform \"./.roc_echo_platform/main.roc\" }\n\n" ++
-        "import pf.Echo\n\n" ++
-        "echo! = |msg| Echo.line!(msg)\n\n";
-    const synthetic_source = std.mem.concat(ctx.gpa, u8, &.{ header, original_source }) catch return error.OutOfMemory;
-    defer ctx.gpa.free(synthetic_source);
-
-    std.Io.Dir.cwd().writeFile(ctx.io.std_io, .{ .sub_path = app_path, .data = synthetic_source }) catch |err| {
+    writeDefaultAppSyntheticRunSource(ctx, app_path, original_source) catch |err| {
         ctx.io.stderr().print("error: failed to write {s}: {}\n", .{ app_path, err }) catch {};
         return err;
     };
@@ -2564,13 +2944,19 @@ fn rocRunDefaultApp(ctx: *CliCtx, args: cli_args.RunArgs, original_source: []con
     };
 
     const original_source_dir = std.fs.path.dirname(args.path) orelse ".";
+    const cache_config = CacheConfig{
+        .enabled = !args.no_cache,
+        .verbose = false,
+        .roc_ctx = ctx.coreCtx(),
+    };
+    var cache_manager = CacheManager.init(ctx.gpa, cache_config, ctx.coreCtx());
     var reporter = makeReporter(ctx, "roc", args.timings);
     defer reporter.deinit();
     reporter.start();
-    const shm_result = try buildLirImageWithCoordinator(ctx, app_path, original_source_dir, args.max_threads, debugEffectsForOpt(args.opt), resolutionConfigFromLimits(args.resolve_limits), &reporter);
+    const shm_result = try buildLirImageWithCoordinator(ctx, app_path, original_source_dir, args.max_threads, debugEffectsForOpt(args.opt), resolutionConfigFromLimits(args.resolve_limits), &cache_manager, &reporter, true);
     defer closeSharedMemoryHandle(shm_result.handle);
 
-    if (shm_result.error_count > 0) {
+    if (shm_result.error_count > 0 and shm_result.entrypoint_names.len == 0) {
         reporter.fail();
         if (args.allow_errors) return;
         return error.TypeCheckingFailed;
@@ -2598,9 +2984,13 @@ fn rocRunDefaultApp(ctx: *CliCtx, args: cli_args.RunArgs, original_source: []con
     const exit_code = result_buf[0];
     if (exit_code != 0) std.process.exit(exit_code);
     if (echo_env.inline_expect_failed) std.process.exit(1);
+    if (shm_result.warning_count > 0) {
+        ctx.io.flush();
+        std.process.exit(2);
+    }
 }
 
-fn rocRunDefaultAppSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, original_source: []const u8) anyerror!void {
+fn rocRunDefaultAppSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, original_source: []const u8) CliMainError!void {
     defer ctx.gpa.free(original_source);
 
     const native_target = RocTarget.detectNative();
@@ -2665,14 +3055,7 @@ fn rocRunDefaultAppSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, origin
     const platform_main_path = try std.fs.path.join(ctx.arena, &.{ platform_dir, "main.roc" });
     const echo_module_path = try std.fs.path.join(ctx.arena, &.{ platform_dir, "Echo.roc" });
 
-    const header =
-        "app [main!] { pf: platform \"./.roc_echo_platform/main.roc\" }\n\n" ++
-        "import pf.Echo\n\n" ++
-        "echo! = |msg| Echo.line!(msg)\n\n";
-    const synthetic_source = try std.mem.concat(ctx.gpa, u8, &.{ header, original_source });
-    defer ctx.gpa.free(synthetic_source);
-
-    try std.Io.Dir.cwd().writeFile(ctx.io.std_io, .{ .sub_path = app_path, .data = synthetic_source });
+    try writeDefaultAppSyntheticRunSource(ctx, app_path, original_source);
     try std.Io.Dir.cwd().writeFile(ctx.io.std_io, .{ .sub_path = platform_main_path, .data = echo_platform.run_shim_platform_main_source });
     try std.Io.Dir.cwd().writeFile(ctx.io.std_io, .{ .sub_path = echo_module_path, .data = echo_platform.echo_module_source });
 
@@ -2688,11 +3071,13 @@ fn rocRunDefaultAppSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, origin
         args.max_threads,
         debugEffectsForOpt(args.opt),
         resolutionConfigFromLimits(args.resolve_limits),
+        &cache_manager,
         &reporter,
+        true,
     );
     defer lowered_result.deinit();
 
-    if (lowered_result.counts.errors > 0) {
+    if (lowered_result.counts.errors > 0 and lowered_result.lowered == null) {
         reporter.fail();
         if (args.allow_errors) return;
         return error.TypeCheckingFailed;
@@ -2709,7 +3094,7 @@ fn rocRunDefaultAppSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, origin
 
     const lowered = successfulLoweredProgram(&lowered_result, "default app run");
     const enable_debug = builtin.mode == .Debug;
-    const checked_host_identity = defaultRunCheckedHostIdentity(selected_target, entrypoint_names, lowered_result.hosted_symbols);
+    const exe_checked_host_identity = defaultRunCheckedHostIdentity(selected_target, entrypoint_names, lowered_result.hosted_symbols);
     const libc_info: ?libc_finder.LibcInfo = if (selected_target.isDynamic())
         libc_finder.findLibc(ctx) catch |err| {
             try ctx.io.stderr().print(
@@ -2728,7 +3113,7 @@ fn rocRunDefaultAppSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, origin
         .shim_kind = .machine_code,
         .target = selected_target,
         .debug = enable_debug,
-        .checked_host_identity = checked_host_identity,
+        .checked_host_identity = exe_checked_host_identity,
         .link_inputs_identity = link_inputs_identity,
     });
     const exe_cache_name_with_ext = if (builtin.target.os.tag == .windows)
@@ -2826,7 +3211,9 @@ fn rocRunDefaultAppSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, origin
         };
     }
 
-    const shm_handle = try publishDevRunImage(ctx, selected_target, entrypoint_names, lowered);
+    // Headerless default apps never hot reload — they compile through throwaway synthetic
+    // source files, so there is nothing stable to reload. They just run once.
+    const shm_handle = try publishDevRunImage(ctx, selected_target, entrypoint_names, lowered, false);
     defer closeSharedMemoryHandle(shm_handle);
 
     if (comptime is_windows) {
@@ -3156,6 +3543,885 @@ fn runWithPosixFdInheritance(ctx: *CliCtx, exe_path: []const u8, shm_handle: Sha
     }
 }
 
+const HotShimChild = struct {
+    child: std.process.Child,
+    thread: std.Thread,
+    done: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    term: ?std.process.Child.Term = null,
+    wait_error: ?std.process.Child.WaitError = null,
+
+    fn waitThread(self: *HotShimChild, io: std.Io) void {
+        self.term = self.child.wait(io) catch |err| {
+            self.wait_error = err;
+            self.done.store(true, .seq_cst);
+            return;
+        };
+        self.done.store(true, .seq_cst);
+    }
+};
+
+fn makeSharedMemoryHandleInheritable(ctx: *CliCtx, shm_handle: SharedMemoryHandle) CliError!void {
+    if (comptime is_windows) {
+        if (windows.SetHandleInformation(@ptrCast(shm_handle.fd), windows.HANDLE_FLAG_INHERIT, windows.HANDLE_FLAG_INHERIT) == 0) {
+            return ctx.fail(.{ .shared_memory_failed = .{
+                .operation = "set handle inheritable",
+                .err = error.HandleInheritanceFailed,
+            } });
+        }
+    } else {
+        const current_flags = std.c.fcntl(shm_handle.fd, std.c.F.GETFD);
+        if (current_flags == -1) {
+            return ctx.fail(.{ .shared_memory_failed = .{
+                .operation = "get fd flags",
+                .err = error.FdConfigFailed,
+            } });
+        }
+
+        const new_flags = current_flags & ~@as(c_int, 1);
+        if (std.c.fcntl(shm_handle.fd, std.c.F.SETFD, new_flags) == -1) {
+            return ctx.fail(.{ .shared_memory_failed = .{
+                .operation = "set fd flags",
+                .err = error.FdConfigFailed,
+            } });
+        }
+    }
+}
+
+fn spawnHotShimChild(
+    ctx: *CliCtx,
+    exe_path: []const u8,
+    shm_handle: SharedMemoryHandle,
+    app_args: []const []const u8,
+) (CliError || Allocator.Error || std.Thread.SpawnError || std.process.SpawnError)!*HotShimChild {
+    if (comptime !is_windows) {
+        writeFdCoordinationFile(ctx, exe_path, shm_handle) catch |err| {
+            const temp_dir = std.fs.path.dirname(exe_path) orelse exe_path;
+            const fd_file_path = std.fmt.allocPrint(ctx.arena, "{s}.txt", .{temp_dir}) catch exe_path;
+            return ctx.fail(.{ .file_write_failed = .{
+                .path = fd_file_path,
+                .err = err,
+            } });
+        };
+    }
+    try makeSharedMemoryHandleInheritable(ctx, shm_handle);
+
+    const coordination_arg_count: usize = if (comptime is_windows) 2 else 0;
+    const argv = try ctx.arena.alloc([]const u8, 1 + coordination_arg_count + app_args.len);
+    argv[0] = exe_path;
+    var app_arg_offset: usize = 1;
+    if (comptime is_windows) {
+        argv[1] = try std.fmt.allocPrint(ctx.arena, "{}", .{@intFromPtr(shm_handle.fd)});
+        argv[2] = try std.fmt.allocPrint(ctx.arena, "{}", .{shm_handle.size});
+        app_arg_offset = 3;
+    }
+    for (app_args, 0..) |arg, i| {
+        argv[app_arg_offset + i] = arg;
+    }
+
+    const child = std.process.spawn(ctx.io.std_io, .{
+        .argv = argv,
+        .cwd = .inherit,
+        .stdout = .inherit,
+        .stderr = .inherit,
+    }) catch |err| {
+        return ctx.fail(.{ .child_process_spawn_failed = .{
+            .command = exe_path,
+            .err = err,
+        } });
+    };
+
+    const watched = try ctx.gpa.create(HotShimChild);
+    watched.* = .{
+        .child = child,
+        .thread = undefined,
+    };
+    watched.thread = std.Thread.spawn(.{}, HotShimChild.waitThread, .{ watched, ctx.io.std_io }) catch |err| {
+        watched.child.kill(ctx.io.std_io);
+        ctx.gpa.destroy(watched);
+        return err;
+    };
+    return watched;
+}
+
+fn terminateHotShimChild(child: *HotShimChild) void {
+    if (child.child.id) |pid| {
+        switch (builtin.os.tag) {
+            .windows => {
+                _ = std.os.windows.ntdll.NtTerminateProcess(pid, @enumFromInt(1));
+            },
+            .wasi => {},
+            else => std.posix.kill(pid, .KILL) catch {},
+        }
+    }
+}
+
+fn destroyHotShimChild(ctx: *CliCtx, child: *HotShimChild) void {
+    ctx.gpa.destroy(child);
+}
+
+const HotReloadRebuild = struct {
+    child: *WatchChild,
+    argv: WatchChildArgv,
+    inputs_path: []const u8,
+    generation: u64,
+    allocation: HotReloadImageAllocation,
+    published_reported: bool = false,
+
+    fn cancelAndJoin(self: *HotReloadRebuild) void {
+        terminateWatchChild(self.child);
+        joinWatchChild(self.child);
+    }
+
+    fn deinit(self: *HotReloadRebuild, ctx: *CliCtx) void {
+        destroyWatchChild(ctx, self.child);
+        self.argv.deinit(ctx.gpa);
+        std.Io.Dir.cwd().deleteFile(ctx.io.std_io, self.inputs_path) catch {};
+        ctx.gpa.free(self.inputs_path);
+    }
+};
+
+const HotReloadSourceRewrite = struct {
+    source_path: []const u8,
+    synthetic_app_path: []const u8,
+    source_dir_override: []const u8,
+};
+
+const HotReloadFreeRegion = struct {
+    start: usize,
+    end: usize,
+
+    fn len(self: HotReloadFreeRegion) usize {
+        return self.end - self.start;
+    }
+};
+
+const HotReloadDescriptorSlot = struct {
+    offset: usize,
+    preserve_refs: bool,
+    fresh: bool,
+};
+
+const HotReloadImageAllocation = struct {
+    generation: u64,
+    descriptor_offset: usize,
+    image_limit: usize,
+    region_start: usize,
+    region_end: usize,
+    append_offset: usize,
+    preserve_descriptor_refs: bool = false,
+};
+
+const HotReloadDescriptorTracker = struct {
+    descriptors: std.ArrayList(usize) = .empty,
+    free_descriptor_slots: std.ArrayList(HotReloadDescriptorSlot) = .empty,
+    free_regions: std.ArrayList(HotReloadFreeRegion) = .empty,
+    descriptor_floor: usize = 0,
+    next_descriptor_offset: usize = 0,
+
+    fn deinit(self: *HotReloadDescriptorTracker, gpa: Allocator) void {
+        self.descriptors.deinit(gpa);
+        self.free_descriptor_slots.deinit(gpa);
+        self.free_regions.deinit(gpa);
+    }
+};
+
+fn buildHotReloadChildArgv(
+    ctx: *CliCtx,
+    arg0: []const u8,
+    args: cli_args.RunArgs,
+    selected_target: RocTarget,
+    shm_handle: SharedMemoryHandle,
+    expected_host_identity: [32]u8,
+    generation: u64,
+    allocation: HotReloadImageAllocation,
+    inputs_path: []const u8,
+    source_rewrite: ?HotReloadSourceRewrite,
+) Allocator.Error!WatchChildArgv {
+    var argv = std.ArrayList([]const u8).empty;
+    errdefer argv.deinit(ctx.gpa);
+    var owned = std.ArrayList([]const u8).empty;
+    errdefer {
+        for (owned.items) |arg| ctx.gpa.free(arg);
+        owned.deinit(ctx.gpa);
+    }
+
+    const expected_hex = std.fmt.bytesToHex(expected_host_identity, .lower);
+
+    try argv.append(ctx.gpa, arg0);
+    try argv.append(ctx.gpa, hot_reload_dev_command);
+    try appendOwnedArg(ctx.gpa, &argv, &owned, "--path={s}", .{args.path});
+    try appendOwnedArg(ctx.gpa, &argv, &owned, "--target={s}", .{@tagName(selected_target)});
+    try appendOwnedArg(ctx.gpa, &argv, &owned, "--generation={}", .{generation});
+    try appendOwnedArg(ctx.gpa, &argv, &owned, "--descriptor-offset={}", .{allocation.descriptor_offset});
+    try appendOwnedArg(ctx.gpa, &argv, &owned, "--image-limit={}", .{allocation.image_limit});
+    try appendOwnedArg(ctx.gpa, &argv, &owned, "--region-start={}", .{allocation.region_start});
+    try appendOwnedArg(ctx.gpa, &argv, &owned, "--region-end={}", .{allocation.region_end});
+    try appendOwnedArg(ctx.gpa, &argv, &owned, "--append-offset={}", .{allocation.append_offset});
+    try appendOwnedArg(ctx.gpa, &argv, &owned, "--preserve-descriptor-refs={}", .{if (allocation.preserve_descriptor_refs) @as(u8, 1) else @as(u8, 0)});
+    if (comptime is_windows) {
+        try appendOwnedArg(ctx.gpa, &argv, &owned, "--shm-handle={}", .{@intFromPtr(shm_handle.fd)});
+    } else {
+        try appendOwnedArg(ctx.gpa, &argv, &owned, "--shm-handle={}", .{shm_handle.fd});
+    }
+    try appendOwnedArg(ctx.gpa, &argv, &owned, "--shm-size={}", .{shm_handle.mapped_size});
+    try appendOwnedArg(ctx.gpa, &argv, &owned, "--expected-host={s}", .{expected_hex[0..]});
+    try appendOwnedArg(ctx.gpa, &argv, &owned, "--watch-inputs-file={s}", .{inputs_path});
+    if (source_rewrite) |rewrite| {
+        try appendOwnedArg(ctx.gpa, &argv, &owned, "--synthetic-source={s}", .{rewrite.source_path});
+        try appendOwnedArg(ctx.gpa, &argv, &owned, "--synthetic-output={s}", .{rewrite.synthetic_app_path});
+        try appendOwnedArg(ctx.gpa, &argv, &owned, "--source-dir={s}", .{rewrite.source_dir_override});
+    }
+    if (args.max_threads) |jobs| try appendOwnedArg(ctx.gpa, &argv, &owned, "--jobs={}", .{jobs});
+    try appendResolveLimitArgs(ctx.gpa, &argv, &owned, args.resolve_limits);
+
+    return .{
+        .argv = try argv.toOwnedSlice(ctx.gpa),
+        .owned = try owned.toOwnedSlice(ctx.gpa),
+    };
+}
+
+fn spawnHotReloadRebuild(
+    ctx: *CliCtx,
+    arg0: []const u8,
+    args: cli_args.RunArgs,
+    selected_target: RocTarget,
+    shm_handle: SharedMemoryHandle,
+    expected_host_identity: [32]u8,
+    generation: u64,
+    allocation: HotReloadImageAllocation,
+    source_rewrite: ?HotReloadSourceRewrite,
+) CliMainError!HotReloadRebuild {
+    try makeSharedMemoryHandleInheritable(ctx, shm_handle);
+
+    const inputs_path = try createWatchInputsPath(ctx);
+    errdefer ctx.gpa.free(inputs_path);
+    errdefer std.Io.Dir.cwd().deleteFile(ctx.io.std_io, inputs_path) catch {};
+
+    var argv = try buildHotReloadChildArgv(ctx, arg0, args, selected_target, shm_handle, expected_host_identity, generation, allocation, inputs_path, source_rewrite);
+    errdefer argv.deinit(ctx.gpa);
+
+    const child = try spawnWatchChild(ctx, argv.argv);
+    errdefer {
+        terminateWatchChild(child);
+        joinWatchChild(child);
+        destroyWatchChild(ctx, child);
+    }
+
+    return .{
+        .child = child,
+        .argv = argv,
+        .inputs_path = inputs_path,
+        .generation = generation,
+        .allocation = allocation,
+    };
+}
+
+fn hotReloadRebuildSucceeded(child: *const WatchChild) bool {
+    const term = child.term orelse return false;
+    return switch (term) {
+        .exited => |code| code == 0,
+        .signal, .stopped, .unknown => false,
+    };
+}
+
+fn finishHotReloadRebuild(
+    ctx: *CliCtx,
+    state: *WatchState,
+    signal: *WatchEventSignal,
+    rebuild: *HotReloadRebuild,
+) CliMainError!bool {
+    joinWatchChild(rebuild.child);
+    if (rebuild.child.output_error) |err| return err;
+
+    try replayWatchChildOutput(ctx, rebuild.child, true);
+
+    const rebuild_succeeded = hotReloadRebuildSucceeded(rebuild.child);
+    const new_inputs = if (rebuild_succeeded)
+        try readWatchInputsFileAfterChild(ctx, rebuild.inputs_path, &.{})
+    else
+        readWatchInputsFile(ctx, rebuild.inputs_path, &.{}) catch |err| switch (err) {
+            error.WatchInputsMissing,
+            error.WatchInputsReadFailed,
+            error.WatchInputsMalformed,
+            => return false,
+            else => |e| return e,
+        };
+    const changed_during_refresh = try refreshWatchState(ctx, state, signal, new_inputs);
+
+    if (rebuild_succeeded) {
+        try reportHotReloadRebuildPublished(ctx, rebuild);
+    }
+
+    return changed_during_refresh;
+}
+
+fn reportHotReloadRebuildPublished(ctx: *CliCtx, rebuild: *HotReloadRebuild) CliOutputWriteError!void {
+    if (rebuild.published_reported) return;
+    try ctx.io.stderr().print("--- roc watch: hot reload generation {} published ---\n", .{rebuild.generation});
+    ctx.io.flush();
+    rebuild.published_reported = true;
+}
+
+fn reportHotReloadAcknowledgement(
+    ctx: *CliCtx,
+    control: *const ipc.hot_reload.Control,
+    last_reported_ack: *u64,
+    active_rebuild: ?*HotReloadRebuild,
+) CliOutputWriteError!?u64 {
+    const ack = ipc.hot_reload.acknowledgement(control) orelse return null;
+    const generation = ack.generation;
+    if (generation == 0 or generation <= last_reported_ack.*) return null;
+
+    if (active_rebuild) |rebuild| {
+        if (generation == rebuild.generation and ack.status != .none) {
+            try reportHotReloadRebuildPublished(ctx, rebuild);
+        }
+    }
+
+    switch (ack.status) {
+        .none => return null,
+        .accepted => try ctx.io.stderr().print("--- roc watch: hot reload generation {} accepted by host ---\n", .{generation}),
+        .rejected => try ctx.io.stderr().print("--- roc watch: hot reload generation {} rejected by host; previous code remains active ---\n", .{generation}),
+    }
+    ctx.io.flush();
+    last_reported_ack.* = generation;
+    return generation;
+}
+
+fn hotReloadRecycleUnpublishedAllocation(
+    gpa: Allocator,
+    control: *ipc.hot_reload.Control,
+    tracker: *HotReloadDescriptorTracker,
+    allocation: HotReloadImageAllocation,
+) Allocator.Error!void {
+    if (ipc.hot_reload.publishedImage(control)) |image| {
+        if (image.generation == allocation.generation and image.descriptor_offset == allocation.descriptor_offset) {
+            try hotReloadTrackDescriptor(gpa, tracker, image.descriptor_offset);
+            return;
+        }
+    }
+    try hotReloadReleaseDescriptorSlot(gpa, tracker, allocation.descriptor_offset, allocation.preserve_descriptor_refs);
+}
+
+fn hotReloadBasePtr(shm_handle: SharedMemoryHandle) [*]align(1) u8 {
+    return @ptrCast(@alignCast(shm_handle.ptr));
+}
+
+fn hotReloadTrackDescriptor(
+    gpa: Allocator,
+    tracker: *HotReloadDescriptorTracker,
+    descriptor_offset: usize,
+) Allocator.Error!void {
+    if (descriptor_offset == ipc.hot_reload.invalid_descriptor_offset) return;
+    for (tracker.descriptors.items) |tracked_offset| {
+        if (tracked_offset == descriptor_offset) return;
+    }
+    try tracker.descriptors.append(gpa, descriptor_offset);
+}
+
+fn hotReloadDescriptorSlotSize() usize {
+    return std.mem.alignForward(usize, @sizeOf(ipc.hot_reload.ImageDescriptor), @alignOf(ipc.hot_reload.ImageDescriptor));
+}
+
+fn hotReloadInitialDescriptorOffset(shm_handle: SharedMemoryHandle) error{InvalidSharedMemory}!usize {
+    const descriptor_size = hotReloadDescriptorSlotSize();
+    if (shm_handle.mapped_size < @sizeOf(SharedMemoryAllocator.Header) + descriptor_size) return error.InvalidSharedMemory;
+    const unaligned = shm_handle.mapped_size - descriptor_size;
+    const offset = std.mem.alignBackward(usize, unaligned, @alignOf(ipc.hot_reload.ImageDescriptor));
+    if (offset < @sizeOf(SharedMemoryAllocator.Header)) return error.InvalidSharedMemory;
+    return offset;
+}
+
+fn hotReloadPreviousDescriptorOffset(offset: usize) ?usize {
+    const descriptor_size = hotReloadDescriptorSlotSize();
+    if (offset < @sizeOf(SharedMemoryAllocator.Header) + descriptor_size) return null;
+    return offset - descriptor_size;
+}
+
+fn hotReloadInitDescriptorTracker(
+    tracker: *HotReloadDescriptorTracker,
+    initial_descriptor_offset: usize,
+) error{InvalidSharedMemory}!void {
+    if (initial_descriptor_offset == ipc.hot_reload.invalid_descriptor_offset) return error.InvalidSharedMemory;
+    tracker.descriptor_floor = initial_descriptor_offset;
+    tracker.next_descriptor_offset = hotReloadPreviousDescriptorOffset(initial_descriptor_offset) orelse return error.InvalidSharedMemory;
+}
+
+fn hotReloadReleaseDescriptorSlot(
+    gpa: Allocator,
+    tracker: *HotReloadDescriptorTracker,
+    descriptor_offset: usize,
+    preserve_refs: bool,
+) Allocator.Error!void {
+    if (descriptor_offset == ipc.hot_reload.invalid_descriptor_offset) return;
+    for (tracker.free_descriptor_slots.items) |slot| {
+        if (slot.offset == descriptor_offset) return;
+    }
+    try tracker.free_descriptor_slots.append(gpa, .{
+        .offset = descriptor_offset,
+        .preserve_refs = preserve_refs,
+        .fresh = false,
+    });
+}
+
+fn hotReloadChooseDescriptorSlot(
+    gpa: Allocator,
+    tracker: *HotReloadDescriptorTracker,
+) (Allocator.Error || error{InvalidSharedMemory})!HotReloadDescriptorSlot {
+    if (tracker.free_descriptor_slots.items.len > 0) {
+        return tracker.free_descriptor_slots.pop().?;
+    }
+
+    // Keep the descriptor list capacity growing in parent-owned memory before
+    // handing this slot to a worker. If the worker publishes successfully, the
+    // next sweep tracks it through the control block; if it fails, the slot is
+    // returned to free_descriptor_slots.
+    try tracker.free_descriptor_slots.ensureUnusedCapacity(gpa, 1);
+
+    const offset = tracker.next_descriptor_offset;
+    if (offset == ipc.hot_reload.invalid_descriptor_offset) return error.InvalidSharedMemory;
+    const next_offset = hotReloadPreviousDescriptorOffset(offset) orelse return error.InvalidSharedMemory;
+    tracker.descriptor_floor = offset;
+    tracker.next_descriptor_offset = next_offset;
+
+    return .{
+        .offset = offset,
+        .preserve_refs = false,
+        .fresh = true,
+    };
+}
+
+fn hotReloadReturnDescriptorSlotAfterFailedChoice(
+    gpa: Allocator,
+    tracker: *HotReloadDescriptorTracker,
+    slot: HotReloadDescriptorSlot,
+) Allocator.Error!void {
+    if (slot.fresh and tracker.descriptor_floor == slot.offset) {
+        const descriptor_size = hotReloadDescriptorSlotSize();
+        tracker.descriptor_floor = slot.offset + descriptor_size;
+        tracker.next_descriptor_offset = slot.offset;
+        return;
+    }
+
+    try hotReloadReleaseDescriptorSlot(gpa, tracker, slot.offset, slot.preserve_refs);
+}
+
+fn hotReloadDescriptor(
+    shm_handle: SharedMemoryHandle,
+    descriptor_offset: usize,
+) error{InvalidSharedMemory}!*ipc.hot_reload.ImageDescriptor {
+    return ipc.hot_reload.descriptorFromOffset(
+        hotReloadBasePtr(shm_handle),
+        shm_handle.mapped_size,
+        descriptor_offset,
+    ) orelse error.InvalidSharedMemory;
+}
+
+fn hotReloadDescriptorForWrite(
+    shm: *SharedMemoryAllocator,
+    descriptor_offset: usize,
+) CliMainError!*ipc.hot_reload.ImageDescriptor {
+    if (descriptor_offset == ipc.hot_reload.invalid_descriptor_offset) return error.InvalidSharedMemory;
+    if (descriptor_offset > shm.total_size) return error.InvalidSharedMemory;
+    if (shm.total_size - descriptor_offset < @sizeOf(ipc.hot_reload.ImageDescriptor)) return error.InvalidSharedMemory;
+    if (descriptor_offset % @alignOf(ipc.hot_reload.ImageDescriptor) != 0) return error.InvalidSharedMemory;
+
+    if (comptime is_windows) {
+        const commit_result = ipc.platform.windows.VirtualAlloc(
+            @ptrCast(shm.base_ptr + descriptor_offset),
+            @sizeOf(ipc.hot_reload.ImageDescriptor),
+            ipc.platform.windows.MEM_COMMIT,
+            ipc.platform.windows.PAGE_READWRITE,
+        );
+        if (commit_result == null) return error.OutOfMemory;
+    }
+
+    return @ptrCast(@alignCast(shm.base_ptr + descriptor_offset));
+}
+
+fn hotReloadValidAllocation(
+    shm_handle: SharedMemoryHandle,
+    reusable_boundary: usize,
+    snapshot: ipc.hot_reload.ImageDescriptorSnapshot,
+) bool {
+    if (snapshot.allocation_start < reusable_boundary) return false;
+    if (snapshot.allocation_end <= snapshot.allocation_start) return false;
+    if (snapshot.allocation_end > shm_handle.mapped_size) return false;
+    if (snapshot.image_offset < snapshot.allocation_start) return false;
+    if (snapshot.image_offset >= snapshot.allocation_end) return false;
+    if (snapshot.image_size <= snapshot.image_offset) return false;
+    if (snapshot.image_size > snapshot.allocation_end) return false;
+    return true;
+}
+
+fn hotReloadFreeRegionLessThan(_: void, a: HotReloadFreeRegion, b: HotReloadFreeRegion) bool {
+    return a.start < b.start or (a.start == b.start and a.end < b.end);
+}
+
+fn hotReloadNormalizeFreeRegions(tracker: *HotReloadDescriptorTracker) void {
+    std.mem.sort(HotReloadFreeRegion, tracker.free_regions.items, {}, hotReloadFreeRegionLessThan);
+
+    var write_index: usize = 0;
+    for (tracker.free_regions.items) |region| {
+        if (region.end <= region.start) continue;
+        if (write_index > 0 and region.start <= tracker.free_regions.items[write_index - 1].end) {
+            tracker.free_regions.items[write_index - 1].end = @max(tracker.free_regions.items[write_index - 1].end, region.end);
+        } else {
+            tracker.free_regions.items[write_index] = region;
+            write_index += 1;
+        }
+    }
+    tracker.free_regions.items.len = write_index;
+}
+
+fn hotReloadAddFreeRegion(
+    gpa: Allocator,
+    tracker: *HotReloadDescriptorTracker,
+    shm_handle: SharedMemoryHandle,
+    reusable_boundary: usize,
+    start: usize,
+    end: usize,
+) CliMainError!void {
+    if (start < reusable_boundary or end <= start or end > shm_handle.mapped_size) return error.InvalidSharedMemory;
+    try tracker.free_regions.append(gpa, .{
+        .start = start,
+        .end = end,
+    });
+    hotReloadNormalizeFreeRegions(tracker);
+}
+
+fn hotReloadSubtractFreeRegion(
+    gpa: Allocator,
+    tracker: *HotReloadDescriptorTracker,
+    start: usize,
+    end: usize,
+) Allocator.Error!void {
+    if (end <= start) return;
+
+    var i: usize = 0;
+    while (i < tracker.free_regions.items.len) {
+        const region = tracker.free_regions.items[i];
+        if (end <= region.start or start >= region.end) {
+            i += 1;
+            continue;
+        }
+
+        const has_left = start > region.start;
+        const has_right = end < region.end;
+
+        if (has_left and has_right) {
+            tracker.free_regions.items[i].end = start;
+            try tracker.free_regions.append(gpa, .{
+                .start = end,
+                .end = region.end,
+            });
+            i += 1;
+        } else if (has_left) {
+            tracker.free_regions.items[i].end = start;
+            i += 1;
+        } else if (has_right) {
+            tracker.free_regions.items[i].start = end;
+            i += 1;
+        } else {
+            _ = tracker.free_regions.swapRemove(i);
+        }
+    }
+
+    hotReloadNormalizeFreeRegions(tracker);
+}
+
+fn hotReloadUsedSizeIncludingFreeRegions(tracker: *const HotReloadDescriptorTracker, used_size: usize) usize {
+    var high_water = used_size;
+    for (tracker.free_regions.items) |region| {
+        high_water = @max(high_water, region.end);
+    }
+    return high_water;
+}
+
+fn hotReloadSweepImageDescriptors(
+    gpa: Allocator,
+    control: *ipc.hot_reload.Control,
+    shm_handle: SharedMemoryHandle,
+    reusable_boundary: usize,
+    tracker: *HotReloadDescriptorTracker,
+) CliMainError!void {
+    const current = ipc.hot_reload.publishedImage(control);
+    if (current) |image| try hotReloadTrackDescriptor(gpa, tracker, image.descriptor_offset);
+
+    var used_size = reusable_boundary;
+    var i: usize = 0;
+    while (i < tracker.descriptors.items.len) {
+        const descriptor_offset = tracker.descriptors.items[i];
+        const descriptor = try hotReloadDescriptor(shm_handle, descriptor_offset);
+        const snapshot = ipc.hot_reload.descriptorSnapshot(descriptor);
+        if (!hotReloadValidAllocation(shm_handle, reusable_boundary, snapshot)) {
+            return error.InvalidSharedMemory;
+        }
+
+        const is_current = current != null and
+            current.?.descriptor_offset == descriptor_offset and
+            current.?.generation == snapshot.generation and
+            current.?.image_offset == snapshot.image_offset and
+            current.?.image_size == snapshot.image_size;
+
+        if (is_current) {
+            if (snapshot.state != .published) return error.InvalidSharedMemory;
+            used_size = @max(used_size, snapshot.allocation_end);
+            try hotReloadSubtractFreeRegion(gpa, tracker, snapshot.allocation_start, snapshot.allocation_end);
+            i += 1;
+            continue;
+        }
+
+        if (snapshot.refs == 0) {
+            ipc.hot_reload.markDescriptorReclaimed(descriptor);
+            try hotReloadAddFreeRegion(
+                gpa,
+                tracker,
+                shm_handle,
+                reusable_boundary,
+                snapshot.allocation_start,
+                snapshot.allocation_end,
+            );
+            try hotReloadReleaseDescriptorSlot(gpa, tracker, descriptor_offset, true);
+            _ = tracker.descriptors.swapRemove(i);
+        } else {
+            ipc.hot_reload.markDescriptorRetired(descriptor);
+            used_size = @max(used_size, snapshot.allocation_end);
+            try hotReloadSubtractFreeRegion(gpa, tracker, snapshot.allocation_start, snapshot.allocation_end);
+            i += 1;
+        }
+    }
+
+    used_size = hotReloadUsedSizeIncludingFreeRegions(tracker, used_size);
+    try SharedMemoryAllocator.rewindMappedHeader(
+        hotReloadBasePtr(shm_handle),
+        shm_handle.mapped_size,
+        used_size,
+    );
+}
+
+fn hotReloadChooseImageAllocation(
+    gpa: Allocator,
+    control: *ipc.hot_reload.Control,
+    shm_handle: SharedMemoryHandle,
+    reusable_boundary: usize,
+    tracker: *HotReloadDescriptorTracker,
+    generation: u64,
+) CliMainError!HotReloadImageAllocation {
+    try hotReloadSweepImageDescriptors(gpa, control, shm_handle, reusable_boundary, tracker);
+
+    const append_offset = try SharedMemoryAllocator.mappedHeaderUsedSize(
+        hotReloadBasePtr(shm_handle),
+        shm_handle.mapped_size,
+    );
+
+    var best_region: ?HotReloadFreeRegion = null;
+    for (tracker.free_regions.items) |region| {
+        if (best_region == null or region.len() > best_region.?.len()) {
+            best_region = region;
+        }
+    }
+
+    const descriptor_slot = try hotReloadChooseDescriptorSlot(gpa, tracker);
+    if (best_region == null and tracker.descriptor_floor <= append_offset) {
+        try hotReloadReturnDescriptorSlotAfterFailedChoice(gpa, tracker, descriptor_slot);
+        return error.OutOfMemory;
+    }
+
+    if (best_region) |region| {
+        return .{
+            .generation = generation,
+            .descriptor_offset = descriptor_slot.offset,
+            .image_limit = tracker.descriptor_floor,
+            .region_start = region.start,
+            .region_end = region.end,
+            .append_offset = append_offset,
+            .preserve_descriptor_refs = descriptor_slot.preserve_refs,
+        };
+    }
+
+    return .{
+        .generation = generation,
+        .descriptor_offset = descriptor_slot.offset,
+        .image_limit = tracker.descriptor_floor,
+        .region_start = 0,
+        .region_end = 0,
+        .append_offset = append_offset,
+        .preserve_descriptor_refs = descriptor_slot.preserve_refs,
+    };
+}
+
+fn runHotReloadDevShim(
+    ctx: *CliCtx,
+    arg0: []const u8,
+    exe_path: []const u8,
+    shm_handle: SharedMemoryHandle,
+    args: cli_args.RunArgs,
+    selected_target: RocTarget,
+    expected_host_identity: [32]u8,
+    initial_watch_inputs: []const compile.watch_inputs.Input,
+    source_rewrite: ?HotReloadSourceRewrite,
+    warning_count: usize,
+) CliMainError!void {
+    var signal = WatchEventSignal{};
+    var state = WatchState{};
+    defer state.deinit(ctx);
+
+    var initial_input_set = try collectHotReloadWatchInputSet(ctx, initial_watch_inputs, source_rewrite);
+    var initial_input_set_needs_deinit = true;
+    errdefer if (initial_input_set_needs_deinit) initial_input_set.deinit(ctx);
+
+    const host_child = try spawnHotShimChild(ctx, exe_path, hotReloadHostChildHandle(shm_handle), args.app_args);
+    var host_child_joined = false;
+    errdefer {
+        if (!host_child_joined) {
+            terminateHotShimChild(host_child);
+            host_child.thread.join();
+        }
+        destroyHotShimChild(ctx, host_child);
+    }
+
+    initial_input_set_needs_deinit = false;
+    var pending_rebuild = try refreshWatchState(ctx, &state, &signal, initial_input_set);
+    initial_input_set = .{ .inputs = &.{}, .snapshot = &.{} };
+
+    var next_generation: u64 = 2;
+    const hot_reload_control = ipc.hot_reload.controlFromBase(@ptrCast(@alignCast(shm_handle.ptr)));
+    const initial_image = ipc.hot_reload.publishedImage(hot_reload_control) orelse return error.InvalidSharedMemory;
+    const hot_reload_reclaim_boundary = @sizeOf(SharedMemoryAllocator.Header);
+    var hot_reload_tracker = HotReloadDescriptorTracker{};
+    defer hot_reload_tracker.deinit(ctx.gpa);
+    try hotReloadInitDescriptorTracker(&hot_reload_tracker, initial_image.descriptor_offset);
+    try hotReloadTrackDescriptor(ctx.gpa, &hot_reload_tracker, initial_image.descriptor_offset);
+    var last_reported_ack = ipc.hot_reload.acknowledgedGeneration(hot_reload_control);
+    var active_rebuild: ?HotReloadRebuild = null;
+    defer {
+        if (active_rebuild) |*rebuild| {
+            rebuild.cancelAndJoin();
+            rebuild.deinit(ctx);
+        }
+    }
+
+    while (!host_child.done.load(.seq_cst)) {
+        if (try reportHotReloadAcknowledgement(
+            ctx,
+            hot_reload_control,
+            &last_reported_ack,
+            if (active_rebuild) |*rebuild| rebuild else null,
+        )) |_| {
+            if (active_rebuild == null) {
+                try hotReloadSweepImageDescriptors(
+                    ctx.gpa,
+                    hot_reload_control,
+                    shm_handle,
+                    hot_reload_reclaim_boundary,
+                    &hot_reload_tracker,
+                );
+            }
+        }
+
+        if (active_rebuild) |*rebuild| {
+            if (rebuild.child.done.load(.seq_cst)) {
+                const changed_during_refresh = finishHotReloadRebuild(ctx, &state, &signal, rebuild) catch |err| {
+                    try hotReloadRecycleUnpublishedAllocation(ctx.gpa, hot_reload_control, &hot_reload_tracker, rebuild.allocation);
+                    rebuild.deinit(ctx);
+                    active_rebuild = null;
+                    return err;
+                };
+                pending_rebuild = changed_during_refresh or pending_rebuild;
+                if (!hotReloadRebuildSucceeded(rebuild.child)) {
+                    try hotReloadRecycleUnpublishedAllocation(ctx.gpa, hot_reload_control, &hot_reload_tracker, rebuild.allocation);
+                }
+                rebuild.deinit(ctx);
+                active_rebuild = null;
+                try hotReloadSweepImageDescriptors(
+                    ctx.gpa,
+                    hot_reload_control,
+                    shm_handle,
+                    hot_reload_reclaim_boundary,
+                    &hot_reload_tracker,
+                );
+            }
+        }
+
+        if (try consumeDebouncedWatchChange(ctx, &signal, &state)) {
+            if (active_rebuild) |*rebuild| {
+                rebuild.cancelAndJoin();
+                try hotReloadRecycleUnpublishedAllocation(ctx.gpa, hot_reload_control, &hot_reload_tracker, rebuild.allocation);
+                rebuild.deinit(ctx);
+                active_rebuild = null;
+            }
+            pending_rebuild = true;
+        }
+
+        if (pending_rebuild and active_rebuild == null) {
+            const allocation = try hotReloadChooseImageAllocation(
+                ctx.gpa,
+                hot_reload_control,
+                shm_handle,
+                hot_reload_reclaim_boundary,
+                &hot_reload_tracker,
+                next_generation,
+            );
+            active_rebuild = spawnHotReloadRebuild(
+                ctx,
+                arg0,
+                args,
+                selected_target,
+                shm_handle,
+                expected_host_identity,
+                next_generation,
+                allocation,
+                source_rewrite,
+            ) catch |err| {
+                try hotReloadRecycleUnpublishedAllocation(ctx.gpa, hot_reload_control, &hot_reload_tracker, allocation);
+                return err;
+            };
+            next_generation += 1;
+            pending_rebuild = false;
+        }
+
+        std.Io.sleep(ctx.io.std_io, std.Io.Duration.fromMilliseconds(watch_debounce_ms), .awake) catch {};
+    }
+
+    host_child.thread.join();
+    host_child_joined = true;
+    defer destroyHotShimChild(ctx, host_child);
+    _ = try reportHotReloadAcknowledgement(
+        ctx,
+        hot_reload_control,
+        &last_reported_ack,
+        if (active_rebuild) |*rebuild| rebuild else null,
+    );
+
+    if (active_rebuild) |*rebuild| {
+        rebuild.cancelAndJoin();
+        try hotReloadRecycleUnpublishedAllocation(ctx.gpa, hot_reload_control, &hot_reload_tracker, rebuild.allocation);
+        rebuild.deinit(ctx);
+        active_rebuild = null;
+    }
+
+    if (host_child.wait_error) |err| {
+        return ctx.fail(.{ .child_process_wait_failed = .{
+            .command = exe_path,
+            .err = err,
+        } });
+    }
+
+    if (std.fs.path.dirname(exe_path)) |temp_dir_path| {
+        compile.CacheCleanup.deleteTempDir(ctx.io.std_io, temp_dir_path);
+        std.log.debug("Cleaned up temp directory: {s}", .{temp_dir_path});
+    }
+
+    const term = host_child.term orelse {
+        return ctx.fail(.{ .child_process_wait_failed = .{
+            .command = exe_path,
+            .err = error.ProcessWaitFailed,
+        } });
+    };
+    try finishCompiledRun(ctx, exe_path, term, warning_count);
+}
+
 /// Handle for cross-platform shared memory operations.
 /// Contains the file descriptor/handle, memory pointer, and size.
 pub const SharedMemoryHandle = struct {
@@ -3168,6 +4434,354 @@ pub const SharedMemoryHandle = struct {
     /// a large virtual address region upfront.
     mapped_size: usize,
 };
+
+fn hotReloadHostChildHandle(handle: SharedMemoryHandle) SharedMemoryHandle {
+    var child_handle = handle;
+    child_handle.size = handle.mapped_size;
+    return child_handle;
+}
+
+test "hot reload host child maps the full shared-memory reservation" {
+    const fd = if (comptime is_windows)
+        @as(*anyopaque, @ptrFromInt(0x1234))
+    else
+        @as(c_int, 1234);
+    const original = SharedMemoryHandle{
+        .fd = fd,
+        .ptr = @as(*anyopaque, @ptrFromInt(0x5678)),
+        .size = 4096,
+        .mapped_size = 8192,
+    };
+
+    const child = hotReloadHostChildHandle(original);
+    try std.testing.expectEqual(original.fd, child.fd);
+    try std.testing.expectEqual(original.ptr, child.ptr);
+    try std.testing.expectEqual(@as(usize, 8192), child.size);
+    try std.testing.expectEqual(@as(usize, 8192), child.mapped_size);
+}
+
+test "hot reload worker args require append offset" {
+    const zero_host = "0000000000000000000000000000000000000000000000000000000000000000";
+
+    const parsed = try parseHotReloadDevWorkerArgs(&.{
+        "--path=app.roc",
+        "--target=x64linux",
+        "--generation=2",
+        "--descriptor-offset=7680",
+        "--image-limit=7680",
+        "--region-start=1024",
+        "--region-end=3072",
+        "--append-offset=4096",
+        "--preserve-descriptor-refs=1",
+        "--shm-handle=3",
+        "--shm-size=8192",
+        "--expected-host=" ++ zero_host,
+        "--watch-inputs-file=watch-inputs",
+    });
+
+    try std.testing.expectEqual(@as(u64, 2), parsed.generation);
+    try std.testing.expectEqual(@as(usize, 7680), parsed.descriptor_offset);
+    try std.testing.expectEqual(@as(usize, 7680), parsed.image_limit);
+    try std.testing.expectEqual(@as(usize, 1024), parsed.region_start);
+    try std.testing.expectEqual(@as(usize, 3072), parsed.region_end);
+    try std.testing.expectEqual(@as(usize, 4096), parsed.append_offset);
+    try std.testing.expectEqual(true, parsed.preserve_descriptor_refs);
+    try std.testing.expectError(error.InvalidArguments, parseHotReloadDevWorkerArgs(&.{
+        "--path=app.roc",
+        "--target=x64linux",
+        "--generation=2",
+        "--descriptor-offset=7680",
+        "--image-limit=7680",
+        "--region-start=1024",
+        "--region-end=3072",
+        "--append-offset=4096",
+        "--preserve-descriptor-refs=false",
+        "--shm-handle=3",
+        "--shm-size=8192",
+        "--expected-host=" ++ zero_host,
+        "--watch-inputs-file=watch-inputs",
+    }));
+    try std.testing.expectError(error.InvalidArguments, parseHotReloadDevWorkerArgs(&.{
+        "--path=app.roc",
+        "--target=x64linux",
+        "--generation=2",
+        "--descriptor-offset=7680",
+        "--image-limit=7680",
+        "--shm-handle=3",
+        "--shm-size=8192",
+        "--expected-host=" ++ zero_host,
+        "--watch-inputs-file=watch-inputs",
+    }));
+}
+
+fn testingSharedMemoryHandle(shm: *SharedMemoryAllocator) SharedMemoryHandle {
+    return .{
+        .fd = shm.handle,
+        .ptr = shm.base_ptr,
+        .size = shm.getUsedSize(),
+        .mapped_size = shm.total_size,
+    };
+}
+
+fn testingHotReloadDescriptor(shm: *SharedMemoryAllocator, offset: usize) *ipc.hot_reload.ImageDescriptor {
+    // Route through the production helper so tests commit the descriptor's page on
+    // Windows (SEC_RESERVE leaves it reserved-but-uncommitted) exactly as a real run does.
+    return hotReloadDescriptorForWrite(shm, offset) catch unreachable;
+}
+
+fn testingPrepareHotReloadDescriptor(
+    shm: *SharedMemoryAllocator,
+    generation: u64,
+    descriptor_offset: usize,
+    image_offset: usize,
+    image_bound: usize,
+    allocation_start: usize,
+    allocation_end: usize,
+) *ipc.hot_reload.ImageDescriptor {
+    const descriptor = testingHotReloadDescriptor(shm, descriptor_offset);
+    ipc.hot_reload.prepareDescriptor(
+        descriptor,
+        generation,
+        image_offset,
+        image_bound,
+        allocation_start,
+        allocation_end,
+        true,
+    );
+    return descriptor;
+}
+
+fn testingInitHotReloadDescriptorTracker(
+    tracker: *HotReloadDescriptorTracker,
+    initial_descriptor_offset: usize,
+    lowest_descriptor_offset: usize,
+) error{InvalidSharedMemory}!void {
+    try hotReloadInitDescriptorTracker(tracker, initial_descriptor_offset);
+    tracker.descriptor_floor = lowest_descriptor_offset;
+    tracker.next_descriptor_offset = hotReloadPreviousDescriptorOffset(lowest_descriptor_offset) orelse return error.InvalidSharedMemory;
+}
+
+test "hot reload allocation coalesces adjacent reclaimed image regions" {
+    const page_size = try SharedMemoryAllocator.getSystemPageSize();
+    var shm = try SharedMemoryAllocator.create(std.testing.io, 64 * 1024, page_size);
+    defer shm.deinit(std.testing.allocator);
+
+    const handle = testingSharedMemoryHandle(&shm);
+    const desc0_offset = try hotReloadInitialDescriptorOffset(handle);
+    const desc1_offset = hotReloadPreviousDescriptorOffset(desc0_offset).?;
+    const desc2_offset = hotReloadPreviousDescriptorOffset(desc1_offset).?;
+
+    const control = ipc.hot_reload.controlFromBase(shm.base_ptr);
+    const desc0 = testingPrepareHotReloadDescriptor(&shm, 1, desc0_offset, 512, 2048, 512, 2048);
+    ipc.hot_reload.init(control, desc0_offset, desc0);
+    try SharedMemoryAllocator.rewindMappedHeader(shm.base_ptr, shm.total_size, 2048);
+
+    const desc1 = testingPrepareHotReloadDescriptor(&shm, 2, desc1_offset, 2048, 4096, 2048, 4096);
+    ipc.hot_reload.publishDescriptor(control, 2, desc1_offset, desc1);
+    try SharedMemoryAllocator.rewindMappedHeader(shm.base_ptr, shm.total_size, 4096);
+
+    const desc2 = testingPrepareHotReloadDescriptor(&shm, 3, desc2_offset, 4096, 8192, 4096, 8192);
+    ipc.hot_reload.publishDescriptor(control, 3, desc2_offset, desc2);
+    try SharedMemoryAllocator.rewindMappedHeader(shm.base_ptr, shm.total_size, 8192);
+
+    var tracker = HotReloadDescriptorTracker{};
+    defer tracker.deinit(std.testing.allocator);
+    try testingInitHotReloadDescriptorTracker(&tracker, desc0_offset, desc2_offset);
+    try hotReloadTrackDescriptor(std.testing.allocator, &tracker, desc0_offset);
+    try hotReloadTrackDescriptor(std.testing.allocator, &tracker, desc1_offset);
+    try hotReloadTrackDescriptor(std.testing.allocator, &tracker, desc2_offset);
+
+    const allocation = try hotReloadChooseImageAllocation(std.testing.allocator, control, handle, @sizeOf(SharedMemoryAllocator.Header), &tracker, 4);
+
+    try std.testing.expectEqual(@as(u64, 4), allocation.generation);
+    try std.testing.expect(allocation.descriptor_offset == desc0_offset or allocation.descriptor_offset == desc1_offset);
+    try std.testing.expectEqual(desc2_offset, allocation.image_limit);
+    try std.testing.expectEqual(@as(usize, 512), allocation.region_start);
+    try std.testing.expectEqual(@as(usize, 4096), allocation.region_end);
+    try std.testing.expectEqual(@as(usize, 8192), allocation.append_offset);
+    try std.testing.expectEqual(true, allocation.preserve_descriptor_refs);
+    try std.testing.expectEqual(ipc.hot_reload.DescriptorState.reclaimed, ipc.hot_reload.descriptorSnapshot(desc1).state);
+    try std.testing.expectEqual(ipc.hot_reload.DescriptorState.published, ipc.hot_reload.descriptorSnapshot(desc2).state);
+    try std.testing.expectEqual(@as(usize, 8192), try SharedMemoryAllocator.mappedHeaderUsedSize(shm.base_ptr, shm.total_size));
+}
+
+test "hot reload sweep keeps acknowledged current descriptor live" {
+    const page_size = try SharedMemoryAllocator.getSystemPageSize();
+    var shm = try SharedMemoryAllocator.create(std.testing.io, 64 * 1024, page_size);
+    defer shm.deinit(std.testing.allocator);
+
+    const handle = testingSharedMemoryHandle(&shm);
+    const desc0_offset = try hotReloadInitialDescriptorOffset(handle);
+    const desc1_offset = hotReloadPreviousDescriptorOffset(desc0_offset).?;
+
+    const control = ipc.hot_reload.controlFromBase(shm.base_ptr);
+    const desc0 = testingPrepareHotReloadDescriptor(&shm, 1, desc0_offset, 512, 2048, 512, 2048);
+    ipc.hot_reload.init(control, desc0_offset, desc0);
+    try SharedMemoryAllocator.rewindMappedHeader(shm.base_ptr, shm.total_size, 2048);
+
+    const desc1 = testingPrepareHotReloadDescriptor(&shm, 2, desc1_offset, 2048, 4096, 2048, 4096);
+    ipc.hot_reload.publishDescriptor(control, 2, desc1_offset, desc1);
+    try SharedMemoryAllocator.rewindMappedHeader(shm.base_ptr, shm.total_size, 4096);
+    ipc.hot_reload.acknowledge(control, 2, .accepted);
+
+    var tracker = HotReloadDescriptorTracker{};
+    defer tracker.deinit(std.testing.allocator);
+    try testingInitHotReloadDescriptorTracker(&tracker, desc0_offset, desc1_offset);
+    try hotReloadTrackDescriptor(std.testing.allocator, &tracker, desc0_offset);
+    try hotReloadTrackDescriptor(std.testing.allocator, &tracker, desc1_offset);
+
+    const allocation = try hotReloadChooseImageAllocation(std.testing.allocator, control, handle, @sizeOf(SharedMemoryAllocator.Header), &tracker, 3);
+
+    try std.testing.expectEqual(desc0_offset, allocation.descriptor_offset);
+    try std.testing.expectEqual(desc1_offset, allocation.image_limit);
+    try std.testing.expectEqual(@as(usize, 512), allocation.region_start);
+    try std.testing.expectEqual(@as(usize, 2048), allocation.region_end);
+    try std.testing.expectEqual(@as(usize, 4096), allocation.append_offset);
+    try std.testing.expectEqual(true, allocation.preserve_descriptor_refs);
+    try std.testing.expectEqual(ipc.hot_reload.DescriptorState.published, ipc.hot_reload.descriptorSnapshot(desc1).state);
+    try std.testing.expectEqual(@as(usize, 4096), try SharedMemoryAllocator.mappedHeaderUsedSize(shm.base_ptr, shm.total_size));
+}
+
+test "hot reload sweep keeps top reclaimed descriptor region addressable" {
+    const page_size = try SharedMemoryAllocator.getSystemPageSize();
+    var shm = try SharedMemoryAllocator.create(std.testing.io, 64 * 1024, page_size);
+    defer shm.deinit(std.testing.allocator);
+
+    const handle = testingSharedMemoryHandle(&shm);
+    const desc0_offset = try hotReloadInitialDescriptorOffset(handle);
+    const desc1_offset = hotReloadPreviousDescriptorOffset(desc0_offset).?;
+
+    const control = ipc.hot_reload.controlFromBase(shm.base_ptr);
+    const desc0 = testingPrepareHotReloadDescriptor(&shm, 3, desc0_offset, 512, 2048, 512, 2048);
+    ipc.hot_reload.init(control, desc0_offset, desc0);
+    try SharedMemoryAllocator.rewindMappedHeader(shm.base_ptr, shm.total_size, 2048);
+
+    const desc1 = testingPrepareHotReloadDescriptor(&shm, 2, desc1_offset, 2048, 4096, 2048, 4096);
+    try SharedMemoryAllocator.rewindMappedHeader(shm.base_ptr, shm.total_size, 4096);
+    ipc.hot_reload.publishDescriptor(control, 3, desc0_offset, desc0);
+
+    var tracker = HotReloadDescriptorTracker{};
+    defer tracker.deinit(std.testing.allocator);
+    try testingInitHotReloadDescriptorTracker(&tracker, desc0_offset, desc1_offset);
+    try hotReloadTrackDescriptor(std.testing.allocator, &tracker, desc0_offset);
+    try hotReloadTrackDescriptor(std.testing.allocator, &tracker, desc1_offset);
+
+    const allocation = try hotReloadChooseImageAllocation(std.testing.allocator, control, handle, @sizeOf(SharedMemoryAllocator.Header), &tracker, 4);
+
+    try std.testing.expectEqual(desc1_offset, allocation.descriptor_offset);
+    try std.testing.expectEqual(desc1_offset, allocation.image_limit);
+    try std.testing.expectEqual(@as(usize, 2048), allocation.region_start);
+    try std.testing.expectEqual(@as(usize, 4096), allocation.region_end);
+    try std.testing.expectEqual(@as(usize, 4096), allocation.append_offset);
+    try std.testing.expectEqual(true, allocation.preserve_descriptor_refs);
+    try std.testing.expectEqual(ipc.hot_reload.DescriptorState.reclaimed, ipc.hot_reload.descriptorSnapshot(desc1).state);
+    try std.testing.expectEqual(ipc.hot_reload.DescriptorState.published, ipc.hot_reload.descriptorSnapshot(desc0).state);
+    try std.testing.expectEqual(@as(usize, 4096), try SharedMemoryAllocator.mappedHeaderUsedSize(shm.base_ptr, shm.total_size));
+}
+
+test "hot reload allocation skips retired retained descriptors" {
+    const page_size = try SharedMemoryAllocator.getSystemPageSize();
+    var shm = try SharedMemoryAllocator.create(std.testing.io, 64 * 1024, page_size);
+    defer shm.deinit(std.testing.allocator);
+
+    const handle = testingSharedMemoryHandle(&shm);
+    const desc0_offset = try hotReloadInitialDescriptorOffset(handle);
+    const desc1_offset = hotReloadPreviousDescriptorOffset(desc0_offset).?;
+    const desc2_offset = hotReloadPreviousDescriptorOffset(desc1_offset).?;
+
+    const control = ipc.hot_reload.controlFromBase(shm.base_ptr);
+    const desc0 = testingPrepareHotReloadDescriptor(&shm, 1, desc0_offset, 512, 2048, 512, 2048);
+    ipc.hot_reload.init(control, desc0_offset, desc0);
+    ipc.hot_reload.retainDescriptor(desc0);
+    try SharedMemoryAllocator.rewindMappedHeader(shm.base_ptr, shm.total_size, 2048);
+
+    const desc1 = testingPrepareHotReloadDescriptor(&shm, 2, desc1_offset, 2048, 4096, 2048, 4096);
+    ipc.hot_reload.publishDescriptor(control, 2, desc1_offset, desc1);
+    ipc.hot_reload.retainDescriptor(desc1);
+    try SharedMemoryAllocator.rewindMappedHeader(shm.base_ptr, shm.total_size, 4096);
+
+    const desc2 = testingPrepareHotReloadDescriptor(&shm, 3, desc2_offset, 4096, 8192, 4096, 8192);
+    ipc.hot_reload.publishDescriptor(control, 3, desc2_offset, desc2);
+    try SharedMemoryAllocator.rewindMappedHeader(shm.base_ptr, shm.total_size, 8192);
+
+    var tracker = HotReloadDescriptorTracker{};
+    defer tracker.deinit(std.testing.allocator);
+    try testingInitHotReloadDescriptorTracker(&tracker, desc0_offset, desc2_offset);
+    try hotReloadTrackDescriptor(std.testing.allocator, &tracker, desc0_offset);
+    try hotReloadTrackDescriptor(std.testing.allocator, &tracker, desc1_offset);
+    try hotReloadTrackDescriptor(std.testing.allocator, &tracker, desc2_offset);
+
+    const allocation = try hotReloadChooseImageAllocation(std.testing.allocator, control, handle, @sizeOf(SharedMemoryAllocator.Header), &tracker, 4);
+
+    try std.testing.expectEqual(hotReloadPreviousDescriptorOffset(desc2_offset).?, allocation.descriptor_offset);
+    try std.testing.expectEqual(hotReloadPreviousDescriptorOffset(desc2_offset).?, allocation.image_limit);
+    try std.testing.expectEqual(@as(usize, 0), allocation.region_start);
+    try std.testing.expectEqual(@as(usize, 0), allocation.region_end);
+    try std.testing.expectEqual(@as(usize, 8192), allocation.append_offset);
+    try std.testing.expectEqual(false, allocation.preserve_descriptor_refs);
+    try std.testing.expectEqual(ipc.hot_reload.DescriptorState.retired, ipc.hot_reload.descriptorSnapshot(desc1).state);
+    try std.testing.expectEqual(@as(u32, 1), ipc.hot_reload.descriptorSnapshot(desc1).refs);
+
+    ipc.hot_reload.releaseDescriptor(desc0);
+    ipc.hot_reload.releaseDescriptor(desc1);
+}
+
+test "hot reload allocation rolls back fresh descriptor when append has no room" {
+    const page_size = try SharedMemoryAllocator.getSystemPageSize();
+    var shm = try SharedMemoryAllocator.create(std.testing.io, 64 * 1024, page_size);
+    defer shm.deinit(std.testing.allocator);
+
+    const handle = testingSharedMemoryHandle(&shm);
+    const desc0_offset = try hotReloadInitialDescriptorOffset(handle);
+    const desc1_offset = hotReloadPreviousDescriptorOffset(desc0_offset).?;
+
+    const control = ipc.hot_reload.controlFromBase(shm.base_ptr);
+    const desc0 = testingPrepareHotReloadDescriptor(&shm, 1, desc0_offset, 512, desc1_offset, 512, desc1_offset);
+    ipc.hot_reload.init(control, desc0_offset, desc0);
+    try SharedMemoryAllocator.rewindMappedHeader(shm.base_ptr, shm.total_size, desc1_offset);
+
+    var tracker = HotReloadDescriptorTracker{};
+    defer tracker.deinit(std.testing.allocator);
+    try hotReloadInitDescriptorTracker(&tracker, desc0_offset);
+    try hotReloadTrackDescriptor(std.testing.allocator, &tracker, desc0_offset);
+
+    try std.testing.expectError(
+        error.OutOfMemory,
+        hotReloadChooseImageAllocation(std.testing.allocator, control, handle, @sizeOf(SharedMemoryAllocator.Header), &tracker, 2),
+    );
+    try std.testing.expectEqual(desc0_offset, tracker.descriptor_floor);
+    try std.testing.expectEqual(desc1_offset, tracker.next_descriptor_offset);
+    try std.testing.expectEqual(@as(usize, 0), tracker.free_descriptor_slots.items.len);
+}
+
+test "hot reload allocation can use reclaimed region when append has no room" {
+    const page_size = try SharedMemoryAllocator.getSystemPageSize();
+    var shm = try SharedMemoryAllocator.create(std.testing.io, 64 * 1024, page_size);
+    defer shm.deinit(std.testing.allocator);
+
+    const handle = testingSharedMemoryHandle(&shm);
+    const desc0_offset = try hotReloadInitialDescriptorOffset(handle);
+    const desc1_offset = hotReloadPreviousDescriptorOffset(desc0_offset).?;
+
+    const control = ipc.hot_reload.controlFromBase(shm.base_ptr);
+    const desc0 = testingPrepareHotReloadDescriptor(&shm, 1, desc0_offset, 4096, desc1_offset, 4096, desc1_offset);
+    ipc.hot_reload.init(control, desc0_offset, desc0);
+    try SharedMemoryAllocator.rewindMappedHeader(shm.base_ptr, shm.total_size, desc1_offset);
+
+    var tracker = HotReloadDescriptorTracker{};
+    defer tracker.deinit(std.testing.allocator);
+    try hotReloadInitDescriptorTracker(&tracker, desc0_offset);
+    try hotReloadTrackDescriptor(std.testing.allocator, &tracker, desc0_offset);
+    try hotReloadAddFreeRegion(std.testing.allocator, &tracker, handle, @sizeOf(SharedMemoryAllocator.Header), 512, 4096);
+
+    const allocation = try hotReloadChooseImageAllocation(std.testing.allocator, control, handle, @sizeOf(SharedMemoryAllocator.Header), &tracker, 2);
+
+    try std.testing.expectEqual(desc1_offset, allocation.descriptor_offset);
+    try std.testing.expectEqual(desc1_offset, allocation.image_limit);
+    try std.testing.expectEqual(@as(usize, 512), allocation.region_start);
+    try std.testing.expectEqual(@as(usize, 4096), allocation.region_end);
+    try std.testing.expectEqual(desc1_offset, allocation.append_offset);
+}
 
 /// Result of setting up shared memory with type checking information.
 /// Contains the shared memory handle for the compiled modules and
@@ -3191,12 +4805,20 @@ const LoweredCoordinatorResult = struct {
     entrypoint_names: []const []const u8,
     hosted_symbols: []const []const u8,
     checked_host_identity: ?[32]u8,
+    watch_inputs: []const compile.watch_inputs.Input,
+    watch_inputs_allocator: Allocator,
     counts: CoordinatorReportCounts,
 
     fn deinit(self: *LoweredCoordinatorResult) void {
         if (self.lowered) |*lowered| {
             lowered.deinit();
         }
+        self.deinitWatchInputs();
+    }
+
+    fn deinitWatchInputs(self: *LoweredCoordinatorResult) void {
+        compile.watch_inputs.deinit(self.watch_inputs_allocator, self.watch_inputs);
+        self.watch_inputs = &.{};
     }
 };
 
@@ -3228,12 +4850,12 @@ fn renderCoordinatorReports(ctx: *CliCtx, coord: *Coordinator, roc_file_path: []
                 ctx.gpa.free(@constCast(note_entry.value));
             }
             if (!builtin.is_test) {
-                reporting.renderReportToTerminal(rep, ctx.io.stderr(), ColorPalette.ANSI, reporting.ReportingConfig.initColorTerminal()) catch {};
+                reporting.renderReportToTerminal(rep, ctx.io.stderr(), ColorPalette.ANSI, ctx.terminalReportConfig()) catch {};
             }
         } else if (rep.severity == .warning) {
             counts.warnings += 1;
             if (!builtin.is_test) {
-                reporting.renderReportToTerminal(rep, ctx.io.stderr(), ColorPalette.ANSI, reporting.ReportingConfig.initColorTerminal()) catch {};
+                reporting.renderReportToTerminal(rep, ctx.io.stderr(), ColorPalette.ANSI, ctx.terminalReportConfig()) catch {};
             }
         }
     }
@@ -3315,12 +4937,245 @@ fn defaultRunShimTarget(native: RocTarget) RocTarget {
     };
 }
 
-fn publishDevRunImage(
+const DevRunImagePublication = struct {
+    descriptor: ?*ipc.hot_reload.ImageDescriptor,
+    descriptor_offset: usize,
+};
+
+const hot_reload_dev_command = "__roc_hot_reload_dev";
+
+const HotReloadDevWorkerArgs = struct {
+    path: []const u8,
+    target: []const u8,
+    generation: u64,
+    descriptor_offset: usize,
+    image_limit: usize,
+    region_start: usize,
+    region_end: usize,
+    append_offset: usize,
+    preserve_descriptor_refs: bool,
+    shm_handle: []const u8,
+    shm_size: usize,
+    expected_host_identity: [32]u8,
+    watch_inputs_file: []const u8,
+    synthetic_source_path: ?[]const u8,
+    synthetic_output_path: ?[]const u8,
+    source_dir_override: ?[]const u8,
+    max_threads: ?usize,
+    resolve_limits: cli_args.ResolveLimitArgs,
+};
+
+fn parseHotReloadDigest(hex: []const u8) error{InvalidArguments}![32]u8 {
+    if (hex.len != 64) return error.InvalidArguments;
+
+    var digest: [32]u8 = undefined;
+    for (&digest, 0..) |*byte, i| {
+        const hi = hexNibble(hex[i * 2]) orelse return error.InvalidArguments;
+        const lo = hexNibble(hex[i * 2 + 1]) orelse return error.InvalidArguments;
+        byte.* = (hi << 4) | lo;
+    }
+    return digest;
+}
+
+fn hotReloadFlagValue(arg: []const u8, flag: []const u8) ?[]const u8 {
+    if (!std.mem.startsWith(u8, arg, flag)) return null;
+    if (arg.len <= flag.len or arg[flag.len] != '=') return null;
+    return arg[flag.len + 1 ..];
+}
+
+fn parseHotReloadBool(value: []const u8) error{InvalidArguments}!bool {
+    if (std.mem.eql(u8, value, "0")) return false;
+    if (std.mem.eql(u8, value, "1")) return true;
+    return error.InvalidArguments;
+}
+
+fn parseHotReloadDevWorkerArgs(args: []const []const u8) error{InvalidArguments}!HotReloadDevWorkerArgs {
+    var path: ?[]const u8 = null;
+    var target: ?[]const u8 = null;
+    var generation: ?u64 = null;
+    var descriptor_offset: ?usize = null;
+    var image_limit: ?usize = null;
+    var region_start: ?usize = null;
+    var region_end: ?usize = null;
+    var append_offset: ?usize = null;
+    var preserve_descriptor_refs: ?bool = null;
+    var shm_handle: ?[]const u8 = null;
+    var shm_size: ?usize = null;
+    var expected_host_identity: ?[32]u8 = null;
+    var watch_inputs_file: ?[]const u8 = null;
+    var synthetic_source_path: ?[]const u8 = null;
+    var synthetic_output_path: ?[]const u8 = null;
+    var source_dir_override: ?[]const u8 = null;
+    var max_threads: ?usize = null;
+    var resolve_limits = cli_args.ResolveLimitArgs{};
+
+    for (args) |arg| {
+        if (hotReloadFlagValue(arg, "--path")) |value| {
+            path = value;
+        } else if (hotReloadFlagValue(arg, "--target")) |value| {
+            target = value;
+        } else if (hotReloadFlagValue(arg, "--generation")) |value| {
+            generation = std.fmt.parseInt(u64, value, 10) catch return error.InvalidArguments;
+        } else if (hotReloadFlagValue(arg, "--descriptor-offset")) |value| {
+            descriptor_offset = std.fmt.parseInt(usize, value, 10) catch return error.InvalidArguments;
+        } else if (hotReloadFlagValue(arg, "--image-limit")) |value| {
+            image_limit = std.fmt.parseInt(usize, value, 10) catch return error.InvalidArguments;
+        } else if (hotReloadFlagValue(arg, "--region-start")) |value| {
+            region_start = std.fmt.parseInt(usize, value, 10) catch return error.InvalidArguments;
+        } else if (hotReloadFlagValue(arg, "--region-end")) |value| {
+            region_end = std.fmt.parseInt(usize, value, 10) catch return error.InvalidArguments;
+        } else if (hotReloadFlagValue(arg, "--append-offset")) |value| {
+            append_offset = std.fmt.parseInt(usize, value, 10) catch return error.InvalidArguments;
+        } else if (hotReloadFlagValue(arg, "--preserve-descriptor-refs")) |value| {
+            preserve_descriptor_refs = try parseHotReloadBool(value);
+        } else if (hotReloadFlagValue(arg, "--shm-handle")) |value| {
+            shm_handle = value;
+        } else if (hotReloadFlagValue(arg, "--shm-size")) |value| {
+            shm_size = std.fmt.parseInt(usize, value, 10) catch return error.InvalidArguments;
+        } else if (hotReloadFlagValue(arg, "--expected-host")) |value| {
+            expected_host_identity = try parseHotReloadDigest(value);
+        } else if (hotReloadFlagValue(arg, "--watch-inputs-file")) |value| {
+            watch_inputs_file = value;
+        } else if (hotReloadFlagValue(arg, "--synthetic-source")) |value| {
+            synthetic_source_path = value;
+        } else if (hotReloadFlagValue(arg, "--synthetic-output")) |value| {
+            synthetic_output_path = value;
+        } else if (hotReloadFlagValue(arg, "--source-dir")) |value| {
+            source_dir_override = value;
+        } else if (hotReloadFlagValue(arg, "--jobs")) |value| {
+            max_threads = std.fmt.parseInt(usize, value, 10) catch return error.InvalidArguments;
+        } else if (hotReloadFlagValue(arg, "--max-package-mb")) |value| {
+            resolve_limits.max_package_mb = std.fmt.parseInt(u32, value, 10) catch return error.InvalidArguments;
+        } else if (hotReloadFlagValue(arg, "--max-transitive-mb")) |value| {
+            resolve_limits.max_transitive_mb = std.fmt.parseInt(u32, value, 10) catch return error.InvalidArguments;
+        } else {
+            return error.InvalidArguments;
+        }
+    }
+
+    return .{
+        .path = path orelse return error.InvalidArguments,
+        .target = target orelse return error.InvalidArguments,
+        .generation = generation orelse return error.InvalidArguments,
+        .descriptor_offset = descriptor_offset orelse return error.InvalidArguments,
+        .image_limit = image_limit orelse return error.InvalidArguments,
+        .region_start = region_start orelse return error.InvalidArguments,
+        .region_end = region_end orelse return error.InvalidArguments,
+        .append_offset = append_offset orelse return error.InvalidArguments,
+        .preserve_descriptor_refs = preserve_descriptor_refs orelse return error.InvalidArguments,
+        .shm_handle = shm_handle orelse return error.InvalidArguments,
+        .shm_size = shm_size orelse return error.InvalidArguments,
+        .expected_host_identity = expected_host_identity orelse return error.InvalidArguments,
+        .watch_inputs_file = watch_inputs_file orelse return error.InvalidArguments,
+        .synthetic_source_path = synthetic_source_path,
+        .synthetic_output_path = synthetic_output_path,
+        .source_dir_override = source_dir_override,
+        .max_threads = max_threads,
+        .resolve_limits = resolve_limits,
+    };
+}
+
+fn rocInternalHotReloadDev(ctx: *CliCtx, raw_args: []const []const u8) CliMainError!void {
+    const args = parseHotReloadDevWorkerArgs(raw_args) catch |err| {
+        try ctx.io.stderr().print("Error: invalid internal hot-reload compiler arguments: {}\n", .{err});
+        return err;
+    };
+
+    const selected_target = RocTarget.fromString(args.target) orelse {
+        try ctx.io.stderr().print("Error: invalid internal hot-reload target: {s}\n", .{args.target});
+        return error.InvalidTarget;
+    };
+
+    const page_size = try SharedMemoryAllocator.getSystemPageSize();
+    const handle = try ipc.coordination.parseHandle(args.shm_handle);
+    var shm = try SharedMemoryAllocator.fromFdWithHeaderOffset(handle, args.shm_size, page_size);
+    defer shm.deinit(ctx.gpa);
+
+    const control = ipc.hot_reload.controlFromBase(shm.base_ptr);
+    if (!ipc.hot_reload.initialized(control)) {
+        try ctx.io.stderr().writeAll("Error: hot-reload shared memory control block is not initialized.\n");
+        return error.InvalidSharedMemory;
+    }
+
+    const source_rewrite: ?HotReloadSourceRewrite = if (args.synthetic_source_path) |source_path| blk: {
+        const synthetic_output_path = args.synthetic_output_path orelse return error.InvalidArguments;
+        const source_dir_override = args.source_dir_override orelse return error.InvalidArguments;
+        try rewriteDefaultAppSyntheticRunSourceFromFile(ctx, synthetic_output_path, source_path);
+        break :blk .{
+            .source_path = source_path,
+            .synthetic_app_path = synthetic_output_path,
+            .source_dir_override = source_dir_override,
+        };
+    } else blk: {
+        if (args.synthetic_output_path != null or args.source_dir_override != null) return error.InvalidArguments;
+        break :blk null;
+    };
+
+    var lowered_result = try lowerLirWithCoordinator(
+        ctx,
+        ctx.gpa,
+        args.path,
+        if (source_rewrite) |rewrite| rewrite.source_dir_override else null,
+        args.max_threads,
+        debugEffectsForOpt(.dev),
+        resolutionConfigFromLimits(args.resolve_limits),
+        null,
+        null,
+        false,
+    );
+    defer lowered_result.deinit();
+
+    try writeHotReloadWatchPathsFile(ctx, args.watch_inputs_file, lowered_result.watch_inputs, source_rewrite);
+
+    if (lowered_result.counts.errors > 0) {
+        return error.TypeCheckingFailed;
+    }
+
+    const checked_host_identity = lowered_result.checked_host_identity orelse {
+        if (builtin.mode == .Debug) {
+            std.debug.panic("hot reload invariant violated: missing checked host identity after successful rebuild", .{});
+        }
+        unreachable;
+    };
+    if (!std.mem.eql(u8, &checked_host_identity, &args.expected_host_identity)) {
+        try ctx.io.stderr().writeAll("Error: hot reload changed the platform host interface; restart `roc --watch`.\n");
+        return error.TypeCheckingFailed;
+    }
+
+    const lowered = successfulLoweredProgram(&lowered_result, "hot reload compiler");
+    const publication = try writeDevRunImageToSharedMemory(
+        ctx,
+        &shm,
+        selected_target,
+        lowered_result.entrypoint_names,
+        lowered,
+        .{
+            .generation = args.generation,
+            .descriptor_offset = args.descriptor_offset,
+            .image_limit = args.image_limit,
+            .region_start = args.region_start,
+            .region_end = args.region_end,
+            .append_offset = args.append_offset,
+            .preserve_descriptor_refs = args.preserve_descriptor_refs,
+        },
+    );
+    shm.updateHeader();
+    ipc.hot_reload.publishDescriptor(
+        control,
+        args.generation,
+        publication.descriptor_offset,
+        publication.descriptor orelse return error.InvalidSharedMemory,
+    );
+}
+
+fn writeDevRunImageToSharedMemory(
     ctx: *CliCtx,
+    shm: *SharedMemoryAllocator,
     selected_target: RocTarget,
     entrypoint_names: []const []const u8,
     lowered: *const lir.CheckedPipeline.LoweredProgram,
-) anyerror!SharedMemoryHandle {
+    hot_reload_allocation: ?HotReloadImageAllocation,
+) CliMainError!DevRunImagePublication {
     if (comptime !backend.host_lir_codegen_available) {
         try ctx.io.stderr().print(
             "Error: The dev backend cannot run in memory on this host architecture.\n",
@@ -3348,6 +5203,7 @@ fn publishDevRunImage(
         );
         defer codegen.deinit();
         codegen.generation_mode = .shim_execution;
+        codegen.enable_hot_reload = hot_reload_allocation != null;
 
         try codegen.compileAllProcSpecs(store.getProcSpecs());
 
@@ -3382,27 +5238,126 @@ fn publishDevRunImage(
             };
         }
 
-        const page_size = try SharedMemoryAllocator.getSystemPageSize();
-        var shm = try createSharedMemory(ctx.io.std_io, page_size);
-        errdefer shm.deinit(ctx.gpa);
+        const generated_code = codegen.getGeneratedCode();
+        const relocations = codegen.getRelocations();
 
-        _ = try backend.RunImage.writeToSharedMemory(
+        var empty_region_buffer: [0]u8 = .{};
+        var fixed_region_buffer = std.heap.FixedBufferAllocator.init(&empty_region_buffer);
+        var image_allocator = shm.allocator();
+        var descriptor: ?*ipc.hot_reload.ImageDescriptor = null;
+        var descriptor_offset: usize = ipc.hot_reload.invalid_descriptor_offset;
+        var allocation_start: usize = 0;
+        var allocation_end: usize = 0;
+        var reset_descriptor_refs = true;
+        const original_total_size = shm.total_size;
+        defer shm.total_size = original_total_size;
+
+        if (hot_reload_allocation) |allocation| {
+            const reusable_capacity = if (allocation.region_end > allocation.region_start)
+                allocation.region_end - allocation.region_start
+            else
+                0;
+            const required_bound = try backend.RunImage.requiredCapacityFromOffset(
+                shm.page_size,
+                allocation.region_start,
+                generated_code,
+                entrypoints,
+                relocations,
+                static_strings.exports,
+            );
+            const required_capacity = required_bound - allocation.region_start;
+
+            descriptor = try hotReloadDescriptorForWrite(shm, allocation.descriptor_offset);
+            descriptor_offset = allocation.descriptor_offset;
+            reset_descriptor_refs = !allocation.preserve_descriptor_refs;
+
+            if (reusable_capacity >= required_capacity) {
+                const region_bytes = shm.base_ptr[allocation.region_start..allocation.region_end];
+                fixed_region_buffer = std.heap.FixedBufferAllocator.init(region_bytes);
+                image_allocator = fixed_region_buffer.allocator();
+                allocation_start = allocation.region_start;
+            } else {
+                if (allocation.image_limit <= allocation.append_offset) return error.OutOfMemory;
+                try shm.resetToUsedSize(allocation.append_offset);
+                shm.total_size = allocation.image_limit;
+                allocation_start = allocation.append_offset;
+            }
+        }
+
+        const header = try backend.RunImage.writeToSharedMemory(
             ctx.gpa,
-            shm.allocator(),
+            image_allocator,
             shm.base_ptr,
-            codegen.getGeneratedCode(),
+            shm.page_size,
+            generated_code,
             entrypoints,
-            codegen.getRelocations(),
+            relocations,
             static_strings.exports,
         );
-        shm.updateHeader();
+        const image_offset = @intFromPtr(header) - @intFromPtr(shm.base_ptr);
+        const image_bound: usize = @intCast(header.image_size);
+        if (hot_reload_allocation) |allocation| {
+            allocation_end = image_bound;
+            ipc.hot_reload.prepareDescriptor(
+                descriptor.?,
+                allocation.generation,
+                image_offset,
+                image_bound,
+                allocation_start,
+                allocation_end,
+                reset_descriptor_refs,
+            );
+            try shm.resetToUsedSize(@max(allocation.append_offset, allocation_end));
+        }
         return .{
+            .descriptor = descriptor,
+            .descriptor_offset = descriptor_offset,
+        };
+    }
+}
+
+fn publishDevRunImage(
+    ctx: *CliCtx,
+    selected_target: RocTarget,
+    entrypoint_names: []const []const u8,
+    lowered: *const lir.CheckedPipeline.LoweredProgram,
+    enable_hot_reload: bool,
+) CliMainError!SharedMemoryHandle {
+    const page_size = try SharedMemoryAllocator.getSystemPageSize();
+    var shm = try createExecutableSharedMemory(ctx.io.std_io, page_size);
+    errdefer shm.deinit(ctx.gpa);
+
+    const hot_reload_allocation: ?HotReloadImageAllocation = if (enable_hot_reload) blk: {
+        const descriptor_offset = try hotReloadInitialDescriptorOffset(.{
             .fd = shm.handle,
             .ptr = shm.base_ptr,
             .size = shm.getUsedSize(),
             .mapped_size = shm.total_size,
+        });
+        break :blk .{
+            .generation = 1,
+            .descriptor_offset = descriptor_offset,
+            .image_limit = descriptor_offset,
+            .region_start = 0,
+            .region_end = 0,
+            .append_offset = @sizeOf(SharedMemoryAllocator.Header),
         };
+    } else null;
+    const publication = try writeDevRunImageToSharedMemory(ctx, &shm, selected_target, entrypoint_names, lowered, hot_reload_allocation);
+    if (enable_hot_reload) {
+        ipc.hot_reload.init(
+            ipc.hot_reload.controlFromBase(shm.base_ptr),
+            publication.descriptor_offset,
+            publication.descriptor orelse return error.InvalidSharedMemory,
+        );
     }
+    shm.updateHeader();
+    return .{
+        .fd = shm.handle,
+        .ptr = shm.base_ptr,
+        .size = shm.getUsedSize(),
+        .mapped_size = shm.total_size,
+    };
 }
 
 fn argLayoutsForProc(
@@ -3469,8 +5424,10 @@ fn lowerLirWithCoordinator(
     max_threads: ?usize,
     debug_effects: lir.CheckedPipeline.DebugEffectMode,
     resolution_config: compile.package_resolution.Config,
+    cache_manager: ?*CacheManager,
     reporter: ?*progress.Reporter,
-) anyerror!LoweredCoordinatorResult {
+    allow_user_errors: bool,
+) CliMainError!LoweredCoordinatorResult {
     if (reporter) |r| r.begin("Resolving Dependencies");
 
     var builtin_modules = try eval.BuiltinModules.init(ctx.gpa);
@@ -3506,6 +5463,18 @@ fn lowerLirWithCoordinator(
         try ctx.arena.dupe(u8, roc_file_path);
     var resolved = try resolvePackages(ctx, roc_file_abs, resolution_config);
     defer resolved.deinit();
+    const resolved_packages = resolved.packages;
+
+    const package_names = try ctx.gpa.alloc([]const u8, resolved_packages.len);
+    defer ctx.gpa.free(package_names);
+    for (package_names, resolved_packages, 0..) |*package_name, package, i| {
+        package_name.* = if (i == compile.package_resolution.Resolved.root_index) "app" else package.identity;
+    }
+    for (resolved_packages[compile.package_resolution.Resolved.root_index].deps) |dep| {
+        if (dep.is_platform) {
+            package_names[dep.target] = "pf";
+        }
+    }
     if (reporter) |r| r.end();
 
     const thread_count: usize = max_threads orelse (std.Thread.getCpuCount() catch 1);
@@ -3518,15 +5487,18 @@ fn lowerLirWithCoordinator(
         RocTarget.detectNative(),
         &builtin_modules,
         build_options.compiler_version,
-        null, // no cache for IPC
+        cache_manager,
         ctx.coreCtx(),
     );
     defer coord.deinit();
     coord.enable_hosted_transform = true;
+    coord.setWatchInputTracking(true);
 
     try coord.start();
 
     const app_pkg = try coord.ensurePackage("app", app_dir);
+    const root_package = resolved_packages[compile.package_resolution.Resolved.root_index];
+    try app_pkg.setRootInput(ctx.gpa, root_package.root_file, try currentCompilerWatchInputState(ctx, root_package.root_file));
     const app_module_name = base.module_path.getModuleName(roc_file_path);
     const app_module_id = try app_pkg.ensureModule(ctx.gpa, app_module_name, roc_file_path);
     if (source_dir_override) |source_dir| {
@@ -3537,15 +5509,22 @@ fn lowerLirWithCoordinator(
     app_pkg.remaining_modules += 1;
     coord.total_remaining += 1;
 
-    // Register every resolved package (named by its unique identity), then
-    // wire each package's shorthand aliases and enqueue the platform root.
-    const resolved_packages = resolved.packages;
-    for (resolved_packages[1..]) |package| {
+    // Register resolved packages under the coordinator package names that
+    // participate in checked module identity. Non-platform packages keep their
+    // resolved identities; the root platform package uses the stable "pf" name,
+    // matching Coordinator.discoverAppFromPath.
+    for (resolved_packages[1..], 1..) |package, package_idx| {
+        const package_name = package_names[package_idx];
         const url_view: ?package_source.UrlSourceView = if (package.url) |url| .{
             .url = url.url,
             .url_id = url.url_id,
         } else null;
-        _ = try coord.ensurePackageWithUrl(package.identity, package.root_dir, url_view);
+        const pkg = try coord.ensurePackageWithUrl(package_name, package.root_dir, url_view);
+        const root_file_state: compile.watch_inputs.State = if (url_view == null)
+            try currentCompilerWatchInputState(ctx, package.root_file)
+        else
+            .{ .hash = package.root_source_hash };
+        try pkg.setRootInput(ctx.gpa, package.root_file, root_file_state);
     }
 
     {
@@ -3569,14 +5548,11 @@ fn lowerLirWithCoordinator(
         const from_pkg = if (i == compile.package_resolution.Resolved.root_index)
             app_pkg
         else
-            coord.packages.get(package.identity) orelse return error.CliError;
+            coord.packages.get(package_names[i]) orelse return error.CliError;
 
         for (package.deps) |dep| {
             const target = resolved_packages[dep.target];
-            const target_name = if (dep.target == compile.package_resolution.Resolved.root_index)
-                "app"
-            else
-                target.identity;
+            const target_name = package_names[dep.target];
             try from_pkg.shorthands.put(
                 try ctx.gpa.dupe(u8, dep.alias),
                 try ctx.gpa.dupe(u8, target_name),
@@ -3585,14 +5561,14 @@ fn lowerLirWithCoordinator(
             // The app's platform root module is parsed eagerly so its
             // provides/hosted declarations are available to the build.
             if (i == compile.package_resolution.Resolved.root_index and dep.is_platform) {
-                const pf_pkg = coord.packages.get(target.identity) orelse return error.CliError;
+                const pf_pkg = coord.packages.get(target_name) orelse return error.CliError;
                 if (pf_pkg.root_module_id == null) {
                     const pf_module_id = try pf_pkg.ensureModule(ctx.gpa, "main", target.root_file);
                     pf_pkg.root_module_id = pf_module_id;
                     pf_pkg.modules.items[pf_module_id].depth = 1;
                     pf_pkg.remaining_modules += 1;
                     coord.total_remaining += 1;
-                    try coord.enqueueParseTask(target.identity, pf_module_id);
+                    try coord.enqueueParseTask(target_name, pf_module_id);
                 }
             }
         }
@@ -3606,27 +5582,38 @@ fn lowerLirWithCoordinator(
         return err;
     };
 
-    const counts = renderCoordinatorReports(ctx, &coord, roc_file_path);
-    if (counts.errors > 0) {
+    if (coord.hasUserErrors() and (!allow_user_errors or !coord.userErrorsAllowExecutableLowering())) {
+        const counts = renderCoordinatorReports(ctx, &coord, roc_file_path);
         if (reporter) |r| r.fail();
+        const watch_inputs = try coord.collectWatchInputStates();
         return .{
             .lowered = null,
             .entrypoint_names = &.{},
             .hosted_symbols = &.{},
             .checked_host_identity = null,
+            .watch_inputs = watch_inputs,
+            .watch_inputs_allocator = ctx.gpa,
             .counts = counts,
         };
     }
 
-    try coord.finalizeExecutableArtifacts();
+    if (allow_user_errors) {
+        try coord.finalizeExecutableArtifactsAllowUserErrors();
+    } else {
+        try coord.finalizeExecutableArtifacts();
+    }
     const finalized_counts = renderCoordinatorReports(ctx, &coord, roc_file_path);
-    if (finalized_counts.errors > 0) {
+    const watch_inputs = try coord.collectWatchInputStates();
+    errdefer coord.freeWatchInputStates(watch_inputs);
+    if (finalized_counts.errors > 0 and (!allow_user_errors or !coord.userErrorsAllowExecutableLowering())) {
         if (reporter) |r| r.fail();
         return .{
             .lowered = null,
             .entrypoint_names = &.{},
             .hosted_symbols = &.{},
             .checked_host_identity = null,
+            .watch_inputs = watch_inputs,
+            .watch_inputs_allocator = ctx.gpa,
             .counts = finalized_counts,
         };
     }
@@ -3670,8 +5657,14 @@ fn lowerLirWithCoordinator(
         imported_artifacts,
         relation_artifacts,
     );
-    const checked_host_identity = checkedInterpreterHostIdentity(
+    const platform_entrypoints = try lowered.platformEntrypoints(ctx.gpa);
+    defer ctx.gpa.free(platform_entrypoints);
+    const checked_host_identity = try checkedInterpreterHostIdentity(
+        ctx.gpa,
         root_artifact,
+        &lowered.lir_result.store,
+        &lowered.lir_result.layouts,
+        platform_entrypoints,
         entrypoint_names,
         lowered.target_usize,
         hosted_table,
@@ -3682,6 +5675,8 @@ fn lowerLirWithCoordinator(
         .entrypoint_names = entrypoint_names,
         .hosted_symbols = hosted_table.symbols,
         .checked_host_identity = checked_host_identity,
+        .watch_inputs = watch_inputs,
+        .watch_inputs_allocator = ctx.gpa,
         .counts = finalized_counts,
     };
 }
@@ -3699,8 +5694,10 @@ pub fn buildLirImageWithCoordinator(
     max_threads: ?usize,
     debug_effects: lir.CheckedPipeline.DebugEffectMode,
     resolution_config: compile.package_resolution.Config,
+    cache_manager: ?*CacheManager,
     reporter: ?*progress.Reporter,
-) anyerror!SharedMemoryResult {
+    allow_user_errors: bool,
+) CliMainError!SharedMemoryResult {
     // Create shared memory with SharedMemoryAllocator, trying progressively smaller
     // sizes if larger ones fail (e.g., due to valgrind or overcommit-disabled Linux)
     const page_size = try SharedMemoryAllocator.getSystemPageSize();
@@ -3718,10 +5715,13 @@ pub fn buildLirImageWithCoordinator(
         max_threads,
         debug_effects,
         resolution_config,
+        cache_manager,
         reporter,
+        allow_user_errors,
     );
+    defer lowered_result.deinitWatchInputs();
 
-    if (lowered_result.counts.errors > 0) {
+    if (lowered_result.counts.errors > 0 and lowered_result.lowered == null) {
         shm.updateHeader();
         return sharedMemoryResult(&shm, lowered_result.counts, &.{}, &.{}, null);
     }
@@ -3754,8 +5754,8 @@ pub fn buildLirImageWithCoordinator(
 
 /// Wrapper around buildLirImageWithCoordinator for callers that pass allow_errors.
 /// The allow_errors flag is handled by the caller; this function ignores it.
-pub fn setupSharedMemoryWithCoordinator(ctx: *CliCtx, roc_file_path: []const u8, _: bool) anyerror!SharedMemoryResult {
-    return buildLirImageWithCoordinator(ctx, roc_file_path, null, null, .run, .{}, null);
+pub fn setupSharedMemoryWithCoordinator(ctx: *CliCtx, roc_file_path: []const u8, _: bool) CliMainError!SharedMemoryResult {
+    return buildLirImageWithCoordinator(ctx, roc_file_path, null, null, .run, .{}, null, null, true);
 }
 
 /// Platform resolution result containing the platform source path
@@ -4005,12 +6005,10 @@ fn resolvePackages(ctx: *CliCtx, roc_file_abs: []const u8, resolution_config: co
         error.OutOfMemory => error.OutOfMemory,
         error.ResolutionFailed => {
             for (resolver.diagnostics.items) |diagnostic| {
-                var report = reporting.Report.init(ctx.gpa, diagnostic.title, .runtime_error);
+                var report = reporting.Report.init(ctx.gpa, diagnostic.title, diagnostic.message, .runtime_error) catch break;
                 defer report.deinit();
-                const owned = report.addOwnedString(diagnostic.message) catch break;
-                report.addErrorMessage(owned) catch break;
                 if (!builtin.is_test) {
-                    reporting.renderReportToTerminal(&report, ctx.io.stderr(), ColorPalette.ANSI, reporting.ReportingConfig.initColorTerminal()) catch {};
+                    reporting.renderReportToTerminal(&report, ctx.io.stderr(), ColorPalette.ANSI, ctx.terminalReportConfig()) catch {};
                 }
             }
             ctx.io.flush();
@@ -4114,7 +6112,7 @@ fn resolveUrlPlatform(ctx: *CliCtx, url: []const u8) (CliError || error{OutOfMem
 }
 
 /// Extract the selected embedded shim library to the specified path for the given target.
-fn extractShimLibrary(ctx: *CliCtx, kind: ShimLibraryKind, output_path: []const u8, target: ?RocTarget) anyerror!void {
+fn extractShimLibrary(ctx: *CliCtx, kind: ShimLibraryKind, output_path: []const u8, target: ?RocTarget) (std.Io.File.OpenError || std.Io.File.Writer.Error)!void {
     if (builtin.is_test) {
         // In test mode, create an empty file to avoid embedding issues
         const shim_file = try std.Io.Dir.cwd().createFile(ctx.io.std_io, output_path, .{});
@@ -4194,7 +6192,7 @@ fn discoverAndAddBundleModules(
     file_paths: *std.ArrayList([]const u8),
     uncompressed_size: *u64,
     stderr: anytype,
-) anyerror!void {
+) CliMainError!void {
     // Resolve the entry point to an absolute path
     const abs_entry = std.Io.Dir.cwd().realPathFileAlloc(ctx.io.std_io, first_roc_file, ctx.gpa) catch |err| {
         try stderr.print("Error: Could not resolve path '{s}': {}\n", .{ first_roc_file, err });
@@ -4357,7 +6355,7 @@ fn longestCommonParentDir(allocator: std.mem.Allocator, abs_paths: []const []con
 }
 
 /// Bundles a roc package and its dependencies into a compressed tar archive
-pub fn rocBundle(ctx: *CliCtx, args: cli_args.BundleArgs) anyerror!void {
+pub fn rocBundle(ctx: *CliCtx, args: cli_args.BundleArgs) CliMainError!void {
     const stdout = ctx.io.stdout();
     const stderr = ctx.io.stderr();
 
@@ -4600,7 +6598,7 @@ pub fn rocBundle(ctx: *CliCtx, args: cli_args.BundleArgs) anyerror!void {
     try stdout.print("Time: {} ms\n", .{elapsed_ms});
 }
 
-fn rocUnbundle(ctx: *CliCtx, args: cli_args.UnbundleArgs) anyerror!void {
+fn rocUnbundle(ctx: *CliCtx, args: cli_args.UnbundleArgs) CliMainError!void {
     const stdout = ctx.io.stdout();
     const stderr = ctx.io.stderr();
     const cwd = std.Io.Dir.cwd();
@@ -4691,17 +6689,12 @@ fn rocUnbundle(ctx: *CliCtx, args: cli_args.UnbundleArgs) anyerror!void {
     }
 }
 
-fn rocBuild(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
-    // Handle the --z-bench-tokenize flag
-    if (args.z_bench_tokenize) |file_path| {
-        try benchTokenizer(ctx.gpa, ctx.io.std_io, file_path);
-        return;
-    }
-
-    // Handle the --z-bench-parse flag
-    if (args.z_bench_parse) |directory_path| {
-        try benchParse(ctx.gpa, ctx.io.std_io, directory_path);
-        return;
+fn rocBuild(ctx: *CliCtx, args: cli_args.BuildArgs, arg0: []const u8) CliMainError!void {
+    // `roc build --watch` rebuilds on every change. The watch loop reruns this same
+    // command (minus --watch) per change; the child writes its discovered inputs to
+    // the --watch-inputs-file so the next iteration watches the right files.
+    if (args.watch) {
+        return runWatchCommand(ctx, arg0, .{ .build = args });
     }
 
     // Headerless apps build through a synthetic default platform.
@@ -4717,7 +6710,7 @@ fn rocBuild(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
     }
 }
 
-fn rocBuildDefaultApp(ctx: *CliCtx, args: cli_args.BuildArgs, original_source: []const u8) anyerror!void {
+fn rocBuildDefaultApp(ctx: *CliCtx, args: cli_args.BuildArgs, original_source: []const u8) CliMainError!void {
     defer ctx.gpa.free(original_source);
 
     const temp_dir = createUniqueTempDir(ctx) catch |err| {
@@ -4875,6 +6868,12 @@ fn selectBuildPlatformTarget(
             return error.UnsupportedTarget;
         },
         .no_default => {
+            if (targets_config.targets.len == 0) {
+                renderValidationError(ctx.gpa, .{
+                    .empty_targets = .{ .platform_path = platform_source orelse "<unknown>" },
+                }, ctx.io.stderr());
+                return error.UnsupportedTarget;
+            }
             const native_target = RocTarget.detectNative();
             try ctx.io.stderr().print(
                 "Error: roc build requires --target or a platform target for wasm32 or the detected native host ({s}).\n",
@@ -4911,6 +6910,12 @@ fn selectRunPlatformTarget(
             return error.UnsupportedTarget;
         },
         .no_default => {
+            if (targets_config.targets.len == 0) {
+                renderValidationError(ctx.gpa, .{
+                    .empty_targets = .{ .platform_path = platform_source orelse "<unknown>" },
+                }, ctx.io.stderr());
+                return error.UnsupportedTarget;
+            }
             const native_target = RocTarget.detectNative();
             const result = platform_validation.createUnsupportedTargetResult(
                 platform_source orelse "<unknown>",
@@ -4972,7 +6977,7 @@ fn verifyHostInputSymbols(
     hosted_symbols: []const []const u8,
     target_name: []const u8,
     synthetic_default_platform: bool,
-) anyerror!void {
+) CliMainError!void {
     if (host_input_paths.len == 0 and synthetic_default_platform) {
         return;
     }
@@ -4990,7 +6995,7 @@ fn verifyHostInputSymbols(
     }
 }
 
-fn writeDefaultPlatformRuntimeObject(ctx: *CliCtx, artifact_dir: []const u8, target: RocTarget) anyerror!?[]const u8 {
+fn writeDefaultPlatformRuntimeObject(ctx: *CliCtx, artifact_dir: []const u8, target: RocTarget) CliMainError!?[]const u8 {
     const bytes = DefaultPlatformRuntimeObjects.forTarget(target) orelse return null;
     const runtime_path = try std.fs.path.join(ctx.arena, &.{ artifact_dir, DefaultPlatformRuntimeObjects.filename(target) });
     backend.writeFileWindowsAvSafe(ctx.io.std_io, runtime_path, bytes) catch |err| {
@@ -5035,7 +7040,7 @@ fn writeArchiveOutput(
     final_output_path: []const u8,
     link_inputs: PlatformLinkInputs,
     object_files: []const []const u8,
-) anyerror!void {
+) CliMainError!void {
     var inputs = try std.array_list.Managed([]const u8).initCapacity(
         ctx.arena,
         link_inputs.platform_files_pre.len + object_files.len + link_inputs.platform_files_post.len,
@@ -5124,7 +7129,7 @@ fn collectPlatformLinkInputs(
     };
 }
 
-fn appendOwnedWasmInput(ctx: *CliCtx, owned_inputs: *std.ArrayList([]u8), path: []const u8) anyerror![]const u8 {
+fn appendOwnedWasmInput(ctx: *CliCtx, owned_inputs: *std.ArrayList([]u8), path: []const u8) CliMainError![]const u8 {
     const bytes = try std.Io.Dir.cwd().readFileAlloc(ctx.io.std_io, path, ctx.gpa, .unlimited);
     errdefer ctx.gpa.free(bytes);
     try owned_inputs.append(ctx.gpa, bytes);
@@ -5192,7 +7197,7 @@ fn configureWasmDataBase(module: *backend.wasm.WasmModule, wasm: ?roc_target.Was
     }
 }
 
-fn exportConfiguredWasmEntrypoints(module: *backend.wasm.WasmModule) anyerror!void {
+fn exportConfiguredWasmEntrypoints(module: *backend.wasm.WasmModule) CliMainError!void {
     try module.exportGlobalSymbols();
 }
 
@@ -5224,7 +7229,7 @@ fn addWasmInput(
     owned_inputs: *std.ArrayList([]u8),
     path: []const u8,
     loaded_module: *bool,
-) anyerror!void {
+) CliMainError!void {
     const bytes = try appendOwnedWasmInput(ctx, owned_inputs, path);
 
     if (backend.wasm.ObjectArchive.isWasmObject(bytes)) {
@@ -5272,7 +7277,7 @@ fn appendWasmObjectExportNames(
     path: []const u8,
     member_name: ?[]const u8,
     bytes: []const u8,
-) anyerror!void {
+) CliMainError!void {
     var module = try preloadWasmObject(ctx, path, member_name, bytes);
     defer module.deinit();
 
@@ -5289,7 +7294,7 @@ fn appendWasmInputExportNames(
     exports: *std.array_list.Managed([]const u8),
     owned_inputs: *std.ArrayList([]u8),
     path: []const u8,
-) anyerror!void {
+) CliMainError!void {
     const bytes = try appendOwnedWasmInput(ctx, owned_inputs, path);
 
     if (backend.wasm.ObjectArchive.isWasmObject(bytes)) {
@@ -5328,7 +7333,7 @@ fn collectWasmPlatformExports(
     ctx: *CliCtx,
     link_inputs: PlatformLinkInputs,
     owned_inputs: *std.ArrayList([]u8),
-) anyerror![]const []const u8 {
+) CliMainError![]const []const u8 {
     var exports = std.array_list.Managed([]const u8).init(ctx.arena);
 
     for (link_inputs.platform_files_pre) |path| {
@@ -5346,7 +7351,7 @@ fn writeDevWasmObject(
     build_cache_dir: []const u8,
     lowered: *const lir.CheckedPipeline.LoweredProgram,
     entrypoints: []const backend.Entrypoint,
-) anyerror![]const u8 {
+) CliMainError![]const u8 {
     if (entrypoints.len == 0) {
         if (builtin.mode == .Debug) {
             std.debug.panic("wasm object invariant violated: no exported platform entrypoints", .{});
@@ -5440,7 +7445,7 @@ fn rocBuildWasmSurgical(
     targets_config: roc_target.TargetsConfig,
     lowered: *const lir.CheckedPipeline.LoweredProgram,
     entrypoints: []const backend.Entrypoint,
-) anyerror!void {
+) CliMainError!void {
     if (entrypoints.len == 0) {
         if (builtin.mode == .Debug) {
             std.debug.panic("wasm build invariant violated: no exported platform entrypoints", .{});
@@ -5494,10 +7499,6 @@ fn rocBuildWasmSurgical(
             .scratch_dir = build_cache_dir,
         };
 
-        if (args.z_dump_linker) {
-            try dumpLinkerInputs(ctx, link_config);
-        }
-
         linker.link(ctx, link_config) catch |err| {
             return ctx.fail(.{ .linker_failed = .{
                 .err = err,
@@ -5548,6 +7549,7 @@ fn rocBuildWasmSurgical(
     defer codegen.deinit();
     loaded_module = false;
     codegen.configureBuiltinRelocs(builtin_symbols);
+    codegen.configureStaticDataAddressTracking();
 
     try codegen.registerIndirectCallTypes();
     codegen.configureSymbolAbi();
@@ -5709,7 +7711,7 @@ fn noTargetLibcallsForLlvmBuild(target: RocTarget) bool {
     };
 }
 
-fn stdTargetForLlvmBuild(ctx: *CliCtx, target: RocTarget) anyerror!std.Target {
+fn stdTargetForLlvmBuild(ctx: *CliCtx, target: RocTarget) std.zig.system.DetectError!std.Target {
     if (target == RocTarget.detectNative() and target.toOsTag() != .macos) return builtin.target;
 
     var query = std.Target.Query{
@@ -5761,7 +7763,7 @@ fn compileLlvmAppObject(
     entrypoints: []const backend.Entrypoint,
     enable_default_platform_runtime: bool,
     enable_default_platform_hosted_calls: bool,
-) anyerror!LlvmObjectPaths {
+) CliMainError!LlvmObjectPaths {
     const std_target = try stdTargetForLlvmBuild(ctx, target);
     const llvm_cpu = llvmCpuNameForTarget(std_target);
     const llvm_features = try llvmFeatureStringForTarget(ctx.arena, std_target);
@@ -5864,7 +7866,7 @@ fn mergeLlvmStaticDataWasmModule(
     module: *backend.wasm.WasmModule,
     static_data_exports: []const backend.StaticDataExport,
     mode: backend.wasm.WasmModule.MergeMode,
-) anyerror!void {
+) CliMainError!void {
     if (static_data_exports.len == 0) return;
 
     try validateWasmStaticFunctionRelocations(module, static_data_exports);
@@ -5886,7 +7888,7 @@ fn writeCombinedLlvmWasmObject(
     static_data_exports: []const backend.StaticDataExport,
     opt: cli_args.OptLevel,
     owned_inputs: *std.ArrayList([]u8),
-) anyerror![]const u8 {
+) CliMainError![]const u8 {
     var wasm_module = backend.wasm.WasmModule.init(ctx.gpa);
     defer wasm_module.deinit();
     wasm_module.addMemoryImport();
@@ -5925,7 +7927,7 @@ fn rocBuildWasmLlvm(
     lowered: *const lir.CheckedPipeline.LoweredProgram,
     entrypoints: []const backend.Entrypoint,
     static_data_exports: []const backend.StaticDataExport,
-) anyerror!void {
+) CliMainError!void {
     if (entrypoints.len == 0) {
         if (builtin.mode == .Debug) {
             std.debug.panic("LLVM wasm build invariant violated: no exported platform entrypoints", .{});
@@ -5980,10 +7982,6 @@ fn rocBuildWasmLlvm(
             .platform_files_dir = link_inputs.platform_files_dir,
             .scratch_dir = app_object.artifact_dir,
         };
-
-        if (args.z_dump_linker) {
-            try dumpLinkerInputs(ctx, link_config);
-        }
 
         linker.link(ctx, link_config) catch |err| {
             return ctx.fail(.{ .linker_failed = .{
@@ -6054,7 +8052,7 @@ fn rocBuildWasmLlvm(
     loaded_module = false;
 }
 
-fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
+fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
     const timer_start_ns = std.Io.Timestamp.now(ctx.io.std_io, .real).nanoseconds;
 
     var reporter = makeReporter(ctx, "roc build", args.timings);
@@ -6072,12 +8070,16 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
     const cwd = try std.fs.path.resolve(ctx.gpa, &.{"."});
     defer ctx.gpa.free(cwd);
     var build_env = try BuildEnv.init(ctx.gpa, mode, thread_count, RocTarget.detectNative(), cwd, ctx.io.std_io);
+    build_env.setWatchInputTracking(args.watch_inputs_file != null);
     if (args.source_dir_override) |source_dir| {
         build_env.setRootSourceDirOverride(source_dir);
     }
     build_env.resolution_config = resolutionConfigFromLimits(args.resolve_limits);
     build_env.compiler_version = build_options.compiler_version;
     defer build_env.deinit();
+    // Registered after build_env.deinit() so it runs first (LIFO), while build_env is still
+    // valid: records discovered source inputs for `roc build --watch` on every exit path.
+    defer writeBuildWatchInputsOnExit(ctx, args, &build_env);
 
     if (!args.no_cache) {
         const build_cache_manager = try ctx.gpa.create(CacheManager);
@@ -6346,10 +8348,6 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
                     null,
             };
 
-            if (args.z_dump_linker) {
-                try dumpLinkerInputs(ctx, link_config);
-            }
-
             linker.link(ctx, link_config) catch |err| {
                 reporter.fail();
                 return ctx.fail(.{ .linker_failed = .{
@@ -6377,13 +8375,10 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
         warning_count_out.* = total_warning_count;
     }
 
-    if (args.exit_on_warnings and total_warning_count > 0) {
-        ctx.io.flush();
-        std.process.exit(2);
-    }
+    exitBuildOnWarningsIfRequested(ctx, args, &build_env, total_warning_count);
 }
 
-fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
+fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
     const timer_start_ns = std.Io.Timestamp.now(ctx.io.std_io, .real).nanoseconds;
 
     var reporter = makeReporter(ctx, "roc build", args.timings);
@@ -6414,12 +8409,16 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
     const cwd = try std.fs.path.resolve(ctx.gpa, &.{"."});
     defer ctx.gpa.free(cwd);
     var build_env = try BuildEnv.init(ctx.gpa, mode, thread_count, RocTarget.detectNative(), cwd, ctx.io.std_io);
+    build_env.setWatchInputTracking(args.watch_inputs_file != null);
     if (args.source_dir_override) |source_dir| {
         build_env.setRootSourceDirOverride(source_dir);
     }
     build_env.resolution_config = resolutionConfigFromLimits(args.resolve_limits);
     build_env.compiler_version = build_options.compiler_version;
     defer build_env.deinit();
+    // Registered after build_env.deinit() so it runs first (LIFO), while build_env is still
+    // valid: records discovered source inputs for `roc build --watch` on every exit path.
+    defer writeBuildWatchInputsOnExit(ctx, args, &build_env);
 
     if (!args.no_cache) {
         const build_cache_manager = try ctx.gpa.create(CacheManager);
@@ -6697,10 +8696,6 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
                 null,
         };
 
-        if (args.z_dump_linker) {
-            try dumpLinkerInputs(ctx, link_config);
-        }
-
         linker.link(ctx, link_config) catch |err| {
             reporter.fail();
             return ctx.fail(.{ .linker_failed = .{
@@ -6727,15 +8722,12 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
         warning_count_out.* = total_warning_count;
     }
 
-    if (args.exit_on_warnings and total_warning_count > 0) {
-        ctx.io.flush();
-        std.process.exit(2);
-    }
+    exitBuildOnWarningsIfRequested(ctx, args, &build_env, total_warning_count);
 }
 
 /// Build a standalone binary with the interpreter and an embedded LIR image.
 /// This is the primary build path that creates executables or libraries without requiring IPC.
-fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
+fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
     const timer_start_ns = std.Io.Timestamp.now(ctx.io.std_io, .real).nanoseconds;
 
     var reporter = makeReporter(ctx, "roc build", args.timings);
@@ -6766,12 +8758,16 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
     const cwd = try std.fs.path.resolve(ctx.gpa, &.{"."});
     defer ctx.gpa.free(cwd);
     var build_env = try BuildEnv.init(ctx.gpa, mode, thread_count, RocTarget.detectNative(), cwd, ctx.io.std_io);
+    build_env.setWatchInputTracking(args.watch_inputs_file != null);
     if (args.source_dir_override) |source_dir| {
         build_env.setRootSourceDirOverride(source_dir);
     }
     build_env.resolution_config = resolutionConfigFromLimits(args.resolve_limits);
     build_env.compiler_version = build_options.compiler_version;
     defer build_env.deinit();
+    // Registered after build_env.deinit() so it runs first (LIFO), while build_env is still
+    // valid: records discovered source inputs for `roc build --watch` on every exit path.
+    defer writeBuildWatchInputsOnExit(ctx, args, &build_env);
 
     if (!args.no_cache) {
         const build_cache_manager = try ctx.gpa.create(CacheManager);
@@ -6965,10 +8961,6 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
             .scratch_dir = build_cache_dir,
         };
 
-        if (args.z_dump_linker) {
-            try dumpLinkerInputs(ctx, link_config);
-        }
-
         linker.link(ctx, link_config) catch |err| {
             reporter.fail();
             return ctx.fail(.{ .linker_failed = .{
@@ -6995,139 +8987,8 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
         warning_count_out.* = total_warning_count;
     }
 
-    if (args.exit_on_warnings and total_warning_count > 0) {
-        ctx.io.flush();
-        std.process.exit(2);
-    }
+    exitBuildOnWarningsIfRequested(ctx, args, &build_env, total_warning_count);
 }
-
-/// Dump linker inputs to a temp directory for debugging linking issues.
-/// Creates a directory with all input files copied and a README with the linker command.
-fn dumpLinkerInputs(ctx: *CliCtx, link_config: linker.LinkConfig) anyerror!void {
-    const stderr = ctx.io.stderr();
-
-    // Create temp directory with unique name based on timestamp
-    const timestamp = @divTrunc(std.Io.Timestamp.now(ctx.io.std_io, .real).nanoseconds, 1_000_000_000);
-    const dir_name = try std.fmt.allocPrint(ctx.arena, "roc-linker-debug-{d}", .{timestamp});
-    const dump_dir = try std.fs.path.join(ctx.arena, &.{ "/tmp", dir_name });
-
-    std.Io.Dir.cwd().createDirPath(ctx.io.std_io, dump_dir) catch |err| {
-        try stderr.print("Failed to create debug dump directory '{s}': {}\n", .{ dump_dir, err });
-        return err;
-    };
-
-    // Track copied files for the README
-    var copied_files = try std.array_list.Managed(CopiedFile).initCapacity(ctx.arena, 16);
-
-    // Copy platform_files_pre
-    for (link_config.platform_files_pre, 0..) |src, i| {
-        const basename = std.fs.path.basename(src);
-        const dest_name = try std.fmt.allocPrint(ctx.arena, "pre_{d}_{s}", .{ i, basename });
-        const dest_path = try std.fs.path.join(ctx.arena, &.{ dump_dir, dest_name });
-        std.Io.Dir.cwd().copyFile(src, std.Io.Dir.cwd(), dest_path, ctx.io.std_io, .{}) catch |err| {
-            try stderr.print("Warning: Failed to copy '{s}': {}\n", .{ src, err });
-            continue;
-        };
-        try copied_files.append(.{ .name = dest_name, .original = src, .category = "platform (pre-link)" });
-    }
-
-    // Copy object_files
-    for (link_config.object_files, 0..) |src, i| {
-        const basename = std.fs.path.basename(src);
-        const dest_name = try std.fmt.allocPrint(ctx.arena, "obj_{d}_{s}", .{ i, basename });
-        const dest_path = try std.fs.path.join(ctx.arena, &.{ dump_dir, dest_name });
-        std.Io.Dir.cwd().copyFile(src, std.Io.Dir.cwd(), dest_path, ctx.io.std_io, .{}) catch |err| {
-            try stderr.print("Warning: Failed to copy '{s}': {}\n", .{ src, err });
-            continue;
-        };
-        try copied_files.append(.{ .name = dest_name, .original = src, .category = "object file" });
-    }
-
-    // Copy platform_files_post
-    for (link_config.platform_files_post, 0..) |src, i| {
-        const basename = std.fs.path.basename(src);
-        const dest_name = try std.fmt.allocPrint(ctx.arena, "post_{d}_{s}", .{ i, basename });
-        const dest_path = try std.fs.path.join(ctx.arena, &.{ dump_dir, dest_name });
-        std.Io.Dir.cwd().copyFile(src, std.Io.Dir.cwd(), dest_path, ctx.io.std_io, .{}) catch |err| {
-            try stderr.print("Warning: Failed to copy '{s}': {}\n", .{ src, err });
-            continue;
-        };
-        try copied_files.append(.{ .name = dest_name, .original = src, .category = "platform (post-link)" });
-    }
-
-    // Generate the linker command string
-    const link_cmd = linker.formatLinkCommand(ctx, link_config) catch |err| {
-        try stderr.print("Warning: Failed to format linker command: {}\n", .{err});
-        return;
-    };
-
-    // Build the file list for README
-    var file_list = std.array_list.Managed(u8).init(ctx.arena);
-    for (copied_files.items) |file| {
-        try file_list.print("  {s}\n    <- {s} ({s})\n", .{ file.name, file.original, file.category });
-    }
-
-    // Write README.txt with instructions
-    const readme_content = try std.fmt.allocPrint(ctx.arena,
-        \\Roc Linker Debug Dump
-        \\=====================
-        \\
-        \\Target format: {s}
-        \\Target OS: {s}
-        \\Target arch: {s}
-        \\Output: {s}
-        \\
-        \\Files ({d} copied):
-        \\{s}
-        \\
-        \\To manually reproduce the link step:
-        \\
-        \\  {s}
-        \\
-        \\Note: The command above uses original file paths. The copied files
-        \\in this directory preserve original filenames for inspection.
-        \\
-    , .{
-        @tagName(link_config.target_format),
-        if (link_config.target_os) |os| @tagName(os) else "native",
-        if (link_config.target_arch) |arch| @tagName(arch) else "native",
-        link_config.output_path,
-        copied_files.items.len,
-        file_list.items,
-        link_cmd,
-    });
-
-    const readme_path = try std.fs.path.join(ctx.arena, &.{ dump_dir, "README.txt" });
-    const readme_file = std.Io.Dir.cwd().createFile(ctx.io.std_io, readme_path, .{}) catch |err| {
-        try stderr.print("Warning: Failed to create README.txt: {}\n", .{err});
-        return;
-    };
-    defer readme_file.close(ctx.io.std_io);
-    readme_file.writeStreamingAll(ctx.io.std_io, readme_content) catch |err| {
-        try stderr.print("Warning: Failed to write README.txt: {}\n", .{err});
-    };
-
-    // Print summary to stderr
-    try stderr.print(
-        \\
-        \\=== Linker debug dump ===
-        \\Directory: {s}
-        \\Files: {d} copied
-        \\
-        \\To reproduce:
-        \\  {s}
-        \\
-        \\See {s}/README.txt for details
-        \\=========================
-        \\
-    , .{ dump_dir, copied_files.items.len, link_cmd, dump_dir });
-}
-
-const CopiedFile = struct {
-    name: []const u8,
-    original: []const u8,
-    category: []const u8,
-};
 
 // Test cache blob format
 // Binary format for caching test results.
@@ -7369,6 +9230,246 @@ fn testRootRegion(
     };
 }
 
+const CliTestFailureDetail = struct {
+    message: []const u8,
+    visibility: CliTestFailureDetailVisibility,
+};
+
+fn appendExprSpanForExpectBindings(
+    env: *const ModuleEnv,
+    allocator: Allocator,
+    stack: *std.ArrayList(CIR.Expr.Idx),
+    span: CIR.Expr.Span,
+) Allocator.Error!void {
+    for (env.store.sliceExpr(span)) |expr_idx| {
+        try stack.append(allocator, expr_idx);
+    }
+}
+
+fn collectExpectBindingPatterns(
+    env: *const ModuleEnv,
+    allocator: Allocator,
+    root: check.CheckedArtifact.RootRequest,
+) Allocator.Error![]CIR.Pattern.Idx {
+    const statement_idx = switch (root.source) {
+        .statement => |statement| statement,
+        else => return allocator.alloc(CIR.Pattern.Idx, 0),
+    };
+    const statement = env.store.getStatement(statement_idx);
+    if (statement != .s_expect) return allocator.alloc(CIR.Pattern.Idx, 0);
+
+    var stack = std.ArrayList(CIR.Expr.Idx).empty;
+    defer stack.deinit(allocator);
+    try stack.append(allocator, statement.s_expect.body);
+
+    var patterns = std.ArrayList(CIR.Pattern.Idx).empty;
+    errdefer patterns.deinit(allocator);
+
+    while (stack.pop()) |expr_idx| {
+        switch (env.store.getExpr(expr_idx)) {
+            .e_lookup_local => |lookup| {
+                if (std.mem.findScalar(CIR.Pattern.Idx, patterns.items, lookup.pattern_idx) == null) {
+                    try patterns.append(allocator, lookup.pattern_idx);
+                }
+            },
+            .e_list => |list| try appendExprSpanForExpectBindings(env, allocator, &stack, list.elems),
+            .e_tuple => |tuple| try appendExprSpanForExpectBindings(env, allocator, &stack, tuple.elems),
+            .e_str => |str| try appendExprSpanForExpectBindings(env, allocator, &stack, str.span),
+            .e_tag => |tag| try appendExprSpanForExpectBindings(env, allocator, &stack, tag.args),
+            .e_call => |call| {
+                try stack.append(allocator, call.func);
+                try appendExprSpanForExpectBindings(env, allocator, &stack, call.args);
+            },
+            .e_record => |record| {
+                if (record.ext) |ext| try stack.append(allocator, ext);
+                for (env.store.sliceRecordFields(record.fields)) |field_idx| {
+                    try stack.append(allocator, env.store.getRecordField(field_idx).value);
+                }
+            },
+            .e_block => |block| {
+                try stack.append(allocator, block.final_expr);
+                for (0..block.stmts.span.len) |stmt_offset| {
+                    const stmt_idx = env.store.statementAt(block.stmts, stmt_offset);
+                    switch (env.store.getStatement(stmt_idx)) {
+                        .s_decl => |decl| try stack.append(allocator, decl.expr),
+                        .s_var => |decl| try stack.append(allocator, decl.expr),
+                        .s_reassign => |assign| try stack.append(allocator, assign.expr),
+                        .s_expr => |stmt| try stack.append(allocator, stmt.expr),
+                        .s_expect => |stmt| try stack.append(allocator, stmt.body),
+                        .s_dbg => |stmt| try stack.append(allocator, stmt.expr),
+                        .s_return => |stmt| try stack.append(allocator, stmt.expr),
+                        .s_for => |stmt| {
+                            try stack.append(allocator, stmt.expr);
+                            try stack.append(allocator, stmt.body);
+                        },
+                        .s_crash,
+                        .s_var_uninitialized,
+                        .s_import,
+                        .s_alias_decl,
+                        .s_nominal_decl,
+                        .s_type_anno,
+                        .s_type_var_alias,
+                        .s_runtime_error,
+                        .s_break,
+                        .s_while,
+                        .s_infinite_loop,
+                        .s_breakable_loop,
+                        => {},
+                    }
+                }
+            },
+            .e_if => |if_expr| {
+                try stack.append(allocator, if_expr.final_else);
+                for (env.store.sliceIfBranches(if_expr.branches)) |branch_idx| {
+                    const branch = env.store.getIfBranch(branch_idx);
+                    try stack.append(allocator, branch.cond);
+                    try stack.append(allocator, branch.body);
+                }
+            },
+            .e_match => |match_expr| {
+                try stack.append(allocator, match_expr.cond);
+                for (env.store.sliceMatchBranches(match_expr.branches)) |branch_idx| {
+                    const branch = env.store.getMatchBranch(branch_idx);
+                    try stack.append(allocator, branch.value);
+                    if (branch.guard) |guard| try stack.append(allocator, guard);
+                }
+            },
+            .e_lambda => |lambda| try stack.append(allocator, lambda.body),
+            .e_closure => |closure| try stack.append(allocator, closure.lambda_idx),
+            .e_nominal => |nominal| try stack.append(allocator, nominal.backing_expr),
+            .e_nominal_external => |nominal| try stack.append(allocator, nominal.backing_expr),
+            .e_binop => |binop| {
+                try stack.append(allocator, binop.lhs);
+                try stack.append(allocator, binop.rhs);
+            },
+            .e_unary_minus => |unary| try stack.append(allocator, unary.expr),
+            .e_unary_not => |unary| try stack.append(allocator, unary.expr),
+            .e_field_access => |field| try stack.append(allocator, field.receiver),
+            .e_method_call => |call| {
+                try stack.append(allocator, call.receiver);
+                try appendExprSpanForExpectBindings(env, allocator, &stack, call.args);
+            },
+            .e_dispatch_call => |call| {
+                try stack.append(allocator, call.receiver);
+                try appendExprSpanForExpectBindings(env, allocator, &stack, call.args);
+            },
+            .e_interpolation => |interpolation| {
+                try stack.append(allocator, interpolation.first);
+                try appendExprSpanForExpectBindings(env, allocator, &stack, interpolation.parts);
+            },
+            .e_structural_eq => |eq| {
+                try stack.append(allocator, eq.lhs);
+                try stack.append(allocator, eq.rhs);
+            },
+            .e_structural_hash => |hash| {
+                try stack.append(allocator, hash.value);
+                try stack.append(allocator, hash.hasher);
+            },
+            .e_method_eq => |eq| {
+                try stack.append(allocator, eq.lhs);
+                try stack.append(allocator, eq.rhs);
+            },
+            .e_type_method_call => |call| try appendExprSpanForExpectBindings(env, allocator, &stack, call.args),
+            .e_type_dispatch_call => |call| try appendExprSpanForExpectBindings(env, allocator, &stack, call.args),
+            .e_tuple_access => |access| try stack.append(allocator, access.tuple),
+            .e_dbg => |dbg| try stack.append(allocator, dbg.expr),
+            .e_expect_err => |expect_err| try stack.append(allocator, expect_err.expr),
+            .e_expect => |expect_expr| try stack.append(allocator, expect_expr.body),
+            .e_return => |ret| try stack.append(allocator, ret.expr),
+            .e_for => |for_expr| {
+                try stack.append(allocator, for_expr.expr);
+                try stack.append(allocator, for_expr.body);
+            },
+            .e_run_low_level => |run| try appendExprSpanForExpectBindings(env, allocator, &stack, run.args),
+            .e_num,
+            .e_frac_f32,
+            .e_frac_f64,
+            .e_dec,
+            .e_dec_small,
+            .e_num_from_numeral,
+            .e_typed_int,
+            .e_typed_frac,
+            .e_typed_num_from_numeral,
+            .e_str_segment,
+            .e_bytes_literal,
+            .e_lookup_external,
+            .e_lookup_required,
+            .e_empty_list,
+            .e_empty_record,
+            .e_zero_argument_tag,
+            .e_runtime_error,
+            .e_crash,
+            .e_ellipsis,
+            .e_anno_only,
+            .e_break,
+            .e_hosted_lambda,
+            => {},
+        }
+    }
+
+    return try patterns.toOwnedSlice(allocator);
+}
+
+fn sourceBindingForPattern(env: *const ModuleEnv, pattern_idx: CIR.Pattern.Idx) ?[]const u8 {
+    const src = env.getSourceAll();
+    for (env.store.sliceDefs(env.all_defs)) |def_idx| {
+        const def = env.store.getDef(def_idx);
+        if (def.pattern != pattern_idx) continue;
+
+        switch (env.store.getExpr(def.expr)) {
+            .e_lambda,
+            .e_closure,
+            .e_hosted_lambda,
+            => return null,
+            else => {},
+        }
+
+        const pattern_region = env.store.getPatternRegion(def.pattern);
+        const expr_region = env.store.getExprRegion(def.expr);
+        const start: usize = @intCast(pattern_region.start.offset);
+        const end: usize = @intCast(expr_region.end.offset);
+        if (start >= end or end > src.len) return null;
+        return std.mem.trim(u8, src[start..end], " \t\r\n");
+    }
+    return null;
+}
+
+fn buildExpectFailureDetail(
+    allocator: Allocator,
+    env: *const ModuleEnv,
+    root: check.CheckedArtifact.RootRequest,
+) Allocator.Error!CliTestFailureDetail {
+    const patterns = try collectExpectBindingPatterns(env, allocator, root);
+    defer allocator.free(patterns);
+
+    var message = std.ArrayList(u8).empty;
+    errdefer message.deinit(allocator);
+
+    var count: usize = 0;
+    for (patterns) |pattern_idx| {
+        const binding = sourceBindingForPattern(env, pattern_idx) orelse continue;
+        if (count == 0) {
+            try message.appendSlice(allocator, "Mentioned values:\n");
+        }
+        try message.appendSlice(allocator, binding);
+        try message.append(allocator, '\n');
+        count += 1;
+    }
+
+    if (count == 0) {
+        message.deinit(allocator);
+        return .{
+            .message = try allocator.dupe(u8, "TEST FAILURE: expect failed"),
+            .visibility = .verbose_only,
+        };
+    }
+
+    return .{
+        .message = try message.toOwnedSlice(allocator),
+        .visibility = .always,
+    };
+}
+
 fn testRootByOrder(
     roots: []const check.CheckedArtifact.RootRequest,
     order: u32,
@@ -7437,6 +9538,7 @@ fn debugEffectsForOpt(opt: cli_args.OptLevel) lir.CheckedPipeline.DebugEffectMod
 
 const CliTestRootRun = struct {
     root: check.CheckedArtifact.RootRequest,
+    env: *const ModuleEnv,
     root_proc: lir.LirProcSpecId,
     region: base.Region,
     arg_layouts: []const layout.Idx,
@@ -7486,6 +9588,7 @@ fn collectCliTestRootRuns(
         errdefer ctx.gpa.free(symbol_name);
         try runs.append(ctx.gpa, .{
             .root = root,
+            .env = module.semantic.env,
             .root_proc = root_proc,
             .region = testRootRegion(module.semantic.env, root),
             .arg_layouts = arg_layouts,
@@ -7599,13 +9702,14 @@ fn runInterpreterTestRoots(
             try results.append(ctx.gpa, .{ .result = .passed, .order = run.root.order, .region = run.region, .failure_detail = null });
         } else {
             summary.failed += 1;
+            const detail = try buildExpectFailureDetail(ctx.gpa, run.env, run.root);
             try appendFailedCliTestResult(
                 ctx,
                 results,
                 run,
                 .failed,
-                try ctx.gpa.dupe(u8, "TEST FAILURE: expect failed"),
-                .verbose_only,
+                detail.message,
+                detail.visibility,
             );
         }
     }
@@ -7614,7 +9718,7 @@ fn runInterpreterTestRoots(
 fn appendCompilerErrorsForRuns(
     ctx: *CliCtx,
     mode: CliTestExecutionMode,
-    err: anyerror,
+    err: CliMainError,
     root_runs: []const CliTestRootRun,
     results: *std.ArrayList(CliTestResultItem),
     summary: *CliTestRunSummary,
@@ -7691,13 +9795,14 @@ fn runCompiledTestRoots(
                     try results.append(ctx.gpa, .{ .result = .passed, .order = run.root.order, .region = run.region, .failure_detail = null });
                 } else {
                     summary.failed += 1;
+                    const detail = try buildExpectFailureDetail(ctx.gpa, run.env, run.root);
                     try appendFailedCliTestResult(
                         ctx,
                         results,
                         run,
                         .failed,
-                        try ctx.gpa.dupe(u8, "TEST FAILURE: expect failed"),
-                        .verbose_only,
+                        detail.message,
+                        detail.visibility,
                     );
                 }
             },
@@ -7808,9 +9913,1027 @@ fn runCheckedArtifactTests(
     return summary;
 }
 
-fn rocTest(ctx: *CliCtx, args: cli_args.TestArgs) anyerror!void {
+const watch_debounce_ms = 25;
+const watch_file_hash_limit = 256 * 1024 * 1024;
+const watch_inputs_file_limit = 64 * 1024 * 1024;
+const watch_inputs_magic = "roc-watch-inputs-v1";
+const watch_separator = "\n--- roc watch: change detected; rerunning ---\n\n";
+
+const WatchCommand = union(enum) {
+    check: cli_args.CheckArgs,
+    test_cmd: cli_args.TestArgs,
+    build: cli_args.BuildArgs,
+};
+
+const WatchPathError = Allocator.Error || std.process.CurrentPathError;
+const WatchCollectPathsError = WatchPathError;
+const WatchSnapshotError = Allocator.Error;
+const WatchCollectInputSetError = WatchCollectPathsError || WatchSnapshotError;
+const WatchWriteInputsError = WatchCollectInputSetError || std.Io.Dir.WriteFileError;
+const WatchReadInputsError = WatchCollectPathsError || WatchSnapshotError || error{ WatchInputsMissing, WatchInputsReadFailed, WatchInputsMalformed };
+const WatchDirectoryError = Allocator.Error;
+const WatcherStartError = std.Thread.SpawnError || error{ AlreadyStarted, UnsupportedWatchMode, WatchBackendFailed };
+const WatchRefreshError = WatchSnapshotError || WatchDirectoryError || WatcherStartError;
+const WatchChangeError = WatchSnapshotError;
+const WatchInputsPathError = Allocator.Error || std.Io.Dir.CreateDirPathError;
+const WatchSpawnChildError = Allocator.Error || std.process.SpawnError || std.Thread.SpawnError;
+const CliOutputWriteError = error{WriteFailed};
+const WatchChildOutputError = std.Io.File.MultiReader.UnendingError || std.Io.Timeout.Error || std.process.Child.WaitError;
+const WatchCommandError = error{UnsupportedWatchMode} || WatchInputsPathError || WatchSpawnChildError || WatchCollectPathsError || WatchRefreshError || WatchReadInputsError || WatchChangeError || WatchChildOutputError || CliOutputWriteError;
+const ReportRenderError = Allocator.Error || CliOutputWriteError;
+const CheckFileWithBuildEnvPreservedError = compile.build.InitError || compile.build.BuildError || compile.build.CompileDiscoveredError || compile.build.BuildWithMainError || Allocator.Error || std.Io.Dir.RealPathFileAllocError || error{ ExpectedAppHeader, InvalidPackageName };
+const RocTestError = WatchCommandError || compile.build.InitError || compile.build.BuildError || compile.build.CompileDiscoveredError || compile.build.BuildWithMainError || WatchWriteInputsError || ReportRenderError || std.Io.Dir.RealPathFileAllocError || error{ CompilationFailed, TestsFailed, NoHomeDirectory };
+const RocCheckError = WatchCommandError || CheckFileWithBuildEnvPreservedError || WatchWriteInputsError || ReportRenderError || CliError || std.Io.Dir.CreateDirPathError || std.Io.Dir.WriteFileError || error{CheckFailed};
+
+const WatchEventSignal = struct {
+    dirty: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+};
+
+const WatchFileState = union(enum) {
+    hash: [32]u8,
+    missing,
+    unreadable,
+
+    fn eql(a: WatchFileState, b: WatchFileState) bool {
+        return switch (a) {
+            .hash => |a_hash| switch (b) {
+                .hash => |b_hash| std.mem.eql(u8, &a_hash, &b_hash),
+                else => false,
+            },
+            .missing => b == .missing,
+            .unreadable => b == .unreadable,
+        };
+    }
+};
+
+fn watchFileStateFromCompiler(state: compile.watch_inputs.State) WatchFileState {
+    return switch (state) {
+        .hash => |hash| .{ .hash = hash },
+        .missing => .missing,
+        .unreadable => .unreadable,
+    };
+}
+
+const WatchSnapshotEntry = struct {
+    state: WatchFileState,
+};
+
+const WatchInputSet = struct {
+    inputs: []const []const u8,
+    snapshot: []WatchSnapshotEntry,
+
+    fn deinit(self: *WatchInputSet, ctx: *CliCtx) void {
+        freeOwnedPathSlice(ctx.gpa, self.inputs);
+        self.inputs = &.{};
+        ctx.gpa.free(self.snapshot);
+        self.snapshot = &.{};
+    }
+};
+
+const WatchState = struct {
+    inputs: []const []const u8 = &.{},
+    snapshot: []WatchSnapshotEntry = &.{},
+    watcher: ?*watch_mod.Watcher = null,
+
+    fn deinit(self: *WatchState, ctx: *CliCtx) void {
+        if (self.watcher) |watcher| {
+            watcher.deinit();
+            self.watcher = null;
+        }
+        freeOwnedPathSlice(ctx.gpa, self.inputs);
+        self.inputs = &.{};
+        ctx.gpa.free(self.snapshot);
+        self.snapshot = &.{};
+    }
+};
+
+const WatchChild = struct {
+    child: std.process.Child,
+    id: std.process.Child.Id,
+    thread: std.Thread,
+    done: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    term: ?std.process.Child.Term = null,
+    stdout: []u8 = &.{},
+    stderr: []u8 = &.{},
+    output_error: ?WatchChildOutputError = null,
+
+    fn waitThread(self: *WatchChild, io: std.Io, gpa: Allocator) void {
+        self.captureOutputAndWait(io, gpa) catch |err| {
+            self.output_error = err;
+            self.child.kill(io);
+        };
+        self.done.store(true, .seq_cst);
+    }
+
+    fn captureOutputAndWait(self: *WatchChild, io: std.Io, gpa: Allocator) WatchChildOutputError!void {
+        var multi_reader_buffer: std.Io.File.MultiReader.Buffer(2) = undefined;
+        var multi_reader: std.Io.File.MultiReader = undefined;
+        multi_reader.init(gpa, io, multi_reader_buffer.toStreams(), &.{ self.child.stdout.?, self.child.stderr.? });
+        defer multi_reader.deinit();
+
+        while (multi_reader.fill(64, .none)) |_| {} else |err| switch (err) {
+            error.EndOfStream => {},
+            else => |e| return e,
+        }
+        try multi_reader.checkAnyError();
+
+        self.term = try self.child.wait(io);
+
+        self.stdout = try multi_reader.toOwnedSlice(0);
+        errdefer {
+            gpa.free(self.stdout);
+            self.stdout = &.{};
+        }
+
+        self.stderr = try multi_reader.toOwnedSlice(1);
+    }
+
+    fn deinit(self: *WatchChild, gpa: Allocator) void {
+        gpa.free(self.stdout);
+        gpa.free(self.stderr);
+    }
+};
+
+const WatchChildArgv = struct {
+    argv: []const []const u8,
+    owned: []const []const u8,
+
+    fn deinit(self: *WatchChildArgv, gpa: Allocator) void {
+        for (self.owned) |arg| gpa.free(arg);
+        gpa.free(self.owned);
+        gpa.free(self.argv);
+    }
+};
+
+fn watchCommandPath(command: WatchCommand) []const u8 {
+    return switch (command) {
+        .check => |args| args.path,
+        .test_cmd => |args| args.path,
+        .build => |args| args.path,
+    };
+}
+
+fn watchCommandMain(command: WatchCommand) ?[]const u8 {
+    return switch (command) {
+        .check => |args| args.main,
+        .test_cmd => |args| args.main,
+        .build => null,
+    };
+}
+
+fn watchCallback(context: ?*anyopaque, _: watch_mod.WatchEvent) void {
+    const signal: *WatchEventSignal = @ptrCast(@alignCast(context.?));
+    signal.dirty.store(true, .seq_cst);
+}
+
+fn freeOwnedPathSlice(gpa: Allocator, paths: []const []const u8) void {
+    for (paths) |path| gpa.free(path);
+    gpa.free(paths);
+}
+
+fn absolutePathFromCwd(ctx: *CliCtx, path: []const u8) WatchPathError![]const u8 {
+    if (std.fs.path.isAbsolute(path)) {
+        return std.fs.path.resolve(ctx.gpa, &.{path});
+    }
+
+    var cwd_buffer: [std.fs.max_path_bytes]u8 = @splat(0);
+    const cwd_len = try std.process.currentPath(ctx.io.std_io, &cwd_buffer);
+    const cwd = cwd_buffer[0..cwd_len];
+    return std.fs.path.resolve(ctx.gpa, &.{ cwd, path });
+}
+
+fn appendOwnedWatchPath(
+    ctx: *CliCtx,
+    paths: *std.ArrayList([]const u8),
+    seen: *std.StringHashMapUnmanaged(void),
+    path: []const u8,
+) WatchCollectPathsError!bool {
+    const absolute = try absolutePathFromCwd(ctx, path);
+    errdefer ctx.gpa.free(absolute);
+
+    if (seen.contains(absolute)) {
+        ctx.gpa.free(absolute);
+        return false;
+    }
+
+    try paths.append(ctx.gpa, absolute);
+    errdefer _ = paths.pop();
+    try seen.put(ctx.gpa, absolute, {});
+
+    return true;
+}
+
+fn collectWatchPaths(ctx: *CliCtx, build_env: ?*BuildEnv, extra_paths: []const []const u8) WatchCollectPathsError![]const []const u8 {
+    var paths = std.ArrayList([]const u8).empty;
+    errdefer {
+        for (paths.items) |path| ctx.gpa.free(path);
+        paths.deinit(ctx.gpa);
+    }
+
+    var seen: std.StringHashMapUnmanaged(void) = .{};
+    defer seen.deinit(ctx.gpa);
+
+    if (build_env) |env| {
+        const inputs = try env.collectWatchInputs();
+        defer env.freeWatchInputs(inputs);
+
+        for (inputs) |path| {
+            _ = try appendOwnedWatchPath(ctx, &paths, &seen, path);
+        }
+    }
+
+    for (extra_paths) |path| {
+        _ = try appendOwnedWatchPath(ctx, &paths, &seen, path);
+    }
+
+    return paths.toOwnedSlice(ctx.gpa);
+}
+
+fn captureWatchInputSet(ctx: *CliCtx, inputs: []const []const u8) WatchCollectInputSetError!WatchInputSet {
+    errdefer freeOwnedPathSlice(ctx.gpa, inputs);
+
+    const snapshot = try computeWatchSnapshot(ctx, inputs);
+    errdefer ctx.gpa.free(snapshot);
+
+    return .{
+        .inputs = inputs,
+        .snapshot = snapshot,
+    };
+}
+
+fn appendCompilerWatchInput(
+    ctx: *CliCtx,
+    paths: *std.ArrayList([]const u8),
+    snapshot: *std.ArrayList(WatchSnapshotEntry),
+    seen: *std.StringHashMapUnmanaged(void),
+    input: compile.watch_inputs.Input,
+) WatchCollectInputSetError!void {
+    if (try appendOwnedWatchPath(ctx, paths, seen, input.path)) {
+        try snapshot.append(ctx.gpa, .{ .state = watchFileStateFromCompiler(input.state) });
+    }
+}
+
+fn appendCurrentCollectedWatchInput(
+    ctx: *CliCtx,
+    paths: *std.ArrayList([]const u8),
+    snapshot: *std.ArrayList(WatchSnapshotEntry),
+    seen: *std.StringHashMapUnmanaged(void),
+    path: []const u8,
+) WatchCollectInputSetError!void {
+    if (try appendOwnedWatchPath(ctx, paths, seen, path)) {
+        const absolute_path = paths.items[paths.items.len - 1];
+        try snapshot.append(ctx.gpa, .{ .state = try readWatchFileState(ctx, absolute_path) });
+    }
+}
+
+fn collectWatchInputSetFromCompilerInputs(
+    ctx: *CliCtx,
+    compiler_inputs: []const compile.watch_inputs.Input,
+    extra_paths: []const []const u8,
+) WatchCollectInputSetError!WatchInputSet {
+    var paths = std.ArrayList([]const u8).empty;
+    errdefer {
+        for (paths.items) |path| ctx.gpa.free(path);
+        paths.deinit(ctx.gpa);
+    }
+
+    var snapshot = std.ArrayList(WatchSnapshotEntry).empty;
+    errdefer snapshot.deinit(ctx.gpa);
+
+    var seen: std.StringHashMapUnmanaged(void) = .{};
+    defer seen.deinit(ctx.gpa);
+
+    for (compiler_inputs) |input| {
+        try appendCompilerWatchInput(ctx, &paths, &snapshot, &seen, input);
+    }
+
+    for (extra_paths) |path| {
+        try appendCurrentCollectedWatchInput(ctx, &paths, &snapshot, &seen, path);
+    }
+
+    const owned_paths = try paths.toOwnedSlice(ctx.gpa);
+    errdefer freeOwnedPathSlice(ctx.gpa, owned_paths);
+
+    return .{
+        .inputs = owned_paths,
+        .snapshot = try snapshot.toOwnedSlice(ctx.gpa),
+    };
+}
+
+fn collectWatchInputSet(ctx: *CliCtx, build_env: ?*BuildEnv, extra_paths: []const []const u8) WatchCollectInputSetError!WatchInputSet {
+    if (build_env) |env| {
+        const inputs = try env.collectWatchInputStates();
+        defer env.freeWatchInputStates(inputs);
+        return collectWatchInputSetFromCompilerInputs(ctx, inputs, extra_paths);
+    }
+
+    const paths = try collectWatchPaths(ctx, null, extra_paths);
+    return captureWatchInputSet(ctx, paths);
+}
+
+fn watchPathSeparator(byte: u8) bool {
+    return byte == '/' or byte == '\\';
+}
+
+fn watchPathIsInsideDirectory(path: []const u8, dir: []const u8) bool {
+    if (dir.len == 0) return false;
+    if (std.mem.eql(u8, path, dir)) return true;
+    if (!std.mem.startsWith(u8, path, dir)) return false;
+    if (watchPathSeparator(dir[dir.len - 1])) return true;
+    return path.len > dir.len and watchPathSeparator(path[dir.len]);
+}
+
+fn collectSyntheticBuildWatchInputSet(
+    ctx: *CliCtx,
+    build_env: *BuildEnv,
+    synthetic_root_path: []const u8,
+) WatchCollectInputSetError!WatchInputSet {
+    const inputs = try build_env.collectWatchInputStates();
+    defer build_env.freeWatchInputStates(inputs);
+
+    var paths = std.ArrayList([]const u8).empty;
+    errdefer {
+        for (paths.items) |path| ctx.gpa.free(path);
+        paths.deinit(ctx.gpa);
+    }
+
+    var snapshot = std.ArrayList(WatchSnapshotEntry).empty;
+    errdefer snapshot.deinit(ctx.gpa);
+
+    var seen: std.StringHashMapUnmanaged(void) = .{};
+    defer seen.deinit(ctx.gpa);
+
+    const synthetic_root_dir = std.fs.path.dirname(synthetic_root_path) orelse ".";
+    const synthetic_root_dir_abs = try absolutePathFromCwd(ctx, synthetic_root_dir);
+    defer ctx.gpa.free(synthetic_root_dir_abs);
+
+    for (inputs) |input| {
+        const input_abs = try absolutePathFromCwd(ctx, input.path);
+        defer ctx.gpa.free(input_abs);
+        if (watchPathIsInsideDirectory(input_abs, synthetic_root_dir_abs)) continue;
+        try appendCompilerWatchInput(ctx, &paths, &snapshot, &seen, input);
+    }
+
+    const owned_paths = try paths.toOwnedSlice(ctx.gpa);
+    errdefer freeOwnedPathSlice(ctx.gpa, owned_paths);
+
+    return .{
+        .inputs = owned_paths,
+        .snapshot = try snapshot.toOwnedSlice(ctx.gpa),
+    };
+}
+
+fn collectHotReloadWatchInputSet(
+    ctx: *CliCtx,
+    inputs_in: []const compile.watch_inputs.Input,
+    source_rewrite: ?HotReloadSourceRewrite,
+) WatchCollectInputSetError!WatchInputSet {
+    var paths = std.ArrayList([]const u8).empty;
+    errdefer {
+        for (paths.items) |path| ctx.gpa.free(path);
+        paths.deinit(ctx.gpa);
+    }
+
+    var seen: std.StringHashMapUnmanaged(void) = .{};
+    defer seen.deinit(ctx.gpa);
+
+    var snapshot = std.ArrayList(WatchSnapshotEntry).empty;
+    errdefer snapshot.deinit(ctx.gpa);
+
+    const synthetic_abs = if (source_rewrite) |rewrite|
+        try absolutePathFromCwd(ctx, rewrite.synthetic_app_path)
+    else
+        null;
+    defer if (synthetic_abs) |path| ctx.gpa.free(path);
+
+    for (inputs_in) |input| {
+        if (synthetic_abs) |synthetic_path| {
+            const path_abs = try absolutePathFromCwd(ctx, input.path);
+            defer ctx.gpa.free(path_abs);
+            if (std.mem.eql(u8, path_abs, synthetic_path)) {
+                try appendCurrentCollectedWatchInput(ctx, &paths, &snapshot, &seen, source_rewrite.?.source_path);
+                continue;
+            }
+        }
+        try appendCompilerWatchInput(ctx, &paths, &snapshot, &seen, input);
+    }
+
+    if (source_rewrite) |rewrite| {
+        try appendCurrentCollectedWatchInput(ctx, &paths, &snapshot, &seen, rewrite.source_path);
+    }
+
+    const owned_paths = try paths.toOwnedSlice(ctx.gpa);
+    errdefer freeOwnedPathSlice(ctx.gpa, owned_paths);
+
+    return .{
+        .inputs = owned_paths,
+        .snapshot = try snapshot.toOwnedSlice(ctx.gpa),
+    };
+}
+
+fn appendSerializedWatchFileState(gpa: Allocator, bytes: *std.ArrayList(u8), state: WatchFileState) Allocator.Error!void {
+    switch (state) {
+        .hash => |hash| {
+            const hex = std.fmt.bytesToHex(hash, .lower);
+            try bytes.append(gpa, 'h');
+            try bytes.appendSlice(gpa, hex[0..]);
+        },
+        .missing => try bytes.append(gpa, 'm'),
+        .unreadable => try bytes.append(gpa, 'u'),
+    }
+}
+
+fn hexNibble(byte: u8) ?u8 {
+    return switch (byte) {
+        '0'...'9' => byte - '0',
+        'a'...'f' => byte - 'a' + 10,
+        'A'...'F' => byte - 'A' + 10,
+        else => null,
+    };
+}
+
+fn parseSerializedWatchFileState(serialized: []const u8) WatchReadInputsError!WatchFileState {
+    if (serialized.len == 0) return error.WatchInputsMalformed;
+
+    return switch (serialized[0]) {
+        'h' => blk: {
+            if (serialized.len != 65) return error.WatchInputsMalformed;
+            var hash: [32]u8 = undefined;
+            for (&hash, 0..) |*byte, i| {
+                const hi = hexNibble(serialized[1 + i * 2]) orelse return error.WatchInputsMalformed;
+                const lo = hexNibble(serialized[2 + i * 2]) orelse return error.WatchInputsMalformed;
+                byte.* = (hi << 4) | lo;
+            }
+            break :blk .{ .hash = hash };
+        },
+        'm' => if (serialized.len == 1) .missing else error.WatchInputsMalformed,
+        'u' => if (serialized.len == 1) .unreadable else error.WatchInputsMalformed,
+        else => error.WatchInputsMalformed,
+    };
+}
+
+fn appendWatchInputWithState(
+    ctx: *CliCtx,
+    paths: *std.ArrayList([]const u8),
+    snapshot: *std.ArrayList(WatchSnapshotEntry),
+    seen: *std.StringHashMapUnmanaged(void),
+    path: []const u8,
+    state: WatchFileState,
+) WatchReadInputsError!void {
+    if (path.len == 0) return error.WatchInputsMalformed;
+
+    if (try appendOwnedWatchPath(ctx, paths, seen, path)) {
+        try snapshot.append(ctx.gpa, .{ .state = state });
+    }
+}
+
+fn appendCurrentWatchInput(
+    ctx: *CliCtx,
+    paths: *std.ArrayList([]const u8),
+    snapshot: *std.ArrayList(WatchSnapshotEntry),
+    seen: *std.StringHashMapUnmanaged(void),
+    path: []const u8,
+) WatchReadInputsError!void {
+    if (try appendOwnedWatchPath(ctx, paths, seen, path)) {
+        const absolute_path = paths.items[paths.items.len - 1];
+        try snapshot.append(ctx.gpa, .{ .state = try readWatchFileState(ctx, absolute_path) });
+    }
+}
+
+fn writeWatchInputSetFile(ctx: *CliCtx, file_path: []const u8, input_set: *const WatchInputSet) WatchWriteInputsError!void {
+    var bytes = std.ArrayList(u8).empty;
+    defer bytes.deinit(ctx.gpa);
+
+    try bytes.appendSlice(ctx.gpa, watch_inputs_magic);
+    try bytes.append(ctx.gpa, 0);
+
+    for (input_set.inputs, input_set.snapshot) |path, snapshot| {
+        try bytes.appendSlice(ctx.gpa, path);
+        try bytes.append(ctx.gpa, 0);
+        try appendSerializedWatchFileState(ctx.gpa, &bytes, snapshot.state);
+        try bytes.append(ctx.gpa, 0);
+    }
+
+    try std.Io.Dir.cwd().writeFile(ctx.io.std_io, .{ .sub_path = file_path, .data = bytes.items });
+}
+
+fn writeWatchInputsFile(ctx: *CliCtx, file_path: []const u8, build_env: ?*BuildEnv, extra_paths: []const []const u8) WatchWriteInputsError!void {
+    var input_set = try collectWatchInputSet(ctx, build_env, extra_paths);
+    defer input_set.deinit(ctx);
+    try writeWatchInputSetFile(ctx, file_path, &input_set);
+}
+
+/// For `roc build --watch`, the build child records its discovered source inputs so the
+/// parent watch loop knows which files to watch. The root path is always included for
+/// ordinary builds. Synthetic-default-platform builds compile through temporary files; the
+/// child filters those generated temp files out, and the parent supplies the real root path
+/// separately while preserving real discovered inputs such as file imports.
+fn writeBuildWatchInputs(ctx: *CliCtx, args: cli_args.BuildArgs, build_env: *BuildEnv) WatchWriteInputsError!void {
+    const file_path = args.watch_inputs_file orelse return;
+    if (args.synthetic_default_platform) {
+        var input_set = try collectSyntheticBuildWatchInputSet(ctx, build_env, args.path);
+        defer input_set.deinit(ctx);
+        try writeWatchInputSetFile(ctx, file_path, &input_set);
+        return;
+    }
+    try writeWatchInputsFile(ctx, file_path, build_env, &[_][]const u8{args.path});
+}
+
+fn reportBuildWatchInputsWriteError(ctx: *CliCtx, file_path: []const u8, err: WatchWriteInputsError) void {
+    ctx.io.stderr().print("Error: failed to write watch input state to {s}: {}\n", .{ file_path, err }) catch {};
+    ctx.io.flush();
+}
+
+fn writeBuildWatchInputsOnExit(ctx: *CliCtx, args: cli_args.BuildArgs, build_env: *BuildEnv) void {
+    writeBuildWatchInputs(ctx, args, build_env) catch |err| {
+        const file_path = args.watch_inputs_file orelse return;
+        reportBuildWatchInputsWriteError(ctx, file_path, err);
+    };
+}
+
+fn exitBuildOnWarningsIfRequested(ctx: *CliCtx, args: cli_args.BuildArgs, build_env: *BuildEnv, total_warning_count: usize) void {
+    if (!args.exit_on_warnings or total_warning_count == 0) return;
+    writeBuildWatchInputsOnExit(ctx, args, build_env);
+    ctx.io.flush();
+    std.process.exit(2);
+}
+
+fn writeHotReloadWatchPathsFile(
+    ctx: *CliCtx,
+    file_path: []const u8,
+    inputs: []const compile.watch_inputs.Input,
+    source_rewrite: ?HotReloadSourceRewrite,
+) WatchWriteInputsError!void {
+    var input_set = try collectHotReloadWatchInputSet(ctx, inputs, source_rewrite);
+    defer input_set.deinit(ctx);
+    try writeWatchInputSetFile(ctx, file_path, &input_set);
+}
+
+fn readWatchInputsFile(ctx: *CliCtx, file_path: []const u8, extra_paths: []const []const u8) WatchReadInputsError!WatchInputSet {
+    const bytes = std.Io.Dir.cwd().readFileAlloc(ctx.io.std_io, file_path, ctx.gpa, .limited(watch_inputs_file_limit)) catch |err| switch (err) {
+        error.FileNotFound => return error.WatchInputsMissing,
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return error.WatchInputsReadFailed,
+    };
+    defer ctx.gpa.free(bytes);
+
+    var paths = std.ArrayList([]const u8).empty;
+    errdefer {
+        for (paths.items) |path| ctx.gpa.free(path);
+        paths.deinit(ctx.gpa);
+    }
+
+    var snapshot = std.ArrayList(WatchSnapshotEntry).empty;
+    errdefer snapshot.deinit(ctx.gpa);
+
+    var seen: std.StringHashMapUnmanaged(void) = .{};
+    defer seen.deinit(ctx.gpa);
+
+    if (!std.mem.startsWith(u8, bytes, watch_inputs_magic)) return error.WatchInputsMalformed;
+    var offset: usize = watch_inputs_magic.len;
+    if (offset >= bytes.len or bytes[offset] != 0) return error.WatchInputsMalformed;
+    offset += 1;
+
+    while (offset < bytes.len) {
+        const path_end = std.mem.findScalarPos(u8, bytes, offset, 0) orelse return error.WatchInputsMalformed;
+        const path = bytes[offset..path_end];
+        offset = path_end + 1;
+
+        const state_end = std.mem.findScalarPos(u8, bytes, offset, 0) orelse return error.WatchInputsMalformed;
+        const serialized_state = bytes[offset..state_end];
+        offset = state_end + 1;
+
+        try appendWatchInputWithState(
+            ctx,
+            &paths,
+            &snapshot,
+            &seen,
+            path,
+            try parseSerializedWatchFileState(serialized_state),
+        );
+    }
+
+    for (extra_paths) |path| {
+        try appendCurrentWatchInput(ctx, &paths, &snapshot, &seen, path);
+    }
+
+    const owned_paths = try paths.toOwnedSlice(ctx.gpa);
+    errdefer freeOwnedPathSlice(ctx.gpa, owned_paths);
+
+    return .{
+        .inputs = owned_paths,
+        .snapshot = try snapshot.toOwnedSlice(ctx.gpa),
+    };
+}
+
+fn readWatchInputsFileAfterChild(ctx: *CliCtx, file_path: []const u8, extra_paths: []const []const u8) WatchCommandError!WatchInputSet {
+    return readWatchInputsFile(ctx, file_path, extra_paths) catch |err| {
+        switch (err) {
+            error.OutOfMemory => {},
+            error.WatchInputsMissing => try ctx.io.stderr().print("Error: watch child did not write source input state to {s}.\n", .{file_path}),
+            error.WatchInputsReadFailed => try ctx.io.stderr().print("Error: failed to read watch input state from {s}.\n", .{file_path}),
+            error.WatchInputsMalformed => try ctx.io.stderr().print("Error: watch child wrote malformed source input state to {s}.\n", .{file_path}),
+            error.Unexpected,
+            error.Canceled,
+            error.NameTooLong,
+            error.CurrentDirUnlinked,
+            => try ctx.io.stderr().print("Error: failed to resolve an explicit watch path while reading source input state from {s}: {}\n", .{ file_path, err }),
+        }
+        ctx.io.flush();
+        return err;
+    };
+}
+
+fn readWatchFileState(ctx: *CliCtx, path: []const u8) WatchSnapshotError!WatchFileState {
+    const bytes = std.Io.Dir.cwd().readFileAlloc(ctx.io.std_io, path, ctx.gpa, .limited(watch_file_hash_limit)) catch |err| switch (err) {
+        error.FileNotFound => return .missing,
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return .unreadable,
+    };
+    defer ctx.gpa.free(bytes);
+
+    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    hasher.update(bytes);
+    return .{ .hash = hasher.finalResult() };
+}
+
+fn computeWatchSnapshot(ctx: *CliCtx, paths: []const []const u8) WatchSnapshotError![]WatchSnapshotEntry {
+    const snapshot = try ctx.gpa.alloc(WatchSnapshotEntry, paths.len);
+    errdefer ctx.gpa.free(snapshot);
+
+    for (paths, 0..) |path, i| {
+        snapshot[i] = .{ .state = try readWatchFileState(ctx, path) };
+    }
+
+    return snapshot;
+}
+
+fn watchSnapshotChanged(a: []const WatchSnapshotEntry, b: []const WatchSnapshotEntry) bool {
+    if (a.len != b.len) return true;
+    for (a, b) |old, new| {
+        if (!old.state.eql(new.state)) return true;
+    }
+    return false;
+}
+
+fn existingDirectory(ctx: *CliCtx, path: []const u8) bool {
+    var dir = std.Io.Dir.openDirAbsolute(ctx.io.std_io, path, .{}) catch return false;
+    dir.close(ctx.io.std_io);
+    return true;
+}
+
+fn nearestExistingAncestor(ctx: *CliCtx, path: []const u8) WatchDirectoryError![]const u8 {
+    var candidate = try ctx.gpa.dupe(u8, std.fs.path.dirname(path) orelse path);
+    errdefer ctx.gpa.free(candidate);
+
+    while (!existingDirectory(ctx, candidate)) {
+        const parent = std.fs.path.dirname(candidate) orelse break;
+        if (parent.len == candidate.len) break;
+
+        const parent_copy = try ctx.gpa.dupe(u8, parent);
+        ctx.gpa.free(candidate);
+        candidate = parent_copy;
+    }
+
+    return candidate;
+}
+
+fn collectWatchDirectories(ctx: *CliCtx, paths: []const []const u8) WatchDirectoryError![]const []const u8 {
+    var dirs = std.ArrayList([]const u8).empty;
+    errdefer {
+        for (dirs.items) |dir| ctx.gpa.free(dir);
+        dirs.deinit(ctx.gpa);
+    }
+
+    var seen: std.StringHashMapUnmanaged(void) = .{};
+    defer seen.deinit(ctx.gpa);
+
+    for (paths) |path| {
+        const dir = try nearestExistingAncestor(ctx, path);
+        errdefer ctx.gpa.free(dir);
+
+        if (seen.contains(dir)) {
+            ctx.gpa.free(dir);
+            continue;
+        }
+
+        try seen.put(ctx.gpa, dir, {});
+        try dirs.append(ctx.gpa, dir);
+    }
+
+    return dirs.toOwnedSlice(ctx.gpa);
+}
+
+fn refreshWatchState(
+    ctx: *CliCtx,
+    state: *WatchState,
+    signal: *WatchEventSignal,
+    new_input_set: WatchInputSet,
+) WatchRefreshError!bool {
+    var owned_input_set = new_input_set;
+    errdefer owned_input_set.deinit(ctx);
+
+    const watch_dirs = try collectWatchDirectories(ctx, owned_input_set.inputs);
+    defer freeOwnedPathSlice(ctx.gpa, watch_dirs);
+
+    var new_watcher: ?*watch_mod.Watcher = null;
+    if (watch_dirs.len > 0) {
+        new_watcher = try watch_mod.Watcher.initAllFiles(ctx.gpa, ctx.io.std_io, watch_dirs, signal, watchCallback);
+        errdefer if (new_watcher) |watcher| watcher.deinit();
+        new_watcher.?.start() catch |err| switch (err) {
+            error.WatchBackendFailed => {
+                ctx.io.stderr().writeAll("Error: failed to start filesystem watching for source inputs.\n") catch {};
+                ctx.io.flush();
+                return err;
+            },
+            else => return err,
+        };
+    }
+
+    const current_snapshot = try computeWatchSnapshot(ctx, owned_input_set.inputs);
+    errdefer ctx.gpa.free(current_snapshot);
+
+    const changed_during_refresh = watchSnapshotChanged(owned_input_set.snapshot, current_snapshot);
+    ctx.gpa.free(owned_input_set.snapshot);
+    owned_input_set.snapshot = &.{};
+
+    state.deinit(ctx);
+    state.inputs = owned_input_set.inputs;
+    owned_input_set.inputs = &.{};
+    state.snapshot = current_snapshot;
+    state.watcher = new_watcher;
+    new_watcher = null;
+
+    return changed_during_refresh;
+}
+
+fn watchStateHasByteChanges(ctx: *CliCtx, state: *WatchState) WatchChangeError!bool {
+    if (state.inputs.len == 0) return true;
+    const current = try computeWatchSnapshot(ctx, state.inputs);
+    defer ctx.gpa.free(current);
+    return watchSnapshotChanged(state.snapshot, current);
+}
+
+fn consumeDebouncedWatchChange(ctx: *CliCtx, signal: *WatchEventSignal, state: *WatchState) WatchChangeError!bool {
+    if (!signal.dirty.swap(false, .seq_cst)) return false;
+    std.Io.sleep(ctx.io.std_io, std.Io.Duration.fromMilliseconds(watch_debounce_ms), .awake) catch {};
+    _ = signal.dirty.swap(false, .seq_cst);
+    return try watchStateHasByteChanges(ctx, state);
+}
+
+fn waitForWatchChange(ctx: *CliCtx, signal: *WatchEventSignal, state: *WatchState) WatchChangeError!void {
+    while (true) {
+        if (try consumeDebouncedWatchChange(ctx, signal, state)) return;
+        std.Io.sleep(ctx.io.std_io, std.Io.Duration.fromMilliseconds(watch_debounce_ms), .awake) catch {};
+    }
+}
+
+fn createWatchInputsPath(ctx: *CliCtx) WatchInputsPathError![]const u8 {
+    try std.Io.Dir.cwd().createDirPath(ctx.io.std_io, ".zig-cache");
+
+    var random: [16]u8 = undefined;
+    ctx.io.std_io.random(&random);
+    const hex = std.fmt.bytesToHex(random, .lower);
+
+    return std.fmt.allocPrint(ctx.gpa, ".zig-cache/roc-watch-{s}.inputs", .{hex[0..]});
+}
+
+fn watchExtraPaths(command: WatchCommand) [2]?[]const u8 {
+    return .{ watchCommandPath(command), watchCommandMain(command) };
+}
+
+fn appendExtraWatchPaths(command: WatchCommand, buffer: *[2][]const u8) []const []const u8 {
+    var len: usize = 0;
+    const extras = watchExtraPaths(command);
+    for (extras) |path| {
+        if (path) |p| {
+            buffer[len] = p;
+            len += 1;
+        }
+    }
+    return buffer[0..len];
+}
+
+fn appendOwnedArg(
+    gpa: Allocator,
+    argv: *std.ArrayList([]const u8),
+    owned: *std.ArrayList([]const u8),
+    comptime fmt_str: []const u8,
+    args: anytype,
+) Allocator.Error!void {
+    const arg = try std.fmt.allocPrint(gpa, fmt_str, args);
+    errdefer gpa.free(arg);
+    try argv.append(gpa, arg);
+    try owned.append(gpa, arg);
+}
+
+fn appendResolveLimitArgs(
+    gpa: Allocator,
+    argv: *std.ArrayList([]const u8),
+    owned: *std.ArrayList([]const u8),
+    limits: cli_args.ResolveLimitArgs,
+) Allocator.Error!void {
+    if (limits.max_package_mb) |limit| {
+        try appendOwnedArg(gpa, argv, owned, "--max-package-mb={}", .{limit});
+    }
+    if (limits.max_transitive_mb) |limit| {
+        try appendOwnedArg(gpa, argv, owned, "--max-transitive-mb={}", .{limit});
+    }
+}
+
+fn buildWatchChildArgv(ctx: *CliCtx, arg0: []const u8, command: WatchCommand, inputs_path: []const u8) Allocator.Error!WatchChildArgv {
+    var argv = std.ArrayList([]const u8).empty;
+    errdefer argv.deinit(ctx.gpa);
+    var owned = std.ArrayList([]const u8).empty;
+    errdefer {
+        for (owned.items) |arg| ctx.gpa.free(arg);
+        owned.deinit(ctx.gpa);
+    }
+
+    try argv.append(ctx.gpa, arg0);
+
+    switch (command) {
+        .check => |args| {
+            try argv.append(ctx.gpa, "check");
+            if (args.main) |main_path| try appendOwnedArg(ctx.gpa, &argv, &owned, "--main={s}", .{main_path});
+            if (args.time) try argv.append(ctx.gpa, "--time");
+            if (args.timings) try argv.append(ctx.gpa, "--timings");
+            if (args.no_cache) try argv.append(ctx.gpa, "--no-cache");
+            if (args.verbose) try argv.append(ctx.gpa, "--verbose");
+            if (args.max_threads) |jobs| try appendOwnedArg(ctx.gpa, &argv, &owned, "--jobs={}", .{jobs});
+            try appendResolveLimitArgs(ctx.gpa, &argv, &owned, args.resolve_limits);
+            try appendOwnedArg(ctx.gpa, &argv, &owned, "--watch-inputs-file={s}", .{inputs_path});
+            try argv.append(ctx.gpa, args.path);
+        },
+        .test_cmd => |args| {
+            try argv.append(ctx.gpa, "test");
+            try appendOwnedArg(ctx.gpa, &argv, &owned, "--opt={s}", .{@tagName(args.opt)});
+            if (args.main) |main_path| try appendOwnedArg(ctx.gpa, &argv, &owned, "--main={s}", .{main_path});
+            if (args.no_cache) try argv.append(ctx.gpa, "--no-cache");
+            if (args.verbose) try argv.append(ctx.gpa, "--verbose");
+            if (args.max_threads) |jobs| try appendOwnedArg(ctx.gpa, &argv, &owned, "--jobs={}", .{jobs});
+            try appendResolveLimitArgs(ctx.gpa, &argv, &owned, args.resolve_limits);
+            try appendOwnedArg(ctx.gpa, &argv, &owned, "--watch-inputs-file={s}", .{inputs_path});
+            try argv.append(ctx.gpa, args.path);
+        },
+        .build => |args| {
+            try argv.append(ctx.gpa, "build");
+            try appendOwnedArg(ctx.gpa, &argv, &owned, "--opt={s}", .{@tagName(args.opt)});
+            if (args.target) |target| try appendOwnedArg(ctx.gpa, &argv, &owned, "--target={s}", .{target});
+            if (args.output) |output| try appendOwnedArg(ctx.gpa, &argv, &owned, "--output={s}", .{output});
+            if (args.debug) try argv.append(ctx.gpa, "--debug");
+            if (args.allow_errors) try argv.append(ctx.gpa, "--allow-errors");
+            if (args.verbose) try argv.append(ctx.gpa, "--verbose");
+            if (args.timings) try argv.append(ctx.gpa, "--timings");
+            if (args.no_cache) try argv.append(ctx.gpa, "--no-cache");
+            if (args.max_threads) |jobs| try appendOwnedArg(ctx.gpa, &argv, &owned, "--jobs={}", .{jobs});
+            if (args.wasm_memory) |bytes| try appendOwnedArg(ctx.gpa, &argv, &owned, "--wasm-memory={}", .{bytes});
+            if (args.wasm_stack_size) |bytes| try appendOwnedArg(ctx.gpa, &argv, &owned, "--wasm-stack-size={}", .{bytes});
+            try appendResolveLimitArgs(ctx.gpa, &argv, &owned, args.resolve_limits);
+            try appendOwnedArg(ctx.gpa, &argv, &owned, "--watch-inputs-file={s}", .{inputs_path});
+            try argv.append(ctx.gpa, args.path);
+        },
+    }
+
+    return .{
+        .argv = try argv.toOwnedSlice(ctx.gpa),
+        .owned = try owned.toOwnedSlice(ctx.gpa),
+    };
+}
+
+fn spawnWatchChild(ctx: *CliCtx, argv: []const []const u8) WatchSpawnChildError!*WatchChild {
+    var child = try std.process.spawn(ctx.io.std_io, .{
+        .argv = argv,
+        .stdin = .inherit,
+        .stdout = .pipe,
+        .stderr = .pipe,
+    });
+
+    const child_id = child.id.?;
+    const watched = ctx.gpa.create(WatchChild) catch |err| {
+        child.kill(ctx.io.std_io);
+        return err;
+    };
+
+    watched.* = .{
+        .child = child,
+        .id = child_id,
+        .thread = undefined,
+    };
+
+    watched.thread = std.Thread.spawn(.{}, WatchChild.waitThread, .{ watched, ctx.io.std_io, ctx.gpa }) catch |err| {
+        watched.child.kill(ctx.io.std_io);
+        ctx.gpa.destroy(watched);
+        return err;
+    };
+
+    return watched;
+}
+
+fn terminateWatchChild(child: *WatchChild) void {
+    switch (builtin.os.tag) {
+        .windows => {
+            _ = std.os.windows.ntdll.NtTerminateProcess(child.id, @enumFromInt(1));
+        },
+        .wasi => {},
+        else => {
+            std.posix.kill(child.id, .KILL) catch {};
+        },
+    }
+}
+
+fn joinWatchChild(child: *WatchChild) void {
+    child.thread.join();
+}
+
+fn destroyWatchChild(ctx: *CliCtx, child: *WatchChild) void {
+    child.deinit(ctx.gpa);
+    ctx.gpa.destroy(child);
+}
+
+fn replayWatchChildOutput(ctx: *CliCtx, child: *WatchChild, print_separator: bool) CliOutputWriteError!void {
+    const stdout = ctx.io.stdout();
+    const stderr = ctx.io.stderr();
+
+    if (print_separator) try stderr.writeAll(watch_separator);
+    if (child.stdout.len > 0) try stdout.writeAll(child.stdout);
+    if (child.stderr.len > 0) try stderr.writeAll(child.stderr);
+    ctx.io.flush();
+}
+
+fn runWatchCommand(ctx: *CliCtx, arg0: []const u8, command: WatchCommand) WatchCommandError!void {
+    if (comptime builtin.target.cpu.arch == .wasm32) {
+        ctx.io.stderr().writeAll("Error: --watch is not supported in WebAssembly builds of the Roc CLI.\n") catch {};
+        return error.UnsupportedWatchMode;
+    }
+
+    var signal = WatchEventSignal{};
+    var state = WatchState{};
+    defer state.deinit(ctx);
+
+    var extra_buf: [2][]const u8 = undefined;
+    const extra_paths = appendExtraWatchPaths(command, &extra_buf);
+
+    var first_run = true;
+    while (true) {
+        const inputs_path = try createWatchInputsPath(ctx);
+        defer ctx.gpa.free(inputs_path);
+        defer std.Io.Dir.cwd().deleteFile(ctx.io.std_io, inputs_path) catch {};
+
+        var child_argv = try buildWatchChildArgv(ctx, arg0, command, inputs_path);
+        defer child_argv.deinit(ctx.gpa);
+
+        {
+            const child = try spawnWatchChild(ctx, child_argv.argv);
+            defer destroyWatchChild(ctx, child);
+
+            var restart_now = false;
+            if (state.inputs.len == 0) {
+                const initial_inputs = try collectWatchInputSet(ctx, null, extra_paths);
+                if (try refreshWatchState(ctx, &state, &signal, initial_inputs)) {
+                    terminateWatchChild(child);
+                    restart_now = true;
+                }
+            }
+
+            if (!restart_now) {
+                while (!child.done.load(.seq_cst)) {
+                    if (try consumeDebouncedWatchChange(ctx, &signal, &state)) {
+                        terminateWatchChild(child);
+                        restart_now = true;
+                        break;
+                    }
+                    std.Io.sleep(ctx.io.std_io, std.Io.Duration.fromMilliseconds(watch_debounce_ms), .awake) catch {};
+                }
+            }
+
+            joinWatchChild(child);
+
+            if (restart_now) {
+                first_run = false;
+                continue;
+            }
+
+            if (child.output_error) |err| return err;
+            try replayWatchChildOutput(ctx, child, !first_run);
+        }
+
+        const new_inputs = try readWatchInputsFileAfterChild(ctx, inputs_path, extra_paths);
+        const changed_during_refresh = try refreshWatchState(ctx, &state, &signal, new_inputs);
+
+        first_run = false;
+        if (changed_during_refresh) continue;
+        try waitForWatchChange(ctx, &signal, &state);
+    }
+}
+
+fn rocTest(ctx: *CliCtx, args: cli_args.TestArgs, arg0: []const u8) RocTestError!void {
     const trace = tracy.trace(@src());
     defer trace.end();
+
+    if (args.watch) {
+        return runWatchCommand(ctx, arg0, .{ .test_cmd = args });
+    }
 
     // Start timing
     const start_time = std.Io.Timestamp.now(ctx.io.std_io, .real).nanoseconds;
@@ -7841,6 +10964,7 @@ fn rocTest(ctx: *CliCtx, args: cli_args.TestArgs) anyerror!void {
     var build_env = BuildEnv.init(ctx.gpa, mode, thread_count, RocTarget.detectNative(), cwd, ctx.io.std_io) catch |err| {
         return err;
     };
+    build_env.setWatchInputTracking(args.watch_inputs_file != null);
     build_env.resolution_config = resolutionConfigFromLimits(args.resolve_limits);
     build_env.compiler_version = build_options.compiler_version;
     defer build_env.deinit();
@@ -7855,16 +10979,38 @@ fn rocTest(ctx: *CliCtx, args: cli_args.TestArgs) anyerror!void {
         build_env.setCacheManager(cache_manager);
     }
 
-    build_env.discoverDependencies(args.path) catch |err| {
-        _ = try build_env.renderDiagnostics(stderr);
-        return err;
-    };
-    build_env.compileDiscovered() catch |err| {
-        _ = try build_env.renderDiagnostics(stderr);
-        return err;
-    };
+    var extra_buf: [2][]const u8 = undefined;
+    const extra_paths = appendExtraWatchPaths(.{ .test_cmd = args }, &extra_buf);
+
+    if (args.main) |main_path| {
+        build_env.buildWithMain(args.path, main_path) catch |err| {
+            _ = try build_env.renderDiagnostics(stderr);
+            if (args.watch_inputs_file) |file_path| {
+                try writeWatchInputsFile(ctx, file_path, &build_env, extra_paths);
+            }
+            return err;
+        };
+    } else {
+        build_env.discoverDependencies(args.path) catch |err| {
+            _ = try build_env.renderDiagnostics(stderr);
+            if (args.watch_inputs_file) |file_path| {
+                try writeWatchInputsFile(ctx, file_path, &build_env, extra_paths);
+            }
+            return err;
+        };
+        build_env.compileDiscovered() catch |err| {
+            _ = try build_env.renderDiagnostics(stderr);
+            if (args.watch_inputs_file) |file_path| {
+                try writeWatchInputsFile(ctx, file_path, &build_env, extra_paths);
+            }
+            return err;
+        };
+    }
 
     const diag = try build_env.renderDiagnostics(stderr);
+    if (args.watch_inputs_file) |file_path| {
+        try writeWatchInputsFile(ctx, file_path, &build_env, extra_paths);
+    }
     if (diag.errors > 0) return error.CompilationFailed;
 
     const modules = try build_env.getCompiledModules(ctx.gpa);
@@ -7947,7 +11093,7 @@ fn renderTestResultBodies(
     stderr_body: *std.Io.Writer,
     module_results: []const CliModuleTestResult,
     verbose: bool,
-) anyerror!void {
+) ReportRenderError!void {
     // Verbose PASS lines go to stdout in every case; problem blocks go to
     // stderr. This matches the pre-refactor layout.
     for (module_results) |module_result| {
@@ -7965,7 +11111,7 @@ fn renderTestResultBodies(
                         module_result.path,
                         module_result.env,
                         region_info,
-                        "FAIL",
+                        "Fail",
                         .runtime_error,
                         result.failure_detail,
                         result.failure_detail_visibility,
@@ -7979,7 +11125,7 @@ fn renderTestResultBodies(
                         module_result.path,
                         module_result.env,
                         region_info,
-                        "COMPILER_ERROR",
+                        "Compiler Error",
                         .warning,
                         result.failure_detail,
                         result.failure_detail_visibility,
@@ -8004,11 +11150,8 @@ fn printTestProblem(
     failure_detail: ?[]const u8,
     failure_detail_visibility: CliTestFailureDetailVisibility,
     verbose: bool,
-) anyerror!void {
+) ReportRenderError!void {
     const src = env.getSourceAll();
-
-    var report = reporting.Report.init(allocator, label, severity);
-    defer report.deinit();
 
     const doc_comment: ?[]const u8 = blk: {
         const line_starts = env.getLineStarts();
@@ -8021,10 +11164,24 @@ fn printTestProblem(
         }
         break :blk null;
     };
-    if (doc_comment) |comment| {
-        try report.document.addText(comment);
-        try report.document.addLineBreak();
+
+    // The headline is the test's doc comment, if any. House style requires a
+    // headline to end in a period, so append one when it's missing.
+    var headline: []const u8 = "";
+    var headline_owned = false;
+    if (doc_comment) |dc| {
+        if (std.mem.endsWith(u8, dc, ".")) {
+            headline = dc;
+        } else {
+            headline = try std.fmt.allocPrint(allocator, "{s}.", .{dc});
+            headline_owned = true;
+        }
     }
+    defer if (headline_owned) allocator.free(headline);
+
+    var report = try reporting.Report.init(allocator, label, headline, severity);
+    defer report.deinit();
+
     try report.addSourceContext(region_info, path, src, env.getLineStarts());
 
     const should_print_detail = switch (failure_detail_visibility) {
@@ -8060,7 +11217,7 @@ const REPL_PROMPT_PLAIN = "» ";
 const REPL_CONT_PROMPT_COLOR = "\x1b[1;36m…\x1b[0m ";
 const REPL_CONT_PROMPT_PLAIN = "… ";
 
-fn rocRepl(ctx: *CliCtx, repl_args: cli_args.ReplArgs) anyerror!void {
+fn rocRepl(ctx: *CliCtx, repl_args: cli_args.ReplArgs) CliMainError!void {
     const stdout = ctx.io.stdout();
     const backend_kind = repl_args.opt.toBackend();
     const stdin = std.Io.File.stdin();
@@ -8162,7 +11319,7 @@ fn processReplInput(
     input: []const u8,
     report_config: reporting.ReportingConfig,
     had_diagnostics: *bool,
-) anyerror!bool {
+) CliMainError!bool {
     const stdout = ctx.io.stdout();
     const stderr = ctx.io.stderr();
 
@@ -8201,10 +11358,16 @@ fn replReportingConfig(ctx: *CliCtx, repl_args: cli_args.ReplArgs, mode: ReplMod
     const color_disabled = repl_args.no_color or no_color_env;
     const should_color = !color_disabled and (force_color or (mode == .interactive and stderr_is_tty));
 
+    // Always render the box layout; when color is disabled, keep the
+    // color_terminal target but force the no-color palette so the REPL shows the
+    // same plain box as non-TTY output (rather than the old markdown layout).
     var config = if (should_color)
-        if (high_contrast) reporting.ReportingConfig.initHighContrast() else reporting.ReportingConfig.initColorTerminal()
-    else
-        reporting.ReportingConfig.initMarkdown();
+        if (high_contrast) reporting.ReportingConfig.initHighContrast() else ctx.terminalReportConfig()
+    else blk: {
+        var plain = ctx.terminalReportConfig();
+        plain.color_preference = .never;
+        break :blk plain;
+    };
 
     config.is_tty = stderr_is_tty;
     return config;
@@ -8233,12 +11396,17 @@ fn rocGlue(ctx: *CliCtx, args: cli_args.GlueArgs) glue.GlueError!void {
         .glue_spec = args.glue_spec,
         .output_dir = args.output_dir,
         .platform_path = args.platform_path,
+        .opt = switch (args.opt) {
+            .dev => .dev,
+            .interpreter => .interpreter,
+            .size, .speed => unreachable,
+        },
     }, temp_dir, ctx.io.std_io);
 }
 
 /// Reads, parses, formats, and overwrites all Roc files at the given paths.
 /// Recurses into directories to search for Roc files.
-fn rocFormat(ctx: *CliCtx, args: cli_args.FormatArgs) anyerror!void {
+fn rocFormat(ctx: *CliCtx, args: cli_args.FormatArgs) CliMainError!void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -8400,7 +11568,7 @@ fn nsToMs(ns: u64) u32 {
     return @intCast((ns + 500_000) / 1_000_000);
 }
 
-fn handleProcessFileError(err: anytype, stderr: anytype, path: []const u8) anyerror!void {
+fn handleProcessFileError(err: anytype, stderr: anytype, path: []const u8) @TypeOf(err)!void {
     stderr.print("Failed to check {s}: ", .{path}) catch {};
     switch (err) {
         // Custom BuildEnv errors - these need special messages
@@ -8465,6 +11633,123 @@ const DrainedReport = struct {
     }
 };
 
+fn countNewlines(bytes: []const u8) u32 {
+    var count: u32 = 0;
+    for (bytes) |byte| {
+        if (byte == '\n') count += 1;
+    }
+    return count;
+}
+
+fn remapDefaultAppSourceRegion(
+    allocator: Allocator,
+    region: *reporting.SourceCodeDisplayRegion,
+    original_path: []const u8,
+    original_source: []const u8,
+    original_line_starts: []const u32,
+    synthetic_header_lines: u32,
+) Allocator.Error!void {
+    if (region.start_line <= synthetic_header_lines or region.end_line <= synthetic_header_lines) return;
+    if (original_line_starts.len == 0) return;
+
+    const original_start_line = region.start_line - synthetic_header_lines;
+    const original_end_line = region.end_line - synthetic_header_lines;
+    const region_info = base.RegionInfo{
+        .start_line_idx = original_start_line - 1,
+        .start_col_idx = region.start_column - 1,
+        .end_line_idx = original_end_line - 1,
+        .end_col_idx = region.end_column - 1,
+    };
+
+    const line_text = try allocator.dupe(u8, region_info.calculateLineText(original_source, original_line_starts));
+    errdefer allocator.free(line_text);
+    const filename = try allocator.dupe(u8, original_path);
+    errdefer allocator.free(filename);
+
+    allocator.free(region.line_text);
+    if (region.filename) |old_filename| allocator.free(old_filename);
+
+    region.line_text = line_text;
+    region.filename = filename;
+    region.start_line = original_start_line;
+    region.end_line = original_end_line;
+}
+
+fn remapDefaultAppDocumentElement(
+    allocator: Allocator,
+    element: *reporting.DocumentElement,
+    original_path: []const u8,
+    original_source: []const u8,
+    original_line_starts: []const u32,
+    synthetic_header_lines: u32,
+) Allocator.Error!void {
+    switch (element.*) {
+        .source_code_region => |*region| try remapDefaultAppSourceRegion(
+            allocator,
+            region,
+            original_path,
+            original_source,
+            original_line_starts,
+            synthetic_header_lines,
+        ),
+        .source_code_with_underlines => |*underlines| {
+            const old_start_line = underlines.display_region.start_line;
+            try remapDefaultAppSourceRegion(
+                allocator,
+                &underlines.display_region,
+                original_path,
+                original_source,
+                original_line_starts,
+                synthetic_header_lines,
+            );
+            if (old_start_line <= synthetic_header_lines) return;
+            for (underlines.underline_regions) |*underline| {
+                if (underline.start_line > synthetic_header_lines) {
+                    underline.start_line -= synthetic_header_lines;
+                }
+                if (underline.end_line > synthetic_header_lines) {
+                    underline.end_line -= synthetic_header_lines;
+                }
+            }
+        },
+        else => {},
+    }
+}
+
+fn remapDefaultAppCheckReports(
+    ctx: *CliCtx,
+    check_result: *CheckResult,
+    synthetic_app_path: []const u8,
+    original_path: []const u8,
+    original_source: []const u8,
+    synthetic_header_lines: u32,
+) Allocator.Error!void {
+    var original_line_starts = try base.RegionInfo.findLineStarts(ctx.gpa, original_source);
+    defer original_line_starts.deinit(ctx.gpa);
+
+    for (check_result.reports) |*module| {
+        if (!std.mem.eql(u8, module.file_path, synthetic_app_path)) continue;
+
+        const remapped_file_path = try ctx.gpa.dupe(u8, original_path);
+        errdefer ctx.gpa.free(remapped_file_path);
+        ctx.gpa.free(module.file_path);
+        module.file_path = remapped_file_path;
+
+        for (module.reports) |*report| {
+            for (report.document.elements.items) |*element| {
+                try remapDefaultAppDocumentElement(
+                    report.document.allocator,
+                    element,
+                    original_path,
+                    original_source,
+                    original_line_starts.items.items,
+                    synthetic_header_lines,
+                );
+            }
+        }
+    }
+}
+
 /// Timing information for check phases
 const CheckTimingInfo = if (builtin.target.cpu.arch == .wasm32) struct {} else TimingInfo;
 
@@ -8479,6 +11764,15 @@ const CheckResultWithBuildEnv = struct {
         self.build_env.deinit();
     }
 };
+
+fn buildForCheckWithOptionalMain(build_env: *BuildEnv, filepath: []const u8, main_filepath: ?[]const u8) CheckFileWithBuildEnvPreservedError!void {
+    if (main_filepath) |main_path| {
+        try build_env.buildWithMain(filepath, main_path);
+    } else {
+        try build_env.discoverDependencies(filepath);
+        try build_env.compileDiscovered();
+    }
+}
 
 /// Returns true when `filepath` is the compiler-owned builtin module (`Builtin.roc`).
 ///
@@ -8504,11 +11798,14 @@ fn isCompilerOwnedBuiltinSourcePath(gpa: Allocator, io: std.Io, filepath: []cons
 fn checkFileWithBuildEnvPreserved(
     ctx: *CliCtx,
     filepath: []const u8,
+    main_filepath: ?[]const u8,
     _: bool,
     cache_config: CacheConfig,
     max_threads: ?usize,
     resolution_config: compile.package_resolution.Config,
-) anyerror!CheckResultWithBuildEnv {
+    source_dir_override: ?[]const u8,
+    track_watch_inputs: bool,
+) CheckFileWithBuildEnvPreservedError!CheckResultWithBuildEnv {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -8520,7 +11817,11 @@ fn checkFileWithBuildEnvPreserved(
     const cwd = try std.Io.Dir.cwd().realPathFileAlloc(ctx.io.std_io, ".", ctx.gpa);
     defer ctx.gpa.free(cwd);
     var build_env = try BuildEnv.init(ctx.gpa, mode, thread_count, RocTarget.detectNative(), cwd, ctx.io.std_io);
+    build_env.setWatchInputTracking(track_watch_inputs);
     build_env.resolution_config = resolution_config;
+    if (source_dir_override) |source_dir| {
+        build_env.setRootSourceDirOverride(source_dir);
+    }
     if (isCompilerOwnedBuiltinSourcePath(ctx.gpa, ctx.io.std_io, filepath)) {
         build_env.setRootModuleRole(.builtin);
     }
@@ -8536,8 +11837,7 @@ fn checkFileWithBuildEnvPreserved(
         // Note: BuildEnv.deinit() will clean up the cache manager when caller calls deinit
     }
 
-    // Build the file (works for both app and module files)
-    build_env.build(filepath) catch |err| {
+    buildForCheckWithOptionalMain(&build_env, filepath, main_filepath) catch |err| {
         switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             else => {},
@@ -8570,6 +11870,7 @@ fn checkFileWithBuildEnvPreserved(
             CheckTimingInfo{}
         else
             build_env.getTimingInfo();
+        const cache_stats = build_env.getBuildStats();
 
         return CheckResultWithBuildEnv{
             .check_result = .{
@@ -8577,6 +11878,13 @@ fn checkFileWithBuildEnvPreserved(
                 .timing = timing,
                 .error_count = error_count,
                 .warning_count = warning_count,
+                .modules_total = cache_stats.modules_total,
+                .cache_hits = cache_stats.cache_hits,
+                .cache_misses = cache_stats.cache_misses,
+                .modules_compiled = cache_stats.modules_compiled,
+                .module_time_min_ns = cache_stats.module_time_min_ns,
+                .module_time_max_ns = cache_stats.module_time_max_ns,
+                .module_time_sum_ns = cache_stats.module_time_sum_ns,
             },
             .build_env = build_env,
         };
@@ -8638,12 +11946,20 @@ fn checkFileWithBuildEnvPreserved(
         CheckTimingInfo{}
     else
         build_env.getTimingInfo();
+    const cache_stats = build_env.getBuildStats();
 
     const check_result = CheckResult{
         .reports = reports,
         .timing = timing,
         .error_count = error_count,
         .warning_count = warning_count,
+        .modules_total = cache_stats.modules_total,
+        .cache_hits = cache_stats.cache_hits,
+        .cache_misses = cache_stats.cache_misses,
+        .modules_compiled = cache_stats.modules_compiled,
+        .module_time_min_ns = cache_stats.module_time_min_ns,
+        .module_time_max_ns = cache_stats.module_time_max_ns,
+        .module_time_sum_ns = cache_stats.module_time_sum_ns,
     };
 
     return CheckResultWithBuildEnv{
@@ -8652,20 +11968,20 @@ fn checkFileWithBuildEnvPreserved(
     };
 }
 
-/// Check a Roc file using the BuildEnv system
+/// Check a Roc file using the ordinary BuildEnv path.
 fn checkFileWithBuildEnv(
     ctx: *CliCtx,
     filepath: []const u8,
+    main_filepath: ?[]const u8,
     _: bool,
     cache_config: CacheConfig,
     max_threads: ?usize,
     resolution_config: compile.package_resolution.Config,
-) anyerror!CheckResult {
+    source_dir_override: ?[]const u8,
+) CheckFileWithBuildEnvPreservedError!CheckResult {
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    // Determine threading mode and thread count
-    // Default to multi-threaded with auto-detected CPU count; use -j1 for single-threaded
     const thread_count: usize = if (max_threads) |t| t else (std.Thread.getCpuCount() catch 1);
     const mode: compile.package.Mode = if (thread_count <= 1) .single_threaded else .multi_threaded;
 
@@ -8673,40 +11989,35 @@ fn checkFileWithBuildEnv(
     defer ctx.gpa.free(cwd);
     var build_env = try BuildEnv.init(ctx.gpa, mode, thread_count, RocTarget.detectNative(), cwd, ctx.io.std_io);
     build_env.resolution_config = resolution_config;
+    if (source_dir_override) |source_dir| {
+        build_env.setRootSourceDirOverride(source_dir);
+    }
 
     build_env.compiler_version = build_options.compiler_version;
+    build_env.setPostCheckPublicationMode(.platform_relations);
     defer build_env.deinit();
 
-    // Set up cache manager if caching is enabled
     if (cache_config.enabled) {
         const cache_manager = try ctx.gpa.create(CacheManager);
         cache_manager.* = CacheManager.init(ctx.gpa, cache_config, ctx.coreCtx());
         build_env.setCacheManager(cache_manager);
-        // Note: BuildEnv.deinit() will clean up the cache manager
     }
-    build_env.setPostCheckPublicationMode(.platform_relations);
 
-    // When checking the Builtin module itself, mark it as such so the
-    // canonicalizer skips loading the pre-compiled builtin types into its
-    // scope (which would cause shadowing errors for every type it defines).
     if (isCompilerOwnedBuiltinSourcePath(ctx.gpa, ctx.io.std_io, filepath)) {
         build_env.setRootModuleRole(.builtin);
     }
 
-    if (comptime build_options.trace_build) {
-        std.debug.print("[CLI] Starting build for {s}\n", .{filepath});
-    }
+    buildForCheckWithOptionalMain(&build_env, filepath, main_filepath) catch |err| {
+        switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => {},
+        }
 
-    // Build the file (works for both app and module files)
-    build_env.build(filepath) catch {
-        // Even on error, drain reports to show what went wrong
         const drained = build_env.drainReports() catch &[_]BuildEnv.DrainedModuleReports{};
         defer build_env.freeDrainedReportsPathsOnly(drained);
 
-        // Count errors and warnings
         var error_count: u32 = 0;
         var warning_count: u32 = 0;
-
         for (drained) |mod| {
             for (mod.reports) |report| {
                 switch (report.severity) {
@@ -8717,19 +12028,15 @@ fn checkFileWithBuildEnv(
             }
         }
 
-        // Convert BuildEnv drained reports to our format
-        // Note: Transfer ownership of reports since drainReports() already transferred them
-        var reports = try build_env.gpa.alloc(DrainedReport, drained.len);
+        var reports = try ctx.gpa.alloc(DrainedReport, drained.len);
         for (drained, 0..) |mod, i| {
             reports[i] = .{
-                .file_path = try build_env.gpa.dupe(u8, mod.abs_path),
-                .reports = mod.reports, // Transfer ownership
+                .file_path = try ctx.gpa.dupe(u8, mod.abs_path),
+                .reports = mod.reports,
             };
         }
 
-        // Get cache stats even on error
         const cache_stats = build_env.getBuildStats();
-
         return CheckResult{
             .reports = reports,
             .error_count = error_count,
@@ -8744,21 +12051,11 @@ fn checkFileWithBuildEnv(
         };
     };
 
-    if (comptime build_options.trace_build) {
-        std.debug.print("[CLI] Build complete, draining reports...\n", .{});
-    }
-
-    // Drain all reports
     const drained = try build_env.drainReports();
+    defer build_env.freeDrainedReportsPathsOnly(drained);
 
-    if (comptime build_options.trace_build) {
-        std.debug.print("[CLI] Reports drained: {} modules\n", .{drained.len});
-    }
-
-    // Count errors and warnings
     var error_count: u32 = 0;
     var warning_count: u32 = 0;
-
     for (drained) |mod| {
         for (mod.reports) |report| {
             switch (report.severity) {
@@ -8769,31 +12066,19 @@ fn checkFileWithBuildEnv(
         }
     }
 
-    // Convert BuildEnv drained reports to our format
     var reports = try ctx.gpa.alloc(DrainedReport, drained.len);
     for (drained, 0..) |mod, i| {
         reports[i] = .{
             .file_path = try ctx.gpa.dupe(u8, mod.abs_path),
-            .reports = mod.reports, // Transfer ownership
+            .reports = mod.reports,
         };
     }
 
-    // Free the original drained reports (abs_path strings and outer slice only)
-    // Note: reports ownership was transferred above, abs_path was duped
-    build_env.freeDrainedReportsPathsOnly(drained);
-
-    // Get timing information from BuildEnv
     const timing = if (builtin.target.cpu.arch == .wasm32)
         CheckTimingInfo{}
     else
         build_env.getTimingInfo();
-
-    // Get cache stats from coordinator
     const cache_stats = build_env.getBuildStats();
-
-    if (comptime build_options.trace_build) {
-        std.debug.print("[CLI] checkFileWithBuildEnv returning (defer deinit will run)\n", .{});
-    }
 
     return CheckResult{
         .reports = reports,
@@ -8810,9 +12095,204 @@ fn checkFileWithBuildEnv(
     };
 }
 
-fn rocCheck(ctx: *CliCtx, args: cli_args.CheckArgs) anyerror!void {
+fn finishRocCheck(
+    ctx: *CliCtx,
+    args: cli_args.CheckArgs,
+    stdout: *std.Io.Writer,
+    stderr: *std.Io.Writer,
+    timer_start_ns: i128,
+    check_result: *CheckResult,
+) RocCheckError!void {
+    const elapsed = @as(u64, @intCast(std.Io.Timestamp.now(ctx.io.std_io, .real).nanoseconds - timer_start_ns));
+
+    for (check_result.reports) |module| {
+        for (module.reports) |*report| {
+            try reporting.renderReportToTerminal(report, stderr, ColorPalette.ANSI, ctx.terminalReportConfig());
+        }
+    }
+
+    ctx.io.flush();
+
+    if (check_result.error_count > 0 or check_result.warning_count > 0) {
+        stderr.writeAll("\n") catch {};
+        stderr.print("Found {} error(s) and {} warning(s) in ", .{
+            check_result.error_count,
+            check_result.warning_count,
+        }) catch {};
+        formatElapsedTimeMs(stderr, elapsed) catch {};
+        stderr.print(" for {s}.\n", .{args.path}) catch {};
+
+        if (args.verbose) {
+            printVerboseStats(stderr, check_result);
+        }
+
+        ctx.io.flush();
+
+        if (check_result.error_count > 0) {
+            return error.CheckFailed;
+        } else {
+            std.process.exit(2);
+        }
+    } else {
+        stdout.print("No errors found in ", .{}) catch {};
+        formatElapsedTimeMs(stdout, elapsed) catch {};
+        stdout.print(" for {s}\n", .{args.path}) catch {};
+
+        if (args.verbose) {
+            printVerboseStats(stdout, check_result);
+        }
+
+        ctx.io.flush();
+    }
+
+    if (args.time) {
+        printTimingBreakdown(stdout, if (builtin.target.cpu.arch == .wasm32) null else check_result.timing);
+    }
+}
+
+const DefaultAppCheckSourceFiles = struct {
+    app_path: []const u8,
+    header_lines: u32,
+};
+
+fn writeDefaultAppCheckSourceFiles(
+    ctx: *CliCtx,
+    temp_dir: []const u8,
+    original_path: []const u8,
+    original_source: []const u8,
+) (Allocator.Error || std.Io.Dir.CreateDirPathError || std.Io.Dir.WriteFileError)!DefaultAppCheckSourceFiles {
+    const platform_dir = try std.fs.path.join(ctx.arena, &.{ temp_dir, ".roc_echo_platform" });
+    try std.Io.Dir.cwd().createDirPath(ctx.io.std_io, platform_dir);
+
+    const app_filename = std.fs.path.basename(original_path);
+    const app_path = try std.fs.path.join(ctx.arena, &.{ temp_dir, app_filename });
+    const platform_main_path = try std.fs.path.join(ctx.arena, &.{ platform_dir, "main.roc" });
+    const echo_module_path = try std.fs.path.join(ctx.arena, &.{ platform_dir, "Echo.roc" });
+
+    const synthetic_source = try std.mem.concat(ctx.gpa, u8, &.{ default_app_run_header, original_source });
+    defer ctx.gpa.free(synthetic_source);
+
+    try std.Io.Dir.cwd().writeFile(ctx.io.std_io, .{ .sub_path = app_path, .data = synthetic_source });
+    try std.Io.Dir.cwd().writeFile(ctx.io.std_io, .{ .sub_path = platform_main_path, .data = echo_platform.platform_main_source });
+    try std.Io.Dir.cwd().writeFile(ctx.io.std_io, .{ .sub_path = echo_module_path, .data = echo_platform.echo_module_source });
+
+    return .{
+        .app_path = app_path,
+        .header_lines = countNewlines(default_app_run_header),
+    };
+}
+
+fn rocCheckDefaultApp(
+    ctx: *CliCtx,
+    args: cli_args.CheckArgs,
+    original_source: []const u8,
+    cache_config: CacheConfig,
+) RocCheckError!CheckResult {
+    defer ctx.gpa.free(original_source);
+
+    const temp_dir = createUniqueTempDir(ctx) catch |err| {
+        return ctx.fail(.{ .temp_dir_failed = .{ .err = err } });
+    };
+    defer std.Io.Dir.cwd().deleteTree(ctx.io.std_io, temp_dir) catch {};
+
+    const files = try writeDefaultAppCheckSourceFiles(ctx, temp_dir, args.path, original_source);
+    const original_source_dir = std.fs.path.dirname(args.path) orelse ".";
+
+    var check_result = try checkFileWithBuildEnv(
+        ctx,
+        files.app_path,
+        null,
+        args.time,
+        cache_config,
+        args.max_threads,
+        resolutionConfigFromLimits(args.resolve_limits),
+        original_source_dir,
+    );
+    errdefer check_result.deinit(ctx.gpa);
+
+    try remapDefaultAppCheckReports(
+        ctx,
+        &check_result,
+        files.app_path,
+        args.path,
+        original_source,
+        files.header_lines,
+    );
+
+    return check_result;
+}
+
+const DefaultAppCheckResultWithBuildEnv = struct {
+    result_with_env: CheckResultWithBuildEnv,
+    synthetic_app_path: []const u8,
+
+    fn deinit(self: *@This(), gpa: Allocator) void {
+        self.result_with_env.deinit(gpa);
+    }
+};
+
+fn rocCheckDefaultAppPreserved(
+    ctx: *CliCtx,
+    args: cli_args.CheckArgs,
+    original_source: []const u8,
+    cache_config: CacheConfig,
+    track_watch_inputs: bool,
+) RocCheckError!DefaultAppCheckResultWithBuildEnv {
+    defer ctx.gpa.free(original_source);
+
+    const temp_dir = createUniqueTempDir(ctx) catch |err| {
+        return ctx.fail(.{ .temp_dir_failed = .{ .err = err } });
+    };
+    defer std.Io.Dir.cwd().deleteTree(ctx.io.std_io, temp_dir) catch {};
+
+    const files = try writeDefaultAppCheckSourceFiles(ctx, temp_dir, args.path, original_source);
+    const original_source_dir = std.fs.path.dirname(args.path) orelse ".";
+
+    var result_with_env = try checkFileWithBuildEnvPreserved(
+        ctx,
+        files.app_path,
+        null,
+        args.time,
+        cache_config,
+        args.max_threads,
+        resolutionConfigFromLimits(args.resolve_limits),
+        original_source_dir,
+        track_watch_inputs,
+    );
+    errdefer result_with_env.deinit(ctx.gpa);
+
+    try remapDefaultAppCheckReports(
+        ctx,
+        &result_with_env.check_result,
+        files.app_path,
+        args.path,
+        original_source,
+        files.header_lines,
+    );
+
+    return .{
+        .result_with_env = result_with_env,
+        .synthetic_app_path = files.app_path,
+    };
+}
+
+fn writeDefaultAppCheckWatchInputs(
+    ctx: *CliCtx,
+    file_path: []const u8,
+    result: *DefaultAppCheckResultWithBuildEnv,
+) WatchWriteInputsError!void {
+    var input_set = try collectSyntheticBuildWatchInputSet(ctx, &result.result_with_env.build_env, result.synthetic_app_path);
+    defer input_set.deinit(ctx);
+    try writeWatchInputSetFile(ctx, file_path, &input_set);
+}
+
+fn rocCheck(ctx: *CliCtx, args: cli_args.CheckArgs, arg0: []const u8) RocCheckError!void {
     const trace = tracy.trace(@src());
     defer trace.end();
+
+    if (args.watch) {
+        return runWatchCommand(ctx, arg0, .{ .check = args });
+    }
 
     const stdout = ctx.io.stdout();
     const stderr = ctx.io.stderr();
@@ -8832,18 +12312,84 @@ fn rocCheck(ctx: *CliCtx, args: cli_args.CheckArgs) anyerror!void {
 
     // Use BuildEnv to check the file
     reporter.begin("Type Checking");
-    var check_result = checkFileWithBuildEnv(
-        ctx,
-        args.path,
-        args.time,
-        cache_config,
-        args.max_threads,
-        resolutionConfigFromLimits(args.resolve_limits),
-    ) catch |err| {
-        reporter.fail();
-        try handleProcessFileError(err, stderr, args.path);
-        return;
-    };
+    if (args.watch_inputs_file) |file_path| {
+        var extra_buf: [2][]const u8 = undefined;
+        const extra_paths = appendExtraWatchPaths(.{ .check = args }, &extra_buf);
+
+        if (try readDefaultAppSource(ctx, args.path)) |source| {
+            var default_result = rocCheckDefaultAppPreserved(
+                ctx,
+                args,
+                source,
+                cache_config,
+                true,
+            ) catch |err| {
+                reporter.fail();
+                try writeWatchInputsFile(ctx, file_path, null, extra_paths);
+                return handleProcessFileError(err, stderr, args.path);
+            };
+            defer default_result.deinit(ctx.gpa);
+            const check_result = &default_result.result_with_env.check_result;
+
+            if (builtin.target.cpu.arch == .wasm32) {
+                reporter.end();
+            } else {
+                reporter.endWithBreakdown(&frontEndBreakdown(check_result.timing));
+            }
+            reporter.finish();
+
+            try writeDefaultAppCheckWatchInputs(ctx, file_path, &default_result);
+            return finishRocCheck(ctx, args, stdout, stderr, timer_start_ns, check_result);
+        }
+
+        var result_with_env = checkFileWithBuildEnvPreserved(
+            ctx,
+            args.path,
+            args.main,
+            args.time,
+            cache_config,
+            args.max_threads,
+            resolutionConfigFromLimits(args.resolve_limits),
+            null,
+            true,
+        ) catch |err| {
+            reporter.fail();
+            try writeWatchInputsFile(ctx, file_path, null, extra_paths);
+            return handleProcessFileError(err, stderr, args.path);
+        };
+        defer result_with_env.deinit(ctx.gpa);
+        const check_result = &result_with_env.check_result;
+
+        if (builtin.target.cpu.arch == .wasm32) {
+            reporter.end();
+        } else {
+            reporter.endWithBreakdown(&frontEndBreakdown(check_result.timing));
+        }
+        reporter.finish();
+
+        try writeWatchInputsFile(ctx, file_path, &result_with_env.build_env, extra_paths);
+        return finishRocCheck(ctx, args, stdout, stderr, timer_start_ns, check_result);
+    }
+
+    var check_result = if (try readDefaultAppSource(ctx, args.path)) |source|
+        rocCheckDefaultApp(ctx, args, source, cache_config) catch |err| {
+            reporter.fail();
+            return handleProcessFileError(err, stderr, args.path);
+        }
+    else
+        checkFileWithBuildEnv(
+            ctx,
+            args.path,
+            args.main,
+            args.time,
+            cache_config,
+            args.max_threads,
+            resolutionConfigFromLimits(args.resolve_limits),
+            null,
+        ) catch |err| {
+            reporter.fail();
+            return handleProcessFileError(err, stderr, args.path);
+        };
     defer check_result.deinit(ctx.gpa);
 
     if (builtin.target.cpu.arch == .wasm32) {
@@ -8853,60 +12399,7 @@ fn rocCheck(ctx: *CliCtx, args: cli_args.CheckArgs) anyerror!void {
     }
     reporter.finish();
 
-    const elapsed = @as(u64, @intCast(std.Io.Timestamp.now(ctx.io.std_io, .real).nanoseconds - timer_start_ns));
-
-    // Render reports grouped by module
-    for (check_result.reports) |module| {
-        for (module.reports) |*report| {
-
-            // Render the diagnostic report to stderr
-            try reporting.renderReportToTerminal(report, stderr, ColorPalette.ANSI, reporting.ReportingConfig.initColorTerminal());
-        }
-    }
-
-    // Flush stderr to ensure all error output is visible
-    ctx.io.flush();
-
-    if (check_result.error_count > 0 or check_result.warning_count > 0) {
-        stderr.writeAll("\n") catch {};
-        stderr.print("Found {} error(s) and {} warning(s) in ", .{
-            check_result.error_count,
-            check_result.warning_count,
-        }) catch {};
-        formatElapsedTimeMs(stderr, elapsed) catch {};
-        stderr.print(" for {s}.\n", .{args.path}) catch {};
-
-        // Print verbose stats if requested
-        if (args.verbose) {
-            printVerboseStats(stderr, &check_result);
-        }
-
-        // Flush before exit
-        ctx.io.flush();
-
-        // Exit with code 1 for errors, code 2 for warnings only
-        if (check_result.error_count > 0) {
-            return error.CheckFailed;
-        } else {
-            std.process.exit(2);
-        }
-    } else {
-        stdout.print("No errors found in ", .{}) catch {};
-        formatElapsedTimeMs(stdout, elapsed) catch {};
-        stdout.print(" for {s}\n", .{args.path}) catch {};
-
-        // Print verbose stats if requested
-        if (args.verbose) {
-            printVerboseStats(stdout, &check_result);
-        }
-
-        ctx.io.flush();
-    }
-
-    // Print timing breakdown if requested
-    if (args.time) {
-        printTimingBreakdown(stdout, if (builtin.target.cpu.arch == .wasm32) null else check_result.timing);
-    }
+    return finishRocCheck(ctx, args, stdout, stderr, timer_start_ns, &check_result);
 }
 
 fn printTimingBreakdown(writer: anytype, timing: ?CheckTimingInfo) void {
@@ -8968,7 +12461,7 @@ fn printVerboseStats(writer: anytype, result: *const CheckResult) void {
 ///
 /// Single-threaded blocking accept loop on 127.0.0.1:8080. GET-only.
 /// Files are streamed up to a 10 MB cap; anything larger returns 500.
-fn serveDocumentation(ctx: *CliCtx, docs_dir: []const u8) anyerror!void {
+fn serveDocumentation(ctx: *CliCtx, docs_dir: []const u8) CliMainError!void {
     const stdout = ctx.io.stdout();
     const io = ctx.io.std_io;
 
@@ -8994,7 +12487,7 @@ fn serveDocumentation(ctx: *CliCtx, docs_dir: []const u8) anyerror!void {
 }
 
 /// Handle a single HTTP connection. Closes the stream before returning.
-fn handleConnection(ctx: *CliCtx, stream: std.Io.net.Stream, docs_dir: []const u8) anyerror!void {
+fn handleConnection(ctx: *CliCtx, stream: std.Io.net.Stream, docs_dir: []const u8) CliMainError!void {
     const io = ctx.io.std_io;
     defer stream.close(io);
 
@@ -9115,7 +12608,7 @@ fn sendResponse(
     try w.flush();
 }
 
-fn rocDocs(ctx: *CliCtx, args: cli_args.DocsArgs) anyerror!void {
+fn rocDocs(ctx: *CliCtx, args: cli_args.DocsArgs) CliMainError!void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -9135,10 +12628,13 @@ fn rocDocs(ctx: *CliCtx, args: cli_args.DocsArgs) anyerror!void {
     var result_with_env = checkFileWithBuildEnvPreserved(
         ctx,
         args.path,
+        null,
         args.time,
         cache_config,
         null, // max_threads: use default (single-threaded for now)
         resolutionConfigFromLimits(args.resolve_limits),
+        null,
+        false,
     ) catch |err| {
         return handleProcessFileError(err, stderr, args.path);
     };
@@ -9154,7 +12650,7 @@ fn rocDocs(ctx: *CliCtx, args: cli_args.DocsArgs) anyerror!void {
         for (module.reports) |*report| {
 
             // Render the diagnostic report to stderr
-            reporting.renderReportToTerminal(report, stderr, ColorPalette.ANSI, reporting.ReportingConfig.initColorTerminal()) catch |render_err| {
+            reporting.renderReportToTerminal(report, stderr, ColorPalette.ANSI, ctx.terminalReportConfig()) catch |render_err| {
                 stderr.print("Error rendering diagnostic report: {}", .{render_err}) catch {};
                 // Fallback to just printing the title
                 stderr.print("  {s}", .{report.title}) catch {};
@@ -9204,7 +12700,7 @@ fn generateDocs(
     build_env: *compile.BuildEnv,
     module_path: []const u8,
     base_output_dir: []const u8,
-) anyerror!void {
+) CliMainError!void {
     const DocModel = docs.DocModel;
     const extract = docs.extract;
 
@@ -9221,6 +12717,13 @@ fn generateDocs(
 
     var is_package = false;
 
+    // Track why modules were dropped so a zero-module result can explain itself
+    // instead of silently writing an empty docs site.
+    var modules_seen: usize = 0;
+    var skipped_platform: usize = 0;
+    var skipped_package: usize = 0;
+    var extract_failed: usize = 0;
+
     var sched_iter = build_env.schedulers.iterator();
     while (sched_iter.next()) |sched_entry| {
         // Docs show the alias the root uses for a package, not its internal
@@ -9230,9 +12733,12 @@ fn generateDocs(
 
         for (package_env.modules.items) |*module_state| {
             if (module_state.moduleEnv()) |mod_env| {
+                modules_seen += 1;
+
                 // Skip platform main.roc modules when documenting an app
                 // Platform modules are still included when documenting a platform directly
                 if (mod_env.module_kind == .platform and !is_documenting_platform) {
+                    skipped_platform += 1;
                     continue;
                 }
 
@@ -9240,11 +12746,13 @@ fn generateDocs(
                 // are exposed and don't contain docs of their own.
                 if (mod_env.module_kind == .package) {
                     is_package = true;
+                    skipped_package += 1;
                     continue;
                 }
 
                 var mod_docs = extract.extractModuleDocs(ctx.gpa, mod_env, sched_pkg_name, module_state.path) catch |err| {
                     std.debug.print("Warning: failed to extract docs for module {s}: {}\n", .{ module_state.name, err });
+                    extract_failed += 1;
                     continue;
                 };
                 module_docs_list.append(ctx.gpa, mod_docs) catch {
@@ -9253,6 +12761,34 @@ fn generateDocs(
                 };
             }
         }
+    }
+
+    // If no documentable modules were collected, fail loudly instead of
+    // writing an empty docs site, and explain why so the cause is actionable
+    // rather than a silent empty index.html.
+    if (module_docs_list.items.len == 0) {
+        std.debug.print("Error: found no documentable modules in '{s}'.\n", .{module_path});
+        if (modules_seen == 0) {
+            // The file compiled (any check errors would have aborted earlier),
+            // yet no module was scheduled to document. This happens when the
+            // source's module name shadows a compiler builtin (e.g. a file
+            // declaring `Builtin`) or otherwise isn't built as a standalone
+            // module — there are no canonicalization or type errors to report.
+            std.debug.print(
+                "  The file compiled successfully but produced no standalone module to document.\n" ++
+                    "  This typically means its module name shadows a compiler builtin, or it is a\n" ++
+                    "  builtin/dependency file that is only documented as part of its owning package.\n",
+                .{},
+            );
+        } else {
+            // Modules existed but every one was filtered out; report the
+            // breakdown so the user knows which filter dropped them.
+            std.debug.print(
+                "  Saw {d} module(s), all skipped: {d} platform, {d} package definition, {d} failed extraction.\n",
+                .{ modules_seen, skipped_platform, skipped_package, extract_failed },
+            );
+        }
+        return error.DocsFailed;
     }
 
     // Modules are collected in package hash-map order, which is not
@@ -9323,12 +12859,191 @@ test {
     _ = @import("linker.zig");
 }
 
+test "readWatchInputsFile reports missing child watch input output" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    var io_state = Io.create(testing.io);
+    var ctx = CliCtx.init(allocator, arena.allocator(), &io_state, .check);
+    ctx.initIo();
+    defer ctx.deinit();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const tmp_root = try tmp.dir.realPathFileAlloc(testing.io, ".", allocator);
+    defer allocator.free(tmp_root);
+
+    const missing_path = try std.fs.path.join(allocator, &.{ tmp_root, "missing-watch-inputs" });
+    defer allocator.free(missing_path);
+
+    try testing.expectError(error.WatchInputsMissing, readWatchInputsFile(&ctx, missing_path, &.{}));
+}
+
+test "readWatchInputsFile parses path states and explicit extras" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    var io_state = Io.create(testing.io);
+    var ctx = CliCtx.init(allocator, arena.allocator(), &io_state, .check);
+    ctx.initIo();
+    defer ctx.deinit();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const tmp_root = try tmp.dir.realPathFileAlloc(testing.io, ".", allocator);
+    defer allocator.free(tmp_root);
+
+    const inputs_path = try std.fs.path.join(allocator, &.{ tmp_root, "watch-inputs" });
+    defer allocator.free(inputs_path);
+
+    const watched_path = try std.fs.path.join(allocator, &.{ tmp_root, "watched.roc" });
+    defer allocator.free(watched_path);
+
+    const main_path = try std.fs.path.join(allocator, &.{ tmp_root, "main.roc" });
+    defer allocator.free(main_path);
+
+    var bytes = std.ArrayList(u8).empty;
+    defer bytes.deinit(allocator);
+    try bytes.appendSlice(allocator, watch_inputs_magic);
+    try bytes.append(allocator, 0);
+    try bytes.appendSlice(allocator, watched_path);
+    try bytes.append(allocator, 0);
+    try appendSerializedWatchFileState(allocator, &bytes, .missing);
+    try bytes.append(allocator, 0);
+
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "watch-inputs", .data = bytes.items });
+
+    var input_set = try readWatchInputsFile(&ctx, inputs_path, &.{ watched_path, main_path });
+    defer input_set.deinit(&ctx);
+
+    try testing.expectEqual(@as(usize, 2), input_set.inputs.len);
+    try testing.expectEqual(@as(usize, 2), input_set.snapshot.len);
+    try testing.expectEqualStrings(watched_path, input_set.inputs[0]);
+    try testing.expectEqualStrings(main_path, input_set.inputs[1]);
+    try testing.expect(input_set.snapshot[0].state.eql(.missing));
+    try testing.expect(input_set.snapshot[1].state.eql(.missing));
+}
+
+test "watchPathIsInsideDirectory respects path boundaries" {
+    const testing = std.testing;
+
+    try testing.expect(watchPathIsInsideDirectory("/tmp/roc-watch/app.roc", "/tmp/roc-watch"));
+    try testing.expect(watchPathIsInsideDirectory("/tmp/roc-watch", "/tmp/roc-watch"));
+    try testing.expect(!watchPathIsInsideDirectory("/tmp/roc-watch-other/app.roc", "/tmp/roc-watch"));
+    try testing.expect(!watchPathIsInsideDirectory("/tmp/roc-watch", "/tmp/roc"));
+    try testing.expect(watchPathIsInsideDirectory("C:\\tmp\\roc-watch\\app.roc", "C:\\tmp\\roc-watch"));
+    try testing.expect(!watchPathIsInsideDirectory("C:\\tmp\\roc-watch-other\\app.roc", "C:\\tmp\\roc-watch"));
+}
+
+test "refreshWatchState reports stale snapshot for newly discovered input" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    var io_state = Io.create(testing.io);
+    var ctx = CliCtx.init(allocator, arena.allocator(), &io_state, .check);
+    ctx.initIo();
+    defer ctx.deinit();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const tmp_root = try tmp.dir.realPathFileAlloc(testing.io, ".", allocator);
+    defer allocator.free(tmp_root);
+
+    const watched_path = try std.fs.path.join(allocator, &.{ tmp_root, "watched.txt" });
+    defer allocator.free(watched_path);
+
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "watched.txt", .data = "old" });
+
+    const inputs = try allocator.alloc([]const u8, 1);
+    errdefer allocator.free(inputs);
+    inputs[0] = try allocator.dupe(u8, watched_path);
+    errdefer allocator.free(inputs[0]);
+
+    const snapshot = try allocator.alloc(WatchSnapshotEntry, 1);
+    errdefer allocator.free(snapshot);
+    snapshot[0] = .{ .state = try readWatchFileState(&ctx, watched_path) };
+
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "watched.txt", .data = "new" });
+
+    var signal = WatchEventSignal{};
+    var state = WatchState{};
+    defer state.deinit(&ctx);
+
+    const changed = try refreshWatchState(&ctx, &state, &signal, .{
+        .inputs = inputs,
+        .snapshot = snapshot,
+    });
+
+    try testing.expect(changed);
+}
+
+test "refreshWatchState reports stale snapshot for existing watch set" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    var io_state = Io.create(testing.io);
+    var ctx = CliCtx.init(allocator, arena.allocator(), &io_state, .check);
+    ctx.initIo();
+    defer ctx.deinit();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const tmp_root = try tmp.dir.realPathFileAlloc(testing.io, ".", allocator);
+    defer allocator.free(tmp_root);
+
+    const watched_path = try std.fs.path.join(allocator, &.{ tmp_root, "watched.txt" });
+    defer allocator.free(watched_path);
+
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "watched.txt", .data = "old" });
+
+    var signal = WatchEventSignal{};
+    var state = WatchState{};
+    defer state.deinit(&ctx);
+
+    const initial_inputs = try collectWatchInputSet(&ctx, null, &.{watched_path});
+    try testing.expect(!try refreshWatchState(&ctx, &state, &signal, initial_inputs));
+
+    const refreshed_inputs = try allocator.alloc([]const u8, 1);
+    errdefer allocator.free(refreshed_inputs);
+    refreshed_inputs[0] = try allocator.dupe(u8, watched_path);
+    errdefer allocator.free(refreshed_inputs[0]);
+
+    const refreshed_snapshot = try allocator.alloc(WatchSnapshotEntry, 1);
+    errdefer allocator.free(refreshed_snapshot);
+    refreshed_snapshot[0] = state.snapshot[0];
+
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "watched.txt", .data = "new" });
+
+    const changed = try refreshWatchState(&ctx, &state, &signal, .{
+        .inputs = refreshed_inputs,
+        .snapshot = refreshed_snapshot,
+    });
+
+    try testing.expect(changed);
+}
+
 test "appendWindowsQuotedArg" {
     const testing = std.testing;
 
     // Helper to test the quoting function
     const testQuote = struct {
-        fn run(input: []const u8, expected: []const u8) anyerror!void {
+        fn run(input: []const u8, expected: []const u8) CliMainError!void {
             var cmd = std.array_list.Managed(u8).initCapacity(testing.allocator, 64) catch unreachable;
             defer cmd.deinit();
             try appendWindowsQuotedArg(&cmd, input);
@@ -9378,7 +13093,7 @@ test "isCompilerOwnedBuiltinSourcePath detects builtin by filename and content m
     const markers = "module []\n\nStr :: [ProvidedByCompiler].{\n}\n";
 
     const expectClassified = struct {
-        fn check(gpa: Allocator, t_io: std.Io, root: []const u8, dir: std.Io.Dir, name: []const u8, data: []const u8, expected: bool) anyerror!void {
+        fn check(gpa: Allocator, t_io: std.Io, root: []const u8, dir: std.Io.Dir, name: []const u8, data: []const u8, expected: bool) CliMainError!void {
             try dir.writeFile(t_io, .{ .sub_path = name, .data = data });
             const path = try std.fs.path.join(gpa, &.{ root, name });
             defer gpa.free(path);

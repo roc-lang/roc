@@ -17,18 +17,20 @@ shorthand = FooBar.myfunc
 # EXPECTED
 MODULE HEADER DEPRECATED - generalize_alias_exposed.md:1:1:1:19
 # PROBLEMS
-**MODULE HEADER DEPRECATED**
-The `module` header is deprecated.
 
-Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
+┌──────────────────────────┐
+│ MODULE HEADER DEPRECATED ├─ The `module` header is deprecated. ─────────────┐
+└┬─────────────────────────┘                                                  │
+ │                                                                            │
+ │  module [shorthand]                                                        │
+ │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                        │
+ └─────────────────────────────────────────── generalize_alias_exposed.md:1:1 ┘
 
-Remove the `module` header and ensure your file defines a type that matches the filename.
-**generalize_alias_exposed.md:1:1:1:19:**
-```roc
-module [shorthand]
-```
-^^^^^^^^^^^^^^^^^^
+    Type modules (headerless files with a top-level type matching the filename)
+    are now the preferred way to define modules.
 
+    Remove the `module` header and ensure your file defines a type that matches
+    the filename.
 
 # TOKENS
 ~~~zig
@@ -91,7 +93,7 @@ shorthand = FooBar.myfunc
 		(e-lambda
 			(args
 				(p-assign (ident "list")))
-			(e-dispatch-call (method "len") (constraint-fn-var 39)
+			(e-dispatch-call (method "len") (constraint-fn-var 40)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "list"))))

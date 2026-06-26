@@ -30,7 +30,18 @@ jobs:
       - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # 2.2.1
         with:
           version: 0.16.0
-          use-cache: false
+          use-cache: true
+
+      - name: Cache Zig dependency packages
+        uses: actions/cache@v4 # ratchet:actions/cache@v4
+        with:
+          # See ci_zig.yml: cache Zig's fetched-package subdir under a stable
+          # build.zig.zon key so a cold runner doesn't re-download deps and hit
+          # transient HttpConnectionClosing fetch failures.
+          path: ${{ env.ZIG_GLOBAL_CACHE_DIR }}/p
+          key: zig-deps-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('build.zig.zon') }}
+          restore-keys: |
+            zig-deps-${{ runner.os }}-${{ runner.arch }}-
 
       - name: Setup MSVC (Windows)
         if: runner.os == 'Windows'
@@ -41,8 +52,8 @@ jobs:
       - name: Build roc compiler and test_runner
         uses: ./.github/actions/flaky-retry
         with:
-          command: 'zig build'
-          error_string_contains: 'EndOfStream|503|Timeout|HttpConnectionClosing|WriteFailed|build.zig.zon'
+          command: zig build
+          error_string_contains: "HttpConnectionClosing|build.zig.zon|TemporaryNameServerFailure|error: cannot download|EndOfStream|WriteFailed|503|Timeout|bad HTTP response code"
           retry_count: 3
 
       - name: Run fx platform cross-compilation tests (Unix)

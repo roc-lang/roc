@@ -18,104 +18,104 @@ PARSE ERROR - fuzz_crash_041.md:1:26:1:27
 PARSE ERROR - fuzz_crash_041.md:1:27:1:28
 PARSE ERROR - fuzz_crash_041.md:1:28:1:29
 # PROBLEMS
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
 
-**fuzz_crash_041.md:1:20:1:21:**
-```roc
-app[]{f:platform""}|(0,)|||0
-```
-                   ^
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  app[]{f:platform""}|(0,)|||0                                              │
+ │                     ‾                                                      │
+ └──────────────────────────────────────────────────── fuzz_crash_041.md:1:20 ┘
 
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_041.md:1:21:1:22:**
-```roc
-app[]{f:platform""}|(0,)|||0
-```
-                    ^
+    This is an unexpected parsing error. Please check your syntax.
 
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  app[]{f:platform""}|(0,)|||0                                              │
+ │                      ‾                                                     │
+ └──────────────────────────────────────────────────── fuzz_crash_041.md:1:21 ┘
 
-**fuzz_crash_041.md:1:22:1:23:**
-```roc
-app[]{f:platform""}|(0,)|||0
-```
-                     ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_041.md:1:23:1:24:**
-```roc
-app[]{f:platform""}|(0,)|||0
-```
-                      ^
+    This is an unexpected parsing error. Please check your syntax.
 
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  app[]{f:platform""}|(0,)|||0                                              │
+ │                       ‾                                                    │
+ └──────────────────────────────────────────────────── fuzz_crash_041.md:1:22 ┘
 
-**fuzz_crash_041.md:1:24:1:25:**
-```roc
-app[]{f:platform""}|(0,)|||0
-```
-                       ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_041.md:1:25:1:26:**
-```roc
-app[]{f:platform""}|(0,)|||0
-```
-                        ^
+    This is an unexpected parsing error. Please check your syntax.
 
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  app[]{f:platform""}|(0,)|||0                                              │
+ │                        ‾                                                   │
+ └──────────────────────────────────────────────────── fuzz_crash_041.md:1:23 ┘
 
-**fuzz_crash_041.md:1:26:1:27:**
-```roc
-app[]{f:platform""}|(0,)|||0
-```
-                         ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_041.md:1:27:1:28:**
-```roc
-app[]{f:platform""}|(0,)|||0
-```
-                          ^
+    This is an unexpected parsing error. Please check your syntax.
 
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  app[]{f:platform""}|(0,)|||0                                              │
+ │                         ‾                                                  │
+ └──────────────────────────────────────────────────── fuzz_crash_041.md:1:24 ┘
 
-**fuzz_crash_041.md:1:28:1:29:**
-```roc
-app[]{f:platform""}|(0,)|||0
-```
-                           ^
+    This is an unexpected parsing error. Please check your syntax.
 
+
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  app[]{f:platform""}|(0,)|||0                                              │
+ │                          ‾                                                 │
+ └──────────────────────────────────────────────────── fuzz_crash_041.md:1:25 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+
+
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  app[]{f:platform""}|(0,)|||0                                              │
+ │                           ‾                                                │
+ └──────────────────────────────────────────────────── fuzz_crash_041.md:1:26 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+
+
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  app[]{f:platform""}|(0,)|||0                                              │
+ │                            ‾                                               │
+ └──────────────────────────────────────────────────── fuzz_crash_041.md:1:27 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+
+
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  app[]{f:platform""}|(0,)|||0                                              │
+ │                             ‾                                              │
+ └──────────────────────────────────────────────────── fuzz_crash_041.md:1:28 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
 
 # TOKENS
 ~~~zig

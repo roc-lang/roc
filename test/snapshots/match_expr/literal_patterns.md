@@ -13,32 +13,45 @@ match Answer {
 }
 ~~~
 # EXPECTED
+UNCONDITIONAL CONDITION - literal_patterns.md:1:7:1:13
 MISSING METHOD - literal_patterns.md:5:5:5:7
 TYPE MISMATCH - literal_patterns.md:3:13:3:20
 # PROBLEMS
-**MISSING METHOD**
-This **from_numeral** method is being called on a value whose type doesn't have that method:
-**literal_patterns.md:5:5:5:7:**
-```roc
-    10 => 4
-```
-    ^^
 
-The value's type, which does not have a method named **from_numeral**, is:
+┌─────────────────────────┐
+│ UNCONDITIONAL CONDITION ├─ This match value is known at compile time, so ───┐
+└┬────────────────────────┘  this match will always inspect the same value.   │
+ │                                                                            │
+ │  match Answer {                                                            │
+ │        ‾‾‾‾‾‾                                                              │
+ └─────────────────────────────────────────────────── literal_patterns.md:1:7 ┘
 
-    [Answer, Greeting, Zero, ..]
 
-**TYPE MISMATCH**
-This string literal is being used where a non-string type is needed:
-**literal_patterns.md:3:13:3:20:**
-```roc
-    Zero => "hello"
-```
-            ^^^^^^^
 
-The type was determined to be:
+┌────────────────┐
+│ MISSING METHOD ├─ This `from_numeral` method is being called on a value ────┐
+└┬───────────────┘  whose type doesn't have that method.                      │
+ │                                                                            │
+ │  10 => 4                                                                   │
+ │  ‾‾                                                                        │
+ └─────────────────────────────────────────────────── literal_patterns.md:5:5 ┘
 
-    Dec
+    The value's type, which does not have a method named `from_numeral`, is:
+
+        [Answer, Greeting, Zero, ..]
+
+
+┌───────────────┐
+│ TYPE MISMATCH ├─ This string literal is being used where a non-string ──────┐
+└┬──────────────┘  type is needed.                                            │
+ │                                                                            │
+ │  Zero => "hello"                                                           │
+ │          ‾‾‾‾‾‾‾                                                           │
+ └────────────────────────────────────────────────── literal_patterns.md:3:13 ┘
+
+    The type was determined to be:
+
+        Dec
 
 # TOKENS
 ~~~zig

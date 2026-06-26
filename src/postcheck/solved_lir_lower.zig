@@ -1567,6 +1567,7 @@ const Lowerer = struct {
             .field_access => |field| try self.lowerFieldAccessInto(target, field.receiver, field.field, next),
             .tuple_access => |access| try self.lowerTupleAccessInto(target, access.tuple, access.elem_index, next),
             .structural_eq => |eq| try self.lowerStructuralEqInto(target, eq.lhs, eq.rhs, eq.negated, next),
+            .structural_hash => |h| try self.lowerStructuralHashInto(target, h.value, h.hasher, next),
             .match_ => |match_| try self.lowerMatchInto(target, match_.scrutinee, match_.branches, match_.comptime_site, next),
             .if_ => |if_| try self.lowerIfInto(target, if_.branches, if_.final_else, next),
             .if_initialized_payload => |payload_switch| try self.lowerInitializedPayloadSwitchInto(target, payload_switch, next),
@@ -2288,6 +2289,12 @@ const Lowerer = struct {
             },
             else => {},
         }
+        if (lowLevelNeedsSignedIntegerLowestCheck(op)) {
+            return try self.lowerSignedIntegerLowestCheckedUnaryLowLevelInto(target, op, args, next);
+        }
+        if (lowLevelNeedsIntegerMultiplicationOverflowCheck(op)) {
+            return try self.lowerIntegerOverflowCheckedMultiplicationLowLevelInto(target, op, args, next);
+        }
         if (lowLevelNeedsIntegerZeroDenominatorCheck(op)) {
             return try self.lowerIntegerZeroDenominatorCheckedLowLevelInto(target, op, args, next);
         }
@@ -2362,6 +2369,22 @@ const Lowerer = struct {
         };
     }
 
+    fn lowLevelNeedsIntegerMultiplicationOverflowCheck(op: LIR.LowLevel) bool {
+        return switch (op) {
+            .num_times => true,
+            else => false,
+        };
+    }
+
+    fn lowLevelNeedsSignedIntegerLowestCheck(op: LIR.LowLevel) bool {
+        return switch (op) {
+            .num_negate,
+            .num_abs,
+            => true,
+            else => false,
+        };
+    }
+
     fn integerDivisionByZeroMessage(layout_idx: layout.Idx) ?[]const u8 {
         return switch (layout_idx) {
             .u8 => "U8 division by zero",
@@ -2376,6 +2399,230 @@ const Lowerer = struct {
             .i128 => "I128 division by zero",
             else => null,
         };
+    }
+
+    fn signedIntegerLowestValue(layout_idx: layout.Idx) ?i128 {
+        return switch (layout_idx) {
+            .i8 => std.math.minInt(i8),
+            .i16 => std.math.minInt(i16),
+            .i32 => std.math.minInt(i32),
+            .i64 => std.math.minInt(i64),
+            .i128 => std.math.minInt(i128),
+            else => null,
+        };
+    }
+
+    fn signedIntegerLowestOverflowMessage(op: LIR.LowLevel, layout_idx: layout.Idx) ?[]const u8 {
+        if (signedIntegerLowestValue(layout_idx) == null) return null;
+
+        return switch (op) {
+            .num_negate => "signed integer negation overflowed",
+            .num_abs => "signed integer absolute value overflowed",
+            .num_div_by,
+            .num_div_trunc_by,
+            => "signed integer division overflowed",
+            else => null,
+        };
+    }
+
+    fn lowerIntegerOverflowCheckedMultiplicationLowLevelInto(
+        self: *Lowerer,
+        target: LIR.LocalId,
+        op: LIR.LowLevel,
+        args: []const Lifted.ExprId,
+        next: LIR.CFStmtId,
+    ) Common.LowerError!LIR.CFStmtId {
+        if (args.len != 2) {
+            Common.invariant("integer multiplication reached LIR lowering with the wrong arity");
+        }
+
+        const lowered = try self.lowerExprsToTemps(args);
+        defer self.allocator.free(lowered.ids);
+
+        const lhs = lowered.ids[0];
+        const rhs = lowered.ids[1];
+        const lhs_layout = self.result.store.getLocal(lhs).layout_idx;
+        const rhs_layout = self.result.store.getLocal(rhs).layout_idx;
+        if (integerDivisionByZeroMessage(lhs_layout) == null) {
+            var current = try self.result.store.addCFStmt(.{ .assign_low_level = .{
+                .target = target,
+                .op = op,
+                .rc_effect = op.rcEffect(),
+                .args = try self.result.store.addLocalSpan(lowered.ids),
+                .next = next,
+            } });
+            current = try self.prependExprs(lowered, current);
+            return current;
+        }
+
+        const zero = try self.addLocalForLayout(rhs_layout);
+        const rhs_is_zero = try self.addLocalForLayout(.bool);
+        const quotient = try self.addLocalForLayout(lhs_layout);
+        const quotient_matches_lhs = try self.addLocalForLayout(.bool);
+
+        const crash_stmt = try self.result.store.addCFStmt(.{ .crash = .{
+            .msg = try self.result.store.insertString("integer multiplication overflowed"),
+        } });
+
+        const quotient_match_switch = try self.boolSwitchNoContinuation(quotient_matches_lhs, next, crash_stmt);
+        const quotient_eq_args = [_]LIR.LocalId{ quotient, lhs };
+        const quotient_eq_stmt = try self.result.store.addCFStmt(.{ .assign_low_level = .{
+            .target = quotient_matches_lhs,
+            .op = .num_is_eq,
+            .rc_effect = LIR.LowLevel.num_is_eq.rcEffect(),
+            .args = try self.result.store.addLocalSpan(&quotient_eq_args),
+            .next = quotient_match_switch,
+        } });
+        const div_args = [_]LIR.LocalId{ target, rhs };
+        const division_check = try self.result.store.addCFStmt(.{ .assign_low_level = .{
+            .target = quotient,
+            .op = .num_div_trunc_by,
+            .rc_effect = LIR.LowLevel.num_div_trunc_by.rcEffect(),
+            .args = try self.result.store.addLocalSpan(&div_args),
+            .next = quotient_eq_stmt,
+        } });
+
+        const nonzero_check = if (signedIntegerLowestValue(lhs_layout)) |lowest_value| blk: {
+            const lowest = try self.addLocalForLayout(lhs_layout);
+            const neg_one = try self.addLocalForLayout(rhs_layout);
+            const lhs_is_lowest = try self.addLocalForLayout(.bool);
+            const rhs_is_neg_one = try self.addLocalForLayout(.bool);
+
+            const rhs_neg_one_switch = try self.boolSwitchNoContinuation(rhs_is_neg_one, crash_stmt, division_check);
+            const rhs_eq_args = [_]LIR.LocalId{ rhs, neg_one };
+            const rhs_eq_stmt = try self.result.store.addCFStmt(.{ .assign_low_level = .{
+                .target = rhs_is_neg_one,
+                .op = .num_is_eq,
+                .rc_effect = LIR.LowLevel.num_is_eq.rcEffect(),
+                .args = try self.result.store.addLocalSpan(&rhs_eq_args),
+                .next = rhs_neg_one_switch,
+            } });
+            const assign_neg_one = try self.result.store.addCFStmt(.{ .assign_literal = .{
+                .target = neg_one,
+                .value = .{ .i128_literal = .{
+                    .value = -1,
+                    .layout_idx = rhs_layout,
+                } },
+                .next = rhs_eq_stmt,
+            } });
+
+            const lhs_lowest_switch = try self.boolSwitchNoContinuation(lhs_is_lowest, assign_neg_one, division_check);
+            const lhs_eq_args = [_]LIR.LocalId{ lhs, lowest };
+            const lhs_eq_stmt = try self.result.store.addCFStmt(.{ .assign_low_level = .{
+                .target = lhs_is_lowest,
+                .op = .num_is_eq,
+                .rc_effect = LIR.LowLevel.num_is_eq.rcEffect(),
+                .args = try self.result.store.addLocalSpan(&lhs_eq_args),
+                .next = lhs_lowest_switch,
+            } });
+            break :blk try self.result.store.addCFStmt(.{ .assign_literal = .{
+                .target = lowest,
+                .value = .{ .i128_literal = .{
+                    .value = lowest_value,
+                    .layout_idx = lhs_layout,
+                } },
+                .next = lhs_eq_stmt,
+            } });
+        } else division_check;
+
+        const zero_switch = try self.boolSwitchNoContinuation(rhs_is_zero, next, nonzero_check);
+        const zero_eq_args = [_]LIR.LocalId{ rhs, zero };
+        const zero_eq_stmt = try self.result.store.addCFStmt(.{ .assign_low_level = .{
+            .target = rhs_is_zero,
+            .op = .num_is_eq,
+            .rc_effect = LIR.LowLevel.num_is_eq.rcEffect(),
+            .args = try self.result.store.addLocalSpan(&zero_eq_args),
+            .next = zero_switch,
+        } });
+        const assign_zero = try self.result.store.addCFStmt(.{ .assign_literal = .{
+            .target = zero,
+            .value = .{ .i128_literal = .{
+                .value = 0,
+                .layout_idx = rhs_layout,
+            } },
+            .next = zero_eq_stmt,
+        } });
+
+        const raw_args = [_]LIR.LocalId{ lhs, rhs };
+        var current = try self.result.store.addCFStmt(.{ .assign_low_level = .{
+            .target = target,
+            .op = op,
+            .rc_effect = op.rcEffect(),
+            .args = try self.result.store.addLocalSpan(&raw_args),
+            .next = assign_zero,
+        } });
+        current = try self.prependExprs(lowered, current);
+        return current;
+    }
+
+    fn lowerSignedIntegerLowestCheckedUnaryLowLevelInto(
+        self: *Lowerer,
+        target: LIR.LocalId,
+        op: LIR.LowLevel,
+        args: []const Lifted.ExprId,
+        next: LIR.CFStmtId,
+    ) Common.LowerError!LIR.CFStmtId {
+        if (args.len != 1) {
+            Common.invariant("signed integer unary operation reached LIR lowering with the wrong arity");
+        }
+
+        const lowered = try self.lowerExprsToTemps(args);
+        defer self.allocator.free(lowered.ids);
+
+        const source = lowered.ids[0];
+        const source_layout = self.result.store.getLocal(source).layout_idx;
+        const lowest_value = signedIntegerLowestValue(source_layout) orelse {
+            var current = try self.result.store.addCFStmt(.{ .assign_low_level = .{
+                .target = target,
+                .op = op,
+                .rc_effect = op.rcEffect(),
+                .args = try self.result.store.addLocalSpan(lowered.ids),
+                .next = next,
+            } });
+            current = try self.prependExprs(lowered, current);
+            return current;
+        };
+        const crash_message = signedIntegerLowestOverflowMessage(op, source_layout) orelse {
+            Common.invariant("signed integer unary operation did not have an overflow message");
+        };
+
+        const lowest = try self.addLocalForLayout(source_layout);
+        const is_lowest = try self.addLocalForLayout(.bool);
+
+        const raw_args = [_]LIR.LocalId{source};
+        const raw_stmt = try self.result.store.addCFStmt(.{ .assign_low_level = .{
+            .target = target,
+            .op = op,
+            .rc_effect = op.rcEffect(),
+            .args = try self.result.store.addLocalSpan(&raw_args),
+            .next = next,
+        } });
+
+        const crash_stmt = try self.result.store.addCFStmt(.{ .crash = .{
+            .msg = try self.result.store.insertString(crash_message),
+        } });
+
+        const switch_stmt = try self.boolSwitchNoContinuation(is_lowest, crash_stmt, raw_stmt);
+
+        const eq_args = [_]LIR.LocalId{ source, lowest };
+        const eq_stmt = try self.result.store.addCFStmt(.{ .assign_low_level = .{
+            .target = is_lowest,
+            .op = .num_is_eq,
+            .rc_effect = LIR.LowLevel.num_is_eq.rcEffect(),
+            .args = try self.result.store.addLocalSpan(&eq_args),
+            .next = switch_stmt,
+        } });
+
+        var current = try self.result.store.addCFStmt(.{ .assign_literal = .{
+            .target = lowest,
+            .value = .{ .i128_literal = .{
+                .value = lowest_value,
+                .layout_idx = source_layout,
+            } },
+            .next = eq_stmt,
+        } });
+        current = try self.prependExprs(lowered, current);
+        return current;
     }
 
     fn lowerIntegerZeroDenominatorCheckedLowLevelInto(
@@ -2395,6 +2642,7 @@ const Lowerer = struct {
         const lhs = lowered.ids[0];
         const rhs = lowered.ids[1];
         const rhs_layout = self.result.store.getLocal(rhs).layout_idx;
+        const lhs_layout = self.result.store.getLocal(lhs).layout_idx;
         const crash_message = integerDivisionByZeroMessage(rhs_layout) orelse {
             var current = try self.result.store.addCFStmt(.{ .assign_low_level = .{
                 .target = target,
@@ -2419,11 +2667,75 @@ const Lowerer = struct {
             .next = next,
         } });
 
+        const normal_stmt = if (signedIntegerLowestValue(lhs_layout)) |lowest_value| blk: {
+            const overflow_body = switch (op) {
+                .num_div_by,
+                .num_div_trunc_by,
+                => try self.result.store.addCFStmt(.{ .crash = .{
+                    .msg = try self.result.store.insertString(signedIntegerLowestOverflowMessage(op, lhs_layout) orelse {
+                        Common.invariant("signed integer division operation did not have an overflow message");
+                    }),
+                } }),
+                .num_rem_by,
+                .num_mod_by,
+                => try self.result.store.addCFStmt(.{ .assign_literal = .{
+                    .target = target,
+                    .value = .{ .i128_literal = .{
+                        .value = 0,
+                        .layout_idx = lhs_layout,
+                    } },
+                    .next = next,
+                } }),
+                else => div_stmt,
+            };
+
+            const lowest = try self.addLocalForLayout(lhs_layout);
+            const neg_one = try self.addLocalForLayout(rhs_layout);
+            const lhs_is_lowest = try self.addLocalForLayout(.bool);
+            const rhs_is_neg_one = try self.addLocalForLayout(.bool);
+
+            const rhs_neg_one_switch = try self.boolSwitchNoContinuation(rhs_is_neg_one, overflow_body, div_stmt);
+            const rhs_eq_args = [_]LIR.LocalId{ rhs, neg_one };
+            const rhs_eq_stmt = try self.result.store.addCFStmt(.{ .assign_low_level = .{
+                .target = rhs_is_neg_one,
+                .op = .num_is_eq,
+                .rc_effect = LIR.LowLevel.num_is_eq.rcEffect(),
+                .args = try self.result.store.addLocalSpan(&rhs_eq_args),
+                .next = rhs_neg_one_switch,
+            } });
+            const assign_neg_one = try self.result.store.addCFStmt(.{ .assign_literal = .{
+                .target = neg_one,
+                .value = .{ .i128_literal = .{
+                    .value = -1,
+                    .layout_idx = rhs_layout,
+                } },
+                .next = rhs_eq_stmt,
+            } });
+
+            const lhs_lowest_switch = try self.boolSwitchNoContinuation(lhs_is_lowest, assign_neg_one, div_stmt);
+            const lhs_eq_args = [_]LIR.LocalId{ lhs, lowest };
+            const lhs_eq_stmt = try self.result.store.addCFStmt(.{ .assign_low_level = .{
+                .target = lhs_is_lowest,
+                .op = .num_is_eq,
+                .rc_effect = LIR.LowLevel.num_is_eq.rcEffect(),
+                .args = try self.result.store.addLocalSpan(&lhs_eq_args),
+                .next = lhs_lowest_switch,
+            } });
+            break :blk try self.result.store.addCFStmt(.{ .assign_literal = .{
+                .target = lowest,
+                .value = .{ .i128_literal = .{
+                    .value = lowest_value,
+                    .layout_idx = lhs_layout,
+                } },
+                .next = lhs_eq_stmt,
+            } });
+        } else div_stmt;
+
         const crash_stmt = try self.result.store.addCFStmt(.{ .crash = .{
             .msg = try self.result.store.insertString(crash_message),
         } });
 
-        const switch_stmt = try self.boolSwitchNoContinuation(is_zero, crash_stmt, div_stmt);
+        const switch_stmt = try self.boolSwitchNoContinuation(is_zero, crash_stmt, normal_stmt);
 
         const eq_args = [_]LIR.LocalId{ rhs, zero };
         const eq_stmt = try self.result.store.addCFStmt(.{ .assign_low_level = .{
@@ -2498,6 +2810,59 @@ const Lowerer = struct {
         var current = try self.lowerEqLocalsInto(target, lhs_local, rhs_local, lhs_ty, negated, next);
         current = try self.lowerExprInto(rhs_local, rhs, current);
         return try self.lowerExprInto(lhs_local, lhs, current);
+    }
+
+    fn lowerStructuralHashInto(self: *Lowerer, target: LIR.LocalId, value: Lifted.ExprId, hasher: Lifted.ExprId, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
+        const value_ty = try self.lowerExprTy(value);
+        const value_local = try self.addTemp(value_ty);
+        const hasher_local = try self.addTemp(try self.lowerExprTy(hasher));
+        var current = try self.lowerHashLocalsInto(target, value_local, hasher_local, value_ty, next);
+        current = try self.lowerExprInto(hasher_local, hasher, current);
+        return try self.lowerExprInto(value_local, value, current);
+    }
+
+    /// Feed `value` (of `value_ty`) into `hasher`, writing the resulting Hasher
+    /// into `target`. Aggregate types are decomposed in Monotype lowering, so
+    /// this only ever sees a scalar/str/zst leaf or a transparent nominal wrapper.
+    fn lowerHashLocalsInto(self: *Lowerer, target: LIR.LocalId, value: LIR.LocalId, hasher: LIR.LocalId, value_ty: Type.TypeId, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
+        return switch (self.types.get(value_ty)) {
+            .primitive => |primitive| try self.lowerPrimitiveHashLocalsInto(target, value, hasher, primitive, next),
+            // Hashing a zero-sized value contributes nothing; thread the hasher through.
+            .zst => try self.assignLocal(target, hasher, next),
+            .named => |named| blk: {
+                const backing = named.backing orelse Common.invariant("named hash reached direct LIR without runtime backing");
+                break :blk try self.lowerHashLocalsInto(target, value, hasher, backing.ty, next);
+            },
+            .record,
+            .tuple,
+            .tag_union,
+            .capture_record,
+            .list,
+            .box,
+            .callable,
+            .erased_fn,
+            .erased_capture_ptr,
+            => Common.invariant("aggregate/owned hash reached direct LIR structural hash lowering"),
+        };
+    }
+
+    fn lowerPrimitiveHashLocalsInto(
+        self: *Lowerer,
+        target: LIR.LocalId,
+        value: LIR.LocalId,
+        hasher: LIR.LocalId,
+        primitive: MonoType.Primitive,
+        next: LIR.CFStmtId,
+    ) Common.LowerError!LIR.CFStmtId {
+        const op = Common.hasherWriteOp(primitive);
+        const args = [_]LIR.LocalId{ hasher, value };
+        return try self.result.store.addCFStmt(.{ .assign_low_level = .{
+            .target = target,
+            .op = op,
+            .rc_effect = op.rcEffect(),
+            .args = try self.result.store.addLocalSpan(&args),
+            .next = next,
+        } });
     }
 
     fn lowerMatchInto(

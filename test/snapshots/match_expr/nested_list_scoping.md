@@ -13,21 +13,22 @@ match nestedList {
 ~~~
 # EXPECTED
 MISSING METHOD - nested_list_scoping.md:4:17:4:22
- - :0:0:0:0
 # PROBLEMS
-**MISSING METHOD**
-The value before this ***** operator has a type that doesn't have a **times** method:
-**nested_list_scoping.md:4:17:4:22:**
-```roc
-    [x, [y]] => x * y
-```
-                ^^^^^
 
-The value's type, which does not have a method named **times**, is:
+┌────────────────┐
+│ MISSING METHOD ├─ The value before this `*` operator has a type that ───────┐
+└┬───────────────┘  doesn't have a `times` method.                            │
+ │                                                                            │
+ │  [x, [y]] => x * y                                                         │
+ │              ‾‾‾‾‾                                                         │
+ └─────────────────────────────────────────────── nested_list_scoping.md:4:17 ┘
 
-    List(_a)
+    The value's type, which does not have a method named `times`, is:
 
-**Hint:** The ***** operator calls a method named **times** on the value preceding it, passing the value after the operator as the one argument.
+        List(_a)
+
+    Hint: The `*` operator calls a method named `times` on the value preceding
+    it, passing the value after the operator as the one argument.
 
 # TOKENS
 ~~~zig

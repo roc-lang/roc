@@ -811,7 +811,12 @@ pub fn floatToStrBytes(buf: []u8, val_bits: u64, is_f32: bool) []const u8 {
     };
 }
 
-fn expectFloatToStr(comptime T: type, value: T, expected: []const u8) anyerror!void {
+const FloatToStrTestError = error{
+    InvalidCharacter,
+    TestExpectedEqual,
+};
+
+fn expectFloatToStr(comptime T: type, value: T, expected: []const u8) FloatToStrTestError!void {
     var buf: [400]u8 = undefined;
     const val_bits: u64 = if (T == f32)
         @as(u64, @as(u32, @bitCast(value)))
@@ -2412,7 +2417,7 @@ pub fn strReleaseExcessCapacity(
     }
 }
 
-fn expectOk(result: FromUtf8Try) anyerror!void {
+fn expectOk(result: FromUtf8Try) error{TestExpectedEqual}!void {
     try std.testing.expectEqual(result.is_ok, true);
 }
 
@@ -3735,7 +3740,7 @@ fn expectErr(
     err: Utf8DecodeError,
     problem: Utf8ByteProblem,
     test_env: *TestEnv,
-) anyerror!void {
+) error{ TestExpectedError, TestUnexpectedError, TestExpectedEqual }!void {
     const str_ptr = @as([*]u8, @ptrCast(list.bytes));
     const len = list.length;
 

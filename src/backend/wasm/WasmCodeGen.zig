@@ -431,6 +431,15 @@ list_reserve_import: ?u32 = null,
 list_reverse_import: ?u32 = null,
 list_replace_import: ?u32 = null,
 list_swap_import: ?u32 = null,
+/// Wasm function indices for the imported hasher host functions.
+dict_pseudo_seed_import: ?u32 = null,
+hasher_finish_import: ?u32 = null,
+hasher_write_u64_import: ?u32 = null,
+hasher_write_u128_import: ?u32 = null,
+hasher_write_f32_bits_import: ?u32 = null,
+hasher_write_f64_bits_import: ?u32 = null,
+hasher_write_bytes_import: ?u32 = null,
+hasher_write_str_import: ?u32 = null,
 /// Configurable wasm stack size in bytes (default 1MB).
 wasm_stack_bytes: u32 = 1024 * 1024,
 /// Configurable wasm memory pages (0 = auto-compute from stack size).
@@ -443,6 +452,9 @@ stack_pointer_symbol: ?SymbolIndex = null,
 indirect_table_symbol: ?SymbolIndex = null,
 /// Whether generated static-data addresses must remain relocatable for object output.
 relocatable_object: bool = false,
+/// Whether final in-memory codegen should still emit relocation edges for
+/// static-data addresses so final DCE can trace data liveness explicitly.
+track_static_data_addresses: bool = false,
 pub fn init(allocator: Allocator, store: *const LirStore, layout_store: *const LayoutStore) Self {
     return .{
         .allocator = allocator,
@@ -502,6 +514,13 @@ pub fn configureTableReloc(self: *Self, symbol: SymbolIndex) void {
 /// Configure generated data-address operands for relocatable object output.
 pub fn configureRelocatableObject(self: *Self) void {
     self.relocatable_object = true;
+}
+
+/// Configure final in-memory codegen to keep explicit relocation edges from
+/// instructions to static data. `resolveRelocations()` still patches the known
+/// final address before encode; the relocation entry exists for DCE liveness.
+pub fn configureStaticDataAddressTracking(self: *Self) void {
+    self.track_static_data_addresses = true;
 }
 
 pub fn deinit(self: *Self) void {
@@ -814,11 +833,11 @@ fn emitHasherU128Parts(self: *Self, value: ProcLocalId) Allocator.Error!void {
 fn emitHasherLowLevel(self: *Self, op: lir.LowLevel, args: []const ProcLocalId) Allocator.Error!void {
     switch (op) {
         .dict_pseudo_seed => {
-            try self.emitBuiltinCall(.dict_pseudo_seed, null);
+            try self.emitBuiltinCall(.dict_pseudo_seed, self.dict_pseudo_seed_import);
         },
         .hasher_finish => {
             try self.emitHasherState(args[0]);
-            try self.emitBuiltinCall(.hasher_finish, null);
+            try self.emitBuiltinCall(.hasher_finish, self.hasher_finish_import);
         },
         .hasher_write_bool,
         .hasher_write_u8,
@@ -834,19 +853,19 @@ fn emitHasherLowLevel(self: *Self, op: lir.LowLevel, args: []const ProcLocalId) 
             try self.emitI32Const(@intCast(hasherDomain(op)));
             try self.emitHasherScalarAsI64(args[1]);
             try self.emitI32Const(@intCast(hasherWidth(op)));
-            try self.emitBuiltinCall(.hasher_write_u64, null);
+            try self.emitBuiltinCall(.hasher_write_u64, self.hasher_write_u64_import);
             try self.emitHasherRecordFromI64();
         },
         .hasher_write_f32 => {
             try self.emitHasherState(args[0]);
             try self.emitHasherFloatBits(args[1], true);
-            try self.emitBuiltinCall(.hasher_write_f32_bits, null);
+            try self.emitBuiltinCall(.hasher_write_f32_bits, self.hasher_write_f32_bits_import);
             try self.emitHasherRecordFromI64();
         },
         .hasher_write_f64 => {
             try self.emitHasherState(args[0]);
             try self.emitHasherFloatBits(args[1], false);
-            try self.emitBuiltinCall(.hasher_write_f64_bits, null);
+            try self.emitBuiltinCall(.hasher_write_f64_bits, self.hasher_write_f64_bits_import);
             try self.emitHasherRecordFromI64();
         },
         .hasher_write_u128,
@@ -856,7 +875,7 @@ fn emitHasherLowLevel(self: *Self, op: lir.LowLevel, args: []const ProcLocalId) 
             try self.emitHasherState(args[0]);
             try self.emitI32Const(@intCast(hasherDomain(op)));
             try self.emitHasherU128Parts(args[1]);
-            try self.emitBuiltinCall(.hasher_write_u128, null);
+            try self.emitBuiltinCall(.hasher_write_u128, self.hasher_write_u128_import);
             try self.emitHasherRecordFromI64();
         },
         .hasher_write_bytes => {
@@ -869,18 +888,29 @@ fn emitHasherLowLevel(self: *Self, op: lir.LowLevel, args: []const ProcLocalId) 
             try self.emitI32Const(@intCast(hasherDomain(op)));
             try self.emitLocalGet(fields.bytes);
             try self.emitLocalGet(fields.len);
-            try self.emitBuiltinCall(.hasher_write_bytes, null);
+            try self.emitBuiltinCall(.hasher_write_bytes, self.hasher_write_bytes_import);
             try self.emitHasherRecordFromI64();
         },
         .hasher_write_str => {
             try self.emitProcLocal(args[1]);
             const str_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
             try self.emitLocalSet(str_ptr);
-            const fields = try self.loadRocStrFields(str_ptr);
+            // Decode the string SSO-aware: a small string stores its bytes inline
+            // and its length in the high bits of the last byte, so a flat field
+            // load would read garbage. emitExtractStrPtrLen yields the correct
+            // (ptr, len) for both small and heap strings, matching every other
+            // backend's str hashing/equality and keeping cross-backend hashes equal.
+            const str_ptr_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+            const str_len_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+            try self.emitExtractStrPtrLen(str_ptr, str_ptr_local, str_len_local);
 
             try self.emitHasherState(args[0]);
-            try self.emitRocStrFields(fields);
-            try self.emitBuiltinCall(.hasher_write_str, null);
+            try self.emitLocalGet(str_ptr_local);
+            try self.emitLocalGet(str_len_local);
+            // The host import ignores capacity; pass the decoded length as a filler
+            // so the call shape stays (hasher, ptr, len, cap).
+            try self.emitLocalGet(str_len_local);
+            try self.emitBuiltinCall(.hasher_write_str, self.hasher_write_str_import);
             try self.emitHasherRecordFromI64();
         },
         else => unreachable,
@@ -1038,7 +1068,7 @@ fn externalCallsUseRelocs(self: *const Self) bool {
 
 fn emitDataAddressConst(self: *Self, address: DataAddress, addend: i32) Allocator.Error!void {
     self.currentCode().append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-    if (self.relocatable_object) {
+    if (self.relocatable_object or self.track_static_data_addresses) {
         const code_pos: u32 = @intCast(self.currentCode().items.len);
         try self.currentBody().addOffsetRelocation(
             self.allocator,
@@ -1047,7 +1077,11 @@ fn emitDataAddressConst(self: *Self, address: DataAddress, addend: i32) Allocato
             address.symbol,
             addend,
         );
-        WasmModule.appendPaddedI32(self.allocator, self.currentCode(), 0) catch return error.OutOfMemory;
+        const placeholder: i32 = if (self.relocatable_object)
+            0
+        else
+            @intCast(@as(i64, @intCast(address.offset)) + @as(i64, addend));
+        WasmModule.appendPaddedI32(self.allocator, self.currentCode(), placeholder) catch return error.OutOfMemory;
     } else {
         WasmModule.leb128WriteI32(
             self.allocator,
@@ -1259,6 +1293,35 @@ fn registerHostImports(self: *Self) Allocator.Error!void {
         &.{.i32},
     );
     self.list_eq_import = try self.module.addImport("env", "roc_list_eq", list_eq_type);
+
+    // Hasher host functions. The Hasher is a u64 seed threaded through each
+    // write; these mirror the `roc_builtins_hasher_*` C ABI in builtins/hash.zig.
+    const dict_pseudo_seed_type = try self.module.addFuncType(&.{}, &.{.i64});
+    self.dict_pseudo_seed_import = try self.module.addImport("env", "roc_dict_pseudo_seed", dict_pseudo_seed_type);
+
+    const hasher_finish_type = try self.module.addFuncType(&.{.i64}, &.{.i64});
+    self.hasher_finish_import = try self.module.addImport("env", "roc_hasher_finish", hasher_finish_type);
+
+    // (seed i64, domain i32, value i64, width i32) -> i64
+    const hasher_write_u64_type = try self.module.addFuncType(&.{ .i64, .i32, .i64, .i32 }, &.{.i64});
+    self.hasher_write_u64_import = try self.module.addImport("env", "roc_hasher_write_u64", hasher_write_u64_type);
+
+    // (seed i64, domain i32, low i64, high i64) -> i64
+    const hasher_write_u128_type = try self.module.addFuncType(&.{ .i64, .i32, .i64, .i64 }, &.{.i64});
+    self.hasher_write_u128_import = try self.module.addImport("env", "roc_hasher_write_u128", hasher_write_u128_type);
+
+    // (seed i64, bits i64) -> i64
+    const hasher_write_bits_type = try self.module.addFuncType(&.{ .i64, .i64 }, &.{.i64});
+    self.hasher_write_f32_bits_import = try self.module.addImport("env", "roc_hasher_write_f32_bits", hasher_write_bits_type);
+    self.hasher_write_f64_bits_import = try self.module.addImport("env", "roc_hasher_write_f64_bits", hasher_write_bits_type);
+
+    // (seed i64, domain i32, ptr i32, len i32) -> i64
+    const hasher_write_bytes_type = try self.module.addFuncType(&.{ .i64, .i32, .i32, .i32 }, &.{.i64});
+    self.hasher_write_bytes_import = try self.module.addImport("env", "roc_hasher_write_bytes", hasher_write_bytes_type);
+
+    // (seed i64, ptr i32, len i32, cap i32) -> i64
+    const hasher_write_str_type = try self.module.addFuncType(&.{ .i64, .i32, .i32, .i32 }, &.{.i64});
+    self.hasher_write_str_import = try self.module.addImport("env", "roc_hasher_write_str", hasher_write_str_type);
 
     // RocOps function imports follow the platform C ABI: each takes a leading `*RocOps`
     // (the i32 pointer to the RocOps struct in linear memory) followed by its natural
@@ -13872,6 +13935,11 @@ fn emitStrToUtf8(self: *Self, str_arg: ProcLocalId) Allocator.Error!void {
         try self.emitLoadOp(.i32, 4);
         try self.emitLocalSet(str_cap);
 
+        // Non-SSO Str.to_utf8 returns a List(U8) that aliases the string bytes.
+        // Retain the shared backing so dropping the list does not invalidate the
+        // input Str that ARC still owns.
+        try self.emitDataPtrIncref(str_data, 1);
+
         try self.emitLocalGet(result_ptr);
         try self.emitLocalGet(str_data);
         try self.emitStoreOp(.i32, 0);
@@ -16041,4 +16109,40 @@ test "rcAllocationLayout matches wasm32 builtin refcount allocation layout" {
     const refcounted_aligned = rcAllocationLayout(16, true);
     try expectEqual(@as(u32, 16), refcounted_aligned.data_offset);
     try expectEqual(@as(u32, 16), refcounted_aligned.allocation_alignment);
+}
+
+test "final static data address tracking keeps referenced data through DCE" {
+    const allocator = std.testing.allocator;
+    const fake_store: *const LirStore = undefined;
+    const fake_layouts: *const LayoutStore = undefined;
+
+    var codegen = Self.init(allocator, fake_store, fake_layouts);
+    defer codegen.deinit();
+    codegen.configureStaticDataAddressTracking();
+
+    const type_idx = try codegen.module.addFuncType(&.{}, &.{});
+    const defined = try codegen.module.addDefinedFunction(type_idx);
+    try codegen.module.addExport("main", .func, defined.function.raw());
+
+    const live_address = try codegen.addStaticDataSymbol(&.{ 0, 0, 0, 0, 'l', 'i', 'v', 'e' }, 4, ".rodata.live", "live.data", 4, 4);
+    _ = try codegen.addStaticDataSymbol(&.{ 0, 0, 0, 0, 'd', 'e', 'a', 'd' }, 4, ".rodata.dead", "dead.data", 4, 4);
+
+    try codegen.beginFunction(defined.local);
+    try codegen.emitDataAddressConst(live_address, 0);
+    try codegen.currentCode().append(allocator, Op.drop);
+    try codegen.currentCode().append(allocator, Op.end);
+    codegen.endFunction();
+    try codegen.flushPendingBodies();
+
+    try std.testing.expectEqual(@as(usize, 1), codegen.module.reloc_code.entries.items.len);
+    try codegen.module.resolveRelocations();
+
+    const called_fns = try allocator.alloc(bool, codegen.module.liveFunctionCount());
+    defer allocator.free(called_fns);
+    @memset(called_fns, false);
+    try codegen.module.eliminateDeadCode(called_fns);
+
+    try std.testing.expectEqual(@as(usize, 1), codegen.module.data_segments.items.len);
+    try std.testing.expect(std.mem.find(u8, codegen.module.data_segments.items[0].data, "live") != null);
+    try std.testing.expect(std.mem.find(u8, codegen.module.data_segments.items[0].data, "dead") == null);
 }

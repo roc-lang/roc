@@ -31,6 +31,7 @@ const BuiltinModules = eval.BuiltinModules;
 const module_discovery = @import("module_discovery.zig");
 const messages = @import("messages.zig");
 const roc_target = @import("roc_target");
+const watch_inputs = @import("watch_inputs.zig");
 
 const Check = check.Check;
 const CheckedArtifact = check.CheckedArtifact;
@@ -61,6 +62,13 @@ const CoreCtx = @import("ctx").CoreCtx;
 
 const parallel = base.parallel;
 const AtomicUsize = std.atomic.Value(usize);
+
+/// Errors that can occur while publishing compile-time finalization results.
+pub const PublishError = CheckedArtifact.CompileTimeFinalizer.Error;
+/// Errors that can occur while type-checking a module.
+pub const TypeCheckModuleError = Allocator.Error || PublishError || error{Internal};
+/// Errors that can occur while processing a package module.
+pub const ProcessError = Allocator.Error || error{FileNotFound} || TypeCheckModuleError;
 
 const Mutex = threading.Mutex;
 const Condition = threading.Condition;
@@ -137,6 +145,10 @@ const Phase = enum { Parse, Canonicalize, WaitingOnImports, TypeCheck, Done };
 const ModuleState = struct {
     name: []const u8, // Module name is needed for error reporting and the schedule hook
     path: []const u8,
+    /// Optional source directory used to resolve imports from this module.
+    source_dir_override: ?[]const u8 = null,
+    /// Raw source file state observed before line-ending normalization.
+    source_file_state: ?watch_inputs.State = null,
     semantic: ?OwnedSemanticState = null,
     phase: Phase = .Parse,
     imports: std.ArrayList(ModuleId),
@@ -173,6 +185,10 @@ const ModuleState = struct {
             .env = env,
             .checked_artifact = self.checkedArtifact(),
         };
+    }
+
+    pub fn canonicalSourceDir(self: *const ModuleState, fallback_root_dir: []const u8) []const u8 {
+        return self.source_dir_override orelse (std.fs.path.dirname(self.path) orelse fallback_root_dir);
     }
 
     fn replaceModuleEnv(self: *ModuleState, env: *ModuleEnv) void {
@@ -275,6 +291,9 @@ const ModuleState = struct {
             std.debug.print("[MOD DEINIT DETAIL] {s}: freeing path\n", .{self.name});
         }
         gpa.free(self.path);
+        if (self.source_dir_override) |source_dir| {
+            gpa.free(source_dir);
+        }
         if (comptime trace_build) {
             std.debug.print("[MOD DEINIT DETAIL] {s}: done\n", .{self.name});
         }
@@ -302,6 +321,7 @@ pub const SemanticModuleData = struct {
 pub const TypeCheckOutput = struct {
     checker: Check,
     checked_artifact: ?CheckedArtifact.CheckedModuleArtifact = null,
+    user_errors_allow_lowering: bool = false,
 
     pub fn deinit(self: *TypeCheckOutput) void {
         if (self.checked_artifact) |*artifact| artifact.deinit(artifact.canonical_names.allocator);
@@ -320,6 +340,7 @@ pub const TypeCheckOutput = struct {
 pub const ArtifactPublicationInputs = struct {
     available_artifacts: []const CheckedArtifact.ImportedModuleView = &.{},
     relation_artifacts: []const CheckedArtifact.ImportedModuleView = &.{},
+    platform_requirement_artifact: ?CheckedArtifact.ImportedModuleView = null,
     platform_requirement_context: ?CheckedArtifact.PlatformRequirementContextKey = null,
     platform_app_relation: ?CheckedArtifact.PlatformAppRelation = null,
     explicit_roots: []const CheckedArtifact.ExplicitRootRequestInput = &.{},
@@ -329,8 +350,30 @@ pub const ArtifactPublicationInputs = struct {
 
 fn problemBlocksCheckedArtifact(problem: check.problem.Problem) bool {
     return switch (problem) {
-        .redundant_pattern, .unmatchable_pattern, .comptime_unused_branch, .literal_defaulted => false,
+        .static_dispatch => |static_dispatch| switch (static_dispatch) {
+            .unresolved_dispatcher => |unresolved| !unresolved.runtime_error_inserted,
+            .dispatcher_not_nominal,
+            .dispatcher_does_not_impl_method,
+            .type_does_not_support_equality,
+            .recursive_dispatch,
+            => true,
+        },
+        .redundant_pattern, .unmatchable_pattern, .comptime_unused_branch, .comptime_condition, .literal_defaulted => false,
         else => true,
+    };
+}
+
+fn problemAllowsLoweringWithUserErrors(problem: check.problem.Problem) bool {
+    return switch (problem) {
+        .static_dispatch => |static_dispatch| switch (static_dispatch) {
+            .unresolved_dispatcher => |unresolved| unresolved.runtime_error_inserted,
+            .dispatcher_not_nominal,
+            .dispatcher_does_not_impl_method,
+            .type_does_not_support_equality,
+            .recursive_dispatch,
+            => false,
+        },
+        else => false,
     };
 }
 
@@ -339,6 +382,13 @@ fn checkerHasArtifactBlockingProblems(checker: *const Check) bool {
         if (problemBlocksCheckedArtifact(problem)) return true;
     }
     return false;
+}
+
+fn checkerProblemsAllowLoweringWithUserErrors(checker: *const Check) bool {
+    for (checker.problems.problems.items) |problem| {
+        if (!problemAllowsLoweringWithUserErrors(problem)) return false;
+    }
+    return true;
 }
 
 fn moduleHasArtifactBlockingCanonicalizeDiagnostics(env: *const ModuleEnv) bool {
@@ -518,6 +568,8 @@ pub const PackageEnv = struct {
     builtin_modules: *const BuiltinModules,
     /// I/O abstraction for reading sources and other filesystem/stdio operations.
     roc_ctx: CoreCtx,
+    /// Whether to retain exact source byte states for watch-mode refreshes.
+    track_watch_inputs: bool = false,
 
     lock: Mutex = Mutex.init,
     cond: Condition = Condition.init,
@@ -535,7 +587,7 @@ pub const PackageEnv = struct {
     /// ID of the root module (the module passed to buildRoot)
     root_module_id: ?ModuleId = null,
     /// First error reported by worker threads during multi-threaded processing
-    worker_error: ?anyerror = null,
+    worker_error: ?ProcessError = null,
 
     // Track module discovery order and which modules have had their reports emitted
     discovered: std.ArrayList(ModuleId),
@@ -585,6 +637,10 @@ pub const PackageEnv = struct {
             .discovered = std.ArrayList(ModuleId).empty,
             .additional_known_modules = std.ArrayList(KnownModule).empty,
         };
+    }
+
+    pub fn setWatchInputTracking(self: *PackageEnv, enabled: bool) void {
+        self.track_watch_inputs = enabled;
     }
 
     pub fn initWithResolver(
@@ -943,13 +999,13 @@ pub const PackageEnv = struct {
     }
 
     /// Public API for processing a module by name (used by BuildEnv)
-    pub fn processModuleByName(self: *PackageEnv, module_name: []const u8) anyerror!void {
+    pub fn processModuleByName(self: *PackageEnv, module_name: []const u8) ProcessError!void {
         if (self.module_names.get(module_name)) |module_id| {
             try self.process(.{ .module_id = module_id });
         }
     }
 
-    pub fn process(self: *PackageEnv, task: Task) anyerror!void {
+    pub fn process(self: *PackageEnv, task: Task) ProcessError!void {
         // In dispatch-only mode, this method is invoked by the global scheduler.
         // In local mode, it's invoked by the internal run* loops.
 
@@ -1018,11 +1074,14 @@ pub const PackageEnv = struct {
     fn doParse(self: *PackageEnv, module_id: ModuleId) (Allocator.Error || error{FileNotFound})!void {
         // Load source and init ModuleEnv
         var st = &self.modules.items[module_id];
-        const src = self.readModuleSource(st.path) catch |read_err| {
+        const source_read = self.readModuleSourceForParse(st.path) catch |read_err| {
             // Note: Let the FileNotFound error propagate naturally
             // The existing error handling will report it appropriately
+            st.source_file_state = if (self.track_watch_inputs) .missing else null;
             return read_err;
         };
+        const src = source_read.source;
+        st.source_file_state = source_read.file_state;
 
         // line starts for diagnostics and consistent positions
 
@@ -1091,9 +1150,7 @@ pub const PackageEnv = struct {
             try child.dependents.append(self.gpa, module_id);
 
             if (child_id == module_id or (try self.findPath(child_id, module_id)) != null) {
-                var rep = Report.init(self.gpa, "Import cycle detected", .runtime_error);
-                const msg = try rep.addOwnedString("This module participates in an import cycle. Cycles between modules are not allowed.");
-                try rep.addErrorMessage(msg);
+                var rep = try Report.init(self.gpa, "Import Cycle Detected", "This module participates in an import cycle. Cycles between modules are not allowed.", .runtime_error);
 
                 if (try self.findPath(child_id, module_id)) |path| {
                     defer self.gpa.free(path);
@@ -1117,9 +1174,7 @@ pub const PackageEnv = struct {
                 }
 
                 try st.reports.append(self.gpa, rep);
-                var rep_child = Report.init(self.gpa, "Import cycle detected", .runtime_error);
-                const child_msg = try rep_child.addOwnedString("This module participates in an import cycle. Cycles between modules are not allowed.");
-                try rep_child.addErrorMessage(child_msg);
+                var rep_child = try Report.init(self.gpa, "Import Cycle Detected", "This module participates in an import cycle. Cycles between modules are not allowed.", .runtime_error);
                 const edge_msg2 = try rep_child.addOwnedString("Cycle edge: ");
                 try rep_child.document.addText(edge_msg2);
                 try rep_child.document.addAnnotated(st.name, .emphasized);
@@ -1174,6 +1229,22 @@ pub const PackageEnv = struct {
         try self.enqueue(module_id);
     }
 
+    const SourceRead = struct {
+        source: []u8,
+        file_state: ?watch_inputs.State,
+    };
+
+    fn readModuleSourceForParse(self: *PackageEnv, path: []const u8) (Allocator.Error || error{FileNotFound})!SourceRead {
+        if (!self.track_watch_inputs) {
+            return .{
+                .source = try self.readModuleSource(path),
+                .file_state = null,
+            };
+        }
+
+        return try self.readModuleSourceWithState(path);
+    }
+
     fn readModuleSource(self: *PackageEnv, path: []const u8) (Allocator.Error || error{FileNotFound})![]u8 {
         const data = self.roc_ctx.readFile(path, self.gpa) catch |err| switch (err) {
             error.FileNotFound => return error.FileNotFound,
@@ -1185,6 +1256,28 @@ pub const PackageEnv = struct {
         // This reallocates to the correct size if normalization occurs, ensuring
         // proper memory management when the buffer is freed later.
         return base.source_utils.normalizeLineEndingsRealloc(self.gpa, data);
+    }
+
+    fn readModuleSourceWithState(self: *PackageEnv, path: []const u8) (Allocator.Error || error{FileNotFound})!SourceRead {
+        const data = self.roc_ctx.readFile(path, self.gpa) catch |err| switch (err) {
+            error.FileNotFound => return error.FileNotFound,
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return error.FileNotFound,
+        };
+        const file_state: watch_inputs.State = .{ .hash = watch_inputs.hashBytes(data) };
+
+        // Normalize line endings (CRLF -> LF) for consistent cross-platform behavior.
+        // This reallocates to the correct size if normalization occurs, ensuring
+        // proper memory management when the buffer is freed later.
+        const source = base.source_utils.normalizeLineEndingsRealloc(self.gpa, data) catch |err| {
+            self.gpa.free(data);
+            return err;
+        };
+
+        return .{
+            .source = source,
+            .file_state = file_state,
+        };
     }
 
     fn doCanonicalize(self: *PackageEnv, module_id: ModuleId) Allocator.Error!void {
@@ -1210,7 +1303,7 @@ pub const PackageEnv = struct {
         // canonicalize using the AST
         var canonicalize_timer = startStageTimer(self.roc_ctx.std_io);
 
-        const module_dir = std.fs.path.dirname(st.path) orelse self.root_dir;
+        const module_dir = st.canonicalSourceDir(self.root_dir);
         try canonicalizeModuleWithSiblings(
             self.roc_ctx,
             env,
@@ -1278,9 +1371,7 @@ pub const PackageEnv = struct {
 
             if (child.visit_color == 1 or child_id == module_id) {
                 // Build a report on the current module describing the cycle
-                var rep = Report.init(self.gpa, "Import cycle detected", .runtime_error);
-                const msg = try rep.addOwnedString("This module participates in an import cycle. Cycles between modules are not allowed.");
-                try rep.addErrorMessage(msg);
+                var rep = try Report.init(self.gpa, "Import Cycle Detected", "This module participates in an import cycle. Cycles between modules are not allowed.", .runtime_error);
 
                 // Build full cycle path lazily (rare path): child_id ... module_id -> child_id
                 if (try self.findPath(child_id, module_id)) |path| {
@@ -1308,9 +1399,7 @@ pub const PackageEnv = struct {
                 // Store the report on both modules for clarity
                 try st.reports.append(self.gpa, rep);
                 // Duplicate for child as well so it gets emitted too
-                var rep_child = Report.init(self.gpa, "Import cycle detected", .runtime_error);
-                const child_msg = try rep_child.addOwnedString("This module participates in an import cycle. Cycles between modules are not allowed.");
-                try rep_child.addErrorMessage(child_msg);
+                var rep_child = try Report.init(self.gpa, "Import Cycle Detected", "This module participates in an import cycle. Cycles between modules are not allowed.", .runtime_error);
                 const edge_msg2 = try rep_child.addOwnedString("Cycle edge: ");
                 try rep_child.document.addText(edge_msg2);
                 try rep_child.document.addAnnotated(st.name, .emphasized);
@@ -1659,7 +1748,7 @@ pub const PackageEnv = struct {
         imported_artifacts: []const CheckedArtifact.PublishImportArtifact,
         available_artifacts: []const CheckedArtifact.ImportedModuleView,
         explicit_roots: []const CheckedArtifact.ExplicitRootRequestInput,
-    ) anyerror!TypeCheckOutput {
+    ) TypeCheckModuleError!TypeCheckOutput {
         // Load builtin indices from the binary data generated at build time
         const builtin_indices = try builtin_loading.deserializeBuiltinIndices(check_alloc, compiled_builtins.builtin_indices_bin);
 
@@ -1700,15 +1789,27 @@ pub const PackageEnv = struct {
 
         module_envs_map.deinit();
 
-        if (moduleHasArtifactBlockingCanonicalizeDiagnostics(env) or
-            try moduleHasDuplicateTopLevelValueDefs(check_alloc, env) or
-            checkerHasArtifactBlockingProblems(&checker) or
-            !importedArtifactsCoverImportedEnvs(imported_envs, imported_artifacts))
+        const has_artifact_blocking_canonicalize_diagnostics = moduleHasArtifactBlockingCanonicalizeDiagnostics(env);
+        const has_duplicate_top_level_value_defs = try moduleHasDuplicateTopLevelValueDefs(check_alloc, env);
+        const has_artifact_blocking_check_problems = checkerHasArtifactBlockingProblems(&checker);
+        const imported_artifacts_cover_imports = importedArtifactsCoverImportedEnvs(imported_envs, imported_artifacts);
+        const user_errors_allow_lowering =
+            !has_artifact_blocking_canonicalize_diagnostics and
+            !has_duplicate_top_level_value_defs and
+            !has_artifact_blocking_check_problems and
+            imported_artifacts_cover_imports and
+            checkerProblemsAllowLoweringWithUserErrors(&checker);
+
+        if (has_artifact_blocking_canonicalize_diagnostics or
+            has_duplicate_top_level_value_defs or
+            has_artifact_blocking_check_problems or
+            !imported_artifacts_cover_imports)
         {
             _ = try checker.problems.flushPendingStaticExhaustiveness(check_alloc);
             return .{
                 .checker = checker,
                 .checked_artifact = null,
+                .user_errors_allow_lowering = false,
             };
         }
 
@@ -1731,6 +1832,7 @@ pub const PackageEnv = struct {
                 return .{
                     .checker = checker,
                     .checked_artifact = null,
+                    .user_errors_allow_lowering = false,
                 };
             },
             else => |other| return other,
@@ -1740,6 +1842,7 @@ pub const PackageEnv = struct {
         return .{
             .checker = checker,
             .checked_artifact = checked_artifact,
+            .user_errors_allow_lowering = user_errors_allow_lowering,
         };
     }
 
@@ -1749,7 +1852,7 @@ pub const PackageEnv = struct {
         imported_envs: []const *ModuleEnv,
         imported_artifacts: []const CheckedArtifact.PublishImportArtifact,
         publication: ArtifactPublicationInputs,
-    ) anyerror!CheckedArtifact.CheckedModuleArtifact {
+    ) PublishError!CheckedArtifact.CheckedModuleArtifact {
         return publishCheckedArtifactFromCheckedModuleWithStorage(
             gpa,
             env,
@@ -1767,7 +1870,7 @@ pub const PackageEnv = struct {
         imported_envs: []const *ModuleEnv,
         imported_artifacts: []const CheckedArtifact.PublishImportArtifact,
         publication: ArtifactPublicationInputs,
-    ) anyerror!CheckedArtifact.CheckedModuleArtifact {
+    ) PublishError!CheckedArtifact.CheckedModuleArtifact {
         var typed = try CheckedModules.initForRootModule(gpa, env, imported_envs);
         defer typed.modules.deinit();
         return publishFromPrebuiltModules(gpa, &typed.modules, typed.module_idx, module_env_storage, imported_artifacts, publication);
@@ -1784,7 +1887,7 @@ pub const PackageEnv = struct {
         module_env_storage: CheckedArtifact.ModuleEnvStorage,
         imported_artifacts: []const CheckedArtifact.PublishImportArtifact,
         publication: ArtifactPublicationInputs,
-    ) anyerror!CheckedArtifact.CheckedModuleArtifact {
+    ) PublishError!CheckedArtifact.CheckedModuleArtifact {
         return try CheckedArtifact.publishFromTypedModule(
             gpa,
             modules,
@@ -1794,6 +1897,7 @@ pub const PackageEnv = struct {
                 .imports = imported_artifacts,
                 .available_artifacts = publication.available_artifacts,
                 .relation_artifacts = publication.relation_artifacts,
+                .platform_requirement_artifact = publication.platform_requirement_artifact,
                 .platform_requirement_context = publication.platform_requirement_context,
                 .platform_app_relation = publication.platform_app_relation,
                 .explicit_roots = publication.explicit_roots,
@@ -1804,7 +1908,7 @@ pub const PackageEnv = struct {
         );
     }
 
-    fn doTypeCheck(self: *PackageEnv, module_id: ModuleId) anyerror!void {
+    fn doTypeCheck(self: *PackageEnv, module_id: ModuleId) TypeCheckModuleError!void {
         var st = &self.modules.items[module_id];
         var env = st.moduleEnv().?;
 

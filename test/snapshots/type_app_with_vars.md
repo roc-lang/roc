@@ -15,19 +15,20 @@ main! = |_| mapList([1,2,3,4,5])
 # EXPECTED
 TOO FEW ARGS - type_app_with_vars.md:6:13:6:33
 # PROBLEMS
-**TOO FEW ARGS**
-The `mapList` function expects 2 arguments, but it got 1 instead:
-**type_app_with_vars.md:6:13:6:33:**
-```roc
-main! = |_| mapList([1,2,3,4,5])
-```
-            ^^^^^^^^^^^^^^^^^^^^
 
-The `mapList` function has the type:
+┌──────────────┐
+│ TOO FEW ARGS ├─ The `mapList` function expects 2 arguments, but it got 1 ───┐
+└┬─────────────┘  instead.                                                    │
+ │                                                                            │
+ │  main! = |_| mapList([1,2,3,4,5])                                          │
+ │              ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                          │
+ └──────────────────────────────────────────────── type_app_with_vars.md:6:13 ┘
 
-    List(a), (a -> b) -> List(b)
+    The `mapList` function has the type:
 
-Are there any missing commas?
+        List(a), (a -> b) -> List(b)
+
+    Are there any missing commas?
 
 # TOKENS
 ~~~zig
@@ -106,7 +107,7 @@ main! = |_| mapList([1, 2, 3, 4, 5])
 			(args
 				(p-assign (ident "list"))
 				(p-assign (ident "fn")))
-			(e-dispatch-call (method "map") (constraint-fn-var 53)
+			(e-dispatch-call (method "map") (constraint-fn-var 54)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "list"))))
@@ -128,7 +129,7 @@ main! = |_| mapList([1, 2, 3, 4, 5])
 		(e-lambda
 			(args
 				(p-underscore))
-			(e-call (constraint-fn-var 250)
+			(e-call (constraint-fn-var 251)
 				(e-lookup-local
 					(p-assign (ident "mapList")))
 				(e-list

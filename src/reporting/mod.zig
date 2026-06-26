@@ -22,6 +22,7 @@ pub const renderReport = @import("renderer.zig").renderReport;
 pub const renderReportWithConfig = @import("renderer.zig").renderReportWithConfig;
 pub const renderReportToTerminal = @import("renderer.zig").renderReportToTerminal;
 pub const renderReportToMarkdown = @import("renderer.zig").renderReportToMarkdown;
+pub const renderReportToBoxPlain = @import("renderer.zig").renderReportToBoxPlain;
 pub const renderReportToHtml = @import("renderer.zig").renderReportToHtml;
 pub const renderReportToLsp = @import("renderer.zig").renderReportToLsp;
 pub const renderDocument = @import("renderer.zig").renderDocument;

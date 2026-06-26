@@ -555,11 +555,7 @@ record_layout_from_fields = |type_table, fields| {
 	var $alignment = 1
 
 	for field in fields {
-		field_layout = if field.is_padding {
-			{ size: field.size, alignment: field.alignment }
-		} else {
-			type_layout_64(type_table, field.type_id)
-		}
+		field_layout = record_field_layout_64(type_table, field)
 		if field_layout.alignment > $alignment {
 			$alignment = field_layout.alignment
 		}
@@ -570,17 +566,22 @@ record_layout_from_fields = |type_table, fields| {
 	{ size: align_forward_u64($offset, $alignment), alignment: $alignment }
 }
 
+record_field_layout_64 : List(TypeRepr), RecordField -> { size : U64, alignment : U64 }
+record_field_layout_64 = |type_table, field| {
+	if field.is_padding {
+		{ size: field.size, alignment: 1 }
+	} else {
+		type_layout_64(type_table, field.type_id)
+	}
+}
+
 record_layout_from_fields_32 : List(TypeRepr), List(RecordField) -> { size : U64, alignment : U64 }
 record_layout_from_fields_32 = |type_table, fields| {
 	var $offset = 0
 	var $alignment = 1
 
 	for field in fields {
-		field_layout = if field.is_padding {
-			{ size: field.size, alignment: field.alignment }
-		} else {
-			type_layout_32(type_table, field.type_id)
-		}
+		field_layout = record_field_layout_32(type_table, field)
 		if field_layout.alignment > $alignment {
 			$alignment = field_layout.alignment
 		}
@@ -589,6 +590,15 @@ record_layout_from_fields_32 = |type_table, fields| {
 	}
 
 	{ size: align_forward_u64($offset, $alignment), alignment: $alignment }
+}
+
+record_field_layout_32 : List(TypeRepr), RecordField -> { size : U64, alignment : U64 }
+record_field_layout_32 = |type_table, field| {
+	if field.is_padding {
+		{ size: field.size, alignment: 1 }
+	} else {
+		type_layout_32(type_table, field.type_id)
+	}
 }
 
 tag_union_layout_32 : List(TypeRepr), TagUnionRepr -> { alignment : U64, discriminant_offset : U64, size : U64 }
@@ -745,8 +755,8 @@ record_fields_for_wasm32 = |type_table, fields| {
 	List.sort_with(
 		fields,
 		|left, right| {
-			left_layout = type_layout_32(type_table, left.type_id)
-			right_layout = type_layout_32(type_table, right.type_id)
+			left_layout = record_field_layout_32(type_table, left)
+			right_layout = record_field_layout_32(type_table, right)
 			if left_layout.alignment > right_layout.alignment {
 				LT
 			} else if left_layout.alignment < right_layout.alignment {
@@ -1051,7 +1061,7 @@ decref_stmt_for_repr = |type_table, type_repr, expr| {
 					} else if is_type_refcounted(type_table, inner_id) {
 						"    decrefBoxWith(@ptrCast(${expr}), @alignOf(${inner_zig}), &${box_payload_decref_name(inner_id)}, roc_host);\n"
 					} else {
-						"    decrefBox(@ptrCast(${expr}), roc_host);\n"
+						"    decrefBoxWith(@ptrCast(${expr}), @alignOf(${inner_zig}), null, roc_host);\n"
 					}
 				}
 				Err(_) => missing_type_compile_error(inner_id, "boxed-payload decref")

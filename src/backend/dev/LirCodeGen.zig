@@ -248,6 +248,10 @@ pub const BuiltinFn = enum {
     erased_callable_decref,
     erased_callable_decref_single_thread,
     erased_callable_free,
+    hot_reload_enter,
+    hot_reload_leave,
+    hot_reload_retain_current,
+    hot_reload_erased_callable_drop,
 
     // Numeric operations
     dec_to_str,
@@ -385,6 +389,10 @@ pub const BuiltinFn = enum {
             .erased_callable_decref => "roc_builtins_erased_callable_decref",
             .erased_callable_decref_single_thread => "roc_builtins_erased_callable_decref_single_thread",
             .erased_callable_free => "roc_builtins_erased_callable_free",
+            .hot_reload_enter => "roc_builtins_hot_reload_enter",
+            .hot_reload_leave => "roc_builtins_hot_reload_leave",
+            .hot_reload_retain_current => "roc_builtins_hot_reload_retain_current",
+            .hot_reload_erased_callable_drop => "roc_builtins_hot_reload_erased_callable_drop",
 
             // Numeric operations
             .dec_to_str => "roc_builtins_dec_to_str",
@@ -900,6 +908,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// - native_execution: Code runs in-process (dev evaluator), direct function pointers work
         /// - object_file: Generating relocatable object files, use symbol references for builtins
         generation_mode: GenerationMode = .native_execution,
+
+        /// Whether shim-executed host-callable functions and boxed callbacks
+        /// participate in the hot-reload code reference protocol.
+        enable_hot_reload: bool = false,
 
         /// Whether object-file entrypoints should use the synthetic default
         /// platform runtime contract.
@@ -6307,8 +6319,22 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const result_reg = try self.allocTempGeneral();
 
             switch (op) {
-                .num_plus => try self.codegen.emitAdd(.w64, result_reg, lhs_reg, rhs_reg),
-                .num_minus => try self.codegen.emitSub(.w64, result_reg, lhs_reg, rhs_reg),
+                .num_plus => {
+                    if (comptime target.toCpuArch() == .aarch64) {
+                        try self.codegen.emit.addsRegRegReg(.w64, result_reg, lhs_reg, rhs_reg);
+                    } else {
+                        try self.codegen.emitAdd(.w64, result_reg, lhs_reg, rhs_reg);
+                    }
+                    try self.emitCheckedIntAddSubOverflow(op, result_reg, operand_layout, is_unsigned);
+                },
+                .num_minus => {
+                    if (comptime target.toCpuArch() == .aarch64) {
+                        try self.codegen.emit.subsRegRegReg(.w64, result_reg, lhs_reg, rhs_reg);
+                    } else {
+                        try self.codegen.emitSub(.w64, result_reg, lhs_reg, rhs_reg);
+                    }
+                    try self.emitCheckedIntAddSubOverflow(op, result_reg, operand_layout, is_unsigned);
+                },
                 .num_times => try self.codegen.emitMul(.w64, result_reg, lhs_reg, rhs_reg),
                 .num_div_by, .num_div_trunc_by => {
                     // For integers, div and div_trunc are the same (integer division truncates)
@@ -6384,6 +6410,90 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return .{ .general_reg = result_reg };
         }
 
+        fn emitCheckedIntAddSubOverflow(
+            self: *Self,
+            op: lir.LowLevel,
+            result_reg: GeneralReg,
+            operand_layout: layout.Idx,
+            is_unsigned: bool,
+        ) Allocator.Error!void {
+            const message = switch (op) {
+                .num_plus => "Integer addition overflowed!",
+                .num_minus => "Integer subtraction overflowed!",
+                else => unreachable,
+            };
+
+            switch (operand_layout) {
+                .u8 => try self.emitUnsignedIntRangeCheck(result_reg, 255, message),
+                .u16 => try self.emitUnsignedIntRangeCheck(result_reg, 65_535, message),
+                .u32 => try self.emitUnsignedIntRangeCheck(result_reg, 4_294_967_295, message),
+                .i8 => try self.emitSignedIntRangeCheck(result_reg, -128, 127, message),
+                .i16 => try self.emitSignedIntRangeCheck(result_reg, -32_768, 32_767, message),
+                .i32 => try self.emitSignedIntRangeCheck(result_reg, -2_147_483_648, 2_147_483_647, message),
+                .u64 => try self.emitCrashOnCond(switch (op) {
+                    .num_plus => condUnsignedAddOverflow(),
+                    .num_minus => condUnsignedSubOverflow(),
+                    else => unreachable,
+                }, message),
+                .i64 => try self.emitCrashOnCond(condOverflow(), message),
+                else => {
+                    if (builtin.mode == .Debug) {
+                        std.debug.assert(!is_unsigned or operand_layout == .u128);
+                    }
+                },
+            }
+        }
+
+        fn emitUnsignedIntRangeCheck(self: *Self, result_reg: GeneralReg, max_value: i64, message: []const u8) Allocator.Error!void {
+            try self.emitCmpRegImm64(result_reg, max_value);
+            try self.emitCrashOnCond(condAbove(), message);
+        }
+
+        fn emitSignedIntRangeCheck(self: *Self, result_reg: GeneralReg, min_value: i64, max_value: i64, message: []const u8) Allocator.Error!void {
+            try self.emitCmpRegImm64(result_reg, min_value);
+            try self.emitCrashOnCond(condLess(), message);
+            try self.emitCmpRegImm64(result_reg, max_value);
+            try self.emitCrashOnCond(condGreater(), message);
+        }
+
+        fn emitCmpRegImm64(self: *Self, reg: GeneralReg, value: i64) Allocator.Error!void {
+            const temp = try self.allocTempGeneral();
+            defer self.codegen.freeGeneral(temp);
+            try self.codegen.emitLoadImm(temp, value);
+            try self.emitCmpReg(reg, temp);
+        }
+
+        fn emitCrashOnCond(self: *Self, cond: Condition, message: []const u8) Allocator.Error!void {
+            const crash_patch = try self.codegen.emitCondJump(cond);
+            const done_patch = try self.codegen.emitJump();
+            self.codegen.patchJump(crash_patch, self.codegen.currentOffset());
+            try self.emitRocCrash(message);
+            try self.emitTrap();
+            self.codegen.patchJump(done_patch, self.codegen.currentOffset());
+        }
+
+        fn emitCheckedI128AddSubOverflow(
+            self: *Self,
+            op: lir.LowLevel,
+            operand_layout: layout.Idx,
+        ) Allocator.Error!void {
+            const message = switch (op) {
+                .num_plus => "Integer addition overflowed!",
+                .num_minus => "Integer subtraction overflowed!",
+                else => unreachable,
+            };
+
+            switch (operand_layout) {
+                .u128 => try self.emitCrashOnCond(switch (op) {
+                    .num_plus => condUnsignedAddOverflow(),
+                    .num_minus => condUnsignedSubOverflow(),
+                    else => unreachable,
+                }, message),
+                .i128 => try self.emitCrashOnCond(condOverflow(), message),
+                else => {},
+            }
+        }
+
         // Condition code helpers for cross-architecture support
         fn condEqual() Condition {
             return if (comptime target.toCpuArch() == .aarch64) .eq else .equal;
@@ -6425,6 +6535,18 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         fn condAboveOrEqual() Condition {
             return if (comptime target.toCpuArch() == .aarch64) .cs else .above_or_equal;
+        }
+
+        fn condOverflow() Condition {
+            return if (comptime target.toCpuArch() == .aarch64) .vs else .overflow;
+        }
+
+        fn condUnsignedAddOverflow() Condition {
+            return if (comptime target.toCpuArch() == .aarch64) .cs else .below;
+        }
+
+        fn condUnsignedSubOverflow() Condition {
+            return if (comptime target.toCpuArch() == .aarch64) .cc else .below;
         }
 
         /// Generate 128-bit integer binary operation
@@ -6474,9 +6596,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .num_plus => {
                     // 128-bit add: low = lhs_low + rhs_low, high = lhs_high + rhs_high + carry
                     if (comptime target.toCpuArch() == .aarch64) {
-                        // ADDS sets carry flag, ADC adds with carry
+                        // ADDS sets carry; ADCS adds it into the high word and leaves final flags.
                         try self.codegen.emit.addsRegRegReg(.w64, result_low, lhs_parts.low, rhs_parts.low);
-                        try self.codegen.emit.adcRegRegReg(.w64, result_high, lhs_parts.high, rhs_parts.high);
+                        try self.codegen.emit.adcsRegRegReg(.w64, result_high, lhs_parts.high, rhs_parts.high);
                     } else {
                         // x86_64: ADD sets carry, ADC uses it
                         try self.codegen.emit.movRegReg(.w64, result_low, lhs_parts.low);
@@ -6484,13 +6606,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try self.codegen.emit.movRegReg(.w64, result_high, lhs_parts.high);
                         try self.codegen.emit.adcRegReg(.w64, result_high, rhs_parts.high);
                     }
+                    try self.emitCheckedI128AddSubOverflow(op, operand_layout);
                 },
                 .num_minus => {
                     // 128-bit sub: low = lhs_low - rhs_low, high = lhs_high - rhs_high - borrow
                     if (comptime target.toCpuArch() == .aarch64) {
                         // SUBS sets borrow flag, SBC subtracts with borrow
                         try self.codegen.emit.subsRegRegReg(.w64, result_low, lhs_parts.low, rhs_parts.low);
-                        try self.codegen.emit.sbcRegRegReg(.w64, result_high, lhs_parts.high, rhs_parts.high);
+                        try self.codegen.emit.sbcsRegRegReg(.w64, result_high, lhs_parts.high, rhs_parts.high);
                     } else {
                         // x86_64: SUB sets borrow, SBB uses it
                         try self.codegen.emit.movRegReg(.w64, result_low, lhs_parts.low);
@@ -6498,6 +6621,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try self.codegen.emit.movRegReg(.w64, result_high, lhs_parts.high);
                         try self.codegen.emit.sbbRegReg(.w64, result_high, rhs_parts.high);
                     }
+                    try self.emitCheckedI128AddSubOverflow(op, operand_layout);
                 },
                 .num_times => {
                     if (operand_layout == .dec) {
@@ -10901,7 +11025,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     }
                 }
             }
-            const payload_size = builtins.erased_callable.payloadSize(capture_size);
+            const capture_prefix_size: u32 = if (self.enable_hot_reload)
+                builtins.erased_callable.hot_reload_capture_prefix_size
+            else
+                0;
+            const payload_size = builtins.erased_callable.payloadSize(capture_prefix_size + capture_size);
             const roc_ops_reg = self.roc_ops_reg orelse unreachable;
             const heap_ptr_slot: i32 = self.codegen.allocStackSlot(8);
 
@@ -10915,6 +11043,16 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
             try self.emitStore(.w64, frame_ptr, heap_ptr_slot, ret_reg_0);
 
+            const hot_reload_code_ref_slot: ?i32 = if (self.enable_hot_reload) blk: {
+                var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                try builder.addRegArg(roc_ops_reg);
+                try self.callBuiltin(&builder, @intFromPtr(&dev_wrappers.roc_builtins_hot_reload_retain_current), .hot_reload_retain_current);
+
+                const slot = self.codegen.allocStackSlot(8);
+                try self.emitStore(.w64, frame_ptr, slot, ret_reg_0);
+                break :blk slot;
+            } else null;
+
             const heap_ptr = try self.allocTempGeneral();
             try self.emitLoad(.w64, heap_ptr, frame_ptr, heap_ptr_slot);
 
@@ -10927,9 +11065,41 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.emitStore(.w64, heap_ptr, 0, proc_addr);
             self.codegen.freeGeneral(proc_addr);
 
-            const on_drop_reg = try self.materializeErasedCallableOnDrop(on_drop);
-            try self.emitStore(.w64, heap_ptr, @intCast(@sizeOf(usize)), on_drop_reg);
-            self.codegen.freeGeneral(on_drop_reg);
+            if (self.enable_hot_reload) {
+                const hot_drop_reg = try self.allocTempGeneral();
+                try self.emitBuiltinAddress(
+                    hot_drop_reg,
+                    @intFromPtr(&dev_wrappers.roc_builtins_hot_reload_erased_callable_drop),
+                    .hot_reload_erased_callable_drop,
+                );
+                try self.emitStore(.w64, heap_ptr, @intCast(@sizeOf(usize)), hot_drop_reg);
+                self.codegen.freeGeneral(hot_drop_reg);
+
+                if (hot_reload_code_ref_slot) |slot| {
+                    const code_ref_reg = try self.allocTempGeneral();
+                    try self.emitLoad(.w64, code_ref_reg, frame_ptr, slot);
+                    try self.emitStore(
+                        .w64,
+                        heap_ptr,
+                        @intCast(builtins.erased_callable.capture_offset + @offsetOf(builtins.erased_callable.HotReloadCaptureHeader, "code_ref")),
+                        code_ref_reg,
+                    );
+                    self.codegen.freeGeneral(code_ref_reg);
+                }
+
+                const original_on_drop_reg = try self.materializeErasedCallableOnDrop(on_drop);
+                try self.emitStore(
+                    .w64,
+                    heap_ptr,
+                    @intCast(builtins.erased_callable.capture_offset + @offsetOf(builtins.erased_callable.HotReloadCaptureHeader, "original_on_drop")),
+                    original_on_drop_reg,
+                );
+                self.codegen.freeGeneral(original_on_drop_reg);
+            } else {
+                const on_drop_reg = try self.materializeErasedCallableOnDrop(on_drop);
+                try self.emitStore(.w64, heap_ptr, @intCast(@sizeOf(usize)), on_drop_reg);
+                self.codegen.freeGeneral(on_drop_reg);
+            }
 
             if (capture) |capture_local| {
                 const layout_idx = capture_layout orelse unreachable;
@@ -10947,7 +11117,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         frame_ptr,
                         capture_stack,
                         heap_ptr,
-                        @intCast(builtins.erased_callable.capture_offset),
+                        @intCast(builtins.erased_callable.capture_offset + capture_prefix_size),
                         capture_size,
                     );
                     self.codegen.freeGeneral(temp);
@@ -11623,6 +11793,37 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try builder.callRelocatable(builtin_fn.symbolName(), self.allocator, &self.codegen.relocations);
                 },
             }
+        }
+
+        fn emitBuiltinAddress(self: *Self, dst_reg: GeneralReg, fn_addr: usize, builtin_fn: BuiltinFn) Allocator.Error!void {
+            switch (self.generation_mode) {
+                .native_execution => {
+                    try self.codegen.emitLoadImm(dst_reg, @bitCast(@as(u64, fn_addr)));
+                },
+                .shim_execution, .object_file => {
+                    try self.codegen.emitLoadDataAddress(dst_reg, builtin_fn.symbolName());
+                },
+            }
+        }
+
+        fn emitHotReloadEnterForHostCallable(self: *Self) Allocator.Error!?i32 {
+            if (!self.enable_hot_reload) return null;
+
+            const roc_ops_reg = self.roc_ops_reg orelse unreachable;
+            const code_ref_slot = self.codegen.allocStackSlot(8);
+            {
+                var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                try builder.addRegArg(roc_ops_reg);
+                try self.callBuiltin(&builder, @intFromPtr(&dev_wrappers.roc_builtins_hot_reload_enter), .hot_reload_enter);
+            }
+            try self.emitStore(.w64, frame_ptr, code_ref_slot, ret_reg_0);
+            return code_ref_slot;
+        }
+
+        fn emitHotReloadLeaveForHostCallable(self: *Self, code_ref_slot: i32) Allocator.Error!void {
+            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            try builder.addMemArg(frame_ptr, code_ref_slot);
+            try self.callBuiltin(&builder, @intFromPtr(&dev_wrappers.roc_builtins_hot_reload_leave), .hot_reload_leave);
         }
 
         /// Ensure a value location is on the stack, spilling if needed. Returns stack offset.
@@ -13271,11 +13472,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
 
             const needs_ret_ptr = self.needsInternalReturnByPointer(proc.ret_layout);
+            var hot_reload_code_ref_slot: ?i32 = null;
             if (proc.abi == .erased_callable) {
                 self.ret_ptr_slot = self.codegen.allocStackSlot(8);
                 const ret_ptr_reg = self.getArgumentRegister(1);
                 try self.codegen.emitStoreStack(.w64, self.ret_ptr_slot.?, ret_ptr_reg);
                 try self.bindErasedCallableAdapterParams(proc.args);
+                hot_reload_code_ref_slot = try self.emitHotReloadEnterForHostCallable();
             } else {
                 if (needs_ret_ptr) {
                     self.ret_ptr_slot = self.codegen.allocStackSlot(8);
@@ -13304,6 +13507,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             // Emit shared epilogue using DeferredFrameBuilder with actual stack usage
             const body_epilogue_offset = self.codegen.currentOffset();
+            if (hot_reload_code_ref_slot) |slot| {
+                try self.emitHotReloadLeaveForHostCallable(slot);
+            }
             {
                 const actual_locals: u32 = if (comptime target.toCpuArch() == .aarch64)
                     @intCast(self.codegen.stack_offset - 16 - CodeGen.CALLEE_SAVED_AREA_SIZE)
@@ -14131,6 +14337,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const capture_stack = self.codegen.allocStackSlot(8);
             const capture_arg_reg = try self.allocTempGeneral();
             try self.emitLoad(.w64, capture_arg_reg, frame_ptr, capture_ptr_slot);
+            if (self.enable_hot_reload) {
+                try self.emitAddPtrImmAny(capture_arg_reg, capture_arg_reg, builtins.erased_callable.hot_reload_capture_prefix_size);
+            }
             try self.emitStore(.w64, frame_ptr, capture_stack, capture_arg_reg);
             self.codegen.freeGeneral(capture_arg_reg);
             try self.local_locations.put(localKey(capture_local), self.stackLocationForLayout(.opaque_ptr, capture_stack));

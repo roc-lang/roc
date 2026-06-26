@@ -29,36 +29,39 @@ result2 = c.plus(d)
 ~~~
 # EXPECTED
 MISSING METHOD - plus_operator_vs_method.md:11:11:11:16
-+ - :0:0:0:0
 MISSING METHOD - plus_operator_vs_method.md:21:13:21:17
 # PROBLEMS
-**MISSING METHOD**
-The value before this **+** operator has a type that doesn't have a **plus** method:
-**plus_operator_vs_method.md:11:11:11:16:**
-```roc
-result1 = a + b
-```
-          ^^^^^
 
-The value's type, which does not have a method named **plus**, is:
+┌────────────────┐
+│ MISSING METHOD ├─ The value before this `+` operator has a type that ───────┐
+└┬───────────────┘  doesn't have a `plus` method.                             │
+ │                                                                            │
+ │  result1 = a + b                                                           │
+ │            ‾‾‾‾‾                                                           │
+ └────────────────────────────────────────── plus_operator_vs_method.md:11:11 ┘
 
-    MyType
+    The value's type, which does not have a method named `plus`, is:
 
-**Hint:** The **+** operator calls a method named **plus** on the value preceding it, passing the value after the operator as the one argument.
+        MyType
 
-**MISSING METHOD**
-This **plus** method is being called on a value whose type doesn't have that method:
-**plus_operator_vs_method.md:21:13:21:17:**
-```roc
-result2 = c.plus(d)
-```
-            ^^^^
+    Hint: The `+` operator calls a method named `plus` on the value preceding
+    it, passing the value after the operator as the one argument.
 
-The value's type, which does not have a method named **plus**, is:
 
-    MyType
+┌────────────────┐
+│ MISSING METHOD ├─ This `plus` method is being called on a value whose ──────┐
+└┬───────────────┘  type doesn't have that method.                            │
+ │                                                                            │
+ │  result2 = c.plus(d)                                                       │
+ │              ‾‾‾‾                                                          │
+ └────────────────────────────────────────── plus_operator_vs_method.md:21:13 ┘
 
-**Hint:** For this to work, the type would need to have a method named **plus** associated with it in the type's declaration.
+    The value's type, which does not have a method named `plus`, is:
+
+        MyType
+
+    Hint: For this to work, the type would need to have a method named `plus`
+    associated with it in the type's declaration.
 
 # TOKENS
 ~~~zig
@@ -186,7 +189,7 @@ NO CHANGE
 			(ty-lookup (name "MyType") (local))))
 	(d-let
 		(p-assign (ident "result2"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 577)
+		(e-dispatch-call (method "plus") (constraint-fn-var 578)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "c"))))

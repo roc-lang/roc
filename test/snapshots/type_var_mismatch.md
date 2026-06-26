@@ -25,24 +25,23 @@ main! = |_| {}
 # EXPECTED
 TYPE MISMATCH - type_var_mismatch.md:7:9:7:11
 # PROBLEMS
-**TYPE MISMATCH**
-This number is being used where a non-number type is needed:
-**type_var_mismatch.md:7:9:7:11:**
-```roc
-	item = 42
-```
-	       ^^
 
-The type was determined to be non-numeric here:
-**type_var_mismatch.md:11:11:11:39:**
-```roc
-	result = List.first(list).ok_or(item)
-```
-	         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+┌───────────────┐
+│ TYPE MISMATCH ├─ This number is being used where a non-number type is ──────┐
+└┬──────────────┘  needed.                                                    │
+ │                                                                            │
+ │  item = 42                                                                 │
+ │         ‾‾                                                                 │
+ └────────────────────────────────────────────────── type_var_mismatch.md:7:9 ┘
 
-Other code expects this to have the type:
+    The type was determined to be non-numeric here:
+       ┌──────────────────────────────────────────────────────────────────────┐
+    11 │   result = List.first(list).ok_or(item)                              │
+       │            ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                              │
+       └────────────────────────────────────────── type_var_mismatch.md:11:11 ┘
+    Other code expects this to have the type:
 
-    item
+        item
 
 # TOKENS
 ~~~zig
@@ -125,9 +124,9 @@ NO CHANGE
 					(e-num (value "42")))
 				(s-let
 					(p-assign (ident "result"))
-					(e-dispatch-call (method "ok_or") (constraint-fn-var 99)
+					(e-dispatch-call (method "ok_or") (constraint-fn-var 100)
 						(receiver
-							(e-call (constraint-fn-var 98)
+							(e-call (constraint-fn-var 99)
 								(e-lookup-external
 									(builtin))
 								(e-lookup-local

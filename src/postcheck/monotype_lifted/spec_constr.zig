@@ -410,6 +410,10 @@ const Pass = struct {
     }
 
     fn collectArgUses(self: *Pass, original_fn_count: usize) Allocator.Error!void {
+        // This loop only reads functions; it must not append to `program.fns`,
+        // whose reallocation would dangle the slice it iterates. Assert that in
+        // debug builds; the check compiles out of release builds.
+        const fns_base = self.program.fns.items.ptr;
         var changed = true;
         while (changed) {
             changed = false;
@@ -422,10 +426,18 @@ const Pass = struct {
                 try self.markArgUsesInExpr(fn_id, body, &changed);
             }
         }
+        if (@import("builtin").mode == .Debug) {
+            std.debug.assert(self.program.fns.items.ptr == fns_base);
+        }
     }
 
     fn collectCallPatterns(self: *Pass, original_fn_count: usize) Allocator.Error!void {
-        for (self.program.fns.items[0..original_fn_count], 0..) |fn_, index| {
+        // Collecting a pattern materializes specialized callables, which appends
+        // to `program.fns` and can reallocate it. Re-read `items` by index each
+        // step rather than iterate a slice captured before the loop.
+        var index: usize = 0;
+        while (index < original_fn_count) : (index += 1) {
+            const fn_ = self.program.fns.items[index];
             const body = switch (fn_.body) {
                 .roc => |body| body,
                 .hosted => continue,
@@ -540,6 +552,10 @@ const Pass = struct {
             .structural_eq => |eq| {
                 try self.markArgUsesInExpr(fn_id, eq.lhs, changed);
                 try self.markArgUsesInExpr(fn_id, eq.rhs, changed);
+            },
+            .structural_hash => |h| {
+                try self.markArgUsesInExpr(fn_id, h.value, changed);
+                try self.markArgUsesInExpr(fn_id, h.hasher, changed);
             },
             .match_ => |match| {
                 self.markArgUseIfLocal(fn_id, match.scrutinee, changed);
@@ -662,6 +678,10 @@ const Pass = struct {
             .structural_eq => |eq| {
                 try self.collectCallPatternsInExpr(owner, eq.lhs);
                 try self.collectCallPatternsInExpr(owner, eq.rhs);
+            },
+            .structural_hash => |h| {
+                try self.collectCallPatternsInExpr(owner, h.value);
+                try self.collectCallPatternsInExpr(owner, h.hasher);
             },
             .match_ => |match| {
                 try self.collectCallPatternsInExpr(owner, match.scrutinee);
@@ -863,6 +883,10 @@ const Pass = struct {
         defer self.allocator.free(done);
         @memset(done, false);
 
+        // This loop only reads functions; it must not append to `program.fns`,
+        // whose reallocation would dangle the slice it iterates. Assert that in
+        // debug builds; the check compiles out of release builds.
+        const fns_base = self.program.fns.items.ptr;
         const fn_count = self.program.fns.items.len;
         for (self.program.fns.items[0..fn_count]) |fn_| {
             const body = switch (fn_.body) {
@@ -870,6 +894,9 @@ const Pass = struct {
                 .hosted => continue,
             };
             try self.rewriteCallsInExpr(body, done);
+        }
+        if (@import("builtin").mode == .Debug) {
+            std.debug.assert(self.program.fns.items.ptr == fns_base);
         }
     }
 
@@ -927,6 +954,10 @@ const Pass = struct {
             .structural_eq => |eq| {
                 try self.rewriteCallsInExpr(eq.lhs, done);
                 try self.rewriteCallsInExpr(eq.rhs, done);
+            },
+            .structural_hash => |h| {
+                try self.rewriteCallsInExpr(h.value, done);
+                try self.rewriteCallsInExpr(h.hasher, done);
             },
             .match_ => |match| {
                 try self.rewriteCallsInExpr(match.scrutinee, done);
@@ -1688,6 +1719,10 @@ const Cloner = struct {
                 .lhs = try self.cloneExpr(eq.lhs),
                 .rhs = try self.cloneExpr(eq.rhs),
                 .negated = eq.negated,
+            } },
+            .structural_hash => |h| .{ .structural_hash = .{
+                .value = try self.cloneExpr(h.value),
+                .hasher = try self.cloneExpr(h.hasher),
             } },
             .match_ => |match| return try self.cloneMatch(expr.ty, match),
             .if_ => |if_| .{ .if_ = .{
@@ -3258,6 +3293,7 @@ fn localUseCountInExpr(program: *const Ast.Program, local: Ast.LocalId, expr_id:
         .field_access => |field| localUseCountInExpr(program, local, field.receiver),
         .tuple_access => |access| localUseCountInExpr(program, local, access.tuple),
         .structural_eq => |eq| localUseCountInExpr(program, local, eq.lhs) + localUseCountInExpr(program, local, eq.rhs),
+        .structural_hash => |h| localUseCountInExpr(program, local, h.value) + localUseCountInExpr(program, local, h.hasher),
         .match_ => |match| blk: {
             var count = localUseCountInExpr(program, local, match.scrutinee);
             for (program.branchSpan(match.branches)) |branch| {
@@ -3398,6 +3434,11 @@ fn scanLocalUseInExpr(program: *const Ast.Program, local: Ast.LocalId, expr_id: 
         .structural_eq => |eq| {
             scanLocalUseInExpr(program, local, eq.lhs, scan);
             scanLocalUseInExpr(program, local, eq.rhs, scan);
+            scan.seen_effect = true;
+        },
+        .structural_hash => |h| {
+            scanLocalUseInExpr(program, local, h.value, scan);
+            scanLocalUseInExpr(program, local, h.hasher, scan);
             scan.seen_effect = true;
         },
         .match_ => |match| {

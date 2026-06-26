@@ -259,6 +259,7 @@ const ExprParentKind = enum(u16) {
     expr_match_guard = 0x0f6b,
     expr_match_body = 0xe148,
     expr_dbg = 0x68b5,
+    expr_crash_statement = 0x23a1,
     expr_return = 0xf86e,
     expr_for_list = 0xb739,
     expr_for_body = 0x247c,
@@ -2153,6 +2154,7 @@ const ExprCollectionResult = union(enum) {
     tuple,
     apply: ExprAfterApplyArgsState,
     method_apply: ExprAfterMethodArgsState,
+    nominal_apply: ExprAfterNominalApplyArgsState,
     arrow_apply: ExprArrowAppAfterArgsState,
 };
 
@@ -2176,6 +2178,12 @@ const ExprAfterMethodArgsState = struct {
     min_bp: u8,
     receiver: AST.Expr.Idx,
     method_token: Token.Idx,
+};
+
+const ExprAfterNominalApplyArgsState = struct {
+    start: Token.Idx,
+    min_bp: u8,
+    mapper: AST.Expr.Idx,
 };
 
 const ExprAfterBinaryRhsState = struct {
@@ -3217,6 +3225,14 @@ fn runExprStatementKernel(
                     expr_state = .{ .start = self.pos, .min_bp = 0 };
                     continue :expr_kernel .prefix;
                 }
+                if (tok == .KwCrash) {
+                    const start = self.pos;
+                    try self.pushDiagnostic(.crash_statement_in_expr_position, .{ .start = start, .end = start + 1 });
+                    self.advance();
+                    try open_syntax.pushExpr(open_allocator, .expr_crash_statement, ExprAfterExprState, .{ .start = start, .min_bp = expr_state.min_bp });
+                    expr_state = .{ .start = self.pos, .min_bp = 0 };
+                    continue :expr_kernel .prefix;
+                }
                 if (tok == .KwFor) {
                     const start = self.pos;
                     self.advance();
@@ -3332,6 +3348,29 @@ fn runExprStatementKernel(
                 }
 
                 continue :expr_kernel .record_fields_next;
+            }
+
+            // `Type.(args)` nominal value/tuple construction. Only treat `.(` as
+            // construction when the mapper is a tag/type path (`Distance`,
+            // `Module.Type`); for any other mapper (e.g. `0.(`) leave the tokens
+            // unconsumed so it surfaces as a parse error instead of a construction
+            // node canonicalization would only reject.
+            if (tok == .Dot and self.peekN(1) == .NoSpaceOpenRound and self.store.getExpr(expr_finish_state.expr) == .tag) {
+                self.advance();
+                self.advance();
+                try expr_collections.enter(open_allocator, .{
+                    .start = expr_finish_state.start,
+                    .min_bp = null,
+                    .scratch_top = self.store.scratchExprTop(),
+                    .end_token = .CloseRound,
+                    .result = .{ .nominal_apply = .{
+                        .start = expr_finish_state.start,
+                        .min_bp = expr_finish_state.min_bp,
+                        .mapper = expr_finish_state.expr,
+                    } },
+                    .close_error = .expected_expr_apply_close_round,
+                });
+                continue :expr_kernel .collection_next;
             }
 
             if (tok_int < @intFromEnum(Token.Tag.OpenRound)) {
@@ -3721,6 +3760,13 @@ fn runExprStatementKernel(
                         expr_finish_state = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr };
                         continue :expr_kernel .suffix;
                     },
+                    .expr_crash_statement => {
+                        const state = open_syntax.popExprPayload(.expr_crash_statement, ExprAfterExprState);
+                        last_expr = null;
+                        const expr = try self.store.addMalformed(AST.Expr.Idx, .crash_statement_in_expr_position, .{ .start = state.start, .end = self.pos });
+                        expr_finish_state = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr };
+                        continue :expr_kernel .suffix;
+                    },
                     .expr_return => {
                         const state = open_syntax.popExprPayload(.expr_return, ExprAfterExprState);
                         last_expr = null;
@@ -3945,6 +3991,15 @@ fn runExprStatementKernel(
                                 .region = .{ .start = method_state.start, .end = self.pos },
                             } });
                             expr_finish_state = .{ .start = method_state.start, .min_bp = method_state.min_bp, .expr = expr };
+                            continue :expr_kernel .suffix;
+                        },
+                        .nominal_apply => |nominal_state| {
+                            const expr = try self.store.addExpr(.{ .nominal_apply = .{
+                                .mapper = nominal_state.mapper,
+                                .args = span,
+                                .region = .{ .start = nominal_state.start, .end = self.pos },
+                            } });
+                            expr_finish_state = .{ .start = nominal_state.start, .min_bp = nominal_state.min_bp, .expr = expr };
                             continue :expr_kernel .suffix;
                         },
                         .arrow_apply => |arrow_state| {
@@ -6318,13 +6373,19 @@ const bin_op_bp_table = blk: {
     const start = @intFromEnum(Token.Tag.OpPlus);
     const len = @intFromEnum(Token.Tag.OpEquals) - start + 1;
     var table = [_]BinOpBp{no_bin_op_bp} ** len;
+    // `*`, `/`, `//`, and `%` form a single multiplicative precedence group,
+    // left-associative among each other (`right > left` makes a following
+    // same-group operator fail `left >= min_bp`, so `1 % 10 // 100` parses as
+    // `(1 % 10) // 100`). The group binds tighter than additive (`+`/`-`).
     table[@intFromEnum(Token.Tag.OpStar) - start] = .{ .left = 32, .right = 33 };
-    table[@intFromEnum(Token.Tag.OpSlash) - start] = .{ .left = 30, .right = 31 };
-    table[@intFromEnum(Token.Tag.OpDoubleSlash) - start] = .{ .left = 28, .right = 29 };
-    table[@intFromEnum(Token.Tag.OpPercent) - start] = .{ .left = 26, .right = 27 };
+    table[@intFromEnum(Token.Tag.OpSlash) - start] = .{ .left = 32, .right = 33 };
+    table[@intFromEnum(Token.Tag.OpDoubleSlash) - start] = .{ .left = 32, .right = 33 };
+    table[@intFromEnum(Token.Tag.OpPercent) - start] = .{ .left = 32, .right = 33 };
     table[@intFromEnum(Token.Tag.OpPlus) - start] = .{ .left = 22, .right = 23 };
     table[@intFromEnum(Token.Tag.OpBinaryMinus) - start] = .{ .left = 22, .right = 23 };
     table[@intFromEnum(Token.Tag.OpDoubleQuestion) - start] = .{ .left = 20, .right = 21 };
+    // `lhs ? handler` (spaced `?`) binds looser than `??` and tighter than `=`/`==`.
+    table[@intFromEnum(Token.Tag.OpQuestion) - start] = .{ .left = 18, .right = 19 };
     table[@intFromEnum(Token.Tag.OpEquals) - start] = .{ .left = 17, .right = 17 };
     table[@intFromEnum(Token.Tag.OpNotEquals) - start] = .{ .left = 15, .right = 15 };
     table[@intFromEnum(Token.Tag.OpLessThan) - start] = .{ .left = 13, .right = 13 };

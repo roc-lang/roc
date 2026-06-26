@@ -32,11 +32,13 @@ pub const BuiltinModules = struct {
     /// `checked_artifact.deinit` — no separate buffer field/teardown here.
     checked_artifact: CheckedModuleArtifact,
 
+    pub const InitError = Allocator.Error || error{ Internal, CorruptBuiltinArtifact, BuiltinArtifactVersionMismatch, CorruptArtifact };
+
     /// Initialize all builtin modules by relocating the baked CheckedModuleArtifact.
     ///
     /// The artifact is produced at build time and embedded; loading it is a single
     /// copy-into-aligned-buffer plus an O(1) relocate (no per-startup re-checking).
-    pub fn init(allocator: Allocator) anyerror!BuiltinModules {
+    pub fn init(allocator: Allocator) InitError!BuiltinModules {
         // Load the builtin indices
         const indices = try builtin_loading.deserializeBuiltinIndices(allocator, compiled_builtins.builtin_indices_bin);
 
