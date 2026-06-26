@@ -732,14 +732,14 @@ direct-list source.
 - [x] Known-value specialization handles direct-call results in demanded
       contexts.
 - [x] Known-value specialization handles `if` and `match` joins.
-- [ ] Loop-state splitting handles iterator records and step callables.
-- [ ] Lambda solving keeps known step callables finite where bodies are
+- [x] Loop-state splitting handles iterator records and step callables.
+- [x] Lambda solving keeps known step callables finite where bodies are
       available.
-- [ ] Public iterator reuse tests pass.
-- [ ] `dbg`, `expect`, and `crash` movement/duplication tests pass.
-- [ ] Imported-module iterator producer tests pass.
-- [ ] Stream optimization tests pass.
-- [ ] Boxed/captured callable fact tests pass outside iterator code.
+- [x] Public iterator reuse tests pass.
+- [x] `dbg`, `expect`, and `crash` movement/duplication tests pass.
+- [x] Imported-module iterator producer tests pass.
+- [x] Stream optimization tests pass.
+- [x] Boxed/captured callable fact tests pass outside iterator code.
 - [ ] Rocci Bird `--opt=size` builds.
 - [ ] Rocci Bird optimized collision loop disassembly contains no public
       iterator wrapper churn on the hot path.

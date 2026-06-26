@@ -14259,7 +14259,7 @@ const BodyContext = struct {
         call_ctx.owner_context_fn_key = self.owner_context_fn_key;
         call_ctx.current_fn_key = self.current_fn_key;
 
-        const callable_mono_ty = try call_ctx.instantiateIteratorPlanCallTypeFromCaller(plan.callable_ty, self, plan_args, loop_iterator, expected_ret_ty);
+        const callable_mono_ty = try call_ctx.instantiateIteratorDispatchCallTypeFromCaller(plan.callable_ty, self, plan_args, loop_iterator, expected_ret_ty);
         const plan_fn_data = self.builder.functionShape(callable_mono_ty, "checked iterator dispatch plan had a non-function type");
         const plan_arg_tys = try self.allocator.dupe(Type.TypeId, self.builder.program.types.span(plan_fn_data.args));
         defer self.allocator.free(plan_arg_tys);
@@ -14309,7 +14309,7 @@ const BodyContext = struct {
         });
     }
 
-    fn instantiateIteratorPlanCallTypeFromCaller(
+    fn instantiateIteratorDispatchCallTypeFromCaller(
         self: *BodyContext,
         source_fn_ty: checked.CheckedTypeId,
         caller: *BodyContext,

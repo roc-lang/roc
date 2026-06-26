@@ -36,26 +36,6 @@ const LiftedSource = struct {
     }
 };
 
-const LambdaSolvedSource = struct {
-    resources: helpers.ParsedResources,
-    solved: postcheck.LambdaSolved.Ast.Program,
-
-    fn deinit(self: *LambdaSolvedSource, allocator: Allocator) void {
-        self.solved.deinit();
-        helpers.cleanupParseAndCanonical(allocator, self.resources);
-    }
-};
-
-const MonotypeSource = struct {
-    resources: helpers.ParsedResources,
-    mono: postcheck.Monotype.Ast.Program,
-
-    fn deinit(self: *MonotypeSource, allocator: Allocator) void {
-        self.mono.deinit();
-        helpers.cleanupParseAndCanonical(allocator, self.resources);
-    }
-};
-
 fn sharedPrePublishedBuiltin() anyerror!helpers.PrePublishedBuiltin {
     shared_test_builtins_mutex.lockUncancelable(std.testing.io);
     defer shared_test_builtins_mutex.unlock(std.testing.io);
@@ -504,94 +484,6 @@ fn liftModuleAfterSpecConstr(
     };
 }
 
-fn lowerMonotypeModuleWithIteratorPlans(
-    allocator: Allocator,
-    source: []const u8,
-) anyerror!MonotypeSource {
-    var resources = try helpers.parseAndCanonicalizeProgramWithBuiltin(allocator, .module, source, &.{}, try sharedPrePublishedBuiltin());
-    errdefer helpers.cleanupParseAndCanonical(allocator, resources);
-
-    const import_count = resources.import_artifacts.len + if (resources.borrowed_builtin_artifact == null) @as(usize, 0) else 1;
-    const import_views = try allocator.alloc(check.CheckedArtifact.ImportedModuleView, import_count);
-    defer allocator.free(import_views);
-
-    var view_index: usize = 0;
-    if (resources.borrowed_builtin_artifact) |builtin_artifact| {
-        import_views[view_index] = check.CheckedArtifact.importedView(builtin_artifact);
-        view_index += 1;
-    }
-    for (resources.import_artifacts) |*artifact| {
-        import_views[view_index] = check.CheckedArtifact.importedView(artifact);
-        view_index += 1;
-    }
-
-    var mono = try postcheck.Monotype.Lower.run(
-        allocator,
-        .{
-            .root = check.CheckedArtifact.loweringView(&resources.checked_artifact),
-            .imports = import_views,
-        },
-        .{ .requests = resources.checked_artifact.root_requests.requests },
-        .{},
-    );
-    errdefer mono.deinit();
-
-    return .{
-        .resources = resources,
-        .mono = mono,
-    };
-}
-
-fn solveModuleWithIteratorPlans(
-    allocator: Allocator,
-    source: []const u8,
-) anyerror!LambdaSolvedSource {
-    var resources = try helpers.parseAndCanonicalizeProgramWithBuiltin(allocator, .module, source, &.{}, try sharedPrePublishedBuiltin());
-    errdefer helpers.cleanupParseAndCanonical(allocator, resources);
-
-    const import_count = resources.import_artifacts.len + if (resources.borrowed_builtin_artifact == null) @as(usize, 0) else 1;
-    const import_views = try allocator.alloc(check.CheckedArtifact.ImportedModuleView, import_count);
-    defer allocator.free(import_views);
-
-    var view_index: usize = 0;
-    if (resources.borrowed_builtin_artifact) |builtin_artifact| {
-        import_views[view_index] = check.CheckedArtifact.importedView(builtin_artifact);
-        view_index += 1;
-    }
-    for (resources.import_artifacts) |*artifact| {
-        import_views[view_index] = check.CheckedArtifact.importedView(artifact);
-        view_index += 1;
-    }
-
-    var mono = try postcheck.Monotype.Lower.run(
-        allocator,
-        .{
-            .root = check.CheckedArtifact.loweringView(&resources.checked_artifact),
-            .imports = import_views,
-        },
-        .{ .requests = resources.checked_artifact.root_requests.requests },
-        .{},
-    );
-    var mono_owned = true;
-    errdefer if (mono_owned) mono.deinit();
-
-    var lifted = try postcheck.MonotypeLifted.Lift.run(allocator, mono);
-    mono_owned = false;
-    mono = undefined;
-    var lifted_owned = true;
-    errdefer if (lifted_owned) lifted.deinit();
-
-    var solved = try postcheck.LambdaSolved.Solve.run(allocator, lifted);
-    lifted_owned = false;
-    lifted = undefined;
-    errdefer solved.deinit();
-
-    return .{
-        .resources = resources,
-        .solved = solved,
-    };
-}
-
 fn expectInlinePlanDecision(
     source: []const u8,
     fn_name: []const u8,
@@ -1029,6 +921,14 @@ fn reachableProcShape(
     comptime matches: fn (ProcShape) bool,
 ) anyerror!bool {
     return (try reachableProcShapeCount(allocator, lowered, matches)) > 0;
+}
+
+fn expectNoReachableErasedCallableLowering(
+    allocator: Allocator,
+    lowered: *const lir.CheckedPipeline.LoweredProgram,
+) anyerror!void {
+    try std.testing.expectEqual(@as(usize, 0), try reachableProcShapeFieldTotal(allocator, lowered, "erased_call_count"));
+    try std.testing.expectEqual(@as(usize, 0), try reachableProcShapeFieldTotal(allocator, lowered, "packed_erased_fn_count"));
 }
 
 fn reachableReturnSlotProcCount(
@@ -1797,6 +1697,64 @@ test "direct range map collect uses direct list loop" {
     , 2);
 }
 
+test "imported iterator producer keeps finite step callables" {
+    const allocator = std.testing.allocator;
+    const producer_module =
+        \\module [points]
+        \\
+        \\Point : { x : I64 }
+        \\
+        \\points : () -> Iter(Point)
+        \\points = || [{ x: 1.I64 }, { x: 2 }].iter().append({ x: 3 })
+    ;
+    const source =
+        \\module [main]
+        \\
+        \\import Points
+        \\
+        \\main : I64
+        \\main = {
+        \\    iter = Points.points()
+        \\    var $sum = 0.I64
+        \\    for point in iter {
+        \\        $sum = $sum + point.x
+        \\    }
+        \\    $sum
+        \\}
+    ;
+
+    var optimized = try lowerModuleWithOptions(allocator, source, .wrappers, .{
+        .imports = &.{.{ .name = "Points", .source = producer_module }},
+    });
+    defer optimized.deinit(allocator);
+
+    try expectNoReachableErasedCallableLowering(allocator, &optimized.lowered);
+}
+
+test "stream from iterator collect keeps finite step callables" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\module [main]
+        \\
+        \\main : () => List(I64)
+        \\main = || {
+        \\    stream =
+        \\        [1.I64, 2]
+        \\            .iter()
+        \\            .append(3)
+        \\            .stream()
+        \\            .map!(|n| n + 1)
+        \\
+        \\    Stream.collect!(stream)
+        \\}
+    ;
+
+    var optimized = try lowerModule(allocator, source, .wrappers);
+    defer optimized.deinit(allocator);
+
+    try expectNoReachableErasedCallableLowering(allocator, &optimized.lowered);
+}
+
 test "spec constr does not duplicate opaque let-bound direct calls" {
     const allocator = std.testing.allocator;
     const source =
@@ -2030,6 +1988,69 @@ test "spec constr preserves nested known-match payload effect order" {
         \\main : I64
         \\main = outer({ n: 1 })
     , &.{ "\"payload\"", "\"branch-before\"" });
+}
+
+test "spec constr preserves known-match expect failure order" {
+    try expectOptimizedHostEvents(
+        \\module [main]
+        \\
+        \\State : { n : I64 }
+        \\Step : [One({ item : I64 })]
+        \\
+        \\tap : I64 -> I64
+        \\tap = |n| {
+        \\    dbg "payload"
+        \\    n
+        \\}
+        \\
+        \\outer : State -> I64
+        \\outer = |state|
+        \\    match One({ item: tap(state.n) }) {
+        \\        One({ item }) => {
+        \\            dbg "branch-before"
+        \\            expect False
+        \\            item
+        \\        }
+        \\    }
+        \\
+        \\main : I64
+        \\main = outer({ n: 1 })
+    , .returned, &.{
+        .{ .dbg = "\"payload\"" },
+        .{ .dbg = "\"branch-before\"" },
+        .expect_failed,
+    });
+}
+
+test "spec constr preserves known-match crash order" {
+    try expectOptimizedHostEvents(
+        \\module [main]
+        \\
+        \\State : { n : I64 }
+        \\Step : [One({ item : I64 })]
+        \\
+        \\tap : I64 -> I64
+        \\tap = |n| {
+        \\    dbg "payload"
+        \\    n
+        \\}
+        \\
+        \\outer : State -> I64
+        \\outer = |state|
+        \\    match One({ item: tap(state.n) }) {
+        \\        One({ item: _ }) => {
+        \\            dbg "branch-before"
+        \\            crash "boom"
+        \\        }
+        \\    }
+        \\
+        \\main : I64
+        \\main = outer({ n: 1 })
+    , .crashed, &.{
+        .{ .dbg = "\"payload\"" },
+        .{ .dbg = "\"branch-before\"" },
+        .{ .crashed = "boom" },
+    });
 }
 
 test "spec constr writes dynamically discovered workers once" {
