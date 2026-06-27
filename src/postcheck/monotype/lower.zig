@@ -9776,16 +9776,6 @@ const BodyContext = struct {
         };
     }
 
-    fn dispatchCheckedOperandType(
-        self: *BodyContext,
-        operand: static_dispatch.StaticDispatchOperand,
-    ) Allocator.Error!Type.TypeId {
-        return switch (operand) {
-            .checked_expr => |expr| try self.lowerType(self.view.bodies.expr(expr).ty),
-            else => Common.invariant("iterator adapter function operand was not a checked expression"),
-        };
-    }
-
     fn lowerGeneratedInterpolationIter(
         self: *BodyContext,
         expr_id: checked.CheckedExprId,
@@ -10762,17 +10752,6 @@ const BodyContext = struct {
             .builtin => |actual| actual == owner,
             .source_decl => false,
             .nominal => false,
-        };
-    }
-
-    fn typeHasCheckedBuiltinNominal(
-        self: *BodyContext,
-        ty: Type.TypeId,
-        builtin_nominal: checked.CheckedBuiltinNominal,
-    ) bool {
-        return switch (self.builder.program.types.get(ty)) {
-            .named => |named| named.builtin_nominal == builtin_nominal,
-            else => false,
         };
     }
 
@@ -16371,38 +16350,6 @@ fn methodOwnerFromType(types: *const Type.Store, ty: Type.TypeId) ?static_dispat
                 .module_name = def.module_name,
                 .type_name = def.type_name,
             } },
-    };
-}
-
-fn procedureBindingBodyMatchesProcedureMethodTarget(
-    body: checked.ProcedureBindingBody,
-    expected: static_dispatch.ProcedureMethodTarget,
-) bool {
-    return switch (body) {
-        .direct_template => |direct| directProcedureBindingMatchesProcedureMethodTarget(direct, expected),
-        .callable_eval_template => false,
-    };
-}
-
-fn importedProcedureBindingBodyMatchesProcedureMethodTarget(
-    body: checked.ImportedProcedureBindingBody,
-    expected: static_dispatch.ProcedureMethodTarget,
-) bool {
-    return switch (body) {
-        .direct_template => |direct| directProcedureBindingMatchesProcedureMethodTarget(direct, expected),
-        .callable_eval_template => false,
-    };
-}
-
-fn directProcedureBindingMatchesProcedureMethodTarget(
-    direct: checked.DirectProcedureBinding,
-    expected: static_dispatch.ProcedureMethodTarget,
-) bool {
-    if (!names.procedureValueRefEql(direct.proc_value, expected.proc)) return false;
-    return switch (direct.template) {
-        .checked => |template| names.procedureTemplateRefEql(template, expected.template),
-        .synthetic => |synthetic| names.procedureTemplateRefEql(synthetic.template, expected.template),
-        .lifted => false,
     };
 }
 

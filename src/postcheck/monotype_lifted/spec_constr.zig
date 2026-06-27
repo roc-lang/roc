@@ -4682,10 +4682,6 @@ const Cloner = struct {
         return try self.pass.program.addRecordDestructSpan(values);
     }
 
-    fn cloneBranchSpan(self: *Cloner, span: Ast.Span(Ast.Branch)) Common.LowerError!Ast.Span(Ast.Branch) {
-        return try self.cloneBranchSpanWithScrutineeFact(span, null);
-    }
-
     fn cloneBranchSpanWithScrutineeFact(
         self: *Cloner,
         span: Ast.Span(Ast.Branch),
@@ -5680,13 +5676,6 @@ fn localMaxUseCountPerPathInStmt(program: *const Ast.Program, local: Ast.LocalId
         => |expr| localMaxUseCountPerPathInExpr(program, local, expr),
         .crash => 0,
     };
-}
-
-fn localUseCountInBlockTail(program: *const Ast.Program, local: Ast.LocalId, tail: BlockTail) usize {
-    var count: usize = 0;
-    for (tail.statements) |stmt| count += localUseCountInStmt(program, local, stmt);
-    count += localUseCountInExpr(program, local, tail.final_expr);
-    return count;
 }
 
 fn localMaxUseCountPerPathInBlockTail(program: *const Ast.Program, local: Ast.LocalId, tail: BlockTail) usize {
