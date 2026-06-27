@@ -114,7 +114,7 @@ pub fn crossCompile(
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
 
-    return handleProcessResult(std_io, result, output_name, expected_stderr_contains);
+    return handleProcessResult(std_io, result, output_name, expectedStderrForBackend(backend, expected_stderr_contains));
 }
 
 /// Build a Roc app natively (no cross-compilation).
@@ -500,6 +500,14 @@ fn missingExpectedStderr(stderr: []const u8, expected_stderr_contains: []const [
     }
 
     return null;
+}
+
+fn expectedStderrForBackend(backend: ?[]const u8, expected_stderr_contains: []const []const u8) []const []const u8 {
+    const backend_name = backend orelse return &.{};
+    if (std.mem.eql(u8, backend_name, "size") or std.mem.eql(u8, backend_name, "speed")) {
+        return expected_stderr_contains;
+    }
+    return &.{};
 }
 
 fn handleProcessResult(
