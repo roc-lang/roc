@@ -376,6 +376,7 @@ const PendingLet = struct {
     local: Ast.LocalId,
     ty: Type.TypeId,
     value: Ast.ExprId,
+    fact: ?ValueFact = null,
 };
 
 const BlockTail = struct {
@@ -391,6 +392,11 @@ const LoopPattern = struct {
 const ActiveCallable = struct {
     source: Ast.FnId,
     specialized: Ast.FnId,
+};
+
+const ActiveInline = struct {
+    fn_id: Ast.FnId,
+    args: ?[]const ValueFact = null,
 };
 
 const Pass = struct {
@@ -489,10 +495,10 @@ const Pass = struct {
             var cloner = Cloner.initForBaseBody(self, fn_id);
             defer cloner.deinit();
 
-            try cloner.inline_stack.append(self.allocator, fn_id);
+            try cloner.inline_stack.append(self.allocator, .{ .fn_id = fn_id });
             defer {
                 const popped = cloner.inline_stack.pop() orelse Common.invariant("base body inline stack underflow");
-                if (popped != fn_id) Common.invariant("base body inline stack was corrupted");
+                if (popped.fn_id != fn_id) Common.invariant("base body inline stack was corrupted");
             }
 
             self.program.fns.items[index].body = .{ .roc = try cloner.cloneExpr(body_expr) };
@@ -721,10 +727,10 @@ const Pass = struct {
         var cloner = Cloner.init(self, source_fn_id, spec.pattern);
         defer cloner.deinit();
 
-        try cloner.inline_stack.append(self.allocator, source_fn_id);
+        try cloner.inline_stack.append(self.allocator, .{ .fn_id = source_fn_id });
         defer {
             const popped = cloner.inline_stack.pop() orelse Common.invariant("call-pattern inline stack underflow while writing specialization");
-            if (popped != source_fn_id) Common.invariant("call-pattern inline stack was corrupted while writing specialization");
+            if (popped.fn_id != source_fn_id) Common.invariant("call-pattern inline stack was corrupted while writing specialization");
         }
 
         const args = try cloner.buildArgs();
@@ -888,7 +894,7 @@ const Cloner = struct {
     /// locals because checked binder ids are not global across lifted modules.
     binder_subst: std.AutoHashMap(check.CheckedModule.PatternBinderId, Value),
     changes: std.ArrayList(BindingChange),
-    inline_stack: std.ArrayList(Ast.FnId),
+    inline_stack: std.ArrayList(ActiveInline),
     callable_stack: std.ArrayList(ActiveCallable),
     loop_stack: std.ArrayList(LoopPattern),
     inline_direct_calls: bool,
@@ -1201,6 +1207,47 @@ const Cloner = struct {
         return false;
     }
 
+    fn directCallActiveArgFacts(self: *Cloner, args_span: Ast.Span(Ast.ExprId)) Allocator.Error![]const ValueFact {
+        const args = self.pass.program.exprSpan(args_span);
+        const facts = try self.pass.arena.allocator().alloc(ValueFact, args.len);
+        for (args, 0..) |arg, index| {
+            facts[index] = (try self.exprKnownFactNoInline(arg)) orelse .{
+                .any = self.pass.program.exprs.items[@intFromEnum(arg)].ty,
+            };
+        }
+        return facts;
+    }
+
+    fn exprKnownFactNoInline(self: *Cloner, expr_id: Ast.ExprId) Allocator.Error!?ValueFact {
+        const expr = self.pass.program.exprs.items[@intFromEnum(expr_id)];
+        return switch (expr.data) {
+            .local => |local| if (self.subst.get(local)) |value|
+                try self.pass.factFromValue(value)
+            else
+                null,
+            .tag,
+            .record,
+            .tuple,
+            .nominal,
+            .fn_ref,
+            => try self.pass.constructorFact(expr_id),
+            .field_access => |field| blk: {
+                const receiver_local = localExpr(self.pass.program, field.receiver) orelse break :blk null;
+                const receiver = self.subst.get(receiver_local) orelse break :blk null;
+                const value = fieldFromValue(receiver, field.field) orelse break :blk null;
+                break :blk try self.pass.factFromValue(value);
+            },
+            .tuple_access => |access| blk: {
+                const tuple_local = localExpr(self.pass.program, access.tuple) orelse break :blk null;
+                const tuple = self.subst.get(tuple_local) orelse break :blk null;
+                const value = itemFromValue(tuple, access.elem_index) orelse break :blk null;
+                break :blk try self.pass.factFromValue(value);
+            },
+            .comptime_branch_taken => |taken| try self.exprKnownFactNoInline(taken.body),
+            else => null,
+        };
+    }
+
     fn exprHasKnownFact(self: *Cloner, expr_id: Ast.ExprId) Allocator.Error!bool {
         const expr = self.pass.program.exprs.items[@intFromEnum(expr_id)];
         return switch (expr.data) {
@@ -1379,7 +1426,7 @@ const Cloner = struct {
             .block => |block| return try self.cloneBlock(expr.ty, block),
             .loop_ => |loop| return try self.cloneLoop(expr.ty, loop),
             .break_ => |maybe| .{ .break_ = if (maybe) |value| try self.cloneExpr(value) else null },
-            .continue_ => |continue_| try self.cloneContinue(continue_),
+            .continue_ => |continue_| try self.cloneContinue(expr.ty, continue_),
             .if_initialized_payload => |payload_switch| .{ .if_initialized_payload = .{
                 .cond = try self.cloneExpr(payload_switch.cond),
                 .cond_mask = payload_switch.cond_mask,
@@ -1689,6 +1736,10 @@ const Cloner = struct {
             defer self.pass.allocator.free(unwrapped_values);
             unwrapped_values[value_index] = let_value.body.*;
 
+            const change_start = self.changes.items.len;
+            defer self.restore(change_start);
+            try self.bindPendingLetFacts(let_value.lets);
+
             const body = try self.cloneLoopFromInitialValues(ty, loop, params, unwrapped_values);
             return try self.wrapPendingLetsAroundExpr(ty, body, let_value.lets);
         }
@@ -1941,7 +1992,7 @@ const Cloner = struct {
         } };
     }
 
-    fn cloneContinue(self: *Cloner, continue_: anytype) Common.LowerError!Ast.ExprData {
+    fn cloneContinue(self: *Cloner, ty: Type.TypeId, continue_: anytype) Common.LowerError!Ast.ExprData {
         const loop = self.loop_stack.getLastOrNull() orelse return .{ .continue_ = .{
             .values = try self.cloneExprSpan(continue_.values),
         } };
@@ -1953,8 +2004,19 @@ const Cloner = struct {
         var new_values = std.ArrayList(Ast.ExprId).empty;
         defer new_values.deinit(self.pass.allocator);
 
+        var pending_statements = std.ArrayList(Ast.StmtId).empty;
+        defer pending_statements.deinit(self.pass.allocator);
+
+        const pending_change_start = self.changes.items.len;
+        defer self.restore(pending_change_start);
+
         for (loop.values, source_values, 0..) |fact, value_expr, index| {
-            const value = try self.cloneExprValueDemandingFact(value_expr);
+            var value = try self.cloneExprValueDemandingFact(value_expr);
+            while (value == .let_) {
+                try self.appendPendingLetStmts(value.let_.lets, &pending_statements);
+                try self.bindPendingLetFacts(value.let_.lets);
+                value = value.let_.body.*;
+            }
             if (!factMatchesValue(self.pass.program, fact, value)) {
                 if (!try self.appendFieldReadExprsFromValue(fact, value, &new_values)) {
                     const refined = try self.refineLoopFactForValue(fact, value);
@@ -1968,8 +2030,15 @@ const Cloner = struct {
             try self.appendExprsFromValue(fact, value, &new_values);
         }
 
-        return .{ .continue_ = .{
+        const continue_data = Ast.ExprData{ .continue_ = .{
             .values = try self.pass.program.addExprSpan(new_values.items),
+        } };
+        if (pending_statements.items.len == 0) return continue_data;
+
+        const continue_expr = try self.addExpr(.{ .ty = ty, .data = continue_data });
+        return .{ .block = .{
+            .statements = try self.pass.program.addStmtSpan(pending_statements.items),
+            .final_expr = continue_expr,
         } };
     }
 
@@ -2948,6 +3017,7 @@ const Cloner = struct {
                     .local = local,
                     .ty = ty,
                     .value = known_fact_expr.expr,
+                    .fact = known_fact_expr.fact,
                 });
                 const local_expr = try self.addExpr(.{
                     .ty = ty,
@@ -3127,7 +3197,7 @@ const Cloner = struct {
         args_span: Ast.Span(Ast.ExprId),
     ) Common.LowerError!Value {
         for (self.inline_stack.items) |active| {
-            if (active == callable.fn_id) {
+            if (active.fn_id == callable.fn_id) {
                 return .{ .expr = try self.addExpr(.{ .ty = ty, .data = .{ .call_value = .{
                     .callee = try self.materialize(.{ .callable = callable }),
                     .args = try self.cloneExprSpan(args_span),
@@ -3193,10 +3263,10 @@ const Cloner = struct {
 
         try self.clearBinderSubstitutionsForInline();
 
-        try self.inline_stack.append(self.pass.allocator, callable.fn_id);
+        try self.inline_stack.append(self.pass.allocator, .{ .fn_id = callable.fn_id });
         defer {
             const popped = self.inline_stack.pop() orelse Common.invariant("call-pattern inline stack underflow");
-            if (popped != callable.fn_id) Common.invariant("call-pattern inline stack was corrupted");
+            if (popped.fn_id != callable.fn_id) Common.invariant("call-pattern inline stack was corrupted");
         }
 
         for (source_args, prepared_args) |source_arg, arg_value| {
@@ -3213,8 +3283,13 @@ const Cloner = struct {
         original_expr: Ast.ExprId,
         demand_result_fact: bool,
     ) Common.LowerError!Value {
+        const active_arg_facts = try self.directCallActiveArgFacts(args_span);
         for (self.inline_stack.items) |active| {
-            if (active == callee) return .{ .expr = try self.cloneExprPlain(original_expr) };
+            if (active.fn_id != callee) continue;
+            const active_args = active.args orelse return .{ .expr = try self.cloneExprPlain(original_expr) };
+            if (!factsStrictlyDescend(self.pass.program, active_args, active_arg_facts)) {
+                return .{ .expr = try self.cloneExprPlain(original_expr) };
+            }
         }
 
         const source_fn = self.pass.program.fns.items[@intFromEnum(callee)];
@@ -3271,10 +3346,13 @@ const Cloner = struct {
 
         try self.clearBinderSubstitutionsForInline();
 
-        try self.inline_stack.append(self.pass.allocator, callee);
+        try self.inline_stack.append(self.pass.allocator, .{
+            .fn_id = callee,
+            .args = active_arg_facts,
+        });
         defer {
             const popped = self.inline_stack.pop() orelse Common.invariant("call-pattern inline stack underflow");
-            if (popped != callee) Common.invariant("call-pattern inline stack was corrupted");
+            if (popped.fn_id != callee) Common.invariant("call-pattern inline stack was corrupted");
         }
 
         for (source_args, prepared_args) |source_arg, arg_value| {
@@ -3578,6 +3656,20 @@ const Cloner = struct {
         }
     }
 
+    fn bindPendingLetFacts(self: *Cloner, pending_lets: []const PendingLet) Common.LowerError!void {
+        for (pending_lets) |pending| {
+            const fact = pending.fact orelse continue;
+            const local_expr = try self.addExpr(.{
+                .ty = pending.ty,
+                .data = .{ .local = pending.local },
+            });
+            try self.putSubst(pending.local, .{ .expr_with_known_fact = .{
+                .expr = local_expr,
+                .fact = fact,
+            } });
+        }
+    }
+
     fn appendPendingLetsFromStatements(
         self: *Cloner,
         statements: []const Ast.StmtId,
@@ -3603,6 +3695,7 @@ const Cloner = struct {
                 .local = local,
                 .ty = pat.ty,
                 .value = let_.value,
+                .fact = try self.pass.constructorFact(let_.value),
             });
         }
         return true;
@@ -4747,6 +4840,50 @@ fn patternEql(program: *const Ast.Program, lhs: CallPattern, rhs: CallPattern) b
         if (!factEql(program, lhs_arg, rhs_arg)) return false;
     }
     return true;
+}
+
+fn factsStrictlyDescend(program: *const Ast.Program, active: []const ValueFact, next: []const ValueFact) bool {
+    if (active.len != next.len) return false;
+    var descended = false;
+    for (active, next) |active_fact, next_fact| {
+        if (factEql(program, active_fact, next_fact)) continue;
+        if (!factContainsStrictSubfact(program, active_fact, next_fact)) return false;
+        descended = true;
+    }
+    return descended;
+}
+
+fn factContainsStrictSubfact(program: *const Ast.Program, container: ValueFact, needle: ValueFact) bool {
+    return switch (container) {
+        .any => false,
+        .tag => |tag| {
+            for (tag.payloads) |payload| {
+                if (factEql(program, payload, needle) or factContainsStrictSubfact(program, payload, needle)) return true;
+            }
+            return false;
+        },
+        .record => |record| {
+            for (record.fields) |field| {
+                if (factEql(program, field.fact, needle) or factContainsStrictSubfact(program, field.fact, needle)) return true;
+            }
+            return false;
+        },
+        .tuple => |tuple| {
+            for (tuple.items) |item| {
+                if (factEql(program, item, needle) or factContainsStrictSubfact(program, item, needle)) return true;
+            }
+            return false;
+        },
+        .nominal => |nominal| {
+            return factEql(program, nominal.backing.*, needle) or factContainsStrictSubfact(program, nominal.backing.*, needle);
+        },
+        .callable => |callable| {
+            for (callable.captures) |capture| {
+                if (factEql(program, capture, needle) or factContainsStrictSubfact(program, capture, needle)) return true;
+            }
+            return false;
+        },
+    };
 }
 
 fn factEql(program: *const Ast.Program, lhs: ValueFact, rhs: ValueFact) bool {
