@@ -854,10 +854,10 @@ fn markReachableLiftedExpr(
         .record => |fields| for (program.fieldExprSpan(fields)) |field| markReachableLiftedExpr(program, field.value, reachable),
         .tag => |tag| for (program.exprSpan(tag.payloads)) |payload| markReachableLiftedExpr(program, payload, reachable),
         .nominal,
-        .return_,
         .dbg,
         .expect,
         => |child| markReachableLiftedExpr(program, child, reachable),
+        .return_ => |ret| markReachableLiftedExpr(program, ret.value, reachable),
         .expect_err => |expect_err| markReachableLiftedExpr(program, expect_err.msg, reachable),
         .comptime_branch_taken => |taken| markReachableLiftedExpr(program, taken.body, reachable),
         .if_initialized_payload => |switch_| {
@@ -936,8 +936,8 @@ fn markReachableLiftedStmt(
         .expr,
         .expect,
         .dbg,
-        .return_,
         => |expr| markReachableLiftedExpr(program, expr, reachable),
+        .return_ => |ret| markReachableLiftedExpr(program, ret.value, reachable),
         .crash => {},
         .uninitialized => {},
     }
