@@ -4143,7 +4143,6 @@ fn appendCheckedNominalDeclarationFromStatement(
         declaration_formals,
         anno_idx,
     );
-
     const padding_field_types = try paddingFieldTypesFromDeclarationAnno(
         allocator,
         module,
@@ -4363,13 +4362,59 @@ fn appendCheckedTypeRootFromDeclarationAnno(
                             ModuleEnv.varFrom(finalized),
                         );
                     }
-                    if (finalized != local.decl_idx) {
-                        checkedArtifactInvariant("checked declaration template generic application referenced an associated-type placeholder", .{});
+                    switch (module.getStatement(finalized)) {
+                        .s_alias_decl => {
+                            const result = try appendInstantiatedAliasDeclarationApplication(
+                                allocator,
+                                module,
+                                names,
+                                imports,
+                                store,
+                                active,
+                                local_type_declarations,
+                                finalized,
+                                actual_args,
+                            );
+                            if (actual_args_owned) {
+                                allocator.free(actual_args);
+                                actual_args_owned = false;
+                            }
+                            break :blk result;
+                        },
+                        .s_nominal_decl => if (finalized != local.decl_idx) {
+                            checkedArtifactInvariant("checked declaration template generic nominal application referenced an associated-type placeholder", .{});
+                        },
+                        else => checkedArtifactInvariant("checked declaration template generic application referenced a non-type declaration", .{}),
                     }
                 },
                 .builtin,
                 .external,
-                => {},
+                => {
+                    const generic_root = try appendCheckedTypeRoot(
+                        allocator,
+                        module,
+                        names,
+                        imports,
+                        store,
+                        active,
+                        ModuleEnv.varFrom(anno_idx),
+                    );
+                    const result = if (actual_args.len == 0)
+                        generic_root
+                    else
+                        try appendInstantiatedNamedApplicationFromTemplate(
+                            allocator,
+                            names,
+                            store,
+                            generic_root,
+                            actual_args,
+                        );
+                    if (actual_args_owned) {
+                        allocator.free(actual_args);
+                        actual_args_owned = false;
+                    }
+                    break :blk result;
+                },
                 .pending => checkedArtifactInvariant("checked declaration template still contained pending apply", .{}),
             }
             if (actual_args_owned) {
@@ -4396,6 +4441,180 @@ fn appendCheckedTypeRootFromDeclarationAnno(
         .malformed,
         => checkedArtifactInvariant("nominal declaration annotation was not a valid checked template", .{}),
     };
+}
+
+fn appendInstantiatedNamedApplicationFromTemplate(
+    allocator: Allocator,
+    names: *const canonical.CanonicalNameStore,
+    store: *CheckedTypeStore,
+    generic_root: CheckedTypeId,
+    actual_args: []const CheckedTypeId,
+) Allocator.Error!CheckedTypeId {
+    const generic_payload = store.payload(generic_root);
+    return switch (generic_payload) {
+        .alias => |alias| blk: {
+            if (alias.args.len != actual_args.len) {
+                checkedArtifactInvariant("checked declaration template alias application arity mismatch", .{});
+            }
+
+            const formals = try allocator.dupe(CheckedTypeId, alias.args);
+            defer allocator.free(formals);
+
+            var active = std.AutoHashMap(CheckedTypeId, CheckedTypeId).init(allocator);
+            defer active.deinit();
+            const backing = try store.cloneCheckedTypeRootSubstituting(
+                allocator,
+                names,
+                alias.backing,
+                formals,
+                actual_args,
+                &active,
+            );
+
+            const payload_args = if (actual_args.len == 0) &.{} else try allocator.dupe(CheckedTypeId, actual_args);
+            errdefer if (payload_args.len != 0) allocator.free(payload_args);
+
+            break :blk try appendExplicitCheckedTypePayload(allocator, names, store, .{ .alias = .{
+                .name = alias.name,
+                .origin_module = alias.origin_module,
+                .source_decl = alias.source_decl,
+                .builtin_origin = alias.builtin_origin,
+                .backing = backing,
+                .args = payload_args,
+            } });
+        },
+        .nominal => |nominal| blk: {
+            if (nominal.args.len != actual_args.len) {
+                checkedArtifactInvariant("checked declaration template nominal application arity mismatch", .{});
+            }
+
+            const formals = try allocator.dupe(CheckedTypeId, nominal.args);
+            defer allocator.free(formals);
+
+            var active = std.AutoHashMap(CheckedTypeId, CheckedTypeId).init(allocator);
+            defer active.deinit();
+            const backing = try store.cloneCheckedTypeRootSubstituting(
+                allocator,
+                names,
+                nominal.backing,
+                formals,
+                actual_args,
+                &active,
+            );
+            const padding_field_types = try store.cloneCheckedTypeIdSliceSubstituting(
+                allocator,
+                names,
+                nominal.padding_field_types,
+                formals,
+                actual_args,
+                &active,
+            );
+            errdefer if (padding_field_types.len != 0) allocator.free(padding_field_types);
+
+            const payload_args = if (actual_args.len == 0) &.{} else try allocator.dupe(CheckedTypeId, actual_args);
+            errdefer if (payload_args.len != 0) allocator.free(payload_args);
+
+            break :blk try appendExplicitCheckedTypePayload(allocator, names, store, .{ .nominal = .{
+                .name = nominal.name,
+                .origin_module = nominal.origin_module,
+                .source_decl = nominal.source_decl,
+                .builtin = nominal.builtin,
+                .is_opaque = nominal.is_opaque,
+                .backing = backing,
+                .representation = nominal.representation,
+                .args = payload_args,
+                .padding_field_types = padding_field_types,
+            } });
+        },
+        else => checkedArtifactInvariant("checked declaration template application did not resolve to a named type", .{}),
+    };
+}
+
+fn appendInstantiatedAliasDeclarationApplication(
+    allocator: Allocator,
+    module: TypedCIR.Module,
+    names: *canonical.CanonicalNameStore,
+    imports: CheckedImportViews,
+    store: *CheckedTypeStore,
+    active: *std.AutoHashMap(Var, CheckedTypeId),
+    local_type_declarations: *const LocalTypeDeclarationIndex,
+    statement_idx: CIR.Statement.Idx,
+    actual_args: []const CheckedTypeId,
+) Allocator.Error!CheckedTypeId {
+    const statement = module.getStatement(statement_idx);
+    const alias = switch (statement) {
+        .s_alias_decl => |alias| alias,
+        else => checkedArtifactInvariant("checked declaration template alias application resolved to a non-alias declaration", .{}),
+    };
+    if (alias.anno == .placeholder) {
+        checkedArtifactInvariant("checked declaration template alias application resolved to an unfinalized alias declaration", .{});
+    }
+
+    const module_env = module.moduleEnvConst();
+    const header = module_env.store.getTypeHeader(alias.header);
+    const header_args = module_env.store.sliceTypeAnnos(header.args);
+    if (header_args.len != actual_args.len) {
+        checkedArtifactInvariant("checked declaration template alias application arity mismatch", .{});
+    }
+
+    const declaration_formals = if (header_args.len == 0) &.{} else blk: {
+        const out = try allocator.alloc(DeclarationFormal, header_args.len);
+        errdefer allocator.free(out);
+        for (header_args, actual_args, 0..) |arg_anno, actual_arg, i| {
+            const arg = module_env.store.getTypeAnno(arg_anno);
+            out[i] = .{
+                .name = switch (arg) {
+                    .rigid_var => |rigid| rigid.name,
+                    else => checkedArtifactInvariant("alias declaration header argument was not a rigid type variable", .{}),
+                },
+                .root = actual_arg,
+            };
+        }
+        break :blk out;
+    };
+    defer if (declaration_formals.len != 0) allocator.free(declaration_formals);
+
+    const generic_root = try appendCheckedTypeRoot(
+        allocator,
+        module,
+        names,
+        imports,
+        store,
+        active,
+        ModuleEnv.varFrom(statement_idx),
+    );
+    const generic_payload = store.payload(generic_root);
+    const generic_alias = switch (generic_payload) {
+        .alias => |payload| payload,
+        else => checkedArtifactInvariant("checked declaration template alias application root was not an alias", .{}),
+    };
+    const alias_name = generic_alias.name;
+    const origin_module = generic_alias.origin_module;
+    const source_decl = generic_alias.source_decl;
+    const builtin_origin = generic_alias.builtin_origin;
+    const backing = try appendCheckedTypeRootFromDeclarationAnno(
+        allocator,
+        module,
+        names,
+        imports,
+        store,
+        active,
+        local_type_declarations,
+        declaration_formals,
+        alias.anno,
+    );
+
+    const payload_args = if (actual_args.len == 0) &.{} else try allocator.dupe(CheckedTypeId, actual_args);
+    errdefer if (payload_args.len != 0) allocator.free(payload_args);
+
+    return try appendExplicitCheckedTypePayload(allocator, names, store, .{ .alias = .{
+        .name = alias_name,
+        .origin_module = origin_module,
+        .source_decl = source_decl,
+        .builtin_origin = builtin_origin,
+        .backing = backing,
+        .args = payload_args,
+    } });
 }
 
 fn checkedTypeIdsFromDeclarationAnnoSpan(
@@ -18741,7 +18960,6 @@ pub const ModuleInterfaceCapabilities = struct {
             };
             if (nominal.builtin != null) continue;
             if (nominal.origin_module != current_module) continue;
-
             const source_key = checked_types.roots.items[i].key;
             const nominal_key = canonical.NominalTypeKey{
                 .module_name = nominal.origin_module,
