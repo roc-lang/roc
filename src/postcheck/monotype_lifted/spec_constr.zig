@@ -3153,7 +3153,7 @@ const Cloner = struct {
         const prepared_captures = try self.pass.allocator.alloc(Value, callable.captures.len);
         defer self.pass.allocator.free(prepared_captures);
         for (source_captures, callable.captures, 0..) |source_capture, capture_value, index| {
-            prepared_captures[index] = try self.makeReusableForMatch(capture_value, &pending_lets);
+            prepared_captures[index] = try self.valueForInlineLocal(source_capture.local, capture_value, body, 0, &pending_lets);
             try self.putSubst(source_capture.local, prepared_captures[index]);
         }
 
@@ -3494,11 +3494,16 @@ const Cloner = struct {
         const cloned: Ast.Stmt = switch (stmt) {
             .uninitialized => |pat| .{ .uninitialized = try self.clonePat(pat) },
             .let_ => |let_| blk: {
-                const value = if (let_.recursive)
+                var value = if (let_.recursive)
                     try self.cloneExprValue(let_.value)
                 else
                     try self.cloneExprValueDemandingFact(let_.value);
                 if (!let_.recursive) {
+                    while (value == .let_) {
+                        try self.appendPendingLetStmts(value.let_.lets, out);
+                        value = value.let_.body.*;
+                    }
+
                     var pending_lets = std.ArrayList(PendingLet).empty;
                     defer pending_lets.deinit(self.pass.allocator);
 
