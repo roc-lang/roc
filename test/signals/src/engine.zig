@@ -6824,18 +6824,50 @@ pub fn Engine(comptime Ctx: type) type {
             return true;
         }
 
-        pub fn activeEachRowScopesInRenderOrder(self: *Self, allocator: std.mem.Allocator, site: HostEachSite) []u64 {
-            var ids: std.ArrayListUnmanaged(u64) = .empty;
-            errdefer ids.deinit(allocator);
+        pub fn activeEachRowRenderSegmentsInRenderOrder(self: *Self, allocator: std.mem.Allocator, site: HostEachSite) []HostEachRowRenderSegment {
+            var segments: std.ArrayListUnmanaged(HostEachRowRenderSegment) = .empty;
+            errdefer segments.deinit(allocator);
+            var segment_indexes_by_scope: std.AutoHashMapUnmanaged(u64, usize) = .{};
+            defer segment_indexes_by_scope.deinit(allocator);
 
             self.recordStreamNodesScannedBy(.stream_nodes_scanned_render_scope, self.active_stream.render_nodes.items.len);
-            for (self.active_stream.render_nodes.items) |node| {
+            var render_index: usize = 0;
+            while (render_index < self.active_stream.render_nodes.items.len) {
+                const node = self.active_stream.render_nodes.items[render_index];
                 const scope_id = renderNodeScopeId(&self.active_stream, node);
-                const row_scope_id = (self.eachSiteRowAncestorScopeId(scope_id, site) catch @panic("scope descriptor referenced an unknown parent scope")) orelse continue;
-                appendUniqueU64(allocator, &ids, row_scope_id);
+                const row_scope_id = (self.eachSiteRowAncestorScopeId(scope_id, site) catch @panic("scope descriptor referenced an unknown parent scope")) orelse {
+                    render_index += 1;
+                    continue;
+                };
+                const start = render_index;
+                render_index += 1;
+                while (render_index < self.active_stream.render_nodes.items.len) : (render_index += 1) {
+                    const next_node = self.active_stream.render_nodes.items[render_index];
+                    const next_scope_id = renderNodeScopeId(&self.active_stream, next_node);
+                    const next_row_scope_id = self.eachSiteRowAncestorScopeId(next_scope_id, site) catch @panic("scope descriptor referenced an unknown parent scope");
+                    if (next_row_scope_id == null or next_row_scope_id.? != row_scope_id) break;
+                }
+
+                const segment_index = segments.items.len;
+                segments.append(allocator, .{
+                    .scope_id = row_scope_id,
+                    .start = start,
+                    .len = render_index - start,
+                }) catch @panic("out of memory");
+                const entry = segment_indexes_by_scope.getOrPut(allocator, row_scope_id) catch @panic("out of memory");
+                if (entry.found_existing) @panic("each row render nodes were split across multiple segments");
+                entry.value_ptr.* = segment_index;
             }
 
-            return ids.toOwnedSlice(allocator) catch @panic("out of memory");
+            return segments.toOwnedSlice(allocator) catch @panic("out of memory");
+        }
+
+        pub fn eachRenderSegmentScopeIds(allocator: std.mem.Allocator, segments: []const HostEachRowRenderSegment) []u64 {
+            const ids = allocator.alloc(u64, segments.len) catch @panic("out of memory");
+            for (segments, ids) |segment, *id| {
+                id.* = segment.scope_id;
+            }
+            return ids;
         }
 
         pub fn eachDiffIsPurePermutation(self: *Self, old_render_rows: []const u64, diff: HostKeyedRowDiffResult, dirty_source_node_ids: []const u64) bool {
@@ -6970,33 +7002,62 @@ pub fn Engine(comptime Ctx: type) type {
             return counts;
         }
 
-        pub fn renderInsertIndexForEachRow(self: *Self, site: HostNodeScopeSiteDesc, next_scope_ids: []const u64, row_index: usize) usize {
+        pub fn renderInsertIndexForEachRowRanges(site: HostNodeScopeSiteDesc, row_ranges: *const std.AutoHashMapUnmanaged(u64, HostEachRowRenderSegment), next_scope_ids: []const u64, row_index: usize) usize {
             if (row_index >= next_scope_ids.len) @panic("each row insertion index was requested outside the next row order");
 
-            if (self.firstRenderIndexInScopeSubtree(&self.active_stream, next_scope_ids[row_index])) |existing_index| {
-                return existing_index;
+            if (row_ranges.get(next_scope_ids[row_index])) |existing| {
+                return existing.start;
             }
 
             var next_index = row_index + 1;
             while (next_index < next_scope_ids.len) : (next_index += 1) {
-                if (self.firstRenderIndexInScopeSubtree(&self.active_stream, next_scope_ids[next_index])) |insert_before| {
-                    return insert_before;
+                if (row_ranges.get(next_scope_ids[next_index])) |next| {
+                    return next.start;
                 }
             }
 
             var previous_index = row_index;
             while (previous_index > 0) {
                 previous_index -= 1;
-                if (self.lastRenderEndIndexInScopeSubtree(&self.active_stream, next_scope_ids[previous_index])) |insert_after| {
-                    return insert_after;
+                if (row_ranges.get(next_scope_ids[previous_index])) |previous| {
+                    return previous.start + previous.len;
                 }
             }
 
             return site.render_insert_index;
         }
 
-        pub fn applyDirtyEachRowScopeSplices(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, site: HostNodeScopeSiteDesc, each: HostNodeEachDesc, diff: HostKeyedRowDiffResult, dirty_source_node_ids: []const u64, dirty_generation: u64) render.Counts {
+        pub fn adjustEachRowRenderRanges(row_ranges: *std.AutoHashMapUnmanaged(u64, HostEachRowRenderSegment), replace_index: usize, removed_count: usize, replacement_count: usize) void {
+            var range_iterator = row_ranges.iterator();
+            while (range_iterator.next()) |entry| {
+                entry.value_ptr.start = adjustedRenderInsertIndex(entry.value_ptr.start, replace_index, removed_count, replacement_count);
+            }
+        }
+
+        pub fn updateEachRowRenderRange(row_ranges: *std.AutoHashMapUnmanaged(u64, HostEachRowRenderSegment), allocator: std.mem.Allocator, scope_id: u64, render_insert_index: usize, removed_count: usize, replacement_count: usize) void {
+            const removed_range = row_ranges.fetchRemove(scope_id);
+            const old_len = if (removed_range) |entry| entry.value.len else 0;
+            if (old_len != removed_count) @panic("each row render range length did not match splice removal count");
+            adjustEachRowRenderRanges(row_ranges, render_insert_index, old_len, replacement_count);
+            if (replacement_count != 0) {
+                row_ranges.put(allocator, scope_id, .{
+                    .scope_id = scope_id,
+                    .start = render_insert_index,
+                    .len = replacement_count,
+                }) catch @panic("out of memory");
+            }
+        }
+
+        pub fn applyDirtyEachRowScopeSplices(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, site: HostNodeScopeSiteDesc, each: HostNodeEachDesc, old_render_segments: []const HostEachRowRenderSegment, diff: HostKeyedRowDiffResult, dirty_source_node_ids: []const u64, dirty_generation: u64) render.Counts {
             const allocator = Ctx.allocator(ctx);
+            var row_ranges: std.AutoHashMapUnmanaged(u64, HostEachRowRenderSegment) = .{};
+            defer row_ranges.deinit(allocator);
+            for (old_render_segments) |segment| {
+                const entry = row_ranges.getOrPut(allocator, segment.scope_id) catch @panic("out of memory");
+                if (entry.found_existing) @panic("each row render range index received duplicate row scopes");
+                entry.value_ptr.* = segment;
+            }
+
             var removed_elem_ids: std.ArrayListUnmanaged(u64) = .empty;
             defer removed_elem_ids.deinit(allocator);
             var touched_parent_ids: std.ArrayListUnmanaged(u64) = .empty;
@@ -7011,9 +7072,11 @@ pub fn Engine(comptime Ctx: type) type {
 
             for (diff.removed_scope_ids) |removed_scope_id| {
                 var empty_stream: HostNodeDescriptorStream = .{};
-                const render_insert_index = self.firstRenderIndexInScopeSubtree(&self.active_stream, removed_scope_id) orelse site.render_insert_index;
+                const removed_range = row_ranges.get(removed_scope_id);
+                const render_insert_index = if (removed_range) |range| range.start else site.render_insert_index;
                 const splice = self.spliceActiveStreamReplacingScope(ctx, roc_host, removed_scope_id, render_insert_index, &empty_stream);
                 defer splice.deinit(allocator);
+                updateEachRowRenderRange(&row_ranges, allocator, removed_scope_id, render_insert_index, splice.removed_elem_ids.len, splice.replacement_elem_ids.len);
 
                 removed_elem_ids.appendSlice(allocator, splice.removed_elem_ids) catch @panic("out of memory");
                 for (splice.touched_parent_ids) |parent_id| {
@@ -7034,9 +7097,10 @@ pub fn Engine(comptime Ctx: type) type {
                 defer row_stream.deinit(allocator, ctx, roc_host, &self.pending_roc_metrics);
                 self.collectActiveEachSingleRowDescriptors(ctx, roc_host, &row_stream, site, each, row_scope_id, diff.scope_created[row_index], dirty_source_node_ids);
 
-                const render_insert_index = self.renderInsertIndexForEachRow(site, diff.scope_ids, row_index);
+                const render_insert_index = renderInsertIndexForEachRowRanges(site, &row_ranges, diff.scope_ids, row_index);
                 const splice = self.spliceActiveStreamReplacingScope(ctx, roc_host, row_scope_id, render_insert_index, &row_stream);
                 defer splice.deinit(allocator);
+                updateEachRowRenderRange(&row_ranges, allocator, row_scope_id, render_insert_index, splice.removed_elem_ids.len, splice.replacement_elem_ids.len);
 
                 removed_elem_ids.appendSlice(allocator, splice.removed_elem_ids) catch @panic("out of memory");
                 for (splice.touched_parent_ids) |parent_id| {
@@ -7065,8 +7129,8 @@ pub fn Engine(comptime Ctx: type) type {
             }, dirty_source_node_ids, dirty_generation);
         }
 
-        pub fn applyDirtyEachMixedRowSplicesAndMoves(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, site: HostNodeScopeSiteDesc, each: HostNodeEachDesc, diff: HostKeyedRowDiffResult, dirty_source_node_ids: []const u64, dirty_generation: u64) render.Counts {
-            var counts = self.applyDirtyEachRowScopeSplices(ctx, roc_host, site, each, diff, dirty_source_node_ids, dirty_generation);
+        pub fn applyDirtyEachMixedRowSplicesAndMoves(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, site: HostNodeScopeSiteDesc, each: HostNodeEachDesc, old_render_segments: []const HostEachRowRenderSegment, diff: HostKeyedRowDiffResult, dirty_source_node_ids: []const u64, dirty_generation: u64) render.Counts {
+            var counts = self.applyDirtyEachRowScopeSplices(ctx, roc_host, site, each, old_render_segments, diff, dirty_source_node_ids, dirty_generation);
             counts.addAll(self.applyDirtyEachPermutationMoves(ctx, site, diff.scope_ids));
             return counts;
         }
@@ -7667,13 +7731,15 @@ pub fn Engine(comptime Ctx: type) type {
                         const allocator = Ctx.allocator(ctx);
                         const old_active_rows = self.activeEachRowScopes(allocator, site.scope_id, site.ordinal) catch @panic("scope id has no host scope descriptor");
                         defer allocator.free(old_active_rows);
-                        const old_render_rows = self.activeEachRowScopesInRenderOrder(allocator, each_site);
+                        const old_render_segments = self.activeEachRowRenderSegmentsInRenderOrder(allocator, each_site);
+                        defer allocator.free(old_render_segments);
+                        const old_render_rows = eachRenderSegmentScopeIds(allocator, old_render_segments);
                         defer allocator.free(old_render_rows);
                         const diff = self.syncActiveEachRowScopes(ctx, roc_host, site, each_desc);
                         defer diff.deinit(allocator);
 
                         if (old_active_rows.len == old_render_rows.len and Self.eachDiffPreservesSurvivorRenderOrder(old_render_rows, diff.scope_ids)) {
-                            const counts = self.applyDirtyEachRowScopeSplices(ctx, roc_host, site, each_desc, diff, dirty_source_node_ids, dirty_generation);
+                            const counts = self.applyDirtyEachRowScopeSplices(ctx, roc_host, site, each_desc, old_render_segments, diff, dirty_source_node_ids, dirty_generation);
                             total_counts.addAll(counts);
                             applied_any = true;
                             continue;
@@ -7687,7 +7753,7 @@ pub fn Engine(comptime Ctx: type) type {
                         }
 
                         if (old_active_rows.len == old_render_rows.len) {
-                            const counts = self.applyDirtyEachMixedRowSplicesAndMoves(ctx, roc_host, site, each_desc, diff, dirty_source_node_ids, dirty_generation);
+                            const counts = self.applyDirtyEachMixedRowSplicesAndMoves(ctx, roc_host, site, each_desc, old_render_segments, diff, dirty_source_node_ids, dirty_generation);
                             total_counts.addAll(counts);
                             applied_any = true;
                             continue;

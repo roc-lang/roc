@@ -451,6 +451,32 @@ Outcome:
   elem-owned-removal reading, while kanban is slower than the previous sample.
   The scan attribution is the reliable signal here.
 
+Each-row splices now use explicit per-event row render ranges, captured on
+2026-06-27. The render-order scan already needed for each diff classification
+now returns `[scope_id, render_start, len]` segments. Row splices build a local
+range map from those segments and update it after each splice, so insertion
+points consume explicit range data instead of repeatedly scanning the active
+render stream for first/last nodes in a row scope.
+
+| case | total_ns | stream_nodes_scanned | remove_target | render_scope | splice | events | dirty_scope | render_indexes_refreshed | host_alloc_bytes_this_event |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| signals-large-each-64 | 697220749 | 43940 | 5600 | 15280 | 4220 | 12520 | 6320 | 90920 | 200502620 |
+| signals-kanban-board | 551420216 | 69800 | 3200 | 30940 | 5520 | 28300 | 1840 | 17680 | 90407940 |
+
+Outcome:
+
+- `stream_nodes_scanned_render_scope` fell from 236360 to 15280 on large-each
+  and from 77800 to 30940 on kanban.
+- Total measured stream scans fell to 43940 on large-each and 69800 on kanban.
+  The largest remaining counted buckets are now event scans and the residual
+  render-scope scan.
+- The local range map adds transient allocation: host allocation bytes rose by
+  about 1.6MB on large-each and 0.1MB on kanban in this single sample. This is a
+  good candidate for the next scratch-buffer pass once the remaining structural
+  tail is understood.
+- The biggest remaining non-counted structural tail is now
+  `render_indexes_refreshed`, especially on large-each at 90920.
+
 Outcome:
 
 - `signal_record_table_rebuilt` dropped to zero in the two structural canaries.
@@ -517,16 +543,16 @@ evidence-gated.
 
 Current priority after the Phase 4 review:
 
-1. Collapse `render_scope` behind explicit active scope range data. Splice now
-   consumes its explicit insertion index and is no longer the large scan bucket.
-2. Remove or bound the render-index refresh tail so splices do not restamp from
+1. Remove or bound the render-index refresh tail so splices do not restamp from
    the splice point to the end of the render-node table.
-3. Reduce event descriptor scans in the structural apply path, especially for
+2. Reduce event descriptor scans in the structural apply path, especially for
    kanban, after the render-scope range work.
+3. Move the per-event each row segment/range-map allocations to scratch if the
+   allocation counters stay elevated after the render-index/event work.
 4. Revisit scope-owned descriptor removal only if the now-small
    `remove_target` residue grows under a broader app or long-session gate.
-5. Then move transient structural buffers to scratch, starting with making
-   `streamDirectChildren` allocation-free for callers.
+5. Then move remaining transient structural buffers to scratch, starting with
+   making `streamDirectChildren` allocation-free for callers.
 6. Keep the long-session leak/plateau gate in the loop for monotonic identity
    and dense `_by_elem_id` tables.
 
@@ -654,9 +680,15 @@ Current priority after the Phase 4 review:
 - **Implemented slice:** splice now consumes the explicit `render_insert_index`
   and scans only the contiguous target range. `stream_nodes_scanned_splice` is
   down again to `4220` on large-each and `5520` on kanban.
-- **How we'll know:** replace the remaining render-scope scans with explicit
-  active scope range lookup and tighten large-N
-  `stream_nodes_scanned_render_scope` assertions.
+- **Implemented slice:** each-row structural splices now reuse explicit
+  per-event row render segments and update a local range map after each splice.
+  `stream_nodes_scanned_render_scope` is down to `15280` on large-each and
+  `30940` on kanban.
+- **Remaining decision:** a persistent active scope range index could remove the
+  residual render-scope scans, but the next measured targets are now
+  `render_indexes_refreshed` and event descriptor scans. Revisit the persistent
+  range index only if the residual bucket grows again or overlaps with the
+  render-index refresh fix.
 
 ### Per-cycle scratch/arena to remove dispatch allocation churn
 
