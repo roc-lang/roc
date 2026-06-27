@@ -390,15 +390,17 @@ pub const TailTransform = enum(u8) {
 
 /// Whether native backends must probe this proc's stack frame page-by-page
 /// before any frame-local access. This is a LIR contract, not a backend
-/// heuristic: lowering sets it when a proc's logical locals/params/return can
+/// policy decision: lowering sets it when a proc's logical locals/params/return can
 /// force dangerous native-stack aggregate storage.
 pub const StackProbe = enum(u8) {
     default,
     required,
 };
 
+/// Page-size threshold used when deciding whether a layout needs native stack probing.
 pub const stack_probe_page_size: u32 = 4096;
 
+/// Reports whether values of this layout are large enough to require stack probing.
 pub fn layoutNeedsStackProbe(layouts: *const layout.Store, layout_idx: layout.Idx) bool {
     const layout_data = layouts.getLayout(layout_idx);
     const size = layouts.layoutSizeAlign(layout_data).size;
@@ -454,6 +456,13 @@ pub const CFStmt = union(enum) {
         /// without inspecting the count; the runtime check is always sound,
         /// so a zero mask reproduces fully checked behavior.
         unique_args: u64 = 0,
+        /// For `list_map_can_reuse`: whether the input and output element
+        /// layouts are interchangeable in one allocation, computed per pointer
+        /// width. Resolved at codegen for the target being built — a `false`
+        /// width forces the op to a constant `0` (reuse statically impossible),
+        /// so the in-place branch is never taken there. Target-independent
+        /// because both widths are stored; ignored by every other op.
+        interchangeable: layout.WidthValues(bool) = layout.WidthValues(bool).both(true, true),
         args: LocalSpan,
         next: CFStmtId,
     },

@@ -605,6 +605,7 @@ pub fn getProcSpecs(self: *const Self) []const LirProcSpec {
     return self.proc_specs.items;
 }
 
+/// Reports whether any local in a span has a layout that requires stack probing.
 pub fn localSpanNeedsStackProbe(self: *const Self, layouts: *const layout.Store, span: LocalSpan) bool {
     for (self.getLocalSpan(span)) |local| {
         if (lir_defs.layoutNeedsStackProbe(layouts, self.getLocal(local).layout_idx)) return true;
@@ -612,6 +613,7 @@ pub fn localSpanNeedsStackProbe(self: *const Self, layouts: *const layout.Store,
     return false;
 }
 
+/// Reports whether a proc's args, frame locals, or return layout require stack probing.
 pub fn procNeedsStackProbe(self: *const Self, layouts: *const layout.Store, proc: LirProcSpec) bool {
     if (self.localSpanNeedsStackProbe(layouts, proc.args)) return true;
     if (self.localSpanNeedsStackProbe(layouts, proc.frame_locals)) return true;
