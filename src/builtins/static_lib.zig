@@ -183,4 +183,13 @@ comptime {
     @export(&dw.roc_builtins_hasher_write_f64_bits, .{ .name = "roc_builtins_hasher_write_f64_bits" });
     @export(&dw.roc_builtins_hasher_write_bytes, .{ .name = "roc_builtins_hasher_write_bytes" });
     @export(&dw.roc_builtins_hasher_write_str, .{ .name = "roc_builtins_hasher_write_str" });
+    // Crypto wrappers
+    @export(&dw.roc_builtins_crypto_sha256_hash_bytes, .{ .name = "roc_builtins_crypto_sha256_hash_bytes" });
+    @export(&dw.roc_builtins_crypto_sha256_hasher_empty, .{ .name = "roc_builtins_crypto_sha256_hasher_empty" });
+    @export(&dw.roc_builtins_crypto_sha256_hasher_write, .{ .name = "roc_builtins_crypto_sha256_hasher_write" });
+    @export(&dw.roc_builtins_crypto_sha256_hasher_finish, .{ .name = "roc_builtins_crypto_sha256_hasher_finish" });
+    @export(&dw.roc_builtins_crypto_blake3_hash_bytes, .{ .name = "roc_builtins_crypto_blake3_hash_bytes" });
+    @export(&dw.roc_builtins_crypto_blake3_hasher_empty, .{ .name = "roc_builtins_crypto_blake3_hasher_empty" });
+    @export(&dw.roc_builtins_crypto_blake3_hasher_write, .{ .name = "roc_builtins_crypto_blake3_hasher_write" });
+    @export(&dw.roc_builtins_crypto_blake3_hasher_finish, .{ .name = "roc_builtins_crypto_blake3_hasher_finish" });
 }

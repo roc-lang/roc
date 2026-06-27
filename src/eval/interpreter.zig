@@ -5363,6 +5363,68 @@ pub const Interpreter = struct {
                 break :blk self.writeHasherValue(ll.ret_layout, next);
             },
 
+            // ── Crypto ──
+            .crypto_sha256_hash_bytes,
+            .crypto_blake3_hash_bytes,
+            => blk: {
+                var crash_boundary = self.enterCrashBoundary();
+                defer crash_boundary.deinit();
+                const sj = crash_boundary.set();
+                if (sj != 0) return error.Crash;
+                const bytes = try self.byteListSlice(args[0], try self.lowLevelArgLayout(ll, 0));
+                const result = switch (ll.op) {
+                    .crypto_sha256_hash_bytes => builtins.crypto.sha256HashBytes(bytes.ptr, bytes.len, &self.roc_ops),
+                    .crypto_blake3_hash_bytes => builtins.crypto.blake3HashBytes(bytes.ptr, bytes.len, &self.roc_ops),
+                    else => unreachable,
+                };
+                break :blk self.rocListToValue(result, ll.ret_layout);
+            },
+            .crypto_sha256_hasher_empty,
+            .crypto_blake3_hasher_empty,
+            => blk: {
+                var crash_boundary = self.enterCrashBoundary();
+                defer crash_boundary.deinit();
+                const sj = crash_boundary.set();
+                if (sj != 0) return error.Crash;
+                const result = switch (ll.op) {
+                    .crypto_sha256_hasher_empty => builtins.crypto.sha256HasherEmpty(&self.roc_ops),
+                    .crypto_blake3_hasher_empty => builtins.crypto.blake3HasherEmpty(&self.roc_ops),
+                    else => unreachable,
+                };
+                break :blk self.rocListToValue(result, ll.ret_layout);
+            },
+            .crypto_sha256_hasher_write,
+            .crypto_blake3_hasher_write,
+            => blk: {
+                var crash_boundary = self.enterCrashBoundary();
+                defer crash_boundary.deinit();
+                const sj = crash_boundary.set();
+                if (sj != 0) return error.Crash;
+                const state = try self.byteListSlice(args[0], try self.lowLevelArgLayout(ll, 0));
+                const bytes = try self.byteListSlice(args[1], try self.lowLevelArgLayout(ll, 1));
+                const result = switch (ll.op) {
+                    .crypto_sha256_hasher_write => builtins.crypto.sha256HasherWrite(state.ptr, state.len, bytes.ptr, bytes.len, &self.roc_ops),
+                    .crypto_blake3_hasher_write => builtins.crypto.blake3HasherWrite(state.ptr, state.len, bytes.ptr, bytes.len, &self.roc_ops),
+                    else => unreachable,
+                };
+                break :blk self.rocListToValue(result, ll.ret_layout);
+            },
+            .crypto_sha256_hasher_finish,
+            .crypto_blake3_hasher_finish,
+            => blk: {
+                var crash_boundary = self.enterCrashBoundary();
+                defer crash_boundary.deinit();
+                const sj = crash_boundary.set();
+                if (sj != 0) return error.Crash;
+                const state = try self.byteListSlice(args[0], try self.lowLevelArgLayout(ll, 0));
+                const result = switch (ll.op) {
+                    .crypto_sha256_hasher_finish => builtins.crypto.sha256HasherFinish(state.ptr, state.len, &self.roc_ops),
+                    .crypto_blake3_hasher_finish => builtins.crypto.blake3HasherFinish(state.ptr, state.len, &self.roc_ops),
+                    else => unreachable,
+                };
+                break :blk self.rocListToValue(result, ll.ret_layout);
+            },
+
             // ── Numeric parsing ──
             .u8_from_str,
             .i8_from_str,

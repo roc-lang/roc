@@ -326,6 +326,16 @@ pub const BuiltinFn = enum {
     hasher_write_bytes,
     hasher_write_str,
 
+    // Crypto operations
+    crypto_sha256_hash_bytes,
+    crypto_sha256_hasher_empty,
+    crypto_sha256_hasher_write,
+    crypto_sha256_hasher_finish,
+    crypto_blake3_hash_bytes,
+    crypto_blake3_hasher_empty,
+    crypto_blake3_hasher_write,
+    crypto_blake3_hasher_finish,
+
     /// Get the exported symbol name for object file linking.
     pub fn symbolName(self: BuiltinFn) []const u8 {
         return switch (self) {
@@ -466,6 +476,16 @@ pub const BuiltinFn = enum {
             .hasher_write_f64_bits => "roc_builtins_hasher_write_f64_bits",
             .hasher_write_bytes => "roc_builtins_hasher_write_bytes",
             .hasher_write_str => "roc_builtins_hasher_write_str",
+
+            // Crypto operations
+            .crypto_sha256_hash_bytes => "roc_builtins_crypto_sha256_hash_bytes",
+            .crypto_sha256_hasher_empty => "roc_builtins_crypto_sha256_hasher_empty",
+            .crypto_sha256_hasher_write => "roc_builtins_crypto_sha256_hasher_write",
+            .crypto_sha256_hasher_finish => "roc_builtins_crypto_sha256_hasher_finish",
+            .crypto_blake3_hash_bytes => "roc_builtins_crypto_blake3_hash_bytes",
+            .crypto_blake3_hasher_empty => "roc_builtins_crypto_blake3_hasher_empty",
+            .crypto_blake3_hasher_write => "roc_builtins_crypto_blake3_hasher_write",
+            .crypto_blake3_hasher_finish => "roc_builtins_crypto_blake3_hasher_finish",
         };
     }
 };
@@ -3964,6 +3984,16 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .hasher_write_str,
                 => return try self.generateHasherLowLevel(ll, args),
 
+                .crypto_sha256_hash_bytes,
+                .crypto_sha256_hasher_empty,
+                .crypto_sha256_hasher_write,
+                .crypto_sha256_hasher_finish,
+                .crypto_blake3_hash_bytes,
+                .crypto_blake3_hasher_empty,
+                .crypto_blake3_hasher_write,
+                .crypto_blake3_hasher_finish,
+                => return try self.generateCryptoLowLevel(ll, args),
+
                 .u8_to_str => {
                     const value_loc = try self.emitValueLocal(args[0]);
                     return self.callIntToStr(value_loc, 1, false);
@@ -4665,6 +4695,79 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
         }
 
+        fn generateCryptoLowLevel(self: *Self, ll: anytype, args: []const LocalId) Allocator.Error!ValueLocation {
+            const Arity = enum { zero, one, two };
+            const CryptoCall = struct {
+                arity: Arity,
+                addr: usize,
+                builtin_fn: BuiltinFn,
+            };
+            const call: CryptoCall = switch (ll.op) {
+                .crypto_sha256_hash_bytes => .{
+                    .arity = Arity.one,
+                    .addr = @intFromPtr(&dev_wrappers.roc_builtins_crypto_sha256_hash_bytes),
+                    .builtin_fn = BuiltinFn.crypto_sha256_hash_bytes,
+                },
+                .crypto_sha256_hasher_empty => .{
+                    .arity = Arity.zero,
+                    .addr = @intFromPtr(&dev_wrappers.roc_builtins_crypto_sha256_hasher_empty),
+                    .builtin_fn = BuiltinFn.crypto_sha256_hasher_empty,
+                },
+                .crypto_sha256_hasher_write => .{
+                    .arity = Arity.two,
+                    .addr = @intFromPtr(&dev_wrappers.roc_builtins_crypto_sha256_hasher_write),
+                    .builtin_fn = BuiltinFn.crypto_sha256_hasher_write,
+                },
+                .crypto_sha256_hasher_finish => .{
+                    .arity = Arity.one,
+                    .addr = @intFromPtr(&dev_wrappers.roc_builtins_crypto_sha256_hasher_finish),
+                    .builtin_fn = BuiltinFn.crypto_sha256_hasher_finish,
+                },
+                .crypto_blake3_hash_bytes => .{
+                    .arity = Arity.one,
+                    .addr = @intFromPtr(&dev_wrappers.roc_builtins_crypto_blake3_hash_bytes),
+                    .builtin_fn = BuiltinFn.crypto_blake3_hash_bytes,
+                },
+                .crypto_blake3_hasher_empty => .{
+                    .arity = Arity.zero,
+                    .addr = @intFromPtr(&dev_wrappers.roc_builtins_crypto_blake3_hasher_empty),
+                    .builtin_fn = BuiltinFn.crypto_blake3_hasher_empty,
+                },
+                .crypto_blake3_hasher_write => .{
+                    .arity = Arity.two,
+                    .addr = @intFromPtr(&dev_wrappers.roc_builtins_crypto_blake3_hasher_write),
+                    .builtin_fn = BuiltinFn.crypto_blake3_hasher_write,
+                },
+                .crypto_blake3_hasher_finish => .{
+                    .arity = Arity.one,
+                    .addr = @intFromPtr(&dev_wrappers.roc_builtins_crypto_blake3_hasher_finish),
+                    .builtin_fn = BuiltinFn.crypto_blake3_hasher_finish,
+                },
+                else => unreachable,
+            };
+
+            return switch (call.arity) {
+                .zero => blk: {
+                    if (args.len != 0) unreachable;
+                    break :blk try self.callNoArgRocOpsToList(call.addr, call.builtin_fn);
+                },
+                .one => blk: {
+                    if (args.len != 1) unreachable;
+                    const list_loc = try self.emitValueLocal(args[0]);
+                    const list_off = try self.ensureOnStack(list_loc, roc_list_size);
+                    break :blk try self.callList1RocOpsToList(list_off, call.addr, call.builtin_fn);
+                },
+                .two => blk: {
+                    if (args.len != 2) unreachable;
+                    const first_loc = try self.emitValueLocal(args[0]);
+                    const second_loc = try self.emitValueLocal(args[1]);
+                    const first_off = try self.ensureOnStack(first_loc, roc_list_size);
+                    const second_off = try self.ensureOnStack(second_loc, roc_list_size);
+                    break :blk try self.callList2RocOpsToList(first_off, second_off, call.addr, call.builtin_fn);
+                },
+            };
+        }
+
         // ── Helper methods for calling C wrapper builtins ──
 
         /// Call a C wrapper: fn(out, str_f0, str_f1, str_f2, roc_ops) -> void
@@ -4706,6 +4809,57 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.callBuiltin(&builder, fn_addr, builtin_fn);
 
             return .{ .stack_str = result_offset };
+        }
+
+        /// Call a C wrapper: fn(out, roc_ops) -> void
+        /// Used for no-arg ops returning List(U8).
+        fn callNoArgRocOpsToList(self: *Self, fn_addr: usize, builtin_fn: BuiltinFn) Allocator.Error!ValueLocation {
+            const roc_ops_reg = self.roc_ops_reg orelse unreachable;
+            const result_offset = self.codegen.allocStackSlot(roc_list_size);
+
+            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            try builder.addLeaArg(frame_ptr, result_offset);
+            try builder.addRegArg(roc_ops_reg);
+            try self.callBuiltin(&builder, fn_addr, builtin_fn);
+
+            return .{ .list_stack = .{ .struct_offset = result_offset, .data_offset = 0, .num_elements = 0 } };
+        }
+
+        /// Call a C wrapper: fn(out, list_bytes, list_len, list_cap, roc_ops) -> void
+        /// Used for list->list ops that take 1 list + roc_ops.
+        fn callList1RocOpsToList(self: *Self, list_off: i32, fn_addr: usize, builtin_fn: BuiltinFn) Allocator.Error!ValueLocation {
+            const roc_ops_reg = self.roc_ops_reg orelse unreachable;
+            const result_offset = self.codegen.allocStackSlot(roc_list_size);
+
+            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            try builder.addLeaArg(frame_ptr, result_offset);
+            try builder.addMemArg(frame_ptr, list_off);
+            try builder.addMemArg(frame_ptr, list_off + 8);
+            try builder.addMemArg(frame_ptr, list_off + 16);
+            try builder.addRegArg(roc_ops_reg);
+            try self.callBuiltin(&builder, fn_addr, builtin_fn);
+
+            return .{ .list_stack = .{ .struct_offset = result_offset, .data_offset = 0, .num_elements = 0 } };
+        }
+
+        /// Call a C wrapper: fn(out, list1_bytes, list1_len, list1_cap, list2_bytes, list2_len, list2_cap, roc_ops) -> void
+        /// Used for list+list->list ops.
+        fn callList2RocOpsToList(self: *Self, first_off: i32, second_off: i32, fn_addr: usize, builtin_fn: BuiltinFn) Allocator.Error!ValueLocation {
+            const roc_ops_reg = self.roc_ops_reg orelse unreachable;
+            const result_offset = self.codegen.allocStackSlot(roc_list_size);
+
+            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            try builder.addLeaArg(frame_ptr, result_offset);
+            try builder.addMemArg(frame_ptr, first_off);
+            try builder.addMemArg(frame_ptr, first_off + 8);
+            try builder.addMemArg(frame_ptr, first_off + 16);
+            try builder.addMemArg(frame_ptr, second_off);
+            try builder.addMemArg(frame_ptr, second_off + 8);
+            try builder.addMemArg(frame_ptr, second_off + 16);
+            try builder.addRegArg(roc_ops_reg);
+            try self.callBuiltin(&builder, fn_addr, builtin_fn);
+
+            return .{ .list_stack = .{ .struct_offset = result_offset, .data_offset = 0, .num_elements = 0 } };
         }
 
         /// Call a C wrapper: fn(out, list_bytes, list_len, list_cap, str_bytes, str_len, str_cap, roc_ops) -> void
