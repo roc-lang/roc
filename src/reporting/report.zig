@@ -79,8 +79,8 @@ fn isAsciiAlphaNum(c: u8) bool {
 }
 
 fn containsNewline(text: []const u8) bool {
-    return std.mem.indexOfScalar(u8, text, '\n') != null or
-        std.mem.indexOfScalar(u8, text, '\r') != null;
+    return std.mem.findScalar(u8, text, '\n') != null or
+        std.mem.findScalar(u8, text, '\r') != null;
 }
 
 fn isLowercaseTitleParticle(word: []const u8) bool {
@@ -179,7 +179,7 @@ fn validateTitleTokens(title: []const u8, token_count: usize) bool {
 
 fn isValidReportTitle(title: []const u8) bool {
     if (title.len == 0 or !isTrimmed(title) or containsNewline(title)) return false;
-    if (std.mem.indexOf(u8, title, "  ") != null) return false;
+    if (std.mem.find(u8, title, "  ") != null) return false;
 
     for (title) |c| {
         if (c >= 0x80) return false;
