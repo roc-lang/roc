@@ -8019,6 +8019,63 @@ fn demandedKnownValueType(known_value: DemandedKnownValue) Type.TypeId {
     };
 }
 
+fn privateStateValueType(value: PrivateStateValue) Type.TypeId {
+    return switch (value) {
+        .leaf => |leaf| leaf.ty,
+        .tag => |tag| tag.ty,
+        .record => |record| record.ty,
+        .tuple => |tuple| tuple.ty,
+        .nominal => |nominal| nominal.ty,
+        .callable => |callable| callable.ty,
+    };
+}
+
+fn privateStateField(value: PrivateStateValue, name: names.RecordFieldNameId) ?PrivateStateValue {
+    return switch (value) {
+        .record => |record| privateStateFieldByName(record.fields, name),
+        .nominal => |nominal| if (nominal.backing) |backing| privateStateField(backing.*, name) else null,
+        else => null,
+    };
+}
+
+fn privateStateItem(value: PrivateStateValue, index: u32) ?PrivateStateValue {
+    return switch (value) {
+        .tuple => |tuple| privateStateIndexedValueByIndex(tuple.items, index),
+        .nominal => |nominal| if (nominal.backing) |backing| privateStateItem(backing.*, index) else null,
+        else => null,
+    };
+}
+
+fn privateStateTagPayload(value: PrivateStateValue, index: u32) ?PrivateStateValue {
+    return switch (value) {
+        .tag => |tag| privateStateIndexedValueByIndex(tag.payloads, index),
+        .nominal => |nominal| if (nominal.backing) |backing| privateStateTagPayload(backing.*, index) else null,
+        else => null,
+    };
+}
+
+fn privateStateCallableCapture(value: PrivateStateValue, index: u32) ?PrivateStateValue {
+    return switch (value) {
+        .callable => |callable| privateStateIndexedValueByIndex(callable.captures, index),
+        .nominal => |nominal| if (nominal.backing) |backing| privateStateCallableCapture(backing.*, index) else null,
+        else => null,
+    };
+}
+
+fn privateStateFieldByName(fields: []const PrivateStateField, name: names.RecordFieldNameId) ?PrivateStateValue {
+    for (fields) |field| {
+        if (field.name == name) return field.value;
+    }
+    return null;
+}
+
+fn privateStateIndexedValueByIndex(items: []const PrivateStateIndexedValue, index: u32) ?PrivateStateValue {
+    for (items) |item| {
+        if (item.index == index) return item.value;
+    }
+    return null;
+}
+
 fn demandedKnownValuePrivateStateParamCount(known_value: DemandedKnownValue) usize {
     return switch (known_value) {
         .any,
@@ -9522,6 +9579,92 @@ test "demanded known value private state param count ignores omitted children" {
         .fn_id = @enumFromInt(11),
         .captures = &carried_captures,
     } }));
+}
+
+test "private state value reads sparse tuple items by original index" {
+    const tuple_ty: Type.TypeId = @enumFromInt(184);
+    const item_ty: Type.TypeId = @enumFromInt(185);
+    const item_expr: Ast.ExprId = @enumFromInt(9);
+    const items = [_]PrivateStateIndexedValue{
+        .{
+            .index = 2,
+            .value = .{ .leaf = .{
+                .ty = item_ty,
+                .expr = item_expr,
+            } },
+        },
+    };
+
+    const tuple = PrivateStateValue{ .tuple = .{
+        .ty = tuple_ty,
+        .items = &items,
+    } };
+
+    try std.testing.expectEqual(tuple_ty, privateStateValueType(tuple));
+    try std.testing.expect(privateStateItem(tuple, 0) == null);
+    const item = privateStateItem(tuple, 2) orelse return error.TestExpectedEqual;
+    try std.testing.expectEqual(item_ty, privateStateValueType(item));
+    try std.testing.expectEqual(item_expr, item.leaf.expr);
+}
+
+test "private state value reads sparse tag payloads by original index through nominal backing" {
+    const nominal_ty: Type.TypeId = @enumFromInt(186);
+    const tag_ty: Type.TypeId = @enumFromInt(187);
+    const payload_ty: Type.TypeId = @enumFromInt(188);
+    const tag_name: names.TagNameId = @enumFromInt(28);
+    const payload_expr: Ast.ExprId = @enumFromInt(10);
+    const payloads = [_]PrivateStateIndexedValue{
+        .{
+            .index = 3,
+            .value = .{ .leaf = .{
+                .ty = payload_ty,
+                .expr = payload_expr,
+            } },
+        },
+    };
+    const tag = PrivateStateValue{ .tag = .{
+        .ty = tag_ty,
+        .name = tag_name,
+        .payloads = &payloads,
+    } };
+    const nominal = PrivateStateValue{ .nominal = .{
+        .ty = nominal_ty,
+        .backing = &tag,
+    } };
+
+    try std.testing.expectEqual(nominal_ty, privateStateValueType(nominal));
+    try std.testing.expect(privateStateTagPayload(nominal, 0) == null);
+    const payload = privateStateTagPayload(nominal, 3) orelse return error.TestExpectedEqual;
+    try std.testing.expectEqual(payload_ty, privateStateValueType(payload));
+    try std.testing.expectEqual(payload_expr, payload.leaf.expr);
+}
+
+test "private state value reads sparse callable captures by original index" {
+    const callable_ty: Type.TypeId = @enumFromInt(189);
+    const capture_ty: Type.TypeId = @enumFromInt(190);
+    const capture_expr: Ast.ExprId = @enumFromInt(11);
+    const fn_id: Ast.FnId = @enumFromInt(5);
+    const captures = [_]PrivateStateIndexedValue{
+        .{
+            .index = 4,
+            .value = .{ .leaf = .{
+                .ty = capture_ty,
+                .expr = capture_expr,
+            } },
+        },
+    };
+
+    const callable = PrivateStateValue{ .callable = .{
+        .ty = callable_ty,
+        .fn_id = fn_id,
+        .captures = &captures,
+    } };
+
+    try std.testing.expectEqual(callable_ty, privateStateValueType(callable));
+    try std.testing.expect(privateStateCallableCapture(callable, 0) == null);
+    const capture = privateStateCallableCapture(callable, 4) orelse return error.TestExpectedEqual;
+    try std.testing.expectEqual(capture_ty, privateStateValueType(capture));
+    try std.testing.expectEqual(capture_expr, capture.leaf.expr);
 }
 
 test "demanded known value matching ignores omitted record fields" {
