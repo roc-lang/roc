@@ -310,7 +310,7 @@ pub fn getDocumentSymbolsReturnsTypeDeclarationsForTypeOnlyModule() integration_
     const contents =
         \\module [Color, User]
         \\
-        \\Color := [Red, Green]
+        \\Color : [Red, Green]
         \\
         \\User : { name : Str }
         \\
@@ -332,7 +332,7 @@ pub fn getDocumentSymbolsReturnsTypeDeclarationsForTypeOnlyModule() integration_
     for (symbols) |sym| {
         if (std.mem.eql(u8, sym.name, "Color")) {
             found_color = true;
-            try std.testing.expectEqual(document_symbol_handler.SymbolKind.@"struct", sym.kind);
+            try std.testing.expectEqual(document_symbol_handler.SymbolKind.class, sym.kind);
         }
         if (std.mem.eql(u8, sym.name, "User")) {
             found_user = true;
