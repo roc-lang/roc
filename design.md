@@ -1486,12 +1486,21 @@ Concrete JSON parser code has this shape:
 ```roc
 JsonState :: [Input(Str)]
 
-JsonEncoding :: [Default, CamelCase].{
+JsonEncoding :: [Default, CamelCase, TrailingCommas].{
 	rename_field : JsonEncoding, Str -> Str
 	rename_field = |encoding, name|
 		match encoding {
 			Default => name
+			TrailingCommas => name
 			CamelCase => snake_to_camel(name)
+		}
+
+	allows_trailing_commas : JsonEncoding -> Bool
+	allows_trailing_commas = |encoding|
+		match encoding {
+			Default => False
+			CamelCase => False
+			TrailingCommas => True
 		}
 
 	parse_str : JsonEncoding, JsonState -> Try({ value : Str, rest : JsonState }, Json)
@@ -1519,6 +1528,25 @@ Json := [MissingRequired, InvalidJson].{
 	parse = |json| {
 		Shape : a
 		parse_shape = Shape.parser_for(JsonEncoding.Default)
+		parsed = parse_shape(JsonState.Input(json))?
+
+		match parsed.rest {
+			Input(rest) =>
+				if Str.is_empty(Str.trim_start(rest)) {
+					Ok(parsed.value)
+				} else {
+					Err(Json.InvalidJson)
+				}
+		}
+	}
+
+	parse_trailing_commas : Str -> Try(a, Json)
+		where [
+			a.parser_for : JsonEncoding -> (JsonState -> Try({ value : a, rest : JsonState }, Json)),
+		]
+	parse_trailing_commas = |json| {
+		Shape : a
+		parse_shape = Shape.parser_for(JsonEncoding.TrailingCommas)
 		parsed = parse_shape(JsonState.Input(json))?
 
 		match parsed.rest {

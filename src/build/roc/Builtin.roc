@@ -350,7 +350,11 @@ Builtin :: [].{
 							Json.skip_json_array(encoding, trimmed)
 						} else {
 							scalar_parts = Json.split_json_scalar_tail(trimmed)?
-							Ok(JsonState.Input(Str.trim_start(scalar_parts.after)))
+							if Json.is_json_scalar(scalar_parts.value) {
+								Ok(JsonState.Input(Str.trim_start(scalar_parts.after)))
+							} else {
+								Err(Json.invalid_json)
+							}
 						}
 					}
 				}
@@ -560,6 +564,160 @@ Builtin :: [].{
 				}
 			}
 
+			is_json_scalar : Str -> Bool
+			is_json_scalar = |value|
+				if Str.is_eq(value, "null") {
+					True
+				} else if Str.is_eq(value, "true") {
+					True
+				} else if Str.is_eq(value, "false") {
+					True
+				} else {
+					Json.is_json_number(value)
+				}
+
+			is_json_number : Str -> Bool
+			is_json_number = |value| {
+				bytes = Str.to_utf8(value)
+				len = List.len(bytes)
+
+				if len == 0 {
+					return False
+				}
+
+				var $index = 0
+
+				first = list_get_unsafe(bytes, $index)
+
+				if first == 45 {
+					$index = $index + 1
+
+					if $index == len {
+						return False
+					}
+				}
+
+				int_first = list_get_unsafe(bytes, $index)
+
+				if int_first == 48 {
+					$index = $index + 1
+				} else if Json.is_json_digit_one_to_nine(int_first) {
+					$index = $index + 1
+
+					while $index < len {
+						byte = list_get_unsafe(bytes, $index)
+
+						if Json.is_json_digit(byte) {
+							$index = $index + 1
+						} else {
+							break
+						}
+					}
+				} else {
+					return False
+				}
+
+				if $index < len {
+					byte = list_get_unsafe(bytes, $index)
+
+					if byte == 46 {
+						$index = $index + 1
+
+						if $index == len {
+							return False
+						}
+
+						first_fraction_byte = list_get_unsafe(bytes, $index)
+
+						if !Json.is_json_digit(first_fraction_byte) {
+							return False
+						}
+
+						while $index < len {
+							fraction_byte = list_get_unsafe(bytes, $index)
+
+							if Json.is_json_digit(fraction_byte) {
+								$index = $index + 1
+							} else {
+								break
+							}
+						}
+					}
+				}
+
+				if $index < len {
+					byte = list_get_unsafe(bytes, $index)
+
+					if Json.is_json_exponent_marker(byte) {
+						$index = $index + 1
+
+						if $index == len {
+							return False
+						}
+
+						exponent_first_byte = list_get_unsafe(bytes, $index)
+
+						if Json.is_json_sign(exponent_first_byte) {
+							$index = $index + 1
+
+							if $index == len {
+								return False
+							}
+						}
+
+						first_exponent_digit = list_get_unsafe(bytes, $index)
+
+						if !Json.is_json_digit(first_exponent_digit) {
+							return False
+						}
+
+						while $index < len {
+							exponent_byte = list_get_unsafe(bytes, $index)
+
+							if Json.is_json_digit(exponent_byte) {
+								$index = $index + 1
+							} else {
+								break
+							}
+						}
+					}
+				}
+
+				$index == len
+			}
+
+			is_json_digit : U8 -> Bool
+			is_json_digit = |byte|
+				if byte >= 48 {
+					byte <= 57
+				} else {
+					False
+				}
+
+			is_json_digit_one_to_nine : U8 -> Bool
+			is_json_digit_one_to_nine = |byte|
+				if byte >= 49 {
+					byte <= 57
+				} else {
+					False
+				}
+
+			is_json_exponent_marker : U8 -> Bool
+			is_json_exponent_marker = |byte|
+				if byte == 69 {
+					True
+				} else {
+					byte == 101
+				}
+
+			is_json_sign : U8 -> Bool
+			is_json_sign = |byte|
+				if byte == 43 {
+					True
+				} else {
+					byte == 45
+				}
+
 			split_json_string_tail : Str -> Try({ value : Str, after : Str }, Json)
 			split_json_string_tail = |tail| {
 				quote_split = Str.find_first(tail, "\"")
@@ -654,6 +812,18 @@ Builtin :: [].{
 						if parts_offset < $offset {
 							$value = parts.before
 							$after = "\t".concat(parts.after)
+							$offset = parts_offset
+						}
+					}
+					Err(NotFound) => {}
+				}
+
+				match Str.find_first(raw, "\r") {
+					Ok(parts) => {
+						parts_offset = Str.count_utf8_bytes(parts.before)
+						if parts_offset < $offset {
+							$value = parts.before
+							$after = "\r".concat(parts.after)
 							$offset = parts_offset
 						}
 					}

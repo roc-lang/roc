@@ -59,6 +59,12 @@ main! = |json| {
 	lenient_unknown_array_trailing_comma_result : Try({ foo : Str }, Json)
 	lenient_unknown_array_trailing_comma_result = Json.parse_trailing_commas("{\"foo\":\"array\",\"skip\":[1,2,]}")
 
+	invalid_unknown_scalar_result : Try({ foo : Str }, Json)
+	invalid_unknown_scalar_result = Json.parse("{\"foo\":\"ok\",\"skip\":not-json}")
+
+	invalid_unknown_array_scalar_result : Try({ foo : Str }, Json)
+	invalid_unknown_array_scalar_result = Json.parse("{\"foo\":\"ok\",\"skip\":[not-json]}")
+
 	match decoded_result {
 		Ok(decoded) => {
 			explicit_optional_length = match decoded.explicit_optional {
@@ -115,6 +121,8 @@ main! = |json| {
 				+ unknown_array_score(unknown_array_result)
 				+ strict_unknown_array_trailing_comma_score(strict_unknown_array_trailing_comma_result)
 				+ lenient_unknown_array_trailing_comma_score(lenient_unknown_array_trailing_comma_result)
+				+ invalid_unknown_scalar_score(invalid_unknown_scalar_result)
+				+ invalid_unknown_array_scalar_score(invalid_unknown_array_scalar_result)
 				+ explicit_optional_length
 				+ wildcard_optional_length
 				+ question_optional_length
@@ -253,5 +261,21 @@ lenient_unknown_array_trailing_comma_score = |record_result|
 			} else {
 				999999
 			}
+		Err(_) => 999999
+	}
+
+invalid_unknown_scalar_score : Try({ foo : Str }, Json) -> U64
+invalid_unknown_scalar_score = |record_result|
+	match record_result {
+		Ok(_) => 999999
+		Err(Json.InvalidJson) => 83
+		Err(_) => 999999
+	}
+
+invalid_unknown_array_scalar_score : Try({ foo : Str }, Json) -> U64
+invalid_unknown_array_scalar_score = |record_result|
+	match record_result {
+		Ok(_) => 999999
+		Err(Json.InvalidJson) => 89
 		Err(_) => 999999
 	}
