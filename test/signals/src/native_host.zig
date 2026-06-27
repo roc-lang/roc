@@ -25,7 +25,6 @@ const HostValue = u64;
 const HostValueCapability = hv.HostValueCapabilityHandle;
 const HostTextRead = engine.HostTextRead;
 const HostBoolRead = engine.HostBoolRead;
-const HostEventReducer = engine.HostEventReducer;
 const HostEachOps = engine.HostEachOps;
 const HostValueList = abi.RocListWith(HostValue, false);
 const I64List = abi.RocListWith(i64, false);
@@ -112,10 +111,6 @@ const NodeFieldCustom = engine.NodeFieldCustom;
 const HostSignalRecord = engine.HostSignalRecord;
 
 const HostSignalBinding = engine.HostSignalBinding;
-
-const HostNodeScopeSiteDesc = engine.HostNodeScopeSiteDesc;
-const HostNodeWhenDesc = engine.HostNodeWhenDesc;
-const HostNodeEachDesc = engine.HostNodeEachDesc;
 
 const HostNodeDescriptorStream = engine.HostNodeDescriptorStream;
 
@@ -1098,12 +1093,6 @@ const HostEnv = struct {
 
     fn setHostValueCapability(self: *HostEnv, value: HostValue, borrowed_cap: HostValueCapability) void {
         self.engine.host_values.setCapability(value, borrowed_cap, self.hostValueRegistryOps()) catch |err| {
-            failHostValueRegistryError(err);
-        };
-    }
-
-    fn assertHostValueCapability(self: *HostEnv, value: HostValue, expected_cap: HostValueCapability) void {
-        self.engine.host_values.assertCapability(value, expected_cap, self.hostValueRegistryOps()) catch |err| {
             failHostValueRegistryError(err);
         };
     }
@@ -3862,16 +3851,6 @@ fn testHostValueDropCallable(roc_host: *abi.RocHost) abi.RocErasedCallable {
     );
 }
 
-fn testHostValueEqCallable(roc_host: *abi.RocHost) abi.RocErasedCallable {
-    return writeTestErasedCallable(
-        TestErasedI64Capture,
-        roc_host,
-        &testHostValueEqErasedCallable,
-        &testErasedCallableOnDrop,
-        .{ .amount = 0 },
-    );
-}
-
 fn testHostValueCloneCallable(roc_host: *abi.RocHost, split: abi.RocErasedCallable) abi.RocErasedCallable {
     return writeTestErasedCallable(
         TestCapabilityCloneCapture,
@@ -4229,7 +4208,7 @@ fn expectHostValueI64(value: HostValue, expected: i64) error{TestExpectedEqual}!
     testDropHostValue(roc_host, value);
 }
 
-fn expectCachedTaskSourceText(roc_host: *abi.RocHost, record: *HostSignalRecord, expected: []const u8) !void {
+fn expectCachedTaskSourceText(roc_host: *abi.RocHost, record: *HostSignalRecord, expected: []const u8) error{TestExpectedEqual}!void {
     const task_payload = switch (record.payload) {
         .task_source => |payload| payload,
         else => unreachable,

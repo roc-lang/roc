@@ -837,6 +837,8 @@ committing. For a pure refactor slice the existing native specs are the
 regression guard; a behaviour-changing slice must also land the assertion that
 locks it in.
 
+- Pre-commit tidy gate:
+  `zig build run-check-tidy`
 - Focused Zig host/engine work:
   `zig build run-test-zig -- --test-filter "native_host"`
 - Shared engine instantiates under wasm32:

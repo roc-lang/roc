@@ -19,7 +19,6 @@ const engine = @import("engine.zig");
 
 const HostValue = u64;
 const HostValueCapability = hv.HostValueCapabilityHandle;
-const HostValueList = abi.RocListWith(HostValue, false);
 const ElemBox = @typeInfo(@TypeOf(abi.roc_ui_init)).@"fn".return_type.?;
 const RenderTextField = render.TextField;
 const RenderBoolField = render.BoolField;
@@ -366,12 +365,6 @@ fn cloneHostValue(value: HostValue) HostValue {
 
 fn setHostValueCapability(value: HostValue, cap: HostValueCapability) void {
     shared_engine.host_values.setCapability(value, cap, registryOps()) catch |err| {
-        failHostValueRegistryError(err);
-    };
-}
-
-fn assertHostValueCapability(value: HostValue, cap: HostValueCapability) void {
-    shared_engine.host_values.assertCapability(value, cap, registryOps()) catch |err| {
         failHostValueRegistryError(err);
     };
 }

@@ -657,10 +657,6 @@ fn releaseHostEachOps(ops: HostEachOps, roc_host: *abi.RocHost, metrics: anytype
     metrics.bump(.closure_releases, 4);
 }
 
-fn releaseHostBinderToken(token: HostBinderToken, roc_host: *abi.RocHost) void {
-    hv.releaseU64Box(token, roc_host);
-}
-
 /// Memoized output of a signal record: absent until first evaluated, then a
 /// retained cell holding the last computed value plus its capability.
 pub const HostSignalCacheSlot = union(enum) {
@@ -2914,13 +2910,6 @@ pub fn Engine(comptime Ctx: type) type {
             pushCapabilities(ctx, &caps);
             defer popCapabilities(ctx);
             return erased_calls.callErasedHostValueToBool(roc_host, callable, value);
-        }
-
-        fn callHostValueToU64WithCapability(ctx: Ctx.Handle, roc_host: *abi.RocHost, cap: HostValueCapability, callable: abi.RocErasedCallable, value: HostValue) u64 {
-            const caps = [_]HostValueCapability{cap};
-            pushCapabilities(ctx, &caps);
-            defer popCapabilities(ctx);
-            return erased_calls.callErasedHostValueToU64(roc_host, callable, value);
         }
 
         fn callHostValueToHostValueListWithCapability(ctx: Ctx.Handle, roc_host: *abi.RocHost, cap: HostValueCapability, callable: abi.RocErasedCallable, value: HostValue) HostValueList {
@@ -6450,43 +6439,6 @@ pub fn Engine(comptime Ctx: type) type {
             }
             self.active_stream.eaches.appendSlice(allocator, replacement.eaches.items) catch @panic("out of memory");
             replacement.eaches.items.len = 0;
-        }
-
-        fn rebuildActiveStreamSignalRecordTable(self: *Self, ctx: Ctx.Handle) void {
-            const allocator = Ctx.allocator(ctx);
-            const rebuilt_records =
-                self.active_stream.signal_text_nodes.items.len +
-                self.active_stream.signal_text_attrs.items.len +
-                self.active_stream.signal_custom_text_attrs.items.len +
-                self.active_stream.signal_bool_attrs.items.len +
-                self.active_stream.on_changes.items.len +
-                self.active_stream.whens.items.len +
-                self.active_stream.eaches.items.len;
-            self.pending_roc_metrics.bump(.signal_record_table_rebuilt, @intCast(rebuilt_records));
-            self.active_stream.signal_records_by_token.clearRetainingCapacity();
-            self.active_stream.signal_record_descriptor_uses_by_token.clearRetainingCapacity();
-
-            for (self.active_stream.signal_text_nodes.items) |desc| {
-                self.active_stream.rememberSignalRecordTree(allocator, desc.signal.record);
-            }
-            for (self.active_stream.signal_text_attrs.items) |desc| {
-                self.active_stream.rememberSignalRecordTree(allocator, desc.signal.record);
-            }
-            for (self.active_stream.signal_custom_text_attrs.items) |desc| {
-                self.active_stream.rememberSignalRecordTree(allocator, desc.signal.record);
-            }
-            for (self.active_stream.signal_bool_attrs.items) |desc| {
-                self.active_stream.rememberSignalRecordTree(allocator, desc.signal.record);
-            }
-            for (self.active_stream.on_changes.items) |desc| {
-                self.active_stream.rememberSignalRecordTree(allocator, desc.signal.record);
-            }
-            for (self.active_stream.whens.items) |desc| {
-                self.active_stream.rememberSignalRecordTree(allocator, desc.condition.record);
-            }
-            for (self.active_stream.eaches.items) |desc| {
-                self.active_stream.rememberSignalRecordTree(allocator, desc.items.record);
-            }
         }
 
         fn validateActiveRenderDescriptorIntegrity(self: *Self) void {

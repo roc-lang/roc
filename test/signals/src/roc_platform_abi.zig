@@ -217,7 +217,6 @@ pub const RocStr = extern struct {
 
     const Self = @This();
     const small_string_size = @sizeOf(RocStr);
-    const small_str_max_length = small_string_size - 1;
     const small_str_bit: usize = @as(usize, @bitCast(@as(isize, std.math.minInt(isize))));
     const seamless_slice_tag: usize = 1;
 
