@@ -2,6 +2,7 @@
 # Optimized builds that omit inline expects must not run the expect condition.
 main! = |_args| {
     expect {
+        dbg "omitted dbg output"
         crash "inline expect condition was evaluated"
     }
     echo!("Hello, World!")
