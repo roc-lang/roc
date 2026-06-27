@@ -1558,6 +1558,17 @@ original tuple index, not a compact tuple whose item positions have changed. A
 demanded tag name with no demanded payloads carries the tag choice without
 payload state.
 
+Demanded private state therefore has its own sparse state-value representation
+while the state graph is being built. It must not be forced through the ordinary
+dense Roc `Value` representation. Ordinary `Value.callable`, `Value.tuple`,
+`Value.tag`, and public record materialization require the public child layout;
+they cannot represent "capture 2 is present and capture 0 is absent" or "tag
+choice is present and payloads are absent" without inventing fake children. A
+state builder may convert demanded state to ordinary `Value` only at an explicit
+materialization boundary where the public representation is demanded. Inside
+private state construction, sparse demanded children remain indexed facts and
+runtime leaves.
+
 For `Iter` and `Stream`, the public wrapper can then disappear from the hot
 loop. The state graph carries private fields such as list pointer, index,
 length, phase, selected callable target, and captured values. The selected
