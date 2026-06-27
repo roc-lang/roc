@@ -191,7 +191,7 @@ fn classifyAggregateSysV(store: *const Store, result: *[8]Class, base_offset: u3
             }
             // The discriminant is an integer placed at its offset.
             if (data.discriminant_size > 0) {
-                const disc_off = base_offset + data.discriminant_offset;
+                const disc_off = base_offset + store.getTagUnionDiscriminantOffset(tu_idx);
                 combineInto(result, disc_off / 8, .integer);
             }
         },
