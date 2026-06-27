@@ -2109,15 +2109,7 @@ pub const SyntaxChecker = struct {
             const def = module_env.store.getDef(def_idx);
             if (extractSymbolFromDecl(module_env, def.pattern, def.expr, source, uri, &line_offsets)) |symbol| {
                 self.logDebug(.build, "symbols: found def symbol '{s}'", .{symbol.name});
-                const owned_name = try allocator.dupe(u8, symbol.name);
-                try symbols.append(allocator, .{
-                    .name = owned_name,
-                    .kind = symbol.kind,
-                    .location = .{
-                        .uri = uri,
-                        .range = symbol.location.range,
-                    },
-                });
+                try appendOwnedSymbol(allocator, &symbols, symbol);
             }
         }
 
@@ -2125,22 +2117,35 @@ pub const SyntaxChecker = struct {
         const local_statements_slice = module_env.store.sliceStatements(module_env.all_statements);
         for (local_statements_slice) |stmt_idx| {
             const stmt = module_env.store.getStatement(stmt_idx);
+            switch (stmt) {
+                .s_alias_decl => |decl| {
+                    if (extractSymbolFromTypeDecl(module_env, decl.header, stmt_idx, uri, &line_offsets, .class)) |symbol| {
+                        self.logDebug(.build, "symbols: found alias symbol '{s}'", .{symbol.name});
+                        try appendOwnedSymbol(allocator, &symbols, symbol);
+                    }
+                    continue;
+                },
+                .s_nominal_decl => |decl| {
+                    if (extractSymbolFromTypeDecl(module_env, decl.header, stmt_idx, uri, &line_offsets, .@"struct")) |symbol| {
+                        self.logDebug(.build, "symbols: found nominal symbol '{s}'", .{symbol.name});
+                        try appendOwnedSymbol(allocator, &symbols, symbol);
+                    }
+                    continue;
+                },
+                else => {},
+            }
+
             const stmt_parts = module_lookup.getStatementParts(stmt);
 
             if (stmt_parts.pattern) |pattern_idx| {
                 if (stmt_parts.expr) |expr_idx| {
                     if (extractSymbolFromDecl(module_env, pattern_idx, expr_idx, source, uri, &line_offsets)) |symbol| {
                         self.logDebug(.build, "symbols: found stmt symbol '{s}'", .{symbol.name});
-                        const owned_name = try allocator.dupe(u8, symbol.name);
-                        try symbols.append(allocator, .{
-                            .name = owned_name,
-                            .kind = symbol.kind,
-                            .location = .{
-                                .uri = uri,
-                                .range = symbol.location.range,
-                            },
-                        });
+                        try appendOwnedSymbol(allocator, &symbols, symbol);
                     }
+                } else if (extractSymbolFromPattern(module_env, pattern_idx, uri, &line_offsets, .variable)) |symbol| {
+                    self.logDebug(.build, "symbols: found pattern symbol '{s}'", .{symbol.name});
+                    try appendOwnedSymbol(allocator, &symbols, symbol);
                 }
             }
         }
@@ -2664,6 +2669,83 @@ const pos = @import("position.zig");
 
 // Position utilities moved to position.zig
 
+fn appendOwnedSymbol(
+    allocator: Allocator,
+    symbols: *std.ArrayList(document_symbol_handler.SymbolInformation),
+    symbol: document_symbol_handler.SymbolInformation,
+) Allocator.Error!void {
+    const owned_name = try allocator.dupe(u8, symbol.name);
+    try symbols.append(allocator, .{
+        .name = owned_name,
+        .kind = symbol.kind,
+        .location = .{
+            .uri = symbol.location.uri,
+            .range = symbol.location.range,
+        },
+    });
+}
+
+fn symbolFromRegion(
+    name: []const u8,
+    kind: document_symbol_handler.SymbolKind,
+    uri: []const u8,
+    region: Region,
+    line_offsets: *const pos.LineOffsets,
+) document_symbol_handler.SymbolInformation {
+    return .{
+        .name = name,
+        .kind = kind,
+        .location = .{
+            .uri = uri,
+            .range = .{
+                .start = pos.offsetToPosition(region.start.offset, line_offsets),
+                .end = pos.offsetToPosition(region.end.offset, line_offsets),
+            },
+        },
+    };
+}
+
+fn extractSymbolFromPattern(
+    module_env: *ModuleEnv,
+    pattern_idx: CIR.Pattern.Idx,
+    uri: []const u8,
+    line_offsets: *const pos.LineOffsets,
+    kind: document_symbol_handler.SymbolKind,
+) ?document_symbol_handler.SymbolInformation {
+    const ident_idx = module_lookup.extractIdentFromPattern(&module_env.store, pattern_idx) orelse return null;
+    const name = module_env.getIdentText(ident_idx);
+    if (name.len == 0) return null;
+
+    return symbolFromRegion(
+        name,
+        kind,
+        uri,
+        module_env.store.getPatternRegion(pattern_idx),
+        line_offsets,
+    );
+}
+
+fn extractSymbolFromTypeDecl(
+    module_env: *ModuleEnv,
+    header_idx: CIR.TypeHeader.Idx,
+    stmt_idx: CIR.Statement.Idx,
+    uri: []const u8,
+    line_offsets: *const pos.LineOffsets,
+    kind: document_symbol_handler.SymbolKind,
+) ?document_symbol_handler.SymbolInformation {
+    const header = module_env.store.getTypeHeader(header_idx);
+    const name = module_env.getIdentText(header.relative_name);
+    if (name.len == 0) return null;
+
+    return symbolFromRegion(
+        name,
+        kind,
+        uri,
+        module_env.store.getStatementRegion(stmt_idx),
+        line_offsets,
+    );
+}
+
 fn extractSymbolFromDecl(
     module_env: *ModuleEnv,
     pattern_idx: CIR.Pattern.Idx,
@@ -2679,37 +2761,11 @@ fn extractSymbolFromDecl(
         else => false,
     };
 
-    // Get the pattern and extract the identifier name
-    const pattern = module_env.store.getPattern(pattern_idx);
-    const ident_idx = switch (pattern) {
-        .assign => |p| p.ident,
-        .as => |p| p.ident,
-        else => return null, // Only handle assign and as patterns
-    };
-
-    // Get the identifier text from the module's ident table
-    const name = module_env.getIdentText(ident_idx);
-
-    // Skip empty or placeholder names
-    if (name.len == 0) {
-        return null;
-    }
-
-    // Get the pattern region for position info
-    const pattern_region = module_env.store.getPatternRegion(pattern_idx);
-    const start_offset = pattern_region.start.offset;
-    const end_offset = pattern_region.end.offset;
-
-    // Convert offsets to positions
-    const start_pos = pos.offsetToPosition(start_offset, line_offsets);
-    const end_pos = pos.offsetToPosition(end_offset, line_offsets);
-
-    return .{
-        .name = name,
-        .kind = if (is_function) .function else .variable,
-        .location = .{
-            .uri = uri,
-            .range = .{ .start = start_pos, .end = end_pos },
-        },
-    };
+    return extractSymbolFromPattern(
+        module_env,
+        pattern_idx,
+        uri,
+        line_offsets,
+        if (is_function) .function else .variable,
+    );
 }
