@@ -260,17 +260,23 @@ const ReadBeforeRebindKey = struct {
     loop_keep_id: u32,
 };
 
-const AnalysisMemoEntry = struct {
-    stmt: u32,
-    owned_digest: u64,
-};
-
 const AnalysisScopedJoin = struct {
     body: LIR.CFStmtId,
-    keep: OwnedSet,
+    remainder: LIR.CFStmtId,
+    params: LIR.LocalSpan,
+    maybe_uninitialized_params: LIR.LocalSpan,
+    entry_owned: OwnedSet,
+    keep: ?OwnedSet = null,
 };
 
 const AnalysisScopedJoinMap = std.AutoHashMap(LIR.JoinPointId, AnalysisScopedJoin);
+
+const AnalysisSeenEntry = struct {
+    stmt: LIR.CFStmtId,
+    owned: OwnedSet,
+};
+
+const AnalysisSeen = std.ArrayList(AnalysisSeenEntry);
 
 const AnalysisStop = union(enum) {
     /// Stop at an explicit shared continuation statement.
@@ -520,7 +526,7 @@ const Inserter = struct {
         exits: *std.ArrayList(OwnedSet),
         loop_keep: ?*const OwnedSet,
         scoped_joins: ?*AnalysisScopedJoinMap,
-        seen: ?*std.AutoHashMap(AnalysisMemoEntry, void),
+        seen: ?*AnalysisSeen,
     };
 
     const AnalysisSwitchContinuationTask = struct {
@@ -530,7 +536,7 @@ const Inserter = struct {
         parent_exits: *std.ArrayList(OwnedSet),
         loop_keep: ?*const OwnedSet,
         scoped_joins: ?*AnalysisScopedJoinMap,
-        seen: ?*std.AutoHashMap(AnalysisMemoEntry, void),
+        seen: ?*AnalysisSeen,
     };
 
     fn rewritePath(self: *Inserter, start: LIR.CFStmtId, owned: *OwnedSet, options: RewriteOptions) ResourceError!LIR.CFStmtId {
@@ -1787,8 +1793,8 @@ const Inserter = struct {
             tasks.deinit(self.store.allocator);
         }
 
-        var seen = std.AutoHashMap(AnalysisMemoEntry, void).init(self.store.allocator);
-        defer seen.deinit();
+        var seen = AnalysisSeen.empty;
+        defer self.deinitAnalysisSeen(&seen);
         var scoped_joins = AnalysisScopedJoinMap.init(self.store.allocator);
         defer self.deinitAnalysisScopedJoins(&scoped_joins);
 
@@ -1810,7 +1816,7 @@ const Inserter = struct {
         exits: *std.ArrayList(OwnedSet),
         loop_keep: ?*const OwnedSet,
         scoped_joins: ?*AnalysisScopedJoinMap,
-        seen: ?*std.AutoHashMap(AnalysisMemoEntry, void),
+        seen: ?*AnalysisSeen,
     ) ResourceError!void {
         const task = try self.store.allocator.create(AnalysisPathTask);
         errdefer self.store.allocator.destroy(task);
@@ -1837,12 +1843,7 @@ const Inserter = struct {
                 return;
             }
             if (path.seen) |seen| {
-                const entry = AnalysisMemoEntry{
-                    .stmt = @intFromEnum(path.cursor),
-                    .owned_digest = ownedSetDigest(&path.owned),
-                };
-                const memo = try seen.getOrPut(entry);
-                if (memo.found_existing) {
+                if (try self.analysisSeenContainsOrAppend(seen, path.cursor, &path.owned)) {
                     self.destroyAnalysisPath(path);
                     return;
                 }
@@ -2083,26 +2084,32 @@ const Inserter = struct {
                                     if (scoped_entry.value_ptr.body != join_stmt.body) {
                                         arcInvariant("ARC jump analysis saw one join id with multiple bodies");
                                     }
+                                    if (scoped_entry.value_ptr.remainder != join_stmt.remainder) {
+                                        arcInvariant("ARC jump analysis saw one join id with multiple remainders");
+                                    }
+                                    if (!localSpanEql(scoped_entry.value_ptr.params, join_stmt.params)) {
+                                        arcInvariant("ARC jump analysis saw one join id with multiple param spans");
+                                    }
+                                    if (!localSpanEql(scoped_entry.value_ptr.maybe_uninitialized_params, join_stmt.maybe_uninitialized_params)) {
+                                        arcInvariant("ARC jump analysis saw one join id with multiple maybe-uninitialized param spans");
+                                    }
+                                    if (!scoped_entry.value_ptr.entry_owned.eql(&path.owned)) {
+                                        scoped_entry.value_ptr.entry_owned.intersect(&path.owned);
+                                        if (scoped_entry.value_ptr.keep) |*keep| {
+                                            keep.deinit();
+                                            scoped_entry.value_ptr.keep = null;
+                                        }
+                                    }
                                 } else {
-                                    var initialized = false;
-                                    errdefer if (!initialized) {
-                                        _ = scoped_joins.remove(join_stmt.id);
-                                    };
-                                    var nested_keep = try self.joinBodyOwnedSet(
-                                        &path.owned,
-                                        join_stmt.id,
-                                        join_stmt.params,
-                                        join_stmt.maybe_uninitialized_params,
-                                        join_stmt.remainder,
-                                        join_stmt.body,
-                                        null,
-                                    );
-                                    errdefer nested_keep.deinit();
+                                    errdefer _ = scoped_joins.remove(join_stmt.id);
                                     scoped_entry.value_ptr.* = .{
                                         .body = join_stmt.body,
-                                        .keep = nested_keep,
+                                        .remainder = join_stmt.remainder,
+                                        .params = join_stmt.params,
+                                        .maybe_uninitialized_params = join_stmt.maybe_uninitialized_params,
+                                        .entry_owned = try path.owned.clone(),
+                                        .keep = null,
                                     };
-                                    initialized = true;
                                 }
                             }
                             path.cursor = join_stmt.remainder;
@@ -2118,9 +2125,21 @@ const Inserter = struct {
                         try path.exits.append(self.store.allocator, try path.owned.clone());
                     } else if (path.stop == .jump_to) {
                         if (path.scoped_joins) |scoped_joins| {
-                            if (scoped_joins.get(jump_stmt.target)) |target_join| {
+                            if (scoped_joins.getPtr(jump_stmt.target)) |target_join| {
+                                if (target_join.keep == null) {
+                                    target_join.keep = try self.joinBodyOwnedSet(
+                                        &target_join.entry_owned,
+                                        jump_stmt.target,
+                                        target_join.params,
+                                        target_join.maybe_uninitialized_params,
+                                        target_join.remainder,
+                                        target_join.body,
+                                        null,
+                                    );
+                                }
+                                const next_owned = try target_join.keep.?.clone();
                                 path.owned.deinit();
-                                path.owned = try target_join.keep.clone();
+                                path.owned = next_owned;
                                 path.cursor = target_join.body;
                                 continue;
                             }
@@ -2246,10 +2265,39 @@ const Inserter = struct {
         self.store.allocator.destroy(resume_task);
     }
 
+    fn analysisSeenContainsOrAppend(
+        self: *Inserter,
+        seen: *AnalysisSeen,
+        stmt: LIR.CFStmtId,
+        owned: *const OwnedSet,
+    ) ResourceError!bool {
+        for (seen.items) |*entry| {
+            if (entry.stmt == stmt and entry.owned.eql(owned)) return true;
+        }
+
+        var owned_clone = try owned.clone();
+        errdefer owned_clone.deinit();
+        try seen.append(self.store.allocator, .{
+            .stmt = stmt,
+            .owned = owned_clone,
+        });
+        return false;
+    }
+
+    fn deinitAnalysisSeen(self: *Inserter, seen: *AnalysisSeen) void {
+        for (seen.items) |*entry| {
+            entry.owned.deinit();
+        }
+        seen.deinit(self.store.allocator);
+    }
+
     fn deinitAnalysisScopedJoins(_: *Inserter, scoped_joins: *AnalysisScopedJoinMap) void {
         var iter = scoped_joins.valueIterator();
         while (iter.next()) |entry| {
-            entry.keep.deinit();
+            entry.entry_owned.deinit();
+            if (entry.keep) |*keep| {
+                keep.deinit();
+            }
         }
         scoped_joins.deinit();
     }
@@ -3994,6 +4042,11 @@ const OwnedSet = struct {
         return self.bits.isSet(@intFromEnum(local));
     }
 
+    fn eql(self: *const OwnedSet, other: *const OwnedSet) bool {
+        if (self.len() != other.len()) return false;
+        return self.bits.eql(other.bits);
+    }
+
     fn intersect(self: *OwnedSet, other: *const OwnedSet) void {
         if (self.len() != other.len()) arcInvariant("ARC owned-set intersection length mismatch");
         self.bits.setIntersection(other.bits);
@@ -4004,16 +4057,6 @@ const OwnedSet = struct {
         self.bits.setUnion(other.bits);
     }
 };
-
-fn ownedSetDigest(owned: *const OwnedSet) u64 {
-    var hasher = std.hash.Wyhash.init(0x6172635f616e616c);
-    var iter = owned.bits.iterator(.{});
-    while (iter.next()) |index| {
-        const local_index: u32 = @intCast(index);
-        hasher.update(std.mem.asBytes(&local_index));
-    }
-    return hasher.final();
-}
 
 fn refOpSource(op: LIR.RefOp) LIR.LocalId {
     return switch (op) {
