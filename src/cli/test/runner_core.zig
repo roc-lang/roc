@@ -503,7 +503,9 @@ fn missingExpectedStderr(stderr: []const u8, expected_stderr_contains: []const [
 }
 
 fn expectedStderrForBackend(backend: ?[]const u8, expected_stderr_contains: []const []const u8) []const []const u8 {
-    const backend_name = backend orelse return &.{};
+    // A null backend means plain `roc build`, whose default emits optimized
+    // build diagnostics.
+    const backend_name = backend orelse return expected_stderr_contains;
     if (std.mem.eql(u8, backend_name, "size") or std.mem.eql(u8, backend_name, "speed")) {
         return expected_stderr_contains;
     }
