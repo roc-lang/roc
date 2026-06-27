@@ -33,6 +33,7 @@ pub const InlineExpectMode = enum {
     omit,
 };
 
+/// Configuration for lowering checked modules into Monotype IR.
 pub const Options = struct {
     /// Preserve source-level procedure names for consumers that present runtime
     /// diagnostics from lowered code.
