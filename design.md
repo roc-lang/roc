@@ -1022,14 +1022,12 @@ json_bytes = Json.Utf8.encode(thing)?
 headers = Encoding.HttpHeader.parse(raw_headers)?
 ```
 
-The convenience functions construct the format state directly, call the value or
-type's ordinary method, validate the remaining state if the format requires it,
-and return the final `Try`. They do not need a required `init`, `finish`, or
-`default` hook. A header helper can build the initial state as ordinary Roc data:
-
-```roc
-state = Encoding.HttpHeader.State.{ raw }
-```
+The convenience functions construct the internal format state directly, call the
+value or type's ordinary method, validate the remaining state if the format
+requires it, and return the final `Try`. They do not need a required `init`,
+`finish`, or `default` hook. The runtime cursor types are implementation
+details of the builtin format module, not public `Json.State` or
+`Encoding.HttpHeader.State` APIs.
 
 The underlying parse method is public and callable. It is deliberately curried:
 
@@ -1056,30 +1054,26 @@ For example, the builtin HTTP header helper inside `Builtin.Encoding` has this
 shape:
 
 ```roc
-HttpHeader :: [Caseless].{
-	DecodeErr := [MissingRequired, BadHeader].{}
-
-	State := { raw : Str }
-
-	parse : Str -> Try(output, DecodeErr)
+HttpHeader := [MissingRequired, BadHeader].{
+	parse : Str -> Try(output, HttpHeader)
 		where [
-			output.parser_for : HttpHeader -> (State -> Try({ value : output, rest : State }, DecodeErr)),
+			output.parser_for : HttpHeaderEncoding -> (HttpHeaderState -> Try({ value : output, rest : HttpHeaderState }, HttpHeader)),
 		]
 	parse = |raw| {
 		Output : output
 
-		parse_output = Output.parser_for(HttpHeader.Caseless)
-		parsed = parse_output(State.{ raw })?
+		parse_output = Output.parser_for(HttpHeaderEncoding.Caseless)
+		parsed = parse_output(HttpHeaderState.{ raw })?
 
 		Ok(parsed.value)
 	}
 }
 ```
 
-The important split is that `Output.parser_for(Encoding.HttpHeader.Caseless)`
-constructs the concrete parser and `Encoding.HttpHeader.State.{ raw }` is the
+The important split is that `Output.parser_for(HttpHeaderEncoding.Caseless)`
+constructs the concrete parser and the hidden `HttpHeaderState.{ raw }` is the
 runtime input state. Formats with no configurable behavior can still use a
-zero-sized encoding value.
+zero-sized internal encoding value.
 
 The error type is inferred from the format methods. All `Try` errors in one
 parse or encode operation unify with the public function's returned error type.
@@ -1412,74 +1406,45 @@ through field or value types that request them, such as `Try(Str, [Null])` or
 Concrete HTTP header parser code has this shape inside `Builtin.Encoding`:
 
 ```roc
-HttpHeader :: [Caseless].{
-	DecodeErr := [MissingRequired, BadHeader].{}
+HttpHeaderState :: { raw : Str }
 
-	State := { raw : Str }
+HttpHeaderEncoding :: [Caseless].{
+	rename_field : HttpHeaderEncoding, Str -> Str
+	parse_str : HttpHeaderEncoding, HttpHeaderState -> Try({ value : Str, rest : HttpHeaderState }, HttpHeader)
+	parse_u64 : HttpHeaderEncoding, HttpHeaderState -> Try({ value : U64, rest : HttpHeaderState }, HttpHeader)
 
-	parser_for : () -> (State -> Try({ value : output, rest : State }, DecodeErr))
+	parse_record_field : HttpHeaderEncoding, Encoding.FieldName.FieldNames(_shape), HttpHeaderState -> Try(
+		[
+			Field({ field : Encoding.FieldName(_shape), rest : HttpHeaderState }),
+			TryField({ name : Str, rest : HttpHeaderState }),
+			TryFieldCaseless({ name : Str, rest : HttpHeaderState }),
+			Continue({ rest : HttpHeaderState }),
+			Done({ rest : HttpHeaderState }),
+		],
+		HttpHeader,
+	)
+
+	skip_record_field : HttpHeaderEncoding, HttpHeaderState -> Try(HttpHeaderState, HttpHeader)
+	missing_record_field : HttpHeaderEncoding, Str, HttpHeaderState -> HttpHeader
+	missing_optional_field : HttpHeaderEncoding, Str, HttpHeaderState -> [Missing]
+}
+
+HttpHeader := [MissingRequired, BadHeader].{
+	parser_for : () -> (Str -> Try(output, HttpHeader))
 		where [
-			output.parser_for : HttpHeader -> (State -> Try({ value : output, rest : State }, DecodeErr)),
+			output.parser_for : HttpHeaderEncoding -> (HttpHeaderState -> Try({ value : output, rest : HttpHeaderState }, HttpHeader)),
 		]
 	parser_for = || {
 		Output : output
-		Output.parser_for(HttpHeader.Caseless)
-	}
+		parse_output = Output.parser_for(HttpHeaderEncoding.Caseless)
 
-	parse : Str -> Try(output, DecodeErr)
-		where [
-			output.parser_for : HttpHeader -> (State -> Try({ value : output, rest : State }, DecodeErr)),
-		]
-	parse = |raw| {
-		Output : output
-		parse_output = Output.parser_for(HttpHeader.Caseless)
-		parsed = parse_output(State.{ raw })?
-		Ok(parsed.value)
-	}
-
-	rename_field : HttpHeader, Str -> Str
-	rename_field = |_, name| underscores_to_dashes(name)
-
-	parse_str : HttpHeader, State -> Try({ value : Str, rest : State }, DecodeErr)
-	parse_str = |_, state| {
-		value_parts = take_header_value(state.raw)?
-		Ok({ value: value_parts.value, rest: State.{ raw: value_parts.after } })
-	}
-
-	parse_u64 : HttpHeader, State -> Try({ value : U64, rest : State }, DecodeErr)
-	parse_u64 = |_, state| {
-		value_parts = take_header_value(state.raw)?
-
-		match u64_from_str(value_parts.value) {
-			Ok(value) => Ok({ value, rest: State.{ raw: value_parts.after } })
-			Err(_) => Err(DecodeErr.BadHeader)
+		|raw| {
+			parsed = parse_output(HttpHeaderState.{ raw })?
+			Ok(parsed.value)
 		}
 	}
 
-	parse_record_field : HttpHeader, Encoding.FieldName.FieldNames(_shape), State -> Try(
-		[
-			Field({ field : Encoding.FieldName(_shape), rest : State }),
-			TryField({ name : Str, rest : State }),
-			TryFieldCaseless({ name : Str, rest : State }),
-			Continue({ rest : State }),
-			Done({ rest : State }),
-		],
-		DecodeErr,
-	)
-	parse_record_field = |_, fields, state|
-		parse_record_field_from_headers(fields, state.raw)
-
-	skip_record_field : HttpHeader, State -> Try(State, DecodeErr)
-	skip_record_field = |_, state| {
-		parts = take_header_value(state.raw)?
-		Ok(State.{ raw: parts.after })
-	}
-
-	missing_record_field : HttpHeader, Str, State -> DecodeErr
-	missing_record_field = |_, _, _| DecodeErr.MissingRequired
-
-	missing_optional_field : HttpHeader, Str, State -> [Missing]
-	missing_optional_field = |_, _, _| Missing
+	parse : Str -> Try(output, HttpHeader)
 }
 ```
 
@@ -1490,16 +1455,16 @@ The exact derived parser type for a header record with mixed field shapes is:
 	cache_control : Str,
 	content_length : U64,
 	x_auth_token : Try(Str, [Missing]),
-}.parser_for : Encoding.HttpHeader -> (Encoding.HttpHeader.State -> Try(
+}.parser_for : HttpHeaderEncoding -> (HttpHeaderState -> Try(
 	{
 		value : {
 			cache_control : Str,
 			content_length : U64,
 			x_auth_token : Try(Str, [Missing]),
 		},
-		rest : Encoding.HttpHeader.State,
+		rest : HttpHeaderState,
 	},
-	Encoding.HttpHeader.DecodeErr,
+	Encoding.HttpHeader,
 ))
 ```
 
@@ -1507,80 +1472,80 @@ Because `Encoding.HttpHeader` does not define `parse_tag_union`, trying to parse
 header record that contains a tag union is a compile-time static-dispatch error:
 
 ```roc
-bad : Try({ mode : [On, Off] }, Encoding.HttpHeader.DecodeErr)
+bad : Try({ mode : [On, Off] }, Encoding.HttpHeader)
 bad = Encoding.HttpHeader.parse("mode: On\r\n")
 ```
 
-The missing requirement is `Encoding.HttpHeader.parse_tag_union`; the compiler does
-not wait until runtime to discover that this format does not support tags.
+The missing requirement is `HttpHeaderEncoding.parse_tag_union`; the compiler
+does not wait until runtime to discover that this format does not support tags.
 
 Concrete JSON parser code has this shape:
 
 ```roc
-Json :: [Default, CamelCase].{
-	DecodeErr := [MissingRequired, InvalidJson].{}
+JsonState :: [Input(Str)]
 
-	State := [Input(Str)]
-
-	rename_field : Json, Str -> Str
+JsonEncoding :: [Default, CamelCase].{
+	rename_field : JsonEncoding, Str -> Str
 	rename_field = |encoding, name|
 		match encoding {
 			Default => name
 			CamelCase => snake_to_camel(name)
 		}
 
-	parse_str : Json, State -> Try({ value : Str, rest : State }, DecodeErr)
-	parse_record_field : Json, Encoding.FieldName.FieldNames(_shape), State -> Try(
+	parse_str : JsonEncoding, JsonState -> Try({ value : Str, rest : JsonState }, Json)
+	parse_record_field : JsonEncoding, Encoding.FieldName.FieldNames(_shape), JsonState -> Try(
 		[
-			Field({ field : Encoding.FieldName(_shape), rest : State }),
-			TryField({ name : Str, rest : State }),
-			TryFieldCaseless({ name : Str, rest : State }),
-			Continue({ rest : State }),
-			Done({ rest : State }),
+			Field({ field : Encoding.FieldName(_shape), rest : JsonState }),
+			TryField({ name : Str, rest : JsonState }),
+			TryFieldCaseless({ name : Str, rest : JsonState }),
+			Continue({ rest : JsonState }),
+			Done({ rest : JsonState }),
 		],
-		DecodeErr,
+		Json,
 	)
-	skip_record_field : Json, State -> Try(State, DecodeErr)
-	missing_record_field : Json, Str, State -> DecodeErr
-	missing_optional_field : Json, Str, State -> [Missing]
-	parse_tag_union : Json, Encoding.ParseTagUnionSpec(a), State -> Try({ value : a, rest : State }, DecodeErr)
+	skip_record_field : JsonEncoding, JsonState -> Try(JsonState, Json)
+	missing_record_field : JsonEncoding, Str, JsonState -> Json
+	missing_optional_field : JsonEncoding, Str, JsonState -> [Missing]
+	parse_tag_union : JsonEncoding, Encoding.ParseTagUnionSpec(a), JsonState -> Try({ value : a, rest : JsonState }, Json)
+}
 
-	parse : Str -> Try(a, DecodeErr)
+Json := [MissingRequired, InvalidJson].{
+	parse : Str -> Try(a, Json)
 		where [
-			a.parser_for : Json -> (State -> Try({ value : a, rest : State }, DecodeErr)),
+			a.parser_for : JsonEncoding -> (JsonState -> Try({ value : a, rest : JsonState }, Json)),
 		]
 	parse = |json| {
 		Shape : a
-		parse_shape = Shape.parser_for(Json.Default)
-		parsed = parse_shape(State.Input(json))?
+		parse_shape = Shape.parser_for(JsonEncoding.Default)
+		parsed = parse_shape(JsonState.Input(json))?
 
 		match parsed.rest {
 			Input(rest) =>
 				if Str.is_empty(Str.trim_start(rest)) {
 					Ok(parsed.value)
 				} else {
-					Err(DecodeErr.InvalidJson)
+					Err(Json.InvalidJson)
 				}
 		}
 	}
 
-	parser_camel : () -> (Str -> Try(a, DecodeErr))
+	parser_camel : () -> (Str -> Try(a, Json))
 		where [
-			a.parser_for : Json -> (State -> Try({ value : a, rest : State }, DecodeErr)),
+			a.parser_for : JsonEncoding -> (JsonState -> Try({ value : a, rest : JsonState }, Json)),
 		]
 	parser_camel = || {
 		Shape : a
-		parse_shape = Shape.parser_for(Json.CamelCase)
+		parse_shape = Shape.parser_for(JsonEncoding.CamelCase)
 
 		|json| {
-			parsed = parse_shape(State.Input(json))?
+			parsed = parse_shape(JsonState.Input(json))?
 
 			match parsed.rest {
 				Input(rest) =>
 					if Str.is_empty(Str.trim_start(rest)) {
 						Ok(parsed.value)
 					} else {
-						Err(DecodeErr.InvalidJson)
+						Err(Json.InvalidJson)
 					}
 			}
 		}
@@ -1595,32 +1560,32 @@ The exact derived parser type for a JSON record is:
 	cache_control : Str,
 	nested_record : { inner_value : Str },
 	user_id : Str,
-}.parser_for : Json -> (Json.State -> Try(
+}.parser_for : JsonEncoding -> (JsonState -> Try(
 	{
 		value : {
 			cache_control : Str,
 			nested_record : { inner_value : Str },
 			user_id : Str,
 		},
-		rest : Json.State,
+		rest : JsonState,
 	},
-	Json.DecodeErr,
+	Json,
 ))
 ```
 
 The exact derived parser type for an externally tagged JSON union is:
 
 ```roc
-[Admin({ name : Str }), Guest].parser_for : Json -> (Json.State -> Try(
+[Admin({ name : Str }), Guest].parser_for : JsonEncoding -> (JsonState -> Try(
 	{
 		value : [Admin({ name : Str }), Guest],
-		rest : Json.State,
+		rest : JsonState,
 	},
-	Json.DecodeErr,
+	Json,
 ))
 ```
 
-With `Json.Default`, this parses values like:
+With `JsonEncoding.Default`, this parses values like:
 
 ```json
 { "Admin": { "name": "Sam" } }

@@ -14161,21 +14161,61 @@ fn finishTagExprWithArgs(
 
         if (!is_imported) {
             // Local reference: look up the type locally
-            const nominal_type_decl_stmt_idx = (try self.scopeLookupOrPrepareTypeDecl(full_type_ident)) orelse {
-                return CanonicalizedExpr{
-                    .idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .undeclared_type = .{
-                        .name = full_type_ident,
-                        .region = type_tok_region,
-                    } }),
-                    .free_vars = DataSpan.empty(),
-                };
-            };
+            if (try self.scopeLookupOrPrepareTypeDecl(full_type_ident)) |nominal_type_decl_stmt_idx| {
+                switch (self.env.store.getStatement(nominal_type_decl_stmt_idx)) {
+                    .s_nominal_decl => {
+                        const expr_idx = try self.env.addExpr(CIR.Expr{
+                            .e_nominal = .{
+                                .nominal_type_decl = nominal_type_decl_stmt_idx,
+                                .backing_expr = tag_expr_idx,
+                                .backing_type = .tag,
+                            },
+                        }, region);
 
-            switch (self.env.store.getStatement(nominal_type_decl_stmt_idx)) {
-                .s_nominal_decl => {
+                        const free_vars_span = self.scratch_free_vars.spanFrom(free_vars_start);
+                        return CanonicalizedExpr{
+                            .idx = expr_idx,
+                            .free_vars = free_vars_span,
+                        };
+                    },
+                    .s_alias_decl => {
+                        return CanonicalizedExpr{
+                            .idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .type_alias_but_needed_nominal = .{
+                                .name = full_type_ident,
+                                .region = type_tok_region,
+                            } }),
+                            .free_vars = DataSpan.empty(),
+                        };
+                    },
+                    else => {
+                        const feature = try self.env.insertString("report an error resolved type decl in scope wasn't actually a type decl");
+                        const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .not_implemented = .{
+                            .feature = feature,
+                            .region = type_tok_region,
+                        } });
+                        return CanonicalizedExpr{
+                            .idx = malformed_idx,
+                            .free_vars = DataSpan.empty(),
+                        };
+                    },
+                }
+            }
+
+            if (self.lookupAvailableModuleEnv(first_tok_ident)) |auto_imported_type| {
+                if (try self.lookupNestedAutoImportedTypeNode(auto_imported_type, first_tok_ident, full_type_name)) |target_node_idx| {
+                    const import_idx = try self.getOrCreateAutoImportedTypeImport(auto_imported_type, first_tok_ident);
+
+                    if (try self.validateImportedNominalTagTarget(Expr.Idx, auto_imported_type.env, target_node_idx, first_tok_ident, full_type_ident, type_tok_region)) |malformed_idx| {
+                        return CanonicalizedExpr{
+                            .idx = malformed_idx,
+                            .free_vars = DataSpan.empty(),
+                        };
+                    }
+
                     const expr_idx = try self.env.addExpr(CIR.Expr{
-                        .e_nominal = .{
-                            .nominal_type_decl = nominal_type_decl_stmt_idx,
+                        .e_nominal_external = .{
+                            .module_idx = import_idx,
+                            .target_node_idx = target_node_idx,
                             .backing_expr = tag_expr_idx,
                             .backing_type = .tag,
                         },
@@ -14186,28 +14226,16 @@ fn finishTagExprWithArgs(
                         .idx = expr_idx,
                         .free_vars = free_vars_span,
                     };
-                },
-                .s_alias_decl => {
-                    return CanonicalizedExpr{
-                        .idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .type_alias_but_needed_nominal = .{
-                            .name = full_type_ident,
-                            .region = type_tok_region,
-                        } }),
-                        .free_vars = DataSpan.empty(),
-                    };
-                },
-                else => {
-                    const feature = try self.env.insertString("report an error resolved type decl in scope wasn't actually a type decl");
-                    const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .not_implemented = .{
-                        .feature = feature,
-                        .region = type_tok_region,
-                    } });
-                    return CanonicalizedExpr{
-                        .idx = malformed_idx,
-                        .free_vars = DataSpan.empty(),
-                    };
-                },
+                }
             }
+
+            return CanonicalizedExpr{
+                .idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .undeclared_type = .{
+                    .name = full_type_ident,
+                    .region = type_tok_region,
+                } }),
+                .free_vars = DataSpan.empty(),
+            };
         }
 
         // Import reference: look up the type in the imported file
@@ -14694,11 +14722,40 @@ fn finishTagPattern(
         const type_tok_region = self.parse_ir.tokens.resolve(type_tok_idx);
 
         // Lookup the type ident in scope
-        const nominal_type_decl_stmt_idx = (try self.scopeLookupOrPrepareTypeDecl(type_tok_ident)) orelse
+        const nominal_type_decl_stmt_idx = (try self.scopeLookupOrPrepareTypeDecl(type_tok_ident)) orelse {
+            if (self.lookupAvailableModuleEnv(type_tok_ident)) |auto_imported_type| {
+                if (auto_imported_type.statement_idx) |stmt_idx| {
+                    const import_idx = try self.getOrCreateAutoImportedTypeImport(auto_imported_type, type_tok_ident);
+                    const target_node_idx = auto_imported_type.env.getExposedNodeIndexByStatementIdx(stmt_idx) orelse {
+                        const module_name_text = auto_imported_type.env.module_name;
+                        const module_ident = try self.env.insertIdent(base.Ident.for_text(module_name_text));
+                        return try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .nested_type_not_found = .{
+                            .parent_name = module_ident,
+                            .nested_name = type_tok_ident,
+                            .region = region,
+                        } });
+                    };
+
+                    if (try self.validateImportedNominalTagTarget(Pattern.Idx, auto_imported_type.env, target_node_idx, type_tok_ident, type_tok_ident, type_tok_region)) |malformed_idx| {
+                        return malformed_idx;
+                    }
+
+                    return try self.env.addPattern(CIR.Pattern{
+                        .nominal_external = .{
+                            .module_idx = import_idx,
+                            .target_node_idx = target_node_idx,
+                            .backing_pattern = tag_pattern_idx,
+                            .backing_type = .tag,
+                        },
+                    }, region);
+                }
+            }
+
             return try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .undeclared_type = .{
                 .name = type_tok_ident,
                 .region = type_tok_region,
             } });
+        };
 
         switch (self.env.store.getStatement(nominal_type_decl_stmt_idx)) {
             .s_nominal_decl => {
@@ -14747,39 +14804,58 @@ fn finishTagPattern(
         const full_type_ident = try self.env.insertIdent(base.Ident.for_text(full_type_name));
 
         const module_info = self.scopeLookupModule(first_tok_ident) orelse {
-            const nominal_type_decl_stmt_idx = (try self.scopeLookupOrPrepareTypeDecl(full_type_ident)) orelse {
-                return try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .undeclared_type = .{
-                    .name = full_type_ident,
-                    .region = type_tok_region,
-                } });
-            };
+            if (try self.scopeLookupOrPrepareTypeDecl(full_type_ident)) |nominal_type_decl_stmt_idx| {
+                switch (self.env.store.getStatement(nominal_type_decl_stmt_idx)) {
+                    .s_nominal_decl => {
+                        const pattern_idx = try self.env.addPattern(CIR.Pattern{
+                            .nominal = .{
+                                .nominal_type_decl = nominal_type_decl_stmt_idx,
+                                .backing_pattern = tag_pattern_idx,
+                                .backing_type = .tag,
+                            },
+                        }, region);
 
-            switch (self.env.store.getStatement(nominal_type_decl_stmt_idx)) {
-                .s_nominal_decl => {
-                    const pattern_idx = try self.env.addPattern(CIR.Pattern{
-                        .nominal = .{
-                            .nominal_type_decl = nominal_type_decl_stmt_idx,
+                        return pattern_idx;
+                    },
+                    .s_alias_decl => {
+                        return try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .type_alias_but_needed_nominal = .{
+                            .name = full_type_ident,
+                            .region = type_tok_region,
+                        } });
+                    },
+                    else => {
+                        const feature = try self.env.insertString("report an error resolved type decl in scope wasn't actually a type decl");
+                        return try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .not_implemented = .{
+                            .feature = feature,
+                            .region = type_tok_region,
+                        } });
+                    },
+                }
+            }
+
+            if (self.lookupAvailableModuleEnv(first_tok_ident)) |auto_imported_type| {
+                if (try self.lookupNestedAutoImportedTypeNode(auto_imported_type, first_tok_ident, full_type_name)) |target_node_idx| {
+                    const import_idx = try self.getOrCreateAutoImportedTypeImport(auto_imported_type, first_tok_ident);
+
+                    if (try self.validateImportedNominalTagTarget(Pattern.Idx, auto_imported_type.env, target_node_idx, first_tok_ident, full_type_ident, type_tok_region)) |malformed_idx| {
+                        return malformed_idx;
+                    }
+
+                    return try self.env.addPattern(CIR.Pattern{
+                        .nominal_external = .{
+                            .module_idx = import_idx,
+                            .target_node_idx = target_node_idx,
                             .backing_pattern = tag_pattern_idx,
                             .backing_type = .tag,
                         },
                     }, region);
-
-                    return pattern_idx;
-                },
-                .s_alias_decl => {
-                    return try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .type_alias_but_needed_nominal = .{
-                        .name = full_type_ident,
-                        .region = type_tok_region,
-                    } });
-                },
-                else => {
-                    const feature = try self.env.insertString("report an error resolved type decl in scope wasn't actually a type decl");
-                    return try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .not_implemented = .{
-                        .feature = feature,
-                        .region = type_tok_region,
-                    } });
-                },
+                }
             }
+
+            return try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .undeclared_type = .{
+                .name = full_type_ident,
+                .region = type_tok_region,
+            } });
         };
 
         const module_name = module_info.module_name;
@@ -18634,12 +18710,37 @@ fn lookupNestedAutoImportedTypeNode(
         type_path_text;
 
     const qualified_type_text = self.env.getIdent(imported_type.qualified_type_ident);
+    if (std.mem.eql(u8, qualified_type_text, "Builtin.Encoding") and isHiddenEncodingNestedType(nested_suffix)) {
+        return null;
+    }
+
     const scratch_top = self.scratchBytesTop();
     defer self.clearScratchBytesFrom(scratch_top);
     const builtin_nested_path = try self.scratchQualifiedText(qualified_type_text, nested_suffix);
 
     return (try self.lookupImportedExposedTypeNode(imported_type.env, builtin_nested_path)) orelse
         (try self.lookupImportedTypeDeclNode(imported_type.env, builtin_nested_path));
+}
+
+fn isHiddenEncodingNestedType(nested_suffix: []const u8) bool {
+    const hidden_names = [_][]const u8{
+        "JsonState",
+        "JsonEncoding",
+        "HttpHeaderState",
+        "HttpHeaderEncoding",
+    };
+
+    inline for (hidden_names) |hidden_name| {
+        if (std.mem.eql(u8, nested_suffix, hidden_name)) return true;
+        if (std.mem.startsWith(u8, nested_suffix, hidden_name) and
+            nested_suffix.len > hidden_name.len and
+            nested_suffix[hidden_name.len] == '.')
+        {
+            return true;
+        }
+    }
+
+    return false;
 }
 
 fn resolveNestedExternalTypeAnno(

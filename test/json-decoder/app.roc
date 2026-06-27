@@ -99,7 +99,6 @@ main! = |json| {
 }
 
 Token := { raw : Str }.{
-	parser_for : Json -> (Json.State -> Try({ value : Token, rest : Json.State }, Json.DecodeErr))
 	parser_for = |encoding| |state| {
 		parsed = Json.parse_str(encoding, state)?
 		Ok({ value: { raw: "custom-token" }, rest: parsed.rest })
@@ -122,18 +121,20 @@ empty_record_score = |empty_result|
 		Err(_) => 999999
 	}
 
-invalid_empty_record_score : Try({}, _) -> U64
+invalid_empty_record_score : Try({}, Json) -> U64
 invalid_empty_record_score = |invalid_empty_result|
 	match invalid_empty_result {
 		Ok(_) => 999999
-		Err(_) => 37
+		Err(Json.InvalidJson) => 37
+		Err(_) => 999999
 	}
 
-trailing_empty_record_score : Try({}, _) -> U64
+trailing_empty_record_score : Try({}, Json) -> U64
 trailing_empty_record_score = |trailing_empty_result|
 	match trailing_empty_result {
 		Ok(_) => 999999
-		Err(_) => 41
+		Err(Json.InvalidJson) => 41
+		Err(_) => 999999
 	}
 
 top_level_string_score : Try(Str, _) -> U64
@@ -143,16 +144,18 @@ top_level_string_score = |string_result|
 		Err(_) => 999999
 	}
 
-invalid_string_score : Try(Str, _) -> U64
+invalid_string_score : Try(Str, Json) -> U64
 invalid_string_score = |string_result|
 	match string_result {
 		Ok(_) => 999999
-		Err(_) => 43
+		Err(Json.InvalidJson) => 43
+		Err(_) => 999999
 	}
 
-null_string_score : Try(Str, _) -> U64
+null_string_score : Try(Str, Json) -> U64
 null_string_score = |string_result|
 	match string_result {
 		Ok(_) => 999999
-		Err(_) => 47
+		Err(Json.InvalidJson) => 47
+		Err(_) => 999999
 	}
