@@ -431,6 +431,15 @@ const LoopPattern = struct {
     refinements: []?KnownValue,
 };
 
+const StateLoopPattern = struct {
+    states: []const StateLoopKnownState,
+};
+
+const StateLoopKnownState = struct {
+    id: Ast.StateLoopStateId,
+    values: []const KnownValue,
+};
+
 const ActiveInline = struct {
     fn_id: Ast.FnId,
     args: ?[]const KnownValue = null,
@@ -1072,6 +1081,7 @@ const Cloner = struct {
     changes: std.ArrayList(BindingChange),
     inline_stack: std.ArrayList(ActiveInline),
     loop_stack: std.ArrayList(LoopPattern),
+    state_loop_stack: std.ArrayList(StateLoopPattern),
     inline_direct_calls: bool,
     inline_direct_requires_known_arg: bool,
     record_call_patterns: bool,
@@ -1089,6 +1099,7 @@ const Cloner = struct {
             .changes = .empty,
             .inline_stack = .empty,
             .loop_stack = .empty,
+            .state_loop_stack = .empty,
             .inline_direct_calls = true,
             .inline_direct_requires_known_arg = true,
             .record_call_patterns = true,
@@ -1108,6 +1119,7 @@ const Cloner = struct {
             .changes = .empty,
             .inline_stack = .empty,
             .loop_stack = .empty,
+            .state_loop_stack = .empty,
             .inline_direct_calls = true,
             .inline_direct_requires_known_arg = false,
             .record_call_patterns = true,
@@ -1126,6 +1138,7 @@ const Cloner = struct {
     }
 
     fn deinit(self: *Cloner) void {
+        self.state_loop_stack.deinit(self.pass.allocator);
         self.inline_stack.deinit(self.pass.allocator);
         self.loop_stack.deinit(self.pass.allocator);
         self.changes.deinit(self.pass.allocator);
@@ -2112,12 +2125,252 @@ const Cloner = struct {
             }
             if (refined) continue;
 
+            if (knownValuesContainFiniteState(known_values)) {
+                return try self.cloneStateLoopFromKnownValues(ty, loop, params, values, known_values);
+            }
+
             return try self.addExpr(.{ .ty = ty, .data = .{ .loop_ = .{
                 .params = try self.pass.program.addTypedLocalSpan(new_params.items),
                 .initial_values = try self.pass.program.addExprSpan(new_initials.items),
                 .body = body,
             } } });
         }
+    }
+
+    fn cloneStateLoopFromKnownValues(
+        self: *Cloner,
+        ty: Type.TypeId,
+        loop: anytype,
+        params: []const Ast.TypedLocal,
+        values: []const Value,
+        known_values: []const KnownValue,
+    ) Common.LowerError!Ast.ExprId {
+        const state_keys = try self.expandStateKnownValues(known_values);
+        if (state_keys.len < 2) Common.invariant("state_loop requested without multiple finite states");
+
+        const state_start: u32 = @intCast(self.pass.program.state_loop_states.items.len);
+        try self.pass.program.state_loop_states.ensureUnusedCapacity(self.pass.program.allocator, state_keys.len);
+
+        const states = try self.pass.allocator.alloc(StateLoopKnownState, state_keys.len);
+        defer self.pass.allocator.free(states);
+
+        for (state_keys, 0..) |state_values, index| {
+            if (state_values.len != params.len) Common.invariant("state_loop key arity differed from loop params");
+            const state_id: Ast.StateLoopStateId = @enumFromInt(state_start + @as(u32, @intCast(index)));
+            states[index] = .{
+                .id = state_id,
+                .values = state_values,
+            };
+            self.pass.program.state_loop_states.appendAssumeCapacity(undefined);
+        }
+
+        const entry_state = self.stateForValues(states, values) orelse
+            Common.invariant("state_loop initial values did not match any state");
+
+        var entry_values = std.ArrayList(Ast.ExprId).empty;
+        defer entry_values.deinit(self.pass.allocator);
+        for (entry_state.values, values) |known_value, value| {
+            if (!try self.appendFieldReadExprsFromValue(known_value, value, &entry_values)) {
+                Common.invariant("state_loop initial value could not be split into entry state params");
+            }
+        }
+
+        try self.state_loop_stack.append(self.pass.allocator, .{ .states = states });
+        defer _ = self.state_loop_stack.pop();
+
+        for (states) |state| {
+            const change_start = self.changes.items.len;
+            defer self.restore(change_start);
+
+            var state_params = std.ArrayList(Ast.TypedLocal).empty;
+            defer state_params.deinit(self.pass.allocator);
+
+            for (params, state.values) |param, known_value| {
+                const param_value = try self.valueFromKnownValueArgs(known_value, &state_params);
+                try self.putSubst(param.local, param_value);
+            }
+
+            self.pass.program.state_loop_states.items[@intFromEnum(state.id)] = .{
+                .params = try self.pass.program.addTypedLocalSpan(state_params.items),
+                .body = try self.cloneExpr(loop.body),
+            };
+        }
+
+        const state_span: Ast.Span(Ast.StateLoopState) = .{
+            .start = state_start,
+            .len = @intCast(states.len),
+        };
+        return try self.addExpr(.{ .ty = ty, .data = .{ .state_loop = .{
+            .entry_state = entry_state.id,
+            .entry_values = try self.pass.program.addExprSpan(entry_values.items),
+            .states = state_span,
+        } } });
+    }
+
+    fn expandStateKnownValues(self: *Cloner, known_values: []const KnownValue) Allocator.Error![]const []const KnownValue {
+        return try self.knownValueProducts(known_values);
+    }
+
+    fn knownValueProducts(self: *Cloner, known_values: []const KnownValue) Allocator.Error![]const []const KnownValue {
+        const options = try self.pass.allocator.alloc([]const KnownValue, known_values.len);
+        defer self.pass.allocator.free(options);
+        for (known_values, 0..) |known_value, index| {
+            options[index] = try self.expandKnownValue(known_value);
+        }
+
+        var products = std.ArrayList([]const KnownValue).empty;
+        defer products.deinit(self.pass.allocator);
+        const current = try self.pass.allocator.alloc(KnownValue, known_values.len);
+        defer self.pass.allocator.free(current);
+
+        try self.appendKnownValueProducts(options, 0, current, &products);
+        return try self.pass.arena.allocator().dupe([]const KnownValue, products.items);
+    }
+
+    fn appendKnownValueProducts(
+        self: *Cloner,
+        options: []const []const KnownValue,
+        index: usize,
+        current: []KnownValue,
+        products: *std.ArrayList([]const KnownValue),
+    ) Allocator.Error!void {
+        if (index == options.len) {
+            try products.append(self.pass.allocator, try self.pass.arena.allocator().dupe(KnownValue, current));
+            return;
+        }
+
+        for (options[index]) |option| {
+            current[index] = option;
+            try self.appendKnownValueProducts(options, index + 1, current, products);
+        }
+    }
+
+    fn expandKnownValue(self: *Cloner, known_value: KnownValue) Allocator.Error![]const KnownValue {
+        return switch (known_value) {
+            .any,
+            .leaf,
+            => try self.singleKnownValue(known_value),
+            .tag => |tag| try self.expandKnownTag(tag),
+            .record => |record| try self.expandKnownRecord(record),
+            .tuple => |tuple| try self.expandKnownTuple(tuple),
+            .nominal => |nominal| try self.expandKnownNominal(nominal),
+            .callable => |callable| try self.expandKnownCallable(callable),
+            .finite_tags => |finite_tags| try self.expandKnownTags(finite_tags),
+            .finite_callables => |finite_callables| try self.expandKnownCallables(finite_callables),
+        };
+    }
+
+    fn singleKnownValue(self: *Cloner, known_value: KnownValue) Allocator.Error![]const KnownValue {
+        const values = try self.pass.arena.allocator().alloc(KnownValue, 1);
+        values[0] = known_value;
+        return values;
+    }
+
+    fn expandKnownRecord(self: *Cloner, record: KnownRecord) Allocator.Error![]const KnownValue {
+        const child_values = try self.pass.allocator.alloc(KnownValue, record.fields.len);
+        defer self.pass.allocator.free(child_values);
+        for (record.fields, 0..) |field, index| {
+            child_values[index] = field.known_value;
+        }
+
+        const products = try self.knownValueProducts(child_values);
+        const alternatives = try self.pass.arena.allocator().alloc(KnownValue, products.len);
+        for (products, alternatives) |product, *out| {
+            const fields = try self.pass.arena.allocator().alloc(KnownField, record.fields.len);
+            for (record.fields, product, fields) |field, field_known_value, *field_out| {
+                field_out.* = .{
+                    .name = field.name,
+                    .known_value = field_known_value,
+                };
+            }
+            out.* = .{ .record = .{
+                .ty = record.ty,
+                .fields = fields,
+            } };
+        }
+        return alternatives;
+    }
+
+    fn expandKnownTuple(self: *Cloner, tuple: KnownTuple) Allocator.Error![]const KnownValue {
+        const products = try self.knownValueProducts(tuple.items);
+        const alternatives = try self.pass.arena.allocator().alloc(KnownValue, products.len);
+        for (products, alternatives) |product, *out| {
+            out.* = .{ .tuple = .{
+                .ty = tuple.ty,
+                .items = product,
+            } };
+        }
+        return alternatives;
+    }
+
+    fn expandKnownNominal(self: *Cloner, nominal: KnownNominal) Allocator.Error![]const KnownValue {
+        const backing_alternatives = try self.expandKnownValue(nominal.backing.*);
+        const alternatives = try self.pass.arena.allocator().alloc(KnownValue, backing_alternatives.len);
+        for (backing_alternatives, alternatives) |backing, *out| {
+            const stored = try self.pass.arena.allocator().create(KnownValue);
+            stored.* = backing;
+            out.* = .{ .nominal = .{
+                .ty = nominal.ty,
+                .backing = stored,
+            } };
+        }
+        return alternatives;
+    }
+
+    fn expandKnownTag(self: *Cloner, tag: KnownTag) Allocator.Error![]const KnownValue {
+        const products = try self.knownValueProducts(tag.payloads);
+        const alternatives = try self.pass.arena.allocator().alloc(KnownValue, products.len);
+        for (products, alternatives) |product, *out| {
+            out.* = .{ .tag = .{
+                .ty = tag.ty,
+                .name = tag.name,
+                .payloads = product,
+            } };
+        }
+        return alternatives;
+    }
+
+    fn expandKnownTags(self: *Cloner, finite_tags: KnownTags) Allocator.Error![]const KnownValue {
+        var alternatives = std.ArrayList(KnownValue).empty;
+        defer alternatives.deinit(self.pass.allocator);
+        for (finite_tags.alternatives) |tag| {
+            const expanded = try self.expandKnownTag(tag);
+            try alternatives.appendSlice(self.pass.allocator, expanded);
+        }
+        return try self.pass.arena.allocator().dupe(KnownValue, alternatives.items);
+    }
+
+    fn expandKnownCallable(self: *Cloner, callable: KnownCallable) Allocator.Error![]const KnownValue {
+        const products = try self.knownValueProducts(callable.captures);
+        const alternatives = try self.pass.arena.allocator().alloc(KnownValue, products.len);
+        for (products, alternatives) |product, *out| {
+            out.* = .{ .callable = .{
+                .ty = callable.ty,
+                .fn_id = callable.fn_id,
+                .captures = product,
+            } };
+        }
+        return alternatives;
+    }
+
+    fn expandKnownCallables(self: *Cloner, finite_callables: KnownCallables) Allocator.Error![]const KnownValue {
+        var alternatives = std.ArrayList(KnownValue).empty;
+        defer alternatives.deinit(self.pass.allocator);
+        for (finite_callables.alternatives) |callable| {
+            const expanded = try self.expandKnownCallable(callable);
+            try alternatives.appendSlice(self.pass.allocator, expanded);
+        }
+        return try self.pass.arena.allocator().dupe(KnownValue, alternatives.items);
+    }
+
+    fn stateForValues(self: *Cloner, states: []const StateLoopKnownState, values: []const Value) ?StateLoopKnownState {
+        var found: ?StateLoopKnownState = null;
+        for (states) |state| {
+            if (!knownValuesMatchValues(self.pass.program, state.values, values)) continue;
+            if (found != null) Common.invariant("state_loop edge matched multiple states");
+            found = state;
+        }
+        return found;
     }
 
     fn cloneLoopUnwrappedLet(
@@ -2422,9 +2675,12 @@ const Cloner = struct {
     }
 
     fn cloneContinue(self: *Cloner, ty: Type.TypeId, continue_: anytype) Common.LowerError!Ast.ExprData {
-        const loop = self.loop_stack.getLastOrNull() orelse return .{ .continue_ = .{
-            .values = try self.cloneExprSpan(continue_.values),
-        } };
+        const loop = self.loop_stack.getLastOrNull() orelse {
+            const state_loop = self.state_loop_stack.getLastOrNull() orelse return .{ .continue_ = .{
+                .values = try self.cloneExprSpan(continue_.values),
+            } };
+            return try self.cloneStateContinue(ty, state_loop, continue_);
+        };
         const values = self.pass.program.exprSpan(continue_.values);
         const source_values = try self.pass.allocator.dupe(Ast.ExprId, values);
         defer self.pass.allocator.free(source_values);
@@ -2457,6 +2713,130 @@ const Cloner = struct {
         return .{ .block = .{
             .statements = try self.pass.program.addStmtSpan(pending_statements.items),
             .final_expr = continue_expr,
+        } };
+    }
+
+    fn cloneStateContinue(self: *Cloner, ty: Type.TypeId, state_loop: StateLoopPattern, continue_: anytype) Common.LowerError!Ast.ExprData {
+        const values = self.pass.program.exprSpan(continue_.values);
+        const source_values = try self.pass.allocator.dupe(Ast.ExprId, values);
+        defer self.pass.allocator.free(source_values);
+        if (state_loop.states.len == 0) Common.invariant("state_continue had no possible target states");
+
+        const arity = state_loop.states[0].values.len;
+        if (source_values.len != arity) Common.invariant("state_continue value count differed from state_loop arity");
+
+        var pending_statements = std.ArrayList(Ast.StmtId).empty;
+        defer pending_statements.deinit(self.pass.allocator);
+
+        const pending_change_start = self.changes.items.len;
+        defer self.restore(pending_change_start);
+
+        const continue_values = try self.pass.allocator.alloc(Value, source_values.len);
+        defer self.pass.allocator.free(continue_values);
+
+        for (source_values, 0..) |value_expr, index| {
+            var value = try self.cloneExprValueDemandingKnownValue(value_expr);
+            while (value == .let_) {
+                try self.appendPendingLetStmts(value.let_.lets, &pending_statements);
+                try self.bindPendingLetKnownValues(value.let_.lets);
+                value = value.let_.body.*;
+            }
+            value = try self.hoistNestedLetsFromValue(value, &pending_statements);
+            continue_values[index] = value;
+        }
+
+        const continue_data = try self.cloneStateContinueDataFromValues(ty, state_loop, continue_values);
+        if (pending_statements.items.len == 0) return continue_data;
+
+        const continue_expr = try self.addExpr(.{ .ty = ty, .data = continue_data });
+        return .{ .block = .{
+            .statements = try self.pass.program.addStmtSpan(pending_statements.items),
+            .final_expr = continue_expr,
+        } };
+    }
+
+    fn cloneStateContinueDataFromValues(
+        self: *Cloner,
+        ty: Type.TypeId,
+        state_loop: StateLoopPattern,
+        values: []const Value,
+    ) Common.LowerError!Ast.ExprData {
+        for (values, 0..) |value, value_index| {
+            const let_value = switch (value) {
+                .let_ => |let_value| let_value,
+                else => continue,
+            };
+
+            var unwrapped_values = try self.pass.allocator.dupe(Value, values);
+            defer self.pass.allocator.free(unwrapped_values);
+            unwrapped_values[value_index] = let_value.body.*;
+
+            const change_start = self.changes.items.len;
+            defer self.restore(change_start);
+            try self.bindPendingLetKnownValues(let_value.lets);
+
+            const continue_expr = try self.addExpr(.{
+                .ty = ty,
+                .data = try self.cloneStateContinueDataFromValues(ty, state_loop, unwrapped_values),
+            });
+            const wrapped = try self.wrapPendingLetsAroundExpr(ty, continue_expr, let_value.lets);
+            return .{ .block = .{
+                .statements = try self.pass.program.addStmtSpan(&.{}),
+                .final_expr = wrapped,
+            } };
+        }
+
+        for (values, 0..) |value, value_index| {
+            const if_value = switch (value) {
+                .if_ => |if_value| if_value,
+                else => continue,
+            };
+
+            const branches = try self.pass.allocator.alloc(Ast.IfBranch, if_value.branches.len);
+            defer self.pass.allocator.free(branches);
+            var branch_values = try self.pass.allocator.dupe(Value, values);
+            defer self.pass.allocator.free(branch_values);
+
+            for (if_value.branches, 0..) |branch, branch_index| {
+                branch_values[value_index] = branch.body;
+                branches[branch_index] = .{
+                    .cond = branch.cond,
+                    .body = try self.addExpr(.{
+                        .ty = ty,
+                        .data = try self.cloneStateContinueDataFromValues(ty, state_loop, branch_values),
+                    }),
+                };
+            }
+
+            branch_values[value_index] = if_value.final_else.*;
+            const final_else = try self.addExpr(.{
+                .ty = ty,
+                .data = try self.cloneStateContinueDataFromValues(ty, state_loop, branch_values),
+            });
+
+            return .{ .if_ = .{
+                .branches = try self.pass.program.addIfBranchSpan(branches),
+                .final_else = final_else,
+            } };
+        }
+
+        const target_state = self.stateForValues(state_loop.states, values) orelse
+            Common.invariant("state_continue values did not match any state_loop state");
+
+        var new_values = std.ArrayList(Ast.ExprId).empty;
+        defer new_values.deinit(self.pass.allocator);
+
+        for (target_state.values, values) |known_value, value| {
+            if (knownValueMatchesValue(self.pass.program, known_value, value)) {
+                try self.appendExprsFromValue(known_value, value, &new_values);
+            } else if (!try self.appendFieldReadExprsFromValue(known_value, value, &new_values)) {
+                Common.invariant("state_continue value could not be split into target state params");
+            }
+        }
+
+        return .{ .state_continue = .{
+            .target_state = target_state.id,
+            .values = try self.pass.program.addExprSpan(new_values.items),
         } };
     }
 
@@ -6748,6 +7128,49 @@ fn known_valueContainsStrictSubknown_value(program: *const Ast.Program, containe
     };
 }
 
+fn knownValuesContainFiniteState(known_values: []const KnownValue) bool {
+    for (known_values) |known_value| {
+        if (knownValueContainsFiniteState(known_value)) return true;
+    }
+    return false;
+}
+
+fn knownValueContainsFiniteState(known_value: KnownValue) bool {
+    return switch (known_value) {
+        .any,
+        .leaf,
+        => false,
+        .tag => |tag| blk: {
+            for (tag.payloads) |payload| {
+                if (knownValueContainsFiniteState(payload)) break :blk true;
+            }
+            break :blk false;
+        },
+        .record => |record| blk: {
+            for (record.fields) |field| {
+                if (knownValueContainsFiniteState(field.known_value)) break :blk true;
+            }
+            break :blk false;
+        },
+        .tuple => |tuple| blk: {
+            for (tuple.items) |item| {
+                if (knownValueContainsFiniteState(item)) break :blk true;
+            }
+            break :blk false;
+        },
+        .nominal => |nominal| knownValueContainsFiniteState(nominal.backing.*),
+        .callable => |callable| blk: {
+            for (callable.captures) |capture| {
+                if (knownValueContainsFiniteState(capture)) break :blk true;
+            }
+            break :blk false;
+        },
+        .finite_tags,
+        .finite_callables,
+        => true,
+    };
+}
+
 fn known_valueEql(program: *const Ast.Program, lhs: KnownValue, rhs: KnownValue) bool {
     if (std.meta.activeTag(lhs) != std.meta.activeTag(rhs)) return false;
     return switch (lhs) {
@@ -6797,6 +7220,14 @@ fn known_valueEql(program: *const Ast.Program, lhs: KnownValue, rhs: KnownValue)
         .finite_tags => |lhs_finite| knownTagsEql(program, lhs_finite, rhs.finite_tags),
         .finite_callables => |lhs_finite| knownCallablesEql(program, lhs_finite, rhs.finite_callables),
     };
+}
+
+fn knownValuesMatchValues(program: *const Ast.Program, known_values: []const KnownValue, values: []const Value) bool {
+    if (known_values.len != values.len) return false;
+    for (known_values, values) |known_value, value| {
+        if (!knownValueMatchesValue(program, known_value, value)) return false;
+    }
+    return true;
 }
 
 fn knownValueMatchesValue(program: *const Ast.Program, known_value: KnownValue, value: Value) bool {

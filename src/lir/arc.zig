@@ -422,6 +422,7 @@ const Inserter = struct {
         body_keep: OwnedSet,
         loop_keep_id: u32,
         join_keeps: []JoinKeep = &.{},
+        forward_join_keeps: std.ArrayList(*OwnedSet) = .empty,
         frames: std.ArrayList(LinearRewriteFrame),
         result: *LIR.CFStmtId,
     };
@@ -1378,10 +1379,15 @@ const Inserter = struct {
         };
         try self.active_loop_keep_ids.put(@intFromPtr(&state.body_keep), state.loop_keep_id);
         loop_keep_registered = true;
-        state.join_keeps = try appendJoinKeep(self.store.allocator, path.options.join_keeps, .{
+        var join_keeps = std.ArrayList(JoinKeep).empty;
+        defer join_keeps.deinit(self.store.allocator);
+        try join_keeps.appendSlice(self.store.allocator, path.options.join_keeps);
+        try join_keeps.append(self.store.allocator, .{
             .target = join_stmt.id,
             .keep = &state.body_keep,
         });
+        try self.appendForwardJoinKeeps(&join_keeps, &state.forward_join_keeps, &state.entry_keep, join_stmt.remainder);
+        state.join_keeps = try join_keeps.toOwnedSlice(self.store.allocator);
         errdefer if (!queued) self.store.allocator.free(state.join_keeps);
 
         try tasks.append(self.store.allocator, .{ .join = state });
@@ -1399,6 +1405,33 @@ const Inserter = struct {
             .join_keeps = join_options.join_keeps,
         }, &state.remainder);
         try self.pushRewritePath(tasks, join_stmt.body, &state.body_keep, join_options, &state.body);
+    }
+
+    fn appendForwardJoinKeeps(
+        self: *Inserter,
+        join_keeps: *std.ArrayList(JoinKeep),
+        owned_sets: *std.ArrayList(*OwnedSet),
+        entry_keep: *const OwnedSet,
+        start: LIR.CFStmtId,
+    ) ResourceError!void {
+        var cursor = start;
+        while (true) {
+            const join_stmt = switch (self.store.getCFStmt(cursor)) {
+                .join => |join_stmt| join_stmt,
+                else => return,
+            };
+            const keep = try self.store.allocator.create(OwnedSet);
+            errdefer self.store.allocator.destroy(keep);
+            keep.* = try self.joinBodyOwnedSet(entry_keep, join_stmt.params, join_stmt.maybe_uninitialized_params, join_stmt.body);
+            errdefer keep.deinit();
+
+            try owned_sets.append(self.store.allocator, keep);
+            try join_keeps.append(self.store.allocator, .{
+                .target = join_stmt.id,
+                .keep = keep,
+            });
+            cursor = join_stmt.remainder;
+        }
     }
 
     fn finishRewriteJoin(self: *Inserter, state: *RewriteJoinTask) ResourceError!void {
@@ -2137,6 +2170,11 @@ const Inserter = struct {
         _ = self.active_loop_keep_ids.remove(@intFromPtr(&state.body_keep));
         self.destroyFrames(&state.frames);
         if (state.join_keeps.len != 0) self.store.allocator.free(state.join_keeps);
+        for (state.forward_join_keeps.items) |keep| {
+            keep.deinit();
+            self.store.allocator.destroy(keep);
+        }
+        state.forward_join_keeps.deinit(self.store.allocator);
         state.incoming_owned.deinit();
         state.entry_keep.deinit();
         state.body_keep.deinit();

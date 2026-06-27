@@ -1464,6 +1464,23 @@ specialized call argument. This uses the ordinary direct-call body and
 preserves argument evaluation order. It must not decide based on method names
 such as `iter`, `append`, `next`, or `map`.
 
+Known-value exposure is demand-directed. A known-value fact may describe an
+entire public value, but private optimized state contains only the projections
+the current continuation actually needs. Demand is explicit compiler data:
+record field demand, tuple item demand, nominal backing demand, tag
+payload/match demand, callable target/capture demand, direct-call result
+demand, or public materialization demand. The optimizer must not split every
+field of a record merely because the record fact exists.
+
+This distinction is important for `Iter` and `Stream`. A consuming loop that
+only steps an iterator demands the `step` field and the captures needed by that
+step callable. It does not demand `len_if_known`, so private loop state must not
+carry the public size-hint field or execute size-hint overflow/sentinel
+bookkeeping. If source code reads the size hint, returns the iterator, stores
+it, passes it to unspecialized code, or otherwise materializes the public value,
+that use creates an explicit demand for the public representation and the
+ordinary fields are preserved.
+
 Known-known values must flow through ordinary local bindings, blocks, `if`,
 `match`, loop initial values, and loop `continue` values. When branches share a
 common outer constructor, such as an `Iter` record with `len_if_known` and
@@ -1495,12 +1512,17 @@ state_continue(target_state: StateId, values: []Expr)
 
 The state graph is built from known-value facts that already exist while the
 function body is cloned. A state key contains only explicit optimizer facts
-that are valid at that program point: finite tags, finite callable targets,
-record/tuple/nominal fields, capture facts, and ordinary expression leaves.
-Numeric, string, list, pointer, and other primitive leaves are carried as
-parameters; the optimizer must not create a distinct state for each runtime
-leaf value. This keeps state creation bounded by reachable control/callable
-structure instead of by arbitrary data values.
+that are valid at that program point and demanded by the state body or one of
+its outgoing edges. Finite tags and finite callable targets are state
+dimensions only when a demanded use needs to distinguish them. Record, tuple,
+nominal, tag payload, and callable capture structure is traversed only along
+demanded projections. Numeric, string, list, pointer, and other primitive leaves
+that are demanded by the state are carried as parameters; the optimizer must
+not create a distinct state for each runtime leaf value. Fields and captures
+outside the demand closure are absent from private state. This keeps state
+creation bounded by reachable control/callable structure and actual
+continuation demand instead of by arbitrary data values or unused public
+wrapper fields.
 
 For `Iter` and `Stream`, the public wrapper can then disappear from the hot
 loop. The state graph carries private fields such as list pointer, index,
@@ -1517,11 +1539,13 @@ The state graph is edge-specialized. When a branch, match arm, known tag, or
 known callable call reaches a `continue`, the optimizer records the exact
 target state implied by that edge. A loop parameter whose fact changes among a
 finite set of known tags or callable targets becomes a finite collection of
-states. A loop-carried ordinary leaf stays an ordinary state parameter. This
-is the loop-native version of worker-wrapper and constructor specialization:
-it keeps loop control as loop control, preserves source mutations outside the
-loop through explicit loop-carried parameters, and avoids encoding each loop
-state as an extra Roc function ABI.
+states only if the loop body demands that distinction. A loop-carried ordinary
+leaf stays an ordinary state parameter when demanded, and disappears when no
+reachable demanded use needs it. This is the loop-native version of
+worker-wrapper and constructor specialization: it keeps loop control as loop
+control, preserves source mutations outside the loop through explicit
+loop-carried parameters, and avoids encoding each loop state as an extra Roc
+function ABI.
 
 A step call through a known callable field can be inlined when it has a single
 target. When multiple known targets remain, optimized lowering dispatches over
