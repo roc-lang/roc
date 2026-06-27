@@ -1115,6 +1115,14 @@ const EngineScratch = struct {
     each_next_hash_links: std.ArrayListUnmanaged(usize) = .empty,
     each_matched_existing: std.ArrayListUnmanaged(bool) = .empty,
     replacement_target_scopes: std.ArrayListUnmanaged(bool) = .empty,
+    remove_element_indexes: std.ArrayListUnmanaged(usize) = .empty,
+    remove_text_node_indexes: std.ArrayListUnmanaged(usize) = .empty,
+    remove_signal_text_node_indexes: std.ArrayListUnmanaged(usize) = .empty,
+    remove_static_text_attr_indexes: std.ArrayListUnmanaged(usize) = .empty,
+    remove_signal_text_attr_indexes: std.ArrayListUnmanaged(usize) = .empty,
+    remove_static_bool_attr_indexes: std.ArrayListUnmanaged(usize) = .empty,
+    remove_signal_bool_attr_indexes: std.ArrayListUnmanaged(usize) = .empty,
+    remove_event_indexes: std.ArrayListUnmanaged(usize) = .empty,
 
     fn deinit(self: *EngineScratch, allocator: std.mem.Allocator) void {
         self.move_child_indexes.deinit(allocator);
@@ -1129,6 +1137,14 @@ const EngineScratch = struct {
         self.each_next_hash_links.deinit(allocator);
         self.each_matched_existing.deinit(allocator);
         self.replacement_target_scopes.deinit(allocator);
+        self.remove_element_indexes.deinit(allocator);
+        self.remove_text_node_indexes.deinit(allocator);
+        self.remove_signal_text_node_indexes.deinit(allocator);
+        self.remove_static_text_attr_indexes.deinit(allocator);
+        self.remove_signal_text_attr_indexes.deinit(allocator);
+        self.remove_static_bool_attr_indexes.deinit(allocator);
+        self.remove_signal_bool_attr_indexes.deinit(allocator);
+        self.remove_event_indexes.deinit(allocator);
         self.* = .{};
     }
 };
@@ -5588,139 +5604,176 @@ pub fn Engine(comptime Ctx: type) type {
             return scopeIsInReplacementTargetSet(target_scopes, site.scope_id);
         }
 
-        fn removeActiveElementDescriptorsInTarget(self: *Self, ctx: Ctx.Handle, target_scopes: []const bool) void {
+        fn removalIndexDesc(_: void, lhs: usize, rhs: usize) bool {
+            return lhs > rhs;
+        }
+
+        fn sortRemovalIndexesDescending(indexes: []usize) void {
+            std.mem.sort(usize, indexes, {}, removalIndexDesc);
+        }
+
+        fn appendRemovalIndex(ctx: Ctx.Handle, indexes: *std.ArrayListUnmanaged(usize), index: ?usize) void {
+            indexes.append(Ctx.allocator(ctx), index orelse return) catch @panic("out of memory");
+        }
+
+        fn appendTextFieldRemovalIndexes(ctx: Ctx.Handle, indexes: *std.ArrayListUnmanaged(usize), fields: HostTextFieldDescriptorIndexes) void {
+            appendRemovalIndex(ctx, indexes, fields.text);
+            appendRemovalIndex(ctx, indexes, fields.role);
+            appendRemovalIndex(ctx, indexes, fields.label);
+            appendRemovalIndex(ctx, indexes, fields.test_id);
+            appendRemovalIndex(ctx, indexes, fields.value);
+            appendRemovalIndex(ctx, indexes, fields.class);
+        }
+
+        fn appendBoolFieldRemovalIndexes(ctx: Ctx.Handle, indexes: *std.ArrayListUnmanaged(usize), fields: HostBoolFieldDescriptorIndexes) void {
+            appendRemovalIndex(ctx, indexes, fields.checked);
+            appendRemovalIndex(ctx, indexes, fields.disabled);
+        }
+
+        fn appendEventRemovalIndexes(ctx: Ctx.Handle, indexes: *std.ArrayListUnmanaged(usize), events: HostEventDescriptorIndexes) void {
+            appendRemovalIndex(ctx, indexes, events.click);
+            appendRemovalIndex(ctx, indexes, events.input);
+            appendRemovalIndex(ctx, indexes, events.check);
+            appendRemovalIndex(ctx, indexes, events.pointer_down);
+            appendRemovalIndex(ctx, indexes, events.pointer_up);
+            appendRemovalIndex(ctx, indexes, events.pointer_enter);
+            appendRemovalIndex(ctx, indexes, events.pointer_leave);
+        }
+
+        fn clearElemOwnedRemovalScratch(self: *Self) void {
+            self.scratch.remove_element_indexes.clearRetainingCapacity();
+            self.scratch.remove_text_node_indexes.clearRetainingCapacity();
+            self.scratch.remove_signal_text_node_indexes.clearRetainingCapacity();
+            self.scratch.remove_static_text_attr_indexes.clearRetainingCapacity();
+            self.scratch.remove_signal_text_attr_indexes.clearRetainingCapacity();
+            self.scratch.remove_static_bool_attr_indexes.clearRetainingCapacity();
+            self.scratch.remove_signal_bool_attr_indexes.clearRetainingCapacity();
+            self.scratch.remove_event_indexes.clearRetainingCapacity();
+        }
+
+        fn removeActiveElementDescriptorAt(self: *Self, ctx: Ctx.Handle, index: usize) void {
             const allocator = Ctx.allocator(ctx);
-            var write_index: usize = 0;
-            self.recordStreamNodesScannedBy(.stream_nodes_scanned_remove_target, self.active_stream.elements.items.len);
-            for (self.active_stream.elements.items, 0..) |desc, read_index| {
-                if (scopeIsInReplacementTargetSet(target_scopes, desc.scope_id)) {
-                    self.active_stream.clearElementIndex(desc.elem_id, read_index);
-                    allocator.free(desc.tag);
-                    continue;
-                }
-                self.active_stream.elements.items[write_index] = desc;
-                self.active_stream.updateElementIndex(desc.elem_id, write_index);
-                write_index += 1;
+            if (index >= self.active_stream.elements.items.len) @panic("element removal index exceeded descriptor table");
+            const last_index = self.active_stream.elements.items.len - 1;
+            const removed = self.active_stream.elements.items[index];
+            self.active_stream.clearElementIndex(removed.elem_id, index);
+            allocator.free(removed.tag);
+
+            if (index != last_index) {
+                const moved = self.active_stream.elements.items[last_index];
+                self.active_stream.elements.items[index] = moved;
+                self.active_stream.updateElementIndex(moved.elem_id, index);
             }
-            self.active_stream.elements.items.len = write_index;
+            self.active_stream.elements.items.len = last_index;
         }
 
-        fn removeActiveTextNodeDescriptorsInTarget(self: *Self, ctx: Ctx.Handle, target_scopes: []const bool) void {
+        fn removeActiveTextNodeDescriptorAt(self: *Self, ctx: Ctx.Handle, index: usize) void {
             const allocator = Ctx.allocator(ctx);
-            var write_index: usize = 0;
-            self.recordStreamNodesScannedBy(.stream_nodes_scanned_remove_target, self.active_stream.text_nodes.items.len);
-            for (self.active_stream.text_nodes.items, 0..) |desc, read_index| {
-                if (scopeIsInReplacementTargetSet(target_scopes, desc.scope_id)) {
-                    self.active_stream.clearTextNodeIndex(desc.elem_id, read_index);
-                    allocator.free(desc.value);
-                    continue;
-                }
-                self.active_stream.text_nodes.items[write_index] = desc;
-                self.active_stream.updateTextNodeIndex(desc.elem_id, write_index);
-                write_index += 1;
+            if (index >= self.active_stream.text_nodes.items.len) @panic("text node removal index exceeded descriptor table");
+            const last_index = self.active_stream.text_nodes.items.len - 1;
+            const removed = self.active_stream.text_nodes.items[index];
+            self.active_stream.clearTextNodeIndex(removed.elem_id, index);
+            allocator.free(removed.value);
+
+            if (index != last_index) {
+                const moved = self.active_stream.text_nodes.items[last_index];
+                self.active_stream.text_nodes.items[index] = moved;
+                self.active_stream.updateTextNodeIndex(moved.elem_id, index);
             }
-            self.active_stream.text_nodes.items.len = write_index;
+            self.active_stream.text_nodes.items.len = last_index;
         }
 
-        fn removeActiveSignalTextNodeDescriptorsInTarget(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, target_scopes: []const bool) void {
-            var write_index: usize = 0;
-            self.recordStreamNodesScannedBy(.stream_nodes_scanned_remove_target, self.active_stream.signal_text_nodes.items.len);
-            for (self.active_stream.signal_text_nodes.items, 0..) |desc, read_index| {
-                if (scopeIsInReplacementTargetSet(target_scopes, desc.scope_id)) {
-                    var removed = desc;
-                    const record_id = self.requireActiveSignalRecordId(removed.signal.record);
-                    self.removeActiveTextSignalRoute(record_id, .text_node, read_index);
-                    self.active_stream.clearSignalTextNodeIndex(removed.elem_id, read_index);
-                    self.active_stream.forgetSignalRecordTree(removed.signal.record);
-                    self.releaseActiveSignalRecord(ctx, removed.signal.record);
-                    self.deinitActiveSignalTextNodeDesc(ctx, roc_host, &removed);
-                    continue;
-                }
-                const record_id = self.requireActiveSignalRecordId(desc.signal.record);
-                self.updateActiveTextSignalRouteIndex(record_id, .text_node, read_index, write_index);
-                self.active_stream.signal_text_nodes.items[write_index] = desc;
-                self.active_stream.updateSignalTextNodeIndex(desc.elem_id, write_index);
-                write_index += 1;
+        fn removeActiveSignalTextNodeDescriptorAt(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, index: usize) void {
+            if (index >= self.active_stream.signal_text_nodes.items.len) @panic("signal text node removal index exceeded descriptor table");
+            const last_index = self.active_stream.signal_text_nodes.items.len - 1;
+            var removed = self.active_stream.signal_text_nodes.items[index];
+            const removed_record_id = self.requireActiveSignalRecordId(removed.signal.record);
+            self.removeActiveTextSignalRoute(removed_record_id, .text_node, index);
+            self.active_stream.clearSignalTextNodeIndex(removed.elem_id, index);
+            self.active_stream.forgetSignalRecordTree(removed.signal.record);
+            self.releaseActiveSignalRecord(ctx, removed.signal.record);
+            self.deinitActiveSignalTextNodeDesc(ctx, roc_host, &removed);
+
+            if (index != last_index) {
+                const moved = self.active_stream.signal_text_nodes.items[last_index];
+                const moved_record_id = self.requireActiveSignalRecordId(moved.signal.record);
+                self.active_stream.signal_text_nodes.items[index] = moved;
+                self.updateActiveTextSignalRouteIndex(moved_record_id, .text_node, last_index, index);
+                self.active_stream.updateSignalTextNodeIndex(moved.elem_id, index);
             }
-            self.active_stream.signal_text_nodes.items.len = write_index;
+            self.active_stream.signal_text_nodes.items.len = last_index;
         }
 
-        fn removeActiveStaticTextAttrDescriptorsInTarget(self: *Self, ctx: Ctx.Handle, target_scopes: []const bool) void {
+        fn removeActiveStaticTextAttrDescriptorAt(self: *Self, ctx: Ctx.Handle, index: usize) void {
             const allocator = Ctx.allocator(ctx);
-            var write_index: usize = 0;
-            self.recordStreamNodesScannedBy(.stream_nodes_scanned_remove_target, self.active_stream.static_text_attrs.items.len);
-            for (self.active_stream.static_text_attrs.items, 0..) |desc, read_index| {
-                if (self.elemIdInReplacementTargetSet(&self.active_stream, desc.elem_id, target_scopes)) {
-                    self.active_stream.clearStaticTextAttrIndex(desc.elem_id, desc.field, read_index);
-                    allocator.free(desc.value);
-                    continue;
-                }
-                self.active_stream.static_text_attrs.items[write_index] = desc;
-                self.active_stream.updateStaticTextAttrIndex(desc.elem_id, desc.field, write_index);
-                write_index += 1;
+            if (index >= self.active_stream.static_text_attrs.items.len) @panic("static text attr removal index exceeded descriptor table");
+            const last_index = self.active_stream.static_text_attrs.items.len - 1;
+            const removed = self.active_stream.static_text_attrs.items[index];
+            self.active_stream.clearStaticTextAttrIndex(removed.elem_id, removed.field, index);
+            allocator.free(removed.value);
+
+            if (index != last_index) {
+                const moved = self.active_stream.static_text_attrs.items[last_index];
+                self.active_stream.static_text_attrs.items[index] = moved;
+                self.active_stream.updateStaticTextAttrIndex(moved.elem_id, moved.field, index);
             }
-            self.active_stream.static_text_attrs.items.len = write_index;
+            self.active_stream.static_text_attrs.items.len = last_index;
         }
 
-        fn removeActiveSignalTextAttrDescriptorsInTarget(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, target_scopes: []const bool) void {
-            var write_index: usize = 0;
-            self.recordStreamNodesScannedBy(.stream_nodes_scanned_remove_target, self.active_stream.signal_text_attrs.items.len);
-            for (self.active_stream.signal_text_attrs.items, 0..) |desc, read_index| {
-                if (self.elemIdInReplacementTargetSet(&self.active_stream, desc.elem_id, target_scopes)) {
-                    var removed = desc;
-                    const record_id = self.requireActiveSignalRecordId(removed.signal.record);
-                    self.removeActiveTextSignalRoute(record_id, .text_attr, read_index);
-                    self.active_stream.clearSignalTextAttrIndex(removed.elem_id, removed.field, read_index);
-                    self.active_stream.forgetSignalRecordTree(removed.signal.record);
-                    self.releaseActiveSignalRecord(ctx, removed.signal.record);
-                    self.deinitActiveSignalTextAttrDesc(ctx, roc_host, &removed);
-                    continue;
-                }
-                const record_id = self.requireActiveSignalRecordId(desc.signal.record);
-                self.updateActiveTextSignalRouteIndex(record_id, .text_attr, read_index, write_index);
-                self.active_stream.signal_text_attrs.items[write_index] = desc;
-                self.active_stream.updateSignalTextAttrIndex(desc.elem_id, desc.field, write_index);
-                write_index += 1;
+        fn removeActiveSignalTextAttrDescriptorAt(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, index: usize) void {
+            if (index >= self.active_stream.signal_text_attrs.items.len) @panic("signal text attr removal index exceeded descriptor table");
+            const last_index = self.active_stream.signal_text_attrs.items.len - 1;
+            var removed = self.active_stream.signal_text_attrs.items[index];
+            const removed_record_id = self.requireActiveSignalRecordId(removed.signal.record);
+            self.removeActiveTextSignalRoute(removed_record_id, .text_attr, index);
+            self.active_stream.clearSignalTextAttrIndex(removed.elem_id, removed.field, index);
+            self.active_stream.forgetSignalRecordTree(removed.signal.record);
+            self.releaseActiveSignalRecord(ctx, removed.signal.record);
+            self.deinitActiveSignalTextAttrDesc(ctx, roc_host, &removed);
+
+            if (index != last_index) {
+                const moved = self.active_stream.signal_text_attrs.items[last_index];
+                const moved_record_id = self.requireActiveSignalRecordId(moved.signal.record);
+                self.active_stream.signal_text_attrs.items[index] = moved;
+                self.updateActiveTextSignalRouteIndex(moved_record_id, .text_attr, last_index, index);
+                self.active_stream.updateSignalTextAttrIndex(moved.elem_id, moved.field, index);
             }
-            self.active_stream.signal_text_attrs.items.len = write_index;
+            self.active_stream.signal_text_attrs.items.len = last_index;
         }
 
-        fn removeActiveStaticBoolAttrDescriptorsInTarget(self: *Self, target_scopes: []const bool) void {
-            var write_index: usize = 0;
-            self.recordStreamNodesScannedBy(.stream_nodes_scanned_remove_target, self.active_stream.static_bool_attrs.items.len);
-            for (self.active_stream.static_bool_attrs.items, 0..) |desc, read_index| {
-                if (self.elemIdInReplacementTargetSet(&self.active_stream, desc.elem_id, target_scopes)) {
-                    self.active_stream.clearStaticBoolAttrIndex(desc.elem_id, desc.field, read_index);
-                    continue;
-                }
-                self.active_stream.static_bool_attrs.items[write_index] = desc;
-                self.active_stream.updateStaticBoolAttrIndex(desc.elem_id, desc.field, write_index);
-                write_index += 1;
+        fn removeActiveStaticBoolAttrDescriptorAt(self: *Self, index: usize) void {
+            if (index >= self.active_stream.static_bool_attrs.items.len) @panic("static bool attr removal index exceeded descriptor table");
+            const last_index = self.active_stream.static_bool_attrs.items.len - 1;
+            const removed = self.active_stream.static_bool_attrs.items[index];
+            self.active_stream.clearStaticBoolAttrIndex(removed.elem_id, removed.field, index);
+
+            if (index != last_index) {
+                const moved = self.active_stream.static_bool_attrs.items[last_index];
+                self.active_stream.static_bool_attrs.items[index] = moved;
+                self.active_stream.updateStaticBoolAttrIndex(moved.elem_id, moved.field, index);
             }
-            self.active_stream.static_bool_attrs.items.len = write_index;
+            self.active_stream.static_bool_attrs.items.len = last_index;
         }
 
-        fn removeActiveSignalBoolAttrDescriptorsInTarget(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, target_scopes: []const bool) void {
-            var write_index: usize = 0;
-            self.recordStreamNodesScannedBy(.stream_nodes_scanned_remove_target, self.active_stream.signal_bool_attrs.items.len);
-            for (self.active_stream.signal_bool_attrs.items, 0..) |desc, read_index| {
-                if (self.elemIdInReplacementTargetSet(&self.active_stream, desc.elem_id, target_scopes)) {
-                    var removed = desc;
-                    const record_id = self.requireActiveSignalRecordId(removed.signal.record);
-                    self.removeActiveBoolSignalRoute(record_id, read_index);
-                    self.active_stream.clearSignalBoolAttrIndex(removed.elem_id, removed.field, read_index);
-                    self.active_stream.forgetSignalRecordTree(removed.signal.record);
-                    self.releaseActiveSignalRecord(ctx, removed.signal.record);
-                    self.deinitActiveSignalBoolAttrDesc(ctx, roc_host, &removed);
-                    continue;
-                }
-                const record_id = self.requireActiveSignalRecordId(desc.signal.record);
-                self.updateActiveBoolSignalRouteIndex(record_id, read_index, write_index);
-                self.active_stream.signal_bool_attrs.items[write_index] = desc;
-                self.active_stream.updateSignalBoolAttrIndex(desc.elem_id, desc.field, write_index);
-                write_index += 1;
+        fn removeActiveSignalBoolAttrDescriptorAt(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, index: usize) void {
+            if (index >= self.active_stream.signal_bool_attrs.items.len) @panic("signal bool attr removal index exceeded descriptor table");
+            const last_index = self.active_stream.signal_bool_attrs.items.len - 1;
+            var removed = self.active_stream.signal_bool_attrs.items[index];
+            const removed_record_id = self.requireActiveSignalRecordId(removed.signal.record);
+            self.removeActiveBoolSignalRoute(removed_record_id, index);
+            self.active_stream.clearSignalBoolAttrIndex(removed.elem_id, removed.field, index);
+            self.active_stream.forgetSignalRecordTree(removed.signal.record);
+            self.releaseActiveSignalRecord(ctx, removed.signal.record);
+            self.deinitActiveSignalBoolAttrDesc(ctx, roc_host, &removed);
+
+            if (index != last_index) {
+                const moved = self.active_stream.signal_bool_attrs.items[last_index];
+                const moved_record_id = self.requireActiveSignalRecordId(moved.signal.record);
+                self.active_stream.signal_bool_attrs.items[index] = moved;
+                self.updateActiveBoolSignalRouteIndex(moved_record_id, last_index, index);
+                self.active_stream.updateSignalBoolAttrIndex(moved.elem_id, moved.field, index);
             }
-            self.active_stream.signal_bool_attrs.items.len = write_index;
+            self.active_stream.signal_bool_attrs.items.len = last_index;
         }
 
         fn removeActiveOnChangeDescriptorsInTarget(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, target_scopes: []const bool) void {
@@ -5774,34 +5827,100 @@ pub fn Engine(comptime Ctx: type) type {
             self.active_stream.cleanups.items.len = write_index;
         }
 
-        fn removeActiveEventDescriptorsInTarget(self: *Self, roc_host: *abi.RocHost, target_scopes: []const bool) void {
+        fn removeActiveEventDescriptorAt(self: *Self, roc_host: *abi.RocHost, index: usize) void {
             if (self.active_events.items.len != self.active_stream.events.items.len) {
                 if (self.active_stream.events.items.len != 0) @panic("active event descriptor table is out of sync with active events");
             }
+            if (index >= self.active_stream.events.items.len) @panic("event removal index exceeded descriptor table");
 
-            var write_index: usize = 0;
-            self.recordStreamNodesScannedBy(.stream_nodes_scanned_remove_target, self.active_stream.events.items.len);
-            for (self.active_stream.events.items, 0..) |desc, event_index| {
-                if (self.elemIdInReplacementTargetSet(&self.active_stream, desc.elem_id, target_scopes)) {
-                    if (desc.owns_payload_reducer) {
-                        @panic("active event descriptor retained ownership outside the active event table");
-                    }
-                    self.active_stream.clearEventIndex(desc.elem_id, desc.kind, event_index);
-                    if (self.active_events.items.len != 0) {
-                        self.deinitActiveEventDesc(roc_host, self.active_events.items[event_index]);
-                    }
-                    continue;
-                }
-
-                self.active_stream.events.items[write_index] = desc;
-                self.active_stream.updateEventIndex(desc.elem_id, desc.kind, write_index);
-                if (self.active_events.items.len != 0) {
-                    self.active_events.items[write_index] = self.active_events.items[event_index];
-                }
-                write_index += 1;
+            const last_index = self.active_stream.events.items.len - 1;
+            const removed = self.active_stream.events.items[index];
+            if (removed.owns_payload_reducer) {
+                @panic("active event descriptor retained ownership outside the active event table");
             }
-            self.active_stream.events.items.len = write_index;
-            if (self.active_events.items.len != 0) self.active_events.items.len = write_index;
+            self.active_stream.clearEventIndex(removed.elem_id, removed.kind, index);
+            if (self.active_events.items.len != 0) {
+                self.deinitActiveEventDesc(roc_host, self.active_events.items[index]);
+            }
+
+            if (index != last_index) {
+                const moved = self.active_stream.events.items[last_index];
+                self.active_stream.events.items[index] = moved;
+                self.active_stream.updateEventIndex(moved.elem_id, moved.kind, index);
+                if (self.active_events.items.len != 0) {
+                    self.active_events.items[index] = self.active_events.items[last_index];
+                }
+            }
+            self.active_stream.events.items.len = last_index;
+            if (self.active_events.items.len != 0) self.active_events.items.len = last_index;
+        }
+
+        fn collectElemOwnedRemovalIndexes(self: *Self, ctx: Ctx.Handle, removed_elem_ids: []const u64) void {
+            if (self.scratch.remove_element_indexes.items.len != 0 or
+                self.scratch.remove_text_node_indexes.items.len != 0 or
+                self.scratch.remove_signal_text_node_indexes.items.len != 0 or
+                self.scratch.remove_static_text_attr_indexes.items.len != 0 or
+                self.scratch.remove_signal_text_attr_indexes.items.len != 0 or
+                self.scratch.remove_static_bool_attr_indexes.items.len != 0 or
+                self.scratch.remove_signal_bool_attr_indexes.items.len != 0 or
+                self.scratch.remove_event_indexes.items.len != 0)
+            {
+                @panic("elem-owned removal scratch was already active");
+            }
+
+            for (removed_elem_ids) |elem_id| {
+                const descriptor_index = self.active_stream.elemDescriptorIndex(elem_id) orelse @panic("removed elem id had no descriptor index");
+                const has_render_descriptor = descriptor_index.element != null or descriptor_index.text_node != null or descriptor_index.signal_text_node != null;
+                if (!has_render_descriptor) @panic("removed rendered elem id had no render-owned descriptor");
+
+                appendRemovalIndex(ctx, &self.scratch.remove_element_indexes, descriptor_index.element);
+                appendRemovalIndex(ctx, &self.scratch.remove_text_node_indexes, descriptor_index.text_node);
+                appendRemovalIndex(ctx, &self.scratch.remove_signal_text_node_indexes, descriptor_index.signal_text_node);
+                appendTextFieldRemovalIndexes(ctx, &self.scratch.remove_static_text_attr_indexes, descriptor_index.static_text_attrs);
+                appendTextFieldRemovalIndexes(ctx, &self.scratch.remove_signal_text_attr_indexes, descriptor_index.signal_text_attrs);
+                appendBoolFieldRemovalIndexes(ctx, &self.scratch.remove_static_bool_attr_indexes, descriptor_index.static_bool_attrs);
+                appendBoolFieldRemovalIndexes(ctx, &self.scratch.remove_signal_bool_attr_indexes, descriptor_index.signal_bool_attrs);
+                appendEventRemovalIndexes(ctx, &self.scratch.remove_event_indexes, descriptor_index.events);
+            }
+
+            sortRemovalIndexesDescending(self.scratch.remove_element_indexes.items);
+            sortRemovalIndexesDescending(self.scratch.remove_text_node_indexes.items);
+            sortRemovalIndexesDescending(self.scratch.remove_signal_text_node_indexes.items);
+            sortRemovalIndexesDescending(self.scratch.remove_static_text_attr_indexes.items);
+            sortRemovalIndexesDescending(self.scratch.remove_signal_text_attr_indexes.items);
+            sortRemovalIndexesDescending(self.scratch.remove_static_bool_attr_indexes.items);
+            sortRemovalIndexesDescending(self.scratch.remove_signal_bool_attr_indexes.items);
+            sortRemovalIndexesDescending(self.scratch.remove_event_indexes.items);
+        }
+
+        fn removeActiveElemOwnedDescriptorsForRemovedElems(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, removed_elem_ids: []const u64) void {
+            self.collectElemOwnedRemovalIndexes(ctx, removed_elem_ids);
+            defer self.clearElemOwnedRemovalScratch();
+
+            for (self.scratch.remove_static_text_attr_indexes.items) |index| {
+                self.removeActiveStaticTextAttrDescriptorAt(ctx, index);
+            }
+            for (self.scratch.remove_signal_text_attr_indexes.items) |index| {
+                self.removeActiveSignalTextAttrDescriptorAt(ctx, roc_host, index);
+            }
+            for (self.scratch.remove_static_bool_attr_indexes.items) |index| {
+                self.removeActiveStaticBoolAttrDescriptorAt(index);
+            }
+            for (self.scratch.remove_signal_bool_attr_indexes.items) |index| {
+                self.removeActiveSignalBoolAttrDescriptorAt(ctx, roc_host, index);
+            }
+            for (self.scratch.remove_event_indexes.items) |index| {
+                self.removeActiveEventDescriptorAt(roc_host, index);
+            }
+            for (self.scratch.remove_element_indexes.items) |index| {
+                self.removeActiveElementDescriptorAt(ctx, index);
+            }
+            for (self.scratch.remove_text_node_indexes.items) |index| {
+                self.removeActiveTextNodeDescriptorAt(ctx, index);
+            }
+            for (self.scratch.remove_signal_text_node_indexes.items) |index| {
+                self.removeActiveSignalTextNodeDescriptorAt(ctx, roc_host, index);
+            }
         }
 
         fn removeActiveScopeSiteDescriptorsInTarget(self: *Self, ctx: Ctx.Handle, target_scopes: []const bool) void {
@@ -5891,22 +6010,15 @@ pub fn Engine(comptime Ctx: type) type {
             self.active_stream.eaches.items.len = write_index;
         }
 
-        fn removeActiveNonRenderDescriptorsInTarget(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, target_scopes: []const bool) void {
-            self.removeActiveStaticTextAttrDescriptorsInTarget(ctx, target_scopes);
-            self.removeActiveSignalTextAttrDescriptorsInTarget(ctx, roc_host, target_scopes);
-            self.removeActiveStaticBoolAttrDescriptorsInTarget(target_scopes);
-            self.removeActiveSignalBoolAttrDescriptorsInTarget(ctx, roc_host, target_scopes);
+        fn removeActiveNonRenderDescriptorsInTarget(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, target_scopes: []const bool, removed_elem_ids: []const u64) void {
+            self.removeActiveElemOwnedDescriptorsForRemovedElems(ctx, roc_host, removed_elem_ids);
             self.removeActiveOnChangeDescriptorsInTarget(ctx, roc_host, target_scopes);
             self.removeActiveMountDescriptorsInTarget(roc_host, target_scopes);
             self.removeActiveCleanupDescriptorsInTarget(ctx, target_scopes);
-            self.removeActiveEventDescriptorsInTarget(roc_host, target_scopes);
             self.removeActiveStateDescriptorsInTarget(roc_host, target_scopes);
             self.removeActiveWhenDescriptorsInTarget(ctx, roc_host, target_scopes);
             self.removeActiveEachDescriptorsInTarget(ctx, roc_host, target_scopes);
             self.removeActiveScopeSiteDescriptorsInTarget(ctx, target_scopes);
-            self.removeActiveElementDescriptorsInTarget(ctx, target_scopes);
-            self.removeActiveTextNodeDescriptorsInTarget(ctx, target_scopes);
-            self.removeActiveSignalTextNodeDescriptorsInTarget(ctx, roc_host, target_scopes);
         }
 
         fn adjustActiveScopeSiteRenderInsertIndices(self: *Self, replace_index: usize, removed_render_count: usize, replacement_render_count: usize) void {
@@ -6188,7 +6300,7 @@ pub fn Engine(comptime Ctx: type) type {
             }
 
             self.active_stream.replaceRenderRangeWithStream(allocator, render_start, removed_render_nodes, replacement, &self.pending_roc_metrics);
-            self.removeActiveNonRenderDescriptorsInTarget(ctx, roc_host, target_scopes);
+            self.removeActiveNonRenderDescriptorsInTarget(ctx, roc_host, target_scopes, removed_elem_ids.items);
             self.adjustActiveScopeSiteRenderInsertIndices(render_insert_index, removed_render_count, replacement_render_count);
             const on_change_start = self.active_stream.on_changes.items.len;
             const replacement_on_change_indices = allocator.alloc(usize, on_change_count) catch @panic("out of memory");

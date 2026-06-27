@@ -379,6 +379,36 @@ residue, not the per-splice tail.
 | signals-large-each-64 | 758172373 | 0 | 2600 | 90920 | 198918280 |
 | signals-kanban-board | 594475033 | 0 | 2120 | 20280 | 90631460 |
 
+Elem-owned descriptor removal worklists landed on 2026-06-27. Structural
+splices now consume the explicit `removed_elem_ids` list and the active stream's
+`descriptor_indexes_by_elem_id` table to remove render-owned descriptor rows
+directly: elements, text nodes, signal text nodes, scalar attrs, signal attrs,
+and events. Removal indexes are collected before mutation, sorted descending,
+and applied with swap-removal so moved rows update their descriptor indexes and
+signal/event routes exactly once. Scope-owned descriptor tables still use the
+target-scope membership set and are the remaining `remove_target` residue.
+
+| case | total_ns | stream_nodes_scanned | remove_target | render_scope | splice | events | dirty_scope | render_indexes_refreshed | host_alloc_bytes_this_event |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| signals-large-each-64 | 698619001 | 561600 | 5600 | 236360 | 300800 | 12520 | 6320 | 90920 | 198930940 |
+| signals-kanban-board | 544532300 | 186780 | 3200 | 77800 | 75640 | 28300 | 1840 | 17680 | 90282660 |
+
+Outcome:
+
+- `stream_nodes_scanned_remove_target` collapsed from 451840 to 5600 on
+  `signals-large-each-64`, and from 128520 to 3200 on
+  `signals-kanban-board`.
+- Single-sample wall time improved by about 6.1% on large-each relative to the
+  target-scope-set probe and about 8.5% on kanban. Host allocation bytes are
+  effectively flat on large-each and slightly lower on kanban.
+- Event descriptor swap-removal reduces incidental event-id churn: the
+  identity-stress filter path now rebinds one moved tail event instead of every
+  later compacted event row. The visible DOM and row reuse/remove assertions are
+  unchanged.
+- The remaining measured structural scan work is now dominated by
+  `splice + render_scope`: 537160 scans on large-each and 153440 on kanban.
+  The render-index refresh tail is also still visible at 90920 / 17680.
+
 Outcome:
 
 - `signal_record_table_rebuilt` dropped to zero in the two structural canaries.
@@ -395,11 +425,10 @@ Baseline review outcome:
 
 - Structural `Ui.each` work remains the clear first target, but the hot metric is
   stream scanning around structural patching, not key comparison. The keyed row
-  lookup path is now linear. The `children` bucket is still worth removing with
-  explicit child indexes, but it is only about 10% of the large-N canary's stream
-  scans. The larger structural targets are `remove_target`, `splice`, and
-  `render_scope`; together they account for about 88% of
-  `signals-large-each-64` stream scans in the split above.
+  lookup path is now linear. The `children` bucket is removed by explicit child
+  links, and the render-owned side of `remove_target` is removed by
+  elem-indexed deletion worklists. The larger remaining structural targets are
+  now `splice`, `render_scope`, and the render-index refresh tail.
 - The child-index slice validated the semantic direction: indexed
   `streamDirectChildren` drops `stream_nodes_scanned_children` to zero and
   reduces total stream scans by the former `children` bucket. The keeper storage
@@ -446,14 +475,13 @@ evidence-gated.
 
 Current priority after the Phase 4 review:
 
-1. Remove the splice tail's whole-stream signal-record table rebuild and active
-   interval graph walk by maintaining them incrementally over the spliced
-   subtree.
-2. Attack `remove_target` with a scope-owned descriptor index and an explicit
-   replacement-subtree membership set.
-3. Collapse `render_scope` and `splice` render-range discovery behind an
+1. Collapse `render_scope` and `splice` render-range discovery behind an
    explicit scope-to-render-range index; fold splice's two current render-node
    passes into one as the first step.
+2. Remove or bound the render-index refresh tail so splices do not restamp from
+   the splice point to the end of the render-node table.
+3. Revisit scope-owned descriptor removal only if the now-small
+   `remove_target` residue grows under a broader app or long-session gate.
 4. Then move transient structural buffers to scratch, starting with making
    `streamDirectChildren` allocation-free for callers.
 5. Keep the long-session leak/plateau gate in the loop for monotonic identity
@@ -535,12 +563,14 @@ Current priority after the Phase 4 review:
 
 ### Scope-owned descriptor removal index
 
-- **Priority:** next major implementation target.
+- **Status:** partially implemented for render-owned descriptors; no longer the
+  next major target.
 - **Hypothesis:** a maintained scope-to-owned-descriptor index makes
   `removeActiveNonRenderDescriptorsInTarget` scale with the replaced subtree
   instead of linearly scanning and compacting every descriptor table.
-- **Why we suspect it:** the `remove_target` bucket is the largest measured
-  structural bucket on `signals-large-each-64`. It comes from the many
+- **Why we suspected it:** before elem-indexed deletion, the `remove_target`
+  bucket was the largest measured structural bucket on `signals-large-each-64`.
+  It came from the many
   remove-in-target helpers scanning descriptor tables and asking whether each
   descriptor belongs to the replacement target.
 - **How we'll know:** add or tighten large-N assertions so a one-row splice's
@@ -556,6 +586,13 @@ Current priority after the Phase 4 review:
   `595055581` with `remove_target=128520`. Keep the target-scope set as a
   supporting structure, but the next real win is explicit descriptor owner
   indexes/removal worklists.
+- **Implemented slice:** render-owned descriptor tables now use explicit
+  elem-id descriptor indexes and scratch removal worklists. This drops
+  `remove_target` to `5600` on large-each and `3200` on kanban.
+- **Remaining decision:** a persistent scope-owned descriptor index would address
+  the residual scope-owned scans, but current measurements make it smaller than
+  `splice`, `render_scope`, event scans, and render-index refresh. Do not promote
+  this again until a benchmark shows the residue growing.
 
 ### Scope render-range index
 
@@ -563,8 +600,11 @@ Current priority after the Phase 4 review:
   scope subtrees collapses the current render-range discovery scans used by
   splice and render-scope lookup.
 - **Why we suspect it:** `splice` and `render_scope` together are more than 40%
-  of the large-N stream-scan split. Both answer the same ownership question:
-  which contiguous render-node range belongs to this scope subtree?
+  of the large-N stream-scan split. After elem-indexed descriptor removal, they
+  are the largest remaining measured scan buckets: `300800 + 236360` on
+  `signals-large-each-64` and `75640 + 77800` on `signals-kanban-board`. Both
+  answer the same ownership question: which contiguous render-node range belongs
+  to this scope subtree?
 - **How we'll know:** fold splice's current double render-node pass into one as
   the small first win, then replace the scan with explicit range lookup and
   tighten large-N `stream_nodes_scanned_splice` /
