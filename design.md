@@ -1381,8 +1381,8 @@ KnownValue model has these categories:
 
 - unknown value
 - expression leaf, including primitive values and ordinary runtime expressions
-- record, tuple, tag, or nominal constructor with child known values
-- callable target with capture known values
+- record, tuple, tag, or nominal constructor with demanded child known values
+- callable target with demanded capture known values
 - finite tag alternatives
 - finite callable alternatives
 
@@ -1391,6 +1391,17 @@ wrapped in `{ value : primitive }` must not become more optimizable merely
 because it was wrapped. If a loop's useful private cursor is only a `U64` index,
 the loop carries that `U64`; it does not need a synthetic single-field record to
 qualify for specialization.
+
+Known children must distinguish "unknown but carried" from "not demanded." Dense
+child arrays cannot represent that distinction for tuples, tag payloads, or
+callable captures. The KnownValue data used by optimized private state therefore
+stores demanded children sparsely by checked child identity: record field name,
+tuple item index, tag payload index, nominal backing value, and callable capture
+index. A missing demanded child means the private state does not carry that
+child. A present child whose fact is `unknown` means the private state carries a
+runtime value for that child but cannot use more precise structure. Public
+materialization demand is the operation that asks for every child needed to
+rebuild the ordinary Roc value.
 
 The post-check pipeline must not add a separate builtin iterator-plan IR. There
 is no `iter_plan` expression, no iterator-plan side store, and no lowering path
@@ -1517,6 +1528,15 @@ pointer, and other primitive leaves that are demanded by the state are carried
 as parameters; the optimizer must not create a distinct state for each runtime
 leaf value. Fields and captures outside the demand closure are absent from
 private state.
+
+Private state splitting must not encode omitted children as `unknown` dense
+children. Doing that would still allocate state parameters or execute producer
+code for data the private loop cannot observe. For example, a demanded callable
+target with one demanded capture and one omitted capture carries only the target
+and the demanded capture. A demanded tuple item carries that item with its
+original tuple index, not a compact tuple whose item positions have changed. A
+demanded tag name with no demanded payloads carries the tag choice without
+payload state.
 
 For `Iter` and `Stream`, the public wrapper can then disappear from the hot
 loop. The state graph carries private fields such as list pointer, index,
