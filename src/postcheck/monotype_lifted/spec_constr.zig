@@ -229,6 +229,7 @@ pub fn run(allocator: Allocator, program: *Ast.Program) Common.LowerError!void {
     try pass.run();
 }
 
+/// Specialize with Lambda Solved type data available for checked-call facts.
 pub fn runWithSolved(allocator: Allocator, solved: *Solved.Program) Common.LowerError!void {
     var pass = try Pass.init(allocator, &solved.lifted, solved);
     defer pass.deinit();
