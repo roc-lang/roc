@@ -228,6 +228,7 @@ pub fn run(allocator: Allocator, program: *Ast.Program) Common.LowerError!void {
 
 const ValueFact = union(enum) {
     any: Type.TypeId,
+    leaf: Type.TypeId,
     tag: TagFact,
     record: RecordFact,
     tuple: TupleFact,
@@ -750,6 +751,15 @@ const Pass = struct {
     fn constructorFact(self: *Pass, expr_id: Ast.ExprId) Allocator.Error!?ValueFact {
         const expr = self.program.exprs.items[@intFromEnum(expr_id)];
         return switch (expr.data) {
+            .unit,
+            .int_lit,
+            .frac_f32_lit,
+            .frac_f64_lit,
+            .dec_lit,
+            .str_lit,
+            .static_data,
+            .list,
+            => ValueFact{ .leaf = expr.ty },
             .tag => |tag| blk: {
                 const payloads = self.program.exprSpan(tag.payloads);
                 const facts = try self.arena.allocator().alloc(ValueFact, payloads.len);
@@ -821,7 +831,21 @@ const Pass = struct {
             .expr => |expr| try self.constructorFact(expr),
             .expr_with_known_fact => |known_fact_expr| known_fact_expr.fact,
             .let_ => |let_value| try self.factFromValue(let_value.body.*),
-            .if_ => null,
+            .if_ => |if_value| blk: {
+                var joined: ?ValueFact = null;
+                for (if_value.branches) |branch| {
+                    const branch_fact = (try self.factFromValue(branch.body)) orelse break :blk null;
+                    joined = if (joined) |existing|
+                        (try joinFactsInArena(self.program, self.arena.allocator(), existing, branch_fact)) orelse break :blk null
+                    else
+                        branch_fact;
+                }
+                const final_fact = (try self.factFromValue(if_value.final_else.*)) orelse break :blk null;
+                break :blk if (joined) |existing|
+                    (try joinFactsInArena(self.program, self.arena.allocator(), existing, final_fact)) orelse null
+                else
+                    final_fact;
+            },
             .tag => |tag| blk: {
                 const payloads = try self.arena.allocator().alloc(ValueFact, tag.payloads.len);
                 for (tag.payloads, 0..) |payload, index| {
@@ -989,6 +1013,14 @@ const Cloner = struct {
     fn valueFromFactArgs(self: *Cloner, fact: ValueFact, args: *std.ArrayList(Ast.TypedLocal)) Allocator.Error!Value {
         switch (fact) {
             .any => |ty| {
+                const local = try self.pass.program.addLocal(self.pass.symbols.fresh(), ty);
+                try args.append(self.pass.allocator, .{ .local = local, .ty = ty });
+                return .{ .expr = try self.addExpr(.{
+                    .ty = ty,
+                    .data = .{ .local = local },
+                }) };
+            },
+            .leaf => |ty| {
                 const local = try self.pass.program.addLocal(self.pass.symbols.fresh(), ty);
                 try args.append(self.pass.allocator, .{ .local = local, .ty = ty });
                 return .{ .expr = try self.addExpr(.{
@@ -1225,11 +1257,19 @@ const Cloner = struct {
                 try self.pass.factFromValue(value)
             else
                 null,
+            .fn_ref => |fn_id| try self.callableFact(expr.ty, fn_id),
             .tag,
             .record,
             .tuple,
             .nominal,
-            .fn_ref,
+            .unit,
+            .int_lit,
+            .frac_f32_lit,
+            .frac_f64_lit,
+            .dec_lit,
+            .str_lit,
+            .static_data,
+            .list,
             => try self.pass.constructorFact(expr_id),
             .field_access => |field| blk: {
                 const receiver_local = localExpr(self.pass.program, field.receiver) orelse break :blk null;
@@ -1255,14 +1295,20 @@ const Cloner = struct {
                 (try self.pass.factFromValue(value)) != null
             else
                 false,
+            .fn_ref => true,
             .tag,
             .record,
             .tuple,
             .nominal,
-            .fn_ref,
+            .unit,
+            .int_lit,
+            .frac_f32_lit,
+            .frac_f64_lit,
+            .dec_lit,
+            .str_lit,
+            .static_data,
+            .list,
             => (try self.pass.constructorFact(expr_id)) != null,
-            .list => true,
-            .static_data => true,
             .static_data_candidate => true,
             .field_access => |field| blk: {
                 const receiver_local = localExpr(self.pass.program, field.receiver) orelse break :blk false;
@@ -1352,6 +1398,23 @@ const Cloner = struct {
                     .data = .{ .local = capture.local },
                 }) };
             }
+        }
+        return .{ .callable = .{
+            .ty = ty,
+            .fn_id = fn_id,
+            .captures = captures,
+        } };
+    }
+
+    fn callableFact(self: *Cloner, ty: Type.TypeId, fn_id: Ast.FnId) Allocator.Error!ValueFact {
+        const fn_ = self.pass.program.fns.items[@intFromEnum(fn_id)];
+        const source_captures = self.pass.program.typedLocalSpan(fn_.captures);
+        const captures = try self.pass.arena.allocator().alloc(ValueFact, source_captures.len);
+        for (source_captures, 0..) |capture, index| {
+            captures[index] = if (self.subst.get(capture.local)) |value|
+                (try self.pass.factFromValue(value)) orelse .{ .any = valueType(self.pass.program, value) }
+            else
+                .{ .any = capture.ty };
         }
         return .{ .callable = .{
             .ty = ty,
@@ -1469,7 +1532,7 @@ const Cloner = struct {
     }
 
     fn cloneLetValue(self: *Cloner, let_: anytype) Common.LowerError!Value {
-        const value = try self.cloneExprValue(let_.value);
+        const value = try self.cloneExprValueDemandingFact(let_.value);
         const value_expr = try self.materialize(value);
         const change_start = self.changes.items.len;
         const bound = try self.bindPatToReusableValue(let_.bind, value);
@@ -1874,6 +1937,7 @@ const Cloner = struct {
 
         return switch (fact) {
             .any => fact,
+            .leaf => fact,
             .record => |record| blk: {
                 const fields = try self.pass.arena.allocator().alloc(FieldFact, record.fields.len);
                 for (record.fields, fields) |field, *out| {
@@ -2001,22 +2065,79 @@ const Cloner = struct {
         defer self.pass.allocator.free(source_values);
         if (source_values.len != loop.values.len) Common.invariant("continue value count differed from specialized loop pattern");
 
-        var new_values = std.ArrayList(Ast.ExprId).empty;
-        defer new_values.deinit(self.pass.allocator);
-
         var pending_statements = std.ArrayList(Ast.StmtId).empty;
         defer pending_statements.deinit(self.pass.allocator);
 
         const pending_change_start = self.changes.items.len;
         defer self.restore(pending_change_start);
 
-        for (loop.values, source_values, 0..) |fact, value_expr, index| {
+        const continue_values = try self.pass.allocator.alloc(Value, source_values.len);
+        defer self.pass.allocator.free(continue_values);
+
+        for (source_values, 0..) |value_expr, index| {
             var value = try self.cloneExprValueDemandingFact(value_expr);
             while (value == .let_) {
                 try self.appendPendingLetStmts(value.let_.lets, &pending_statements);
                 try self.bindPendingLetFacts(value.let_.lets);
                 value = value.let_.body.*;
             }
+            continue_values[index] = value;
+        }
+
+        const continue_data = try self.cloneContinueDataFromValues(ty, loop, continue_values);
+        if (pending_statements.items.len == 0) return continue_data;
+
+        const continue_expr = try self.addExpr(.{ .ty = ty, .data = continue_data });
+        return .{ .block = .{
+            .statements = try self.pass.program.addStmtSpan(pending_statements.items),
+            .final_expr = continue_expr,
+        } };
+    }
+
+    fn cloneContinueDataFromValues(
+        self: *Cloner,
+        ty: Type.TypeId,
+        loop: LoopPattern,
+        values: []const Value,
+    ) Common.LowerError!Ast.ExprData {
+        for (values, 0..) |value, value_index| {
+            const if_value = switch (value) {
+                .if_ => |if_value| if_value,
+                else => continue,
+            };
+
+            const branches = try self.pass.allocator.alloc(Ast.IfBranch, if_value.branches.len);
+            defer self.pass.allocator.free(branches);
+            var branch_values = try self.pass.allocator.dupe(Value, values);
+            defer self.pass.allocator.free(branch_values);
+
+            for (if_value.branches, 0..) |branch, branch_index| {
+                branch_values[value_index] = branch.body;
+                branches[branch_index] = .{
+                    .cond = branch.cond,
+                    .body = try self.addExpr(.{
+                        .ty = ty,
+                        .data = try self.cloneContinueDataFromValues(ty, loop, branch_values),
+                    }),
+                };
+            }
+
+            branch_values[value_index] = if_value.final_else.*;
+            const final_else = try self.addExpr(.{
+                .ty = ty,
+                .data = try self.cloneContinueDataFromValues(ty, loop, branch_values),
+            });
+
+            return .{ .if_ = .{
+                .branches = try self.pass.program.addIfBranchSpan(branches),
+                .final_else = final_else,
+            } };
+        }
+
+        var new_values = std.ArrayList(Ast.ExprId).empty;
+        defer new_values.deinit(self.pass.allocator);
+
+        for (loop.values, values, 0..) |fact, value, index| {
             if (!factMatchesValue(self.pass.program, fact, value)) {
                 if (!try self.appendFieldReadExprsFromValue(fact, value, &new_values)) {
                     const refined = try self.refineLoopFactForValue(fact, value);
@@ -2030,15 +2151,8 @@ const Cloner = struct {
             try self.appendExprsFromValue(fact, value, &new_values);
         }
 
-        const continue_data = Ast.ExprData{ .continue_ = .{
+        return .{ .continue_ = .{
             .values = try self.pass.program.addExprSpan(new_values.items),
-        } };
-        if (pending_statements.items.len == 0) return continue_data;
-
-        const continue_expr = try self.addExpr(.{ .ty = ty, .data = continue_data });
-        return .{ .block = .{
-            .statements = try self.pass.program.addStmtSpan(pending_statements.items),
-            .final_expr = continue_expr,
         } };
     }
 
@@ -2055,6 +2169,7 @@ const Cloner = struct {
 
         return switch (fact) {
             .any => fact,
+            .leaf => fact,
             .record => |record| blk: {
                 const fields = try self.pass.arena.allocator().alloc(FieldFact, record.fields.len);
                 if (recordFromValue(value)) |record_value| {
@@ -2170,6 +2285,7 @@ const Cloner = struct {
 
         return switch (lhs) {
             .any => .{ .any = ty },
+            .leaf => .{ .leaf = ty },
             .record => |lhs_record| blk: {
                 const rhs_record = rhs.record;
                 if (lhs_record.fields.len != rhs_record.fields.len) break :blk ValueFact{ .any = ty };
@@ -2374,7 +2490,9 @@ const Cloner = struct {
         };
 
         switch (fact) {
-            .any => try out.append(self.pass.allocator, try self.materialize(value)),
+            .any,
+            .leaf,
+            => try out.append(self.pass.allocator, try self.materialize(value)),
             .tag => |tag| {
                 const tag_value = switch (value) {
                     .tag => |tag_value| tag_value,
@@ -2434,7 +2552,9 @@ const Cloner = struct {
         }
 
         switch (fact) {
-            .any => {
+            .any,
+            .leaf,
+            => {
                 try out.append(self.pass.allocator, try self.materialize(value));
                 return true;
             },
@@ -2630,99 +2750,7 @@ const Cloner = struct {
     }
 
     fn joinFacts(self: *Cloner, lhs: ValueFact, rhs: ValueFact) Allocator.Error!?ValueFact {
-        if (factEql(self.pass.program, lhs, rhs)) return lhs;
-        if (!sameType(self.pass.program, factType(lhs), factType(rhs))) return null;
-
-        return switch (lhs) {
-            .any => |ty| ValueFact{ .any = ty },
-            .tag => |lhs_tag| blk: {
-                const rhs_tag = switch (rhs) {
-                    .tag => |tag| tag,
-                    else => break :blk null,
-                };
-                if (lhs_tag.name != rhs_tag.name or lhs_tag.payloads.len != rhs_tag.payloads.len) break :blk null;
-                const payloads = try self.pass.arena.allocator().alloc(ValueFact, lhs_tag.payloads.len);
-                for (lhs_tag.payloads, rhs_tag.payloads, 0..) |lhs_payload, rhs_payload, index| {
-                    payloads[index] = (try self.joinFacts(lhs_payload, rhs_payload)) orelse
-                        .{ .any = factType(lhs_payload) };
-                }
-                break :blk ValueFact{ .tag = .{
-                    .ty = lhs_tag.ty,
-                    .name = lhs_tag.name,
-                    .payloads = payloads,
-                } };
-            },
-            .record => |lhs_record| blk: {
-                const rhs_record = switch (rhs) {
-                    .record => |record| record,
-                    else => break :blk null,
-                };
-                if (lhs_record.fields.len != rhs_record.fields.len) break :blk null;
-                const fields = try self.pass.arena.allocator().alloc(FieldFact, lhs_record.fields.len);
-                for (lhs_record.fields, rhs_record.fields, 0..) |lhs_field, rhs_field, index| {
-                    if (lhs_field.name != rhs_field.name) break :blk null;
-                    fields[index] = .{
-                        .name = lhs_field.name,
-                        .fact = (try self.joinFacts(lhs_field.fact, rhs_field.fact)) orelse
-                            .{ .any = factType(lhs_field.fact) },
-                    };
-                }
-                break :blk ValueFact{ .record = .{
-                    .ty = lhs_record.ty,
-                    .fields = fields,
-                } };
-            },
-            .tuple => |lhs_tuple| blk: {
-                const rhs_tuple = switch (rhs) {
-                    .tuple => |tuple| tuple,
-                    else => break :blk null,
-                };
-                if (lhs_tuple.items.len != rhs_tuple.items.len) break :blk null;
-                const items = try self.pass.arena.allocator().alloc(ValueFact, lhs_tuple.items.len);
-                for (lhs_tuple.items, rhs_tuple.items, 0..) |lhs_item, rhs_item, index| {
-                    items[index] = (try self.joinFacts(lhs_item, rhs_item)) orelse
-                        .{ .any = factType(lhs_item) };
-                }
-                break :blk ValueFact{ .tuple = .{
-                    .ty = lhs_tuple.ty,
-                    .items = items,
-                } };
-            },
-            .nominal => |lhs_nominal| blk: {
-                const rhs_nominal = switch (rhs) {
-                    .nominal => |nominal| nominal,
-                    else => break :blk null,
-                };
-                const backing = (try self.joinFacts(lhs_nominal.backing.*, rhs_nominal.backing.*)) orelse break :blk null;
-                const stored = try self.pass.arena.allocator().create(ValueFact);
-                stored.* = backing;
-                break :blk ValueFact{ .nominal = .{
-                    .ty = lhs_nominal.ty,
-                    .backing = stored,
-                } };
-            },
-            .callable => |lhs_callable| blk: {
-                const rhs_callable = switch (rhs) {
-                    .callable => |callable| callable,
-                    else => break :blk null,
-                };
-                if (!callableTargetMatches(self.pass.program, lhs_callable.fn_id, rhs_callable.fn_id) or
-                    lhs_callable.captures.len != rhs_callable.captures.len)
-                {
-                    break :blk null;
-                }
-                const captures = try self.pass.arena.allocator().alloc(ValueFact, lhs_callable.captures.len);
-                for (lhs_callable.captures, rhs_callable.captures, 0..) |lhs_capture, rhs_capture, index| {
-                    captures[index] = (try self.joinFacts(lhs_capture, rhs_capture)) orelse
-                        .{ .any = factType(lhs_capture) };
-                }
-                break :blk ValueFact{ .callable = .{
-                    .ty = lhs_callable.ty,
-                    .fn_id = lhs_callable.fn_id,
-                    .captures = captures,
-                } };
-            },
-        };
+        return try joinFactsInArena(self.pass.program, self.pass.arena.allocator(), lhs, rhs);
     }
 
     fn cloneMatch(self: *Cloner, ty: Type.TypeId, match: @import("../monotype/ast.zig").MatchExpr) Common.LowerError!Ast.ExprId {
@@ -3208,10 +3236,12 @@ const Cloner = struct {
         const source_fn = self.pass.program.fns.items[@intFromEnum(callable.fn_id)];
         const body = switch (source_fn.body) {
             .roc => |body| body,
-            .hosted => return .{ .expr = try self.addExpr(.{ .ty = ty, .data = .{ .call_value = .{
-                .callee = try self.materialize(.{ .callable = callable }),
-                .args = try self.cloneExprSpan(args_span),
-            } } }) },
+            .hosted => {
+                return .{ .expr = try self.addExpr(.{ .ty = ty, .data = .{ .call_value = .{
+                    .callee = try self.materialize(.{ .callable = callable }),
+                    .args = try self.cloneExprSpan(args_span),
+                } } }) };
+            },
         };
         if (exprContainsReturn(self.pass.program, body)) {
             return .{ .expr = try self.addExpr(.{ .ty = ty, .data = .{ .call_value = .{
@@ -3295,9 +3325,13 @@ const Cloner = struct {
         const source_fn = self.pass.program.fns.items[@intFromEnum(callee)];
         const body = switch (source_fn.body) {
             .roc => |body| body,
-            .hosted => return .{ .expr = try self.cloneExprPlain(original_expr) },
+            .hosted => {
+                return .{ .expr = try self.cloneExprPlain(original_expr) };
+            },
         };
-        if (exprContainsReturn(self.pass.program, body)) return .{ .expr = try self.cloneExprPlain(original_expr) };
+        if (exprContainsReturn(self.pass.program, body)) {
+            return .{ .expr = try self.cloneExprPlain(original_expr) };
+        }
 
         const source_args = try self.pass.allocator.dupe(Ast.TypedLocal, self.pass.program.typedLocalSpan(source_fn.args));
         defer self.pass.allocator.free(source_args);
@@ -4801,6 +4835,7 @@ fn itemFactFromFact(fact: ValueFact, index: u32) ?ValueFact {
 fn factType(fact: ValueFact) Type.TypeId {
     return switch (fact) {
         .any => |ty| ty,
+        .leaf => |ty| ty,
         .tag => |tag| tag.ty,
         .record => |record| record.ty,
         .tuple => |tuple| tuple.ty,
@@ -4842,6 +4877,114 @@ fn patternEql(program: *const Ast.Program, lhs: CallPattern, rhs: CallPattern) b
     return true;
 }
 
+fn joinFactsInArena(
+    program: *const Ast.Program,
+    arena: Allocator,
+    lhs: ValueFact,
+    rhs: ValueFact,
+) Allocator.Error!?ValueFact {
+    if (factEql(program, lhs, rhs)) return lhs;
+    if (!sameType(program, factType(lhs), factType(rhs))) return null;
+
+    return switch (lhs) {
+        .any => |ty| ValueFact{ .any = ty },
+        .leaf => |ty| blk: {
+            const rhs_ty = switch (rhs) {
+                .leaf => |rhs_ty| rhs_ty,
+                else => break :blk null,
+            };
+            break :blk if (sameType(program, ty, rhs_ty)) ValueFact{ .leaf = ty } else null;
+        },
+        .tag => |lhs_tag| blk: {
+            const rhs_tag = switch (rhs) {
+                .tag => |tag| tag,
+                else => break :blk null,
+            };
+            if (lhs_tag.name != rhs_tag.name or lhs_tag.payloads.len != rhs_tag.payloads.len) break :blk null;
+            const payloads = try arena.alloc(ValueFact, lhs_tag.payloads.len);
+            for (lhs_tag.payloads, rhs_tag.payloads, 0..) |lhs_payload, rhs_payload, index| {
+                payloads[index] = (try joinFactsInArena(program, arena, lhs_payload, rhs_payload)) orelse
+                    .{ .any = factType(lhs_payload) };
+            }
+            break :blk ValueFact{ .tag = .{
+                .ty = lhs_tag.ty,
+                .name = lhs_tag.name,
+                .payloads = payloads,
+            } };
+        },
+        .record => |lhs_record| blk: {
+            const rhs_record = switch (rhs) {
+                .record => |record| record,
+                else => break :blk null,
+            };
+            if (lhs_record.fields.len != rhs_record.fields.len) break :blk null;
+            const fields = try arena.alloc(FieldFact, lhs_record.fields.len);
+            for (lhs_record.fields, rhs_record.fields, 0..) |lhs_field, rhs_field, index| {
+                if (lhs_field.name != rhs_field.name) break :blk null;
+                fields[index] = .{
+                    .name = lhs_field.name,
+                    .fact = (try joinFactsInArena(program, arena, lhs_field.fact, rhs_field.fact)) orelse
+                        .{ .any = factType(lhs_field.fact) },
+                };
+            }
+            break :blk ValueFact{ .record = .{
+                .ty = lhs_record.ty,
+                .fields = fields,
+            } };
+        },
+        .tuple => |lhs_tuple| blk: {
+            const rhs_tuple = switch (rhs) {
+                .tuple => |tuple| tuple,
+                else => break :blk null,
+            };
+            if (lhs_tuple.items.len != rhs_tuple.items.len) break :blk null;
+            const items = try arena.alloc(ValueFact, lhs_tuple.items.len);
+            for (lhs_tuple.items, rhs_tuple.items, 0..) |lhs_item, rhs_item, index| {
+                items[index] = (try joinFactsInArena(program, arena, lhs_item, rhs_item)) orelse
+                    .{ .any = factType(lhs_item) };
+            }
+            break :blk ValueFact{ .tuple = .{
+                .ty = lhs_tuple.ty,
+                .items = items,
+            } };
+        },
+        .nominal => |lhs_nominal| blk: {
+            const rhs_nominal = switch (rhs) {
+                .nominal => |nominal| nominal,
+                else => break :blk null,
+            };
+            const backing = (try joinFactsInArena(program, arena, lhs_nominal.backing.*, rhs_nominal.backing.*)) orelse break :blk null;
+            const stored = try arena.create(ValueFact);
+            stored.* = backing;
+            break :blk ValueFact{ .nominal = .{
+                .ty = lhs_nominal.ty,
+                .backing = stored,
+            } };
+        },
+        .callable => |lhs_callable| blk: {
+            const rhs_callable = switch (rhs) {
+                .callable => |callable| callable,
+                else => break :blk null,
+            };
+            if (!callableTargetMatches(program, lhs_callable.fn_id, rhs_callable.fn_id) or
+                lhs_callable.captures.len != rhs_callable.captures.len)
+            {
+                break :blk null;
+            }
+            const captures = try arena.alloc(ValueFact, lhs_callable.captures.len);
+            for (lhs_callable.captures, rhs_callable.captures, 0..) |lhs_capture, rhs_capture, index| {
+                captures[index] = (try joinFactsInArena(program, arena, lhs_capture, rhs_capture)) orelse
+                    .{ .any = factType(lhs_capture) };
+            }
+            break :blk ValueFact{ .callable = .{
+                .ty = lhs_callable.ty,
+                .fn_id = lhs_callable.fn_id,
+                .captures = captures,
+            } };
+        },
+    };
+}
+
 fn factsStrictlyDescend(program: *const Ast.Program, active: []const ValueFact, next: []const ValueFact) bool {
     if (active.len != next.len) return false;
     var descended = false;
@@ -4856,6 +4999,7 @@ fn factsStrictlyDescend(program: *const Ast.Program, active: []const ValueFact, 
 fn factContainsStrictSubfact(program: *const Ast.Program, container: ValueFact, needle: ValueFact) bool {
     return switch (container) {
         .any => false,
+        .leaf => false,
         .tag => |tag| {
             for (tag.payloads) |payload| {
                 if (factEql(program, payload, needle) or factContainsStrictSubfact(program, payload, needle)) return true;
@@ -4890,6 +5034,7 @@ fn factEql(program: *const Ast.Program, lhs: ValueFact, rhs: ValueFact) bool {
     if (std.meta.activeTag(lhs) != std.meta.activeTag(rhs)) return false;
     return switch (lhs) {
         .any => |lhs_ty| sameType(program, lhs_ty, rhs.any),
+        .leaf => |lhs_ty| sameType(program, lhs_ty, rhs.leaf),
         .tag => |lhs_tag| blk: {
             const rhs_tag = rhs.tag;
             if (!sameType(program, lhs_tag.ty, rhs_tag.ty) or lhs_tag.name != rhs_tag.name or lhs_tag.payloads.len != rhs_tag.payloads.len) break :blk false;
@@ -4937,12 +5082,14 @@ fn factEql(program: *const Ast.Program, lhs: ValueFact, rhs: ValueFact) bool {
 fn factMatchesValue(program: *const Ast.Program, fact: ValueFact, value: Value) bool {
     if (value == .expr_with_known_fact) {
         if (fact == .any) return true;
+        if (fact == .leaf) return sameType(program, fact.leaf, valueType(program, value));
         if (!canReadFieldsFromExpr(program, value.expr_with_known_fact.expr)) return false;
         return factCanProjectFromExpr(fact) and factMatchesFact(program, fact, value.expr_with_known_fact.fact);
     }
 
     return switch (fact) {
         .any => true,
+        .leaf => |ty| sameType(program, ty, valueType(program, value)),
         .tag => |tag| blk: {
             const value_tag = switch (value) {
                 .tag => |value_tag| value_tag,
@@ -5005,6 +5152,7 @@ fn factMatchesValue(program: *const Ast.Program, fact: ValueFact, value: Value) 
 fn factCanProjectFromExpr(fact: ValueFact) bool {
     return switch (fact) {
         .any => true,
+        .leaf => true,
         .record => |record| blk: {
             for (record.fields) |field| {
                 if (!factCanProjectFromExpr(field.fact)) break :blk false;
@@ -5027,6 +5175,7 @@ fn factCanProjectFromExpr(fact: ValueFact) bool {
 fn factMatchesFact(program: *const Ast.Program, pattern: ValueFact, actual: ValueFact) bool {
     return switch (pattern) {
         .any => true,
+        .leaf => |ty| sameType(program, ty, factType(actual)),
         .tag => |pattern_tag| blk: {
             const actual_tag = switch (actual) {
                 .tag => |tag| tag,
