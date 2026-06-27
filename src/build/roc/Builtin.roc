@@ -65,9 +65,13 @@ Builtin :: [].{
 
 						match parts {
 							Ok(scalar) =>
-								match u64_from_str(scalar.value) {
-									Ok(value) => Ok({ value, rest: JsonState.Input(Str.trim_start(scalar.after)) })
-									Err(_) => Err(Json.invalid_json)
+								if Json.is_json_u64_literal(scalar.value) {
+									match u64_from_str(scalar.value) {
+										Ok(value) => Ok({ value, rest: JsonState.Input(Str.trim_start(scalar.after)) })
+										Err(_) => Err(Json.invalid_json)
+									}
+								} else {
+									Err(Json.invalid_json)
 								}
 
 							Err(_) => Err(Json.invalid_json)
@@ -488,6 +492,10 @@ Builtin :: [].{
 
 						payload = Str.trim_start(Str.drop_prefix(after_key, ":"))
 
+						if !Str.starts_with(payload, "{") {
+							return Err(Json.invalid_json)
+						}
+
 						parsed = ParseTagUnionSpec.parse(spec, {
 							tag: tag_name,
 							encoding,
@@ -684,6 +692,40 @@ Builtin :: [].{
 				}
 
 				$index == len
+			}
+
+			is_json_u64_literal : Str -> Bool
+			is_json_u64_literal = |value| {
+				bytes = Str.to_utf8(value)
+				len = List.len(bytes)
+
+				if len == 0 {
+					return False
+				}
+
+				first = list_get_unsafe(bytes, 0)
+
+				if first == 48 {
+					return len == 1
+				}
+
+				if !Json.is_json_digit_one_to_nine(first) {
+					return False
+				}
+
+				var $index = 1
+
+				while $index < len {
+					byte = list_get_unsafe(bytes, $index)
+
+					if Json.is_json_digit(byte) {
+						$index = $index + 1
+					} else {
+						return False
+					}
+				}
+
+				True
 			}
 
 			is_json_digit : U8 -> Bool

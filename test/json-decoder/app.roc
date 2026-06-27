@@ -65,6 +65,15 @@ main! = |json| {
 	invalid_unknown_array_scalar_result : Try({ foo : Str }, Json)
 	invalid_unknown_array_scalar_result = Json.parse("{\"foo\":\"ok\",\"skip\":[not-json]}")
 
+	invalid_u64_plus_result : Try({ n : U64 }, Json)
+	invalid_u64_plus_result = Json.parse("{\"n\":+1}")
+
+	invalid_u64_leading_zero_result : Try({ n : U64 }, Json)
+	invalid_u64_leading_zero_result = Json.parse("{\"n\":01}")
+
+	invalid_missing_tag_payload_result : Try([Active, Paused], Json)
+	invalid_missing_tag_payload_result = Json.parse("{\"Active\":}")
+
 	match decoded_result {
 		Ok(decoded) => {
 			explicit_optional_length = match decoded.explicit_optional {
@@ -123,6 +132,9 @@ main! = |json| {
 				+ lenient_unknown_array_trailing_comma_score(lenient_unknown_array_trailing_comma_result)
 				+ invalid_unknown_scalar_score(invalid_unknown_scalar_result)
 				+ invalid_unknown_array_scalar_score(invalid_unknown_array_scalar_result)
+				+ invalid_u64_plus_score(invalid_u64_plus_result)
+				+ invalid_u64_leading_zero_score(invalid_u64_leading_zero_result)
+				+ invalid_missing_tag_payload_score(invalid_missing_tag_payload_result)
 				+ explicit_optional_length
 				+ wildcard_optional_length
 				+ question_optional_length
@@ -277,5 +289,29 @@ invalid_unknown_array_scalar_score = |record_result|
 	match record_result {
 		Ok(_) => 999999
 		Err(Json.InvalidJson) => 89
+		Err(_) => 999999
+	}
+
+invalid_u64_plus_score : Try({ n : U64 }, Json) -> U64
+invalid_u64_plus_score = |record_result|
+	match record_result {
+		Ok(_) => 999999
+		Err(Json.InvalidJson) => 97
+		Err(_) => 999999
+	}
+
+invalid_u64_leading_zero_score : Try({ n : U64 }, Json) -> U64
+invalid_u64_leading_zero_score = |record_result|
+	match record_result {
+		Ok(_) => 999999
+		Err(Json.InvalidJson) => 101
+		Err(_) => 999999
+	}
+
+invalid_missing_tag_payload_score : Try([Active, Paused], Json) -> U64
+invalid_missing_tag_payload_score = |tag_result|
+	match tag_result {
+		Ok(_) => 999999
+		Err(Json.InvalidJson) => 103
 		Err(_) => 999999
 	}
