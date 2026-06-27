@@ -791,7 +791,7 @@ It currently fails because the iterator form lowers to substantially more
 reachable LIR than the direct-list form:
 
 ```text
-switch_count: iter form has 16, direct-list form has 7
+direct_call_count: iter form has 13, direct-list form has 6
 ```
 
 The minimized record variant fails for the same reason. The latest
@@ -816,6 +816,17 @@ investigation found these concrete gaps:
   loop calls the append step thunk instead of optimizing to a private finite
   state machine. The fix is to preserve finite callable alternatives through
   refinement and lower the call through those alternatives.
+- The initial `if` around `collision_points` is already reaching
+  `cloneLoopDistributedIf`; the remaining public iterator churn is introduced
+  after branch loop cloning, when loop refinement sees a `let_`-wrapped rest
+  value and widens the iterator record fact back to `any`.
+- Moving those pending lets outside `continue` as an ad hoc rewrite is not the
+  right fix. A trial rewrite using ordinary `let` expressions broke ARC
+  certification, and a block-scoped version exposed a known-match invariant in
+  the larger iterator-adapter regression. The long-term fix needs explicit
+  known-value control state for loop transitions: pending setup, conditionals,
+  and finite callable alternatives must be represented together before lowering
+  to terminal `continue` expressions.
 
 ## Non-Negotiable Invariants
 
