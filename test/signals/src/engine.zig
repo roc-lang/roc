@@ -6271,18 +6271,19 @@ pub fn Engine(comptime Ctx: type) type {
                     if (removed_render_start == null) removed_render_start = index;
                     removed_render_count += 1;
                     removed_elem_ids.append(allocator, node.elem_id) catch @panic("out of memory");
+                    appendUniqueU64(allocator, &touched_parent_ids, renderNodeParentElemId(&self.active_stream, node));
                 } else if (removed_render_start != null) {
                     target_range_closed = true;
                 }
             }
 
-            self.recordStreamNodesScannedBy(.stream_nodes_scanned_splice, self.active_stream.render_nodes.items.len);
-            for (self.active_stream.render_nodes.items) |node| {
-                if (!self.renderNodeInReplacementTargetSet(&self.active_stream, node, target_scopes)) continue;
-                const parent_elem_id = renderNodeParentElemId(&self.active_stream, node);
+            var touched_parent_write_index: usize = 0;
+            for (touched_parent_ids.items) |parent_elem_id| {
                 if (u64SliceContains(removed_elem_ids.items, parent_elem_id)) continue;
-                appendUniqueU64(allocator, &touched_parent_ids, parent_elem_id);
+                touched_parent_ids.items[touched_parent_write_index] = parent_elem_id;
+                touched_parent_write_index += 1;
             }
+            touched_parent_ids.items.len = touched_parent_write_index;
 
             const render_start = removed_render_start orelse render_insert_index;
             if (removed_render_count != 0 and render_start != render_insert_index) {

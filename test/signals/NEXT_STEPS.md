@@ -409,6 +409,27 @@ Outcome:
   `splice + render_scope`: 537160 scans on large-each and 153440 on kanban.
   The render-index refresh tail is also still visible at 90920 / 17680.
 
+Splice touched-parent collection was folded into the target render-node pass on
+2026-06-27. The splice path now records removed elem ids and candidate touched
+parents in one full render-node walk, then filters the small parent candidate
+list against the completed removed-elem set.
+
+| case | total_ns | stream_nodes_scanned | remove_target | render_scope | splice | events | dirty_scope | render_indexes_refreshed | host_alloc_bytes_this_event |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| signals-large-each-64 | 706742673 | 411920 | 5600 | 236360 | 151120 | 12520 | 6320 | 90920 | 198930940 |
+| signals-kanban-board | 535414668 | 150260 | 3200 | 77800 | 39120 | 28300 | 1840 | 17680 | 90282660 |
+
+Outcome:
+
+- `stream_nodes_scanned_splice` fell from 300800 to 151120 on large-each and
+  from 75640 to 39120 on kanban.
+- This is a clear attribution win but not yet the full range-index fix. The
+  remaining largest measured buckets are `render_scope` plus the remaining
+  splice range discovery: 387480 scans on large-each and 116920 on kanban.
+- Single-sample wall time is mixed: large-each is noisier/slower in this sample,
+  kanban improves from 544532300 to 535414668. Keep using scan counters for
+  direction and median-of-N for timing claims.
+
 Outcome:
 
 - `signal_record_table_rebuilt` dropped to zero in the two structural canaries.
@@ -475,9 +496,9 @@ evidence-gated.
 
 Current priority after the Phase 4 review:
 
-1. Collapse `render_scope` and `splice` render-range discovery behind an
-   explicit scope-to-render-range index; fold splice's two current render-node
-   passes into one as the first step.
+1. Collapse `render_scope` and remaining `splice` render-range discovery behind
+   an explicit scope-to-render-range index. The double-pass splice fold is done;
+   the next step is explicit active scope range data.
 2. Remove or bound the render-index refresh tail so splices do not restamp from
    the splice point to the end of the render-node table.
 3. Revisit scope-owned descriptor removal only if the now-small
@@ -605,8 +626,10 @@ Current priority after the Phase 4 review:
   `signals-large-each-64` and `75640 + 77800` on `signals-kanban-board`. Both
   answer the same ownership question: which contiguous render-node range belongs
   to this scope subtree?
-- **How we'll know:** fold splice's current double render-node pass into one as
-  the small first win, then replace the scan with explicit range lookup and
+- **Implemented slice:** splice's touched-parent collection now shares the
+  target render-node pass. `stream_nodes_scanned_splice` is down to `151120` on
+  large-each and `39120` on kanban.
+- **How we'll know:** replace the remaining scan with explicit range lookup and
   tighten large-N `stream_nodes_scanned_splice` /
   `stream_nodes_scanned_render_scope` assertions.
 
