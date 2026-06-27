@@ -1474,6 +1474,22 @@ loop demand, private state reachability, demanded child expansion, or worker
 queue management. The optimized path may spend extra compiler time because the
 user requested size- or speed-optimized generated code.
 
+The optimized path is selected before creating the body-cloning context. The
+post-check driver receives explicit build-mode data and chooses one of two
+entrypoints:
+
+- ordinary public-value lowering for dev builds, `roc check`,
+  compile-time finalization, interpreter execution, and any other non-optimized
+  consumer
+- optimized known-value specialization for `--opt=size` and `--opt=speed`
+
+There is no "mostly ordinary lowering plus optional iterator optimization"
+mode. The result-demand types, demanded-known-value arena, private-state graph,
+and optimized direct-call worker queue are owned by the optimized entrypoint.
+Constructing them outside that entrypoint is a compiler bug. This keeps
+non-optimized compiler cost predictable and prevents correctness from depending
+on an optimization-only analysis.
+
 The opt-mode boundary is a hard pipeline boundary, not a pass-internal
 preference. The post-check driver selects either ordinary lowering or optimized
 specialization from explicit build-mode data before constructing per-body
@@ -1482,7 +1498,11 @@ execution, and dev builds must not enter the result-demand worklist, must not
 allocate private-state graph storage, and must not enqueue optimized workers.
 `--opt=size` and `--opt=speed` both use the same semantic specialization model;
 they may tune later code-generation and inlining policy differently, but they
-must not use different language-level iterator rules.
+must not use different language-level iterator rules. If one of those modes can
+eliminate a public wrapper through known-value specialization, the other mode
+must be able to perform the same semantic rewrite. Any difference between the
+two belongs to later cost decisions such as inlining threshold, outlining,
+Binaryen optimization level, or backend instruction selection.
 
 Result demand is the optimizer's precise statement of how the current
 continuation will use an expression result. Required demand forms are:
