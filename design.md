@@ -1358,6 +1358,21 @@ a length hint and a zero-argument step function. Adapters such as `append`,
 `concat`, `map`, and filters are ordinary Roc functions that build another
 record containing another step callable.
 
+Optimizing those ordinary Roc functions is not part of the language meaning of
+`Iter` or `Stream`. It is an optimized post-check lowering feature, enabled only
+for `--opt=size` and `--opt=speed`. It is off for `roc check`, compile-time
+finalization, interpreter builds, and dev builds. The mode input is explicit
+pipeline data derived from the requested build mode; no stage may infer this
+work from target triples, wasm output, backend choice, method names, public
+builtin names, or generated symbols.
+
+This boundary is about compiler cost, not correctness. Checking, static
+dispatch finalization, compile-time root selection, compile-time evaluation,
+static data emission, and `crash`/`dbg`/`expect` diagnostics are required in
+all modes and must not depend on this optimizer. Build modes may differ in
+generated code size, generated code speed, and compile time, but never in
+observable Roc behavior.
+
 The optimized target is the same useful machine code Rust gets from iterators:
 private cursor state with direct stepping and no heap allocation for adapter
 wrappers. Rust reaches that target by representing every adapter chain in
@@ -1436,9 +1451,9 @@ required to optimize the callee's own body.
 
 The pass operates as a worklist:
 
-- compute explicit argument demand for direct-call arguments that may be split
 - clone each original Roc body once as the base specialization
-- clone expressions under an explicit result demand
+- clone every expression in that body under an explicit result demand
+- compute direct-call argument demand from the calls seen during that cloning
 - record newly discovered direct-call worker patterns while cloning callers
 - pop unwritten worker patterns, reserve their function ids, and clone their
   bodies with split arguments
@@ -1470,6 +1485,11 @@ under the demand imposed by the call's result. A loop clones its initial values,
 body, and `continue` edges under the demand created by reachable uses of loop
 parameters. If the context needs the public value, the demand is materialization
 and the ordinary public representation is preserved.
+
+The result-demand machinery is local to optimized post-check lowering. It is
+not a checked-module data structure, not a compile-time-evaluation input, and
+not visible to LIR, ARC, LirImage, or backends. Those later stages see only the
+ordinary lowered control flow and explicit values produced by specialization.
 
 Loop-carried demand is a fixed point, not a one-shot body-use query. The loop
 body creates demands on loop parameters from ordinary observations such as field
@@ -1557,6 +1577,13 @@ if the loop body demands that distinction. A loop-carried ordinary leaf stays an
 ordinary state parameter when demanded, and disappears when no reachable
 demanded use needs it.
 
+There is no state-count heuristic, cutoff, or fallback. The state graph is the
+exact result of demanded finite facts reachable from the optimized body. If the
+graph grows unexpectedly, the fix is to make demand propagation more precise,
+share equivalent states, or fix the source of unnecessary demand. Silently
+turning the optimization off for a large graph would make performance depend on
+an arbitrary implementation limit and is not allowed in post-check stages.
+
 Demanded `continue` cloning is the rule that prevents public-wrapper work from
 leaking into private state. If parameter `rest` is demanded only through
 `rest.step`, the `continue` expression that constructs the next `rest` is cloned
@@ -1583,22 +1610,10 @@ control flow, calls, committed layouts, and explicit ARC statements. They do not
 know iterator rules, stream rules, public step-callable layouts, or
 reference-count policy for iterator wrappers.
 
-Known-value and loop-state specialization run only in optimized post-check
-lowering. The pipeline carries an explicit optimization-mode input derived from
-the requested build mode: off for `roc check`, compile-time finalization,
-interpreter builds, and dev builds; on for `--opt=size` and `--opt=speed`. The
-mode flag is the only gate. No stage may infer this work from target triples,
-wasm output, backend choice, method names, or the presence of iterator builtins.
-
-That boundary exists for compiler cost, not language meaning. The optimized
-state pass may spend extra work constructing result-demand summaries, reachable
-private state graphs, and extra direct-call workers because users requested
-optimized code. Unoptimized modes still run all language-required checking,
-static-dispatch finalization, compile-time root selection, compile-time
-evaluation, static data emission, and `crash`/`dbg`/`expect` diagnostics. They
-skip only private cursor-state specialization and related optimized worker
-cloning. Therefore build modes can differ in generated code shape, code size,
-and compile time, but never in observable Roc behavior.
+The optimized state pass may spend extra work constructing result-demand
+summaries, reachable private state graphs, and extra direct-call workers because
+users requested optimized code. Unoptimized modes skip only private
+cursor-state specialization and related optimized worker cloning.
 
 Public iterator values remain immutable and reusable. Source such as:
 
