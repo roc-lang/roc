@@ -6250,6 +6250,8 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
     const build_roots = try lir.CheckedPipeline.selectPlatformExportRoots(ctx.gpa, root_artifact.root_requests.runtime_requests);
     defer ctx.gpa.free(build_roots);
 
+    const preserve_default_backtrace_frames = args.synthetic_default_platform and args.debug;
+
     reporter.begin("Specializing");
     var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
         ctx.gpa,
@@ -6260,7 +6262,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
         .{ .requests = build_roots, .include_static_data_exports = true },
         .{
             .target_usize = target_usize,
-            .inline_mode = postCheckInlineModeForOpt(args.opt),
+            .inline_mode = postCheckInlineModeForOpt(args.opt, preserve_default_backtrace_frames),
             .debug_effects = debugEffectsForOpt(args.opt),
             .list_in_place_map = listInPlaceMapForOpt(args.opt),
             .tag_reachability = tagReachabilityForOpt(args.opt),
@@ -6586,6 +6588,8 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
     const build_roots = try lir.CheckedPipeline.selectPlatformExportRoots(ctx.gpa, root_artifact.root_requests.runtime_requests);
     defer ctx.gpa.free(build_roots);
 
+    const preserve_default_backtrace_frames = args.synthetic_default_platform and args.debug;
+
     reporter.begin("Specializing");
     var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
         ctx.gpa,
@@ -6596,7 +6600,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
         .{ .requests = build_roots, .include_static_data_exports = true },
         .{
             .target_usize = target_usize,
-            .inline_mode = postCheckInlineModeForOpt(args.opt),
+            .inline_mode = postCheckInlineModeForOpt(args.opt, preserve_default_backtrace_frames),
             .debug_effects = debugEffectsForOpt(args.opt),
             .list_in_place_map = listInPlaceMapForOpt(args.opt),
             .tag_reachability = tagReachabilityForOpt(args.opt),
@@ -7466,7 +7470,9 @@ fn cliTestExecutionMode(opt: cli_args.OptLevel) CliTestExecutionMode {
     };
 }
 
-fn postCheckInlineModeForOpt(opt: cli_args.OptLevel) lir.CheckedPipeline.InlineMode {
+fn postCheckInlineModeForOpt(opt: cli_args.OptLevel, preserve_proc_frames: bool) lir.CheckedPipeline.InlineMode {
+    if (preserve_proc_frames) return .none;
+
     return switch (opt) {
         .size, .speed => .wrappers,
         .dev, .interpreter => .none,
@@ -7828,7 +7834,7 @@ fn runCheckedArtifactTests(
         .{ .requests = test_roots },
         .{
             .target_usize = base.target.TargetUsize.native,
-            .inline_mode = postCheckInlineModeForOpt(opt),
+            .inline_mode = postCheckInlineModeForOpt(opt, false),
             .list_in_place_map = listInPlaceMapForOpt(opt),
             .tag_reachability = tagReachabilityForOpt(opt),
         },
