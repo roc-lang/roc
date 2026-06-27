@@ -190,7 +190,7 @@ fn expectLirImageCanBeViewedFromMappedHeader(compiled: *const test_helpers.Compi
     try testing.expect(compiled.lowered.view.layouts.layouts.items.items.len > 0);
 
     const header = compiled.lowered.image_header;
-    const child_view = try lir.LirImage.viewMappedImage(header, compiled.lowered.shm.base_ptr, used);
+    const child_view = try lir.LirImage.viewMappedImage(header, compiled.lowered.shm.base_ptr, used, compiled.lowered.view.target_usize);
     try testing.expectEqual(lir.LirImage.MAGIC, header.magic);
     try testing.expectEqual(lir.LirImage.FORMAT_VERSION, header.format_version);
     try testing.expectEqual(compiled.lowered.view.root_procs.len, child_view.root_procs.len);
@@ -238,6 +238,43 @@ test "integration - compilation pipeline for u32 platform" {
 
     try expectLirImageCanBeViewedFromMappedHeader(&wasm32);
     try testing.expectEqual(base.target.TargetUsize.u32, wasm32.lowered.view.target_usize);
+}
+
+test "integration - one LIR image resolves layouts for both pointer widths" {
+    // The serialized LIR image is pointer-width independent: the layout store
+    // carries both widths' sizes/offsets and the op stream uses no width-
+    // dependent decisions, so the same image bytes can be viewed for either
+    // width. This is what lets a single lowered image be cached and reused by,
+    // e.g., a 64-bit interpreter and a 32-bit codegen backend.
+    var compiled = try compileLirImageForSharedTestTarget(
+        testing.allocator,
+        "main : () -> List(I64)\nmain = || [1, 2, 3]",
+        &.{},
+        .native,
+    );
+    defer compiled.deinit(testing.allocator);
+
+    var arena_impl = base.SingleThreadArena.init(testing.allocator);
+    defer arena_impl.deinit();
+    const arena = arena_impl.allocator();
+
+    const header = compiled.lowered.image_header;
+    const image_base = compiled.lowered.shm.base_ptr;
+    const used = compiled.lowered.shm.getUsedSize();
+
+    // View the very same image bytes for each pointer width.
+    const view32 = try lir.LirImage.viewMappedImageWithAllocator(header, image_base, used, .u32, arena);
+    const view64 = try lir.LirImage.viewMappedImageWithAllocator(header, image_base, used, .u64, arena);
+    try testing.expectEqual(base.target.TargetUsize.u32, view32.target_usize);
+    try testing.expectEqual(base.target.TargetUsize.u64, view64.target_usize);
+
+    // `main` returns `List(I64)`, a three-word RocList: 12 bytes at 4-byte
+    // pointers, 24 bytes at 8-byte pointers — both resolved from one image.
+    const ret_layout = view32.store.getProcSpec(view32.root_procs[0]).ret_layout;
+    const size32 = view32.layouts.layoutSize(view32.layouts.getLayout(ret_layout));
+    const size64 = view64.layouts.layoutSize(view64.layouts.getLayout(ret_layout));
+    try testing.expectEqual(@as(u32, 12), size32);
+    try testing.expectEqual(@as(u32, 24), size64);
 }
 
 test "integration - error handling for non-existent file" {

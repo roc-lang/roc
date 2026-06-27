@@ -46,17 +46,23 @@ const LowerToLirHarnessError = std.mem.Allocator.Error ||
         WriteFailed,
     };
 
+/// Options controlling how the harness lowers an app to LIR.
+pub const LirLoweringOptions = struct {
+    target_usize: base.target.TargetUsize = base.target.TargetUsize.native,
+    list_in_place_map: bool = false,
+};
+
 /// Lower an app whose body is `app_body` (everything after the platform header
 /// and the echo wiring) to LIR. Reaching the end without a panic means the
 /// program checked cleanly and passed ARC certification.
 pub fn expectLowersToLir(app_body: []const u8) LowerToLirHarnessError!void {
-    try runToLir(app_body, null);
+    try runToLir(app_body, null, .{});
 }
 
 /// Lower an app at `app_path` to LIR. Reaching the end without a panic means
 /// the app checked cleanly and passed ARC certification.
 pub fn expectAppPathLowersToLir(app_path: []const u8) LowerToLirHarnessError!void {
-    try lowerAppPathToLir(std.testing.allocator, app_path, null);
+    try lowerAppPathToLir(std.testing.allocator, app_path, null, .{});
 }
 
 /// Lower `app_body` twice and assert the two LIR dumps are byte-identical, so
@@ -71,12 +77,34 @@ pub fn expectDeterministicLir(app_body: []const u8) LowerToLirHarnessError!void 
     defer gpa.free(buf_b);
     var writer_a = std.Io.Writer.fixed(buf_a);
     var writer_b = std.Io.Writer.fixed(buf_b);
-    try runToLir(app_body, &writer_a);
-    try runToLir(app_body, &writer_b);
+    try runToLir(app_body, &writer_a, .{});
+    try runToLir(app_body, &writer_b, .{});
     try std.testing.expectEqualStrings(writer_a.buffered(), writer_b.buffered());
 }
 
-fn runToLir(app_body: []const u8, dump: ?*std.Io.Writer) LowerToLirHarnessError!void {
+/// Lower `app_body` for both pointer widths (with in-place `List.map` reuse
+/// enabled) and assert the two LIR dumps are byte-identical. This guards that
+/// lowering produces a target-independent op stream — the property that lets a
+/// single lowered LIR image be cached across 32-bit and 64-bit targets. A
+/// regression that reintroduced a pointer-width-dependent lowering decision
+/// (for example, baking the `list_map_can_reuse` interchangeability check for
+/// one width instead of carrying both) would make the dumps diverge and fail
+/// here.
+pub fn expectTargetIndependentLir(app_body: []const u8) LowerToLirHarnessError!void {
+    const gpa = std.testing.allocator;
+    const cap = 1 << 22;
+    const buf_a = try gpa.alloc(u8, cap);
+    defer gpa.free(buf_a);
+    const buf_b = try gpa.alloc(u8, cap);
+    defer gpa.free(buf_b);
+    var writer_a = std.Io.Writer.fixed(buf_a);
+    var writer_b = std.Io.Writer.fixed(buf_b);
+    try runToLir(app_body, &writer_a, .{ .target_usize = .u32, .list_in_place_map = true });
+    try runToLir(app_body, &writer_b, .{ .target_usize = .u64, .list_in_place_map = true });
+    try std.testing.expectEqualStrings(writer_a.buffered(), writer_b.buffered());
+}
+
+fn runToLir(app_body: []const u8, dump: ?*std.Io.Writer, opts: LirLoweringOptions) LowerToLirHarnessError!void {
     const gpa = std.testing.allocator;
     var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
@@ -130,10 +158,10 @@ fn runToLir(app_body: []const u8, dump: ?*std.Io.Writer) LowerToLirHarnessError!
     const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "main.roc", gpa);
     defer gpa.free(app_path);
 
-    try lowerAppPathToLir(gpa, app_path, dump);
+    try lowerAppPathToLir(gpa, app_path, dump, opts);
 }
 
-fn lowerAppPathToLir(gpa: std.mem.Allocator, app_path: []const u8, dump: ?*std.Io.Writer) LowerToLirHarnessError!void {
+fn lowerAppPathToLir(gpa: std.mem.Allocator, app_path: []const u8, dump: ?*std.Io.Writer, opts: LirLoweringOptions) LowerToLirHarnessError!void {
     var arena_impl = collections.SingleThreadArena.init(gpa);
     defer arena_impl.deinit();
     const arena = arena_impl.allocator();
@@ -176,7 +204,7 @@ fn lowerAppPathToLir(gpa: std.mem.Allocator, app_path: []const u8, dump: ?*std.I
             .imports = imports,
         },
         .{ .requests = lir_roots },
-        .{ .target_usize = base.target.TargetUsize.native },
+        .{ .target_usize = opts.target_usize, .list_in_place_map = opts.list_in_place_map },
     );
     defer lowered.deinit();
 

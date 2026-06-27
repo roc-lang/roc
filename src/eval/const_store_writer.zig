@@ -663,7 +663,7 @@ pub const Writer = struct {
         const layout_value = self.program.layouts.getLayout(layout_idx);
         return switch (layout_value.tag) {
             .zst => 0,
-            .tag_union => self.program.layouts.getTagUnionData(layout_value.getTagUnion().idx).readDiscriminant(value.ptr),
+            .tag_union => self.program.layouts.getTagUnionData(layout_value.getTagUnion().idx).readDiscriminant(value.ptr, self.program.layouts.targetUsize()),
             else => writerInvariant("tag discriminant read had non-tag-union layout"),
         };
     }

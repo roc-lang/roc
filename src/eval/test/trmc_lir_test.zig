@@ -264,7 +264,7 @@ const PeanoLayouts = struct {
         var count: usize = 0;
         var blob = root;
         while (true) {
-            if (blob[tu_data.discriminant_offset] == 0) return count;
+            if (blob[tu_data.discriminant_offset.get(layouts.targetUsize())] == 0) return count;
             const cell = std.mem.readInt(usize, blob[0..@sizeOf(usize)], .little);
             if (cell == 0) @panic("null cell while walking a finished peano list");
             blob = @ptrFromInt(cell);
