@@ -270,6 +270,8 @@ const CallableFact = struct {
 const Value = union(enum) {
     expr: Ast.ExprId,
     expr_with_known_fact: ExprWithKnownFactValue,
+    let_: LetValue,
+    if_: IfValue,
     tag: TagValue,
     record: RecordValue,
     tuple: TupleValue,
@@ -280,6 +282,22 @@ const Value = union(enum) {
 const ExprWithKnownFactValue = struct {
     expr: Ast.ExprId,
     fact: ValueFact,
+};
+
+const LetValue = struct {
+    lets: []const PendingLet,
+    body: *const Value,
+};
+
+const IfValueBranch = struct {
+    cond: Ast.ExprId,
+    body: Value,
+};
+
+const IfValue = struct {
+    ty: Type.TypeId,
+    branches: []const IfValueBranch,
+    final_else: *const Value,
 };
 
 const TagValue = struct {
@@ -353,6 +371,11 @@ const PendingLet = struct {
     local: Ast.LocalId,
     ty: Type.TypeId,
     value: Ast.ExprId,
+};
+
+const BlockTail = struct {
+    statements: []const Ast.StmtId,
+    final_expr: Ast.ExprId,
 };
 
 const LoopPattern = struct {
@@ -786,6 +809,8 @@ const Pass = struct {
         return switch (value) {
             .expr => |expr| try self.constructorFact(expr),
             .expr_with_known_fact => |known_fact_expr| known_fact_expr.fact,
+            .let_ => |let_value| try self.factFromValue(let_value.body.*),
+            .if_ => null,
             .tag => |tag| blk: {
                 const payloads = try self.arena.allocator().alloc(ValueFact, tag.payloads.len);
                 for (tag.payloads, 0..) |payload, index| {
@@ -1110,7 +1135,7 @@ const Cloner = struct {
             },
             .match_ => |match| {
                 const scrutinee = try self.cloneExprValueDemandingFact(match.scrutinee);
-                if (try self.simplifyKnownMatchValue(scrutinee, match.branches)) |value| return value;
+                if (try self.simplifyKnownMatchValue(expr.ty, scrutinee, match.branches)) |value| return value;
                 const scrutinee_expr = try self.materialize(scrutinee);
                 if (try self.cloneCaseOfCaseValue(expr.ty, scrutinee_expr, match.branches)) |value| return value;
                 return try self.cloneMatchJoinedValue(expr.ty, scrutinee_expr, match);
@@ -1208,6 +1233,13 @@ const Cloner = struct {
     fn valueCanSubstitute(self: *Cloner, value: Value) bool {
         return switch (value) {
             .expr => |expr| self.exprCanSubstitute(expr),
+            .let_ => false,
+            .if_ => |if_value| blk: {
+                for (if_value.branches) |branch| {
+                    if (!self.exprCanSubstitute(branch.cond) or !self.valueCanSubstitute(branch.body)) break :blk false;
+                }
+                break :blk self.valueCanSubstitute(if_value.final_else.*);
+            },
             .tag => |tag| blk: {
                 for (tag.payloads) |payload| {
                     if (!self.valueCanSubstitute(payload)) break :blk false;
@@ -1394,6 +1426,11 @@ const Cloner = struct {
             self.restore(change_start);
             return rest;
         }
+        if (try self.bindPatToSingleUseRestValue(let_.bind, value, let_.rest)) {
+            const rest = try self.cloneExprValue(let_.rest);
+            self.restore(change_start);
+            return rest;
+        }
         if (try self.bindPatToMaterializedFact(let_.bind, value)) {
             const rest_value = try self.cloneExprValue(let_.rest);
             const rest = try self.materialize(rest_value);
@@ -1420,6 +1457,10 @@ const Cloner = struct {
         const change_start = self.changes.items.len;
         const bound = try self.bindPatToReusableValue(let_.bind, value);
         const rest = if (bound) blk: {
+            const cloned = try self.cloneExpr(let_.rest);
+            self.restore(change_start);
+            break :blk cloned;
+        } else if (try self.bindPatToSingleUseRestValue(let_.bind, value, let_.rest)) blk: {
             const cloned = try self.cloneExpr(let_.rest);
             self.restore(change_start);
             break :blk cloned;
@@ -1481,8 +1522,11 @@ const Cloner = struct {
 
                 var statements = std.ArrayList(Ast.StmtId).empty;
                 defer statements.deinit(self.pass.allocator);
-                for (source) |stmt| {
-                    try self.cloneStmtInto(stmt, &statements);
+                for (source, 0..) |stmt, stmt_index| {
+                    try self.cloneStmtInto(stmt, &statements, .{
+                        .statements = source[stmt_index + 1 ..],
+                        .final_expr = block.final_expr,
+                    });
                 }
 
                 const final_value = try self.cloneExprValue(block.final_expr);
@@ -1540,19 +1584,34 @@ const Cloner = struct {
 
         const values = try self.pass.allocator.alloc(Value, initial_values.len);
         defer self.pass.allocator.free(values);
-        const facts = try self.pass.arena.allocator().alloc(ValueFact, initial_values.len);
-        var has_constructor = false;
         for (initial_values, 0..) |initial, index| {
             values[index] = try self.cloneExprValueDemandingFact(initial);
-            if (try self.pass.factFromValue(values[index])) |fact| {
-                if (try self.projectableLoopFactForValue(fact, values[index])) |loop_fact| {
+        }
+        return try self.cloneLoopFromInitialValues(ty, loop, params, values);
+    }
+
+    fn cloneLoopFromInitialValues(
+        self: *Cloner,
+        ty: Type.TypeId,
+        loop: anytype,
+        params: []const Ast.TypedLocal,
+        values: []const Value,
+    ) Common.LowerError!Ast.ExprId {
+        if (try self.cloneLoopUnwrappedLet(ty, loop, params, values)) |unwrapped| return unwrapped;
+        if (try self.cloneLoopDistributedIf(ty, loop, params, values)) |distributed| return distributed;
+
+        const facts = try self.pass.arena.allocator().alloc(ValueFact, values.len);
+        var has_constructor = false;
+        for (values, 0..) |value, index| {
+            if (try self.pass.factFromValue(value)) |fact| {
+                if (try self.projectableLoopFactForValue(fact, value)) |loop_fact| {
                     facts[index] = loop_fact;
                     has_constructor = true;
                 } else {
-                    facts[index] = .{ .any = valueType(self.pass.program, values[index]) };
+                    facts[index] = .{ .any = valueType(self.pass.program, value) };
                 }
             } else {
-                facts[index] = .{ .any = valueType(self.pass.program, values[index]) };
+                facts[index] = .{ .any = valueType(self.pass.program, value) };
             }
         }
         if (!has_constructor) {
@@ -1606,6 +1665,68 @@ const Cloner = struct {
                 .body = body,
             } } });
         }
+    }
+
+    fn cloneLoopUnwrappedLet(
+        self: *Cloner,
+        ty: Type.TypeId,
+        loop: anytype,
+        params: []const Ast.TypedLocal,
+        values: []const Value,
+    ) Common.LowerError!?Ast.ExprId {
+        for (values, 0..) |value, value_index| {
+            const let_value = switch (value) {
+                .let_ => |let_value| let_value,
+                else => continue,
+            };
+
+            var unwrapped_values = try self.pass.allocator.dupe(Value, values);
+            defer self.pass.allocator.free(unwrapped_values);
+            unwrapped_values[value_index] = let_value.body.*;
+
+            const body = try self.cloneLoopFromInitialValues(ty, loop, params, unwrapped_values);
+            return try self.wrapPendingLetsAroundExpr(ty, body, let_value.lets);
+        }
+
+        return null;
+    }
+
+    fn cloneLoopDistributedIf(
+        self: *Cloner,
+        ty: Type.TypeId,
+        loop: anytype,
+        params: []const Ast.TypedLocal,
+        values: []const Value,
+    ) Common.LowerError!?Ast.ExprId {
+        for (values, 0..) |value, value_index| {
+            const if_value = switch (value) {
+                .if_ => |if_value| if_value,
+                else => continue,
+            };
+
+            const branches = try self.pass.allocator.alloc(Ast.IfBranch, if_value.branches.len);
+            defer self.pass.allocator.free(branches);
+            var branch_values = try self.pass.allocator.dupe(Value, values);
+            defer self.pass.allocator.free(branch_values);
+
+            for (if_value.branches, 0..) |branch, branch_index| {
+                branch_values[value_index] = branch.body;
+                branches[branch_index] = .{
+                    .cond = branch.cond,
+                    .body = try self.cloneLoopFromInitialValues(ty, loop, params, branch_values),
+                };
+            }
+
+            branch_values[value_index] = if_value.final_else.*;
+            const final_else = try self.cloneLoopFromInitialValues(ty, loop, params, branch_values);
+
+            return try self.addExpr(.{ .ty = ty, .data = .{ .if_ = .{
+                .branches = try self.pass.program.addIfBranchSpan(branches),
+                .final_else = final_else,
+            } } });
+        }
+
+        return null;
     }
 
     fn projectableLoopFactForValue(self: *Cloner, fact: ValueFact, value: Value) Allocator.Error!?ValueFact {
@@ -1680,6 +1801,8 @@ const Cloner = struct {
                     .captures = captures,
                 } };
             },
+            .let_ => null,
+            .if_ => null,
             .expr_with_known_fact => |known| if (canReadFieldsFromExpr(self.pass.program, known.expr))
                 try self.projectableLoopFactFromExpr(known.fact)
             else
@@ -1744,8 +1867,11 @@ const Cloner = struct {
 
         var statements = std.ArrayList(Ast.StmtId).empty;
         defer statements.deinit(self.pass.allocator);
-        for (source) |stmt| {
-            try self.cloneStmtInto(stmt, &statements);
+        for (source, 0..) |stmt, index| {
+            try self.cloneStmtInto(stmt, &statements, .{
+                .statements = source[index + 1 ..],
+                .final_expr = block.final_expr,
+            });
         }
 
         return try self.addExpr(.{ .ty = ty, .data = .{ .block = .{
@@ -1776,15 +1902,26 @@ const Cloner = struct {
 
         var statements = std.ArrayList(Ast.StmtId).empty;
         defer statements.deinit(self.pass.allocator);
-        for (source) |stmt| {
-            try self.cloneStmtInto(stmt, &statements);
+        for (source, 0..) |stmt, index| {
+            try self.cloneStmtInto(stmt, &statements, .{
+                .statements = source[index + 1 ..],
+                .final_expr = block.final_expr,
+            });
         }
 
         const final_value = if (demand_final_fact)
             try self.cloneExprValueDemandingFact(block.final_expr)
         else
             try self.cloneExprValue(block.final_expr);
-        if (demand_final_fact and statements.items.len == 0) return final_value;
+        if (demand_final_fact) {
+            if (statements.items.len == 0) return final_value;
+
+            var pending_lets = std.ArrayList(PendingLet).empty;
+            defer pending_lets.deinit(self.pass.allocator);
+            if (try self.appendPendingLetsFromStatements(statements.items, &pending_lets)) {
+                return try self.wrapPendingLets(final_value, pending_lets.items, true);
+            }
+        }
 
         const final_expr = try self.materialize(final_value);
         const block_expr = try self.addExpr(.{ .ty = ty, .data = .{ .block = .{
@@ -2228,6 +2365,15 @@ const Cloner = struct {
                 return true;
             },
             .record => |record| {
+                if (recordFromValue(value)) |record_value| {
+                    if (record.fields.len != record_value.fields.len) return false;
+                    for (record.fields, record_value.fields) |field_fact, field_value| {
+                        if (field_fact.name != field_value.name) return false;
+                        if (!try self.appendFieldReadExprsFromValue(field_fact.fact, field_value.value, out)) return false;
+                    }
+                    return true;
+                }
+
                 const receiver = projectableExprFromValue(value) orelse return false;
                 if (!canReadFieldsFromExpr(self.pass.program, receiver)) return false;
                 for (record.fields) |field| {
@@ -2240,6 +2386,14 @@ const Cloner = struct {
                 return true;
             },
             .tuple => |tuple| {
+                if (tupleFromValue(value)) |tuple_value| {
+                    if (tuple.items.len != tuple_value.items.len) return false;
+                    for (tuple.items, tuple_value.items) |item_fact, item_value| {
+                        if (!try self.appendFieldReadExprsFromValue(item_fact, item_value, out)) return false;
+                    }
+                    return true;
+                }
+
                 const receiver = projectableExprFromValue(value) orelse return false;
                 if (!canReadFieldsFromExpr(self.pass.program, receiver)) return false;
                 for (tuple.items, 0..) |item, index| {
@@ -2252,8 +2406,22 @@ const Cloner = struct {
                 return true;
             },
             .nominal => |nominal| return try self.appendFieldReadExprsFromValue(nominal.backing.*, value, out),
+            .callable => |callable| {
+                const callable_value = switch (value) {
+                    .callable => |callable_value| callable_value,
+                    else => return false,
+                };
+                if (!callableTargetMatches(self.pass.program, callable.fn_id, callable_value.fn_id) or
+                    callable.captures.len != callable_value.captures.len)
+                {
+                    return false;
+                }
+                for (callable.captures, callable_value.captures) |capture_fact, capture_value| {
+                    if (!try self.appendFieldReadExprsFromValue(capture_fact, capture_value, out)) return false;
+                }
+                return true;
+            },
             .tag,
-            .callable,
             => return false,
         }
     }
@@ -2321,27 +2489,25 @@ const Cloner = struct {
 
         for (source_branches, 0..) |branch, index| {
             branches[index] = .{
-                .cond = try self.cloneExpr(branch.cond),
+                .cond = try self.materialize(try self.cloneExprValueDemandingFact(branch.cond)),
                 .body = undefined,
             };
             body_values[index] = try self.cloneExprValueDemandingFact(branch.body);
-            branches[index].body = try self.materialize(body_values[index]);
         }
 
         body_values[source_branches.len] = try self.cloneExprValueDemandingFact(if_.final_else);
-        const final_else = try self.materialize(body_values[source_branches.len]);
 
-        const fact = try self.joinValueFacts(body_values);
-        const if_expr = try self.addExpr(.{ .ty = ty, .data = .{ .if_ = .{
-            .branches = try self.pass.program.addIfBranchSpan(branches),
-            .final_else = final_else,
-        } } });
-
-        if (fact == null) return .{ .expr = if_expr };
-
-        return .{ .expr_with_known_fact = .{
-            .expr = if_expr,
-            .fact = fact.?,
+        const if_branches = try self.pass.arena.allocator().alloc(IfValueBranch, source_branches.len);
+        for (branches, body_values[0..source_branches.len], 0..) |branch, body, index| {
+            if_branches[index] = .{
+                .cond = branch.cond,
+                .body = body,
+            };
+        }
+        return .{ .if_ = .{
+            .ty = ty,
+            .branches = if_branches,
+            .final_else = try self.copyValue(body_values[source_branches.len]),
         } };
     }
 
@@ -2487,7 +2653,7 @@ const Cloner = struct {
 
     fn cloneMatch(self: *Cloner, ty: Type.TypeId, match: @import("../monotype/ast.zig").MatchExpr) Common.LowerError!Ast.ExprId {
         const scrutinee = try self.cloneExprValue(match.scrutinee);
-        if (try self.simplifyKnownMatch(scrutinee, match.branches)) |body| return body;
+        if (try self.simplifyKnownMatch(ty, scrutinee, match.branches)) |body| return body;
 
         const scrutinee_expr = try self.materialize(scrutinee);
         return try self.addExpr(.{ .ty = ty, .data = .{ .match_ = .{
@@ -2497,18 +2663,20 @@ const Cloner = struct {
         } } });
     }
 
-    fn simplifyKnownMatch(self: *Cloner, scrutinee: Value, branches_span: Ast.Span(Ast.Branch)) Common.LowerError!?Ast.ExprId {
-        if (try self.simplifyKnownMatchValue(scrutinee, branches_span)) |value| {
+    fn simplifyKnownMatch(self: *Cloner, ty: Type.TypeId, scrutinee: Value, branches_span: Ast.Span(Ast.Branch)) Common.LowerError!?Ast.ExprId {
+        if (try self.simplifyKnownMatchValue(ty, scrutinee, branches_span)) |value| {
             return try self.materialize(value);
         }
         return null;
     }
 
-    fn simplifyKnownMatchValue(self: *Cloner, scrutinee: Value, branches_span: Ast.Span(Ast.Branch)) Common.LowerError!?Value {
+    fn simplifyKnownMatchValue(self: *Cloner, ty: Type.TypeId, scrutinee: Value, branches_span: Ast.Span(Ast.Branch)) Common.LowerError!?Value {
         switch (scrutinee) {
             .expr,
             .expr_with_known_fact,
+            .let_,
             => return null,
+            .if_ => |if_value| return try self.simplifyKnownMatchIfValue(ty, if_value, branches_span),
             else => {},
         }
         for (self.pass.program.branchSpan(branches_span)) |branch| {
@@ -2531,6 +2699,32 @@ const Cloner = struct {
             return try self.wrapPendingLets(body, pending_lets.items, false);
         }
         Common.invariant("known constructor match had no matching branch");
+    }
+
+    fn simplifyKnownMatchIfValue(
+        self: *Cloner,
+        ty: Type.TypeId,
+        if_value: IfValue,
+        branches_span: Ast.Span(Ast.Branch),
+    ) Common.LowerError!?Value {
+        const branches = try self.pass.arena.allocator().alloc(IfValueBranch, if_value.branches.len);
+        for (if_value.branches, 0..) |branch, index| {
+            branches[index] = .{
+                .cond = branch.cond,
+                .body = (try self.simplifyKnownMatchValue(ty, branch.body, branches_span)) orelse
+                    return null,
+            };
+        }
+
+        const final_else = try self.pass.arena.allocator().create(Value);
+        final_else.* = (try self.simplifyKnownMatchValue(ty, if_value.final_else.*, branches_span)) orelse
+            return null;
+
+        return .{ .if_ = .{
+            .ty = ty,
+            .branches = branches,
+            .final_else = final_else,
+        } };
     }
 
     fn bindPatToMatchValue(
@@ -2661,9 +2855,10 @@ const Cloner = struct {
         unsafe_count: usize,
         pending_lets: *std.ArrayList(PendingLet),
     ) Common.LowerError!Value {
-        const uses = localUseCountInExpr(self.pass.program, local, body);
+        _ = unsafe_count;
+        const uses = localMaxUseCountPerPathInExpr(self.pass.program, local, body);
         if (self.valueCanSubstitute(value) or
-            (unsafe_count == 1 and uses == 1 and localUseBeforeEffect(self.pass.program, local, body)))
+            (uses == 1 and localUseBeforeEffect(self.pass.program, local, body)))
         {
             return value;
         }
@@ -2674,6 +2869,20 @@ const Cloner = struct {
         return switch (value) {
             .expr => |expr| if (self.exprCanSubstitute(expr)) 0 else 1,
             .expr_with_known_fact => |known_fact_expr| if (self.exprCanSubstitute(known_fact_expr.expr)) 0 else 1,
+            .let_ => |let_value| blk: {
+                var count: usize = let_value.lets.len;
+                count += self.unsafeLeafCount(let_value.body.*);
+                break :blk count;
+            },
+            .if_ => |if_value| blk: {
+                var count: usize = 0;
+                for (if_value.branches) |branch| {
+                    if (!self.exprCanSubstitute(branch.cond)) count += 1;
+                    count += self.unsafeLeafCount(branch.body);
+                }
+                count += self.unsafeLeafCount(if_value.final_else.*);
+                break :blk count;
+            },
             .tag => |tag| blk: {
                 var count: usize = 0;
                 for (tag.payloads) |payload| count += self.unsafeLeafCount(payload);
@@ -2729,6 +2938,30 @@ const Cloner = struct {
                 break :blk Value{ .expr_with_known_fact = .{
                     .expr = local_expr,
                     .fact = known_fact_expr.fact,
+                } };
+            },
+            .let_ => |let_value| blk: {
+                const body = try self.makeReusableForMatch(let_value.body.*, pending_lets);
+                const lets = try self.pass.arena.allocator().dupe(PendingLet, let_value.lets);
+                break :blk Value{ .let_ = .{
+                    .lets = lets,
+                    .body = try self.copyValue(body),
+                } };
+            },
+            .if_ => |if_value| blk: {
+                const branches = try self.pass.arena.allocator().alloc(IfValueBranch, if_value.branches.len);
+                for (if_value.branches, 0..) |branch, index| {
+                    branches[index] = .{
+                        .cond = branch.cond,
+                        .body = try self.makeReusableForMatch(branch.body, pending_lets),
+                    };
+                }
+                const final_else = try self.pass.arena.allocator().create(Value);
+                final_else.* = try self.makeReusableForMatch(if_value.final_else.*, pending_lets);
+                break :blk Value{ .if_ = .{
+                    .ty = if_value.ty,
+                    .branches = branches,
+                    .final_else = final_else,
                 } };
             },
             .tag => |tag| blk: {
@@ -2791,8 +3024,27 @@ const Cloner = struct {
         if (pending_lets.len == 0) return body;
 
         const fact = if (preserve_fact) try self.pass.factFromValue(body) else null;
+        if (fact != null) {
+            const lets = try self.pass.arena.allocator().dupe(PendingLet, pending_lets);
+            return .{ .let_ = .{
+                .lets = lets,
+                .body = try self.copyValue(body),
+            } };
+        }
+
         const ty = valueType(self.pass.program, body);
         var result = try self.materialize(body);
+        result = try self.wrapPendingLetsAroundExpr(ty, result, pending_lets);
+        return .{ .expr = result };
+    }
+
+    fn wrapPendingLetsAroundExpr(
+        self: *Cloner,
+        ty: Type.TypeId,
+        body_expr: Ast.ExprId,
+        pending_lets: []const PendingLet,
+    ) Common.LowerError!Ast.ExprId {
+        var result = body_expr;
         var index = pending_lets.len;
         while (index > 0) {
             index -= 1;
@@ -2807,13 +3059,7 @@ const Cloner = struct {
                 .rest = result,
             } } });
         }
-        if (fact) |known| {
-            return .{ .expr_with_known_fact = .{
-                .expr = result,
-                .fact = known,
-            } };
-        }
-        return .{ .expr = result };
+        return result;
     }
 
     fn cloneCaseOfCaseValue(
@@ -2841,7 +3087,7 @@ const Cloner = struct {
 
         for (inner_branches, 0..) |inner_branch, index| {
             const inner_value = try self.cloneExprValue(inner_branch.body);
-            const outer_value = (try self.simplifyKnownMatchValue(inner_value, outer_branches_span)) orelse return null;
+            const outer_value = (try self.simplifyKnownMatchValue(ty, inner_value, outer_branches_span)) orelse return null;
             rewritten[index] = .{
                 .pat = inner_branch.pat,
                 .guard = inner_branch.guard,
@@ -3089,6 +3335,41 @@ const Cloner = struct {
         return try self.bindPatToValue(pat_id, value);
     }
 
+    fn bindPatToSingleUseTailValue(self: *Cloner, pat_id: Ast.PatId, value: Value, tail: BlockTail) Common.LowerError!bool {
+        const pat = self.pass.program.pats.items[@intFromEnum(pat_id)];
+        switch (pat.data) {
+            .bind => |local| {
+                const uses = localMaxUseCountPerPathInBlockTail(self.pass.program, local, tail);
+                const before_effect = localUseBeforeEffectInBlockTail(self.pass.program, local, tail);
+                if (uses != 1) return false;
+                if (!before_effect) return false;
+                try self.putSubst(local, value);
+                return true;
+            },
+            .wildcard,
+            .as,
+            .record,
+            .tuple,
+            .list,
+            .tag,
+            .nominal,
+            .int_lit,
+            .dec_lit,
+            .frac_f32_lit,
+            .frac_f64_lit,
+            .str_lit,
+            .str_pattern,
+            => return false,
+        }
+    }
+
+    fn bindPatToSingleUseRestValue(self: *Cloner, pat_id: Ast.PatId, value: Value, rest: Ast.ExprId) Common.LowerError!bool {
+        return try self.bindPatToSingleUseTailValue(pat_id, value, .{
+            .statements = &.{},
+            .final_expr = rest,
+        });
+    }
+
     fn bindPatToMaterializedFact(self: *Cloner, pat_id: Ast.PatId, value: Value) Common.LowerError!bool {
         const fact = (try self.pass.factFromValue(value)) orelse return false;
         return try self.bindPatToExprWithKnownFact(pat_id, fact);
@@ -3196,7 +3477,12 @@ const Cloner = struct {
         };
     }
 
-    fn cloneStmtInto(self: *Cloner, stmt_id: Ast.StmtId, out: *std.ArrayList(Ast.StmtId)) Common.LowerError!void {
+    fn cloneStmtInto(
+        self: *Cloner,
+        stmt_id: Ast.StmtId,
+        out: *std.ArrayList(Ast.StmtId),
+        tail: BlockTail,
+    ) Common.LowerError!void {
         const saved_loc = self.current_loc;
         defer self.current_loc = saved_loc;
         const saved_region = self.current_region;
@@ -3208,7 +3494,10 @@ const Cloner = struct {
         const cloned: Ast.Stmt = switch (stmt) {
             .uninitialized => |pat| .{ .uninitialized = try self.clonePat(pat) },
             .let_ => |let_| blk: {
-                const value = try self.cloneExprValue(let_.value);
+                const value = if (let_.recursive)
+                    try self.cloneExprValue(let_.value)
+                else
+                    try self.cloneExprValueDemandingFact(let_.value);
                 if (!let_.recursive) {
                     var pending_lets = std.ArrayList(PendingLet).empty;
                     defer pending_lets.deinit(self.pass.allocator);
@@ -3217,6 +3506,11 @@ const Cloner = struct {
                     const bind_change_start = self.changes.items.len;
                     if (try self.bindPatToReusableValue(let_.pat, reusable)) {
                         try self.appendPendingLetStmts(pending_lets.items, out);
+                        return;
+                    }
+                    self.restore(bind_change_start);
+
+                    if (try self.bindPatToSingleUseTailValue(let_.pat, value, tail)) {
                         return;
                     }
                     self.restore(bind_change_start);
@@ -3259,6 +3553,36 @@ const Cloner = struct {
                 .comptime_site = null,
             } }));
         }
+    }
+
+    fn appendPendingLetsFromStatements(
+        self: *Cloner,
+        statements: []const Ast.StmtId,
+        out: *std.ArrayList(PendingLet),
+    ) Allocator.Error!bool {
+        for (statements) |stmt_id| {
+            const stmt = self.pass.program.stmts.items[@intFromEnum(stmt_id)];
+            const let_ = switch (stmt) {
+                .let_ => |let_| let_,
+                .expr => |expr| {
+                    if (discardedExprIsEffectFree(self.pass.program, expr)) continue;
+                    return false;
+                },
+                else => return false,
+            };
+            if (let_.recursive) return false;
+            const pat = self.pass.program.pats.items[@intFromEnum(let_.pat)];
+            const local = switch (pat.data) {
+                .bind => |local| local,
+                else => return false,
+            };
+            try out.append(self.pass.allocator, .{
+                .local = local,
+                .ty = pat.ty,
+                .value = let_.value,
+            });
+        }
+        return true;
     }
 
     fn cloneExprSpan(self: *Cloner, span: Ast.Span(Ast.ExprId)) Common.LowerError!Ast.Span(Ast.ExprId) {
@@ -3346,6 +3670,24 @@ const Cloner = struct {
         switch (value) {
             .expr => |expr| return expr,
             .expr_with_known_fact => |known_fact_expr| return known_fact_expr.expr,
+            .let_ => |let_value| {
+                const body = try self.materialize(let_value.body.*);
+                return try self.wrapPendingLetsAroundExpr(valueType(self.pass.program, let_value.body.*), body, let_value.lets);
+            },
+            .if_ => |if_value| {
+                const branches = try self.pass.allocator.alloc(Ast.IfBranch, if_value.branches.len);
+                defer self.pass.allocator.free(branches);
+                for (if_value.branches, 0..) |branch, index| {
+                    branches[index] = .{
+                        .cond = branch.cond,
+                        .body = try self.materialize(branch.body),
+                    };
+                }
+                return try self.addExpr(.{ .ty = if_value.ty, .data = .{ .if_ = .{
+                    .branches = try self.pass.program.addIfBranchSpan(branches),
+                    .final_else = try self.materialize(if_value.final_else.*),
+                } } });
+            },
             .tag => |tag| {
                 const payloads = try self.pass.allocator.alloc(Ast.ExprId, tag.payloads.len);
                 defer self.pass.allocator.free(payloads);
@@ -3596,6 +3938,8 @@ const Cloner = struct {
             => true,
             .expr,
             .expr_with_known_fact,
+            .let_,
+            .if_,
             .callable,
             => false,
         };
@@ -3869,6 +4213,173 @@ fn localUseCountInExprSpan(program: *const Ast.Program, local: Ast.LocalId, span
     return count;
 }
 
+fn localMaxUseCountPerPathInExpr(program: *const Ast.Program, local: Ast.LocalId, expr_id: Ast.ExprId) usize {
+    return switch (program.exprs.items[@intFromEnum(expr_id)].data) {
+        .local => |seen| if (seen == local) 1 else 0,
+        .unit,
+        .int_lit,
+        .frac_f32_lit,
+        .frac_f64_lit,
+        .dec_lit,
+        .str_lit,
+        .static_data,
+        .fn_ref,
+        .crash,
+        .comptime_exhaustiveness_failed,
+        .uninitialized,
+        .uninitialized_payload,
+        .lambda,
+        .def_ref,
+        .fn_def,
+        => 0,
+        .static_data_candidate => |candidate| localMaxUseCountPerPathInExpr(program, local, candidate.fallback),
+        .list,
+        .tuple,
+        => |items| localMaxUseCountPerPathInExprSpan(program, local, items),
+        .record => |fields| blk: {
+            var count: usize = 0;
+            for (program.fieldExprSpan(fields)) |field| count += localMaxUseCountPerPathInExpr(program, local, field.value);
+            break :blk count;
+        },
+        .tag => |tag| localMaxUseCountPerPathInExprSpan(program, local, tag.payloads),
+        .nominal,
+        .return_,
+        .dbg,
+        .expect,
+        => |child| localMaxUseCountPerPathInExpr(program, local, child),
+        .expect_err => |expect_err| localMaxUseCountPerPathInExpr(program, local, expect_err.msg),
+        .comptime_branch_taken => |taken| localMaxUseCountPerPathInExpr(program, local, taken.body),
+        .let_ => |let_| localMaxUseCountPerPathInExpr(program, local, let_.value) +
+            localMaxUseCountPerPathInExpr(program, local, let_.rest),
+        .call_value => |call| localMaxUseCountPerPathInExpr(program, local, call.callee) +
+            localMaxUseCountPerPathInExprSpan(program, local, call.args),
+        .call_proc => |call| localMaxUseCountPerPathInExprSpan(program, local, call.args),
+        .low_level => |call| localMaxUseCountPerPathInExprSpan(program, local, call.args),
+        .field_access => |field| localMaxUseCountPerPathInExpr(program, local, field.receiver),
+        .tuple_access => |access| localMaxUseCountPerPathInExpr(program, local, access.tuple),
+        .structural_eq => |eq| localMaxUseCountPerPathInExpr(program, local, eq.lhs) +
+            localMaxUseCountPerPathInExpr(program, local, eq.rhs),
+        .structural_hash => |h| localMaxUseCountPerPathInExpr(program, local, h.value) +
+            localMaxUseCountPerPathInExpr(program, local, h.hasher),
+        .match_ => |match| blk: {
+            const scrutinee_count = localMaxUseCountPerPathInExpr(program, local, match.scrutinee);
+            var max_branch_count: usize = 0;
+            for (program.branchSpan(match.branches)) |branch| {
+                var branch_count: usize = if (branch.guard) |guard|
+                    localMaxUseCountPerPathInExpr(program, local, guard)
+                else
+                    0;
+                branch_count += localMaxUseCountPerPathInExpr(program, local, branch.body);
+                max_branch_count = @max(max_branch_count, branch_count);
+            }
+            break :blk scrutinee_count + max_branch_count;
+        },
+        .if_ => |if_| blk: {
+            var count: usize = 0;
+            var max_branch_count: usize = 0;
+            for (program.ifBranchSpan(if_.branches)) |branch| {
+                count += localMaxUseCountPerPathInExpr(program, local, branch.cond);
+                max_branch_count = @max(max_branch_count, localMaxUseCountPerPathInExpr(program, local, branch.body));
+            }
+            max_branch_count = @max(max_branch_count, localMaxUseCountPerPathInExpr(program, local, if_.final_else));
+            break :blk count + max_branch_count;
+        },
+        .block => |block| blk: {
+            var count: usize = 0;
+            for (program.stmtSpan(block.statements)) |stmt| count += localMaxUseCountPerPathInStmt(program, local, stmt);
+            count += localMaxUseCountPerPathInExpr(program, local, block.final_expr);
+            break :blk count;
+        },
+        .loop_ => |loop| blk: {
+            const initial_count = localMaxUseCountPerPathInExprSpan(program, local, loop.initial_values);
+            const body_count = localMaxUseCountPerPathInExpr(program, local, loop.body);
+            break :blk initial_count + if (body_count == 0) @as(usize, 0) else @max(body_count, 2);
+        },
+        .break_ => |maybe| if (maybe) |value| localMaxUseCountPerPathInExpr(program, local, value) else 0,
+        .continue_ => |continue_| localMaxUseCountPerPathInExprSpan(program, local, continue_.values),
+        .if_initialized_payload => |payload_switch| localMaxUseCountPerPathInExpr(program, local, payload_switch.cond) +
+            @max(
+                (if (payload_switch.payload == local) @as(usize, 1) else 0) +
+                    localMaxUseCountPerPathInExpr(program, local, payload_switch.initialized),
+                localMaxUseCountPerPathInExpr(program, local, payload_switch.uninitialized),
+            ),
+        .try_sequence => |sequence| localMaxUseCountPerPathInExpr(program, local, sequence.try_expr) +
+            if (sequence.ok_local == local) 0 else localMaxUseCountPerPathInExpr(program, local, sequence.ok_body),
+        .try_record_sequence => |sequence| localMaxUseCountPerPathInExpr(program, local, sequence.try_expr) +
+            if (sequence.value_local == local or sequence.rest_local == local) 0 else localMaxUseCountPerPathInExpr(program, local, sequence.ok_body),
+    };
+}
+
+fn localMaxUseCountPerPathInExprSpan(program: *const Ast.Program, local: Ast.LocalId, span: Ast.Span(Ast.ExprId)) usize {
+    var count: usize = 0;
+    for (program.exprSpan(span)) |expr| count += localMaxUseCountPerPathInExpr(program, local, expr);
+    return count;
+}
+
+fn discardedExprIsEffectFree(program: *const Ast.Program, expr_id: Ast.ExprId) bool {
+    return switch (program.exprs.items[@intFromEnum(expr_id)].data) {
+        .local,
+        .unit,
+        .int_lit,
+        .frac_f32_lit,
+        .frac_f64_lit,
+        .dec_lit,
+        .str_lit,
+        .static_data,
+        .fn_ref,
+        .uninitialized,
+        .uninitialized_payload,
+        => true,
+        .static_data_candidate => |candidate| discardedExprIsEffectFree(program, candidate.fallback),
+        .list,
+        .tuple,
+        => |items| discardedExprSpanIsEffectFree(program, items),
+        .record => |fields| blk: {
+            for (program.fieldExprSpan(fields)) |field| {
+                if (!discardedExprIsEffectFree(program, field.value)) break :blk false;
+            }
+            break :blk true;
+        },
+        .tag => |tag| discardedExprSpanIsEffectFree(program, tag.payloads),
+        .nominal => |backing| discardedExprIsEffectFree(program, backing),
+        .let_ => |let_| discardedExprIsEffectFree(program, let_.value) and discardedExprIsEffectFree(program, let_.rest),
+        .field_access => |field| discardedExprIsEffectFree(program, field.receiver),
+        .tuple_access => |access| discardedExprIsEffectFree(program, access.tuple),
+        .comptime_branch_taken => |taken| discardedExprIsEffectFree(program, taken.body),
+        .lambda,
+        .def_ref,
+        .fn_def,
+        .call_value,
+        .call_proc,
+        .low_level,
+        .structural_eq,
+        .structural_hash,
+        .match_,
+        .if_,
+        .block,
+        .loop_,
+        .break_,
+        .continue_,
+        .return_,
+        .dbg,
+        .expect,
+        .expect_err,
+        .crash,
+        .comptime_exhaustiveness_failed,
+        .if_initialized_payload,
+        .try_sequence,
+        .try_record_sequence,
+        => false,
+    };
+}
+
+fn discardedExprSpanIsEffectFree(program: *const Ast.Program, span: Ast.Span(Ast.ExprId)) bool {
+    for (program.exprSpan(span)) |expr| {
+        if (!discardedExprIsEffectFree(program, expr)) return false;
+    }
+    return true;
+}
+
 fn localUseCountInStmt(program: *const Ast.Program, local: Ast.LocalId, stmt_id: Ast.StmtId) usize {
     return switch (program.stmts.items[@intFromEnum(stmt_id)]) {
         .uninitialized => 0,
@@ -3882,11 +4393,45 @@ fn localUseCountInStmt(program: *const Ast.Program, local: Ast.LocalId, stmt_id:
     };
 }
 
+fn localMaxUseCountPerPathInStmt(program: *const Ast.Program, local: Ast.LocalId, stmt_id: Ast.StmtId) usize {
+    return switch (program.stmts.items[@intFromEnum(stmt_id)]) {
+        .uninitialized => 0,
+        .let_ => |let_| localMaxUseCountPerPathInExpr(program, local, let_.value),
+        .expr,
+        .expect,
+        .dbg,
+        .return_,
+        => |expr| localMaxUseCountPerPathInExpr(program, local, expr),
+        .crash => 0,
+    };
+}
+
+fn localUseCountInBlockTail(program: *const Ast.Program, local: Ast.LocalId, tail: BlockTail) usize {
+    var count: usize = 0;
+    for (tail.statements) |stmt| count += localUseCountInStmt(program, local, stmt);
+    count += localUseCountInExpr(program, local, tail.final_expr);
+    return count;
+}
+
+fn localMaxUseCountPerPathInBlockTail(program: *const Ast.Program, local: Ast.LocalId, tail: BlockTail) usize {
+    var count: usize = 0;
+    for (tail.statements) |stmt| count += localMaxUseCountPerPathInStmt(program, local, stmt);
+    count += localMaxUseCountPerPathInExpr(program, local, tail.final_expr);
+    return count;
+}
+
 const LocalUseScan = struct {
     seen_effect: bool = false,
     found_before_effect: bool = false,
     found_after_effect: bool = false,
 };
+
+fn localUseBeforeEffectInBlockTail(program: *const Ast.Program, local: Ast.LocalId, tail: BlockTail) bool {
+    var scan: LocalUseScan = .{};
+    for (tail.statements) |stmt| scanLocalUseInStmt(program, local, stmt, &scan);
+    scanLocalUseInExpr(program, local, tail.final_expr, &scan);
+    return scan.found_before_effect and !scan.found_after_effect;
+}
 
 fn localUseBeforeEffect(program: *const Ast.Program, local: Ast.LocalId, expr_id: Ast.ExprId) bool {
     var scan: LocalUseScan = .{};
@@ -3977,25 +4522,35 @@ fn scanLocalUseInExpr(program: *const Ast.Program, local: Ast.LocalId, expr_id: 
         },
         .match_ => |match| {
             scanLocalUseInExpr(program, local, match.scrutinee, scan);
+            const after_scrutinee = scan.*;
+            var merged = after_scrutinee;
             for (program.branchSpan(match.branches)) |branch| {
-                var branch_scan = scan.*;
+                var branch_scan = after_scrutinee;
                 if (branch.guard) |guard| scanLocalUseInExpr(program, local, guard, &branch_scan);
                 scanLocalUseInExpr(program, local, branch.body, &branch_scan);
-                scan.found_before_effect = scan.found_before_effect or branch_scan.found_before_effect;
-                scan.found_after_effect = scan.found_after_effect or branch_scan.found_after_effect;
-                scan.seen_effect = scan.seen_effect or branch_scan.seen_effect;
+                merged.found_before_effect = merged.found_before_effect or branch_scan.found_before_effect;
+                merged.found_after_effect = merged.found_after_effect or branch_scan.found_after_effect;
+                merged.seen_effect = merged.seen_effect or branch_scan.seen_effect;
             }
+            scan.* = merged;
         },
         .if_ => |if_| {
+            var condition_scan = scan.*;
+            var merged = condition_scan;
             for (program.ifBranchSpan(if_.branches)) |branch| {
-                scanLocalUseInExpr(program, local, branch.cond, scan);
-                var branch_scan = scan.*;
+                scanLocalUseInExpr(program, local, branch.cond, &condition_scan);
+                var branch_scan = condition_scan;
                 scanLocalUseInExpr(program, local, branch.body, &branch_scan);
-                scan.found_before_effect = scan.found_before_effect or branch_scan.found_before_effect;
-                scan.found_after_effect = scan.found_after_effect or branch_scan.found_after_effect;
-                scan.seen_effect = scan.seen_effect or branch_scan.seen_effect;
+                merged.found_before_effect = merged.found_before_effect or branch_scan.found_before_effect;
+                merged.found_after_effect = merged.found_after_effect or branch_scan.found_after_effect;
+                merged.seen_effect = merged.seen_effect or branch_scan.seen_effect;
             }
-            scanLocalUseInExpr(program, local, if_.final_else, scan);
+            var else_scan = condition_scan;
+            scanLocalUseInExpr(program, local, if_.final_else, &else_scan);
+            merged.found_before_effect = merged.found_before_effect or else_scan.found_before_effect;
+            merged.found_after_effect = merged.found_after_effect or else_scan.found_after_effect;
+            merged.seen_effect = merged.seen_effect or else_scan.seen_effect;
+            scan.* = merged;
         },
         .block => |block| {
             for (program.stmtSpan(block.statements)) |stmt| scanLocalUseInStmt(program, local, stmt, scan);
@@ -4142,6 +4697,8 @@ fn valueType(program: *const Ast.Program, value: Value) Type.TypeId {
     return switch (value) {
         .expr => |expr| program.exprs.items[@intFromEnum(expr)].ty,
         .expr_with_known_fact => |known_fact_expr| program.exprs.items[@intFromEnum(known_fact_expr.expr)].ty,
+        .let_ => |let_value| valueType(program, let_value.body.*),
+        .if_ => |if_value| if_value.ty,
         .tag => |tag| tag.ty,
         .record => |record| record.ty,
         .tuple => |tuple| tuple.ty,
