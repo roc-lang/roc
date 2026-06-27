@@ -1014,6 +1014,7 @@ functions:
 
 ```roc
 thing = Json.parse(json_str)?
+thing = Json.parse_trailing_commas(json_str)?
 thing = Json.Utf8.parse(json_bytes)?
 
 json_str = Json.encode(thing)?
@@ -1044,7 +1045,8 @@ value, or other sub-shape has that nominal type.
 
 The `encoding` argument is the pure format/configuration value used to construct
 the specialized parser. It may represent choices such as JSON object field
-renaming, JSON tag representation, or a header matching mode. The `state`
+renaming, whether JSON accepts trailing commas, JSON tag representation, or a
+header matching mode. The `state`
 argument is the runtime cursor or output state. Keeping these separate matters:
 parser construction can transform the requested structural shape before the
 runtime scan starts, while the returned runtime function threads only the cursor

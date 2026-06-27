@@ -24,12 +24,21 @@ Builtin :: [].{
 
 		JsonState :: [Input(Str)]
 
-		JsonEncoding :: [Default, CamelCase].{
+		JsonEncoding :: [Default, CamelCase, TrailingCommas].{
 			rename_field : JsonEncoding, Str -> Str
 			rename_field = |encoding, name|
 				match encoding {
 					Default => name
+					TrailingCommas => name
 					CamelCase => Json.snake_to_camel(name)
+				}
+
+			allows_trailing_commas : JsonEncoding -> Bool
+			allows_trailing_commas = |encoding|
+				match encoding {
+					Default => False
+					CamelCase => False
+					TrailingCommas => True
 				}
 
 			parse_str : JsonEncoding, JsonState -> Try({ value : Str, rest : JsonState }, Json)
@@ -76,13 +85,13 @@ Builtin :: [].{
 				],
 				Json,
 			)
-			parse_record_field = |_, _, state|
+			parse_record_field = |encoding, _, state|
 				match state {
-					Input(raw) => Json.parse_record_field_from_object(raw)
+					Input(raw) => Json.parse_record_field_from_object(encoding, raw)
 				}
 
 			skip_record_field : JsonEncoding, JsonState -> Try(JsonState, Json)
-			skip_record_field = |_, state| Json.skip_json_value(state)
+			skip_record_field = |encoding, state| Json.skip_json_value(encoding, state)
 
 			missing_record_field : JsonEncoding, Str, JsonState -> Json
 			missing_record_field = |_, _, _| Json.MissingRequired
@@ -168,6 +177,25 @@ Builtin :: [].{
 						} else {
 							Err(Json.invalid_json)
 						}
+					}
+				}
+
+			parse_trailing_commas : Str -> Try(a, Json)
+				where [
+					a.parser_for : JsonEncoding -> (JsonState -> Try({ value : a, rest : JsonState }, Json)),
+				]
+			parse_trailing_commas = |json| {
+				Shape : a
+				parse_shape = Shape.parser_for(JsonEncoding.TrailingCommas)
+				parsed = parse_shape(JsonState.Input(json))?
+
+				match parsed.rest {
+					Input(rest) =>
+						if Str.is_empty(Str.trim_start(rest)) {
+							Ok(parsed.value)
+						} else {
+							Err(Json.invalid_json)
+						}
 				}
 			}
 
@@ -196,7 +224,7 @@ Builtin :: [].{
 			invalid_json : Json
 			invalid_json = Json.InvalidJson
 
-			parse_record_field_from_object : Str -> Try(
+			parse_record_field_from_object : JsonEncoding, Str -> Try(
 				[
 					Field({ field : FieldName(_shape), rest : JsonState }),
 					TryField({ name : Str, rest : JsonState }),
@@ -206,22 +234,54 @@ Builtin :: [].{
 				],
 				Json,
 			)
-			parse_record_field_from_object = |raw| {
+			parse_record_field_from_object = |encoding, raw| {
 				remaining = Str.trim_start(raw)
 
 				if Str.starts_with(remaining, "{") {
-					return Json.parse_record_field_from_object(Str.trim_start(Str.drop_prefix(remaining, "{")))
+					return Json.parse_record_field_after_object_start(encoding, Str.trim_start(Str.drop_prefix(remaining, "{")))
 				}
 
-				if Str.starts_with(remaining, ",") {
-					return Json.parse_record_field_from_object(Str.trim_start(Str.drop_prefix(remaining, ",")))
-				}
+				Json.parse_record_field_after_value(encoding, remaining)
+			}
 
+			parse_record_field_after_object_start = |encoding, remaining| {
 				if Str.starts_with(remaining, "}") {
 					after_record = Str.trim_start(Str.drop_prefix(remaining, "}"))
 					return Ok(Done({ rest: JsonState.Input(after_record) }))
 				}
 
+				if Str.starts_with(remaining, ",") {
+					return Err(Json.invalid_json)
+				}
+
+				Json.parse_record_field_start(encoding, remaining)
+			}
+
+			parse_record_field_after_value = |encoding, remaining| {
+				if Str.starts_with(remaining, "}") {
+					after_record = Str.trim_start(Str.drop_prefix(remaining, "}"))
+					return Ok(Done({ rest: JsonState.Input(after_record) }))
+				}
+
+				if !Str.starts_with(remaining, ",") {
+					return Err(Json.invalid_json)
+				}
+
+				after_comma = Str.trim_start(Str.drop_prefix(remaining, ","))
+
+				if Str.starts_with(after_comma, "}") {
+					if JsonEncoding.allows_trailing_commas(encoding) {
+						after_record = Str.trim_start(Str.drop_prefix(after_comma, "}"))
+						return Ok(Done({ rest: JsonState.Input(after_record) }))
+					} else {
+						return Err(Json.invalid_json)
+					}
+				}
+
+				Json.parse_record_field_start(encoding, after_comma)
+			}
+
+			parse_record_field_start = |_, remaining| {
 				if !Str.starts_with(remaining, "\"") {
 					return Err(Json.invalid_json)
 				}
@@ -275,8 +335,8 @@ Builtin :: [].{
 				}
 			}
 
-			skip_json_value : JsonState -> Try(JsonState, Json)
-			skip_json_value = |state|
+			skip_json_value : JsonEncoding, JsonState -> Try(JsonState, Json)
+			skip_json_value = |encoding, state|
 				match state {
 					Input(raw) => {
 						trimmed = Str.trim_start(raw)
@@ -285,14 +345,117 @@ Builtin :: [].{
 							value_parts = Json.split_json_string_tail(Str.drop_prefix(trimmed, "\""))?
 							Ok(JsonState.Input(Str.trim_start(value_parts.after)))
 						} else if Str.starts_with(trimmed, "{") {
-							end_parts = Json.find_object_end(trimmed)?
-							Ok(JsonState.Input(Str.trim_start(end_parts.after)))
+							Json.skip_json_object(encoding, trimmed)
+						} else if Str.starts_with(trimmed, "[") {
+							Json.skip_json_array(encoding, trimmed)
 						} else {
 							scalar_parts = Json.split_json_scalar_tail(trimmed)?
 							Ok(JsonState.Input(Str.trim_start(scalar_parts.after)))
 						}
 					}
 				}
+
+			skip_json_object : JsonEncoding, Str -> Try(JsonState, Json)
+			skip_json_object = |encoding, raw| {
+				remaining = Str.trim_start(raw)
+
+				if !Str.starts_with(remaining, "{") {
+					return Err(Json.invalid_json)
+				}
+
+				var $after_field = Str.trim_start(Str.drop_prefix(remaining, "{"))
+
+				if Str.starts_with($after_field, "}") {
+					return Ok(JsonState.Input(Str.trim_start(Str.drop_prefix($after_field, "}"))))
+				}
+
+				while True {
+					if !Str.starts_with($after_field, "\"") {
+						return Err(Json.invalid_json)
+					}
+
+					key_parts = Json.split_json_string_tail(Str.drop_prefix($after_field, "\""))?
+					after_key = Str.trim_start(key_parts.after)
+
+					if !Str.starts_with(after_key, ":") {
+						return Err(Json.invalid_json)
+					}
+
+					after_colon = Str.trim_start(Str.drop_prefix(after_key, ":"))
+					skipped = Json.skip_json_value(encoding, JsonState.Input(after_colon))?
+
+					match skipped {
+						Input(after_value) => {
+							after_value_trimmed = Str.trim_start(after_value)
+
+							if Str.starts_with(after_value_trimmed, "}") {
+								return Ok(JsonState.Input(Str.trim_start(Str.drop_prefix(after_value_trimmed, "}"))))
+							}
+
+							if !Str.starts_with(after_value_trimmed, ",") {
+								return Err(Json.invalid_json)
+							}
+
+							after_comma = Str.trim_start(Str.drop_prefix(after_value_trimmed, ","))
+
+							if Str.starts_with(after_comma, "}") {
+								if JsonEncoding.allows_trailing_commas(encoding) {
+									return Ok(JsonState.Input(Str.trim_start(Str.drop_prefix(after_comma, "}"))))
+								} else {
+									return Err(Json.invalid_json)
+								}
+							}
+
+							$after_field = after_comma
+						}
+					}
+				}
+			}
+
+			skip_json_array : JsonEncoding, Str -> Try(JsonState, Json)
+			skip_json_array = |encoding, raw| {
+				remaining = Str.trim_start(raw)
+
+				if !Str.starts_with(remaining, "[") {
+					return Err(Json.invalid_json)
+				}
+
+				var $after_value = Str.trim_start(Str.drop_prefix(remaining, "["))
+
+				if Str.starts_with($after_value, "]") {
+					return Ok(JsonState.Input(Str.trim_start(Str.drop_prefix($after_value, "]"))))
+				}
+
+				while True {
+					skipped = Json.skip_json_value(encoding, JsonState.Input($after_value))?
+
+					match skipped {
+						Input(after_nested_value) => {
+							after_nested_value_trimmed = Str.trim_start(after_nested_value)
+
+							if Str.starts_with(after_nested_value_trimmed, "]") {
+								return Ok(JsonState.Input(Str.trim_start(Str.drop_prefix(after_nested_value_trimmed, "]"))))
+							}
+
+							if !Str.starts_with(after_nested_value_trimmed, ",") {
+								return Err(Json.invalid_json)
+							}
+
+							after_comma = Str.trim_start(Str.drop_prefix(after_nested_value_trimmed, ","))
+
+							if Str.starts_with(after_comma, "]") {
+								if JsonEncoding.allows_trailing_commas(encoding) {
+									return Ok(JsonState.Input(Str.trim_start(Str.drop_prefix(after_comma, "]"))))
+								} else {
+									return Err(Json.invalid_json)
+								}
+							}
+
+							$after_value = after_comma
+						}
+					}
+				}
+			}
 
 			parse_tag_union_from_json : Str, JsonEncoding, ParseTagUnionSpec(a) -> Try({ value : a, rest : JsonState }, Json)
 			parse_tag_union_from_json = |raw, encoding, spec| {
@@ -329,20 +492,33 @@ Builtin :: [].{
 						})?
 
 						match parsed.rest {
-							Input(after_payload) => Json.finish_tag_payload(parsed.value, after_payload)
+							Input(after_payload) => Json.finish_tag_payload(encoding, parsed.value, after_payload)
 						}
 					}
 					Err(_) => Err(Json.invalid_json)
 				}
 			}
 
-			finish_tag_payload : a, Str -> Try({ value : a, rest : JsonState }, Json)
-			finish_tag_payload = |value, raw| {
+			finish_tag_payload : JsonEncoding, a, Str -> Try({ value : a, rest : JsonState }, Json)
+			finish_tag_payload = |encoding, value, raw| {
 				remaining = Str.trim_start(raw)
 
 				if Str.starts_with(remaining, "}") {
 					after_close = Str.trim_start(Str.drop_prefix(remaining, "}"))
 					return Ok({ value, rest: JsonState.Input(after_close) })
+				}
+
+				if Str.starts_with(remaining, ",") {
+					after_comma = Str.trim_start(Str.drop_prefix(remaining, ","))
+
+					if JsonEncoding.allows_trailing_commas(encoding) {
+						if Str.starts_with(after_comma, "}") {
+							after_close = Str.trim_start(Str.drop_prefix(after_comma, "}"))
+							return Ok({ value, rest: JsonState.Input(after_close) })
+						}
+					}
+
+					return Err(Json.invalid_json)
 				}
 
 				empty_payload = Json.consume_empty_json_object(remaining)?
@@ -351,6 +527,17 @@ Builtin :: [].{
 				if Str.starts_with(after_payload, "}") {
 					after_close = Str.trim_start(Str.drop_prefix(after_payload, "}"))
 					Ok({ value, rest: JsonState.Input(after_close) })
+				} else if Str.starts_with(after_payload, ",") {
+					after_comma = Str.trim_start(Str.drop_prefix(after_payload, ","))
+
+					if JsonEncoding.allows_trailing_commas(encoding) {
+						if Str.starts_with(after_comma, "}") {
+							after_close = Str.trim_start(Str.drop_prefix(after_comma, "}"))
+							return Ok({ value, rest: JsonState.Input(after_close) })
+						}
+					}
+
+					Err(Json.invalid_json)
 				} else {
 					Err(Json.invalid_json)
 				}
@@ -480,88 +667,7 @@ Builtin :: [].{
 				}
 			}
 
-			split_before : Try({ before : Str, after : Str }, [NotFound]), U64 -> Bool
-			split_before = |split, offset|
-				match split {
-					Ok(parts) => Str.count_utf8_bytes(parts.before) < offset
-					Err(NotFound) => False
 				}
-
-				find_object_end : Str -> Try({ after : Str }, Json)
-				find_object_end = |object_text| {
-					var $remaining = object_text
-					var $depth = 0
-
-				while True {
-					quote_split = Str.find_first($remaining, "\"")
-					open_split = Str.find_first($remaining, "{")
-					close_split = Str.find_first($remaining, "}")
-					var $skipped_string = False
-
-					match quote_split {
-						Ok(quote_parts) => {
-							quote_offset = Str.count_utf8_bytes(quote_parts.before)
-
-							if !Json.split_before(open_split, quote_offset) {
-								if !Json.split_before(close_split, quote_offset) {
-									string_parts = Json.split_json_string_tail(quote_parts.after)?
-									$remaining = string_parts.after
-									$skipped_string = True
-								}
-							}
-						}
-						Err(NotFound) => {}
-					}
-
-					if $skipped_string == False {
-						match open_split {
-							Ok(open_parts) => {
-								match close_split {
-									Ok(close_parts) => {
-										if Str.count_utf8_bytes(open_parts.before) < Str.count_utf8_bytes(close_parts.before) {
-											$depth = $depth + 1
-											$remaining = open_parts.after
-										} else {
-											if $depth == 0 {
-												return Err(Json.invalid_json)
-											}
-
-											$depth = $depth - 1
-											$remaining = close_parts.after
-
-											if $depth == 0 {
-												return Ok({ after: $remaining })
-											}
-										}
-									}
-									Err(NotFound) => {
-										$depth = $depth + 1
-										$remaining = open_parts.after
-									}
-								}
-							}
-							Err(NotFound) => {
-								match close_split {
-									Ok(close_parts) => {
-										if $depth == 0 {
-											return Err(Json.invalid_json)
-										}
-
-										$depth = $depth - 1
-										$remaining = close_parts.after
-
-										if $depth == 0 {
-											return Ok({ after: $remaining })
-										}
-									}
-									Err(NotFound) => return Err(Json.invalid_json)
-								}
-							}
-						}
-						}
-					}
-				}
-			}
 
 			HttpHeader := [MissingRequired, BadHeader].{
 				parser_for : () -> (Str -> Try(output, HttpHeader))

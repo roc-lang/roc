@@ -38,6 +38,27 @@ main! = |json| {
 	null_string_result : Try(Str, _)
 	null_string_result = Json.parse("null")
 
+	strict_trailing_comma_result : Try({ foo : Str }, Json)
+	strict_trailing_comma_result = Json.parse("{\"foo\":\"comma\",}")
+
+	lenient_trailing_comma_result : Try({ foo : Str }, Json)
+	lenient_trailing_comma_result = Json.parse_trailing_commas("{\"foo\":\"comma\",}")
+
+	strict_tag_trailing_comma_result : Try([Active, Paused], Json)
+	strict_tag_trailing_comma_result = Json.parse("{\"Active\":{},}")
+
+	lenient_tag_trailing_comma_result : Try([Active, Paused], Json)
+	lenient_tag_trailing_comma_result = Json.parse_trailing_commas("{\"Active\":{},}")
+
+	unknown_array_result : Try({ foo : Str }, Json)
+	unknown_array_result = Json.parse("{\"foo\":\"array\",\"skip\":[1,2]}")
+
+	strict_unknown_array_trailing_comma_result : Try({ foo : Str }, Json)
+	strict_unknown_array_trailing_comma_result = Json.parse("{\"foo\":\"array\",\"skip\":[1,2,]}")
+
+	lenient_unknown_array_trailing_comma_result : Try({ foo : Str }, Json)
+	lenient_unknown_array_trailing_comma_result = Json.parse_trailing_commas("{\"foo\":\"array\",\"skip\":[1,2,]}")
+
 	match decoded_result {
 		Ok(decoded) => {
 			explicit_optional_length = match decoded.explicit_optional {
@@ -87,6 +108,13 @@ main! = |json| {
 				+ top_level_string_score(top_level_string_result)
 				+ invalid_string_score(invalid_string_result)
 				+ null_string_score(null_string_result)
+				+ strict_trailing_comma_score(strict_trailing_comma_result)
+				+ lenient_trailing_comma_score(lenient_trailing_comma_result)
+				+ strict_tag_trailing_comma_score(strict_tag_trailing_comma_result)
+				+ lenient_tag_trailing_comma_score(lenient_tag_trailing_comma_result)
+				+ unknown_array_score(unknown_array_result)
+				+ strict_unknown_array_trailing_comma_score(strict_unknown_array_trailing_comma_result)
+				+ lenient_unknown_array_trailing_comma_score(lenient_unknown_array_trailing_comma_result)
 				+ explicit_optional_length
 				+ wildcard_optional_length
 				+ question_optional_length
@@ -157,5 +185,73 @@ null_string_score = |string_result|
 	match string_result {
 		Ok(_) => 999999
 		Err(Json.InvalidJson) => 47
+		Err(_) => 999999
+	}
+
+strict_trailing_comma_score : Try({ foo : Str }, Json) -> U64
+strict_trailing_comma_score = |record_result|
+	match record_result {
+		Ok(_) => 999999
+		Err(Json.InvalidJson) => 53
+		Err(_) => 999999
+	}
+
+lenient_trailing_comma_score : Try({ foo : Str }, Json) -> U64
+lenient_trailing_comma_score = |record_result|
+	match record_result {
+		Ok(record) =>
+			if Str.is_eq(record.foo, "comma") {
+				59
+			} else {
+				999999
+			}
+		Err(_) => 999999
+	}
+
+strict_tag_trailing_comma_score : Try([Active, Paused], Json) -> U64
+strict_tag_trailing_comma_score = |tag_result|
+	match tag_result {
+		Ok(_) => 999999
+		Err(Json.InvalidJson) => 67
+		Err(_) => 999999
+	}
+
+lenient_tag_trailing_comma_score : Try([Active, Paused], Json) -> U64
+lenient_tag_trailing_comma_score = |tag_result|
+	match tag_result {
+		Ok(Active) => 71
+		Ok(_) => 999999
+		Err(_) => 999999
+	}
+
+unknown_array_score : Try({ foo : Str }, Json) -> U64
+unknown_array_score = |record_result|
+	match record_result {
+		Ok(record) =>
+			if Str.is_eq(record.foo, "array") {
+				61
+			} else {
+				999999
+			}
+		Err(_) => 999999
+	}
+
+strict_unknown_array_trailing_comma_score : Try({ foo : Str }, Json) -> U64
+strict_unknown_array_trailing_comma_score = |record_result|
+	match record_result {
+		Ok(_) => 999999
+		Err(Json.InvalidJson) => 73
+		Err(_) => 999999
+	}
+
+lenient_unknown_array_trailing_comma_score : Try({ foo : Str }, Json) -> U64
+lenient_unknown_array_trailing_comma_score = |record_result|
+	match record_result {
+		Ok(record) =>
+			if Str.is_eq(record.foo, "array") {
+				79
+			} else {
+				999999
+			}
 		Err(_) => 999999
 	}

@@ -45,6 +45,13 @@ const pair_score: u64 = 31;
 const trailing_empty_record_score: u64 = 41;
 const invalid_string_score: u64 = 43;
 const null_string_score: u64 = 47;
+const strict_trailing_comma_score: u64 = 53;
+const lenient_trailing_comma_score: u64 = 59;
+const strict_tag_trailing_comma_score: u64 = 67;
+const lenient_tag_trailing_comma_score: u64 = 71;
+const unknown_array_score: u64 = 61;
+const strict_unknown_array_trailing_comma_score: u64 = 73;
+const lenient_unknown_array_trailing_comma_score: u64 = 79;
 
 const optional_fields = [_]OptionalField{
     .{ .name = "explicit_optional", .value = "abc" },
@@ -420,6 +427,13 @@ fn expectedJsonLength(optional_mask: u8, status_index: usize, mode_index: usize)
         trailing_empty_record_score +
         invalid_string_score +
         null_string_score +
+        strict_trailing_comma_score +
+        lenient_trailing_comma_score +
+        strict_tag_trailing_comma_score +
+        lenient_tag_trailing_comma_score +
+        unknown_array_score +
+        strict_unknown_array_trailing_comma_score +
+        lenient_unknown_array_trailing_comma_score +
         status_scores[status_index] +
         mode_scores[mode_index];
     for (optional_fields, 0..) |field, index| {

@@ -18701,13 +18701,7 @@ fn lookupNestedAutoImportedTypeNode(
     source_root_ident: Ident.Idx,
     type_path_text: []const u8,
 ) std.mem.Allocator.Error!?u32 {
-    const source_root_text = self.env.getIdent(source_root_ident);
-    const nested_suffix = if (std.mem.startsWith(u8, type_path_text, source_root_text) and
-        type_path_text.len > source_root_text.len and
-        type_path_text[source_root_text.len] == '.')
-        type_path_text[source_root_text.len + 1 ..]
-    else
-        type_path_text;
+    const nested_suffix = self.nestedAutoImportedTypeSuffix(imported_type, source_root_ident, type_path_text);
 
     const qualified_type_text = self.env.getIdent(imported_type.qualified_type_ident);
     if (std.mem.eql(u8, qualified_type_text, "Builtin.Encoding") and isHiddenEncodingNestedType(nested_suffix)) {
@@ -18720,6 +18714,46 @@ fn lookupNestedAutoImportedTypeNode(
 
     return (try self.lookupImportedExposedTypeNode(imported_type.env, builtin_nested_path)) orelse
         (try self.lookupImportedTypeDeclNode(imported_type.env, builtin_nested_path));
+}
+
+fn nestedAutoImportedTypeSuffix(
+    self: *Self,
+    imported_type: AutoImportedType,
+    source_root_ident: Ident.Idx,
+    type_path_text: []const u8,
+) []const u8 {
+    const source_root_text = self.env.getIdent(source_root_ident);
+    if (std.mem.startsWith(u8, type_path_text, source_root_text) and
+        type_path_text.len > source_root_text.len and
+        type_path_text[source_root_text.len] == '.')
+    {
+        return type_path_text[source_root_text.len + 1 ..];
+    }
+
+    const qualified_type_text = self.env.getIdent(imported_type.qualified_type_ident);
+    if (std.mem.startsWith(u8, type_path_text, qualified_type_text) and
+        type_path_text.len > qualified_type_text.len and
+        type_path_text[qualified_type_text.len] == '.')
+    {
+        return type_path_text[qualified_type_text.len + 1 ..];
+    }
+
+    return type_path_text;
+}
+
+fn isHiddenAutoImportedNestedType(
+    self: *Self,
+    imported_type: AutoImportedType,
+    source_root_ident: Ident.Idx,
+    type_path_text: []const u8,
+) bool {
+    const qualified_type_text = self.env.getIdent(imported_type.qualified_type_ident);
+    if (!std.mem.eql(u8, qualified_type_text, "Builtin.Encoding")) {
+        return false;
+    }
+
+    const nested_suffix = self.nestedAutoImportedTypeSuffix(imported_type, source_root_ident, type_path_text);
+    return isHiddenEncodingNestedType(nested_suffix);
 }
 
 fn isHiddenEncodingNestedType(nested_suffix: []const u8) bool {
@@ -18754,6 +18788,9 @@ fn resolveNestedExternalTypeAnno(
     const imported_type = self.lookupAvailableModuleEnv(external.module_ident) orelse
         self.lookupAvailableModuleEnv(external.original_ident) orelse
         return null;
+    if (self.isHiddenAutoImportedNestedType(imported_type, external.original_ident, type_path_text)) {
+        return null;
+    }
     const target_node_idx = (try self.lookupImportedExposedTypeNode(imported_type.env, type_path_text)) orelse
         (try self.lookupImportedTypeDeclNode(imported_type.env, type_path_text)) orelse
         (try self.lookupNestedAutoImportedTypeNode(imported_type, external.original_ident, type_path_text)) orelse
