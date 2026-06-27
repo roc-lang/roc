@@ -580,6 +580,15 @@ const StateLoopKnownState = struct {
     values: []const KnownValue,
 };
 
+const SparseStateLoopPattern = struct {
+    states: []const SparseStateLoopState,
+};
+
+const SparseStateLoopState = struct {
+    id: Ast.StateLoopStateId,
+    values: []const DemandedKnownValue,
+};
+
 const ActiveInline = struct {
     fn_id: Ast.FnId,
     args: ?[]const KnownValue = null,
@@ -4081,6 +4090,98 @@ const Cloner = struct {
             },
             .tag,
             => return false,
+        }
+    }
+
+    fn appendExprsFromDemandedKnownValue(
+        self: *Cloner,
+        known_value: DemandedKnownValue,
+        value: Value,
+        out: *std.ArrayList(Ast.ExprId),
+    ) Common.LowerError!bool {
+        switch (known_value) {
+            .any,
+            .leaf,
+            => {
+                try out.append(self.pass.allocator, try self.materializePublic(value));
+                return true;
+            },
+            .record => |record| {
+                if (recordFromValue(value)) |record_value| {
+                    for (record.fields) |field_known_value| {
+                        const field_value = fieldFromRecord(record_value, field_known_value.name) orelse return false;
+                        if (!try self.appendExprsFromDemandedKnownValue(field_known_value.known_value, field_value, out)) return false;
+                    }
+                    return true;
+                }
+
+                const receiver = projectableExprFromValue(value) orelse return false;
+                if (!canReadFieldsFromExpr(self.pass.program, receiver)) return false;
+                for (record.fields) |field| {
+                    const field_expr = try self.addExpr(.{ .ty = demandedKnownValueType(field.known_value), .data = .{ .field_access = .{
+                        .receiver = receiver,
+                        .field = field.name,
+                    } } });
+                    if (!try self.appendExprsFromDemandedKnownValue(field.known_value, .{ .expr = field_expr }, out)) return false;
+                }
+                return true;
+            },
+            .tuple => |tuple| {
+                if (tupleFromValue(value)) |tuple_value| {
+                    for (tuple.items) |item_known_value| {
+                        if (item_known_value.index >= tuple_value.items.len) return false;
+                        if (!try self.appendExprsFromDemandedKnownValue(item_known_value.known_value, tuple_value.items[item_known_value.index], out)) return false;
+                    }
+                    return true;
+                }
+
+                const receiver = projectableExprFromValue(value) orelse return false;
+                if (!canReadFieldsFromExpr(self.pass.program, receiver)) return false;
+                for (tuple.items) |item| {
+                    const item_expr = try self.addExpr(.{ .ty = demandedKnownValueType(item.known_value), .data = .{ .tuple_access = .{
+                        .tuple = receiver,
+                        .elem_index = item.index,
+                    } } });
+                    if (!try self.appendExprsFromDemandedKnownValue(item.known_value, .{ .expr = item_expr }, out)) return false;
+                }
+                return true;
+            },
+            .nominal => |nominal| {
+                const backing = nominal.backing orelse return true;
+                const backing_value = switch (value) {
+                    .nominal => |nominal_value| nominal_value.backing.*,
+                    else => value,
+                };
+                return try self.appendExprsFromDemandedKnownValue(backing.*, backing_value, out);
+            },
+            .tag => |tag| {
+                const tag_value = tagFromValue(value) orelse return false;
+                if (!sameType(self.pass.program, tag.ty, tag_value.ty) or tag.name != tag_value.name) return false;
+                for (tag.payloads) |payload_known_value| {
+                    if (payload_known_value.index >= tag_value.payloads.len) return false;
+                    if (!try self.appendExprsFromDemandedKnownValue(payload_known_value.known_value, tag_value.payloads[payload_known_value.index], out)) return false;
+                }
+                return true;
+            },
+            .callable => |callable| {
+                const callable_value = switch (value) {
+                    .callable => |callable_value| callable_value,
+                    else => return false,
+                };
+                if (!sameType(self.pass.program, callable.ty, callable_value.ty) or
+                    !callableTargetMatches(self.pass.program, callable.fn_id, callable_value.fn_id))
+                {
+                    return false;
+                }
+                for (callable.captures) |capture_known_value| {
+                    if (capture_known_value.index >= callable_value.captures.len) return false;
+                    if (!try self.appendExprsFromDemandedKnownValue(capture_known_value.known_value, callable_value.captures[capture_known_value.index], out)) return false;
+                }
+                return true;
+            },
+            .finite_tags,
+            .finite_callables,
+            => Common.invariant("finite demanded state reached expression extraction before expansion"),
         }
     }
 
@@ -8333,6 +8434,85 @@ fn knownValuesMatchValues(program: *const Ast.Program, known_values: []const Kno
     return true;
 }
 
+fn demandedKnownValuesMatchValues(program: *const Ast.Program, known_values: []const DemandedKnownValue, values: []const Value) bool {
+    if (known_values.len != values.len) return false;
+    for (known_values, values) |known_value, value| {
+        if (!demandedKnownValueMatchesValue(program, known_value, value)) return false;
+    }
+    return true;
+}
+
+fn demandedKnownValueMatchesValue(program: *const Ast.Program, known_value: DemandedKnownValue, value: Value) bool {
+    return switch (known_value) {
+        .any => |ty| sameType(program, ty, valueType(program, value)),
+        .leaf => |ty| sameType(program, ty, valueType(program, value)),
+        .record => |record| blk: {
+            const value_record = recordFromValue(value) orelse break :blk false;
+            if (!sameType(program, record.ty, value_record.ty)) break :blk false;
+            for (record.fields) |field| {
+                const field_value = fieldFromRecord(value_record, field.name) orelse break :blk false;
+                if (!demandedKnownValueMatchesValue(program, field.known_value, field_value)) break :blk false;
+            }
+            break :blk true;
+        },
+        .tuple => |tuple| blk: {
+            const value_tuple = tupleFromValue(value) orelse break :blk false;
+            if (!sameType(program, tuple.ty, value_tuple.ty)) break :blk false;
+            for (tuple.items) |item| {
+                if (item.index >= value_tuple.items.len) break :blk false;
+                if (!demandedKnownValueMatchesValue(program, item.known_value, value_tuple.items[item.index])) break :blk false;
+            }
+            break :blk true;
+        },
+        .nominal => |nominal| blk: {
+            const value_nominal = switch (value) {
+                .nominal => |value_nominal| value_nominal,
+                else => break :blk false,
+            };
+            if (!sameType(program, nominal.ty, value_nominal.ty)) break :blk false;
+            const backing = nominal.backing orelse break :blk true;
+            break :blk demandedKnownValueMatchesValue(program, backing.*, value_nominal.backing.*);
+        },
+        .tag => |tag| blk: {
+            const value_tag = tagFromValue(value) orelse break :blk false;
+            if (!sameType(program, tag.ty, value_tag.ty) or tag.name != value_tag.name) break :blk false;
+            for (tag.payloads) |payload| {
+                if (payload.index >= value_tag.payloads.len) break :blk false;
+                if (!demandedKnownValueMatchesValue(program, payload.known_value, value_tag.payloads[payload.index])) break :blk false;
+            }
+            break :blk true;
+        },
+        .callable => |callable| blk: {
+            const value_callable = switch (value) {
+                .callable => |value_callable| value_callable,
+                else => break :blk false,
+            };
+            if (!sameType(program, callable.ty, value_callable.ty) or
+                !callableTargetMatches(program, callable.fn_id, value_callable.fn_id))
+            {
+                break :blk false;
+            }
+            for (callable.captures) |capture| {
+                if (capture.index >= value_callable.captures.len) break :blk false;
+                if (!demandedKnownValueMatchesValue(program, capture.known_value, value_callable.captures[capture.index])) break :blk false;
+            }
+            break :blk true;
+        },
+        .finite_tags => |finite_tags| blk: {
+            for (finite_tags.alternatives) |alternative| {
+                if (demandedKnownValueMatchesValue(program, .{ .tag = alternative }, value)) break :blk true;
+            }
+            break :blk false;
+        },
+        .finite_callables => |finite_callables| blk: {
+            for (finite_callables.alternatives) |alternative| {
+                if (demandedKnownValueMatchesValue(program, .{ .callable = alternative }, value)) break :blk true;
+            }
+            break :blk false;
+        },
+    };
+}
+
 fn knownValueMatchesValue(program: *const Ast.Program, known_value: KnownValue, value: Value) bool {
     if (value == .expr_with_known_value) {
         if (known_value == .any) return sameType(program, known_value.any, valueType(program, value));
@@ -9342,6 +9522,106 @@ test "demanded known value private state param count ignores omitted children" {
         .fn_id = @enumFromInt(11),
         .captures = &carried_captures,
     } }));
+}
+
+test "demanded known value matching ignores omitted record fields" {
+    const program: *const Ast.Program = undefined;
+
+    const record_ty: Type.TypeId = @enumFromInt(160);
+    const tag_ty: Type.TypeId = @enumFromInt(161);
+    const tag_name: names.TagNameId = @enumFromInt(22);
+    const kept_field: names.RecordFieldNameId = @enumFromInt(20);
+    const omitted_field: names.RecordFieldNameId = @enumFromInt(21);
+    const demanded_fields = [_]DemandedKnownField{
+        .{ .name = kept_field, .known_value = .{ .tag = .{
+            .ty = tag_ty,
+            .name = tag_name,
+            .payloads = &.{},
+        } } },
+    };
+    const value_fields = [_]FieldValue{
+        .{ .name = kept_field, .value = .{ .tag = .{
+            .ty = tag_ty,
+            .name = tag_name,
+            .payloads = &.{},
+        } } },
+        .{ .name = omitted_field, .value = .{ .expr = @enumFromInt(1) } },
+    };
+
+    try std.testing.expect(demandedKnownValueMatchesValue(
+        program,
+        .{ .record = .{
+            .ty = record_ty,
+            .fields = &demanded_fields,
+        } },
+        .{ .record = .{
+            .ty = record_ty,
+            .fields = &value_fields,
+        } },
+    ));
+    try std.testing.expect(!demandedKnownValueMatchesValue(
+        program,
+        .{ .record = .{
+            .ty = record_ty,
+            .fields = &demanded_fields,
+        } },
+        .{ .record = .{
+            .ty = @enumFromInt(163),
+            .fields = &value_fields,
+        } },
+    ));
+}
+
+test "demanded known value matching ignores omitted callable captures" {
+    const program: *const Ast.Program = undefined;
+
+    const callable_ty: Type.TypeId = @enumFromInt(170);
+    const tag_ty: Type.TypeId = @enumFromInt(171);
+    const tag_name: names.TagNameId = @enumFromInt(23);
+    const fn_id: Ast.FnId = @enumFromInt(12);
+    const demanded_captures = [_]DemandedKnownIndexedValue{
+        .{ .index = 1, .known_value = .{ .tag = .{
+            .ty = tag_ty,
+            .name = tag_name,
+            .payloads = &.{},
+        } } },
+    };
+    const value_captures = [_]Value{
+        .{ .expr = @enumFromInt(0) },
+        .{ .tag = .{
+            .ty = tag_ty,
+            .name = tag_name,
+            .payloads = &.{},
+        } },
+        .{ .expr = @enumFromInt(2) },
+    };
+
+    try std.testing.expect(demandedKnownValueMatchesValue(
+        program,
+        .{ .callable = .{
+            .ty = callable_ty,
+            .fn_id = fn_id,
+            .captures = &demanded_captures,
+        } },
+        .{ .callable = .{
+            .ty = callable_ty,
+            .fn_id = fn_id,
+            .captures = &value_captures,
+        } },
+    ));
+    try std.testing.expect(!demandedKnownValueMatchesValue(
+        program,
+        .{ .callable = .{
+            .ty = callable_ty,
+            .fn_id = @enumFromInt(13),
+            .captures = &demanded_captures,
+        } },
+        .{ .callable = .{
+            .ty = callable_ty,
+            .fn_id = fn_id,
+            .captures = &value_captures,
+        } },
+    ));
 }
 
 test "demanded known value distinguishes omitted capture from unknown carried capture" {
