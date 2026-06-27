@@ -185,13 +185,24 @@ closures it holds and applies explicit patches from the runtime.
 The patch command set:
 
 - `ResetDom`
-- `CreateElement` and `AppendChild`
+- `CreateElement`, `CreateText`, `AppendChild`, `RemoveNode`, and `MoveBefore`
 - `SetText`, `SetValue`, `SetChecked`, and `SetDisabled`
-- `SetRole`, `SetLabel`, and `SetTestId`
-- `BindClick`, `BindInput`, and `BindCheck`
+- `SetRole`, `SetLabel`, `SetTestId`, `SetClass`, and dynamic text attributes
+  from `Html.attr` / `Html.attr_s`
+- `BindClick`, `BindInput`, `BindCheck`, pointer-event binds, and `ClearEvent`
+- Timer and task commands for intervals, async starts, and cancellation
 
 The simulated host applies these against an in-memory element tree; a browser
 host maps the same commands onto real DOM operations.
+
+In the browser host those patches travel over a versioned command-buffer wire.
+Hot operations are fixed six-word records in WASM memory. Text payloads use a
+separate UTF-8 string buffer. Variable-shape attribute operations use an
+`Extended` record whose operands point into a dynamic byte buffer; version 1
+defines `SetAttrText` and `RemoveAttr`. The JS runtime checks the protocol
+version/feature bits and validates each dynamic record before applying it.
+Native specs can assert app-authored custom attrs with
+`expect_attr <locator> <name> "value"`.
 
 ## One Call Into Roc at Startup, Direct Calls After
 
@@ -286,7 +297,8 @@ The platform uses a few terms that are specific to this architecture:
   and each sites do.
 - **Render patch / command:** an explicit host operation such as `SetText`,
   `SetValue`, `CreateElement`, `RemoveNode`, or `MoveBefore`. Roc describes UI;
-  the host applies patches.
+  the host applies patches. In the browser host, hot patches use fixed records
+  and variable-shape attribute patches use versioned dynamic records.
 - **Opaque host value:** the boxed Roc value the host stores without inspecting
   its bytes. The platform carries the typed read, equality, hash, and drop
   thunks that are allowed to touch it.
@@ -473,7 +485,10 @@ choosing a decoder or comparing erased bytes. Built-in types such as `Str`,
   for two, and `Signal.combine` for a list of signals.
 - Use `Html.text` for static text and `Html.text_s` for signal-backed text.
 - Use `Html.value`, `Html.checked`, and `Html.disabled` for signal-backed
-  attributes; `Html.on_click`, `Html.on_input`, and `Html.on_check` for handlers.
+  fields, role/label/test-id/class helpers for common metadata, and
+  `Html.attr` / `Html.attr_s` for app-authored text attributes such as
+  `data-*` and `aria-*`. `Html.on_click`, `Html.on_input`, and
+  `Html.on_check` attach handlers.
 - Use `Ui.when` for conditional regions and `Ui.each` for lists. Use
   `Ui.component` to introduce a named scope when a reusable piece of UI needs its
   own local state.

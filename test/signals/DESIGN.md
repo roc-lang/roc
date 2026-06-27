@@ -388,6 +388,8 @@ Html.text_s : Signal(Str) -> Elem  # signal-backed text (a sink)
 Html.value : Signal(Str) -> Attr
 Html.checked : Signal(Bool) -> Attr
 Html.disabled : Signal(Bool) -> Attr
+Html.attr : Str, Str -> Attr
+Html.attr_s : Str, Signal(Str) -> Attr
 Html.on_click : Msg -> Attr
 Html.on_input : (Str -> Msg) -> Attr
 Html.on_check : (Bool -> Msg) -> Attr
@@ -756,16 +758,24 @@ The engine never touches a DOM directly. It writes to a `sink()` the host
 supplies. The command set is the typed, host-independent vocabulary:
 `ResetDom`, `CreateElement`, `CreateText`, `AppendChild`, `RemoveNode`,
 `MoveBefore`, `SetText`, `SetValue`, `SetChecked`, `SetDisabled`, `SetRole`,
-`SetLabel`, `SetTestId`, `BindClick`, `BindInput`, `BindCheck`. The shared
-command vocabulary, command counters, metrics accumulator, and fixed-width
-command record live in `src/render_commands.zig`. Each host implements the sink:
+`SetLabel`, `SetTestId`, `SetClass`, pointer-event binds, timer/task commands,
+and event bind/clear operations. The browser wire also has an `Extended` fixed
+record whose operands point at a dynamic byte record for less common operations
+such as arbitrary text attributes. The shared command vocabulary, command
+counters, metrics accumulator, fixed-width command record, and dynamic-record
+framing live in `src/render_commands.zig`. Each host implements the sink:
 
-- the **native host** applies each command to its `DomElement` array;
+- the **native host** applies each command to its `DomElement` array, including
+  a separate owned custom-attribute table for `Html.attr`/`Html.attr_s`;
 - the **wasm host** serializes each command into a fixed-width record in linear
-  memory for the JS executor to apply.
+  memory for the JS executor to apply, with dynamic byte records for metadata
+  attributes (`role`, `aria-label`, `data-testid`, `class`) and open-ended
+  custom text attributes.
 
-Because the command set is shared, a spec on the native host asserts exactly the
-same command sequence the browser will execute.
+Because the logical command set is shared, a spec on the native host asserts the
+same render semantics the browser will execute. The browser wire can choose a
+compact fixed record or an `Extended` dynamic record without changing the engine
+or native host semantics.
 
 ### Metrics
 
@@ -895,13 +905,26 @@ holds no reactive state, runs no diff, and never reconstructs meaning.
 
 ```
 roc_ui_mount() -> void          // host runs roc_ui_init, ingests, emits initial patch stream
-roc_ui_event(event_id, payload_ptr, payload_len) -> u32  // returns packed preventDefault/stopPropagation flags
+roc_ui_event(event_id, payload_kind, payload_ptr, payload_len, bool_value) -> void
 roc_ui_timer(token) -> void                 // drive interval/timer source
-roc_ui_resolve(request_id, ptr, len, ok) -> void   // async result
+roc_ui_resolve(request_id, ptr, len, failed) -> void   // async result
 roc_ui_unmount() -> void        // dispose all scopes, drop descriptor, free retained closures
 
 roc_alloc / roc_dealloc / roc_realloc        // marshalling
 memory                                       // exported linear memory
+
+roc_ui_protocol_version() -> u32
+roc_ui_protocol_features() -> u32
+roc_ui_command_record_words() -> usize
+roc_ui_command_buffer_ptr() -> usize
+roc_ui_command_buffer_len() -> usize
+roc_ui_string_buffer_ptr() -> usize
+roc_ui_string_buffer_len() -> usize
+roc_ui_dynamic_buffer_ptr() -> usize
+roc_ui_dynamic_buffer_len() -> usize
+roc_ui_last_error_ptr() -> usize
+roc_ui_last_error_len() -> usize
+roc_ui_live_host_values() -> usize
 ```
 
 The host drives the engine entirely inside WASM. `roc_ui_event` enters the Zig
@@ -911,18 +934,65 @@ crossing — this is the reason the boundary is cheap.
 
 ### Command-buffer wire format
 
-The host appends fixed-width command records (op-code + integer operands +
-optional `(ptr, len)` for strings) to a buffer in linear memory, then signals JS
-to drain. JS reads the buffer through typed-array views and dispatches a `switch`
-over op-codes — one DOM operation per record. This minimizes both the *number* of
-crossings (one drain per host call, not one call per patch) and the *cost* of
-each crossing (in-place integer reads; `encodeInto`/`TextDecoder` only for the
-few strings).
+The browser wire is versioned. JS reads `roc_ui_protocol_version()` and
+`roc_ui_protocol_features()` before mounting and requires version `1` with the
+`dynamic_attrs` feature bit. A version or feature mismatch is a boundary error,
+not a compatibility shim.
 
-`tag_ref` and `accessor_ref` operands are integer enum indices into a JS
-string/array table, not transcoded strings. Free-form strings (text content,
-input values) cross as `(ptr, len)` UTF-8 slices the host materializes; JS never
-decodes a `RocStr` header, tag union, or list layout to infer meaning.
+The host appends fixed-width records to `roc_ui_command_buffer_*`: six little
+endian `u32` words (`op`, then five integer operands). Hot operations fit
+entirely in those operands. Free-form text for hot string ops (`CreateElement`,
+`CreateText`, `SetText`, `SetValue`, task name/request) is stored in
+`roc_ui_string_buffer_*`, and fixed records carry `(offset, len)` slices into
+that buffer. JS never decodes a `RocStr` header, tag union, list layout, or Roc
+payload to infer meaning.
+
+Less common variable-shape commands use fixed op `Extended`. Its operands are:
+
+```text
+record.op = Extended
+record.a  = byte offset in roc_ui_dynamic_buffer_*
+record.b  = byte length of this dynamic record
+```
+
+Each dynamic record is self-framed:
+
+```text
+u16 dynamic_op
+u16 flags       # currently 0
+u32 payload_len
+payload bytes
+zero padding to 4-byte alignment
+```
+
+Version 1 defines two dynamic attribute ops:
+
+```text
+SetAttrText:
+  u32 elem_id
+  u32 name_len
+  name bytes
+  u32 value_len
+  value bytes
+
+RemoveAttr:
+  u32 elem_id
+  u32 name_len
+  name bytes
+```
+
+Strings in dynamic records are UTF-8 byte slices. The runtime validates the
+header, flags, aligned outer length, payload consumption, operand bounds, and
+UTF-8 before touching the DOM. Unknown dynamic ops and malformed records are
+reported as contract errors. This keeps JS a decoder/executor for explicit data
+the host emitted; it does not reconstruct missing render intent.
+
+Current wasm-host emission uses dynamic records for metadata text attributes
+(`role`, `aria-label`, `data-testid`, and `class`) and for app-authored custom
+text attributes from `Html.attr` / `Html.attr_s`. The Roc descriptor makes the
+custom path explicit with `Node.field_custom` plus a `name` field on text attrs;
+fixed text fields must carry an empty name. `SetText`, `SetValue`, bool fields,
+event binds, timers, and tasks remain fixed records.
 
 ### Marshalling and memory discipline
 
@@ -972,10 +1042,11 @@ queue; JS scheduling stays a single synchronous path.
 The JS runtime is a thin executor, so engine semantics and work budgets are
 proven by the native spec runner, **never re-tested through JS**. The only
 JS-side behavior worth an automated guard is the **JS↔WASM contract** itself:
-the cmd/patch codec, event-payload marshalling, and the `memory.grow`
-view-refresh discipline. A JS test that re-asserts "clicking changes the count"
-or "one patch per event" is duplicating the engine's own coverage across the
-boundary and pulls no additional weight.
+the cmd/patch codec, protocol version/feature negotiation, dynamic-record
+validation, event-payload marshalling, telemetry byte accounting, and the
+`memory.grow` view-refresh discipline. A JS test that re-asserts "clicking
+changes the count" or "one patch per event" is duplicating the engine's own
+coverage across the boundary and pulls no additional weight.
 
 ## Measures of Effectiveness
 

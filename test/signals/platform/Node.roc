@@ -102,6 +102,9 @@ import HostValue exposing [HostValue]
 	field_class : U64
 	field_class = 6
 
+	field_custom : U64
+	field_custom = 7
+
 	bool_field_checked : U64
 	bool_field_checked = 1
 
@@ -150,8 +153,8 @@ import HostValue exposing [HostValue]
 	## Static attribute on a markup element. Dynamic (signal-backed) attrs carry a
 	## `SignalExpr`; event handlers carry a `Msg`.
 	Attr := [
-		StaticText({ field : U64, value : Str }),
-		SignalText({ field : U64, signal : Box(SignalExpr), read : HostValue.TextReadHandle }),
+		StaticText({ field : U64, name : Str, value : Str }),
+		SignalText({ field : U64, name : Str, signal : Box(SignalExpr), read : HostValue.TextReadHandle }),
 		StaticBool({ field : U64, value : Bool }),
 		SignalBool({ field : U64, signal : Box(SignalExpr), read : HostValue.BoolReadHandle }),
 		OnEvent({ kind : U64, msg : Msg }),

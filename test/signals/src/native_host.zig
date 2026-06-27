@@ -107,6 +107,7 @@ const HostSignalToken = engine.HostSignalToken;
 const HostBinderBinding = engine.HostBinderBinding;
 
 const HostSignalRecordPayload = engine.HostSignalRecordPayload;
+const NodeFieldCustom = engine.NodeFieldCustom;
 
 const HostSignalRecord = engine.HostSignalRecord;
 
@@ -270,6 +271,7 @@ const DomElement = struct {
     value_update_count: u64,
     checked_update_count: u64,
     disabled_update_count: u64,
+    attrs: std.ArrayListUnmanaged(DomTextAttr),
 
     fn init(id: u64, tag: []const u8) DomElement {
         return .{
@@ -297,6 +299,7 @@ const DomElement = struct {
             .value_update_count = 0,
             .checked_update_count = 0,
             .disabled_update_count = 0,
+            .attrs = .empty,
         };
     }
 
@@ -308,7 +311,28 @@ const DomElement = struct {
         if (self.class) |class| allocator.free(class);
         if (self.text) |text| allocator.free(text);
         if (self.value) |value| allocator.free(value);
+        for (self.attrs.items) |attr| {
+            attr.deinit(allocator);
+        }
+        self.attrs.deinit(allocator);
         self.children.deinit(allocator);
+    }
+
+    fn textAttrIndex(self: *const DomElement, name: []const u8) ?usize {
+        for (self.attrs.items, 0..) |attr, index| {
+            if (std.mem.eql(u8, attr.name, name)) return index;
+        }
+        return null;
+    }
+};
+
+const DomTextAttr = struct {
+    name: []const u8,
+    value: []const u8,
+
+    fn deinit(self: DomTextAttr, allocator: std.mem.Allocator) void {
+        allocator.free(self.name);
+        allocator.free(self.value);
     }
 };
 
@@ -325,6 +349,7 @@ const SpecCommandType = enum {
     expect_visible,
     expect_absent,
     expect_value,
+    expect_attr,
     expect_checked,
     expect_disabled,
     expect_updates,
@@ -372,6 +397,7 @@ const SpecCommand = struct {
     cmd_type: SpecCommandType,
     locator: Locator,
     task_name: ?[]const u8 = null,
+    expected_attr: ?[]const u8 = null,
     interval_ms: ?u64 = null,
     expected_text: ?[]const u8,
     expected_count: ?u64,
@@ -384,6 +410,7 @@ fn freeSpecCommands(allocator: std.mem.Allocator, commands: []SpecCommand) void 
     for (commands) |cmd| {
         cmd.locator.deinit(allocator);
         if (cmd.task_name) |name| allocator.free(name);
+        if (cmd.expected_attr) |attr| allocator.free(attr);
         if (cmd.expected_text) |text| allocator.free(text);
     }
     if (commands.len > 0) {
@@ -571,6 +598,15 @@ fn parseTestSpec(allocator: std.mem.Allocator, content: []const u8) ParseError![
             const split = try splitTrailingQuoted(trimmed[13..]);
             const value_copy = allocator.dupe(u8, split.quoted) catch return ParseError.OutOfMemory;
             try appendSpecCommand(&commands, allocator, .expect_value, try parseLocator(allocator, split.head), value_copy, null, null, line_num);
+        } else if (std.mem.startsWith(u8, trimmed, "expect_attr ")) {
+            const value_split = try splitTrailingQuoted(trimmed["expect_attr ".len..]);
+            const name_split = try splitTrailingToken(value_split.head);
+            const attr_name = allocator.dupe(u8, name_split.token) catch return ParseError.OutOfMemory;
+            errdefer allocator.free(attr_name);
+            const value_copy = allocator.dupe(u8, value_split.quoted) catch return ParseError.OutOfMemory;
+            errdefer allocator.free(value_copy);
+            try appendSpecCommand(&commands, allocator, .expect_attr, try parseLocator(allocator, name_split.head), value_copy, null, null, line_num);
+            commands.items[commands.items.len - 1].expected_attr = attr_name;
         } else if (std.mem.startsWith(u8, trimmed, "expect_checked ")) {
             const split = try splitTrailingToken(trimmed[15..]);
             try appendSpecCommand(&commands, allocator, .expect_checked, try parseLocator(allocator, split.head), null, null, try parseBoolToken(split.token), line_num);
@@ -887,12 +923,20 @@ const HostEnv = struct {
         setRenderTextField(self, elem_id, field, value);
     }
 
+    pub fn sinkApplyTextAttr(self: *HostEnv, elem_id: u64, name: []const u8, value: []const u8) void {
+        setRenderTextAttr(self, elem_id, name, value);
+    }
+
     pub fn sinkApplyBoolField(self: *HostEnv, elem_id: u64, field: RenderBoolField, value: bool) void {
         setRenderBoolField(self, elem_id, field, value);
     }
 
     pub fn sinkClearTextField(self: *HostEnv, elem_id: u64, field: RenderTextField) void {
         clearRenderTextField(self, elem_id, field);
+    }
+
+    pub fn sinkClearTextAttr(self: *HostEnv, elem_id: u64, name: []const u8) void {
+        clearRenderTextAttr(self, elem_id, name);
     }
 
     pub fn sinkClearBoolField(self: *HostEnv, elem_id: u64, field: RenderBoolField) void {
@@ -2094,6 +2138,41 @@ fn clearElementValue(host: *HostEnv, elem: *DomElement) void {
     elem.value_update_count += 1;
 }
 
+fn setElementTextAttr(host: *HostEnv, elem: *DomElement, name: []const u8, value: []const u8) void {
+    const allocator = host.hostAllocator();
+    if (elem.textAttrIndex(name)) |index| {
+        const attr = &elem.attrs.items[index];
+        allocator.free(attr.value);
+        attr.value = allocator.dupe(u8, value) catch std.process.exit(1);
+        return;
+    }
+
+    const name_copy = allocator.dupe(u8, name) catch std.process.exit(1);
+    const value_copy = allocator.dupe(u8, value) catch {
+        allocator.free(name_copy);
+        std.process.exit(1);
+    };
+    elem.attrs.append(allocator, .{
+        .name = name_copy,
+        .value = value_copy,
+    }) catch {
+        allocator.free(name_copy);
+        allocator.free(value_copy);
+        std.process.exit(1);
+    };
+}
+
+fn clearElementTextAttr(host: *HostEnv, elem: *DomElement, name: []const u8) void {
+    const index = elem.textAttrIndex(name) orelse return;
+    const removed = elem.attrs.orderedRemove(index);
+    removed.deinit(host.hostAllocator());
+}
+
+fn elementTextAttr(elem: *const DomElement, name: []const u8) ?[]const u8 {
+    const index = elem.textAttrIndex(name) orelse return null;
+    return elem.attrs.items[index].value;
+}
+
 fn setElementCheckedIfChanged(elem: *DomElement, checked: bool) bool {
     if (elem.checked != checked) {
         elem.checked = checked;
@@ -2151,6 +2230,10 @@ fn setRenderTextField(host: *HostEnv, elem_id: u64, field: RenderTextField, valu
     }
 }
 
+fn setRenderTextAttr(host: *HostEnv, elem_id: u64, name: []const u8, value: []const u8) void {
+    setElementTextAttr(host, domElementById(host, elem_id), name, value);
+}
+
 fn setRenderBoolField(host: *HostEnv, elem_id: u64, field: RenderBoolField, value: bool) void {
     const elem = domElementById(host, elem_id);
     switch (field) {
@@ -2169,6 +2252,10 @@ fn clearRenderTextField(host: *HostEnv, elem_id: u64, field: RenderTextField) vo
         .value => clearElementValue(host, elem),
         .class => clearOwnedString(host.hostAllocator(), &elem.class),
     }
+}
+
+fn clearRenderTextAttr(host: *HostEnv, elem_id: u64, name: []const u8) void {
+    clearElementTextAttr(host, domElementById(host, elem_id), name);
 }
 
 fn clearRenderBoolField(host: *HostEnv, elem_id: u64, field: RenderBoolField) void {
@@ -3101,6 +3188,23 @@ fn platform_main(spec_file: []const u8, verbose: bool) error{}!c_int {
                 const actual = elem.value orelse "";
                 if (!std.mem.eql(u8, actual, expected)) {
                     writeStringMismatch(cmd.line_num, "value", expected, actual);
+                    return 1;
+                }
+            },
+
+            .expect_attr => {
+                const attr_name = cmd.expected_attr orelse {
+                    writeLocatorFailure(cmd.line_num, "attr assertion had no attr name");
+                    return 1;
+                };
+                const expected = cmd.expected_text orelse "";
+                const elem = host_env.findElementByLocator(cmd.locator, cmd.line_num) orelse {
+                    writeLocatorFailure(cmd.line_num, "locator did not resolve to one element");
+                    return 1;
+                };
+                const actual = elementTextAttr(elem, attr_name) orelse "";
+                if (!std.mem.eql(u8, actual, expected)) {
+                    writeStringMismatch(cmd.line_num, attr_name, expected, actual);
                     return 1;
                 }
             },
@@ -5205,6 +5309,7 @@ test "signals host structural patch clears fields absent from reused DOM node" {
 
     const initial_attrs = [_]abi.NodeAttr{
         testNodeStaticTextAttr(&roc_host, .label, "Initial label"),
+        testNodeStaticCustomTextAttr(&roc_host, "data-mode", "initial"),
         testNodeStaticBoolAttr(.disabled, true),
     };
     const initial_root = testElementWith(&roc_host, "section", &initial_attrs, &.{});
@@ -5217,6 +5322,7 @@ test "signals host structural patch clears fields absent from reused DOM node" {
 
     const section_id = host.engine.active_stream.elements.items[0].elem_id;
     try std.testing.expectEqualStrings("Initial label", host.dom_elements.items[@intCast(section_id)].label.?);
+    try std.testing.expectEqualStrings("initial", elementTextAttr(&host.dom_elements.items[@intCast(section_id)], "data-mode").?);
     try std.testing.expect(host.dom_elements.items[@intCast(section_id)].disabled);
 
     const next_root = testElementWith(&roc_host, "section", &.{}, &.{});
@@ -5230,9 +5336,10 @@ test "signals host structural patch clears fields absent from reused DOM node" {
 
     try std.testing.expectEqual(@as(u64, 0), patch_counts.reset_dom);
     try std.testing.expectEqual(@as(u64, 0), patch_counts.create_element);
-    try std.testing.expectEqual(@as(u64, 1), patch_counts.set_metadata);
+    try std.testing.expectEqual(@as(u64, 2), patch_counts.set_metadata);
     try std.testing.expectEqual(@as(u64, 1), patch_counts.set_disabled);
     try std.testing.expect(host.dom_elements.items[@intCast(section_id)].label == null);
+    try std.testing.expect(elementTextAttr(&host.dom_elements.items[@intCast(section_id)], "data-mode") == null);
     try std.testing.expect(!host.dom_elements.items[@intCast(section_id)].disabled);
 }
 
@@ -5677,6 +5784,20 @@ fn testNodeStaticTextAttr(roc_host: *abi.RocHost, field: RenderTextField, value:
         .payload = .{
             .static_text = .{
                 .field = @intFromEnum(field),
+                .name = RocStr.fromSlice("", roc_host),
+                .value = RocStr.fromSlice(value, roc_host),
+            },
+        },
+        .tag = .StaticText,
+    };
+}
+
+fn testNodeStaticCustomTextAttr(roc_host: *abi.RocHost, name: []const u8, value: []const u8) abi.NodeAttr {
+    return .{
+        .payload = .{
+            .static_text = .{
+                .field = NodeFieldCustom,
+                .name = RocStr.fromSlice(name, roc_host),
                 .value = RocStr.fromSlice(value, roc_host),
             },
         },
@@ -5694,6 +5815,7 @@ fn testNodeSignalTextAttrWithCapability(roc_host: *abi.RocHost, field: RenderTex
         .payload = .{
             .signal_text = .{
                 .field = @intFromEnum(field),
+                .name = RocStr.fromSlice("", roc_host),
                 .read = testTextReadHandle(roc_host, cap),
                 .signal = boxTestNodeSignalExpr(roc_host, signal),
             },

@@ -1,7 +1,16 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { Op, PayloadAccessor, PayloadKind, SignalsRuntime, opsApiTextTaskHandler } from "./runtime.mjs";
+import {
+  DynamicOp,
+  Op,
+  PayloadAccessor,
+  PayloadKind,
+  Protocol,
+  ProtocolFeature,
+  SignalsRuntime,
+  opsApiTextTaskHandler,
+} from "./runtime.mjs";
 import {
   installDomDouble,
   findByText,
@@ -15,6 +24,7 @@ import {
 const PAGE = 65536;
 const CMD_BASE = 1024;
 const STR_BASE = 16384;
+const DYN_BASE = 24576;
 const ERROR_BASE = 32768;
 const DEFAULT_ALLOC_BASE = 40960;
 const RECORD_WORDS = 6;
@@ -23,12 +33,19 @@ const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
 class MockHost {
-  constructor({ allocBase = DEFAULT_ALLOC_BASE } = {}) {
+  constructor({
+    allocBase = DEFAULT_ALLOC_BASE,
+    protocolVersion = Protocol.version,
+    protocolFeatures = ProtocolFeature.dynamicAttrs,
+  } = {}) {
     this.memory = new WebAssembly.Memory({ initial: 1 });
     this.cmdLen = 0;
     this.strLen = 0;
+    this.dynamicLen = 0;
     this.lastErrorLen = 0;
     this.allocPtr = allocBase;
+    this.protocolVersion = protocolVersion;
+    this.protocolFeatures = protocolFeatures;
     this.dispatches = [];
     this.timers = [];
     this.resolutions = [];
@@ -39,11 +56,15 @@ class MockHost {
 
     this.exports = {
       memory: this.memory,
+      roc_ui_protocol_version: () => this.protocolVersion,
+      roc_ui_protocol_features: () => this.protocolFeatures,
       roc_ui_command_record_words: () => RECORD_WORDS,
       roc_ui_command_buffer_ptr: () => (this.cmdLen === 0 ? 0 : CMD_BASE),
       roc_ui_command_buffer_len: () => this.cmdLen,
       roc_ui_string_buffer_ptr: () => STR_BASE,
       roc_ui_string_buffer_len: () => this.strLen,
+      roc_ui_dynamic_buffer_ptr: () => (this.dynamicLen === 0 ? 0 : DYN_BASE),
+      roc_ui_dynamic_buffer_len: () => this.dynamicLen,
       roc_ui_last_error_ptr: () => (this.lastErrorLen === 0 ? 0 : ERROR_BASE),
       roc_ui_last_error_len: () => this.lastErrorLen,
       roc_ui_live_host_values: () => 0,
@@ -53,6 +74,7 @@ class MockHost {
       roc_ui_unmount: () => {
         this.cmdLen = 0;
         this.strLen = 0;
+        this.dynamicLen = 0;
       },
       roc_ui_timer: (token) => {
         this.timers.push(token);
@@ -105,7 +127,9 @@ class MockHost {
     const view = new DataView(this.memory.buffer);
     const bytes = new Uint8Array(this.memory.buffer);
     let strOffset = 0;
+    let dynamicOffset = 0;
     script.forEach((entry, index) => {
+      let op = entry.op;
       let { a = 0, b = 0, c = 0, d = 0, e = 0 } = entry;
       if (entry.strings !== undefined) {
         const [first, second] = entry.strings.map((value) => encoder.encode(value));
@@ -124,8 +148,19 @@ class MockHost {
         c = encoded.length;
         strOffset += encoded.length;
       }
+      if (entry.dynamic !== undefined || entry.dynamicBytes !== undefined) {
+        const encoded =
+          entry.dynamicBytes === undefined
+            ? encodeDynamicRecord(entry.dynamic)
+            : toUint8Array(entry.dynamicBytes);
+        bytes.set(encoded, DYN_BASE + dynamicOffset);
+        op = Op.extended;
+        a = dynamicOffset;
+        b = entry.dynamicLength ?? encoded.length;
+        dynamicOffset += encoded.length;
+      }
       const base = CMD_BASE + index * RECORD_WORDS * 4;
-      view.setUint32(base, entry.op, true);
+      view.setUint32(base, op, true);
       view.setUint32(base + 4, a, true);
       view.setUint32(base + 8, b, true);
       view.setUint32(base + 12, c, true);
@@ -134,7 +169,67 @@ class MockHost {
     });
     this.cmdLen = script.length;
     this.strLen = strOffset;
+    this.dynamicLen = dynamicOffset;
   }
+}
+
+function encodeDynamicRecord(spec) {
+  const payload = spec.payloadBytes === undefined ? encodeDynamicPayload(spec) : toUint8Array(spec.payloadBytes);
+  const totalLen = 8 + align4(payload.length);
+  const out = new Uint8Array(totalLen);
+  const view = new DataView(out.buffer);
+  view.setUint16(0, spec.op, true);
+  view.setUint16(2, spec.flags ?? 0, true);
+  view.setUint32(4, payload.length, true);
+  out.set(payload, 8);
+  return out;
+}
+
+function encodeDynamicPayload(spec) {
+  switch (spec.op) {
+    case DynamicOp.setAttrText:
+      return concatBytes([
+        u32Bytes(spec.elemId),
+        stringBytes(spec.name),
+        stringBytes(spec.value),
+      ]);
+
+    case DynamicOp.removeAttr:
+      return concatBytes([u32Bytes(spec.elemId), stringBytes(spec.name)]);
+
+    default:
+      return new Uint8Array(0);
+  }
+}
+
+function stringBytes(value) {
+  const bytes = encoder.encode(value);
+  return concatBytes([u32Bytes(bytes.length), bytes]);
+}
+
+function u32Bytes(value) {
+  const out = new Uint8Array(4);
+  new DataView(out.buffer).setUint32(0, value, true);
+  return out;
+}
+
+function concatBytes(chunks) {
+  const len = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
+  const out = new Uint8Array(len);
+  let offset = 0;
+  for (const chunk of chunks) {
+    out.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return out;
+}
+
+function align4(value) {
+  return (value + 3) & ~3;
+}
+
+function toUint8Array(value) {
+  return value instanceof Uint8Array ? value : new Uint8Array(value);
 }
 
 function mountWith(mountScript, options = {}) {
@@ -146,6 +241,31 @@ function mountWith(mountScript, options = {}) {
   runtime.mount();
   return { host, root, runtime };
 }
+
+test("protocol checks reject incompatible wasm exports", () => {
+  assert.throws(
+    () => new SignalsRuntime(new MockHost({ protocolVersion: Protocol.version + 1 }).exports, installDomDouble()),
+    /wire protocol version mismatch/,
+  );
+  assert.throws(
+    () => new SignalsRuntime(new MockHost({ protocolFeatures: 0 }).exports, installDomDouble()),
+    /wire protocol feature mismatch/,
+  );
+
+  const host = new MockHost();
+  delete host.exports.roc_ui_protocol_features;
+  assert.throws(
+    () => new SignalsRuntime(host.exports, installDomDouble()),
+    /roc_ui_protocol_features is missing/,
+  );
+
+  const missingDynamic = new MockHost();
+  delete missingDynamic.exports.roc_ui_dynamic_buffer_ptr;
+  assert.throws(
+    () => new SignalsRuntime(missingDynamic.exports, installDomDouble()),
+    /roc_ui_dynamic_buffer_ptr is missing/,
+  );
+});
 
 test("command opcodes map to the expected DOM operations", () => {
   const { root } = mountWith([
@@ -187,6 +307,138 @@ test("command opcodes map to the expected DOM operations", () => {
   assert.equal(input.getAttribute("data-testid"), "name-field");
   assert.equal(input.getAttribute("class"), "rounded-md border-zinc-300");
   assert.equal(findTextNode(root, "before"), null);
+});
+
+test("dynamic attribute commands set and remove DOM attributes", () => {
+  const telemetry = [];
+  const { host, root, runtime } = mountWith(
+    [
+      { op: Op.resetDom },
+      { op: Op.createElement, a: 1, s: "button" },
+      {
+        dynamic: {
+          op: DynamicOp.setAttrText,
+          elemId: 1,
+          name: "aria-label",
+          value: "Save",
+        },
+      },
+      {
+        dynamic: {
+          op: DynamicOp.setAttrText,
+          elemId: 1,
+          name: "data-mode",
+          value: "primary",
+        },
+      },
+      {
+        dynamic: {
+          op: DynamicOp.setAttrText,
+          elemId: 1,
+          name: "class",
+          value: "toolbar",
+        },
+      },
+      { op: Op.appendChild, a: 0, b: 1 },
+    ],
+    { telemetry: (entry) => telemetry.push(entry) },
+  );
+
+  const button = findNode(root, (node) => node.tagName === "BUTTON");
+  assert.equal(button.getAttribute("aria-label"), "Save");
+  assert.equal(button.getAttribute("data-mode"), "primary");
+  assert.equal(button.getAttribute("class"), "toolbar");
+
+  const mountCommands = telemetry.find((entry) => entry.kind === "commands" && entry.phase === "mount");
+  assert.equal(mountCommands.opCounts.set_attr_text, 3);
+  assert.equal(mountCommands.dynamicBytes, 104);
+  assert.equal(mountCommands.fixedRecordBytes, 6 * RECORD_WORDS * 4);
+
+  host.writeCommands([
+    {
+      dynamic: {
+        op: DynamicOp.removeAttr,
+        elemId: 1,
+        name: "data-mode",
+      },
+    },
+    {
+      dynamic: {
+        op: DynamicOp.removeAttr,
+        elemId: 1,
+        name: "class",
+      },
+    },
+  ]);
+  runtime.applyPendingCommands("dynamic-remove");
+
+  assert.equal(button.getAttribute("aria-label"), "Save");
+  assert.equal(button.getAttribute("data-mode"), null);
+  assert.equal(button.getAttribute("class"), null);
+
+  const removeCommands = telemetry.find(
+    (entry) => entry.kind === "commands" && entry.phase === "dynamic-remove",
+  );
+  assert.equal(removeCommands.opCounts.remove_attr, 2);
+  assert.equal(removeCommands.dynamicBytes, 52);
+});
+
+test("malformed dynamic command records fail closed", () => {
+  const { host, runtime } = mountWith([
+    { op: Op.resetDom },
+    { op: Op.createElement, a: 1, s: "button" },
+    { op: Op.appendChild, a: 0, b: 1 },
+  ]);
+
+  const record = (payloadBytes, overrides = {}) =>
+    encodeDynamicRecord({
+      op: overrides.op ?? DynamicOp.removeAttr,
+      flags: overrides.flags ?? 0,
+      payloadBytes,
+    });
+  const validEmptyNameRemove = record(concatBytes([u32Bytes(1), u32Bytes(0)]));
+  const withExtraByte = new Uint8Array(validEmptyNameRemove.length + 4);
+  withExtraByte.set(validEmptyNameRemove);
+
+  const cases = [
+    [{ dynamicBytes: new Uint8Array([1, 0, 0, 0]) }, /header needs 8 bytes/],
+    [
+      { dynamicBytes: encodeDynamicRecord({ op: DynamicOp.removeAttr, flags: 1, payloadBytes: [] }) },
+      /unsupported flags/,
+    ],
+    [
+      {
+        dynamicBytes: record(concatBytes([u32Bytes(1), u32Bytes(99), encoder.encode("abc")])),
+      },
+      /operand name extends beyond payload_len/,
+    ],
+    [
+      {
+        dynamicBytes: record(concatBytes([u32Bytes(1), u32Bytes(1), new Uint8Array([0xff])])),
+      },
+      /name was not valid UTF-8/,
+    ],
+    [
+      {
+        dynamicBytes: record(concatBytes([u32Bytes(1), u32Bytes(0), new Uint8Array([1])])),
+      },
+      /left 1 trailing payload bytes/,
+    ],
+    [{ dynamicBytes: withExtraByte }, /outer length 20 did not match payload_len 8/],
+    [
+      { dynamicBytes: encodeDynamicRecord({ op: 65535, payloadBytes: [] }) },
+      /unknown dynamic render op 65535/,
+    ],
+    [
+      { dynamicBytes: new Uint8Array([1, 0, 0, 0]), dynamicLength: 12 },
+      /exceeds dynamic buffer length/,
+    ],
+  ];
+
+  for (const [entry, pattern] of cases) {
+    host.writeCommands([entry]);
+    assert.throws(() => runtime.applyPendingCommands("malformed-dynamic"), pattern);
+  }
 });
 
 test("event payloads round-trip through the wasm memory boundary", () => {
@@ -335,7 +587,17 @@ test("memory growth during dispatch keeps the response command stream readable",
     ],
     { allocBase: PAGE - 1 },
   );
-  host.eventResponses.set(2, (dispatch) => [{ op: Op.setText, a: 2, s: dispatch.payload }]);
+  host.eventResponses.set(2, (dispatch) => [
+    { op: Op.setText, a: 2, s: dispatch.payload },
+    {
+      dynamic: {
+        op: DynamicOp.setAttrText,
+        elemId: 1,
+        name: "data-last-input",
+        value: dispatch.payload,
+      },
+    },
+  ]);
 
   const input = findNode(root, (node) => node.tagName === "INPUT");
   input.value = "after-grow";
@@ -347,6 +609,7 @@ test("memory growth during dispatch keeps the response command stream readable",
     { eventId: 2, kind: PayloadKind.str, payload: "after-grow" },
   ]);
   assert.ok(findTextNode(root, "after-grow"));
+  assert.equal(input.getAttribute("data-last-input"), "after-grow");
 });
 
 test("timer commands register intervals and timer ticks re-enter wasm", () => {

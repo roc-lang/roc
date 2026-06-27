@@ -119,7 +119,15 @@ const WasmSink = struct {
     }
 
     pub fn applyTextField(_: WasmSink, elem_id: u64, field: RenderTextField, value: []const u8) void {
-        appendStringCommand(field.setOp(), toU32(elem_id), value);
+        if (textAttrNameForField(field)) |name| {
+            appendDynamicSetAttrText(toU32(elem_id), name, value);
+        } else {
+            appendStringCommand(field.setOp(), toU32(elem_id), value);
+        }
+    }
+
+    pub fn applyTextAttr(_: WasmSink, elem_id: u64, name: []const u8, value: []const u8) void {
+        appendDynamicSetAttrText(toU32(elem_id), name, value);
     }
 
     pub fn applyBoolField(_: WasmSink, elem_id: u64, field: RenderBoolField, value: bool) void {
@@ -127,7 +135,15 @@ const WasmSink = struct {
     }
 
     pub fn clearTextField(_: WasmSink, elem_id: u64, field: RenderTextField) void {
-        appendStringCommand(field.setOp(), toU32(elem_id), "");
+        if (textAttrNameForField(field)) |name| {
+            appendDynamicRemoveAttr(toU32(elem_id), name);
+        } else {
+            appendStringCommand(field.setOp(), toU32(elem_id), "");
+        }
+    }
+
+    pub fn clearTextAttr(_: WasmSink, elem_id: u64, name: []const u8) void {
+        appendDynamicRemoveAttr(toU32(elem_id), name);
     }
 
     pub fn clearBoolField(_: WasmSink, elem_id: u64, field: RenderBoolField) void {
@@ -171,6 +187,7 @@ fn emitAppendChildren(parent_elem_id: u64, next_child_ids: []const u64) void {
 
 var shared_engine: SharedEngine = .init();
 var command_buffer: render.Buffer = .{};
+var dynamic_command_buffer: render.DynamicBuffer = .{};
 var string_buffer: std.ArrayListUnmanaged(u8) = .empty;
 
 const RocAllocation = struct {
@@ -253,6 +270,7 @@ fn appendCommand(op: render.Op, a: u32, b: u32, c: u32, d: u32, e: u32) void {
 
 fn clearCommandBuffers() void {
     command_buffer.clearRetainingCapacity();
+    dynamic_command_buffer.clearRetainingCapacity();
     string_buffer.clearRetainingCapacity();
 }
 
@@ -264,6 +282,26 @@ fn storeBytes(bytes: []const u8) u32 {
 
 fn appendStringCommand(op: render.Op, elem_id: u32, bytes: []const u8) void {
     appendCommand(op, elem_id, storeBytes(bytes), toU32(bytes.len), 0, 0);
+}
+
+fn textAttrNameForField(field: RenderTextField) ?[]const u8 {
+    return switch (field) {
+        .role => "role",
+        .label => "aria-label",
+        .test_id => "data-testid",
+        .class => "class",
+        .text, .value => null,
+    };
+}
+
+fn appendDynamicSetAttrText(elem_id: u32, name: []const u8, value: []const u8) void {
+    const slice = dynamic_command_buffer.appendSetAttrText(allocator(), elem_id, name, value) catch failHost();
+    appendCommand(.extended, slice.offset, slice.len, 0, 0, 0);
+}
+
+fn appendDynamicRemoveAttr(elem_id: u32, name: []const u8) void {
+    const slice = dynamic_command_buffer.appendRemoveAttr(allocator(), elem_id, name) catch failHost();
+    appendCommand(.extended, slice.offset, slice.len, 0, 0, 0);
 }
 
 fn appendBoolFieldCommand(field: RenderBoolField, elem_id: u32, value: bool) void {
@@ -824,6 +862,14 @@ export fn roc_realloc(ptr: *anyopaque, new_length: usize, alignment_arg: usize) 
 
 // --- Command-buffer wire surface (drained by the JS executor) ---
 
+export fn roc_ui_protocol_version() callconv(.c) u32 {
+    return render.protocol_version;
+}
+
+export fn roc_ui_protocol_features() callconv(.c) u32 {
+    return render.protocol_features;
+}
+
 export fn roc_ui_command_buffer_ptr() callconv(.c) usize {
     return command_buffer.ptrAddress();
 }
@@ -839,6 +885,14 @@ export fn roc_ui_string_buffer_ptr() callconv(.c) usize {
 
 export fn roc_ui_string_buffer_len() callconv(.c) usize {
     return string_buffer.items.len;
+}
+
+export fn roc_ui_dynamic_buffer_ptr() callconv(.c) usize {
+    return dynamic_command_buffer.ptrAddress();
+}
+
+export fn roc_ui_dynamic_buffer_len() callconv(.c) usize {
+    return dynamic_command_buffer.len();
 }
 
 export fn roc_ui_command_record_words() callconv(.c) usize {

@@ -29,11 +29,23 @@ pub const RenderTextField = render.TextField;
 pub const RenderBoolField = render.BoolField;
 pub const RenderEventKind = render.EventKind;
 pub const EventPayloadAccessor = render.EventPayloadAccessor;
+pub const NodeFieldCustom: u64 = 7;
+const node_field_custom: u64 = NodeFieldCustom;
 
 pub const HostValue = u64;
 pub const HostValueList = abi.RocListWith(HostValue, false);
 
 const render_event_kinds = [_]RenderEventKind{ .click, .input, .check, .pointer_down, .pointer_up, .pointer_enter, .pointer_leave };
+
+const RenderCustomTextAttrCache = struct {
+    name: []const u8,
+    value: []const u8,
+
+    fn deinit(self: RenderCustomTextAttrCache, allocator: std.mem.Allocator) void {
+        allocator.free(self.name);
+        allocator.free(self.value);
+    }
+};
 
 const RenderScalarNodeCache = struct {
     active: bool = false,
@@ -60,6 +72,7 @@ const RenderScalarNodeCache = struct {
     test_id: ?[]const u8 = null,
     value: ?[]const u8 = null,
     class: ?[]const u8 = null,
+    custom_text_attrs: std.ArrayListUnmanaged(RenderCustomTextAttrCache) = .empty,
     checked: ?bool = null,
     disabled: ?bool = null,
 
@@ -71,6 +84,10 @@ const RenderScalarNodeCache = struct {
         if (self.test_id) |test_id| allocator.free(test_id);
         if (self.value) |value| allocator.free(value);
         if (self.class) |class| allocator.free(class);
+        for (self.custom_text_attrs.items) |attr| {
+            attr.deinit(allocator);
+        }
+        self.custom_text_attrs.deinit(allocator);
         self.children.deinit(allocator);
         self.* = .{};
     }
@@ -98,6 +115,13 @@ const RenderScalarNodeCache = struct {
             .checked => &self.checked,
             .disabled => &self.disabled,
         };
+    }
+
+    fn customTextAttrIndex(self: *const RenderScalarNodeCache, name: []const u8) ?usize {
+        for (self.custom_text_attrs.items, 0..) |attr, index| {
+            if (std.mem.eql(u8, attr.name, name)) return index;
+        }
+        return null;
     }
 
     fn eventSlot(self: *RenderScalarNodeCache, kind: RenderEventKind) *?u64 {
@@ -318,8 +342,10 @@ pub fn verifySink(comptime Sink: type) void {
     verifyDeclFn("engine Sink", Sink, "replaceChildren", .{ Sink, u64, []const u64 }, void);
     verifyDeclFn("engine Sink", Sink, "replaceChildrenForMoves", .{ Sink, u64, []const u64 }, void);
     verifyDeclFn("engine Sink", Sink, "applyTextField", .{ Sink, u64, RenderTextField, []const u8 }, void);
+    verifyDeclFn("engine Sink", Sink, "applyTextAttr", .{ Sink, u64, []const u8, []const u8 }, void);
     verifyDeclFn("engine Sink", Sink, "applyBoolField", .{ Sink, u64, RenderBoolField, bool }, void);
     verifyDeclFn("engine Sink", Sink, "clearTextField", .{ Sink, u64, RenderTextField }, void);
+    verifyDeclFn("engine Sink", Sink, "clearTextAttr", .{ Sink, u64, []const u8 }, void);
     verifyDeclFn("engine Sink", Sink, "clearBoolField", .{ Sink, u64, RenderBoolField }, void);
     verifyDeclFn("engine Sink", Sink, "bindEventKind", .{ Sink, u64, RenderEventKind, u64, EventPayloadAccessor }, void);
     verifyDeclFn("engine Sink", Sink, "clearEvent", .{ Sink, u64, RenderEventKind }, void);
@@ -956,6 +982,7 @@ pub const HostScopeBranch = scope_tree.Branch;
 pub const HostActiveTextSignalSinkKind = enum {
     text_node,
     text_attr,
+    custom_text_attr,
 };
 
 pub const HostActiveTextSignalSink = struct {
@@ -1215,6 +1242,20 @@ pub const HostNodeSignalTextAttrDesc = struct {
     cached_value: HostSignalCacheSlot = .absent,
 };
 
+pub const HostNodeStaticCustomTextAttrDesc = struct {
+    elem_id: u64,
+    name: []const u8,
+    value: []const u8,
+};
+
+pub const HostNodeSignalCustomTextAttrDesc = struct {
+    elem_id: u64,
+    name: []const u8,
+    signal: HostSignalBinding,
+    read: HostTextRead,
+    cached_value: HostSignalCacheSlot = .absent,
+};
+
 pub const HostNodeStaticBoolAttrDesc = struct {
     elem_id: u64,
     field: RenderBoolField,
@@ -1431,6 +1472,8 @@ pub const HostNodeDescriptorStream = struct {
     signal_text_nodes: std.ArrayListUnmanaged(HostNodeSignalTextNodeDesc) = .empty,
     static_text_attrs: std.ArrayListUnmanaged(HostNodeStaticTextAttrDesc) = .empty,
     signal_text_attrs: std.ArrayListUnmanaged(HostNodeSignalTextAttrDesc) = .empty,
+    static_custom_text_attrs: std.ArrayListUnmanaged(HostNodeStaticCustomTextAttrDesc) = .empty,
+    signal_custom_text_attrs: std.ArrayListUnmanaged(HostNodeSignalCustomTextAttrDesc) = .empty,
     static_bool_attrs: std.ArrayListUnmanaged(HostNodeStaticBoolAttrDesc) = .empty,
     signal_bool_attrs: std.ArrayListUnmanaged(HostNodeSignalBoolAttrDesc) = .empty,
     on_changes: std.ArrayListUnmanaged(HostNodeOnChangeDesc) = .empty,
@@ -1938,6 +1981,20 @@ pub const HostNodeDescriptorStream = struct {
         }
         self.signal_text_attrs.deinit(allocator);
 
+        for (self.static_custom_text_attrs.items) |desc| {
+            allocator.free(desc.name);
+            allocator.free(desc.value);
+        }
+        self.static_custom_text_attrs.deinit(allocator);
+
+        for (self.signal_custom_text_attrs.items) |*desc| {
+            allocator.free(desc.name);
+            desc.cached_value.deinit(ctx, roc_host, metrics);
+            desc.signal.deinit(allocator, ctx, roc_host, metrics);
+            releaseHostTextRead(desc.read, roc_host, metrics);
+        }
+        self.signal_custom_text_attrs.deinit(allocator);
+
         self.static_bool_attrs.deinit(allocator);
 
         for (self.signal_bool_attrs.items) |*desc| {
@@ -2195,6 +2252,57 @@ pub const HostNodeDescriptorStream = struct {
         self.recordSignalTextAttrIndex(allocator, elem_id, field, attr_index);
     }
 
+    pub fn customTextAttrDescriptorExists(self: *const HostNodeDescriptorStream, elem_id: u64, name: []const u8) bool {
+        for (self.static_custom_text_attrs.items) |desc| {
+            if (desc.elem_id == elem_id and std.mem.eql(u8, desc.name, name)) return true;
+        }
+        for (self.signal_custom_text_attrs.items) |desc| {
+            if (desc.elem_id == elem_id and std.mem.eql(u8, desc.name, name)) return true;
+        }
+        return false;
+    }
+
+    pub fn appendStaticCustomTextAttr(self: *HostNodeDescriptorStream, allocator: std.mem.Allocator, elem_id: u64, name: []const u8, value: []const u8) void {
+        if (name.len == 0) @panic("custom text attr descriptor used an empty name");
+        if (self.customTextAttrDescriptorExists(elem_id, name)) @panic("element has duplicate custom text attr descriptors");
+
+        const name_copy = allocator.dupe(u8, name) catch @panic("out of memory");
+        const value_copy = allocator.dupe(u8, value) catch {
+            allocator.free(name_copy);
+            @panic("out of memory");
+        };
+        self.static_custom_text_attrs.append(allocator, .{
+            .elem_id = elem_id,
+            .name = name_copy,
+            .value = value_copy,
+        }) catch {
+            allocator.free(name_copy);
+            allocator.free(value_copy);
+            @panic("out of memory");
+        };
+    }
+
+    pub fn appendSignalCustomTextAttr(self: *HostNodeDescriptorStream, allocator: std.mem.Allocator, ctx: anytype, roc_host: *abi.RocHost, metrics: anytype, elem_id: u64, name: []const u8, signal: HostSignalBinding, read: HostTextRead) void {
+        if (name.len == 0) @panic("custom text attr descriptor used an empty name");
+        if (self.customTextAttrDescriptorExists(elem_id, name)) @panic("element has duplicate custom text attr descriptors");
+
+        self.rememberSignalRecordTree(allocator, signal.record);
+        const name_copy = allocator.dupe(u8, name) catch @panic("out of memory");
+        const retained_read = retainHostTextRead(read, metrics);
+        self.signal_custom_text_attrs.append(allocator, .{
+            .elem_id = elem_id,
+            .name = name_copy,
+            .signal = signal,
+            .read = retained_read,
+        }) catch {
+            allocator.free(name_copy);
+            var owned_signal = signal;
+            owned_signal.deinit(allocator, ctx, roc_host, metrics);
+            releaseHostTextRead(retained_read, roc_host, metrics);
+            @panic("out of memory");
+        };
+    }
+
     pub fn appendStaticBoolAttr(self: *HostNodeDescriptorStream, allocator: std.mem.Allocator, elem_id: u64, field: RenderBoolField, value: bool) void {
         const attr_index = self.static_bool_attrs.items.len;
         self.static_bool_attrs.append(allocator, .{
@@ -2420,6 +2528,16 @@ pub fn streamHasTextField(stream: *const HostNodeDescriptorStream, elem_id: u64,
         const desc = stream.signal_text_attrs.items[attr_index];
         if (desc.elem_id != elem_id or desc.field != field) @panic("signal text attr descriptor index pointed at the wrong field");
         return true;
+    }
+    return false;
+}
+
+pub fn streamHasCustomTextAttr(stream: *const HostNodeDescriptorStream, elem_id: u64, name: []const u8) bool {
+    for (stream.static_custom_text_attrs.items) |desc| {
+        if (desc.elem_id == elem_id and std.mem.eql(u8, desc.name, name)) return true;
+    }
+    for (stream.signal_custom_text_attrs.items) |desc| {
+        if (desc.elem_id == elem_id and std.mem.eql(u8, desc.name, name)) return true;
     }
     return false;
 }
@@ -3221,6 +3339,37 @@ pub fn Engine(comptime Ctx: type) type {
             return true;
         }
 
+        pub fn applyRenderTextAttr(self: *Self, ctx: Ctx.Handle, elem_id: u64, name: []const u8, value: []const u8) bool {
+            const allocator = Ctx.allocator(ctx);
+            const node = self.activeRenderScalarNode(elem_id);
+            if (node.customTextAttrIndex(name)) |index| {
+                const attr = &node.custom_text_attrs.items[index];
+                if (std.mem.eql(u8, attr.value, value)) return false;
+
+                const value_copy = allocator.dupe(u8, value) catch @panic("out of memory");
+                allocator.free(attr.value);
+                attr.value = value_copy;
+                Ctx.sink(ctx).applyTextAttr(elem_id, name, value);
+                return true;
+            }
+
+            const name_copy = allocator.dupe(u8, name) catch @panic("out of memory");
+            const value_copy = allocator.dupe(u8, value) catch {
+                allocator.free(name_copy);
+                @panic("out of memory");
+            };
+            node.custom_text_attrs.append(allocator, .{
+                .name = name_copy,
+                .value = value_copy,
+            }) catch {
+                allocator.free(name_copy);
+                allocator.free(value_copy);
+                @panic("out of memory");
+            };
+            Ctx.sink(ctx).applyTextAttr(elem_id, name, value);
+            return true;
+        }
+
         pub fn applyRenderBoolField(self: *Self, ctx: Ctx.Handle, elem_id: u64, field: RenderBoolField, value: bool) bool {
             const slot = self.activeRenderScalarNode(elem_id).boolSlot(field);
             if (slot.*) |existing| {
@@ -3239,6 +3388,16 @@ pub fn Engine(comptime Ctx: type) type {
             allocator.free(existing);
             slot.* = null;
             Ctx.sink(ctx).clearTextField(elem_id, field);
+            return true;
+        }
+
+        pub fn clearRenderTextAttr(self: *Self, ctx: Ctx.Handle, elem_id: u64, name: []const u8) bool {
+            const allocator = Ctx.allocator(ctx);
+            const node = self.activeRenderScalarNode(elem_id);
+            const index = node.customTextAttrIndex(name) orelse return false;
+            const removed = node.custom_text_attrs.orderedRemove(index);
+            Ctx.sink(ctx).clearTextAttr(elem_id, removed.name);
+            removed.deinit(allocator);
             return true;
         }
 
@@ -4147,6 +4306,16 @@ pub fn Engine(comptime Ctx: type) type {
                 stream.appendSignalTextAttr(allocator, ctx, roc_host, &self.pending_roc_metrics, desc.elem_id, desc.field, signal, desc.read);
                 stream.signal_text_attrs.items[stream.signal_text_attrs.items.len - 1].cached_value = self.cloneHostSignalCacheSlot(ctx, desc.cached_value, &self.pending_roc_metrics);
             }
+            for (previous.static_custom_text_attrs.items) |desc| {
+                if (!u64SliceContains(copied_elem_ids.items, desc.elem_id)) continue;
+                stream.appendStaticCustomTextAttr(allocator, desc.elem_id, desc.name, desc.value);
+            }
+            for (previous.signal_custom_text_attrs.items) |desc| {
+                if (!u64SliceContains(copied_elem_ids.items, desc.elem_id)) continue;
+                const signal = desc.signal.cloneRetained(allocator, &self.pending_roc_metrics);
+                stream.appendSignalCustomTextAttr(allocator, ctx, roc_host, &self.pending_roc_metrics, desc.elem_id, desc.name, signal, desc.read);
+                stream.signal_custom_text_attrs.items[stream.signal_custom_text_attrs.items.len - 1].cached_value = self.cloneHostSignalCacheSlot(ctx, desc.cached_value, &self.pending_roc_metrics);
+            }
             for (previous.static_bool_attrs.items) |desc| {
                 if (!u64SliceContains(copied_elem_ids.items, desc.elem_id)) continue;
                 stream.appendStaticBoolAttr(allocator, desc.elem_id, desc.field, desc.value);
@@ -4542,14 +4711,27 @@ pub fn Engine(comptime Ctx: type) type {
             switch (attr.tag) {
                 .StaticText => {
                     const payload = attr.payload_static_text();
-                    const field = renderTextFieldFromAbi(payload.field);
-                    stream.appendStaticTextAttr(allocator, elem_id, field, payload.value.asSlice());
+                    if (payload.field == node_field_custom) {
+                        stream.appendStaticCustomTextAttr(allocator, elem_id, payload.name.asSlice(), payload.value.asSlice());
+                    } else {
+                        if (payload.name.asSlice().len != 0) @panic("fixed text attr descriptor carried a custom name");
+                        const field = renderTextFieldFromAbi(payload.field);
+                        stream.appendStaticTextAttr(allocator, elem_id, field, payload.value.asSlice());
+                    }
                 },
                 .SignalText => {
                     const payload = attr.payload_signal_text();
-                    const field = renderTextFieldFromAbi(payload.field);
-                    const signal = self.bindNodeSignal(allocator, stream, payload.signal.*, binder_stack);
-                    stream.appendSignalTextAttr(allocator, ctx, roc_host, &self.pending_roc_metrics, elem_id, field, signal, payload.read);
+                    if (payload.field == node_field_custom) {
+                        if (payload.name.asSlice().len == 0) @panic("custom text attr descriptor used an empty name");
+                        if (stream.customTextAttrDescriptorExists(elem_id, payload.name.asSlice())) @panic("element has duplicate custom text attr descriptors");
+                        const signal = self.bindNodeSignal(allocator, stream, payload.signal.*, binder_stack);
+                        stream.appendSignalCustomTextAttr(allocator, ctx, roc_host, &self.pending_roc_metrics, elem_id, payload.name.asSlice(), signal, payload.read);
+                    } else {
+                        if (payload.name.asSlice().len != 0) @panic("fixed text attr descriptor carried a custom name");
+                        const field = renderTextFieldFromAbi(payload.field);
+                        const signal = self.bindNodeSignal(allocator, stream, payload.signal.*, binder_stack);
+                        stream.appendSignalTextAttr(allocator, ctx, roc_host, &self.pending_roc_metrics, elem_id, field, signal, payload.read);
+                    }
                 },
                 .StaticBool => {
                     const payload = attr.payload_static_bool();
@@ -5322,6 +5504,14 @@ pub fn Engine(comptime Ctx: type) type {
                 });
             }
 
+            for (stream.signal_custom_text_attrs.items, 0..) |desc, index| {
+                const record_id = self.requireActiveSignalRecordId(desc.signal.record);
+                self.appendActiveTextSignalRoute(ctx, record_id, .{
+                    .kind = .custom_text_attr,
+                    .index = index,
+                });
+            }
+
             for (stream.signal_bool_attrs.items, 0..) |desc, index| {
                 const record_id = self.requireActiveSignalRecordId(desc.signal.record);
                 self.appendActiveBoolSignalRoute(ctx, record_id, .{
@@ -5361,6 +5551,9 @@ pub fn Engine(comptime Ctx: type) type {
                 self.retainActiveSignalRecord(ctx, desc.signal.record);
             }
             for (stream.signal_text_attrs.items) |*desc| {
+                self.retainActiveSignalRecord(ctx, desc.signal.record);
+            }
+            for (stream.signal_custom_text_attrs.items) |*desc| {
                 self.retainActiveSignalRecord(ctx, desc.signal.record);
             }
             for (stream.signal_bool_attrs.items) |*desc| {
@@ -5520,6 +5713,14 @@ pub fn Engine(comptime Ctx: type) type {
         fn deinitActiveSignalTextAttrDesc(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, desc: *HostNodeSignalTextAttrDesc) void {
             desc.cached_value.deinit(ctx, roc_host, &self.pending_roc_metrics);
             desc.signal.deinit(Ctx.allocator(ctx), ctx, roc_host, &self.pending_roc_metrics);
+            releaseHostTextRead(desc.read, roc_host, &self.pending_roc_metrics);
+        }
+
+        fn deinitActiveSignalCustomTextAttrDesc(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, desc: *HostNodeSignalCustomTextAttrDesc) void {
+            const allocator = Ctx.allocator(ctx);
+            allocator.free(desc.name);
+            desc.cached_value.deinit(ctx, roc_host, &self.pending_roc_metrics);
+            desc.signal.deinit(allocator, ctx, roc_host, &self.pending_roc_metrics);
             releaseHostTextRead(desc.read, roc_host, &self.pending_roc_metrics);
         }
 
@@ -5739,6 +5940,43 @@ pub fn Engine(comptime Ctx: type) type {
                 self.active_stream.updateSignalTextAttrIndex(moved.elem_id, moved.field, index);
             }
             self.active_stream.signal_text_attrs.items.len = last_index;
+        }
+
+        fn removeActiveStaticCustomTextAttrDescriptorsForRemovedElems(self: *Self, ctx: Ctx.Handle, removed_elem_ids: []const u64) void {
+            const allocator = Ctx.allocator(ctx);
+            var write_index: usize = 0;
+            self.recordStreamNodesScannedBy(.stream_nodes_scanned_remove_target, self.active_stream.static_custom_text_attrs.items.len);
+            for (self.active_stream.static_custom_text_attrs.items) |desc| {
+                if (u64SliceContains(removed_elem_ids, desc.elem_id)) {
+                    allocator.free(desc.name);
+                    allocator.free(desc.value);
+                    continue;
+                }
+                self.active_stream.static_custom_text_attrs.items[write_index] = desc;
+                write_index += 1;
+            }
+            self.active_stream.static_custom_text_attrs.items.len = write_index;
+        }
+
+        fn removeActiveSignalCustomTextAttrDescriptorsForRemovedElems(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, removed_elem_ids: []const u64) void {
+            var write_index: usize = 0;
+            self.recordStreamNodesScannedBy(.stream_nodes_scanned_remove_target, self.active_stream.signal_custom_text_attrs.items.len);
+            for (self.active_stream.signal_custom_text_attrs.items, 0..) |desc, read_index| {
+                if (u64SliceContains(removed_elem_ids, desc.elem_id)) {
+                    var removed = desc;
+                    const record_id = self.requireActiveSignalRecordId(removed.signal.record);
+                    self.removeActiveTextSignalRoute(record_id, .custom_text_attr, read_index);
+                    self.active_stream.forgetSignalRecordTree(removed.signal.record);
+                    self.releaseActiveSignalRecord(ctx, removed.signal.record);
+                    self.deinitActiveSignalCustomTextAttrDesc(ctx, roc_host, &removed);
+                    continue;
+                }
+                const record_id = self.requireActiveSignalRecordId(desc.signal.record);
+                self.updateActiveTextSignalRouteIndex(record_id, .custom_text_attr, read_index, write_index);
+                self.active_stream.signal_custom_text_attrs.items[write_index] = desc;
+                write_index += 1;
+            }
+            self.active_stream.signal_custom_text_attrs.items.len = write_index;
         }
 
         fn removeActiveStaticBoolAttrDescriptorAt(self: *Self, index: usize) void {
@@ -6012,6 +6250,8 @@ pub fn Engine(comptime Ctx: type) type {
 
         fn removeActiveNonRenderDescriptorsInTarget(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, target_scopes: []const bool, removed_elem_ids: []const u64) void {
             self.removeActiveElemOwnedDescriptorsForRemovedElems(ctx, roc_host, removed_elem_ids);
+            self.removeActiveStaticCustomTextAttrDescriptorsForRemovedElems(ctx, removed_elem_ids);
+            self.removeActiveSignalCustomTextAttrDescriptorsForRemovedElems(ctx, roc_host, removed_elem_ids);
             self.removeActiveOnChangeDescriptorsInTarget(ctx, roc_host, target_scopes);
             self.removeActiveMountDescriptorsInTarget(roc_host, target_scopes);
             self.removeActiveCleanupDescriptorsInTarget(ctx, target_scopes);
@@ -6108,6 +6348,22 @@ pub fn Engine(comptime Ctx: type) type {
             self.active_stream.signal_text_attrs.appendSlice(allocator, replacement.signal_text_attrs.items) catch @panic("out of memory");
             replacement.signal_text_attrs.items.len = 0;
 
+            self.active_stream.static_custom_text_attrs.appendSlice(allocator, replacement.static_custom_text_attrs.items) catch @panic("out of memory");
+            replacement.static_custom_text_attrs.items.len = 0;
+
+            const signal_custom_text_attr_base = self.active_stream.signal_custom_text_attrs.items.len;
+            for (replacement.signal_custom_text_attrs.items, 0..) |desc, offset| {
+                self.active_stream.rememberSignalRecordTree(allocator, desc.signal.record);
+                self.retainActiveSignalRecord(ctx, desc.signal.record);
+                const record_id = self.requireActiveSignalRecordId(desc.signal.record);
+                self.appendActiveTextSignalRoute(ctx, record_id, .{
+                    .kind = .custom_text_attr,
+                    .index = signal_custom_text_attr_base + offset,
+                });
+            }
+            self.active_stream.signal_custom_text_attrs.appendSlice(allocator, replacement.signal_custom_text_attrs.items) catch @panic("out of memory");
+            replacement.signal_custom_text_attrs.items.len = 0;
+
             const static_bool_attr_base = self.active_stream.static_bool_attrs.items.len;
             for (replacement.static_bool_attrs.items, 0..) |desc, offset| {
                 self.active_stream.recordStaticBoolAttrIndex(allocator, desc.elem_id, desc.field, static_bool_attr_base + offset);
@@ -6201,6 +6457,7 @@ pub fn Engine(comptime Ctx: type) type {
             const rebuilt_records =
                 self.active_stream.signal_text_nodes.items.len +
                 self.active_stream.signal_text_attrs.items.len +
+                self.active_stream.signal_custom_text_attrs.items.len +
                 self.active_stream.signal_bool_attrs.items.len +
                 self.active_stream.on_changes.items.len +
                 self.active_stream.whens.items.len +
@@ -6213,6 +6470,9 @@ pub fn Engine(comptime Ctx: type) type {
                 self.active_stream.rememberSignalRecordTree(allocator, desc.signal.record);
             }
             for (self.active_stream.signal_text_attrs.items) |desc| {
+                self.active_stream.rememberSignalRecordTree(allocator, desc.signal.record);
+            }
+            for (self.active_stream.signal_custom_text_attrs.items) |desc| {
                 self.active_stream.rememberSignalRecordTree(allocator, desc.signal.record);
             }
             for (self.active_stream.signal_bool_attrs.items) |desc| {
@@ -6413,6 +6673,17 @@ pub fn Engine(comptime Ctx: type) type {
             return changed;
         }
 
+        pub fn evalSignalTextAttr(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, elem_id: u64, name: []const u8, signal: *HostSignalBinding, read: HostTextRead, cache_slot: *HostSignalCacheSlot) bool {
+            const value = self.evalHostSignalBinding(ctx, roc_host, signal);
+            const signal_cap = self.hostSignalBindingCapability(ctx, signal);
+            assertHostValueCapabilitiesMatch(read.capability, signal_cap, "text attr read extension capability did not match its signal value");
+            const text = callHostValueToStrWithCapability(ctx, roc_host, read.capability, read.read, value);
+            defer text.decref(roc_host);
+            const changed = self.applyRenderTextAttr(ctx, elem_id, name, text.asSlice());
+            cache_slot.replace(ctx, roc_host, &self.pending_roc_metrics, value, signal_cap);
+            return changed;
+        }
+
         pub fn evalSignalBoolField(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, elem_id: u64, field: RenderBoolField, signal: *HostSignalBinding, read: HostBoolRead, cache_slot: *HostSignalCacheSlot) bool {
             const value = self.evalHostSignalBinding(ctx, roc_host, signal);
             const signal_cap = self.hostSignalBindingCapability(ctx, signal);
@@ -6437,6 +6708,20 @@ pub fn Engine(comptime Ctx: type) type {
             return self.applyRenderTextField(ctx, elem_id, field, text.asSlice());
         }
 
+        pub fn evalDirtySignalTextAttr(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, elem_id: u64, name: []const u8, signal: *HostSignalBinding, read: HostTextRead, cache_slot: *HostSignalCacheSlot, dirty_source_node_ids: []const u64, dirty_generation: u64) bool {
+            const result = self.evalDirtyHostSignalBinding(ctx, roc_host, signal, dirty_source_node_ids, dirty_generation);
+            const cap = self.hostSignalBindingCapability(ctx, signal);
+            assertHostValueCapabilitiesMatch(read.capability, cap, "dirty text attr read extension capability did not match its signal value");
+            if (!result.changed) {
+                callHostValueToUnitWithCapability(ctx, roc_host, cap, hv.hostValueCapabilityDrop(cap), result.value);
+                return false;
+            }
+            if (!self.updateDirtySignalCache(ctx, roc_host, cache_slot, result.value, cap)) return false;
+            const text = callHostValueToStrWithCapability(ctx, roc_host, read.capability, read.read, result.value);
+            defer text.decref(roc_host);
+            return self.applyRenderTextAttr(ctx, elem_id, name, text.asSlice());
+        }
+
         pub fn evalDirtySignalBoolField(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, elem_id: u64, field: RenderBoolField, signal: *HostSignalBinding, read: HostBoolRead, cache_slot: *HostSignalCacheSlot, dirty_source_node_ids: []const u64, dirty_generation: u64) bool {
             const result = self.evalDirtyHostSignalBinding(ctx, roc_host, signal, dirty_source_node_ids, dirty_generation);
             const cap = self.hostSignalBindingCapability(ctx, signal);
@@ -6454,6 +6739,13 @@ pub fn Engine(comptime Ctx: type) type {
                 return self.evalDirtySignalTextField(ctx, roc_host, elem_id, field, signal, read, cache_slot, dirty_source_node_ids, dirty_generation);
             }
             return self.evalSignalTextField(ctx, roc_host, elem_id, field, signal, read, cache_slot);
+        }
+
+        pub fn evalStructuralSignalTextAttr(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, elem_id: u64, name: []const u8, signal: *HostSignalBinding, read: HostTextRead, cache_slot: *HostSignalCacheSlot, dirty_source_node_ids: []const u64, dirty_generation: u64) bool {
+            if (dirty_generation != 0 and sourceNodeIdsIntersect(signal.source_node_ids, dirty_source_node_ids)) {
+                return self.evalDirtySignalTextAttr(ctx, roc_host, elem_id, name, signal, read, cache_slot, dirty_source_node_ids, dirty_generation);
+            }
+            return self.evalSignalTextAttr(ctx, roc_host, elem_id, name, signal, read, cache_slot);
         }
 
         pub fn evalStructuralSignalBoolField(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, elem_id: u64, field: RenderBoolField, signal: *HostSignalBinding, read: HostBoolRead, cache_slot: *HostSignalCacheSlot, dirty_source_node_ids: []const u64, dirty_generation: u64) bool {
@@ -7145,7 +7437,7 @@ pub fn Engine(comptime Ctx: type) type {
             desc.run_on_mount = false;
 
             const cmd = erased_calls.callUnitToStartTaskCmd(roc_host, desc.to_cmd);
-            defer abi.decref__AnonStruct86(cmd, roc_host);
+            defer abi.decref__AnonStruct84(cmd, roc_host);
             return self.startTaskCommand(ctx, roc_host, desc.scope_id, cmd);
         }
 
@@ -7264,6 +7556,38 @@ pub fn Engine(comptime Ctx: type) type {
             }
         }
 
+        pub fn clearRenderTextAttrsMissingFromStream(self: *Self, ctx: Ctx.Handle, stream: *const HostNodeDescriptorStream, elem_id: u64, counts: *render.Counts) void {
+            var index: usize = 0;
+            while (index < self.activeRenderScalarNode(elem_id).custom_text_attrs.items.len) {
+                const name = self.activeRenderScalarNode(elem_id).custom_text_attrs.items[index].name;
+                if (streamHasCustomTextAttr(stream, elem_id, name)) {
+                    index += 1;
+                    continue;
+                }
+                if (self.clearRenderTextAttr(ctx, elem_id, name)) {
+                    counts.addTextAttr();
+                }
+            }
+        }
+
+        pub fn applyActiveStreamCustomTextAttrsForElem(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, elem_id: u64, counts: *render.Counts, dirty_source_node_ids: []const u64, dirty_generation: u64) void {
+            self.recordStreamNodesScannedBy(.stream_nodes_scanned_apply, self.active_stream.static_custom_text_attrs.items.len);
+            for (self.active_stream.static_custom_text_attrs.items) |desc| {
+                if (desc.elem_id != elem_id) continue;
+                if (self.applyRenderTextAttr(ctx, desc.elem_id, desc.name, desc.value)) {
+                    counts.addTextAttr();
+                }
+            }
+
+            self.recordStreamNodesScannedBy(.stream_nodes_scanned_apply, self.active_stream.signal_custom_text_attrs.items.len);
+            for (self.active_stream.signal_custom_text_attrs.items) |*desc| {
+                if (desc.elem_id != elem_id) continue;
+                if (self.evalStructuralSignalTextAttr(ctx, roc_host, desc.elem_id, desc.name, &desc.signal, desc.read, &desc.cached_value, dirty_source_node_ids, dirty_generation)) {
+                    counts.addTextAttr();
+                }
+            }
+        }
+
         pub fn applyActiveStreamBoolAttrForElem(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, elem_id: u64, field: RenderBoolField, descriptor_index: HostElemDescriptorIndex, counts: *render.Counts, dirty_source_node_ids: []const u64, dirty_generation: u64) void {
             if (descriptor_index.static_bool_attrs.get(field)) |attr_index| {
                 if (attr_index >= self.active_stream.static_bool_attrs.items.len) @panic("active static bool attr index exceeded descriptor table");
@@ -7299,6 +7623,7 @@ pub fn Engine(comptime Ctx: type) type {
                     counts.addBoolField(field);
                 }
             }
+            self.clearRenderTextAttrsMissingFromStream(ctx, &self.active_stream, elem_id, counts);
 
             if (descriptor_index.text_node) |text_index| {
                 if (text_index >= self.active_stream.text_nodes.items.len) @panic("active text node index exceeded descriptor table");
@@ -7321,6 +7646,7 @@ pub fn Engine(comptime Ctx: type) type {
             for (text_fields) |field| {
                 self.applyActiveStreamTextAttrForElem(ctx, roc_host, elem_id, field, descriptor_index, counts, dirty_source_node_ids, dirty_generation);
             }
+            self.applyActiveStreamCustomTextAttrsForElem(ctx, roc_host, elem_id, counts, dirty_source_node_ids, dirty_generation);
             for (bool_fields) |field| {
                 self.applyActiveStreamBoolAttrForElem(ctx, roc_host, elem_id, field, descriptor_index, counts, dirty_source_node_ids, dirty_generation);
             }
@@ -7385,6 +7711,7 @@ pub fn Engine(comptime Ctx: type) type {
                         counts.addBoolField(field);
                     }
                 }
+                self.clearRenderTextAttrsMissingFromStream(ctx, stream, elem_id, &counts);
             }
 
             self.recordStreamNodesScannedBy(.stream_nodes_scanned_apply, stream.text_nodes.items.len);
@@ -7409,6 +7736,18 @@ pub fn Engine(comptime Ctx: type) type {
             for (stream.signal_text_attrs.items) |*desc| {
                 if (desc.elem_id < seen.len and seen[@intCast(desc.elem_id)] and self.evalSignalTextField(ctx, roc_host, desc.elem_id, desc.field, &desc.signal, desc.read, &desc.cached_value)) {
                     counts.addTextField(desc.field);
+                }
+            }
+            self.recordStreamNodesScannedBy(.stream_nodes_scanned_apply, stream.static_custom_text_attrs.items.len);
+            for (stream.static_custom_text_attrs.items) |desc| {
+                if (desc.elem_id < seen.len and seen[@intCast(desc.elem_id)] and self.applyRenderTextAttr(ctx, desc.elem_id, desc.name, desc.value)) {
+                    counts.addTextAttr();
+                }
+            }
+            self.recordStreamNodesScannedBy(.stream_nodes_scanned_apply, stream.signal_custom_text_attrs.items.len);
+            for (stream.signal_custom_text_attrs.items) |*desc| {
+                if (desc.elem_id < seen.len and seen[@intCast(desc.elem_id)] and self.evalSignalTextAttr(ctx, roc_host, desc.elem_id, desc.name, &desc.signal, desc.read, &desc.cached_value)) {
+                    counts.addTextAttr();
                 }
             }
             self.recordStreamNodesScannedBy(.stream_nodes_scanned_apply, stream.static_bool_attrs.items.len);
@@ -7481,6 +7820,16 @@ pub fn Engine(comptime Ctx: type) type {
             for (stream.signal_text_attrs.items) |*desc| {
                 if (self.evalSignalTextField(ctx, roc_host, desc.elem_id, desc.field, &desc.signal, desc.read, &desc.cached_value)) {
                     counts.addTextField(desc.field);
+                }
+            }
+            for (stream.static_custom_text_attrs.items) |desc| {
+                if (self.applyRenderTextAttr(ctx, desc.elem_id, desc.name, desc.value)) {
+                    counts.addTextAttr();
+                }
+            }
+            for (stream.signal_custom_text_attrs.items) |*desc| {
+                if (self.evalSignalTextAttr(ctx, roc_host, desc.elem_id, desc.name, &desc.signal, desc.read, &desc.cached_value)) {
+                    counts.addTextAttr();
                 }
             }
             for (stream.static_bool_attrs.items) |desc| {
@@ -7640,6 +7989,7 @@ pub fn Engine(comptime Ctx: type) type {
                         counts.addBoolField(field);
                     }
                 }
+                self.clearRenderTextAttrsMissingFromStream(ctx, stream, elem_id, &counts);
             }
 
             for (stream.text_nodes.items) |desc| {
@@ -7660,6 +8010,16 @@ pub fn Engine(comptime Ctx: type) type {
             for (stream.signal_text_attrs.items) |*desc| {
                 if (self.evalSignalTextField(ctx, roc_host, desc.elem_id, desc.field, &desc.signal, desc.read, &desc.cached_value)) {
                     counts.addTextField(desc.field);
+                }
+            }
+            for (stream.static_custom_text_attrs.items) |desc| {
+                if (self.applyRenderTextAttr(ctx, desc.elem_id, desc.name, desc.value)) {
+                    counts.addTextAttr();
+                }
+            }
+            for (stream.signal_custom_text_attrs.items) |*desc| {
+                if (self.evalSignalTextAttr(ctx, roc_host, desc.elem_id, desc.name, &desc.signal, desc.read, &desc.cached_value)) {
+                    counts.addTextAttr();
                 }
             }
             for (stream.static_bool_attrs.items) |desc| {
@@ -8021,7 +8381,7 @@ pub fn Engine(comptime Ctx: type) type {
             if (!self.updateDirtySignalCache(ctx, roc_host, &desc.cached_value, result.value, cap)) return .{};
 
             const cmd = callHostValueToStartTaskCmdWithCapability(ctx, roc_host, cap, desc.to_cmd, result.value);
-            defer abi.decref__AnonStruct86(cmd, roc_host);
+            defer abi.decref__AnonStruct84(cmd, roc_host);
             return self.startTaskCommand(ctx, roc_host, desc.scope_id, cmd);
         }
 
@@ -8043,6 +8403,12 @@ pub fn Engine(comptime Ctx: type) type {
                                 const desc = &self.active_stream.signal_text_attrs.items[route.index];
                                 if (self.evalDirtySignalTextField(ctx, roc_host, desc.elem_id, desc.field, &desc.signal, desc.read, &desc.cached_value, dirty_source_node_ids, dirty_generation)) {
                                     counts.addTextField(desc.field);
+                                }
+                            },
+                            .custom_text_attr => {
+                                const desc = &self.active_stream.signal_custom_text_attrs.items[route.index];
+                                if (self.evalDirtySignalTextAttr(ctx, roc_host, desc.elem_id, desc.name, &desc.signal, desc.read, &desc.cached_value, dirty_source_node_ids, dirty_generation)) {
+                                    counts.addTextAttr();
                                 }
                             },
                         }
@@ -8082,8 +8448,10 @@ const VerifySink = struct {
     pub fn replaceChildren(_: VerifySink, _: u64, _: []const u64) void {}
     pub fn replaceChildrenForMoves(_: VerifySink, _: u64, _: []const u64) void {}
     pub fn applyTextField(_: VerifySink, _: u64, _: RenderTextField, _: []const u8) void {}
+    pub fn applyTextAttr(_: VerifySink, _: u64, _: []const u8, _: []const u8) void {}
     pub fn applyBoolField(_: VerifySink, _: u64, _: RenderBoolField, _: bool) void {}
     pub fn clearTextField(_: VerifySink, _: u64, _: RenderTextField) void {}
+    pub fn clearTextAttr(_: VerifySink, _: u64, _: []const u8) void {}
     pub fn clearBoolField(_: VerifySink, _: u64, _: RenderBoolField) void {}
     pub fn bindEventKind(_: VerifySink, _: u64, _: RenderEventKind, _: u64, _: EventPayloadAccessor) void {}
     pub fn clearEvent(_: VerifySink, _: u64, _: RenderEventKind) void {}

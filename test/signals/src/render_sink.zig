@@ -46,12 +46,20 @@ pub fn DomSink(comptime Host: type) type {
             self.host.sinkApplyTextField(elem_id, field, value);
         }
 
+        pub fn applyTextAttr(self: @This(), elem_id: u64, name: []const u8, value: []const u8) void {
+            self.host.sinkApplyTextAttr(elem_id, name, value);
+        }
+
         pub fn applyBoolField(self: @This(), elem_id: u64, field: BoolField, value: bool) void {
             self.host.sinkApplyBoolField(elem_id, field, value);
         }
 
         pub fn clearTextField(self: @This(), elem_id: u64, field: TextField) void {
             self.host.sinkClearTextField(elem_id, field);
+        }
+
+        pub fn clearTextAttr(self: @This(), elem_id: u64, name: []const u8) void {
+            self.host.sinkClearTextAttr(elem_id, name);
         }
 
         pub fn clearBoolField(self: @This(), elem_id: u64, field: BoolField) void {
@@ -130,12 +138,20 @@ test "DomSink forwards every render seam method to the host" {
             self.mark(6);
         }
 
+        pub fn sinkApplyTextAttr(self: *@This(), _: u64, _: []const u8, _: []const u8) void {
+            self.mark(17);
+        }
+
         pub fn sinkApplyBoolField(self: *@This(), _: u64, _: BoolField, _: bool) void {
             self.mark(7);
         }
 
         pub fn sinkClearTextField(self: *@This(), _: u64, _: TextField) void {
             self.mark(8);
+        }
+
+        pub fn sinkClearTextAttr(self: *@This(), _: u64, _: []const u8) void {
+            self.mark(18);
         }
 
         pub fn sinkClearBoolField(self: *@This(), _: u64, _: BoolField) void {
@@ -186,8 +202,10 @@ test "DomSink forwards every render seam method to the host" {
     sink.replaceChildren(1, &children);
     sink.replaceChildrenForMoves(1, &children);
     sink.applyTextField(1, .text, "hello");
+    sink.applyTextAttr(1, "data-state", "ready");
     sink.applyBoolField(1, .disabled, true);
     sink.clearTextField(1, .label);
+    sink.clearTextAttr(1, "data-state");
     sink.clearBoolField(1, .checked);
     sink.bindEventKind(1, .input, 7, .target_value);
     sink.clearEvent(1, .input);
@@ -197,7 +215,7 @@ test "DomSink forwards every render seam method to the host" {
     sink.cancelTask(9);
     sink.debugAssertNode(1, true, "div", 0, &children, 7, null, null, null, null, null, null);
 
-    try std.testing.expectEqual((@as(u32, 1) << 17) - 1, host.seen);
+    try std.testing.expectEqual((@as(u32, 1) << 19) - 1, host.seen);
     try std.testing.expectEqual(@as(usize, 2), host.last_children_len);
     try std.testing.expectEqual(@as(usize, 2), host.last_debug_children_len);
     try std.testing.expectEqual(EventPayloadAccessor.target_value, host.last_event_accessor);
