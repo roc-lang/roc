@@ -45,6 +45,8 @@ pub const TagUnionData = @import("layout.zig").TagUnionData;
 pub const TagUnionVariant = @import("layout.zig").TagUnionVariant;
 pub const ClosureLayout = @import("layout.zig").ClosureLayout;
 pub const RocAlignment = @import("layout.zig").RocAlignment;
+pub const SortKey = @import("layout.zig").SortKey;
+pub const WidthValues = @import("layout.zig").WidthValues;
 pub const SizeAlign = @import("layout.zig").SizeAlign;
 
 // Re-export Info types

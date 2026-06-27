@@ -267,9 +267,9 @@ TYPE MISMATCH - syntax_grab_bag.md:70:5:70:8
 MISSING METHOD - syntax_grab_bag.md:99:3:99:8
 MISSING METHOD - syntax_grab_bag.md:101:3:101:8
 TYPE MISMATCH - syntax_grab_bag.md:84:2:84:2
+TYPE MISMATCH - syntax_grab_bag.md:150:3:150:6
 TOO FEW ARGS - syntax_grab_bag.md:155:2:157:3
 TYPE MISMATCH - syntax_grab_bag.md:167:3:167:3
-TYPE MISMATCH - syntax_grab_bag.md:150:3:150:6
 DECLARATION HAS NO VALUE - syntax_grab_bag.md:201:1:201:25
 MISSING METHOD - syntax_grab_bag.md:189:26:189:40
 MISSING METHOD - syntax_grab_bag.md:189:26:189:66
@@ -948,6 +948,26 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
     These can never match! Either the pattern or expression has a problem.
 
 
+┌───────────────┐
+│ TYPE MISMATCH ├─ This `return` does not match the function's return type. ──┐
+└┬──────────────┘                                                             │
+ │                                                                            │
+ │  tag # Comment after return statement                                      │
+ │  ‾‾‾                                                                       │
+ └────────────────────────────────────────────────── syntax_grab_bag.md:150:3 ┘
+
+    It has the type:
+
+        [Blue, ..]
+
+    But the function's return type is:
+
+        Try({}, _d)
+
+    Hint: All `return` statements and the final expression in a function must
+    have the same type.
+
+
 ┌──────────────┐
 │ TOO FEW ARGS ├─ The `match_time` function expects 2 arguments, but it got ──┐
 └┬─────────────┘  1 instead.                                                  │
@@ -983,26 +1003,6 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
     But `add_one` needs the first argument to be:
 
         U64
-
-
-┌───────────────┐
-│ TYPE MISMATCH ├─ This `return` does not match the function's return type. ──┐
-└┬──────────────┘                                                             │
- │                                                                            │
- │  tag # Comment after return statement                                      │
- │  ‾‾‾                                                                       │
- └────────────────────────────────────────────────── syntax_grab_bag.md:150:3 ┘
-
-    It has the type:
-
-        [Blue, ..]
-
-    But the function's return type is:
-
-        Try({}, _d)
-
-    Hint: All `return` statements and the final expression in a function must
-    have the same type.
 
 
 ┌──────────────────────────┐
@@ -2415,7 +2415,7 @@ expect {
 					(e-if
 						(if-branches
 							(if-branch
-								(e-dispatch-call (method "is_gt") (constraint-fn-var 5104)
+								(e-dispatch-call (method "is_gt") (constraint-fn-var 5106)
 									(receiver
 										(e-match
 											(match
@@ -2440,7 +2440,7 @@ expect {
 														(value
 															(e-num (value "12"))))))))
 									(args
-										(e-dispatch-call (method "times") (constraint-fn-var 5099)
+										(e-dispatch-call (method "times") (constraint-fn-var 5101)
 											(receiver
 												(e-num (value "5")))
 											(args
@@ -2455,18 +2455,18 @@ expect {
 										(e-if
 											(if-branches
 												(if-branch
-													(e-dispatch-call (method "is_lt") (constraint-fn-var 5221)
+													(e-dispatch-call (method "is_lt") (constraint-fn-var 5223)
 														(receiver
-															(e-dispatch-call (method "plus") (constraint-fn-var 5183)
+															(e-dispatch-call (method "plus") (constraint-fn-var 5185)
 																(receiver
 																	(e-num (value "13")))
 																(args
 																	(e-num (value "2")))))
 														(args
 															(e-num (value "5"))))
-													(e-dispatch-call (method "is_gte") (constraint-fn-var 5330)
+													(e-dispatch-call (method "is_gte") (constraint-fn-var 5332)
 														(receiver
-															(e-dispatch-call (method "minus") (constraint-fn-var 5292)
+															(e-dispatch-call (method "minus") (constraint-fn-var 5294)
 																(receiver
 																	(e-num (value "10")))
 																(args
@@ -2481,11 +2481,11 @@ expect {
 											(builtin)
 											(e-tag (name "True")))))
 								(if-else
-									(e-dispatch-call (method "is_lte") (constraint-fn-var 5449)
+									(e-dispatch-call (method "is_lte") (constraint-fn-var 5451)
 										(receiver
 											(e-num (value "12")))
 										(args
-											(e-dispatch-call (method "div_by") (constraint-fn-var 5444)
+											(e-dispatch-call (method "div_by") (constraint-fn-var 5446)
 												(receiver
 													(e-num (value "3")))
 												(args
@@ -2500,12 +2500,12 @@ expect {
 										(e-match
 											(match
 												(cond
-													(e-dispatch-call (method "next_static_dispatch_method") (constraint-fn-var 5515)
+													(e-dispatch-call (method "next_static_dispatch_method") (constraint-fn-var 5517)
 														(receiver
 															(e-match
 																(match
 																	(cond
-																		(e-dispatch-call (method "static_dispatch_method") (constraint-fn-var 5482)
+																		(e-dispatch-call (method "static_dispatch_method") (constraint-fn-var 5484)
 																			(receiver
 																				(e-match
 																					(match

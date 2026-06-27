@@ -1357,7 +1357,10 @@ fn generatePlatformHostShim(
         return ctx.fail(.{ .shim_generation_failed = .{ .err = error.InvalidLirImage } });
     }
     const image_header: *const lir.LirImage.Header = @ptrCast(@alignCast(lir_image.ptr + @sizeOf(SharedMemoryAllocator.Header)));
-    const view = lir.LirImage.viewMappedImageWithAllocator(image_header, lir_image.ptr, lir_image.len, ctx.arena) catch |err| {
+    // The host shim's C-ABI lowering needs layout sizes for the target being
+    // built, so resolve the width-independent image for that pointer width.
+    const shim_target_usize: base.target.TargetUsize = if (target.ptrBitWidth() == 64) .u64 else .u32;
+    const view = lir.LirImage.viewMappedImageWithAllocator(image_header, lir_image.ptr, lir_image.len, shim_target_usize, ctx.arena) catch |err| {
         return ctx.fail(.{ .shim_generation_failed = .{ .err = err } });
     };
 
@@ -1713,7 +1716,7 @@ const LayoutHashContext = struct {
                 const info = self.layouts.getTagUnionInfo(layout_val);
                 updateHashU32(hasher, @intCast(info.alignment.toByteUnits()));
                 updateHashU32(hasher, info.size());
-                updateHashU32(hasher, @intCast(info.data.discriminant_offset));
+                updateHashU32(hasher, @intCast(info.discriminant_offset));
                 updateHashU32(hasher, @intCast(info.data.discriminant_size));
                 updateHashU32(hasher, @intCast(info.variants.len));
                 for (0..info.variants.len) |i| {
@@ -2580,7 +2583,7 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
                         }
                         unreachable;
                     };
-                    const view = try viewLirImageFromHandle(shm_handle, ctx.arena);
+                    const view = try viewLirImageFromHandle(shm_handle, base.target.TargetUsize.native, ctx.arena);
                     break :blk try hostedSymbolsFromLir(ctx.arena, &view.store);
                 },
                 .size, .speed => unreachable,
@@ -2963,7 +2966,7 @@ fn rocRunDefaultApp(ctx: *CliCtx, args: cli_args.RunArgs, original_source: []con
     }
     reporter.finish();
 
-    const view = try viewLirImageFromHandle(shm_result.handle, ctx.arena);
+    const view = try viewLirImageFromHandle(shm_result.handle, base.target.TargetUsize.native, ctx.arena);
 
     var hosted_fn_array = [_]echo_platform.host_abi.HostedFn{echo_platform.host_abi.hostedFn(&echo_platform.echoHostedFn)};
     var echo_env = echo_platform.EchoEnv{ .std_io = ctx.io.std_io };
@@ -4906,10 +4909,10 @@ fn closeSharedMemoryHandle(handle: SharedMemoryHandle) void {
     }
 }
 
-fn viewLirImageFromHandle(handle: SharedMemoryHandle, arena: std.mem.Allocator) lir.LirImage.ImageError!lir.LirImage.ProgramView {
+fn viewLirImageFromHandle(handle: SharedMemoryHandle, target_usize: base.target.TargetUsize, arena: std.mem.Allocator) lir.LirImage.ImageError!lir.LirImage.ProgramView {
     const base_ptr: [*]align(1) u8 = @ptrCast(@alignCast(handle.ptr));
     const header: *const lir.LirImage.Header = @ptrCast(@alignCast(base_ptr + @sizeOf(SharedMemoryAllocator.Header)));
-    return lir.LirImage.viewMappedImageWithAllocator(header, base_ptr, handle.size, arena);
+    return lir.LirImage.viewMappedImageWithAllocator(header, base_ptr, handle.size, target_usize, arena);
 }
 
 fn devShimTargetCompatible(selected: RocTarget, native: RocTarget) bool {
@@ -5738,7 +5741,6 @@ pub fn buildLirImageWithCoordinator(
         shm.base_ptr,
         shm.getUsedSize(),
         &lowered.lir_result,
-        lowered.target_usize,
         platform_entrypoints,
     );
 
@@ -8885,7 +8887,6 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
         shm.base_ptr,
         shm.getUsedSize(),
         &lowered.lir_result,
-        lowered.target_usize,
         platform_entrypoints,
     );
     shm.updateHeader();

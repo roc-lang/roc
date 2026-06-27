@@ -437,6 +437,13 @@ pub const CFStmt = union(enum) {
         /// without inspecting the count; the runtime check is always sound,
         /// so a zero mask reproduces fully checked behavior.
         unique_args: u64 = 0,
+        /// For `list_map_can_reuse`: whether the input and output element
+        /// layouts are interchangeable in one allocation, computed per pointer
+        /// width. Resolved at codegen for the target being built — a `false`
+        /// width forces the op to a constant `0` (reuse statically impossible),
+        /// so the in-place branch is never taken there. Target-independent
+        /// because both widths are stored; ignored by every other op.
+        interchangeable: layout.WidthValues(bool) = layout.WidthValues(bool).both(true, true),
         args: LocalSpan,
         next: CFStmtId,
     },
