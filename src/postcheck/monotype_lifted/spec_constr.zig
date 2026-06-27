@@ -7732,6 +7732,158 @@ fn demandedKnownCapturesFromDemand(
     return try arena.dupe(DemandedKnownIndexedValue, demanded.items);
 }
 
+fn demandedKnownValuesContainFiniteState(known_values: []const DemandedKnownValue) bool {
+    for (known_values) |known_value| {
+        if (demandedKnownValueContainsFiniteState(known_value)) return true;
+    }
+    return false;
+}
+
+fn demandedKnownValueContainsFiniteState(known_value: DemandedKnownValue) bool {
+    return switch (known_value) {
+        .any,
+        .leaf,
+        => false,
+        .tag => |tag| blk: {
+            for (tag.payloads) |payload| {
+                if (demandedKnownValueContainsFiniteState(payload.known_value)) break :blk true;
+            }
+            break :blk false;
+        },
+        .record => |record| blk: {
+            for (record.fields) |field| {
+                if (demandedKnownValueContainsFiniteState(field.known_value)) break :blk true;
+            }
+            break :blk false;
+        },
+        .tuple => |tuple| blk: {
+            for (tuple.items) |item| {
+                if (demandedKnownValueContainsFiniteState(item.known_value)) break :blk true;
+            }
+            break :blk false;
+        },
+        .nominal => |nominal| if (nominal.backing) |backing| demandedKnownValueContainsFiniteState(backing.*) else false,
+        .callable => |callable| blk: {
+            for (callable.captures) |capture| {
+                if (demandedKnownValueContainsFiniteState(capture.known_value)) break :blk true;
+            }
+            break :blk false;
+        },
+        .finite_tags,
+        .finite_callables,
+        => true,
+    };
+}
+
+fn demandedKnownValueType(known_value: DemandedKnownValue) Type.TypeId {
+    return switch (known_value) {
+        .any => |ty| ty,
+        .leaf => |ty| ty,
+        .tag => |tag| tag.ty,
+        .record => |record| record.ty,
+        .tuple => |tuple| tuple.ty,
+        .nominal => |nominal| nominal.ty,
+        .callable => |callable| callable.ty,
+        .finite_tags => |finite_tags| finite_tags.ty,
+        .finite_callables => |finite_callables| finite_callables.ty,
+    };
+}
+
+fn demandedKnownValueEql(program: *const Ast.Program, lhs: DemandedKnownValue, rhs: DemandedKnownValue) bool {
+    if (std.meta.activeTag(lhs) != std.meta.activeTag(rhs)) return false;
+    return switch (lhs) {
+        .any => |lhs_ty| sameType(program, lhs_ty, rhs.any),
+        .leaf => |lhs_ty| sameType(program, lhs_ty, rhs.leaf),
+        .tag => |lhs_tag| demandedKnownTagEql(program, lhs_tag, rhs.tag),
+        .record => |lhs_record| blk: {
+            const rhs_record = rhs.record;
+            if (!sameType(program, lhs_record.ty, rhs_record.ty) or lhs_record.fields.len != rhs_record.fields.len) break :blk false;
+            for (lhs_record.fields) |lhs_field| {
+                const rhs_field = demandedKnownFieldByName(rhs_record.fields, lhs_field.name) orelse break :blk false;
+                if (!demandedKnownValueEql(program, lhs_field.known_value, rhs_field.known_value)) break :blk false;
+            }
+            break :blk true;
+        },
+        .tuple => |lhs_tuple| blk: {
+            const rhs_tuple = rhs.tuple;
+            if (!sameType(program, lhs_tuple.ty, rhs_tuple.ty) or lhs_tuple.items.len != rhs_tuple.items.len) break :blk false;
+            for (lhs_tuple.items) |lhs_item| {
+                const rhs_item = demandedKnownIndexedValueByIndex(rhs_tuple.items, lhs_item.index) orelse break :blk false;
+                if (!demandedKnownValueEql(program, lhs_item.known_value, rhs_item.known_value)) break :blk false;
+            }
+            break :blk true;
+        },
+        .nominal => |lhs_nominal| blk: {
+            const rhs_nominal = rhs.nominal;
+            if (!sameType(program, lhs_nominal.ty, rhs_nominal.ty)) break :blk false;
+            if (lhs_nominal.backing == null or rhs_nominal.backing == null) break :blk lhs_nominal.backing == null and rhs_nominal.backing == null;
+            break :blk demandedKnownValueEql(program, lhs_nominal.backing.?.*, rhs_nominal.backing.?.*);
+        },
+        .callable => |lhs_callable| demandedKnownCallableEql(program, lhs_callable, rhs.callable),
+        .finite_tags => |lhs_finite| blk: {
+            const rhs_finite = rhs.finite_tags;
+            if (!sameType(program, lhs_finite.ty, rhs_finite.ty) or lhs_finite.alternatives.len != rhs_finite.alternatives.len) break :blk false;
+            for (lhs_finite.alternatives) |lhs_alternative| {
+                for (rhs_finite.alternatives) |rhs_alternative| {
+                    if (demandedKnownTagEql(program, lhs_alternative, rhs_alternative)) break;
+                } else {
+                    break :blk false;
+                }
+            }
+            break :blk true;
+        },
+        .finite_callables => |lhs_finite| blk: {
+            const rhs_finite = rhs.finite_callables;
+            if (!sameType(program, lhs_finite.ty, rhs_finite.ty) or lhs_finite.alternatives.len != rhs_finite.alternatives.len) break :blk false;
+            for (lhs_finite.alternatives) |lhs_alternative| {
+                for (rhs_finite.alternatives) |rhs_alternative| {
+                    if (demandedKnownCallableEql(program, lhs_alternative, rhs_alternative)) break;
+                } else {
+                    break :blk false;
+                }
+            }
+            break :blk true;
+        },
+    };
+}
+
+fn demandedKnownTagEql(program: *const Ast.Program, lhs: DemandedKnownTag, rhs: DemandedKnownTag) bool {
+    if (!sameType(program, lhs.ty, rhs.ty) or lhs.name != rhs.name or lhs.payloads.len != rhs.payloads.len) return false;
+    for (lhs.payloads) |lhs_payload| {
+        const rhs_payload = demandedKnownIndexedValueByIndex(rhs.payloads, lhs_payload.index) orelse return false;
+        if (!demandedKnownValueEql(program, lhs_payload.known_value, rhs_payload.known_value)) return false;
+    }
+    return true;
+}
+
+fn demandedKnownCallableEql(program: *const Ast.Program, lhs: DemandedKnownCallable, rhs: DemandedKnownCallable) bool {
+    if (!sameType(program, lhs.ty, rhs.ty) or
+        !callableTargetMatches(program, lhs.fn_id, rhs.fn_id) or
+        lhs.captures.len != rhs.captures.len)
+    {
+        return false;
+    }
+    for (lhs.captures) |lhs_capture| {
+        const rhs_capture = demandedKnownIndexedValueByIndex(rhs.captures, lhs_capture.index) orelse return false;
+        if (!demandedKnownValueEql(program, lhs_capture.known_value, rhs_capture.known_value)) return false;
+    }
+    return true;
+}
+
+fn demandedKnownFieldByName(fields: []const DemandedKnownField, name: names.RecordFieldNameId) ?DemandedKnownField {
+    for (fields) |field| {
+        if (field.name == name) return field;
+    }
+    return null;
+}
+
+fn demandedKnownIndexedValueByIndex(items: []const DemandedKnownIndexedValue, index: u32) ?DemandedKnownIndexedValue {
+    for (items) |item| {
+        if (item.index == index) return item;
+    }
+    return null;
+}
+
 fn known_valueEql(program: *const Ast.Program, lhs: KnownValue, rhs: KnownValue) bool {
     if (std.meta.activeTag(lhs) != std.meta.activeTag(rhs)) return false;
     return switch (lhs) {
@@ -8566,6 +8718,102 @@ test "demanded known value preserves finite tag choices without payload demand" 
     try std.testing.expectEqual(second_name, demanded.finite_tags.alternatives[1].name);
     try std.testing.expectEqual(@as(usize, 0), demanded.finite_tags.alternatives[0].payloads.len);
     try std.testing.expectEqual(@as(usize, 0), demanded.finite_tags.alternatives[1].payloads.len);
+}
+
+test "demanded known value equality ignores sparse child order" {
+    const program: *const Ast.Program = undefined;
+
+    const record_ty: Type.TypeId = @enumFromInt(90);
+    const first_ty: Type.TypeId = @enumFromInt(91);
+    const second_ty: Type.TypeId = @enumFromInt(92);
+    const field_a: names.RecordFieldNameId = @enumFromInt(8);
+    const field_b: names.RecordFieldNameId = @enumFromInt(9);
+    const lhs_fields = [_]DemandedKnownField{
+        .{ .name = field_a, .known_value = .{ .leaf = first_ty } },
+        .{ .name = field_b, .known_value = .{ .any = second_ty } },
+    };
+    const rhs_fields = [_]DemandedKnownField{
+        .{ .name = field_b, .known_value = .{ .any = second_ty } },
+        .{ .name = field_a, .known_value = .{ .leaf = first_ty } },
+    };
+    try std.testing.expect(demandedKnownValueEql(
+        program,
+        .{ .record = .{ .ty = record_ty, .fields = &lhs_fields } },
+        .{ .record = .{ .ty = record_ty, .fields = &rhs_fields } },
+    ));
+
+    const tuple_ty: Type.TypeId = @enumFromInt(93);
+    const lhs_items = [_]DemandedKnownIndexedValue{
+        .{ .index = 2, .known_value = .{ .leaf = first_ty } },
+        .{ .index = 0, .known_value = .{ .any = second_ty } },
+    };
+    const rhs_items = [_]DemandedKnownIndexedValue{
+        .{ .index = 0, .known_value = .{ .any = second_ty } },
+        .{ .index = 2, .known_value = .{ .leaf = first_ty } },
+    };
+    try std.testing.expect(demandedKnownValueEql(
+        program,
+        .{ .tuple = .{ .ty = tuple_ty, .items = &lhs_items } },
+        .{ .tuple = .{ .ty = tuple_ty, .items = &rhs_items } },
+    ));
+}
+
+test "demanded known value equality distinguishes omitted child from unknown carried child" {
+    const program: *const Ast.Program = undefined;
+
+    const callable_ty: Type.TypeId = @enumFromInt(100);
+    const capture_ty: Type.TypeId = @enumFromInt(101);
+    const fn_id: Ast.FnId = @enumFromInt(7);
+    const carried_captures = [_]DemandedKnownIndexedValue{
+        .{ .index = 0, .known_value = .{ .any = capture_ty } },
+    };
+
+    try std.testing.expect(!demandedKnownValueEql(
+        program,
+        .{ .callable = .{
+            .ty = callable_ty,
+            .fn_id = fn_id,
+            .captures = &.{},
+        } },
+        .{ .callable = .{
+            .ty = callable_ty,
+            .fn_id = fn_id,
+            .captures = &carried_captures,
+        } },
+    ));
+}
+
+test "demanded known value finite-state detection follows demanded children" {
+    const selector_ty: Type.TypeId = @enumFromInt(110);
+    const wrapper_ty: Type.TypeId = @enumFromInt(111);
+    const field: names.RecordFieldNameId = @enumFromInt(10);
+    const alternatives = [_]DemandedKnownTag{
+        .{
+            .ty = selector_ty,
+            .name = @enumFromInt(11),
+            .payloads = &.{},
+        },
+        .{
+            .ty = selector_ty,
+            .name = @enumFromInt(12),
+            .payloads = &.{},
+        },
+    };
+    const fields = [_]DemandedKnownField{
+        .{ .name = field, .known_value = .{ .finite_tags = .{
+            .ty = selector_ty,
+            .alternatives = &alternatives,
+        } } },
+    };
+
+    try std.testing.expect(demandedKnownValueContainsFiniteState(.{ .record = .{
+        .ty = wrapper_ty,
+        .fields = &fields,
+    } }));
+    try std.testing.expect(!demandedKnownValueContainsFiniteState(.{ .record = .{
+        .ty = wrapper_ty,
+        .fields = &.{},
+    } }));
 }
 
 test "demanded known value distinguishes omitted capture from unknown carried capture" {
