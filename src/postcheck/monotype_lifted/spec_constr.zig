@@ -267,6 +267,11 @@ const CallableFact = struct {
     captures: []const ValueFact,
 };
 
+const KnownMatchMode = enum {
+    strict,
+    speculative,
+};
+
 const Value = union(enum) {
     expr: Ast.ExprId,
     expr_with_known_fact: ExprWithKnownFactValue,
@@ -2671,6 +2676,16 @@ const Cloner = struct {
     }
 
     fn simplifyKnownMatchValue(self: *Cloner, ty: Type.TypeId, scrutinee: Value, branches_span: Ast.Span(Ast.Branch)) Common.LowerError!?Value {
+        return try self.simplifyKnownMatchValueMode(ty, scrutinee, branches_span, .strict);
+    }
+
+    fn simplifyKnownMatchValueMode(
+        self: *Cloner,
+        ty: Type.TypeId,
+        scrutinee: Value,
+        branches_span: Ast.Span(Ast.Branch),
+        mode: KnownMatchMode,
+    ) Common.LowerError!?Value {
         switch (scrutinee) {
             .expr,
             .expr_with_known_fact,
@@ -2698,7 +2713,10 @@ const Cloner = struct {
             self.restore(change_start);
             return try self.wrapPendingLets(body, pending_lets.items, false);
         }
-        Common.invariant("known constructor match had no matching branch");
+        switch (mode) {
+            .strict => Common.invariant("known constructor match had no matching branch"),
+            .speculative => return null,
+        }
     }
 
     fn simplifyKnownMatchIfValue(
@@ -2711,13 +2729,13 @@ const Cloner = struct {
         for (if_value.branches, 0..) |branch, index| {
             branches[index] = .{
                 .cond = branch.cond,
-                .body = (try self.simplifyKnownMatchValue(ty, branch.body, branches_span)) orelse
+                .body = (try self.simplifyKnownMatchValueMode(ty, branch.body, branches_span, .speculative)) orelse
                     return null,
             };
         }
 
         const final_else = try self.pass.arena.allocator().create(Value);
-        final_else.* = (try self.simplifyKnownMatchValue(ty, if_value.final_else.*, branches_span)) orelse
+        final_else.* = (try self.simplifyKnownMatchValueMode(ty, if_value.final_else.*, branches_span, .speculative)) orelse
             return null;
 
         return .{ .if_ = .{
@@ -3087,7 +3105,7 @@ const Cloner = struct {
 
         for (inner_branches, 0..) |inner_branch, index| {
             const inner_value = try self.cloneExprValue(inner_branch.body);
-            const outer_value = (try self.simplifyKnownMatchValue(ty, inner_value, outer_branches_span)) orelse return null;
+            const outer_value = (try self.simplifyKnownMatchValueMode(ty, inner_value, outer_branches_span, .speculative)) orelse return null;
             rewritten[index] = .{
                 .pat = inner_branch.pat,
                 .guard = inner_branch.guard,
