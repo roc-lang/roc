@@ -178,6 +178,10 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
         }
         inserter.rewritten_joins = &rewritten_joins;
         defer inserter.rewritten_joins = null;
+        var join_body_memo = JoinBodyMemo.init(store.allocator);
+        defer inserter.deinitJoinBodyMemo(&join_body_memo);
+        inserter.join_body_memo = &join_body_memo;
+        defer inserter.join_body_memo = null;
         var owned = try OwnedSet.init(store.allocator, store.locals.items.len);
         defer owned.deinit();
         for (store.getLocalSpan(emit_args), 0..) |param, position| {
@@ -272,11 +276,40 @@ const AnalysisScopedJoin = struct {
 const AnalysisScopedJoinMap = std.AutoHashMap(LIR.JoinPointId, AnalysisScopedJoin);
 
 const AnalysisSeenEntry = struct {
-    stmt: LIR.CFStmtId,
     owned: OwnedSet,
 };
 
-const AnalysisSeen = std.ArrayList(AnalysisSeenEntry);
+const AnalysisSeenId = struct {
+    stmt: LIR.CFStmtId,
+    owned_digest: u64,
+};
+
+const AnalysisSeenBucket = struct {
+    entries: std.ArrayList(AnalysisSeenEntry),
+};
+
+const AnalysisSeen = std.AutoHashMap(AnalysisSeenId, AnalysisSeenBucket);
+
+const JoinBodyMemoId = struct {
+    join: LIR.JoinPointId,
+    owned_digest: u64,
+};
+
+const JoinBodyMemoEntry = struct {
+    entry_owned: OwnedSet,
+    params: LIR.LocalSpan,
+    maybe_uninitialized_params: LIR.LocalSpan,
+    remainder: LIR.CFStmtId,
+    body: LIR.CFStmtId,
+    keep: OwnedSet,
+    body_reachable: bool,
+};
+
+const JoinBodyMemoBucket = struct {
+    entries: std.ArrayList(JoinBodyMemoEntry),
+};
+
+const JoinBodyMemo = std.AutoHashMap(JoinBodyMemoId, JoinBodyMemoBucket);
 
 const AnalysisStop = union(enum) {
     /// Stop at an explicit shared continuation statement.
@@ -400,6 +433,7 @@ const Inserter = struct {
     current_proc_body: LIR.CFStmtId = undefined,
     join_bodies: ?*const JoinBodyMap = null,
     rewritten_joins: ?*RewrittenJoinMap = null,
+    join_body_memo: ?*JoinBodyMemo = null,
 
     const CallArgOwnership = struct {
         retain_args: std.ArrayList(LIR.LocalId) = .empty,
@@ -1793,7 +1827,7 @@ const Inserter = struct {
             tasks.deinit(self.store.allocator);
         }
 
-        var seen = AnalysisSeen.empty;
+        var seen = AnalysisSeen.init(self.store.allocator);
         defer self.deinitAnalysisSeen(&seen);
         var scoped_joins = AnalysisScopedJoinMap.init(self.store.allocator);
         defer self.deinitAnalysisScopedJoins(&scoped_joins);
@@ -2271,24 +2305,39 @@ const Inserter = struct {
         stmt: LIR.CFStmtId,
         owned: *const OwnedSet,
     ) ResourceError!bool {
-        for (seen.items) |*entry| {
-            if (entry.stmt == stmt and entry.owned.eql(owned)) return true;
+        const seen_id = AnalysisSeenId{
+            .stmt = stmt,
+            .owned_digest = ownedSetDigest(owned),
+        };
+        const seen_entry = try seen.getOrPut(seen_id);
+        if (!seen_entry.found_existing) {
+            seen_entry.value_ptr.* = .{ .entries = .empty };
+        }
+        errdefer if (!seen_entry.found_existing) {
+            _ = seen.remove(seen_id);
+        };
+
+        for (seen_entry.value_ptr.entries.items) |*entry| {
+            if (entry.owned.eql(owned)) return true;
         }
 
         var owned_clone = try owned.clone();
         errdefer owned_clone.deinit();
-        try seen.append(self.store.allocator, .{
-            .stmt = stmt,
+        try seen_entry.value_ptr.entries.append(self.store.allocator, .{
             .owned = owned_clone,
         });
         return false;
     }
 
     fn deinitAnalysisSeen(self: *Inserter, seen: *AnalysisSeen) void {
-        for (seen.items) |*entry| {
-            entry.owned.deinit();
+        var iter = seen.valueIterator();
+        while (iter.next()) |bucket| {
+            for (bucket.entries.items) |*entry| {
+                entry.owned.deinit();
+            }
+            bucket.entries.deinit(self.store.allocator);
         }
-        seen.deinit(self.store.allocator);
+        seen.deinit();
     }
 
     fn deinitAnalysisScopedJoins(_: *Inserter, scoped_joins: *AnalysisScopedJoinMap) void {
@@ -2300,6 +2349,18 @@ const Inserter = struct {
             }
         }
         scoped_joins.deinit();
+    }
+
+    fn deinitJoinBodyMemo(self: *Inserter, memo: *JoinBodyMemo) void {
+        var iter = memo.valueIterator();
+        while (iter.next()) |bucket| {
+            for (bucket.entries.items) |*entry| {
+                entry.entry_owned.deinit();
+                entry.keep.deinit();
+            }
+            bucket.entries.deinit(self.store.allocator);
+        }
+        memo.deinit();
     }
 
     fn isBindingBorrowed(self: *const Inserter, local: LIR.LocalId) bool {
@@ -2340,6 +2401,97 @@ const Inserter = struct {
         owned.unset(self.solution.unitLocalOf(local));
     }
 
+    fn cachedJoinBodyOwnedSet(
+        self: *Inserter,
+        entry_owned: *const OwnedSet,
+        join_id: LIR.JoinPointId,
+        params: LIR.LocalSpan,
+        maybe_uninitialized_params: LIR.LocalSpan,
+        remainder: LIR.CFStmtId,
+        body: LIR.CFStmtId,
+        body_reachable: ?*bool,
+    ) ResourceError!?OwnedSet {
+        const memo = self.join_body_memo orelse return null;
+        const memo_id = JoinBodyMemoId{
+            .join = join_id,
+            .owned_digest = ownedSetDigest(entry_owned),
+        };
+        const bucket = memo.getPtr(memo_id) orelse return null;
+        for (bucket.entries.items) |*entry| {
+            if (!entry.entry_owned.eql(entry_owned)) continue;
+            checkJoinBodyMemoMetadata(entry, params, maybe_uninitialized_params, remainder, body);
+            if (body_reachable) |reachable| reachable.* = entry.body_reachable;
+            return try entry.keep.clone();
+        }
+        return null;
+    }
+
+    fn cacheJoinBodyOwnedSet(
+        self: *Inserter,
+        entry_owned: *const OwnedSet,
+        join_id: LIR.JoinPointId,
+        params: LIR.LocalSpan,
+        maybe_uninitialized_params: LIR.LocalSpan,
+        remainder: LIR.CFStmtId,
+        body: LIR.CFStmtId,
+        keep: *const OwnedSet,
+        body_reachable: bool,
+    ) ResourceError!void {
+        const memo = self.join_body_memo orelse return;
+        const memo_id = JoinBodyMemoId{
+            .join = join_id,
+            .owned_digest = ownedSetDigest(entry_owned),
+        };
+        const bucket = try memo.getOrPut(memo_id);
+        if (!bucket.found_existing) {
+            bucket.value_ptr.* = .{ .entries = .empty };
+        }
+        errdefer if (!bucket.found_existing) {
+            _ = memo.remove(memo_id);
+        };
+
+        for (bucket.value_ptr.entries.items) |*entry| {
+            if (!entry.entry_owned.eql(entry_owned)) continue;
+            checkJoinBodyMemoMetadata(entry, params, maybe_uninitialized_params, remainder, body);
+            return;
+        }
+
+        var entry_owned_clone = try entry_owned.clone();
+        errdefer entry_owned_clone.deinit();
+        var keep_clone = try keep.clone();
+        errdefer keep_clone.deinit();
+        try bucket.value_ptr.entries.append(self.store.allocator, .{
+            .entry_owned = entry_owned_clone,
+            .params = params,
+            .maybe_uninitialized_params = maybe_uninitialized_params,
+            .remainder = remainder,
+            .body = body,
+            .keep = keep_clone,
+            .body_reachable = body_reachable,
+        });
+    }
+
+    fn checkJoinBodyMemoMetadata(
+        entry: *const JoinBodyMemoEntry,
+        params: LIR.LocalSpan,
+        maybe_uninitialized_params: LIR.LocalSpan,
+        remainder: LIR.CFStmtId,
+        body: LIR.CFStmtId,
+    ) void {
+        if (!localSpanEql(entry.params, params)) {
+            arcInvariant("ARC join body memo saw one join id with multiple param spans");
+        }
+        if (!localSpanEql(entry.maybe_uninitialized_params, maybe_uninitialized_params)) {
+            arcInvariant("ARC join body memo saw one join id with multiple maybe-uninitialized param spans");
+        }
+        if (entry.remainder != remainder) {
+            arcInvariant("ARC join body memo saw one join id with multiple remainders");
+        }
+        if (entry.body != body) {
+            arcInvariant("ARC join body memo saw one join id with multiple bodies");
+        }
+    }
+
     fn joinBodyOwnedSet(
         self: *Inserter,
         entry_owned: *const OwnedSet,
@@ -2350,6 +2502,10 @@ const Inserter = struct {
         body: LIR.CFStmtId,
         body_reachable: ?*bool,
     ) ResourceError!OwnedSet {
+        if (try self.cachedJoinBodyOwnedSet(entry_owned, join_id, params, maybe_uninitialized_params, remainder, body, body_reachable)) |cached| {
+            return cached;
+        }
+
         // The emitted body is shared by every jump into the join. A non-param
         // local can enter that body as owned only when every jump reaches it
         // with that local owned, whether the local was already owned before
@@ -2360,9 +2516,8 @@ const Inserter = struct {
             jump_states.deinit(self.store.allocator);
         }
         try self.analyzeJumpsToJoin(remainder, entry_owned, join_id, &jump_states, null);
-        if (body_reachable) |reachable| {
-            reachable.* = jump_states.items.len != 0;
-        }
+        const reachable = jump_states.items.len != 0;
+        if (body_reachable) |reachable_out| reachable_out.* = reachable;
 
         var owned = try OwnedSet.init(self.store.allocator, entry_owned.len());
         errdefer owned.deinit();
@@ -2394,6 +2549,7 @@ const Inserter = struct {
             // the param as borrowed.
             self.addConditionallyOwnedIfRc(&owned, param);
         }
+        try self.cacheJoinBodyOwnedSet(entry_owned, join_id, params, maybe_uninitialized_params, remainder, body, &owned, reachable);
         return owned;
     }
 
@@ -4057,6 +4213,16 @@ const OwnedSet = struct {
         self.bits.setUnion(other.bits);
     }
 };
+
+fn ownedSetDigest(owned: *const OwnedSet) u64 {
+    var hasher = std.hash.Wyhash.init(0x6172635f616e616c);
+    var iter = owned.bits.iterator(.{});
+    while (iter.next()) |index| {
+        const local_index: u32 = @intCast(index);
+        hasher.update(std.mem.asBytes(&local_index));
+    }
+    return hasher.final();
+}
 
 fn refOpSource(op: LIR.RefOp) LIR.LocalId {
     return switch (op) {
