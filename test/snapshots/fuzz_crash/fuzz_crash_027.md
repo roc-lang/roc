@@ -1911,7 +1911,7 @@ main! = |_| { # Yeah Ie
 							(p-assign (ident "#interp_0"))
 							(e-lookup-local
 								(p-assign (ident "world"))))
-						(e-interpolation (constraint-fn-var 3691)
+						(e-interpolation (constraint-fn-var 3683)
 							(first
 								(e-literal (string "Hello, ")))
 							(parts

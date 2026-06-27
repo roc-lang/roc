@@ -59,7 +59,7 @@ NO CHANGE
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "rest"))))))
-		(e-interpolation (constraint-fn-var 94)
+		(e-interpolation (constraint-fn-var 86)
 			(first
 				(e-literal (string "Hello ")))
 			(parts

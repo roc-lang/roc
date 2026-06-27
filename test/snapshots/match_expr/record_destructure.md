@@ -98,7 +98,7 @@ match ... {
 									(e-lookup-local
 										(p-assign (ident "age"))))
 								(args)))
-						(e-interpolation (constraint-fn-var 124)
+						(e-interpolation (constraint-fn-var 116)
 							(first
 								(e-literal (string "")))
 							(parts
@@ -133,7 +133,7 @@ match ... {
 							(p-assign (ident "#interp_3"))
 							(e-lookup-local
 								(p-assign (ident "name"))))
-						(e-interpolation (constraint-fn-var 193)
+						(e-interpolation (constraint-fn-var 177)
 							(first
 								(e-literal (string "")))
 							(parts

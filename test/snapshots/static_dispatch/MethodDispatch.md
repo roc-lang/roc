@@ -353,7 +353,7 @@ NO CHANGE
 			(ty-lookup (name "Str") (builtin))))
 	(d-let
 		(p-assign (ident "result2"))
-		(e-call (constraint-fn-var 499)
+		(e-call (constraint-fn-var 491)
 			(e-lookup-local
 				(p-assign (ident "modify")))
 			(e-lookup-local
@@ -366,7 +366,7 @@ NO CHANGE
 						(p-assign (ident "#interp_0"))
 						(e-lookup-local
 							(p-assign (ident "s"))))
-					(e-interpolation (constraint-fn-var 497)
+					(e-interpolation (constraint-fn-var 489)
 						(first
 							(e-literal (string "")))
 						(parts
@@ -383,7 +383,7 @@ NO CHANGE
 					(p-assign (ident "directCall")))
 				(e-lookup-local
 					(p-assign (ident "result1")))
-				(e-call (constraint-fn-var 526)
+				(e-call (constraint-fn-var 518)
 					(e-lookup-local
 						(p-assign (ident "extract")))
 					(e-lookup-local
