@@ -417,6 +417,7 @@ const Value = union(enum) {
     callable: CallableValue,
     finite_tags: FiniteTagsValue,
     finite_callables: FiniteCallablesValue,
+    private_state: PrivateStateValue,
 };
 
 const ExprWithKnownValue = struct {
@@ -1348,6 +1349,7 @@ const Pass = struct {
                     .alternatives = alternatives,
                 } };
             },
+            .private_state => null,
         };
     }
 };
@@ -1983,6 +1985,7 @@ const Cloner = struct {
                 break :blk true;
             },
             .expr_with_known_value => |known_value_expr| self.exprCanSubstitute(known_value_expr.expr),
+            .private_state => true,
         };
     }
 
@@ -2893,6 +2896,7 @@ const Cloner = struct {
             },
             .let_ => |let_value| try self.projectableLoopKnownValueForValue(known_value, let_value.body.*),
             .if_ => null,
+            .private_state => null,
             .expr_with_known_value => |known| if (canReadFieldsFromExpr(self.pass.program, known.expr))
                 try self.projectableLoopKnownValueFromExpr(known.known_value)
             else
@@ -3303,6 +3307,7 @@ const Cloner = struct {
             .if_,
             .expr,
             .expr_with_known_value,
+            .private_state,
             => value,
         };
     }
@@ -4761,6 +4766,7 @@ const Cloner = struct {
                 }
                 break :blk count;
             },
+            .private_state => 0,
         };
     }
 
@@ -4919,6 +4925,7 @@ const Cloner = struct {
                     .alternatives = alternatives,
                 } };
             },
+            .private_state => value,
         };
     }
 
@@ -5915,6 +5922,7 @@ const Cloner = struct {
             .callable => |callable| return try self.materializeCallable(callable),
             .finite_tags => |finite_tags| return try self.materialize(try self.finiteTagsAsIfValue(finite_tags)),
             .finite_callables => |finite_callables| return try self.materialize(try self.finiteCallablesAsIfValue(finite_callables)),
+            .private_state => Common.invariant("private state value reached public materialization"),
         }
     }
 
@@ -5980,6 +5988,7 @@ const Cloner = struct {
             .callable => |callable| return try self.materializePublicCallable(callable),
             .finite_tags => |finite_tags| return try self.materializePublic(try self.finiteTagsAsIfValue(finite_tags)),
             .finite_callables => |finite_callables| return try self.materializePublic(try self.finiteCallablesAsIfValue(finite_callables)),
+            .private_state => Common.invariant("private state value reached public materialization"),
         }
     }
 
@@ -7307,6 +7316,7 @@ fn valueType(program: *const Ast.Program, value: Value) Type.TypeId {
         .callable => |callable| callable.ty,
         .finite_tags => |finite_tags| finite_tags.ty,
         .finite_callables => |finite_callables| finite_callables.ty,
+        .private_state => |private_state| privateStateValueType(private_state),
     };
 }
 
@@ -9665,6 +9675,17 @@ test "private state value reads sparse callable captures by original index" {
     const capture = privateStateCallableCapture(callable, 4) orelse return error.TestExpectedEqual;
     try std.testing.expectEqual(capture_ty, privateStateValueType(capture));
     try std.testing.expectEqual(capture_expr, capture.leaf.expr);
+}
+
+test "value type reads private state type without public materialization" {
+    const private_ty: Type.TypeId = @enumFromInt(191);
+    const private_expr: Ast.ExprId = @enumFromInt(12);
+    const program: *const Ast.Program = undefined;
+
+    try std.testing.expectEqual(private_ty, valueType(program, .{ .private_state = .{ .leaf = .{
+        .ty = private_ty,
+        .expr = private_expr,
+    } } }));
 }
 
 test "demanded known value matching ignores omitted record fields" {
