@@ -2300,6 +2300,7 @@ pub fn build(b: *std.Build) void {
     const run_fmt_zig_step = b.step("run-fmt-zig", "Format all zig code");
     const run_snapshot_tool_step = b.step("run-snapshot-tool", "Run the snapshot tool to update snapshot files");
     const echo_wasm_step = b.step("build-echo-wasm", "Build the echo platform to zig-out/lib/echo.wasm");
+    const echo_wasm_archive_step = b.step("build-echo-wasm-archive", "Build echo.wasm and zstd-compress it to zig-out/lib/echo.wasm.zst");
 
     const build_test_hosts_step = b.step("build-test-hosts", "Build test platform host libraries");
     const build_release_step = b.step("build-release", "Build optimized release binary for distribution");
@@ -3352,6 +3353,26 @@ pub fn build(b: *std.Build) void {
         });
         build_playground_step.dependOn(&echo_wasm_install.step);
         echo_wasm_step.dependOn(&echo_wasm_install.step);
+
+        // build-echo-wasm-archive: compress echo.wasm into echo.wasm.zst using
+        // the same zstd streaming compressor as `roc bundle` (src/bundle/).
+        const echo_wasm_archive_exe = b.addExecutable(.{
+            .name = "echo_wasm_archive",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/echo_platform/echo_wasm_archive.zig"),
+                .target = target,
+                .optimize = optimize,
+            }),
+        });
+        configureBackend(echo_wasm_archive_exe, target);
+        echo_wasm_archive_exe.root_module.addImport("bundle", roc_modules.bundle);
+        echo_wasm_archive_exe.root_module.linkLibrary(zstd.artifact("zstd"));
+
+        const echo_wasm_archive_cmd = b.addRunArtifact(echo_wasm_archive_exe);
+        echo_wasm_archive_cmd.addFileArg(echo_wasm.getEmittedBin());
+        const echo_wasm_archive_out = echo_wasm_archive_cmd.addOutputFileArg("echo.wasm.zst");
+        const echo_wasm_archive_install = b.addInstallFileWithDir(echo_wasm_archive_out, .lib, "echo.wasm.zst");
+        echo_wasm_archive_step.dependOn(&echo_wasm_archive_install.step);
 
         // Copy the echo platform www files alongside echo.wasm
         inline for (.{ "index.html", "app.js" }) |filename| {
