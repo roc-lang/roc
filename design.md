@@ -1478,10 +1478,28 @@ When a loop starts with useful known-value facts, the loop parameter may be
 split into private leaves. For `Iter` and `Stream`, that means the public
 wrapper can disappear from the hot loop. The loop carries private fields such
 as list pointer, index, length, phase, selected callable target, and captured
-values. A step call through a known callable field can be inlined when it has a
-single target, or lowered through finite lambda-set dispatch when multiple
-known targets remain. Matches on known step tags simplify through the same
-ordinary known-tag machinery used for all tag unions.
+values. The selected callable target is not always one fixed function for the
+whole loop. Real iterator state machines change targets as they advance: an
+append iterator can step through an append wrapper, then through the source
+iterator, then through the empty iterator; a concat iterator can move from the
+first iterator to the second. Loop-state specialization must therefore preserve
+finite callable alternatives, not widen to an opaque callable merely because a
+reachable `continue` value has a different target or capture count.
+
+A step call through a known callable field can be inlined when it has a single
+target. When multiple known targets remain, optimized lowering uses the same
+finite lambda-set dispatch machinery used for ordinary Roc function values,
+and each branch continues with the target's captures as private state. This is
+the Roc equivalent of Rust's adapter enum/state-machine lowering. Matches on
+known step tags simplify through the same ordinary known-tag machinery used for
+all tag unions.
+
+This known-value specialization work runs only in optimized post-check
+lowering. `roc check`, compile-time finalization, interpreter builds, and dev
+builds still run all language-required compile-time evaluation and diagnostics,
+but they do not need the extra private cursor-state specialization. `--opt=size`
+and `--opt=speed` enable wrapper inlining and the known-value specialization
+pipeline.
 
 Public iterator values remain immutable and reusable. Source such as:
 

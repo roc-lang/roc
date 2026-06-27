@@ -198,6 +198,8 @@ while preserving the source program's evaluation order:
 - `Record`, `Tuple`, `Tag`, or `Nominal`: a constructor with child facts.
 - `Callable`: a known lifted target or finite lambda-set member with child
   facts for captures.
+- `CallableAlternatives`: a finite set of known callable members for the same
+  function type, each with its own capture facts.
 
 This is deliberately broader than aggregate shape. Records, tuples, tags, and
 nominals can expose useful children, but they are not the only useful state.
@@ -210,6 +212,17 @@ The target implementation uses names such as `KnownValue` or `ValueFact` for
 this optimizer data. It does not expose APIs, comments, or tests that talk
 about "shaped expressions." Names such as `Shape` are reserved for actual type,
 layout, serialization, or source-shape concepts, not this optimizer fact model.
+
+Finite callable alternatives are required for real iterator state machines.
+`Iter.append`, `Iter.concat`, finite ranges, and empty iterators do not keep one
+fixed step function target for the whole consuming loop. For example,
+`base.iter().append(last)` can continue from the append step wrapper to another
+append wrapper with a different source cursor, and eventually to the empty
+iterator's zero-capture step thunk. Widening that field to an ordinary callable
+keeps the public iterator protocol in the hot loop. The optimizer must preserve
+the finite callable alternatives and their captures, then lower calls through
+that field by the same finite lambda-set machinery used for ordinary Roc
+function values.
 
 ### Public Builtins
 
@@ -341,6 +354,13 @@ sum = |start| {
 The record argument only matters for a possible interprocedural worker ABI. It
 must not be the reason the body gets local loop-state specialization. A
 primitive leaf is already valid private state.
+
+The pass runs only in optimized post-check lowering. Normal CLI builds already
+express that through `postCheckInlineModeForOpt`: `--opt=size` and
+`--opt=speed` use wrapper inlining, while dev/interpreter use `.none`. The
+compiler must keep language-required compile-time evaluation and diagnostics in
+all modes, but this private cursor-state specialization belongs only to the
+optimized path.
 
 The pass should run as a worklist:
 
@@ -652,10 +672,18 @@ Update loop specialization so split loop state works with:
 - callable fields read from known records
 - step results returned by inlined `Iter.next`/`Stream.next!`
 - `continue` values that rebuild the same outer constructor
+- `continue` values whose callable field stays finite but changes target or
+  capture count
 
 The loop rewrite must remain all-or-nothing for each loop parameter. If the
 initial facts and every reachable `continue` fact cannot be made consistent,
 keep the ordinary loop value.
+
+The consistency check must not reduce "same public function type, different
+known callable target" to `any`. It should form finite callable alternatives
+when all reachable callables are known. Only truly unknown, erased, or
+materialized callable values force the loop state back to the ordinary public
+representation.
 
 ### 10. Ensure Lambda Sets Stay Finite Until Lowering
 
@@ -732,6 +760,8 @@ direct-list source.
 - [ ] Known-value specialization handles direct-call results in demanded
       contexts.
 - [x] Known-value specialization handles `if` and `match` joins.
+- [ ] Known-value specialization preserves finite callable alternatives across
+      branch joins and loop `continue` refinements.
 - [ ] Loop-state splitting handles iterator records and step callables.
 - [x] Lambda solving keeps known step callables finite where bodies are
       available.
@@ -761,12 +791,11 @@ It currently fails because the iterator form lowers to substantially more
 reachable LIR than the direct-list form:
 
 ```text
-direct_call_count: iter form has 77, direct-list form has 2
+switch_count: iter form has 16, direct-list form has 7
 ```
 
-The minimized record variant fails for the same reason.
-
-The latest investigation found two concrete gaps:
+The minimized record variant fails for the same reason. The latest
+investigation found these concrete gaps:
 
 - Source `for` lowering calls `.iter` on the iterable. For an `Iter`, this is
   the identity function `Iter.iter`, but the current direct-call demand logic
@@ -780,6 +809,13 @@ The latest investigation found two concrete gaps:
   churn instead of private cursor leaves. The real fix needs precise
   result-demand propagation plus sharing/splitting of known callable captures,
   not an over-broad "demand every argument" rule.
+- Loop refinement currently assumes a callable field has one target and one
+  capture layout. In the append case, a reachable `continue` value changes from
+  the append step wrapper to another known step target such as the empty
+  iterator. The current code widens that field to an ordinary callable, so the
+  loop calls the append step thunk instead of optimizing to a private finite
+  state machine. The fix is to preserve finite callable alternatives through
+  refinement and lower the call through those alternatives.
 
 ## Non-Negotiable Invariants
 
