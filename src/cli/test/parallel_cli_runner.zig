@@ -185,6 +185,9 @@ const PlatformCase = struct {
     roc_file: []const u8,
     /// Platform name (for display grouping)
     platform: []const u8,
+    /// Stderr substrings expected during the build step. A build that exits 2
+    /// because of expected warning diagnostics still produces an executable.
+    expected_build_stderr_contains: []const []const u8 = &.{},
     /// What kind of test to run
     test_kind: TestKind,
 
@@ -374,6 +377,7 @@ fn appendPlatformSpecs(
                     .body = .{ .platform = .{
                         .roc_file = spec.roc_file,
                         .platform = platform.name,
+                        .expected_build_stderr_contains = spec.expected_build_stderr_contains,
                         .test_kind = .{ .io_spec = spec.io_spec },
                     } },
                 };
@@ -1200,8 +1204,24 @@ fn runCompiledTest(
         return .{ .status = .infra_error, .phase = .build, .duration_ns = timer.read(), .build_ns = build_timer.read(), .message = msg };
     };
     const build_ns = build_timer.read();
-    if (!processSucceeded(build_result.term)) {
+    if (processTimedOut(build_result.stderr) or hasMemoryErrors(build_result.stderr) != null) {
         return resultFromProcess(build_result, timer, .build, build_ns, 0, "build failed");
+    }
+    if (!buildSucceededOrExpectedDiagnostics(build_result, platform.expected_build_stderr_contains)) {
+        return resultFromProcess(build_result, timer, .build, build_ns, 0, "build failed");
+    }
+    if (missingExpectedStderr(build_result.stderr, platform.expected_build_stderr_contains)) |needle| {
+        const msg = std.fmt.allocPrint(allocator, "missing expected build stderr: {s}", .{needle}) catch "missing expected build stderr";
+        return .{
+            .status = .build_failed,
+            .phase = .build,
+            .duration_ns = timer.read(),
+            .build_ns = build_ns,
+            .exit_code = exitCode(build_result.term),
+            .stderr_capture = build_result.stderr,
+            .stdout_capture = build_result.stdout,
+            .message = msg,
+        };
     }
 
     if (!builtOutputExists(io, allocator, output_name)) {
@@ -1335,6 +1355,24 @@ fn processSucceeded(term: std.process.Child.Term) bool {
         .exited => |code| code == 0,
         else => false,
     };
+}
+
+fn buildSucceededOrExpectedDiagnostics(result: std.process.RunResult, expected_stderr_contains: []const []const u8) bool {
+    if (processSucceeded(result.term)) return true;
+    if (expected_stderr_contains.len == 0) return false;
+
+    return switch (result.term) {
+        .exited => |code| code == 2,
+        else => false,
+    };
+}
+
+fn missingExpectedStderr(stderr: []const u8, expected_stderr_contains: []const []const u8) ?[]const u8 {
+    for (expected_stderr_contains) |needle| {
+        if (std.mem.find(u8, stderr, needle) == null) return needle;
+    }
+
+    return null;
 }
 
 fn processTimedOut(stderr: []const u8) bool {
