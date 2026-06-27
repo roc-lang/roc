@@ -49,9 +49,10 @@ fn titleContainsIgnoreCase(title: []const u8, needle: []const u8) bool {
 ///   - trimmed, with no newlines or consecutive spaces;
 ///   - title case outside backticks: every non-minor word begins with a capital
 ///     letter (or a digit), every word contains only alphanumeric characters,
-///     and the title has at least one lowercase letter (so it reads as
-///     `Title Case`, not `ALL CAPS` — the box/HTML/LSP renderers shout it back
-///     to ALL CAPS, while markdown keeps the authored case);
+///     except for `UTF-` prefixed words such as `UTF-8`, and the title has at
+///     least one lowercase letter (so it reads as `Title Case`, not `ALL CAPS`
+///     — the box/HTML/LSP renderers shout it back to ALL CAPS, while markdown
+///     keeps the authored case);
 ///   - allowed to contain backticked inline code spans, whose contents must be
 ///     non-empty and trimmed, but are not title-cased;
 ///   - free of the word "comptime", which is a Zig term, not a Roc one, and so
