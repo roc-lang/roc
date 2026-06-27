@@ -290,6 +290,65 @@ const KnownCallables = struct {
     alternatives: []const KnownCallable,
 };
 
+const DemandedKnownValue = union(enum) {
+    any: Type.TypeId,
+    leaf: Type.TypeId,
+    tag: DemandedKnownTag,
+    record: DemandedKnownRecord,
+    tuple: DemandedKnownTuple,
+    nominal: DemandedKnownNominal,
+    callable: DemandedKnownCallable,
+    finite_tags: DemandedKnownTags,
+    finite_callables: DemandedKnownCallables,
+};
+
+const DemandedKnownTag = struct {
+    ty: Type.TypeId,
+    name: names.TagNameId,
+    payloads: []const DemandedKnownIndexedValue,
+};
+
+const DemandedKnownField = struct {
+    name: names.RecordFieldNameId,
+    known_value: DemandedKnownValue,
+};
+
+const DemandedKnownRecord = struct {
+    ty: Type.TypeId,
+    fields: []const DemandedKnownField,
+};
+
+const DemandedKnownTuple = struct {
+    ty: Type.TypeId,
+    items: []const DemandedKnownIndexedValue,
+};
+
+const DemandedKnownNominal = struct {
+    ty: Type.TypeId,
+    backing: ?*const DemandedKnownValue,
+};
+
+const DemandedKnownCallable = struct {
+    ty: Type.TypeId,
+    fn_id: Ast.FnId,
+    captures: []const DemandedKnownIndexedValue,
+};
+
+const DemandedKnownTags = struct {
+    ty: Type.TypeId,
+    alternatives: []const DemandedKnownTag,
+};
+
+const DemandedKnownCallables = struct {
+    ty: Type.TypeId,
+    alternatives: []const DemandedKnownCallable,
+};
+
+const DemandedKnownIndexedValue = struct {
+    index: u32,
+    known_value: DemandedKnownValue,
+};
+
 const KnownMatchMode = enum {
     strict,
     speculative,
@@ -7372,6 +7431,237 @@ fn knownValueContainsFiniteState(known_value: KnownValue) bool {
     };
 }
 
+fn demandedKnownValueFromDemand(
+    arena: Allocator,
+    known_value: KnownValue,
+    demand: ValueDemand,
+) Allocator.Error!?DemandedKnownValue {
+    return switch (demand) {
+        .none => null,
+        .materialize => try materializedDemandedKnownValue(arena, known_value),
+        .record => |field_demands| blk: {
+            if (known_value == .nominal) {
+                const demanded_backing = (try demandedKnownValueFromDemand(arena, known_value.nominal.backing.*, demand)) orelse break :blk null;
+                const backing = try arena.create(DemandedKnownValue);
+                backing.* = demanded_backing;
+                break :blk DemandedKnownValue{ .nominal = .{
+                    .ty = known_value.nominal.ty,
+                    .backing = backing,
+                } };
+            }
+            const record = switch (known_value) {
+                .record => |record| record,
+                else => break :blk null,
+            };
+
+            var fields = std.ArrayList(DemandedKnownField).empty;
+            defer fields.deinit(arena);
+            for (record.fields) |field| {
+                const field_demand = fieldDemandByName(field_demands, field.name) orelse continue;
+                const demanded_field = (try demandedKnownValueFromDemand(arena, field.known_value, field_demand.demand.*)) orelse continue;
+                try fields.append(arena, .{
+                    .name = field.name,
+                    .known_value = demanded_field,
+                });
+            }
+            if (fields.items.len == 0) break :blk null;
+            break :blk DemandedKnownValue{ .record = .{
+                .ty = record.ty,
+                .fields = try arena.dupe(DemandedKnownField, fields.items),
+            } };
+        },
+        .tuple => |item_demands| blk: {
+            if (known_value == .nominal) {
+                const demanded_backing = (try demandedKnownValueFromDemand(arena, known_value.nominal.backing.*, demand)) orelse break :blk null;
+                const backing = try arena.create(DemandedKnownValue);
+                backing.* = demanded_backing;
+                break :blk DemandedKnownValue{ .nominal = .{
+                    .ty = known_value.nominal.ty,
+                    .backing = backing,
+                } };
+            }
+            const tuple = switch (known_value) {
+                .tuple => |tuple| tuple,
+                else => break :blk null,
+            };
+
+            var items = std.ArrayList(DemandedKnownIndexedValue).empty;
+            defer items.deinit(arena);
+            for (tuple.items, 0..) |item, index| {
+                const item_demand = itemDemandByIndex(item_demands, @intCast(index)) orelse continue;
+                const demanded_item = (try demandedKnownValueFromDemand(arena, item, item_demand.demand.*)) orelse continue;
+                try items.append(arena, .{
+                    .index = @intCast(index),
+                    .known_value = demanded_item,
+                });
+            }
+            if (items.items.len == 0) break :blk null;
+            break :blk DemandedKnownValue{ .tuple = .{
+                .ty = tuple.ty,
+                .items = try arena.dupe(DemandedKnownIndexedValue, items.items),
+            } };
+        },
+        .nominal => |backing_demand| blk: {
+            const nominal = switch (known_value) {
+                .nominal => |nominal| nominal,
+                else => break :blk null,
+            };
+            const demanded_backing = (try demandedKnownValueFromDemand(arena, nominal.backing.*, backing_demand.*)) orelse break :blk null;
+            const backing = try arena.create(DemandedKnownValue);
+            backing.* = demanded_backing;
+            break :blk DemandedKnownValue{ .nominal = .{
+                .ty = nominal.ty,
+                .backing = backing,
+            } };
+        },
+        .callable => |callable_demand| blk: {
+            if (known_value == .nominal) {
+                const demanded_backing = (try demandedKnownValueFromDemand(arena, known_value.nominal.backing.*, demand)) orelse break :blk null;
+                const backing = try arena.create(DemandedKnownValue);
+                backing.* = demanded_backing;
+                break :blk DemandedKnownValue{ .nominal = .{
+                    .ty = known_value.nominal.ty,
+                    .backing = backing,
+                } };
+            }
+
+            switch (known_value) {
+                .callable => |callable| {
+                    const captures = try demandedKnownCapturesFromDemand(arena, callable.captures, callable_demand);
+                    if (captures.len == 0) break :blk null;
+                    break :blk DemandedKnownValue{ .callable = .{
+                        .ty = callable.ty,
+                        .fn_id = callable.fn_id,
+                        .captures = captures,
+                    } };
+                },
+                .finite_callables => |finite_callables| {
+                    const alternatives = try arena.alloc(DemandedKnownCallable, finite_callables.alternatives.len);
+                    var has_demanded_capture = false;
+                    for (finite_callables.alternatives, alternatives) |alternative, *out| {
+                        const captures = try demandedKnownCapturesFromDemand(arena, alternative.captures, callable_demand);
+                        has_demanded_capture = has_demanded_capture or captures.len != 0;
+                        out.* = .{
+                            .ty = alternative.ty,
+                            .fn_id = alternative.fn_id,
+                            .captures = captures,
+                        };
+                    }
+                    if (!has_demanded_capture) break :blk null;
+                    break :blk DemandedKnownValue{ .finite_callables = .{
+                        .ty = finite_callables.ty,
+                        .alternatives = alternatives,
+                    } };
+                },
+                else => break :blk null,
+            }
+        },
+    };
+}
+
+fn materializedDemandedKnownValue(arena: Allocator, known_value: KnownValue) Allocator.Error!DemandedKnownValue {
+    return switch (known_value) {
+        .any => |ty| .{ .any = ty },
+        .leaf => |ty| .{ .leaf = ty },
+        .tag => |tag| .{ .tag = .{
+            .ty = tag.ty,
+            .name = tag.name,
+            .payloads = try materializedDemandedKnownIndexedValues(arena, tag.payloads),
+        } },
+        .record => |record| blk: {
+            const fields = try arena.alloc(DemandedKnownField, record.fields.len);
+            for (record.fields, fields) |field, *out| {
+                out.* = .{
+                    .name = field.name,
+                    .known_value = try materializedDemandedKnownValue(arena, field.known_value),
+                };
+            }
+            break :blk DemandedKnownValue{ .record = .{
+                .ty = record.ty,
+                .fields = fields,
+            } };
+        },
+        .tuple => |tuple| .{ .tuple = .{
+            .ty = tuple.ty,
+            .items = try materializedDemandedKnownIndexedValues(arena, tuple.items),
+        } },
+        .nominal => |nominal| blk: {
+            const backing = try arena.create(DemandedKnownValue);
+            backing.* = try materializedDemandedKnownValue(arena, nominal.backing.*);
+            break :blk DemandedKnownValue{ .nominal = .{
+                .ty = nominal.ty,
+                .backing = backing,
+            } };
+        },
+        .callable => |callable| .{ .callable = .{
+            .ty = callable.ty,
+            .fn_id = callable.fn_id,
+            .captures = try materializedDemandedKnownIndexedValues(arena, callable.captures),
+        } },
+        .finite_tags => |finite_tags| blk: {
+            const alternatives = try arena.alloc(DemandedKnownTag, finite_tags.alternatives.len);
+            for (finite_tags.alternatives, alternatives) |alternative, *out| {
+                out.* = .{
+                    .ty = alternative.ty,
+                    .name = alternative.name,
+                    .payloads = try materializedDemandedKnownIndexedValues(arena, alternative.payloads),
+                };
+            }
+            break :blk DemandedKnownValue{ .finite_tags = .{
+                .ty = finite_tags.ty,
+                .alternatives = alternatives,
+            } };
+        },
+        .finite_callables => |finite_callables| blk: {
+            const alternatives = try arena.alloc(DemandedKnownCallable, finite_callables.alternatives.len);
+            for (finite_callables.alternatives, alternatives) |alternative, *out| {
+                out.* = .{
+                    .ty = alternative.ty,
+                    .fn_id = alternative.fn_id,
+                    .captures = try materializedDemandedKnownIndexedValues(arena, alternative.captures),
+                };
+            }
+            break :blk DemandedKnownValue{ .finite_callables = .{
+                .ty = finite_callables.ty,
+                .alternatives = alternatives,
+            } };
+        },
+    };
+}
+
+fn materializedDemandedKnownIndexedValues(
+    arena: Allocator,
+    values: []const KnownValue,
+) Allocator.Error![]const DemandedKnownIndexedValue {
+    const indexed = try arena.alloc(DemandedKnownIndexedValue, values.len);
+    for (values, indexed, 0..) |known_value, *out, index| {
+        out.* = .{
+            .index = @intCast(index),
+            .known_value = try materializedDemandedKnownValue(arena, known_value),
+        };
+    }
+    return indexed;
+}
+
+fn demandedKnownCapturesFromDemand(
+    arena: Allocator,
+    captures: []const KnownValue,
+    demand: CallableDemand,
+) Allocator.Error![]const DemandedKnownIndexedValue {
+    var demanded = std.ArrayList(DemandedKnownIndexedValue).empty;
+    defer demanded.deinit(arena);
+    for (captures, 0..) |capture, index| {
+        if (index >= demand.captures.len) break;
+        const capture_demand = demand.captures[index];
+        const demanded_capture = (try demandedKnownValueFromDemand(arena, capture, capture_demand)) orelse continue;
+        try demanded.append(arena, .{
+            .index = @intCast(index),
+            .known_value = demanded_capture,
+        });
+    }
+    return try arena.dupe(DemandedKnownIndexedValue, demanded.items);
+}
+
 fn known_valueEql(program: *const Ast.Program, lhs: KnownValue, rhs: KnownValue) bool {
     if (std.meta.activeTag(lhs) != std.meta.activeTag(rhs)) return false;
     return switch (lhs) {
@@ -8063,6 +8353,131 @@ test "value demand equality ignores projection order" {
         .{ .record = &record_lhs_fields },
         .{ .record = &record_missing_field },
     ));
+}
+
+test "demanded known value materialization preserves indexed tuple children" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const tuple_ty: Type.TypeId = @enumFromInt(10);
+    const first_ty: Type.TypeId = @enumFromInt(11);
+    const second_ty: Type.TypeId = @enumFromInt(12);
+    const third_ty: Type.TypeId = @enumFromInt(13);
+    const dense_items = [_]KnownValue{
+        .{ .leaf = first_ty },
+        .{ .any = second_ty },
+        .{ .leaf = third_ty },
+    };
+    const known = KnownValue{ .tuple = .{
+        .ty = tuple_ty,
+        .items = &dense_items,
+    } };
+
+    const demanded = (try demandedKnownValueFromDemand(arena.allocator(), known, .materialize)) orelse
+        return error.TestUnexpectedResult;
+
+    try std.testing.expectEqual(tuple_ty, demanded.tuple.ty);
+    try std.testing.expectEqual(@as(usize, 3), demanded.tuple.items.len);
+    try std.testing.expectEqual(@as(u32, 0), demanded.tuple.items[0].index);
+    try std.testing.expectEqual(@as(u32, 1), demanded.tuple.items[1].index);
+    try std.testing.expectEqual(@as(u32, 2), demanded.tuple.items[2].index);
+    try std.testing.expectEqual(second_ty, demanded.tuple.items[1].known_value.any);
+}
+
+test "demanded known value omits tuple siblings" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const tuple_ty: Type.TypeId = @enumFromInt(20);
+    const first_ty: Type.TypeId = @enumFromInt(21);
+    const second_ty: Type.TypeId = @enumFromInt(22);
+    const third_ty: Type.TypeId = @enumFromInt(23);
+    const dense_items = [_]KnownValue{
+        .{ .leaf = first_ty },
+        .{ .any = second_ty },
+        .{ .leaf = third_ty },
+    };
+    const known = KnownValue{ .tuple = .{
+        .ty = tuple_ty,
+        .items = &dense_items,
+    } };
+    const materialize: ValueDemand = .materialize;
+    const item_demands = [_]ItemDemand{
+        .{ .index = 1, .demand = &materialize },
+    };
+
+    const demanded = (try demandedKnownValueFromDemand(arena.allocator(), known, .{ .tuple = &item_demands })) orelse
+        return error.TestUnexpectedResult;
+
+    try std.testing.expectEqual(tuple_ty, demanded.tuple.ty);
+    try std.testing.expectEqual(@as(usize, 1), demanded.tuple.items.len);
+    try std.testing.expectEqual(@as(u32, 1), demanded.tuple.items[0].index);
+    try std.testing.expectEqual(second_ty, demanded.tuple.items[0].known_value.any);
+}
+
+test "demanded known value distinguishes omitted capture from unknown carried capture" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const callable_ty: Type.TypeId = @enumFromInt(30);
+    const first_ty: Type.TypeId = @enumFromInt(31);
+    const second_ty: Type.TypeId = @enumFromInt(32);
+    const third_ty: Type.TypeId = @enumFromInt(33);
+    const captures = [_]KnownValue{
+        .{ .leaf = first_ty },
+        .{ .any = second_ty },
+        .{ .leaf = third_ty },
+    };
+    const known = KnownValue{ .callable = .{
+        .ty = callable_ty,
+        .fn_id = @enumFromInt(0),
+        .captures = &captures,
+    } };
+    const capture_demands = [_]ValueDemand{
+        .none,
+        .materialize,
+        .none,
+    };
+
+    const demanded = (try demandedKnownValueFromDemand(arena.allocator(), known, .{
+        .callable = .{ .captures = &capture_demands },
+    })) orelse return error.TestUnexpectedResult;
+
+    try std.testing.expectEqual(callable_ty, demanded.callable.ty);
+    try std.testing.expectEqual(@as(usize, 1), demanded.callable.captures.len);
+    try std.testing.expectEqual(@as(u32, 1), demanded.callable.captures[0].index);
+    try std.testing.expectEqual(second_ty, demanded.callable.captures[0].known_value.any);
+}
+
+test "demanded known value omits unused record fields" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const record_ty: Type.TypeId = @enumFromInt(40);
+    const kept_ty: Type.TypeId = @enumFromInt(41);
+    const omitted_ty: Type.TypeId = @enumFromInt(42);
+    const kept_field: names.RecordFieldNameId = @enumFromInt(1);
+    const omitted_field: names.RecordFieldNameId = @enumFromInt(2);
+    const fields = [_]KnownField{
+        .{ .name = kept_field, .known_value = .{ .leaf = kept_ty } },
+        .{ .name = omitted_field, .known_value = .{ .leaf = omitted_ty } },
+    };
+    const known = KnownValue{ .record = .{
+        .ty = record_ty,
+        .fields = &fields,
+    } };
+    const materialize: ValueDemand = .materialize;
+    const field_demands = [_]FieldDemand{
+        .{ .name = kept_field, .demand = &materialize },
+    };
+
+    const demanded = (try demandedKnownValueFromDemand(arena.allocator(), known, .{ .record = &field_demands })) orelse
+        return error.TestUnexpectedResult;
+
+    try std.testing.expectEqual(record_ty, demanded.record.ty);
+    try std.testing.expectEqual(@as(usize, 1), demanded.record.fields.len);
+    try std.testing.expectEqual(kept_field, demanded.record.fields[0].name);
+    try std.testing.expectEqual(kept_ty, demanded.record.fields[0].known_value.leaf);
 }
 
 test "call-pattern specialization declarations are referenced" {
