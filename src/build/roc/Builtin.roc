@@ -680,26 +680,34 @@ Builtin :: [].{
 		## ```
 		append : Iter(item), item -> Iter(item)
 		append = |iterator, last| {
-			make = |current|
+			make = |current, pending_last|
 				iter_from_step(
-					match current.len_if_known {
-						Known(len) =>
-							if len == 18446744073709551615 {
-								Unknown
-							} else {
-								Known(len + 1)
-							}
-						Unknown => Unknown
+					if pending_last {
+						match current.len_if_known {
+							Known(len) =>
+								if len == 18446744073709551615 {
+									Unknown
+								} else {
+									Known(len + 1)
+								}
+							Unknown => Unknown
+						}
+					} else {
+						Known(0)
 					},
 					||
-						match Iter.next(current) {
-							Done => One({ item: last, rest: range_done() })
-							Skip({ rest }) => Skip({ rest: make(rest) })
-							One({ item, rest }) => One({ item, rest: make(rest) })
+						if pending_last {
+							match Iter.next(current) {
+								Done => One({ item: last, rest: make(current, Bool.False) })
+								Skip({ rest }) => Skip({ rest: make(rest, Bool.True) })
+								One({ item, rest }) => One({ item, rest: make(rest, Bool.True) })
+							}
+						} else {
+							Done
 						},
 				)
 
-			make(iterator)
+			make(iterator, Bool.True)
 		}
 
 		next : Iter(item) -> [One({ item : item, rest : Iter(item) }), Skip({ rest : Iter(item) }), Done]

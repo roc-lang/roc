@@ -279,11 +279,40 @@ const WrapperAnalyzer = struct {
     fn isInlineableWrapperBody(self: *const WrapperAnalyzer, expr_id: Lifted.ExprId) bool {
         const expr = self.solved.lifted.exprs.items[@intFromEnum(expr_id)];
         return switch (expr.data) {
+            .local,
+            .unit,
+            .int_lit,
+            .frac_f32_lit,
+            .frac_f64_lit,
+            .dec_lit,
+            .str_lit,
+            .static_data,
+            .fn_ref,
+            => true,
             .call_proc, .low_level => true,
+            .field_access => |field| self.isInlineableWrapperBody(field.receiver),
+            .tuple_access => |access| self.isInlineableWrapperBody(access.tuple),
+            .tuple,
+            => |items| self.exprSpanIsInlineableWrapperBody(items),
+            .record => |fields| {
+                for (self.solved.lifted.fieldExprSpan(fields)) |field| {
+                    if (!self.isInlineableWrapperBody(field.value)) return false;
+                }
+                return true;
+            },
+            .tag => |tag| self.exprSpanIsInlineableWrapperBody(tag.payloads),
+            .nominal => |backing| self.isInlineableWrapperBody(backing),
             .block => |block| self.solved.lifted.stmtSpan(block.statements).len == 0 and
                 self.isInlineableWrapperBody(block.final_expr),
             else => false,
         };
+    }
+
+    fn exprSpanIsInlineableWrapperBody(self: *const WrapperAnalyzer, span: Lifted.Span(Lifted.ExprId)) bool {
+        for (self.solved.lifted.exprSpan(span)) |expr| {
+            if (!self.isInlineableWrapperBody(expr)) return false;
+        }
+        return true;
     }
 
     /// Visit every proc called within a wrapper body so inline cycles are
