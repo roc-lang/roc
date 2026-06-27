@@ -1117,9 +1117,9 @@ const TypeTable = struct {
         for (fields) |field| self.freeDuped(field.name);
     }
 
-    fn freeCollectedRecordFieldList(self: *TypeTable, fields: *std.ArrayList(CollectedRecordField)) void {
-        self.freeCollectedRecordFieldNames(fields.items);
-        fields.deinit(self.gpa);
+    fn freeCollectedRecordFields(self: *TypeTable, fields: []const CollectedRecordField, populated: usize) void {
+        self.freeCollectedRecordFieldNames(fields[0..populated]);
+        self.gpa.free(fields);
     }
 
     /// Clear the checked-type map when switching modules (checked ids are artifact-local).
@@ -1399,8 +1399,9 @@ const TypeTable = struct {
         // Each named declared field recovers its converted shape from the backing
         // record (matched by name); each nonzero unnamed field becomes a padding
         // spacer whose size is its declared type's size and whose alignment is 1.
-        var collected = std.ArrayList(CollectedRecordField).empty;
-        errdefer self.freeCollectedRecordFieldList(&collected);
+        const collected = try self.gpa.alloc(CollectedRecordField, anno_fields.len);
+        var populated: usize = 0;
+        errdefer self.freeCollectedRecordFields(collected, populated);
 
         var padding_cursor: usize = 0;
         var pad_index: usize = 0;
@@ -1410,7 +1411,7 @@ const TypeTable = struct {
             if (field.is_unnamed) {
                 saw_unnamed_field = true;
                 if (padding_cursor >= padding_types.len) {
-                    self.freeCollectedRecordFieldList(&collected);
+                    self.freeCollectedRecordFields(collected, populated);
                     return null;
                 }
                 // Padding field types index the declaring artifact's type store.
@@ -1421,30 +1422,30 @@ const TypeTable = struct {
                 if (sa.size == 0) continue;
 
                 const name = try std.fmt.allocPrint(self.gpa, "_pad{d}", .{pad_index});
-                errdefer self.freeDuped(name);
                 pad_index += 1;
-                try collected.append(self.gpa, .{
+                collected[populated] = .{
                     .name = name,
                     .type_id = 0,
                     .size = sa.size,
                     .alignment = 1,
                     .is_padding = true,
-                });
+                };
+                populated += 1;
             } else {
                 const field_name = module_env.getIdentText(field.name);
                 const match = backingFieldByName(backing, field_name) orelse {
-                    self.freeCollectedRecordFieldList(&collected);
+                    self.freeCollectedRecordFields(collected, populated);
                     return null;
                 };
                 const name = try self.gpa.dupe(u8, field_name);
-                errdefer self.freeDuped(name);
-                try collected.append(self.gpa, .{
+                collected[populated] = .{
                     .name = name,
                     .type_id = match.type_id,
                     .size = match.size,
                     .alignment = match.alignment,
                     .is_padding = false,
-                });
+                };
+                populated += 1;
             }
         }
 
@@ -1452,10 +1453,13 @@ const TypeTable = struct {
         // unnamed `_` field. Without one it lays out like a structural record, so
         // fall back to the structural backing order.
         if (!saw_unnamed_field) {
-            self.freeCollectedRecordFieldList(&collected);
+            self.freeCollectedRecordFields(collected, populated);
             return null;
         }
-        const collected_fields = try collected.toOwnedSlice(self.gpa);
+        const collected_fields = if (populated == collected.len)
+            collected
+        else
+            try self.gpa.realloc(collected, populated);
 
         // Declared order, verbatim, with C-style padding inserted between fields as
         // alignment requires (the padding amount can differ on 32- vs 64-bit).
