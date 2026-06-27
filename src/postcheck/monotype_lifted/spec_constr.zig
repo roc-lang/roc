@@ -3567,9 +3567,10 @@ const Cloner = struct {
                     .record => |record_value| record_value,
                     else => Common.invariant("record call pattern matched a non-record value"),
                 };
-                for (record.fields, record_value.fields) |field_known_value, field| {
-                    if (field_known_value.name != field.name) Common.invariant("record call-pattern field order changed after matching");
-                    try self.appendExprsFromValue(field_known_value.known_value, field.value, out);
+                for (record.fields) |field_known_value| {
+                    const field_value = fieldFromRecord(record_value, field_known_value.name) orelse
+                        Common.invariant("record call-pattern field was not present after matching");
+                    try self.appendExprsFromValue(field_known_value.known_value, field_value, out);
                 }
             },
             .tuple => |tuple| {
@@ -3735,10 +3736,9 @@ const Cloner = struct {
             },
             .record => |record| {
                 if (recordFromValue(value)) |record_value| {
-                    if (record.fields.len != record_value.fields.len) return false;
-                    for (record.fields, record_value.fields) |field_known_value, field_value| {
-                        if (field_known_value.name != field_value.name) return false;
-                        if (!try self.appendFieldReadExprsFromValue(field_known_value.known_value, field_value.value, out)) return false;
+                    for (record.fields) |field_known_value| {
+                        const field_value = fieldFromRecord(record_value, field_known_value.name) orelse return false;
+                        if (!try self.appendFieldReadExprsFromValue(field_known_value.known_value, field_value, out)) return false;
                     }
                     return true;
                 }
@@ -5997,10 +5997,9 @@ const Cloner = struct {
             },
             .record => |record| {
                 if (recordFromValue(value)) |record_value| {
-                    if (record.fields.len != record_value.fields.len) return false;
-                    for (record.fields, record_value.fields) |field_known_value, field| {
-                        if (field_known_value.name != field.name) return false;
-                        if (!try self.appendCaptureExprsFromValue(field_known_value.known_value, field.value, out, pending_lets)) return false;
+                    for (record.fields) |field_known_value| {
+                        const field_value = fieldFromRecord(record_value, field_known_value.name) orelse return false;
+                        if (!try self.appendCaptureExprsFromValue(field_known_value.known_value, field_value, out, pending_lets)) return false;
                     }
                     return true;
                 }
@@ -7459,9 +7458,10 @@ fn knownValueMatchesValue(program: *const Ast.Program, known_value: KnownValue, 
                 .record => |value_record| value_record,
                 else => break :blk false,
             };
-            if (!sameType(program, record.ty, value_record.ty) or record.fields.len != value_record.fields.len) break :blk false;
-            for (record.fields, value_record.fields) |field_known_value, field_value| {
-                if (field_known_value.name != field_value.name or !knownValueMatchesValue(program, field_known_value.known_value, field_value.value)) break :blk false;
+            if (!sameType(program, record.ty, value_record.ty)) break :blk false;
+            for (record.fields) |field_known_value| {
+                const field_value = fieldFromRecord(value_record, field_known_value.name) orelse break :blk false;
+                if (!knownValueMatchesValue(program, field_known_value.known_value, field_value)) break :blk false;
             }
             break :blk true;
         },
@@ -7566,9 +7566,10 @@ fn knownValueMatchesKnownValue(program: *const Ast.Program, pattern: KnownValue,
                 .record => |record| record,
                 else => break :blk false,
             };
-            if (!sameType(program, pattern_record.ty, actual_record.ty) or pattern_record.fields.len != actual_record.fields.len) break :blk false;
-            for (pattern_record.fields, actual_record.fields) |pattern_field, actual_field| {
-                if (pattern_field.name != actual_field.name or !knownValueMatchesKnownValue(program, pattern_field.known_value, actual_field.known_value)) break :blk false;
+            if (!sameType(program, pattern_record.ty, actual_record.ty)) break :blk false;
+            for (pattern_record.fields) |pattern_field| {
+                const actual_field = fieldKnownValueFromKnownValue(actual, pattern_field.name) orelse break :blk false;
+                if (!knownValueMatchesKnownValue(program, pattern_field.known_value, actual_field)) break :blk false;
             }
             break :blk true;
         },
