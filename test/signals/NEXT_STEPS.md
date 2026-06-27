@@ -547,6 +547,15 @@ Current priority after the Phase 4 review:
   `stream_nodes_scanned_remove_target` is bounded by changed descriptors, not
   total active descriptors. Precomputing the replacement-subtree membership set
   should remove repeated ancestry walks inside the removal loops.
+- **Probe result:** precomputing a replacement-target scope membership set once
+  per splice is valid and removes repeated ancestry walks from descriptor
+  removal checks, but it does not reduce `stream_nodes_scanned_remove_target`
+  because the descriptor tables are still scanned and compacted. Single-sample
+  benchmark after the splice-tail commit: `signals-large-each-64` total
+  `743778712` with `remove_target=451840`; `signals-kanban-board` total
+  `595055581` with `remove_target=128520`. Keep the target-scope set as a
+  supporting structure, but the next real win is explicit descriptor owner
+  indexes/removal worklists.
 
 ### Scope render-range index
 

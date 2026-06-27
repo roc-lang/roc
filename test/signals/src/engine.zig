@@ -1114,6 +1114,7 @@ const EngineScratch = struct {
     each_next_hash_heads: std.AutoHashMapUnmanaged(u64, usize) = .empty,
     each_next_hash_links: std.ArrayListUnmanaged(usize) = .empty,
     each_matched_existing: std.ArrayListUnmanaged(bool) = .empty,
+    replacement_target_scopes: std.ArrayListUnmanaged(bool) = .empty,
 
     fn deinit(self: *EngineScratch, allocator: std.mem.Allocator) void {
         self.move_child_indexes.deinit(allocator);
@@ -1127,6 +1128,7 @@ const EngineScratch = struct {
         self.each_next_hash_heads.deinit(allocator);
         self.each_next_hash_links.deinit(allocator);
         self.each_matched_existing.deinit(allocator);
+        self.replacement_target_scopes.deinit(allocator);
         self.* = .{};
     }
 };
@@ -5530,13 +5532,41 @@ pub fn Engine(comptime Ctx: type) type {
             };
         }
 
+        fn buildReplacementTargetScopeSet(self: *Self, ctx: Ctx.Handle, target: HostStructuralReplacementTarget) []const bool {
+            if (self.scratch.replacement_target_scopes.items.len != 0) @panic("replacement target scope scratch was already active");
+            const allocator = Ctx.allocator(ctx);
+            self.scratch.replacement_target_scopes.resize(allocator, self.scopes.items.len) catch @panic("out of memory");
+            const target_scopes = self.scratch.replacement_target_scopes.items;
+            for (self.scopes.items) |scope| {
+                if (scope.scope_id >= target_scopes.len) @panic("scope descriptor id exceeded replacement target set");
+                target_scopes[@intCast(scope.scope_id)] = self.scopeIsInReplacementTarget(scope.scope_id, target);
+            }
+            return target_scopes;
+        }
+
+        fn scopeIsInReplacementTargetSet(target_scopes: []const bool, scope_id: u64) bool {
+            if (scope_id >= target_scopes.len) @panic("descriptor referenced scope outside replacement target set");
+            return target_scopes[@intCast(scope_id)];
+        }
+
         pub fn renderNodeInReplacementTarget(self: *Self, stream: *const HostNodeDescriptorStream, node: HostRenderNode, target: HostStructuralReplacementTarget) bool {
             return self.scopeIsInReplacementTarget(renderNodeScopeId(stream, node), target);
+        }
+
+        pub fn renderNodeInReplacementTargetSet(self: *Self, stream: *const HostNodeDescriptorStream, node: HostRenderNode, target_scopes: []const bool) bool {
+            _ = self;
+            return scopeIsInReplacementTargetSet(target_scopes, renderNodeScopeId(stream, node));
         }
 
         pub fn elemIdInReplacementTarget(self: *Self, stream: *const HostNodeDescriptorStream, elem_id: u64, target: HostStructuralReplacementTarget) bool {
             const scope_id = elemScopeId(stream, elem_id) orelse @panic("descriptor referenced an element outside the render stream");
             return self.scopeIsInReplacementTarget(scope_id, target);
+        }
+
+        pub fn elemIdInReplacementTargetSet(self: *Self, stream: *const HostNodeDescriptorStream, elem_id: u64, target_scopes: []const bool) bool {
+            _ = self;
+            const scope_id = elemScopeId(stream, elem_id) orelse @panic("descriptor referenced an element outside the render stream");
+            return scopeIsInReplacementTargetSet(target_scopes, scope_id);
         }
 
         pub fn streamNodeIdInReplacementTarget(self: *Self, previous: *const HostNodeDescriptorStream, node_id: u64, kind: HostNodeScopeSiteKind, target: HostStructuralReplacementTarget) bool {
@@ -5548,12 +5578,22 @@ pub fn Engine(comptime Ctx: type) type {
             return self.scopeIsInReplacementTarget(site.scope_id, target);
         }
 
-        fn removeActiveElementDescriptorsInTarget(self: *Self, ctx: Ctx.Handle, target: HostStructuralReplacementTarget) void {
+        pub fn streamNodeIdInReplacementTargetSet(self: *Self, previous: *const HostNodeDescriptorStream, node_id: u64, kind: HostNodeScopeSiteKind, target_scopes: []const bool) bool {
+            _ = self;
+            const descriptor_index = previous.nodeDescriptorIndex(node_id) orelse return false;
+            const site_index = descriptor_index.scope_sites.get(kind) orelse return false;
+            if (site_index >= previous.scope_sites.items.len) @panic("scope site descriptor index exceeded descriptor table");
+            const site = previous.scope_sites.items[site_index];
+            if (site.node_id != node_id or site.kind != kind) @panic("scope site descriptor index pointed at the wrong node");
+            return scopeIsInReplacementTargetSet(target_scopes, site.scope_id);
+        }
+
+        fn removeActiveElementDescriptorsInTarget(self: *Self, ctx: Ctx.Handle, target_scopes: []const bool) void {
             const allocator = Ctx.allocator(ctx);
             var write_index: usize = 0;
             self.recordStreamNodesScannedBy(.stream_nodes_scanned_remove_target, self.active_stream.elements.items.len);
             for (self.active_stream.elements.items, 0..) |desc, read_index| {
-                if (self.scopeIsInReplacementTarget(desc.scope_id, target)) {
+                if (scopeIsInReplacementTargetSet(target_scopes, desc.scope_id)) {
                     self.active_stream.clearElementIndex(desc.elem_id, read_index);
                     allocator.free(desc.tag);
                     continue;
@@ -5565,12 +5605,12 @@ pub fn Engine(comptime Ctx: type) type {
             self.active_stream.elements.items.len = write_index;
         }
 
-        fn removeActiveTextNodeDescriptorsInTarget(self: *Self, ctx: Ctx.Handle, target: HostStructuralReplacementTarget) void {
+        fn removeActiveTextNodeDescriptorsInTarget(self: *Self, ctx: Ctx.Handle, target_scopes: []const bool) void {
             const allocator = Ctx.allocator(ctx);
             var write_index: usize = 0;
             self.recordStreamNodesScannedBy(.stream_nodes_scanned_remove_target, self.active_stream.text_nodes.items.len);
             for (self.active_stream.text_nodes.items, 0..) |desc, read_index| {
-                if (self.scopeIsInReplacementTarget(desc.scope_id, target)) {
+                if (scopeIsInReplacementTargetSet(target_scopes, desc.scope_id)) {
                     self.active_stream.clearTextNodeIndex(desc.elem_id, read_index);
                     allocator.free(desc.value);
                     continue;
@@ -5582,11 +5622,11 @@ pub fn Engine(comptime Ctx: type) type {
             self.active_stream.text_nodes.items.len = write_index;
         }
 
-        fn removeActiveSignalTextNodeDescriptorsInTarget(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, target: HostStructuralReplacementTarget) void {
+        fn removeActiveSignalTextNodeDescriptorsInTarget(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, target_scopes: []const bool) void {
             var write_index: usize = 0;
             self.recordStreamNodesScannedBy(.stream_nodes_scanned_remove_target, self.active_stream.signal_text_nodes.items.len);
             for (self.active_stream.signal_text_nodes.items, 0..) |desc, read_index| {
-                if (self.scopeIsInReplacementTarget(desc.scope_id, target)) {
+                if (scopeIsInReplacementTargetSet(target_scopes, desc.scope_id)) {
                     var removed = desc;
                     const record_id = self.requireActiveSignalRecordId(removed.signal.record);
                     self.removeActiveTextSignalRoute(record_id, .text_node, read_index);
@@ -5605,12 +5645,12 @@ pub fn Engine(comptime Ctx: type) type {
             self.active_stream.signal_text_nodes.items.len = write_index;
         }
 
-        fn removeActiveStaticTextAttrDescriptorsInTarget(self: *Self, ctx: Ctx.Handle, target: HostStructuralReplacementTarget) void {
+        fn removeActiveStaticTextAttrDescriptorsInTarget(self: *Self, ctx: Ctx.Handle, target_scopes: []const bool) void {
             const allocator = Ctx.allocator(ctx);
             var write_index: usize = 0;
             self.recordStreamNodesScannedBy(.stream_nodes_scanned_remove_target, self.active_stream.static_text_attrs.items.len);
             for (self.active_stream.static_text_attrs.items, 0..) |desc, read_index| {
-                if (self.elemIdInReplacementTarget(&self.active_stream, desc.elem_id, target)) {
+                if (self.elemIdInReplacementTargetSet(&self.active_stream, desc.elem_id, target_scopes)) {
                     self.active_stream.clearStaticTextAttrIndex(desc.elem_id, desc.field, read_index);
                     allocator.free(desc.value);
                     continue;
@@ -5622,11 +5662,11 @@ pub fn Engine(comptime Ctx: type) type {
             self.active_stream.static_text_attrs.items.len = write_index;
         }
 
-        fn removeActiveSignalTextAttrDescriptorsInTarget(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, target: HostStructuralReplacementTarget) void {
+        fn removeActiveSignalTextAttrDescriptorsInTarget(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, target_scopes: []const bool) void {
             var write_index: usize = 0;
             self.recordStreamNodesScannedBy(.stream_nodes_scanned_remove_target, self.active_stream.signal_text_attrs.items.len);
             for (self.active_stream.signal_text_attrs.items, 0..) |desc, read_index| {
-                if (self.elemIdInReplacementTarget(&self.active_stream, desc.elem_id, target)) {
+                if (self.elemIdInReplacementTargetSet(&self.active_stream, desc.elem_id, target_scopes)) {
                     var removed = desc;
                     const record_id = self.requireActiveSignalRecordId(removed.signal.record);
                     self.removeActiveTextSignalRoute(record_id, .text_attr, read_index);
@@ -5645,11 +5685,11 @@ pub fn Engine(comptime Ctx: type) type {
             self.active_stream.signal_text_attrs.items.len = write_index;
         }
 
-        fn removeActiveStaticBoolAttrDescriptorsInTarget(self: *Self, target: HostStructuralReplacementTarget) void {
+        fn removeActiveStaticBoolAttrDescriptorsInTarget(self: *Self, target_scopes: []const bool) void {
             var write_index: usize = 0;
             self.recordStreamNodesScannedBy(.stream_nodes_scanned_remove_target, self.active_stream.static_bool_attrs.items.len);
             for (self.active_stream.static_bool_attrs.items, 0..) |desc, read_index| {
-                if (self.elemIdInReplacementTarget(&self.active_stream, desc.elem_id, target)) {
+                if (self.elemIdInReplacementTargetSet(&self.active_stream, desc.elem_id, target_scopes)) {
                     self.active_stream.clearStaticBoolAttrIndex(desc.elem_id, desc.field, read_index);
                     continue;
                 }
@@ -5660,11 +5700,11 @@ pub fn Engine(comptime Ctx: type) type {
             self.active_stream.static_bool_attrs.items.len = write_index;
         }
 
-        fn removeActiveSignalBoolAttrDescriptorsInTarget(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, target: HostStructuralReplacementTarget) void {
+        fn removeActiveSignalBoolAttrDescriptorsInTarget(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, target_scopes: []const bool) void {
             var write_index: usize = 0;
             self.recordStreamNodesScannedBy(.stream_nodes_scanned_remove_target, self.active_stream.signal_bool_attrs.items.len);
             for (self.active_stream.signal_bool_attrs.items, 0..) |desc, read_index| {
-                if (self.elemIdInReplacementTarget(&self.active_stream, desc.elem_id, target)) {
+                if (self.elemIdInReplacementTargetSet(&self.active_stream, desc.elem_id, target_scopes)) {
                     var removed = desc;
                     const record_id = self.requireActiveSignalRecordId(removed.signal.record);
                     self.removeActiveBoolSignalRoute(record_id, read_index);
@@ -5683,11 +5723,11 @@ pub fn Engine(comptime Ctx: type) type {
             self.active_stream.signal_bool_attrs.items.len = write_index;
         }
 
-        fn removeActiveOnChangeDescriptorsInTarget(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, target: HostStructuralReplacementTarget) void {
+        fn removeActiveOnChangeDescriptorsInTarget(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, target_scopes: []const bool) void {
             var write_index: usize = 0;
             self.recordStreamNodesScannedBy(.stream_nodes_scanned_remove_target, self.active_stream.on_changes.items.len);
             for (self.active_stream.on_changes.items, 0..) |desc, read_index| {
-                if (self.scopeIsInReplacementTarget(desc.scope_id, target)) {
+                if (scopeIsInReplacementTargetSet(target_scopes, desc.scope_id)) {
                     var removed = desc;
                     const record_id = self.requireActiveSignalRecordId(removed.signal.record);
                     self.removeActiveChangeSignalRoute(record_id, read_index);
@@ -5704,11 +5744,11 @@ pub fn Engine(comptime Ctx: type) type {
             self.active_stream.on_changes.items.len = write_index;
         }
 
-        fn removeActiveMountDescriptorsInTarget(self: *Self, roc_host: *abi.RocHost, target: HostStructuralReplacementTarget) void {
+        fn removeActiveMountDescriptorsInTarget(self: *Self, roc_host: *abi.RocHost, target_scopes: []const bool) void {
             var write_index: usize = 0;
             self.recordStreamNodesScannedBy(.stream_nodes_scanned_remove_target, self.active_stream.mounts.items.len);
             for (self.active_stream.mounts.items) |desc| {
-                if (self.scopeIsInReplacementTarget(desc.scope_id, target)) {
+                if (scopeIsInReplacementTargetSet(target_scopes, desc.scope_id)) {
                     var removed = desc;
                     self.deinitActiveMountDesc(roc_host, &removed);
                     continue;
@@ -5719,12 +5759,12 @@ pub fn Engine(comptime Ctx: type) type {
             self.active_stream.mounts.items.len = write_index;
         }
 
-        fn removeActiveCleanupDescriptorsInTarget(self: *Self, ctx: Ctx.Handle, target: HostStructuralReplacementTarget) void {
+        fn removeActiveCleanupDescriptorsInTarget(self: *Self, ctx: Ctx.Handle, target_scopes: []const bool) void {
             const allocator = Ctx.allocator(ctx);
             var write_index: usize = 0;
             self.recordStreamNodesScannedBy(.stream_nodes_scanned_remove_target, self.active_stream.cleanups.items.len);
             for (self.active_stream.cleanups.items) |desc| {
-                if (self.scopeIsInReplacementTarget(desc.scope_id, target)) {
+                if (scopeIsInReplacementTargetSet(target_scopes, desc.scope_id)) {
                     allocator.free(desc.name);
                     continue;
                 }
@@ -5734,7 +5774,7 @@ pub fn Engine(comptime Ctx: type) type {
             self.active_stream.cleanups.items.len = write_index;
         }
 
-        fn removeActiveEventDescriptorsInTarget(self: *Self, roc_host: *abi.RocHost, target: HostStructuralReplacementTarget) void {
+        fn removeActiveEventDescriptorsInTarget(self: *Self, roc_host: *abi.RocHost, target_scopes: []const bool) void {
             if (self.active_events.items.len != self.active_stream.events.items.len) {
                 if (self.active_stream.events.items.len != 0) @panic("active event descriptor table is out of sync with active events");
             }
@@ -5742,7 +5782,7 @@ pub fn Engine(comptime Ctx: type) type {
             var write_index: usize = 0;
             self.recordStreamNodesScannedBy(.stream_nodes_scanned_remove_target, self.active_stream.events.items.len);
             for (self.active_stream.events.items, 0..) |desc, event_index| {
-                if (self.elemIdInReplacementTarget(&self.active_stream, desc.elem_id, target)) {
+                if (self.elemIdInReplacementTargetSet(&self.active_stream, desc.elem_id, target_scopes)) {
                     if (desc.owns_payload_reducer) {
                         @panic("active event descriptor retained ownership outside the active event table");
                     }
@@ -5764,12 +5804,12 @@ pub fn Engine(comptime Ctx: type) type {
             if (self.active_events.items.len != 0) self.active_events.items.len = write_index;
         }
 
-        fn removeActiveScopeSiteDescriptorsInTarget(self: *Self, ctx: Ctx.Handle, target: HostStructuralReplacementTarget) void {
+        fn removeActiveScopeSiteDescriptorsInTarget(self: *Self, ctx: Ctx.Handle, target_scopes: []const bool) void {
             const allocator = Ctx.allocator(ctx);
             var write_index: usize = 0;
             self.recordStreamNodesScannedBy(.stream_nodes_scanned_remove_target, self.active_stream.scope_sites.items.len);
             for (self.active_stream.scope_sites.items, 0..) |desc, read_index| {
-                if (self.scopeIsInReplacementTarget(desc.scope_id, target)) {
+                if (scopeIsInReplacementTargetSet(target_scopes, desc.scope_id)) {
                     self.active_stream.clearScopeSiteIndex(desc.node_id, desc.kind, read_index);
                     allocator.free(desc.binder_bindings);
                     continue;
@@ -5781,11 +5821,11 @@ pub fn Engine(comptime Ctx: type) type {
             self.active_stream.scope_sites.items.len = write_index;
         }
 
-        fn removeActiveStateDescriptorsInTarget(self: *Self, roc_host: *abi.RocHost, target: HostStructuralReplacementTarget) void {
+        fn removeActiveStateDescriptorsInTarget(self: *Self, roc_host: *abi.RocHost, target_scopes: []const bool) void {
             var write_index: usize = 0;
             self.recordStreamNodesScannedBy(.stream_nodes_scanned_remove_target, self.active_stream.states.items.len);
             for (self.active_stream.states.items, 0..) |desc, read_index| {
-                if (self.streamNodeIdInReplacementTarget(&self.active_stream, desc.node_id, .state, target)) {
+                if (self.streamNodeIdInReplacementTargetSet(&self.active_stream, desc.node_id, .state, target_scopes)) {
                     self.active_stream.clearStateIndex(desc.node_id, read_index);
                     self.pending_roc_metrics.bump(.closure_releases, 1);
                     abi.decrefErasedCallable(desc.initial, roc_host);
@@ -5799,11 +5839,11 @@ pub fn Engine(comptime Ctx: type) type {
             self.active_stream.states.items.len = write_index;
         }
 
-        fn removeActiveWhenDescriptorsInTarget(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, target: HostStructuralReplacementTarget) void {
+        fn removeActiveWhenDescriptorsInTarget(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, target_scopes: []const bool) void {
             var write_index: usize = 0;
             self.recordStreamNodesScannedBy(.stream_nodes_scanned_remove_target, self.active_stream.whens.items.len);
             for (self.active_stream.whens.items, 0..) |desc, read_index| {
-                if (self.streamNodeIdInReplacementTarget(&self.active_stream, desc.node_id, .when, target)) {
+                if (self.streamNodeIdInReplacementTargetSet(&self.active_stream, desc.node_id, .when, target_scopes)) {
                     var removed = desc;
                     const record_id = self.requireActiveSignalRecordId(removed.condition.record);
                     self.removeActiveStructuralSignalRoute(record_id, .when, read_index);
@@ -5826,11 +5866,11 @@ pub fn Engine(comptime Ctx: type) type {
             self.active_stream.whens.items.len = write_index;
         }
 
-        fn removeActiveEachDescriptorsInTarget(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, target: HostStructuralReplacementTarget) void {
+        fn removeActiveEachDescriptorsInTarget(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, target_scopes: []const bool) void {
             var write_index: usize = 0;
             self.recordStreamNodesScannedBy(.stream_nodes_scanned_remove_target, self.active_stream.eaches.items.len);
             for (self.active_stream.eaches.items, 0..) |desc, read_index| {
-                if (self.streamNodeIdInReplacementTarget(&self.active_stream, desc.node_id, .each, target)) {
+                if (self.streamNodeIdInReplacementTargetSet(&self.active_stream, desc.node_id, .each, target_scopes)) {
                     var removed = desc;
                     const record_id = self.requireActiveSignalRecordId(removed.items.record);
                     self.removeActiveStructuralSignalRoute(record_id, .each, read_index);
@@ -5851,22 +5891,22 @@ pub fn Engine(comptime Ctx: type) type {
             self.active_stream.eaches.items.len = write_index;
         }
 
-        fn removeActiveNonRenderDescriptorsInTarget(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, target: HostStructuralReplacementTarget) void {
-            self.removeActiveStaticTextAttrDescriptorsInTarget(ctx, target);
-            self.removeActiveSignalTextAttrDescriptorsInTarget(ctx, roc_host, target);
-            self.removeActiveStaticBoolAttrDescriptorsInTarget(target);
-            self.removeActiveSignalBoolAttrDescriptorsInTarget(ctx, roc_host, target);
-            self.removeActiveOnChangeDescriptorsInTarget(ctx, roc_host, target);
-            self.removeActiveMountDescriptorsInTarget(roc_host, target);
-            self.removeActiveCleanupDescriptorsInTarget(ctx, target);
-            self.removeActiveEventDescriptorsInTarget(roc_host, target);
-            self.removeActiveStateDescriptorsInTarget(roc_host, target);
-            self.removeActiveWhenDescriptorsInTarget(ctx, roc_host, target);
-            self.removeActiveEachDescriptorsInTarget(ctx, roc_host, target);
-            self.removeActiveScopeSiteDescriptorsInTarget(ctx, target);
-            self.removeActiveElementDescriptorsInTarget(ctx, target);
-            self.removeActiveTextNodeDescriptorsInTarget(ctx, target);
-            self.removeActiveSignalTextNodeDescriptorsInTarget(ctx, roc_host, target);
+        fn removeActiveNonRenderDescriptorsInTarget(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, target_scopes: []const bool) void {
+            self.removeActiveStaticTextAttrDescriptorsInTarget(ctx, target_scopes);
+            self.removeActiveSignalTextAttrDescriptorsInTarget(ctx, roc_host, target_scopes);
+            self.removeActiveStaticBoolAttrDescriptorsInTarget(target_scopes);
+            self.removeActiveSignalBoolAttrDescriptorsInTarget(ctx, roc_host, target_scopes);
+            self.removeActiveOnChangeDescriptorsInTarget(ctx, roc_host, target_scopes);
+            self.removeActiveMountDescriptorsInTarget(roc_host, target_scopes);
+            self.removeActiveCleanupDescriptorsInTarget(ctx, target_scopes);
+            self.removeActiveEventDescriptorsInTarget(roc_host, target_scopes);
+            self.removeActiveStateDescriptorsInTarget(roc_host, target_scopes);
+            self.removeActiveWhenDescriptorsInTarget(ctx, roc_host, target_scopes);
+            self.removeActiveEachDescriptorsInTarget(ctx, roc_host, target_scopes);
+            self.removeActiveScopeSiteDescriptorsInTarget(ctx, target_scopes);
+            self.removeActiveElementDescriptorsInTarget(ctx, target_scopes);
+            self.removeActiveTextNodeDescriptorsInTarget(ctx, target_scopes);
+            self.removeActiveSignalTextNodeDescriptorsInTarget(ctx, roc_host, target_scopes);
         }
 
         fn adjustActiveScopeSiteRenderInsertIndices(self: *Self, replace_index: usize, removed_render_count: usize, replacement_render_count: usize) void {
@@ -6100,6 +6140,9 @@ pub fn Engine(comptime Ctx: type) type {
             const allocator = Ctx.allocator(ctx);
             if (render_insert_index > self.active_stream.render_nodes.items.len) @panic("structural replacement render insertion point is outside the active stream");
 
+            const target_scopes = self.buildReplacementTargetScopeSet(ctx, target);
+            defer self.scratch.replacement_target_scopes.clearRetainingCapacity();
+
             var removed_elem_ids: std.ArrayListUnmanaged(u64) = .empty;
             errdefer removed_elem_ids.deinit(allocator);
             var touched_parent_ids: std.ArrayListUnmanaged(u64) = .empty;
@@ -6111,7 +6154,7 @@ pub fn Engine(comptime Ctx: type) type {
 
             self.recordStreamNodesScannedBy(.stream_nodes_scanned_splice, self.active_stream.render_nodes.items.len);
             for (self.active_stream.render_nodes.items, 0..) |node, index| {
-                if (self.renderNodeInReplacementTarget(&self.active_stream, node, target)) {
+                if (self.renderNodeInReplacementTargetSet(&self.active_stream, node, target_scopes)) {
                     if (target_range_closed) @panic("structural replacement render target is not contiguous");
                     if (removed_render_start == null) removed_render_start = index;
                     removed_render_count += 1;
@@ -6123,7 +6166,7 @@ pub fn Engine(comptime Ctx: type) type {
 
             self.recordStreamNodesScannedBy(.stream_nodes_scanned_splice, self.active_stream.render_nodes.items.len);
             for (self.active_stream.render_nodes.items) |node| {
-                if (!self.renderNodeInReplacementTarget(&self.active_stream, node, target)) continue;
+                if (!self.renderNodeInReplacementTargetSet(&self.active_stream, node, target_scopes)) continue;
                 const parent_elem_id = renderNodeParentElemId(&self.active_stream, node);
                 if (u64SliceContains(removed_elem_ids.items, parent_elem_id)) continue;
                 appendUniqueU64(allocator, &touched_parent_ids, parent_elem_id);
@@ -6145,7 +6188,7 @@ pub fn Engine(comptime Ctx: type) type {
             }
 
             self.active_stream.replaceRenderRangeWithStream(allocator, render_start, removed_render_nodes, replacement, &self.pending_roc_metrics);
-            self.removeActiveNonRenderDescriptorsInTarget(ctx, roc_host, target);
+            self.removeActiveNonRenderDescriptorsInTarget(ctx, roc_host, target_scopes);
             self.adjustActiveScopeSiteRenderInsertIndices(render_insert_index, removed_render_count, replacement_render_count);
             const on_change_start = self.active_stream.on_changes.items.len;
             const replacement_on_change_indices = allocator.alloc(usize, on_change_count) catch @panic("out of memory");
