@@ -1597,6 +1597,12 @@ const Cloner = struct {
     fn callableValue(self: *Cloner, ty: Type.TypeId, fn_id: Ast.FnId) Common.LowerError!Value {
         const fn_ = self.pass.program.fns.items[@intFromEnum(fn_id)];
         const source_captures = self.pass.program.typedLocalSpan(fn_.captures);
+        for (source_captures) |capture| {
+            if (!self.subst.contains(capture.local)) {
+                return .{ .expr = try self.addExpr(.{ .ty = ty, .data = .{ .fn_ref = fn_id } }) };
+            }
+        }
+
         const captures = try self.pass.arena.allocator().alloc(Value, source_captures.len);
         for (source_captures, 0..) |capture, index| {
             if (self.subst.get(capture.local)) |value| {
@@ -1649,6 +1655,7 @@ const Cloner = struct {
             if (capture.local != source_captures[index].local) {
                 Common.invariant("Lambda Solved callable member captures differed from lifted function capture order");
             }
+            if (!self.subst.contains(capture.local)) return null;
             captures[index] = if (self.subst.get(capture.local)) |value|
                 value
             else
@@ -4205,6 +4212,9 @@ const Cloner = struct {
         if (exprContainsReturn(self.pass.program, body)) {
             return .{ .expr = try self.cloneExprPlain(original_expr) };
         }
+        if (!self.directInlineCapturesAvailable(source_fn)) {
+            return .{ .expr = try self.cloneExprPlain(original_expr) };
+        }
 
         const source_args = try self.pass.allocator.dupe(Ast.TypedLocal, self.pass.program.typedLocalSpan(source_fn.args));
         defer self.pass.allocator.free(source_args);
@@ -4271,6 +4281,13 @@ const Cloner = struct {
         else
             try self.cloneExprValue(body);
         return try self.wrapPendingLets(body_value, pending_lets.items, demand_result_known_value);
+    }
+
+    fn directInlineCapturesAvailable(self: *Cloner, source_fn: Ast.Fn) bool {
+        for (self.pass.program.typedLocalSpan(source_fn.captures)) |capture| {
+            if (!self.subst.contains(capture.local)) return false;
+        }
+        return true;
     }
 
     fn bindPatToValue(self: *Cloner, pat_id: Ast.PatId, value: Value) Common.LowerError!bool {
