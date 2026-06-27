@@ -388,31 +388,17 @@ Ui.when(
 Each branch is its own scope. When the condition flips, the host disposes the
 losing branch (releasing its state and detaching its DOM) and mounts the other.
 
-Use `Ui.each` for lists. You supply a typed key function and a row renderer. The
-item type provides `is_eq`; key types wrap a single-tag union and provide `hash`
-and `is_eq` methods through their method block:
+Use `Ui.each_str` for lists keyed by stable text. You supply a key function and
+a row renderer. The item type provides `is_eq`; the host hashes the key text
+privately for lookup and uses exact key equality for collisions:
 
 ```roc
-TodoId := [Tid(U64)].{
-    hash : TodoId, Hasher -> Hasher
-    hash = |id, hasher| match id {
-        Tid(n) => Hasher.write_u64(hasher, n)
-    }
-
-    is_eq : TodoId, TodoId -> Bool
-    is_eq = |left, right| match left {
-        Tid(a) => match right {
-            Tid(b) => a == b
-        }
-    }
-}
-
 todo_list : Signal(List(Todo)) -> Elem
 todo_list = |todos|
     Html.ul(
         [],
         [
-            Ui.each(
+            Ui.each_str(
                 todos,
                 |todo| todo.id,
                 |_key, row| {
@@ -435,12 +421,12 @@ todo_list = |todos|
     )
 ```
 
-The row renderer receives the row's key and a `Signal(item)` for that row's data.
-Any `Ui.state` binder you create inside the renderer is local to that row scope,
-so it survives reorder and filter. The key function must
-return a stable identity from the data (a database id, slug, or durable client
-id) — never the item's current position. Two rows that produce the same key are
-reported as a host error rather than silently aliased.
+The row renderer receives the row's key text and a `Signal(item)` for that row's
+data. Any `Ui.state` binder you create inside the renderer is local to that row
+scope, so it survives reorder and filter. The key function must return a stable
+identity from the data (a database id, slug, or durable client id) — never the
+item's current position. Two rows that produce the same key are reported as a
+host error rather than silently aliased.
 
 When the list changes, the host diffs the new key set against the old: surviving
 rows are reused (including their local state), new keys mint a fresh row scope,
@@ -454,42 +440,26 @@ App code works with ordinary typed Roc values throughout. Signals are typed
 `map2`, and `combine` are ordinary typed functions. There is no untyped value
 representation and no hand-written conversion boilerplate to write.
 
-For a custom type to be used as a signal value or a list key, it must define the
-methods those positions require. The platform resolves these by static dispatch
-on the value's type (there is no auto-derivation, so you define the methods on
-the type):
+For a custom type to be used as a signal value, it must define the methods those
+positions require. The platform resolves these by static dispatch on the value's
+type (there is no auto-derivation, so you define the methods on the type):
 
 - Any signal value type defines `is_eq : t, t -> Bool`. The runtime uses it to
   stop propagation when a recomputed value is unchanged.
-- Any `Ui.each` key type defines both `hash : t, Hasher -> Hasher` and
-  `is_eq : t, t -> Bool`.
-- Any `Ui.each` item type also defines `is_eq : t, t -> Bool`, so keyed row
+- Any `Ui.each_str` key function returns stable `Str` identity material.
+- Any `Ui.each_str` item type also defines `is_eq : t, t -> Bool`, so keyed row
   reuse and row value changes are separate explicit facts.
 
 ```roc
-Todo := { id : TodoId, title : Str, done : Bool }.{
+Todo := { id : Str, title : Str, done : Bool }.{
     is_eq : Todo, Todo -> Bool
-    is_eq = |a, b| a.id.is_eq(b.id) and a.title == b.title and a.done == b.done
-}
-
-TodoId := [Tid(U64)].{
-    hash : TodoId, Hasher -> Hasher
-    hash = |id, hasher| match id {
-        Tid(n) => Hasher.write_u64(hasher, n)
-    }
-
-    is_eq : TodoId, TodoId -> Bool
-    is_eq = |left, right| match left {
-        Tid(a) => match right {
-            Tid(b) => a == b
-        }
-    }
+    is_eq = |a, b| a.id == b.id and a.title == b.title and a.done == b.done
 }
 ```
 
 You define the comparison (and, where a value must serialize, `encode`/`decode`)
-methods on the type. The platform captures the type-specific equality/hash
-thunks at each edge or key site; the host invokes those thunks rather than
+methods on the type. The platform captures type-specific equality and key-text
+read thunks at each edge or key site; the host invokes those thunks rather than
 choosing a decoder or comparing erased bytes. Built-in types such as `Str`,
 `Bool`, and `I64` already provide what the common cases need.
 

@@ -106,7 +106,7 @@ main = |_| {
 									Html.button_c("Toggle Beta", quiet_button_class, show_beta.on_unit(|value| !value)),
 								],
 							),
-							Ui.each(visible, |label| label, Ui.str_key_hash, render_component),
+							Ui.each_str(visible, |label| label, render_component),
 						],
 					)
 				},

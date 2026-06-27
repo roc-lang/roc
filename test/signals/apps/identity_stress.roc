@@ -188,7 +188,7 @@ main = |_| {
 														"Rows active",
 														panel_class,
 														[
-															Ui.each(rows, |label| label, Ui.str_key_hash, render_row),
+															Ui.each_str(rows, |label| label, render_row),
 														],
 													)
 												},

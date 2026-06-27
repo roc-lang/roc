@@ -12,15 +12,6 @@ import Signal exposing [Signal]
 ## wherever it is mounted.
 Ui := [].{
 
-	str_key_hash : Str -> U64
-	str_key_hash = |value| {
-		List.fold_with_index(
-			Str.to_utf8(value),
-			Str.count_utf8_bytes(value),
-			|hash, byte, index| U64.bitwise_xor(U64.shift_left_by(hash, 5), U8.to_u64(byte) + index),
-		)
-	}
-
 	## A handle to a state binder, given to the `Ui.state` body. `signal` reads the
 	## current value; `send` builds a `Node.Msg` that, when its event fires, applies
 	## the given reducer to the current value.
@@ -162,17 +153,16 @@ Ui := [].{
 		)
 	}
 
-	## Keyed list. `key_of` extracts a typed, stable key per item; `key_hash`
-	## produces the host's bucket key; `row` renders a row given that key and a
-	## typed signal for the item. Row identity is the key, so per-row local state
-	## survives reorder/insert/delete.
-	each :
-		Signal(List(item)), (item -> k), (k -> U64), (k, Signal(item) -> Elem) -> Elem
+	## Keyed list with string identity material. `key_of` extracts a stable key per
+	## item; the host hashes the key text privately for its bucket index; `row`
+	## renders a row given that key and a typed signal for the item. Row identity is
+	## the key, so per-row local state survives reorder/insert/delete.
+	each_str :
+		Signal(List(item)), (item -> Str), (Str, Signal(item) -> Elem) -> Elem
 			where [
 				item.is_eq : item, item -> Bool,
-				k.is_eq : k, k -> Bool,
 			]
-	each = |items, key_of, key_hash, row| {
+	each_str = |items, key_of, row| {
 		items_cap = items.cap
 		item_cap = Capability.new({})
 		key_cap = Capability.new({})
@@ -189,21 +179,21 @@ Ui := [].{
 			key = key_of(item)
 			Capability.store(Box.box(key), key_cap)
 		}
-		key_hash_hv : HostValue -> U64
-		key_hash_hv = |key_hv| {
-			key : k
+		key_text_hv : HostValue -> Str
+		key_text_hv = |key_hv| {
+			key : Str
 			key = Box.unbox(Capability.get(key_hv, key_cap))
-			key_hash(key)
+			key
 		}
 		row_hv : HostValue, HostValue -> Elem
 		row_hv = |key_hv, item_hv| {
-				key : k
-				key = Box.unbox(Capability.get(key_hv, key_cap))
-				row_item : {} -> HostValue
-				row_item = |_| HostValue.clone(item_hv)
-				row_signal_token : Box(U64)
-				row_signal_token = Node.new_token({})
-				row(
+			key : Str
+			key = Box.unbox(Capability.get(key_hv, key_cap))
+			row_item : {} -> HostValue
+			row_item = |_| HostValue.clone(item_hv)
+			row_signal_token : Box(U64)
+			row_signal_token = Node.new_token({})
+			row(
 				key,
 				Signal.from_expr(
 					Node.SignalExpr.ConstValue(
@@ -223,7 +213,7 @@ Ui := [].{
 					item_capability: Capability.handle(item_cap),
 					key_capability: Capability.handle(key_cap),
 					items_to_values: Box.box(items_to_values),
-					key_hash: Box.box(key_hash_hv),
+					key_text: Box.box(key_text_hv),
 					key_of: Box.box(key_of_hv),
 					row: Box.box(row_hv),
 				},

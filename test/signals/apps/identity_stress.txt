@@ -28,7 +28,7 @@ expect_text text:"Beta waiting" "Beta waiting"
 expect_metric_delta rows_reused 3
 expect_metric_delta rows_created 0
 expect_metric_delta rows_removed 0
-expect_metric_delta each_key_compares 9
+expect_metric_delta each_key_compares 6
 
 mark_metrics
 click role:button name:"Bump Gamma"
@@ -50,7 +50,7 @@ expect_metric_delta patches_emitted 12
 expect_metric_delta rows_reused 3
 expect_metric_delta rows_created 1
 expect_metric_delta rows_removed 0
-expect_metric_delta each_key_compares 10
+expect_metric_delta each_key_compares 7
 
 mark_metrics
 click role:button name:"Bump Delta"
@@ -78,7 +78,7 @@ expect_metric_delta rows_reused 3
 expect_metric_delta rows_created 0
 expect_metric_delta rows_removed 1
 expect_metric_delta scopes_disposed 2
-expect_metric_delta each_key_compares 10
+expect_metric_delta each_key_compares 6
 
 mark_metrics
 click role:button name:"Filter Beta"
@@ -90,7 +90,7 @@ expect_text text:"Alpha detail count: 1" "Alpha detail count: 1"
 expect_metric_delta rows_reused 3
 expect_metric_delta rows_created 1
 expect_metric_delta rows_removed 0
-expect_metric_delta each_key_compares 10
+expect_metric_delta each_key_compares 7
 
 mark_metrics
 click role:button name:"Toggle rows active"

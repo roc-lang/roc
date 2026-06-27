@@ -209,22 +209,22 @@ render_alert_row = |_key, alert| {
 }
 
 render_status_items : Signal.Signal(List(DashboardView.StatusItem)) -> Elem
-render_status_items = |items| Ui.each(items, |item| item.id, Ui.str_key_hash, render_status_item)
+render_status_items = |items| Ui.each_str(items, |item| item.id, render_status_item)
 
 render_metrics : Signal.Signal(List(DashboardView.Metric)) -> Elem
-render_metrics = |items| Ui.each(items, |item| item.id, Ui.str_key_hash, render_metric)
+render_metrics = |items| Ui.each_str(items, |item| item.id, render_metric)
 
 render_traffic_rows : Signal.Signal(List(DashboardView.TrafficRow)) -> Elem
-render_traffic_rows = |items| Ui.each(items, |item| item.id, Ui.str_key_hash, render_traffic_row)
+render_traffic_rows = |items| Ui.each_str(items, |item| item.id, render_traffic_row)
 
 render_service_rows : Signal.Signal(List(DashboardView.ServiceRow)) -> Elem
-render_service_rows = |items| Ui.each(items, |item| item.id, Ui.str_key_hash, render_service_cell)
+render_service_rows = |items| Ui.each_str(items, |item| item.id, render_service_cell)
 
 render_job_rows : Signal.Signal(List(DashboardView.JobRow)) -> Elem
-render_job_rows = |items| Ui.each(items, |item| item.id, Ui.str_key_hash, render_job_row)
+render_job_rows = |items| Ui.each_str(items, |item| item.id, render_job_row)
 
 render_alert_rows : Signal.Signal(List(DashboardView.AlertRow)) -> Elem
-render_alert_rows = |items| Ui.each(items, |item| item.id, Ui.str_key_hash, render_alert_row)
+render_alert_rows = |items| Ui.each_str(items, |item| item.id, render_alert_row)
 
 status_strip_items : Signal.Signal(DashboardRemote(DashboardView.StatusStrip)) -> Signal.Signal(List(DashboardView.StatusItem))
 status_strip_items = |remote|

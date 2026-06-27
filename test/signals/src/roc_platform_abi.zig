@@ -712,16 +712,16 @@ pub const __AnonStruct58 = if (@sizeOf(usize) == 4) extern struct {
     @"items_capability": HostValueCapabilityHandle,
     @"items_to_values": RocErasedCallable,
     @"key_capability": HostValueCapabilityHandle,
-    @"key_hash": RocErasedCallable,
     @"key_of": RocErasedCallable,
+    @"key_text": RocErasedCallable,
     @"row": RocErasedCallable,
 } else extern struct {
     @"item_capability": HostValueCapabilityHandle,
     @"items_capability": HostValueCapabilityHandle,
     @"items_to_values": RocErasedCallable,
     @"key_capability": HostValueCapabilityHandle,
-    @"key_hash": RocErasedCallable,
     @"key_of": RocErasedCallable,
+    @"key_text": RocErasedCallable,
     @"row": RocErasedCallable,
 };
 
@@ -1736,8 +1736,8 @@ pub fn decref__AnonStruct58(value: __AnonStruct58, roc_host: *RocHost) void {
     decrefHostValueCapabilityHandle(value.@"items_capability", roc_host);
     decrefErasedCallable(value.@"items_to_values", roc_host);
     decrefHostValueCapabilityHandle(value.@"key_capability", roc_host);
-    decrefErasedCallable(value.@"key_hash", roc_host);
     decrefErasedCallable(value.@"key_of", roc_host);
+    decrefErasedCallable(value.@"key_text", roc_host);
     decrefErasedCallable(value.@"row", roc_host);
 }
 
@@ -1747,8 +1747,8 @@ pub fn incref__AnonStruct58(value: __AnonStruct58, amount: isize) void {
     increfHostValueCapabilityHandle(value.@"items_capability", amount);
     increfErasedCallable(value.@"items_to_values", amount);
     increfHostValueCapabilityHandle(value.@"key_capability", amount);
-    increfErasedCallable(value.@"key_hash", amount);
     increfErasedCallable(value.@"key_of", amount);
+    increfErasedCallable(value.@"key_text", amount);
     increfErasedCallable(value.@"row", amount);
 }
 
@@ -2209,4 +2209,3 @@ pub fn makeRocHost(env: *RocEnv) RocHost {
 
 /// Entrypoint: ui_init
 pub extern fn roc_ui_init() callconv(.c) *Elem;
-

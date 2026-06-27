@@ -213,8 +213,8 @@ capability handles:
   `HostValue.BoolReadHandle`;
 - task request reads use `HostValue.TaskRequestReadHandle`;
 - event reducers use `HostValue.EventReducerHandle`;
-- `Ui.each` operations travel in one erased ops record containing the items,
-  item, and key capabilities plus `items_to_values`, `key_of`, `key_hash`, and
+- `Ui.each_str` operations travel in one erased ops record containing the items,
+  item, and key capabilities plus `items_to_values`, `key_of`, `key_text`, and
   `row`.
 
 The operation and owning capability are now one object at the host boundary. The
@@ -304,7 +304,8 @@ Baseline review outcome:
   touches the same dirty-worklist ownership.
 - Slot reclamation requires a long-session experiment; the single-sample
   `retained_alloc_delta` table cannot prove or disprove plateau behaviour.
-- `key.hash` / `Hasher` API cleanup remains blocked on a public hash finalizer.
+- App-authored keyed-row hashes have been replaced with host-private hashing of
+  explicit key text; keep the large-N evidence current as the keyed diff evolves.
 
 ## Phase 5 — Re-prioritise the optimisation backlog
 
@@ -330,7 +331,7 @@ Current priority after the Phase 4 review:
 3. Persistent rank-ordered propagation queue.
 4. Per-cycle scratch/arena allocation cleanup.
 5. Long-session leak experiment and slot reclamation.
-6. `key.hash` / `Hasher` API cleanup once the Roc API exists.
+6. Large-N validation for host-private keyed-row hashing.
 
 ### Persistent rank-ordered propagation queue (design gap, not optimisation)
 
@@ -391,28 +392,29 @@ Current priority after the Phase 4 review:
 
 ### O(1) identity/descriptor lookup (kill linear-scan-by-id)
 
-- **Status:** first slice landed for node-id lookups. `HostNodeDescriptorStream`
-  now maintains explicit `node_id -> scope_site/state/when/each` descriptor
-  indexes, and the engine maintains `node_id -> state cell` indexes for runtime
-  state. `stateIndexByNodeId`, `activeScopeSiteByNodeId`,
-  `activeWhenIndexByNodeId`, `activeEachIndexByNodeId`, and structural
-  `streamNodeIdInReplacementTarget` no longer scan descriptor tables. Remaining
-  work is the render/stream lookup side (`signalRecordByToken`, render-node
-  subtree scans, child collection, and text/bool field scans).
-- **Hypothesis:** dense side tables for `elem_id → descriptor`, `token → record`,
-  and `node_id → active-stream index` — maintained on insert/remove, the way
-  `descriptor_indexes_by_elem_id` already is — plus restricting structural
+- **Status:** node/elem descriptor lookup slices have landed.
+  `HostNodeDescriptorStream` maintains explicit
+  `node_id -> scope_site/state/when/each` and `elem_id -> descriptor` indexes;
+  the engine maintains `node_id -> state cell` indexes for runtime state; and
+  signal record reuse now uses an explicit `token -> record` map. The direct
+  lookup helpers (`stateIndexByNodeId`, `activeScopeSiteByNodeId`,
+  `activeWhenIndexByNodeId`, `activeEachIndexByNodeId`,
+  `streamNodeIdInReplacementTarget`, `streamNodeIdInScopeSubtree`,
+  `findElementDesc`, `findTextNodeDesc`, `findSignalTextNodeDesc`,
+  `streamHasTextField`, `streamHasBoolField`, and `signalRecordByToken`) no
+  longer scan descriptor tables. Remaining work is the render-node subtree
+  scans, child collection, and keyed diff lookup discipline.
+- **Hypothesis:** finishing dense side tables for active render-node/subtree
+  ownership and keyed diff lookup discipline — maintained on insert/remove, the
+  way `descriptor_indexes_by_elem_id` already is — plus restricting structural
   patching to the spliced subtree, remove the O(render_nodes²) behaviour in the
   structural patch paths.
 - **Why we suspect it:** `DESIGN.md` forbids answering "what id is this record?"
-  or "what descriptor owns this elem_id?" by walking a list, yet
-  `signalRecordByToken`, `stateIndexByNodeId`, `activeScopeSiteByNodeId`,
-  `activeWhenIndexByNodeId`, and `activeEachIndexByNodeId` are linear scans —
-  several called inside the per-change loop in `applyDirtyStructuralSignalsLocally`
-  — and `findElementDesc` / `findTextNodeDesc` / `findSignalTextNodeDesc` /
-  `streamHasTextField` / `streamHasBoolField` scan the stream inside loops over
-  render nodes. The accelerator pattern already exists in the file; it just is not
-  applied to these lookups.
+  or "what descriptor owns this elem_id?" by walking a list. The descriptor and
+  token lookups now follow that rule, but the remaining subtree and child
+  collection paths still walk active render nodes to rediscover ownership. The
+  accelerator pattern already exists in the file; the remaining work is applying
+  it to those ownership questions without changing behaviour.
 - **How we'll know:** add `stream_nodes_scanned` assertions on a single-row update
   in the large-N app; the counter must be bounded by the changed set, not by N,
   before and after — and the baseline must show the scan is actually a hot path
@@ -459,15 +461,15 @@ Current priority after the Phase 4 review:
 - **How we'll know:** a large-N reorder host test fails if reorder degrades from
   moves-only to whole-site re-collect/rebuild.
 
-### `key.hash` / `Hasher` API cleanup
+### Host-private keyed-row hashing
 
-- **Hypothesis:** replacing the explicit `key -> U64` hash thunk on `Ui.each` with
-  the target `key.hash` / `Hasher` constraint removes a platform wart once Roc
-  exposes a public hash finalizer (e.g. `Hasher.finish : Hasher -> U64`).
-- **Why we suspect it:** the explicit hash argument exists only because Roc does
-  not yet expose `Hasher.finish`; it is a stand-in, not the intended API.
-- **How we'll know:** the API matches `DESIGN.md`'s `Ui.each` signature and
-  `each_key_compares` still tracks L (not L²) under churn after the swap.
+- **Hypothesis:** replacing the app-authored `key -> U64` hash thunk with
+  `Ui.each_str` key material keeps keyed diff lookup O(L) without exposing hash
+  finalization to Roc apps.
+- **Why we suspect it:** the host still builds the same hash index, but now hashes
+  explicit key text privately and stores existing row hashes on row scopes.
+- **How we'll know:** `each_key_compares` still tracks L (not L²) under churn and
+  large-N reorder tests do not re-run row bodies or rebuild the each site.
 
 ### Long-session leak experiment
 

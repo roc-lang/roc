@@ -123,7 +123,7 @@ main = |_| {{
 						"Large each rows",
 						[],
 						[
-							Ui.each(items, |item| item.id, Ui.str_key_hash, render_row),
+							Ui.each_str(items, |item| item.id, render_row),
 						],
 					),
 				],

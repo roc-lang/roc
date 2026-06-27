@@ -576,7 +576,7 @@ render_column = |board_state, column_id, column_signal| {
 		[
 			Html.heading_c(column_title(column_id), column_heading_class),
 			Html.paragraph_s_c(summary_signal, column_summary_class),
-			Ui.each(cards_signal, |card| card.id, Ui.str_key_hash, |card_id, card| render_card(board_state, column_id, card_id, card)),
+			Ui.each_str(cards_signal, |card| card.id, |card_id, card| render_card(board_state, column_id, card_id, card)),
 			Html.section(
 				end_label,
 				[
@@ -670,7 +670,7 @@ main = |_| {
 					Html.div_c(
 						board_class,
 						[
-							Ui.each(column_signal, |column| column.id, Ui.str_key_hash, |column_id, column| render_column(board, column_id, column)),
+							Ui.each_str(column_signal, |column| column.id, |column_id, column| render_column(board, column_id, column)),
 						],
 					),
 				],

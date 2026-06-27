@@ -1298,8 +1298,8 @@ const HostEnv = struct {
         return result.scope_id;
     }
 
-    fn createEachRowScope(self: *HostEnv, parent_scope_id: u64, site_ordinal: u64, key: HostValue, item: HostValue, key_cap: HostValueCapability, item_cap: HostValueCapability) u64 {
-        return self.engine.createEachRowScope(self, parent_scope_id, site_ordinal, key, item, key_cap, item_cap);
+    fn createEachRowScope(self: *HostEnv, parent_scope_id: u64, site_ordinal: u64, key_hash: u64, key: HostValue, item: HostValue, key_cap: HostValueCapability, item_cap: HostValueCapability) u64 {
+        return self.engine.createEachRowScope(self, parent_scope_id, site_ordinal, key_hash, key, item, key_cap, item_cap);
     }
 
     fn internNodeIdentity(self: *HostEnv, scope_id: u64, ordinal: u64) u64 {
@@ -3518,14 +3518,24 @@ fn testHostValueCapability(roc_host: *abi.RocHost) HostValueCapability {
     return testHostValueCapabilityWithEq(roc_host, &testHostValueEqErasedCallable);
 }
 
-fn testHostValueHashCallable(roc_host: *abi.RocHost) abi.RocErasedCallable {
+fn testHostValueKeyTextCallable(roc_host: *abi.RocHost) abi.RocErasedCallable {
     return writeTestErasedCallable(
         TestErasedI64Capture,
         roc_host,
-        &testHostValueHashErasedCallable,
+        &testHostValueKeyTextErasedCallable,
         &testErasedCallableOnDrop,
         .{ .amount = 0 },
     );
+}
+
+fn testHashI64KeyText(value: i64) u64 {
+    var buf: [32]u8 = undefined;
+    const text = std.fmt.bufPrint(&buf, "{d}", .{value}) catch unreachable;
+    return std.hash.Wyhash.hash(0, text);
+}
+
+fn testHashHostValueKeyText(roc_host: *abi.RocHost, key: HostValue) u64 {
+    return testHashI64KeyText(testReadHostValueI64(roc_host, key));
 }
 
 fn testReadStrCallable(roc_host: *abi.RocHost) abi.RocErasedCallable {
@@ -3566,11 +3576,13 @@ fn testUnaryHostValueCallable(roc_host: *abi.RocHost, ret: ?[*]u8, args: ?[*]con
     writeTestErasedResult(HostValue, ret, capabilityTestHostValue(host, roc_host, hostValueI64(host, roc_host, input + capture.amount)));
 }
 
-fn testHostValueHashErasedCallable(roc_host: *abi.RocHost, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8) callconv(.c) void {
+fn testHostValueKeyTextErasedCallable(roc_host: *abi.RocHost, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8) callconv(.c) void {
     _ = capture_ptr;
     const call_args = testErasedArgsAs(ErasedHostValueUnaryArgs, args);
     const value = testReadHostValueI64(roc_host, call_args.arg0);
-    writeTestErasedResult(u64, ret, @intCast(value));
+    var buf: [32]u8 = undefined;
+    const text = std.fmt.bufPrint(&buf, "{d}", .{value}) catch unreachable;
+    writeTestErasedResult(RocStr, ret, RocStr.fromSlice(text, roc_host));
 }
 
 fn testUnaryIdentityHostValueCallable(roc_host: *abi.RocHost, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8) callconv(.c) void {
@@ -5105,8 +5117,8 @@ fn syncTestEachRowScopes(host: *HostEnv, roc_host: *abi.RocHost, parent_scope_id
         }
     }
 
-    const key_hash = testHostValueHashCallable(roc_host);
-    defer abi.decrefErasedCallable(key_hash, roc_host);
+    const key_text = testHostValueKeyTextCallable(roc_host);
+    defer abi.decrefErasedCallable(key_text, roc_host);
     const key_of = writeTestErasedCallable(
         TestErasedI64Capture,
         roc_host,
@@ -5130,15 +5142,15 @@ fn syncTestEachRowScopes(host: *HostEnv, roc_host: *abi.RocHost, parent_scope_id
         .item_capability = item_cap,
         .key_capability = key_cap,
         .items_to_values = items_to_values,
-        .key_hash = key_hash,
+        .key_text = key_text,
         .key_of = key_of,
         .row = row,
     };
     return host.syncEachRowScopes(roc_host, parent_scope_id, site_ordinal, key_values, item_values, ops);
 }
 
-fn createTestEachRowScope(host: *HostEnv, _: *abi.RocHost, parent_scope_id: u64, site_ordinal: u64, key: HostValue, item: HostValue, key_cap: HostValueCapability, item_cap: HostValueCapability) u64 {
-    return host.createEachRowScope(parent_scope_id, site_ordinal, key, item, key_cap, item_cap);
+fn createTestEachRowScope(host: *HostEnv, roc_host: *abi.RocHost, parent_scope_id: u64, site_ordinal: u64, key: HostValue, item: HostValue, key_cap: HostValueCapability, item_cap: HostValueCapability) u64 {
+    return host.createEachRowScope(parent_scope_id, site_ordinal, testHashHostValueKeyText(roc_host, key), key, item, key_cap, item_cap);
 }
 
 fn boxTestElem(roc_host: *abi.RocHost, elem: abi.Elem) *abi.Elem {
@@ -5601,7 +5613,7 @@ fn testNodeEachWithSignalCapabilityAndRow(roc_host: *abi.RocHost, signal: abi.No
         &testErasedCallableOnDrop,
         .{ .amount = 0 },
     );
-    const key_hash = testHostValueHashCallable(roc_host);
+    const key_text = testHostValueKeyTextCallable(roc_host);
     const item_cap = testHostValueCapability(roc_host);
     const items_to_values = testItemsToValuesCallable(roc_host);
     const row = writeTestErasedCallable(
@@ -5620,7 +5632,7 @@ fn testNodeEachWithSignalCapabilityAndRow(roc_host: *abi.RocHost, signal: abi.No
                     .item_capability = item_cap,
                     .key_capability = key_cap,
                     .items_to_values = items_to_values,
-                    .key_hash = key_hash,
+                    .key_text = key_text,
                     .key_of = key_of,
                     .row = row,
                 },
@@ -5643,7 +5655,7 @@ fn testNodeEachWithNestedWhenRows(roc_host: *abi.RocHost, items: []const HostVal
         &testErasedCallableOnDrop,
         .{ .amount = 0 },
     );
-    const key_hash = testHostValueHashCallable(roc_host);
+    const key_text = testHostValueKeyTextCallable(roc_host);
     const item_cap = testHostValueCapability(roc_host);
     const items_to_values = testItemsToValuesCallable(roc_host);
     const row = writeTestErasedCallable(
@@ -5667,7 +5679,7 @@ fn testNodeEachWithNestedWhenRows(roc_host: *abi.RocHost, items: []const HostVal
                     .item_capability = item_cap,
                     .key_capability = key_cap,
                     .items_to_values = items_to_values,
-                    .key_hash = key_hash,
+                    .key_text = key_text,
                     .key_of = key_of,
                     .row = row,
                 },
@@ -5802,7 +5814,7 @@ test "signals host keyed row diff hash probes scale linearly" {
     try std.testing.expectEqual(@as(u64, 0), reordered.rows_removed);
 
     const compare_delta = host.engine.pending_roc_metrics.each_key_compares - compare_start;
-    try std.testing.expectEqual(@as(u64, row_count * 3), compare_delta);
+    try std.testing.expectEqual(@as(u64, row_count * 2), compare_delta);
 }
 
 test "signals host row scopes retain key and item capabilities" {

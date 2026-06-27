@@ -389,12 +389,24 @@ pub const HostValueCell = struct {
         erased_calls.callErasedHostValueToUnit(roc_host, hv.hostValueCapabilityDrop(self.cap), self.value);
         self.value = value;
     }
+
+    pub fn replaceRetained(self: *HostValueCell, ctx: anytype, roc_host: *abi.RocHost, metrics: anytype, value: HostValue, cap: HostValueCapability) void {
+        const old_cap = self.cap;
+        _ = retainHostValueCapability(cap, metrics);
+        const caps = [_]HostValueCapability{old_cap};
+        ctx.pushHostValueCapabilities(&caps);
+        defer ctx.popHostValueCapabilities();
+        erased_calls.callErasedHostValueToUnit(roc_host, hv.hostValueCapabilityDrop(old_cap), self.value);
+        releaseHostValueCapability(old_cap, roc_host, metrics);
+        self.* = .{ .value = value, .cap = cap };
+    }
 };
 
 /// Per-row payload carried in an `Ui.each` scope: the row's key and item cells,
 /// keyed by the construction-site ordinal.
 pub const HostEachRowScopeStep = struct {
     site_ordinal: u64,
+    key_hash: u64,
     key: HostValueCell,
     item: HostValueCell,
 };
@@ -450,6 +462,10 @@ fn releaseHostValueCapability(capability: HostValueCapability, roc_host: *abi.Ro
     hv.releaseHostValueCapability(capability, roc_host);
 }
 
+fn hashEachKeyText(bytes: []const u8) u64 {
+    return std.hash.Wyhash.hash(0, bytes);
+}
+
 fn assertHostValueCapabilitiesMatch(actual: HostValueCapability, expected: HostValueCapability, message: []const u8) void {
     if (!hv.hostValueCapabilitiesMatch(actual, expected)) @panic(message);
 }
@@ -498,7 +514,7 @@ fn retainHostEachOps(ops: HostEachOps, metrics: anytype) HostEachOps {
     _ = retainHostValueCapability(ops.item_capability, metrics);
     _ = retainHostValueCapability(ops.key_capability, metrics);
     abi.increfErasedCallable(ops.items_to_values, 1);
-    abi.increfErasedCallable(ops.key_hash, 1);
+    abi.increfErasedCallable(ops.key_text, 1);
     abi.increfErasedCallable(ops.key_of, 1);
     abi.increfErasedCallable(ops.row, 1);
     metrics.bump(.closure_retains, 4);
@@ -510,7 +526,7 @@ fn releaseHostEachOps(ops: HostEachOps, roc_host: *abi.RocHost, metrics: anytype
     releaseHostValueCapability(ops.item_capability, roc_host, metrics);
     releaseHostValueCapability(ops.key_capability, roc_host, metrics);
     abi.decrefErasedCallable(ops.items_to_values, roc_host);
-    abi.decrefErasedCallable(ops.key_hash, roc_host);
+    abi.decrefErasedCallable(ops.key_text, roc_host);
     abi.decrefErasedCallable(ops.key_of, roc_host);
     abi.decrefErasedCallable(ops.row, roc_host);
     metrics.bump(.closure_releases, 4);
@@ -1118,11 +1134,6 @@ pub const HostNodeEachDesc = struct {
     cached_value: HostSignalCacheSlot = .absent,
 };
 
-pub const HostSignalRecordTokenEntry = struct {
-    token: HostSignalToken,
-    record: *HostSignalRecord,
-};
-
 // Descriptor stream
 //
 // The retained stream of node descriptors plus the per-elem index that makes
@@ -1273,7 +1284,7 @@ pub const HostNodeDescriptorStream = struct {
     states: std.ArrayListUnmanaged(HostNodeStateDesc) = .empty,
     whens: std.ArrayListUnmanaged(HostNodeWhenDesc) = .empty,
     eaches: std.ArrayListUnmanaged(HostNodeEachDesc) = .empty,
-    signal_records_by_token: std.ArrayListUnmanaged(HostSignalRecordTokenEntry) = .empty,
+    signal_records_by_token: std.AutoHashMapUnmanaged(usize, *HostSignalRecord) = .{},
     descriptor_indexes_by_elem_id: std.ArrayListUnmanaged(HostElemDescriptorIndex) = .empty,
     descriptor_indexes_by_node_id: std.ArrayListUnmanaged(HostNodeDescriptorIndex) = .empty,
     next_elem_id: u64 = 1,
@@ -1565,22 +1576,17 @@ pub const HostNodeDescriptorStream = struct {
     }
 
     pub fn signalRecordByToken(self: *HostNodeDescriptorStream, token: HostSignalToken) ?*HostSignalRecord {
-        for (self.signal_records_by_token.items) |entry| {
-            if (entry.token == token) return entry.record;
-        }
-        return null;
+        return self.signal_records_by_token.get(@intFromPtr(token));
     }
 
     pub fn rememberSignalRecord(self: *HostNodeDescriptorStream, allocator: std.mem.Allocator, record: *HostSignalRecord) void {
         const token = record.token() orelse return;
-        if (self.signalRecordByToken(token)) |existing| {
-            if (existing != record) @panic("signal token was bound to multiple host records");
+        const entry = self.signal_records_by_token.getOrPut(allocator, @intFromPtr(token)) catch @panic("out of memory");
+        if (entry.found_existing) {
+            if (entry.value_ptr.* != record) @panic("signal token was bound to multiple host records");
             return;
         }
-        self.signal_records_by_token.append(allocator, .{
-            .token = token,
-            .record = record,
-        }) catch @panic("out of memory");
+        entry.value_ptr.* = record;
     }
 
     pub fn rememberSignalRecordTree(self: *HostNodeDescriptorStream, allocator: std.mem.Allocator, record: *HostSignalRecord) void {
@@ -3282,9 +3288,23 @@ pub fn Engine(comptime Ctx: type) type {
         }
 
         pub fn streamNodeIdInScopeSubtree(self: *Self, previous: *const HostNodeDescriptorStream, node_id: u64, root_scope_id: u64) bool {
-            self.recordStreamNodesScanned(previous.scope_sites.items.len);
-            for (previous.scope_sites.items) |site| {
-                if (site.node_id == node_id and self.scopeIsDescendantOrSelf(site.scope_id, root_scope_id) catch @panic("scope descriptor referenced an unknown parent scope")) return true;
+            const descriptor_index = previous.nodeDescriptorIndex(node_id) orelse return false;
+            const ScopeSiteSlot = struct {
+                kind: HostNodeScopeSiteKind,
+                index: ?usize,
+            };
+            const scope_site_slots = [_]ScopeSiteSlot{
+                .{ .kind = .component, .index = descriptor_index.scope_sites.component },
+                .{ .kind = .state, .index = descriptor_index.scope_sites.state },
+                .{ .kind = .when, .index = descriptor_index.scope_sites.when },
+                .{ .kind = .each, .index = descriptor_index.scope_sites.each },
+            };
+            for (scope_site_slots) |slot| {
+                const site_index = slot.index orelse continue;
+                if (site_index >= previous.scope_sites.items.len) @panic("scope site descriptor index exceeded descriptor table");
+                const site = previous.scope_sites.items[site_index];
+                if (site.node_id != node_id or site.kind != slot.kind) @panic("scope site descriptor index pointed at the wrong node");
+                if (self.scopeIsDescendantOrSelf(site.scope_id, root_scope_id) catch @panic("scope descriptor referenced an unknown parent scope")) return true;
             }
             return false;
         }
@@ -3528,13 +3548,14 @@ pub fn Engine(comptime Ctx: type) type {
             self.pending_roc_metrics = metrics;
         }
 
-        pub fn createEachRowScope(self: *Self, ctx: Ctx.Handle, parent_scope_id: u64, site_ordinal: u64, key: HostValue, item: HostValue, key_cap: HostValueCapability, item_cap: HostValueCapability) u64 {
+        pub fn createEachRowScope(self: *Self, ctx: Ctx.Handle, parent_scope_id: u64, site_ordinal: u64, key_hash: u64, key: HostValue, item: HostValue, key_cap: HostValueCapability, item_cap: HostValueCapability) u64 {
             self.validateScopeId(parent_scope_id) catch @panic("scope id has no host scope descriptor");
 
             const key_cell = HostValueCell.initRetained(key, key_cap, &self.pending_roc_metrics);
             const item_cell = HostValueCell.initRetained(item, item_cap, &self.pending_roc_metrics);
             const result = scope_tree.appendEachRow(HostEachRowScopeStep, Ctx.allocator(ctx), &self.scopes, parent_scope_id, .{
                 .site_ordinal = site_ordinal,
+                .key_hash = key_hash,
                 .key = key_cell,
                 .item = item_cell,
             }) catch @panic("scope id has no host scope descriptor");
@@ -3551,7 +3572,7 @@ pub fn Engine(comptime Ctx: type) type {
             };
         }
 
-        pub fn replaceEachRowScopeItem(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, scope_id: u64, item: HostValue) void {
+        pub fn replaceEachRowScopeKey(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, scope_id: u64, key_hash: u64, key: HostValue, key_cap: HostValueCapability) void {
             self.validateScopeId(scope_id) catch @panic("scope id has no host scope descriptor");
             const scope = &self.scopes.items[@intCast(scope_id)];
             switch (scope.step) {
@@ -3559,7 +3580,19 @@ pub fn Engine(comptime Ctx: type) type {
                 .root, .component, .when_branch => @panic("scope id does not reference an each-row scope"),
             }
 
-            scope.step.each_row.item.replaceValue(ctx, roc_host, item);
+            scope.step.each_row.key_hash = key_hash;
+            scope.step.each_row.key.replaceRetained(ctx, roc_host, &self.pending_roc_metrics, key, key_cap);
+        }
+
+        pub fn replaceEachRowScopeItemWithCapability(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, scope_id: u64, item: HostValue, item_cap: HostValueCapability) void {
+            self.validateScopeId(scope_id) catch @panic("scope id has no host scope descriptor");
+            const scope = &self.scopes.items[@intCast(scope_id)];
+            switch (scope.step) {
+                .each_row => {},
+                .root, .component, .when_branch => @panic("scope id does not reference an each-row scope"),
+            }
+
+            scope.step.each_row.item.replaceRetained(ctx, roc_host, &self.pending_roc_metrics, item, item_cap);
         }
 
         pub fn eachRowScopeValues(self: *Self, scope_id: u64) EachRowValues {
@@ -3581,7 +3614,19 @@ pub fn Engine(comptime Ctx: type) type {
 
             const key_cap = ops.key_capability;
             const item_cap = ops.item_capability;
-            const match_plan = self.buildEachRowMatchPlan(allocator, ctx, roc_host, existing_scope_ids, keys, ops) catch @panic("keyed row diff operation failed");
+            const key_hashes = allocator.alloc(u64, keys.len) catch @panic("out of memory");
+            defer allocator.free(key_hashes);
+            for (keys, 0..) |key, key_index| {
+                key_hashes[key_index] = self.hashEachKeyValue(ctx, roc_host, ops.key_text, ops.key_capability, key);
+            }
+
+            const existing_key_hashes = allocator.alloc(u64, existing_scope_ids.len) catch @panic("out of memory");
+            defer allocator.free(existing_key_hashes);
+            for (existing_scope_ids, 0..) |scope_id, existing_index| {
+                existing_key_hashes[existing_index] = self.eachRowScopeKeyHash(scope_id);
+            }
+
+            const match_plan = self.buildEachRowMatchPlan(allocator, ctx, roc_host, existing_scope_ids, existing_key_hashes, key_hashes, keys, ops) catch @panic("keyed row diff operation failed");
             defer allocator.free(match_plan.rows);
             errdefer allocator.free(match_plan.removed_scope_ids);
 
@@ -3601,19 +3646,19 @@ pub fn Engine(comptime Ctx: type) type {
                         const scope_id = reuse.scope_id;
                         next_scope_ids[key_index] = scope_id;
                         scope_created[key_index] = false;
-                        callHostValueToUnitWithCapability(ctx, roc_host, key_cap, hv.hostValueCapabilityDrop(key_cap), key);
-                        if (self.eachRowScopeItemEquals(ctx, roc_host, scope_id, item)) {
-                            callHostValueToUnitWithCapability(ctx, roc_host, item_cap, hv.hostValueCapabilityDrop(item_cap), item);
+                        const row_item_equal = self.eachRowScopeItemEquals(ctx, roc_host, scope_id, item);
+                        self.replaceEachRowScopeKey(ctx, roc_host, scope_id, key_hashes[key_index], key, key_cap);
+                        self.replaceEachRowScopeItemWithCapability(ctx, roc_host, scope_id, item, item_cap);
+                        if (row_item_equal) {
                             row_items_changed[key_index] = false;
                             row_items_unchanged += 1;
                         } else {
-                            self.replaceEachRowScopeItem(ctx, roc_host, scope_id, item);
                             row_items_changed[key_index] = true;
                             row_items_updated += 1;
                         }
                     },
                     .create => {
-                        next_scope_ids[key_index] = self.createEachRowScope(ctx, parent_scope_id, site_ordinal, key, item, key_cap, item_cap);
+                        next_scope_ids[key_index] = self.createEachRowScope(ctx, parent_scope_id, site_ordinal, key_hashes[key_index], key, item, key_cap, item_cap);
                         row_items_changed[key_index] = true;
                         scope_created[key_index] = true;
                     },
@@ -5164,7 +5209,7 @@ pub fn Engine(comptime Ctx: type) type {
 
         fn rebuildActiveStreamSignalRecordTable(self: *Self, ctx: Ctx.Handle) void {
             const allocator = Ctx.allocator(ctx);
-            self.active_stream.signal_records_by_token.items.len = 0;
+            self.active_stream.signal_records_by_token.clearRetainingCapacity();
 
             for (self.active_stream.signal_text_nodes.items) |desc| {
                 self.active_stream.rememberSignalRecordTree(allocator, desc.signal.record);
@@ -5736,9 +5781,20 @@ pub fn Engine(comptime Ctx: type) type {
             };
         }
 
-        pub fn hashEachKeyValue(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, key_hash: abi.RocErasedCallable, key_cap: HostValueCapability, key: HostValue) u64 {
+        pub fn eachRowScopeKeyHash(self: *Self, scope_id: u64) u64 {
+            self.validateScopeId(scope_id) catch @panic("scope id has no host scope descriptor");
+            const scope = &self.scopes.items[@intCast(scope_id)];
+            return switch (scope.step) {
+                .each_row => |row| row.key_hash,
+                .root, .component, .when_branch => @panic("scope id does not reference an each-row scope"),
+            };
+        }
+
+        pub fn hashEachKeyValue(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, key_text: abi.RocErasedCallable, key_cap: HostValueCapability, key: HostValue) u64 {
             self.recordEachKeyCompare();
-            return callHostValueToU64WithCapability(ctx, roc_host, key_cap, key_hash, key);
+            const text = callHostValueToStrWithCapability(ctx, roc_host, key_cap, key_text, key);
+            defer text.decref(roc_host);
+            return hashEachKeyText(text.asSlice());
         }
 
         pub fn eachKeysEqual(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, ops: HostEachOps, left: HostValue, right: HostValue) bool {
@@ -5747,20 +5803,7 @@ pub fn Engine(comptime Ctx: type) type {
             return callHostValueHostValueToBoolWithCapability(ctx, roc_host, key_cap, hv.hostValueCapabilityEq(key_cap), left, right);
         }
 
-        pub fn buildEachRowMatchPlan(self: *Self, allocator: std.mem.Allocator, ctx: Ctx.Handle, roc_host: *abi.RocHost, existing_scope_ids: []const u64, keys: []const HostValue, ops: HostEachOps) keyed_rows.Error!keyed_rows.Plan {
-            const key_hashes = allocator.alloc(u64, keys.len) catch return error.OutOfMemory;
-            defer allocator.free(key_hashes);
-            for (keys, 0..) |key, key_index| {
-                key_hashes[key_index] = self.hashEachKeyValue(ctx, roc_host, ops.key_hash, ops.key_capability, key);
-            }
-
-            const existing_key_hashes = allocator.alloc(u64, existing_scope_ids.len) catch return error.OutOfMemory;
-            defer allocator.free(existing_key_hashes);
-            for (existing_scope_ids, 0..) |scope_id, existing_index| {
-                const existing_key = self.eachRowScopeKeyValue(scope_id);
-                existing_key_hashes[existing_index] = self.hashEachKeyValue(ctx, roc_host, ops.key_hash, ops.key_capability, existing_key);
-            }
-
+        pub fn buildEachRowMatchPlan(self: *Self, allocator: std.mem.Allocator, ctx: Ctx.Handle, roc_host: *abi.RocHost, existing_scope_ids: []const u64, existing_key_hashes: []const u64, key_hashes: []const u64, keys: []const HostValue, ops: HostEachOps) keyed_rows.Error!keyed_rows.Plan {
             const MatchContext = struct {
                 engine: *Self,
                 ctx: Ctx.Handle,

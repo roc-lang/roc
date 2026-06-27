@@ -172,8 +172,8 @@ and dynamic list structure must therefore share one mechanism, never two.
 
 ## Identity: Construction-Site Within Explicit Scopes
 
-There are no author-written string keys anywhere. Identity is assigned by the
-host during graph ingestion.
+There are no author-written node ids or event ids. Identity is assigned by the
+host during graph ingestion; keyed rows use app-provided stable key material.
 
 - Within a scope, node identity is **construction order** (the order the app
   built the nodes). The app build is pure and deterministic, so this order is
@@ -183,14 +183,14 @@ host during graph ingestion.
   shift identities in sibling scopes. This is the new failure mode we design
   around: "where you built it is your identity," so the seams that can shift
   (branches, lists) are explicit scope boundaries.
-- **Dynamic lists use typed keys, not position.** `Ui.each` takes a typed key
-  function `item -> key` where `key` provides `hash` and `is_eq` methods (the
-  `where [key.hash : ..., key.is_eq : ...]` static-dispatch constraints below).
-  The item type also provides `is_eq`, so the host can distinguish "same row
-  identity, unchanged row value" from "same row identity, changed row value"
-  without guessing from bytes. A row's identity is its key, so per-row local
-  state survives reorder/insert/delete. Duplicate keys are an `is_eq` question
-  the host answers explicitly (reported as a host error), never a silent alias.
+- **Dynamic lists use stable key material, not position.** `Ui.each_str` takes a
+  key function `item -> Str`. The host stores the typed key value, hashes the key
+  text privately for its row lookup table, and uses exact key equality for
+  collisions and duplicate-key checks. The item type also provides `is_eq`, so
+  the host can distinguish "same row identity, unchanged row value" from "same
+  row identity, changed row value" without guessing from bytes. A row's identity
+  is its key, so per-row local state survives reorder/insert/delete. Duplicate
+  keys are reported as a host error, never silently aliased.
 
 This replaces string-collision/rename hazards with explicit, typed structure.
 
@@ -297,9 +297,9 @@ CapabilityHandle := {
   of the universal trio. A signal-backed text edge owns a
   `{ capability, read : HostValue -> Str }` record; a `Ui.when` condition owns a
   `{ capability, read : HostValue -> Bool }` record; a task request read and an
-  event reducer carry their operation the same way; `Ui.each` owns one ops
+  event reducer carry their operation the same way; `Ui.each_str` owns one ops
   record containing its item/key/items capabilities plus `items_to_values`,
-  `key_of`, `key_hash`, and `row`. These records are carried by the edge that
+  `key_of`, `key_text`, and `row`. These records are carried by the edge that
   needs them, never invented by the host.
 - **The capability is app-compiled, not host-authored.** The prebuilt host sees
   only the platform ABI; `a` is made concrete by the *application* (`Signal(a)`,
@@ -399,11 +399,9 @@ State.signal : State(a) -> Signal(a)
 State.on_unit : State(a), (a -> a) -> Msg
 State.on_value : State(a), (a, payload -> a) -> Msg
 Ui.when : Signal(Bool), ({} -> Elem), ({} -> Elem) -> Elem
-Ui.each : Signal(List(item)), (item -> key), (key, Signal(item) -> Elem) -> Elem
+Ui.each_str : Signal(List(item)), (item -> Str), (Str, Signal(item) -> Elem) -> Elem
     where [
         item.is_eq : item, item -> Bool,
-        key.hash : key, Hasher -> Hasher,
-        key.is_eq : key, key -> Bool,
     ]
 
 # Components (named scopes for local state)
@@ -464,28 +462,12 @@ string and not by re-derived tree position.
 ### Example: keyed list with per-row local state
 
 ```roc
-# A nominal key type provides hash and is_eq through its method block, so it
-# satisfies the `where [key.hash, key.is_eq]` constraint on Ui.each.
-TodoId := [Tid(U64)].{
-    hash : TodoId, Hasher -> Hasher
-    hash = |id, hasher| match id {
-        Tid(n) => Hasher.write_u64(hasher, n)
-    }
-
-    is_eq : TodoId, TodoId -> Bool
-    is_eq = |left, right| match left {
-        Tid(a) => match right {
-            Tid(b) => a == b
-        }
-    }
-}
-
 todo_list : Signal(List(Todo)) -> Elem
 todo_list = |todos|
     Html.ul(
         [],
         [
-            Ui.each(
+            Ui.each_str(
                 todos,
                 |todo| todo.id,
                 |_key, row| {
@@ -703,11 +685,11 @@ Non-negotiable structural rules that follow from the budget:
   edits only the records in the affected scope and patches their adjacency/rank
   in place. There is no clear-and-rebuild of the whole active signal graph on a
   structural change. Initial ingestion may be O(N); nothing after it may be.
-- **`Ui.each` carries a key hash index.** The `key.hash` constraint in the API is
-  load-bearing, not decorative: the host builds a `HashMap(key → row scope id)`
-  for each `each` site and uses it for the keyed diff and the duplicate-key
-  check. Linear `is_eq` matching is a budget violation. Dropping `key.hash` is a
-  regression to fix in the API, not a host workaround to absorb.
+- **`Ui.each_str` carries a host-private key hash index.** The key text is
+  load-bearing, not decorative: the host hashes it into a `HashMap` for each
+  each site and uses typed key equality to resolve collisions and duplicate-key
+  checks. Linear equality-only matching is a budget violation. Dropping the hash
+  index is a regression to fix, not a host workaround to absorb.
 - **Reorder moves, it does not rebuild.** A pure permutation of surviving rows
   must emit only DOM moves for displaced rows (computed against a longest-stable
   subsequence so unmoved rows cost nothing) and must not re-collect row
