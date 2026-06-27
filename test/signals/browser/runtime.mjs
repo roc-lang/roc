@@ -27,6 +27,22 @@ export const Op = Object.freeze({
   bindPointerUp: 24,
   bindPointerEnter: 25,
   bindPointerLeave: 26,
+  extended: 27,
+});
+
+export const Protocol = Object.freeze({
+  version: 1,
+});
+
+export const ProtocolFeature = Object.freeze({
+  dynamicAttrs: 1 << 0,
+});
+
+const requiredProtocolFeatures = ProtocolFeature.dynamicAttrs;
+
+export const DynamicOp = Object.freeze({
+  setAttrText: 1,
+  removeAttr: 2,
 });
 
 // RenderEventKind enum (render_commands.zig) -> DOM event name. The host emits
@@ -78,6 +94,12 @@ const opNames = Object.freeze({
   [Op.bindPointerUp]: "bind_pointer_up",
   [Op.bindPointerEnter]: "bind_pointer_enter",
   [Op.bindPointerLeave]: "bind_pointer_leave",
+  [Op.extended]: "extended",
+});
+
+const dynamicOpNames = Object.freeze({
+  [DynamicOp.setAttrText]: "set_attr_text",
+  [DynamicOp.removeAttr]: "remove_attr",
 });
 
 export const PayloadKind = Object.freeze({
@@ -128,6 +150,7 @@ export const HttpTextTask = Object.freeze({
 });
 
 const textDecoder = new TextDecoder();
+const dynamicTextDecoder = new TextDecoder("utf-8", { fatal: true });
 const textEncoder = new TextEncoder();
 
 const opsApiTextPathSet = new Set(HttpTextTask.opsApiPaths);
@@ -173,6 +196,7 @@ export class SignalsRuntime {
   constructor(exports, root, options = {}) {
     this.exports = exports;
     this.root = root;
+    this.checkProtocol();
     this.views = createMemoryViewCache(exports.memory);
     this.nodes = new Map([[0, root]]);
     this.eventCleanups = new Map();
@@ -193,6 +217,33 @@ export class SignalsRuntime {
     this.lastCommands = [];
     if (this.telemetryLog) {
       this.installPointerProbe();
+    }
+  }
+
+  checkProtocol() {
+    if (typeof this.exports.roc_ui_protocol_version !== "function") {
+      throw new Error("Signals wasm export roc_ui_protocol_version is missing");
+    }
+    if (typeof this.exports.roc_ui_protocol_features !== "function") {
+      throw new Error("Signals wasm export roc_ui_protocol_features is missing");
+    }
+    if (typeof this.exports.roc_ui_dynamic_buffer_ptr !== "function") {
+      throw new Error("Signals wasm export roc_ui_dynamic_buffer_ptr is missing");
+    }
+    if (typeof this.exports.roc_ui_dynamic_buffer_len !== "function") {
+      throw new Error("Signals wasm export roc_ui_dynamic_buffer_len is missing");
+    }
+    const version = this.exports.roc_ui_protocol_version();
+    if (version !== Protocol.version) {
+      throw new Error(
+        `Signals wire protocol version mismatch: runtime expects ${Protocol.version}, wasm exports ${version}`,
+      );
+    }
+    const features = this.exports.roc_ui_protocol_features();
+    if ((features & requiredProtocolFeatures) !== requiredProtocolFeatures) {
+      throw new Error(
+        `Signals wire protocol feature mismatch: runtime requires 0x${requiredProtocolFeatures.toString(16)}, wasm exports 0x${features.toString(16)}`,
+      );
     }
   }
 
@@ -335,6 +386,24 @@ export class SignalsRuntime {
     const base = this.exports.roc_ui_string_buffer_ptr();
     const bytes = this.views.u8.subarray(base + offset, base + offset + length);
     return textDecoder.decode(bytes);
+  }
+
+  readDynamicBytes(offset, length) {
+    this.views.afterHostCall();
+    const base = this.exports.roc_ui_dynamic_buffer_ptr();
+    const available = this.exports.roc_ui_dynamic_buffer_len();
+    if (length === 0) {
+      return new Uint8Array(0);
+    }
+    if (base === 0) {
+      throw new Error("dynamic render command referenced an empty dynamic buffer");
+    }
+    if (offset + length > available) {
+      throw new Error(
+        `dynamic render command slice ${offset}:${offset + length} exceeds dynamic buffer length ${available}`,
+      );
+    }
+    return this.views.u8.subarray(base + offset, base + offset + length);
   }
 
   applyPendingCommands(phase = "host-call") {
@@ -481,8 +550,81 @@ export class SignalsRuntime {
         this.cancelTask(record.a);
         return;
 
+      case Op.extended:
+        this.applyDynamicCommand(record.a, record.b);
+        return;
+
       default:
         throw new Error(`unknown render op ${record.op}`);
+    }
+  }
+
+  applyDynamicCommand(offset, length) {
+    const command = this.decodeDynamicCommand(offset, length);
+    switch (command.op) {
+      case DynamicOp.setAttrText:
+        setDynamicTextAttribute(this.node(command.elemId), command.name, command.value);
+        return;
+
+      case DynamicOp.removeAttr:
+        removeDynamicAttribute(this.node(command.elemId), command.name);
+        return;
+
+      default:
+        throw new Error(`unknown dynamic render op ${command.op}`);
+    }
+  }
+
+  decodeDynamicCommand(offset, length) {
+    const bytes = this.readDynamicBytes(offset, length);
+    if (bytes.byteLength < 8) {
+      throw new Error(
+        `malformed dynamic render record at byte ${offset}: header needs 8 bytes, got ${bytes.byteLength}`,
+      );
+    }
+
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    const op = view.getUint16(0, true);
+    const flags = view.getUint16(2, true);
+    const payloadLen = view.getUint32(4, true);
+    const totalLen = 8 + align4(payloadLen);
+    const opName = dynamicOpName(op);
+
+    if (flags !== 0) {
+      throw new Error(
+        `malformed dynamic render record at byte ${offset}: ${opName} used unsupported flags 0x${flags.toString(16)}`,
+      );
+    }
+    if (totalLen > bytes.byteLength) {
+      throw new Error(
+        `malformed dynamic render record at byte ${offset}: ${opName} payload_len ${payloadLen} extends beyond ${bytes.byteLength} bytes`,
+      );
+    }
+    if (totalLen !== bytes.byteLength) {
+      throw new Error(
+        `malformed dynamic render record at byte ${offset}: ${opName} outer length ${bytes.byteLength} did not match payload_len ${payloadLen}`,
+      );
+    }
+
+    const cursor = { offset: 8, limit: 8 + payloadLen, recordOffset: offset, opName };
+    switch (op) {
+      case DynamicOp.setAttrText: {
+        const elemId = readDynamicU32(view, cursor, "elem_id");
+        const name = readDynamicString(view, cursor, "name");
+        const value = readDynamicString(view, cursor, "value");
+        assertDynamicPayloadConsumed(cursor);
+        return { op, elemId, name, value };
+      }
+
+      case DynamicOp.removeAttr: {
+        const elemId = readDynamicU32(view, cursor, "elem_id");
+        const name = readDynamicString(view, cursor, "name");
+        assertDynamicPayloadConsumed(cursor);
+        return { op, elemId, name };
+      }
+
+      default:
+        throw new Error(`unknown dynamic render op ${op} at byte ${offset}`);
     }
   }
 
@@ -726,6 +868,9 @@ export class SignalsRuntime {
     this.emitTelemetry("commands", {
       phase,
       count: records.length,
+      fixedRecordBytes: records.length * this.exports.roc_ui_command_record_words() * 4,
+      fixedStringBytes: this.exports.roc_ui_string_buffer_len(),
+      dynamicBytes: this.exports.roc_ui_dynamic_buffer_len(),
       opCounts,
       commands,
     });
@@ -822,8 +967,34 @@ export class SignalsRuntime {
       case Op.cancelTask:
         return { op, requestId: record.a };
 
+      case Op.extended:
+        return this.describeDynamicCommand(record.a, record.b);
+
       default:
         return { op, raw: { ...record } };
+    }
+  }
+
+  describeDynamicCommand(offset, length) {
+    const command = this.decodeDynamicCommand(offset, length);
+    switch (command.op) {
+      case DynamicOp.setAttrText:
+        return {
+          op: dynamicOpName(command.op),
+          elemId: command.elemId,
+          name: command.name,
+          value: command.value,
+        };
+
+      case DynamicOp.removeAttr:
+        return {
+          op: dynamicOpName(command.op),
+          elemId: command.elemId,
+          name: command.name,
+        };
+
+      default:
+        return { op: dynamicOpName(command.op), offset, length };
     }
   }
 
@@ -888,6 +1059,10 @@ function consoleTelemetry(entry) {
 
 function opName(op) {
   return opNames[op] ?? `unknown:${op}`;
+}
+
+function dynamicOpName(op) {
+  return dynamicOpNames[op] ?? `unknown:${op}`;
 }
 
 function payloadKindName(kind) {
@@ -989,5 +1164,67 @@ function setClass(node, value) {
     node.removeAttribute("class");
   } else {
     node.className = value;
+  }
+}
+
+function align4(value) {
+  return (value + 3) & ~3;
+}
+
+function ensureDynamicAvailable(cursor, byteCount, field) {
+  if (cursor.offset + byteCount <= cursor.limit) {
+    return;
+  }
+  throw new Error(
+    `malformed dynamic render record at byte ${cursor.recordOffset}: ${cursor.opName} operand ${field} extends beyond payload_len`,
+  );
+}
+
+function readDynamicU32(view, cursor, field) {
+  ensureDynamicAvailable(cursor, 4, field);
+  const value = view.getUint32(cursor.offset, true);
+  cursor.offset += 4;
+  return value;
+}
+
+function readDynamicString(view, cursor, field) {
+  const length = readDynamicU32(view, cursor, `${field}_len`);
+  ensureDynamicAvailable(cursor, length, field);
+  const bytes = new Uint8Array(view.buffer, view.byteOffset + cursor.offset, length);
+  cursor.offset += length;
+  try {
+    return dynamicTextDecoder.decode(bytes);
+  } catch (err) {
+    throw new Error(
+      `malformed dynamic render record at byte ${cursor.recordOffset}: ${cursor.opName} ${field} was not valid UTF-8`,
+      { cause: err },
+    );
+  }
+}
+
+function assertDynamicPayloadConsumed(cursor) {
+  if (cursor.offset === cursor.limit) {
+    return;
+  }
+  throw new Error(
+    `malformed dynamic render record at byte ${cursor.recordOffset}: ${cursor.opName} left ${cursor.limit - cursor.offset} trailing payload bytes`,
+  );
+}
+
+function setDynamicTextAttribute(node, name, value) {
+  if (name === "role") {
+    setRole(node, value);
+  } else if (name === "class") {
+    setClass(node, value);
+  } else {
+    node.setAttribute(name, value);
+  }
+}
+
+function removeDynamicAttribute(node, name) {
+  if (name === "class") {
+    setClass(node, "");
+  } else {
+    node.removeAttribute(name);
   }
 }

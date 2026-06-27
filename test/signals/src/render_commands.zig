@@ -1,5 +1,9 @@
 const std = @import("std");
 
+pub const protocol_version: u32 = 1;
+pub const protocol_feature_dynamic_attrs: u32 = 1 << 0;
+pub const protocol_features: u32 = protocol_feature_dynamic_attrs;
+
 pub const Op = enum(u32) {
     reset_dom = 1,
     create_element = 2,
@@ -27,6 +31,12 @@ pub const Op = enum(u32) {
     bind_pointer_up = 24,
     bind_pointer_enter = 25,
     bind_pointer_leave = 26,
+    extended = 27,
+};
+
+pub const DynamicOp = enum(u16) {
+    set_attr_text = 1,
+    remove_attr = 2,
 };
 
 pub const Record = extern struct {
@@ -76,6 +86,99 @@ pub const Buffer = struct {
         try self.records.append(allocator, Record.init(op, a, b, c, d, e));
     }
 };
+
+pub const DynamicSlice = struct {
+    offset: u32,
+    len: u32,
+};
+
+pub const DynamicBuffer = struct {
+    bytes: std.ArrayListUnmanaged(u8) = .empty,
+
+    pub fn deinit(self: *DynamicBuffer, allocator: std.mem.Allocator) void {
+        self.bytes.deinit(allocator);
+        self.* = .{};
+    }
+
+    pub fn clearRetainingCapacity(self: *DynamicBuffer) void {
+        self.bytes.clearRetainingCapacity();
+    }
+
+    pub fn len(self: *const DynamicBuffer) usize {
+        return self.bytes.items.len;
+    }
+
+    pub fn ptrAddress(self: *const DynamicBuffer) usize {
+        if (self.bytes.items.len == 0) return 0;
+        return @intFromPtr(self.bytes.items.ptr);
+    }
+
+    pub fn appendSetAttrText(self: *DynamicBuffer, allocator: std.mem.Allocator, elem_id: u32, name: []const u8, value: []const u8) std.mem.Allocator.Error!DynamicSlice {
+        const payload_len = @sizeOf(u32) + @sizeOf(u32) + name.len + @sizeOf(u32) + value.len;
+        const record = try self.appendRecord(allocator, .set_attr_text, payload_len);
+        var cursor = record.payload_start;
+        writeU32(self.bytes.items, &cursor, elem_id);
+        writeU32(self.bytes.items, &cursor, @intCast(name.len));
+        writeBytes(self.bytes.items, &cursor, name);
+        writeU32(self.bytes.items, &cursor, @intCast(value.len));
+        writeBytes(self.bytes.items, &cursor, value);
+        return record.slice;
+    }
+
+    pub fn appendRemoveAttr(self: *DynamicBuffer, allocator: std.mem.Allocator, elem_id: u32, name: []const u8) std.mem.Allocator.Error!DynamicSlice {
+        const payload_len = @sizeOf(u32) + @sizeOf(u32) + name.len;
+        const record = try self.appendRecord(allocator, .remove_attr, payload_len);
+        var cursor = record.payload_start;
+        writeU32(self.bytes.items, &cursor, elem_id);
+        writeU32(self.bytes.items, &cursor, @intCast(name.len));
+        writeBytes(self.bytes.items, &cursor, name);
+        return record.slice;
+    }
+
+    const AppendedRecord = struct {
+        slice: DynamicSlice,
+        payload_start: usize,
+    };
+
+    fn appendRecord(self: *DynamicBuffer, allocator: std.mem.Allocator, op: DynamicOp, payload_len: usize) std.mem.Allocator.Error!AppendedRecord {
+        const offset = self.bytes.items.len;
+        const total_len = @sizeOf(u16) + @sizeOf(u16) + @sizeOf(u32) + align4(payload_len);
+        try self.bytes.resize(allocator, offset + total_len);
+        @memset(self.bytes.items[offset..][0..total_len], 0);
+
+        var cursor = offset;
+        writeU16(self.bytes.items, &cursor, @intFromEnum(op));
+        writeU16(self.bytes.items, &cursor, 0);
+        writeU32(self.bytes.items, &cursor, @intCast(payload_len));
+
+        return .{
+            .slice = .{
+                .offset = @intCast(offset),
+                .len = @intCast(total_len),
+            },
+            .payload_start = cursor,
+        };
+    }
+};
+
+pub fn align4(len: usize) usize {
+    return (len + 3) & ~@as(usize, 3);
+}
+
+fn writeU16(bytes: []u8, cursor: *usize, value: u16) void {
+    std.mem.writeInt(u16, bytes[cursor.*..][0..@sizeOf(u16)], value, .little);
+    cursor.* += @sizeOf(u16);
+}
+
+fn writeU32(bytes: []u8, cursor: *usize, value: u32) void {
+    std.mem.writeInt(u32, bytes[cursor.*..][0..@sizeOf(u32)], value, .little);
+    cursor.* += @sizeOf(u32);
+}
+
+fn writeBytes(bytes: []u8, cursor: *usize, value: []const u8) void {
+    @memcpy(bytes[cursor.*..][0..value.len], value);
+    cursor.* += value.len;
+}
 
 pub const TextField = enum(u64) {
     text = 1,
@@ -165,6 +268,7 @@ pub const Counts = struct {
             .set_disabled => self.set_disabled += 1,
             .set_role, .set_label, .set_test_id, .set_class => self.set_metadata += 1,
             .bind_click, .bind_input, .bind_check, .bind_pointer_down, .bind_pointer_up, .bind_pointer_enter, .bind_pointer_leave => self.bind_event += 1,
+            .extended => self.set_metadata += 1,
             // Event-unbinding is counted through `addEventBinding` alongside the
             // bind it supersedes, so the raw wire op never reaches this counter.
             .clear_event => self.bind_event += 1,
@@ -277,8 +381,9 @@ test "render command counts group detailed host-independent ops" {
     counts.addEventBindingKind(.pointer_up);
     counts.addEventBindingKind(.pointer_enter);
     counts.addEventBindingKind(.pointer_leave);
+    counts.addOp(.extended);
 
-    try std.testing.expectEqual(@as(u64, 21), counts.total);
+    try std.testing.expectEqual(@as(u64, 22), counts.total);
     try std.testing.expectEqual(@as(u64, 1), counts.reset_dom);
     try std.testing.expectEqual(@as(u64, 2), counts.create_element);
     try std.testing.expectEqual(@as(u64, 1), counts.append_child);
@@ -288,7 +393,7 @@ test "render command counts group detailed host-independent ops" {
     try std.testing.expectEqual(@as(u64, 1), counts.set_value);
     try std.testing.expectEqual(@as(u64, 1), counts.set_checked);
     try std.testing.expectEqual(@as(u64, 1), counts.set_disabled);
-    try std.testing.expectEqual(@as(u64, 4), counts.set_metadata);
+    try std.testing.expectEqual(@as(u64, 5), counts.set_metadata);
     try std.testing.expectEqual(@as(u64, 7), counts.bind_event);
 }
 
@@ -311,6 +416,34 @@ test "render command buffer stores fixed-width records" {
     try std.testing.expectEqual(@intFromEnum(Op.set_text), buffer.records.items[1].op);
     try std.testing.expectEqual(@as(u32, 1024), buffer.records.items[1].b);
     try std.testing.expectEqual(@as(u32, 12), buffer.records.items[1].c);
+
+    buffer.clearRetainingCapacity();
+    try std.testing.expectEqual(@as(usize, 0), buffer.len());
+    try std.testing.expectEqual(@as(usize, 0), buffer.ptrAddress());
+}
+
+test "dynamic command buffer stores aligned attribute records" {
+    var buffer: DynamicBuffer = .{};
+    defer buffer.deinit(std.testing.allocator);
+
+    const set_attr = try buffer.appendSetAttrText(std.testing.allocator, 42, "aria-label", "Save");
+    const remove_attr = try buffer.appendRemoveAttr(std.testing.allocator, 42, "aria-label");
+
+    try std.testing.expectEqual(@as(u32, 0), set_attr.offset);
+    try std.testing.expectEqual(@as(u32, 36), set_attr.len);
+    try std.testing.expectEqual(@as(u32, 36), remove_attr.offset);
+    try std.testing.expectEqual(@as(u32, 28), remove_attr.len);
+    try std.testing.expectEqual(@as(usize, 64), buffer.len());
+    try std.testing.expect(buffer.ptrAddress() != 0);
+
+    try std.testing.expectEqual(@as(u16, @intFromEnum(DynamicOp.set_attr_text)), std.mem.readInt(u16, buffer.bytes.items[0..2], .little));
+    try std.testing.expectEqual(@as(u16, 0), std.mem.readInt(u16, buffer.bytes.items[2..4], .little));
+    try std.testing.expectEqual(@as(u32, 26), std.mem.readInt(u32, buffer.bytes.items[4..8], .little));
+    try std.testing.expectEqual(@as(u32, 42), std.mem.readInt(u32, buffer.bytes.items[8..12], .little));
+    try std.testing.expectEqual(@as(u32, 10), std.mem.readInt(u32, buffer.bytes.items[12..16], .little));
+    try std.testing.expectEqualStrings("aria-label", buffer.bytes.items[16..26]);
+    try std.testing.expectEqual(@as(u32, 4), std.mem.readInt(u32, buffer.bytes.items[26..30], .little));
+    try std.testing.expectEqualStrings("Save", buffer.bytes.items[30..34]);
 
     buffer.clearRetainingCapacity();
     try std.testing.expectEqual(@as(usize, 0), buffer.len());
