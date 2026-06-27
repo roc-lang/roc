@@ -1474,6 +1474,16 @@ loop demand, private state reachability, demanded child expansion, or worker
 queue management. The optimized path may spend extra compiler time because the
 user requested size- or speed-optimized generated code.
 
+The opt-mode boundary is a hard pipeline boundary, not a pass-internal
+preference. The post-check driver selects either ordinary lowering or optimized
+specialization from explicit build-mode data before constructing per-body
+specialization state. `roc check`, compile-time finalization, interpreter
+execution, and dev builds must not enter the result-demand worklist, must not
+allocate private-state graph storage, and must not enqueue optimized workers.
+`--opt=size` and `--opt=speed` both use the same semantic specialization model;
+they may tune later code-generation and inlining policy differently, but they
+must not use different language-level iterator rules.
+
 Result demand is the optimizer's precise statement of how the current
 continuation will use an expression result. Required demand forms are:
 
@@ -1635,6 +1645,15 @@ summaries, reachable private state graphs, and extra direct-call workers because
 users requested optimized code. Unoptimized modes skip private cursor-state
 specialization and related optimized worker cloning completely; they do not run
 a disabled version of the pass for analysis-only side effects.
+
+This design deliberately spends extra compiler work only where it can affect the
+optimized output. The expected extra work is proportional to realized
+specialized bodies, realized direct-call worker patterns, and reachable private
+loop states. It is not proportional to all source expressions in non-optimized
+modes, and it is not a late program-wide cleanup scan after lowering. When the
+optimized path needs additional body variants, those variants are created while
+cloning from explicit call patterns and result demands, so the source of truth
+for each generated body is the same data that justified generating it.
 
 Public iterator values remain immutable and reusable. Source such as:
 
