@@ -8753,14 +8753,13 @@ const BodyContext = struct {
             try self.constrainTypeToMono(binder_ty, try self.publicOpaqueUnificationType(ty));
             try self.constrainTypeToMono(checked_ty, try self.publicOpaqueUnificationType(ty));
             const live_ty = try self.lowerType(binder_ty);
-            const use_ty = if (ty == local_ty)
+            const use_ty = if (self.sameType(ty, local_ty))
                 local_ty
             else if (self.sameType(ty, live_ty))
                 live_ty
-            else if (self.sameType(ty, local_ty))
-                local_ty
             else
                 Common.invariant("checked local lookup type differed from its expected Monotype use type");
+            if (use_ty != local_ty) self.builder.program.setLocalType(local_id, use_ty);
             return try self.builder.program.addExpr(.{ .ty = use_ty, .data = .{ .local = local_id } });
         }
 
