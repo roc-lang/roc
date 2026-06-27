@@ -555,6 +555,9 @@ Current priority after the Phase 4 review:
    making `streamDirectChildren` allocation-free for callers.
 6. Keep the long-session leak/plateau gate in the loop for monotonic identity
    and dense `_by_elem_id` tables.
+7. Keep scoped browser command-wire string dedupe as a measured hypothesis, not
+   as active work, until wire byte/decode counters show it is larger than the
+   remaining structural tail.
 
 ### Persistent rank-ordered propagation queue (design gap, not optimisation)
 
@@ -809,6 +812,31 @@ Current priority after the Phase 4 review:
   explicit key text privately and stores existing row hashes on row scopes.
 - **How we'll know:** `each_key_compares` still tracks L (not L²) under churn and
   large-N reorder tests do not re-run row bodies or rebuild the each site.
+
+### Scoped command-wire string dedupe and JS decode cache
+
+- **Hypothesis:** a per-drain string table for the wasm command wire, paired with
+  a JS decode cache keyed by explicit string identity or `(offset, len)`, reduces
+  command-buffer bytes, host-side string copies, and repeated UTF-8 decode work
+  during initial mount and structural splices.
+- **Why we suspect it:** fixed string commands currently append every occurrence
+  into `roc_ui_string_buffer_*`, dynamic attr records inline each `name` and
+  `value`, and JS decodes every referenced byte slice independently. Repeated
+  tags, metadata names (`role`, `aria-label`, `data-testid`, `class`), and
+  repeated class/text attribute values are common in large rows and dashboards.
+  Ordinary unchanged signal text is already pruned before command emission, so
+  the expected win is command-wire churn for patches that really are emitted, not
+  reactive equality or DOM-churn avoidance.
+- **Constraint:** scope this to the browser command wire and per-drain JS cache.
+  Do not globally intern Roc `Str`, `HostValue` payloads, keyed-row values, or
+  capability-owned data. Do not replace keyed-row typed equality with intern ids;
+  keyed rows continue to use host-private hashes plus typed equality for
+  collisions and duplicate-key checks.
+- **How we'll know:** add metrics for fixed string bytes, dynamic string bytes,
+  deduped string-table bytes, string table hits/misses, and JS decode-cache
+  hits/misses. Promote the work only if large-N mount/splice or attr-heavy app
+  samples show material byte/decode reduction without increasing retained host
+  memory or weakening the wire contract.
 
 ### Long-session leak experiment
 
