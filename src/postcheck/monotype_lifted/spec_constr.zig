@@ -3712,10 +3712,8 @@ const Cloner = struct {
         local: Ast.LocalId,
         value: Value,
         body: Ast.ExprId,
-        unsafe_count: usize,
         pending_lets: *std.ArrayList(PendingLet),
     ) Common.LowerError!Value {
-        _ = unsafe_count;
         const uses = localMaxUseCountPerPathInExpr(self.pass.program, local, body);
         if (self.valueCanSubstitute(value) or
             (uses == 1 and localUseBeforeEffect(self.pass.program, local, body)))
@@ -4069,7 +4067,7 @@ const Cloner = struct {
         const prepared_captures = try self.pass.allocator.alloc(Value, callable.captures.len);
         defer self.pass.allocator.free(prepared_captures);
         for (source_captures, callable.captures, 0..) |source_capture, capture_value, index| {
-            prepared_captures[index] = try self.valueForInlineLocal(source_capture.local, capture_value, body, 0, &pending_lets);
+            prepared_captures[index] = try self.valueForInlineLocal(source_capture.local, capture_value, body, &pending_lets);
             try self.putSubst(source_capture.local, prepared_captures[index]);
         }
 
@@ -4086,7 +4084,7 @@ const Cloner = struct {
         const prepared_args = try self.pass.allocator.alloc(Value, arg_values.len);
         defer self.pass.allocator.free(prepared_args);
         for (source_args, arg_values, 0..) |source_arg, arg_value, index| {
-            prepared_args[index] = try self.valueForInlineLocal(source_arg.local, arg_value, body, unsafe_count, &pending_lets);
+            prepared_args[index] = try self.valueForInlineLocal(source_arg.local, arg_value, body, &pending_lets);
         }
 
         try self.clearBinderSubstitutionsForInline();
@@ -4250,7 +4248,7 @@ const Cloner = struct {
         const prepared_args = try self.pass.allocator.alloc(Value, arg_values.len);
         defer self.pass.allocator.free(prepared_args);
         for (source_args, arg_values, 0..) |source_arg, arg_value, index| {
-            prepared_args[index] = try self.valueForInlineLocal(source_arg.local, arg_value, body, unsafe_count, &pending_lets);
+            prepared_args[index] = try self.valueForInlineLocal(source_arg.local, arg_value, body, &pending_lets);
         }
 
         try self.clearBinderSubstitutionsForInline();
