@@ -76,6 +76,17 @@ pub const Program = struct {
         self.types.deinit();
         self.lifted.deinit();
     }
+
+    pub fn deinitExceptLifted(self: *Program) void {
+        self.runtime_schema_requests.deinit(self.allocator);
+        self.layout_requests.deinit(self.allocator);
+        self.fn_tys.deinit(self.allocator);
+        self.pat_tys.deinit(self.allocator);
+        self.expr_tys.deinit(self.allocator);
+        self.local_tys.deinit(self.allocator);
+        self.defs.deinit(self.allocator);
+        self.types.deinit();
+    }
 };
 
 test "lambda solved ast declarations are referenced" {

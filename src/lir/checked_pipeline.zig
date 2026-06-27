@@ -227,7 +227,17 @@ pub fn lowerCheckedModulesToLir(
     errdefer if (lifted_owned) lifted.deinit();
 
     if (target.inline_mode != .none) {
-        try postcheck.MonotypeLifted.SpecConstr.run(allocator, &lifted);
+        var pre_solved = try postcheck.LambdaSolved.Solve.run(allocator, lifted);
+        lifted_owned = false;
+        var pre_solved_owned = true;
+        errdefer if (pre_solved_owned) pre_solved.deinit();
+
+        try postcheck.MonotypeLifted.SpecConstr.runWithSolved(allocator, &pre_solved);
+
+        lifted = pre_solved.lifted;
+        pre_solved.deinitExceptLifted();
+        pre_solved_owned = false;
+        lifted_owned = true;
     }
 
     var solved = try postcheck.LambdaSolved.Solve.run(allocator, lifted);

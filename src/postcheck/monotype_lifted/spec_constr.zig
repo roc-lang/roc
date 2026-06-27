@@ -214,6 +214,8 @@ const Common = @import("../common.zig");
 const Ast = @import("ast.zig");
 const Mono = @import("../monotype/ast.zig");
 const Type = @import("../monotype/type.zig");
+const Solved = @import("../lambda_solved/ast.zig");
+const SolvedType = @import("../lambda_solved/type.zig");
 const check = @import("check");
 const names = @import("check").CheckedNames;
 
@@ -221,7 +223,13 @@ const Allocator = std.mem.Allocator;
 
 /// Specialize recursive direct calls whose arguments are known constructor facts.
 pub fn run(allocator: Allocator, program: *Ast.Program) Common.LowerError!void {
-    var pass = try Pass.init(allocator, program);
+    var pass = try Pass.init(allocator, program, null);
+    defer pass.deinit();
+    try pass.run();
+}
+
+pub fn runWithSolved(allocator: Allocator, solved: *Solved.Program) Common.LowerError!void {
+    var pass = try Pass.init(allocator, &solved.lifted, solved);
     defer pass.deinit();
     try pass.run();
 }
@@ -404,11 +412,12 @@ const Pass = struct {
     allocator: Allocator,
     arena: std.heap.ArenaAllocator,
     program: *Ast.Program,
+    solved: ?*const Solved.Program,
     plans: []FnPlan,
     worker_worklist: std.ArrayList(WorkerJob),
     symbols: Common.SymbolGen,
 
-    fn init(allocator: Allocator, program: *Ast.Program) Allocator.Error!Pass {
+    fn init(allocator: Allocator, program: *Ast.Program, solved: ?*const Solved.Program) Allocator.Error!Pass {
         var arena = std.heap.ArenaAllocator.init(allocator);
         errdefer arena.deinit();
 
@@ -431,6 +440,7 @@ const Pass = struct {
             .allocator = allocator,
             .arena = arena,
             .program = program,
+            .solved = solved,
             .plans = plans,
             .worker_worklist = .empty,
             .symbols = .{ .next = program.next_symbol },
@@ -442,6 +452,36 @@ const Pass = struct {
         for (self.plans) |*plan| plan.deinit(self.allocator);
         self.allocator.free(self.plans);
         self.arena.deinit();
+    }
+
+    fn solvedSingleCallableMember(self: *const Pass, expr_id: Ast.ExprId) ?SolvedType.FnMember {
+        const solved = self.solved orelse return null;
+        const raw = @intFromEnum(expr_id);
+        if (raw >= solved.expr_tys.items.len) return null;
+        return self.solvedSingleCallableMemberFromType(solved.expr_tys.items[raw]);
+    }
+
+    fn solvedSingleCallableMemberFromType(self: *const Pass, ty: SolvedType.TypeVarId) ?SolvedType.FnMember {
+        const solved = self.solved orelse return null;
+        const callable_ty = switch (solved.types.rootContent(ty)) {
+            .func => |func| func.callable,
+            .lambda_set => ty,
+            else => return null,
+        };
+        const members = switch (solved.types.rootContent(callable_ty)) {
+            .lambda_set => |members| members,
+            else => return null,
+        };
+        const member_items = solved.types.memberSpan(members);
+        if (member_items.len != 1) return null;
+        return member_items[0];
+    }
+
+    fn fnWithSymbol(self: *const Pass, symbol: Common.Symbol) ?Ast.FnId {
+        for (self.program.fns.items, 0..) |fn_, index| {
+            if (fn_.symbol == symbol) return @enumFromInt(@as(u32, @intCast(index)));
+        }
+        return null;
     }
 
     fn run(self: *Pass) Common.LowerError!void {
@@ -502,7 +542,8 @@ const Pass = struct {
                 if (popped.fn_id != fn_id) Common.invariant("base body inline stack was corrupted");
             }
 
-            self.program.fns.items[index].body = .{ .roc = try cloner.cloneExpr(body_expr) };
+            const cloned_body = try cloner.cloneExpr(body_expr);
+            self.program.fns.items[index].body = .{ .roc = cloned_body };
         }
     }
 
@@ -1109,6 +1150,7 @@ const Cloner = struct {
                 if (self.pass.program.locals.items[@intFromEnum(local)].binder) |binder| {
                     if (self.binder_subst.get(binder)) |value| return value;
                 }
+                if (try self.solvedSingleCallable(expr_id)) |callable| return callable;
                 return .{ .expr = try self.addExpr(.{ .ty = expr.ty, .data = .{ .local = local } }) };
             },
             .fn_ref => |fn_id| return try self.callableValue(expr.ty, fn_id),
@@ -1163,6 +1205,7 @@ const Cloner = struct {
             .field_access => |field| {
                 const receiver = try self.cloneExprValueDemandingFact(field.receiver);
                 if (try self.fieldFromKnownValue(receiver, field.field)) |value| return value;
+                if (try self.solvedSingleCallable(expr_id)) |callable| return callable;
                 return .{ .expr = try self.addExpr(.{ .ty = expr.ty, .data = .{ .field_access = .{
                     .receiver = try self.materialize(receiver),
                     .field = field.field,
@@ -1171,6 +1214,7 @@ const Cloner = struct {
             .tuple_access => |access| {
                 const receiver = try self.cloneExprValueDemandingFact(access.tuple);
                 if (try self.itemFromKnownValue(receiver, access.elem_index)) |value| return value;
+                if (try self.solvedSingleCallable(expr_id)) |callable| return callable;
                 return .{ .expr = try self.addExpr(.{ .ty = expr.ty, .data = .{ .tuple_access = .{
                     .tuple = try self.materialize(receiver),
                     .elem_index = access.elem_index,
@@ -1423,6 +1467,39 @@ const Cloner = struct {
         } };
     }
 
+    fn solvedSingleCallable(self: *Cloner, expr_id: Ast.ExprId) Allocator.Error!?Value {
+        const solved = self.pass.solved orelse return null;
+        const member = self.pass.solvedSingleCallableMember(expr_id) orelse return null;
+        const fn_id = self.pass.fnWithSymbol(member.lambda) orelse return null;
+        const expr = self.pass.program.exprs.items[@intFromEnum(expr_id)];
+        const solved_captures = solved.types.captureSpan(member.captures);
+        const source_fn = self.pass.program.fns.items[@intFromEnum(fn_id)];
+        const source_captures = self.pass.program.typedLocalSpan(source_fn.captures);
+        if (solved_captures.len != 0) return null;
+        if (solved_captures.len != source_captures.len) {
+            Common.invariant("Lambda Solved callable member capture count differed from lifted function captures");
+        }
+
+        const captures = try self.pass.arena.allocator().alloc(Value, solved_captures.len);
+        for (solved_captures, 0..) |capture, index| {
+            if (capture.local != source_captures[index].local) {
+                Common.invariant("Lambda Solved callable member captures differed from lifted function capture order");
+            }
+            captures[index] = if (self.subst.get(capture.local)) |value|
+                value
+            else
+                .{ .expr = try self.addExpr(.{
+                    .ty = source_captures[index].ty,
+                    .data = .{ .local = capture.local },
+                }) };
+        }
+        return .{ .callable = .{
+            .ty = expr.ty,
+            .fn_id = fn_id,
+            .captures = captures,
+        } };
+    }
+
     fn cloneExprPlain(self: *Cloner, expr_id: Ast.ExprId) Common.LowerError!Ast.ExprId {
         const saved_loc = self.current_loc;
         defer self.current_loc = saved_loc;
@@ -1532,21 +1609,37 @@ const Cloner = struct {
     }
 
     fn cloneLetValue(self: *Cloner, let_: anytype) Common.LowerError!Value {
-        const value = try self.cloneExprValueDemandingFact(let_.value);
-        const value_expr = try self.materialize(value);
-        const change_start = self.changes.items.len;
-        const bound = try self.bindPatToReusableValue(let_.bind, value);
-        if (bound) {
-            const rest = try self.cloneExprValue(let_.rest);
-            self.restore(change_start);
-            return rest;
+        const raw_value = try self.cloneExprValueDemandingFact(let_.value);
+        var pending_lets = std.ArrayList(PendingLet).empty;
+        defer pending_lets.deinit(self.pass.allocator);
+
+        const pending_change_start = self.changes.items.len;
+        var value = raw_value;
+        while (value == .let_) {
+            try pending_lets.appendSlice(self.pass.allocator, value.let_.lets);
+            try self.bindPendingLetFacts(value.let_.lets);
+            value = value.let_.body.*;
         }
+
+        const reusable = try self.makeReusableForMatch(value, &pending_lets);
+        const bind_change_start = self.changes.items.len;
+        if (try self.bindPatToReusableValue(let_.bind, reusable)) {
+            const rest = try self.cloneExprValue(let_.rest);
+            self.restore(pending_change_start);
+            return try self.wrapPendingLets(rest, pending_lets.items, true);
+        }
+        self.restore(bind_change_start);
+
         if (try self.bindPatToSingleUseRestValue(let_.bind, value, let_.rest)) {
             const rest = try self.cloneExprValue(let_.rest);
-            self.restore(change_start);
-            return rest;
+            self.restore(pending_change_start);
+            return try self.wrapPendingLets(rest, pending_lets.items, true);
         }
-        if (try self.bindPatToMaterializedFact(let_.bind, value)) {
+        self.restore(pending_change_start);
+
+        const value_expr = try self.materialize(raw_value);
+        const change_start = self.changes.items.len;
+        if (try self.bindPatToMaterializedFact(let_.bind, raw_value)) {
             const rest_value = try self.cloneExprValue(let_.rest);
             const rest = try self.materialize(rest_value);
             self.restore(change_start);
@@ -1822,7 +1915,6 @@ const Cloner = struct {
                 .if_ => |if_value| if_value,
                 else => continue,
             };
-
             const branches = try self.pass.allocator.alloc(Ast.IfBranch, if_value.branches.len);
             defer self.pass.allocator.free(branches);
             var branch_values = try self.pass.allocator.dupe(Value, values);
@@ -3171,7 +3263,7 @@ const Cloner = struct {
             });
             result = try self.addExpr(.{ .ty = ty, .data = .{ .let_ = .{
                 .bind = pat,
-                .value = pending.value,
+                .value = try self.cloneExpr(pending.value),
                 .rest = result,
             } } });
         }
@@ -3683,7 +3775,7 @@ const Cloner = struct {
             });
             try out.append(self.pass.allocator, try self.addStmt(.{ .let_ = .{
                 .pat = pat,
-                .value = pending.value,
+                .value = try self.cloneExpr(pending.value),
                 .recursive = false,
                 .comptime_site = null,
             } }));
