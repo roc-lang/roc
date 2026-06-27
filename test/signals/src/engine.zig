@@ -6260,22 +6260,18 @@ pub fn Engine(comptime Ctx: type) type {
             var touched_parent_ids: std.ArrayListUnmanaged(u64) = .empty;
             errdefer touched_parent_ids.deinit(allocator);
 
-            var removed_render_start: ?usize = null;
             var removed_render_count: usize = 0;
-            var target_range_closed = false;
-
-            self.recordStreamNodesScannedBy(.stream_nodes_scanned_splice, self.active_stream.render_nodes.items.len);
-            for (self.active_stream.render_nodes.items, 0..) |node, index| {
-                if (self.renderNodeInReplacementTargetSet(&self.active_stream, node, target_scopes)) {
-                    if (target_range_closed) @panic("structural replacement render target is not contiguous");
-                    if (removed_render_start == null) removed_render_start = index;
-                    removed_render_count += 1;
-                    removed_elem_ids.append(allocator, node.elem_id) catch @panic("out of memory");
-                    appendUniqueU64(allocator, &touched_parent_ids, renderNodeParentElemId(&self.active_stream, node));
-                } else if (removed_render_start != null) {
-                    target_range_closed = true;
-                }
+            var target_scan_count: usize = 0;
+            var render_index = render_insert_index;
+            while (render_index < self.active_stream.render_nodes.items.len) : (render_index += 1) {
+                const node = self.active_stream.render_nodes.items[render_index];
+                target_scan_count += 1;
+                if (!self.renderNodeInReplacementTargetSet(&self.active_stream, node, target_scopes)) break;
+                removed_render_count += 1;
+                removed_elem_ids.append(allocator, node.elem_id) catch @panic("out of memory");
+                appendUniqueU64(allocator, &touched_parent_ids, renderNodeParentElemId(&self.active_stream, node));
             }
+            self.recordStreamNodesScannedBy(.stream_nodes_scanned_splice, target_scan_count);
 
             var touched_parent_write_index: usize = 0;
             for (touched_parent_ids.items) |parent_elem_id| {
@@ -6285,11 +6281,7 @@ pub fn Engine(comptime Ctx: type) type {
             }
             touched_parent_ids.items.len = touched_parent_write_index;
 
-            const render_start = removed_render_start orelse render_insert_index;
-            if (removed_render_count != 0 and render_start != render_insert_index) {
-                @panic("structural replacement render target did not start at its explicit insertion point");
-            }
-
+            const render_start = render_insert_index;
             const removed_render_nodes = self.active_stream.render_nodes.items[render_start..][0..removed_render_count];
             const replacement_render_count = replacement.render_nodes.items.len;
             const on_change_count = replacement.on_changes.items.len;

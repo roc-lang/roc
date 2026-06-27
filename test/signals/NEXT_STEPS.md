@@ -430,6 +430,27 @@ Outcome:
   kanban improves from 544532300 to 535414668. Keep using scan counters for
   direction and median-of-N for timing claims.
 
+Splice target range discovery was then changed to consume the explicit
+`render_insert_index` passed by the caller on 2026-06-27. Instead of scanning
+the whole active render stream to rediscover the target range, splice walks from
+the insertion point through the contiguous target range and stops at the first
+non-target boundary node.
+
+| case | total_ns | stream_nodes_scanned | remove_target | render_scope | splice | events | dirty_scope | render_indexes_refreshed | host_alloc_bytes_this_event |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| signals-large-each-64 | 699562249 | 265020 | 5600 | 236360 | 4220 | 12520 | 6320 | 90920 | 198930940 |
+| signals-kanban-board | 549882230 | 116660 | 3200 | 77800 | 5520 | 28300 | 1840 | 17680 | 90282660 |
+
+Outcome:
+
+- `stream_nodes_scanned_splice` fell from 151120 to 4220 on large-each and from
+  39120 to 5520 on kanban.
+- Total measured stream scans are now dominated by `render_scope`:
+  236360 / 265020 on large-each and 77800 / 116660 on kanban.
+- Timing remains noisy in single samples: large-each returns near the
+  elem-owned-removal reading, while kanban is slower than the previous sample.
+  The scan attribution is the reliable signal here.
+
 Outcome:
 
 - `signal_record_table_rebuilt` dropped to zero in the two structural canaries.
@@ -496,16 +517,17 @@ evidence-gated.
 
 Current priority after the Phase 4 review:
 
-1. Collapse `render_scope` and remaining `splice` render-range discovery behind
-   an explicit scope-to-render-range index. The double-pass splice fold is done;
-   the next step is explicit active scope range data.
+1. Collapse `render_scope` behind explicit active scope range data. Splice now
+   consumes its explicit insertion index and is no longer the large scan bucket.
 2. Remove or bound the render-index refresh tail so splices do not restamp from
    the splice point to the end of the render-node table.
-3. Revisit scope-owned descriptor removal only if the now-small
+3. Reduce event descriptor scans in the structural apply path, especially for
+   kanban, after the render-scope range work.
+4. Revisit scope-owned descriptor removal only if the now-small
    `remove_target` residue grows under a broader app or long-session gate.
-4. Then move transient structural buffers to scratch, starting with making
+5. Then move transient structural buffers to scratch, starting with making
    `streamDirectChildren` allocation-free for callers.
-5. Keep the long-session leak/plateau gate in the loop for monotonic identity
+6. Keep the long-session leak/plateau gate in the loop for monotonic identity
    and dense `_by_elem_id` tables.
 
 ### Persistent rank-ordered propagation queue (design gap, not optimisation)
@@ -629,8 +651,11 @@ Current priority after the Phase 4 review:
 - **Implemented slice:** splice's touched-parent collection now shares the
   target render-node pass. `stream_nodes_scanned_splice` is down to `151120` on
   large-each and `39120` on kanban.
-- **How we'll know:** replace the remaining scan with explicit range lookup and
-  tighten large-N `stream_nodes_scanned_splice` /
+- **Implemented slice:** splice now consumes the explicit `render_insert_index`
+  and scans only the contiguous target range. `stream_nodes_scanned_splice` is
+  down again to `4220` on large-each and `5520` on kanban.
+- **How we'll know:** replace the remaining render-scope scans with explicit
+  active scope range lookup and tighten large-N
   `stream_nodes_scanned_render_scope` assertions.
 
 ### Per-cycle scratch/arena to remove dispatch allocation churn
