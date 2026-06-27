@@ -10,6 +10,7 @@ platform ""
         "roc_cli_read": CliHost.read!,
         "roc_cli_many": CliHost.many!,
         "roc_cli_shape": CliHost.shape!,
+        "roc_cli_wide": CliHost.wide!,
     }
     targets: {}
 

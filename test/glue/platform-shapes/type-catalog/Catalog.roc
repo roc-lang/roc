@@ -17,6 +17,9 @@ Catalog := [].{
         Node(Box(Tree), Box(Tree)),
     ]
 
+    SinglePayload : [Only(Payload)]
+    SingleNoPayload : [Ready]
+
     CatalogUnion : [
         Payload(Payload),
         Pair(Point, Point),
