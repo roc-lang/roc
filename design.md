@@ -1481,7 +1481,7 @@ it, passes it to unspecialized code, or otherwise materializes the public value,
 that use creates an explicit demand for the public representation and the
 ordinary fields are preserved.
 
-Known-known values must flow through ordinary local bindings, blocks, `if`,
+Known values must flow through ordinary local bindings, blocks, `if`,
 `match`, loop initial values, and loop `continue` values. When branches share a
 common outer constructor, such as an `Iter` record with `len_if_known` and
 `step` fields, the optimizer may keep that outer constructor while leaving
@@ -1564,16 +1564,22 @@ not know iterator rules, stream rules, public step-callable layouts, or
 reference-count policy for iterator wrappers.
 
 This known-value and loop-state specialization work runs only in optimized
-post-check lowering. The pipeline must carry an explicit optimization-mode
-input derived from the requested build mode: off for `roc check`, compile-time
+post-check lowering. The pipeline carries an explicit optimization-mode input
+derived from the requested build mode: off for `roc check`, compile-time
 finalization, interpreter builds, and dev builds; on for `--opt=size` and
-`--opt=speed`. Those unoptimized modes still run all language-required
-compile-time evaluation and diagnostics. They do not run private
-cursor-state specialization. The current CLI shape expresses the boundary by
-enabling post-check wrapper inlining for `--opt=size` and `--opt=speed` and
-using `.none` for dev/interpreter; the state-loop pass must keep that same
-semantic boundary even if the configuration type is later renamed to make the
-optimization mode explicit.
+`--opt=speed`. The mode flag is the only gate. No stage may infer this work
+from target triples, wasm output, backend choice, method names, or the presence
+of iterator builtins.
+
+That boundary exists for compiler cost, not language meaning. The optimized
+state pass may spend extra work constructing demanded known-value summaries,
+reachable private state graphs, and extra direct-call workers because users
+requested optimized code. Unoptimized modes still run all language-required
+checking, static-dispatch finalization, compile-time root selection,
+compile-time evaluation, static data emission, and `crash`/`dbg`/`expect`
+diagnostics. They skip only private cursor-state specialization and related
+optimized worker cloning. Therefore build modes can differ in generated code
+shape, code size, and compile time, but never in observable Roc semantics.
 
 Public iterator values remain immutable and reusable. Source such as:
 
