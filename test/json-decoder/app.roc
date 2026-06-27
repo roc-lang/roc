@@ -1,7 +1,5 @@
 app [main!] { pf: platform "./platform/main.roc" }
 
-import pf.Json
-
 main! : Str => U64
 main! = |json| {
 	decoded_result : Try(
@@ -15,7 +13,7 @@ main! = |json| {
 			pair : [Pair({ first : Str, second : Str })],
 			question_optional : Try(Str, [Missing]),
 			status : [Active, Paused],
-			token : Json.Token,
+			token : Token,
 			wildcard_optional : Try(Str, _),
 		},
 		_,
@@ -82,7 +80,7 @@ main! = |json| {
 
 			Str.count_utf8_bytes(decoded.foo)
 				+ Str.count_utf8_bytes(decoded.nested.bar)
-				+ Json.Token.count_utf8_bytes(decoded.token)
+				+ Token.count_utf8_bytes(decoded.token)
 				+ empty_record_score(empty_result)
 				+ invalid_empty_record_score(invalid_empty_result)
 				+ trailing_empty_record_score(trailing_empty_result)
@@ -98,6 +96,17 @@ main! = |json| {
 		}
 		Err(_) => 999999
 	}
+}
+
+Token := { raw : Str }.{
+	parser_for : Json -> (Json.State -> Try({ value : Token, rest : Json.State }, Json.DecodeErr))
+	parser_for = |encoding| |state| {
+		parsed = Json.parse_str(encoding, state)?
+		Ok({ value: { raw: "custom-token" }, rest: parsed.rest })
+	}
+
+	count_utf8_bytes : Token -> U64
+	count_utf8_bytes = |token| Str.count_utf8_bytes(token.raw)
 }
 
 question_length : Try(Str, [Missing]) -> Try(U64, [Missing])

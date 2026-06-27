@@ -207,9 +207,15 @@ fn serializeBuiltinArtifact(
 
 fn buildBuiltinIndices(gpa: Allocator, env: *const ModuleEnv) !BuiltinIndices {
     const bool_type_idx = try findTypeDeclaration(gpa, env, "Bool");
-    const parse_tag_union_spec_type_idx = try findNestedTypeDeclaration(gpa, env, "Str", "ParseTagUnionSpec");
-    const fields_type_idx = try findTypeDeclarationByQualifiedName(env, "Builtin.Str.FieldName.FieldNames");
-    const field_type_idx = try findTypeDeclarationByQualifiedName(env, "Builtin.Str.FieldName");
+    const parse_tag_union_spec_type_idx = try findNestedTypeDeclaration(gpa, env, "Encoding", "ParseTagUnionSpec");
+    const fields_type_idx = try findTypeDeclarationByQualifiedName(env, "Builtin.Encoding.FieldName.FieldNames");
+    const field_type_idx = try findTypeDeclarationByQualifiedName(env, "Builtin.Encoding.FieldName");
+    const json_type_idx = try findNestedTypeDeclaration(gpa, env, "Encoding", "Json");
+    const json_decode_err_type_idx = try findTypeDeclarationByQualifiedName(env, "Builtin.Encoding.Json.DecodeErr");
+    const json_state_type_idx = try findTypeDeclarationByQualifiedName(env, "Builtin.Encoding.Json.State");
+    const http_header_type_idx = try findNestedTypeDeclaration(gpa, env, "Encoding", "HttpHeader");
+    const http_header_decode_err_type_idx = try findTypeDeclarationByQualifiedName(env, "Builtin.Encoding.HttpHeader.DecodeErr");
+    const http_header_state_type_idx = try findTypeDeclarationByQualifiedName(env, "Builtin.Encoding.HttpHeader.State");
     const try_type_idx = try findTypeDeclaration(gpa, env, "Try");
     const dict_type_idx = try findTypeDeclaration(gpa, env, "Dict");
     const set_type_idx = try findTypeDeclaration(gpa, env, "Set");
@@ -251,6 +257,12 @@ fn buildBuiltinIndices(gpa: Allocator, env: *const ModuleEnv) !BuiltinIndices {
         .parse_tag_union_spec_type = parse_tag_union_spec_type_idx,
         .fields_type = fields_type_idx,
         .field_type = field_type_idx,
+        .json_type = json_type_idx,
+        .json_decode_err_type = json_decode_err_type_idx,
+        .json_state_type = json_state_type_idx,
+        .http_header_type = http_header_type_idx,
+        .http_header_decode_err_type = http_header_decode_err_type_idx,
+        .http_header_state_type = http_header_state_type_idx,
         .utf8_problem_type = utf8_problem_type_idx,
         .u8_type = u8_type_idx,
         .i8_type = i8_type_idx,
@@ -267,9 +279,15 @@ fn buildBuiltinIndices(gpa: Allocator, env: *const ModuleEnv) !BuiltinIndices {
         .f64_type = f64_type_idx,
         .numeral_type = numeral_type_idx,
         .bool_ident = expectBuiltinIdent(env, "Builtin.Bool"),
-        .parse_tag_union_spec_ident = expectBuiltinIdent(env, "Builtin.Str.ParseTagUnionSpec"),
-        .fields_ident = expectBuiltinIdent(env, "Builtin.Str.FieldName.FieldNames"),
-        .field_ident = expectBuiltinIdent(env, "Builtin.Str.FieldName"),
+        .parse_tag_union_spec_ident = expectBuiltinIdent(env, "Builtin.Encoding.ParseTagUnionSpec"),
+        .fields_ident = expectBuiltinIdent(env, "Builtin.Encoding.FieldName.FieldNames"),
+        .field_ident = expectBuiltinIdent(env, "Builtin.Encoding.FieldName"),
+        .json_ident = expectBuiltinIdent(env, "Builtin.Encoding.Json"),
+        .json_decode_err_ident = expectBuiltinIdent(env, "Builtin.Encoding.Json.DecodeErr"),
+        .json_state_ident = expectBuiltinIdent(env, "Builtin.Encoding.Json.State"),
+        .http_header_ident = expectBuiltinIdent(env, "Builtin.Encoding.HttpHeader"),
+        .http_header_decode_err_ident = expectBuiltinIdent(env, "Builtin.Encoding.HttpHeader.DecodeErr"),
+        .http_header_state_ident = expectBuiltinIdent(env, "Builtin.Encoding.HttpHeader.State"),
         .try_ident = expectBuiltinIdent(env, "Builtin.Try"),
         .dict_ident = expectBuiltinIdent(env, "Builtin.Dict"),
         .set_ident = expectBuiltinIdent(env, "Builtin.Set"),
@@ -317,6 +335,12 @@ fn installBuiltinNodeIndices(gpa: Allocator, env: *ModuleEnv, indices: BuiltinIn
     try env.common.setTypeNodeIndexById(gpa, indices.parse_tag_union_spec_ident, @intCast(@intFromEnum(indices.parse_tag_union_spec_type)));
     try env.common.setTypeNodeIndexById(gpa, indices.fields_ident, @intCast(@intFromEnum(indices.fields_type)));
     try env.common.setTypeNodeIndexById(gpa, indices.field_ident, @intCast(@intFromEnum(indices.field_type)));
+    try env.common.setTypeNodeIndexById(gpa, indices.json_ident, @intCast(@intFromEnum(indices.json_type)));
+    try env.common.setTypeNodeIndexById(gpa, indices.json_decode_err_ident, @intCast(@intFromEnum(indices.json_decode_err_type)));
+    try env.common.setTypeNodeIndexById(gpa, indices.json_state_ident, @intCast(@intFromEnum(indices.json_state_type)));
+    try env.common.setTypeNodeIndexById(gpa, indices.http_header_ident, @intCast(@intFromEnum(indices.http_header_type)));
+    try env.common.setTypeNodeIndexById(gpa, indices.http_header_decode_err_ident, @intCast(@intFromEnum(indices.http_header_decode_err_type)));
+    try env.common.setTypeNodeIndexById(gpa, indices.http_header_state_ident, @intCast(@intFromEnum(indices.http_header_state_type)));
     try env.common.setTypeNodeIndexById(gpa, indices.utf8_problem_ident, @intCast(@intFromEnum(indices.utf8_problem_type)));
     try env.common.setTypeNodeIndexById(gpa, indices.u8_ident, @intCast(@intFromEnum(indices.u8_type)));
     try env.common.setTypeNodeIndexById(gpa, indices.i8_ident, @intCast(@intFromEnum(indices.i8_type)));
@@ -336,7 +360,7 @@ fn installBuiltinNodeIndices(gpa: Allocator, env: *ModuleEnv, indices: BuiltinIn
 
 /// Validates that BuiltinIndices contains all nominal type declarations in the Builtin module.
 /// Iterates through all statements and ensures every s_nominal_decl is present in BuiltinIndices,
-/// with the exception of "Num" which is a container type, not an auto-imported type.
+/// with the exception of container types, which are not auto-imported types.
 fn validateBuiltinIndicesCompleteness(gpa: Allocator, env: *const ModuleEnv, indices: BuiltinIndices) !void {
     // Collect all statement indices from BuiltinIndices using reflection
     // Only check Statement.Idx fields (skip Ident.Idx fields)
@@ -362,7 +386,8 @@ fn validateBuiltinIndicesCompleteness(gpa: Allocator, env: *const ModuleEnv, ind
 
                 // Skip container types that are not auto-imported types
                 if (std.mem.eql(u8, ident_text, "Builtin") or
-                    std.mem.eql(u8, ident_text, "Builtin.Num"))
+                    std.mem.eql(u8, ident_text, "Builtin.Num") or
+                    std.mem.eql(u8, ident_text, "Builtin.Encoding"))
                 {
                     continue;
                 }

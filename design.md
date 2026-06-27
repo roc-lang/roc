@@ -1019,7 +1019,7 @@ thing = Json.Utf8.parse(json_bytes)?
 json_str = Json.encode(thing)?
 json_bytes = Json.Utf8.encode(thing)?
 
-headers = Headers.parse(raw_headers)?
+headers = Encoding.HttpHeader.parse(raw_headers)?
 ```
 
 The convenience functions construct the format state directly, call the value or
@@ -1028,7 +1028,7 @@ and return the final `Try`. They do not need a required `init`, `finish`, or
 `default` hook. A header helper can build the initial state as ordinary Roc data:
 
 ```roc
-state = Headers.{ raw }
+state = Encoding.HttpHeader.State.{ raw }
 ```
 
 The underlying parse method is public and callable. It is deliberately curried:
@@ -1052,31 +1052,34 @@ parser construction can transform the requested structural shape before the
 runtime scan starts, while the returned runtime function threads only the cursor
 state and parsed values.
 
-For example, a public HTTP header helper has this shape:
+For example, the builtin HTTP header helper inside `Builtin.Encoding` has this
+shape:
 
 ```roc
-Headers := { raw : Str }.{
+HttpHeader :: [Caseless].{
 	DecodeErr := [MissingRequired, BadHeader].{}
+
+	State := { raw : Str }
 
 	parse : Str -> Try(output, DecodeErr)
 		where [
-			output.parser_for : HeaderEncoding -> (Headers -> Try({ value : output, rest : Headers }, DecodeErr)),
+			output.parser_for : HttpHeader -> (State -> Try({ value : output, rest : State }, DecodeErr)),
 		]
 	parse = |raw| {
 		Output : output
 
-		parse_output = Output.parser_for(HeaderEncoding.Caseless)
-		parsed = parse_output(Headers.{ raw })?
+		parse_output = Output.parser_for(HttpHeader.Caseless)
+		parsed = parse_output(State.{ raw })?
 
 		Ok(parsed.value)
 	}
 }
 ```
 
-The exact shape of `HeaderEncoding` is format-owned; it is not a compiler
-interface. The important split is that `Output.parser_for(HeaderEncoding.Caseless)`
-constructs the concrete parser and `Headers.{ raw }` is the runtime input state.
-Formats with no configurable behavior can still use a zero-sized encoding value.
+The important split is that `Output.parser_for(Encoding.HttpHeader.Caseless)`
+constructs the concrete parser and `Encoding.HttpHeader.State.{ raw }` is the
+runtime input state. Formats with no configurable behavior can still use a
+zero-sized encoding value.
 
 The error type is inferred from the format methods. All `Try` errors in one
 parse or encode operation unify with the public function's returned error type.
@@ -1128,33 +1131,33 @@ not expose raw field-slot indices, unsafe byte indexing, or unchecked memory
 primitives as part of the serialization method surface.
 
 Record parsing is driven by the compiler-generated structural `parser_for` method.
-The compiler creates a `Str.FieldName.FieldNames(_shape)` value for each
+The compiler creates a `Encoding.FieldName.FieldNames(_shape)` value for each
 concrete record shape:
 
 ```roc
-Str.FieldName(_shape) : opaque
-Str.FieldName.FieldNames(_shape) : opaque
+Encoding.FieldName(_shape) : opaque
+Encoding.FieldName.FieldNames(_shape) : opaque
 
-Str.FieldName.FieldNames.rename_fields : Str.FieldName.FieldNames(_shape), (Str -> Str) -> Str.FieldName.FieldNames(_shape)
-Str.FieldName.FieldNames.shortest_name : Str.FieldName.FieldNames(_shape) -> U64
-Str.FieldName.FieldNames.longest_name : Str.FieldName.FieldNames(_shape) -> U64
-Str.FieldName.FieldNames.iter : Str.FieldName.FieldNames(_shape) -> Iter(Str.FieldName(_shape))
-Str.FieldName.FieldNames.for_size : Str.FieldName.FieldNames(_shape), U64 -> Iter(Str.FieldName(_shape))
+Encoding.FieldName.FieldNames.rename_fields : Encoding.FieldName.FieldNames(_shape), (Str -> Str) -> Encoding.FieldName.FieldNames(_shape)
+Encoding.FieldName.FieldNames.shortest_name : Encoding.FieldName.FieldNames(_shape) -> U64
+Encoding.FieldName.FieldNames.longest_name : Encoding.FieldName.FieldNames(_shape) -> U64
+Encoding.FieldName.FieldNames.iter : Encoding.FieldName.FieldNames(_shape) -> Iter(Encoding.FieldName(_shape))
+Encoding.FieldName.FieldNames.for_size : Encoding.FieldName.FieldNames(_shape), U64 -> Iter(Encoding.FieldName(_shape))
 
-Str.FieldName.name : Str.FieldName(_shape) -> Str
+Encoding.FieldName.name : Encoding.FieldName(_shape) -> Str
 ```
 
-`Str.FieldName.FieldNames(_shape)` contains the requested field names and
+`Encoding.FieldName.FieldNames(_shape)` contains the requested field names and
 compiler-owned result positions for one concrete record shape.
-`Str.FieldName(_shape)` is an opaque handle to one field in that same shape. The
+`Encoding.FieldName(_shape)` is an opaque handle to one field in that same shape. The
 `_shape` parameter is a phantom type: it is not runtime data, but it ties a
 field handle to the exact field set that created it. A parser for
 `{ cache_control : Str, content_length : U64 }` cannot accept a
-`Str.FieldName` produced from `{ foo : Str }`, because the phantom types do not
+`Encoding.FieldName` produced from `{ foo : Str }`, because the phantom types do not
 unify. That type-level tie is what lets generated record parsers avoid runtime
 bounds checks on field handles. If the only way to obtain a
-`Str.FieldName(_shape)` is from the matching
-`Str.FieldName.FieldNames(_shape)`, then the compiler already knows every handle
+`Encoding.FieldName(_shape)` is from the matching
+`Encoding.FieldName.FieldNames(_shape)`, then the compiler already knows every handle
 is in range for that record. There is no user-exposed `U64` slot to validate at
 runtime.
 
@@ -1162,7 +1165,7 @@ The derived `parser_for` constructs field metadata before returning the runtime
 lambda:
 
 ```roc
-renamed_fields = Str.FieldName.FieldNames.rename_fields(original_fields, |name| encoding.rename_field(name))
+renamed_fields = Encoding.FieldName.FieldNames.rename_fields(original_fields, |name| encoding.rename_field(name))
 parse_nested = Nested.parser_for(encoding)
 ```
 
@@ -1170,11 +1173,11 @@ parse_nested = Nested.parser_for(encoding)
 method whose first argument is the encoding value. Every encoding provides it;
 identity is the normal implementation. Taking the encoding value as an argument
 lets one encoding type store parser-construction configuration such as JSON
-field naming style. `Str.FieldName.FieldNames.rename_fields` applies that
+field naming style. `Encoding.FieldName.FieldNames.rename_fields` applies that
 function to every requested record field, discards the original names from the
-returned `Str.FieldName.FieldNames`, and rebuilds the length buckets used by
-`Str.FieldName.FieldNames.for_size`, `Str.FieldName.FieldNames.shortest_name`,
-and `Str.FieldName.FieldNames.longest_name`. If parser construction is
+returned `Encoding.FieldName.FieldNames`, and rebuilds the length buckets used by
+`Encoding.FieldName.FieldNames.for_size`, `Encoding.FieldName.FieldNames.shortest_name`,
+and `Encoding.FieldName.FieldNames.longest_name`. If parser construction is
 compile-time evaluated, the renaming work is also compile-time work. For JSON
 camel-case decoding, the final runtime parser can contain only `camelCase`
 field names. For HTTP header decoding, the final runtime parser can contain only
@@ -1186,11 +1189,11 @@ parse strings, `U64`, tag unions, and records uses these method shapes:
 ```roc
 encoding.parse_str : encoding, state -> Try({ value : Str, rest : state }, err)
 encoding.parse_u64 : encoding, state -> Try({ value : U64, rest : state }, err)
-encoding.parse_tag_union : encoding, ParseTagUnionSpec(a), state -> Try({ value : a, rest : state }, err)
+encoding.parse_tag_union : encoding, Encoding.ParseTagUnionSpec(a), state -> Try({ value : a, rest : state }, err)
 
-encoding.parse_record_field : encoding, Str.FieldName.FieldNames(_shape), state -> Try(
+encoding.parse_record_field : encoding, Encoding.FieldName.FieldNames(_shape), state -> Try(
 	[
-		Field({ field : Str.FieldName(_shape), rest : state }),
+		Field({ field : Encoding.FieldName(_shape), rest : state }),
 		TryField({ name : Str, rest : state }),
 		TryFieldCaseless({ name : Str, rest : state }),
 		Continue({ rest : state }),
@@ -1225,8 +1228,8 @@ continues from that parser's returned state. When it sees `cache_control`, it
 calls the `Str` parser. The value parser owns value consumption.
 
 `Field` means the format already matched the input field name against the
-provided `Str.FieldName.FieldNames(_shape)`, usually by iterating
-`Str.FieldName.FieldNames.for_size(fields, len)`
+provided `Encoding.FieldName.FieldNames(_shape)`, usually by iterating
+`Encoding.FieldName.FieldNames.for_size(fields, len)`
 or another field iterator. `TryField` means the format parsed a field name and
 asks the generated record parser to exact-match it against the transformed
 fields. `TryFieldCaseless` is the same, but uses ASCII caseless matching. If a
@@ -1264,19 +1267,19 @@ construction time and then use `TryFieldCaseless("Cache-Control")` at runtime.
 JSON camel-case parsing can rename `user_id` to `userId` at parser construction
 time and then use `TryField("userId")` at runtime. The compiler does not know
 those policies; it only knows that it has a transformed
-`Str.FieldName.FieldNames(_shape)` value and a requested matching mode.
+`Encoding.FieldName.FieldNames(_shape)` value and a requested matching mode.
 
-`Str.FieldName.FieldNames.shortest_name` and
-`Str.FieldName.FieldNames.longest_name` are computed after renaming. Formats may
+`Encoding.FieldName.FieldNames.shortest_name` and
+`Encoding.FieldName.FieldNames.longest_name` are computed after renaming. Formats may
 use them to skip impossible fields before doing more expensive work. For
 example, if a header name is longer than
-`Str.FieldName.FieldNames.longest_name(fields)` and the format's `rename_field`
+`Encoding.FieldName.FieldNames.longest_name(fields)` and the format's `rename_field`
 never increases field length for headers, the format can consume the line and
 return `Continue` without constructing any temporary field name. This is not a
 parse failure: for formats such as HTTP headers and JSON objects, unknown fields
 remain ordinary input according to that format's rules. If the target record
 actually contains a long renamed field name, the long input field remains
-matchable through the same `Str.FieldName.FieldNames` iteration APIs.
+matchable through the same `Encoding.FieldName.FieldNames` iteration APIs.
 
 For small fields, generated record dispatch compares the packed small string
 representation directly. Roc zeroes unused SSO bytes, so equality can use
@@ -1308,7 +1311,7 @@ sake of generality.
 Nested records follow the same construction/runtime split. The outer derived
 `parser_for` method eagerly calls every nested parser constructor before
 returning its runtime lambda. A nested record gets its own
-`Str.FieldName.FieldNames(_nested_shape)` value, then renames and rebuckets that
+`Encoding.FieldName.FieldNames(_nested_shape)` value, then renames and rebuckets that
 field set through the same `encoding.rename_field` method. A custom nominal
 field calls that nominal type's explicit `parser_for` method during parser
 construction. At runtime the outer record parser dispatches to the
@@ -1357,8 +1360,8 @@ x_auth_token -> x-auth-token
 ```
 
 At runtime the header parser parses the input line name as a seamless slice. It
-may use `Str.FieldName.FieldNames.for_size` plus ASCII-caseless comparison
-against `Str.FieldName.name` to match the transformed field set directly and
+may use `Encoding.FieldName.FieldNames.for_size` plus ASCII-caseless comparison
+against `Encoding.FieldName.name` to match the transformed field set directly and
 return `Field({ field, rest: value_start })`. It may also return
 `TryFieldCaseless({ name, rest: value_start })` and let generated record
 dispatch perform the ASCII-caseless match. If the name cannot match any target
@@ -1381,8 +1384,8 @@ user_id -> userId
 cache_control -> cacheControl
 ```
 
-The runtime JSON scanner can use `Str.FieldName.FieldNames.for_size` and exact
-`Str.FieldName.name` comparison to match each object key against the
+The runtime JSON scanner can use `Encoding.FieldName.FieldNames.for_size` and exact
+`Encoding.FieldName.name` comparison to match each object key against the
 already-renamed field set and return `Field({ field, rest: value_start })` for
 known keys. It may also return `TryField({ name, rest: value_start })` and let
 generated record dispatch perform exact matching. For unknown keys, it skips the
@@ -1406,76 +1409,76 @@ and missing object fields are separate format conditions. They are surfaced only
 through field or value types that request them, such as `Try(Str, [Null])` or
 `Try(Str, [Missing])`; the plain `Str` method does not accept either condition.
 
-Concrete HTTP header parser code has this public shape:
+Concrete HTTP header parser code has this shape inside `Builtin.Encoding`:
 
 ```roc
-Headers := { raw : Str }.{
+HttpHeader :: [Caseless].{
 	DecodeErr := [MissingRequired, BadHeader].{}
 
-	parser_for : () -> (Headers -> Try({ value : output, rest : Headers }, DecodeErr))
+	State := { raw : Str }
+
+	parser_for : () -> (State -> Try({ value : output, rest : State }, DecodeErr))
 		where [
-			output.parser_for : HeaderEncoding -> (Headers -> Try({ value : output, rest : Headers }, DecodeErr)),
+			output.parser_for : HttpHeader -> (State -> Try({ value : output, rest : State }, DecodeErr)),
 		]
 	parser_for = || {
 		Output : output
-		Output.parser_for(HeaderEncoding.Caseless)
+		Output.parser_for(HttpHeader.Caseless)
 	}
 
 	parse : Str -> Try(output, DecodeErr)
 		where [
-			output.parser_for : HeaderEncoding -> (Headers -> Try({ value : output, rest : Headers }, DecodeErr)),
+			output.parser_for : HttpHeader -> (State -> Try({ value : output, rest : State }, DecodeErr)),
 		]
 	parse = |raw| {
 		Output : output
-		parse_output = Output.parser_for(HeaderEncoding.Caseless)
-		parsed = parse_output(Headers.{ raw })?
+		parse_output = Output.parser_for(HttpHeader.Caseless)
+		parsed = parse_output(State.{ raw })?
 		Ok(parsed.value)
 	}
-}
 
-HeaderEncoding :: [Caseless].{
-	rename_field : HeaderEncoding, Str -> Str
+	rename_field : HttpHeader, Str -> Str
 	rename_field = |_, name| underscores_to_dashes(name)
 
-	parse_str : HeaderEncoding, Headers -> Try({ value : Str, rest : Headers }, Headers.DecodeErr)
+	parse_str : HttpHeader, State -> Try({ value : Str, rest : State }, DecodeErr)
 	parse_str = |_, state| {
 		value_parts = take_header_value(state.raw)?
-		Ok({ value: value_parts.value, rest: { raw: value_parts.after } })
+		Ok({ value: value_parts.value, rest: State.{ raw: value_parts.after } })
 	}
 
-	parse_u64 : HeaderEncoding, Headers -> Try({ value : U64, rest : Headers }, Headers.DecodeErr)
+	parse_u64 : HttpHeader, State -> Try({ value : U64, rest : State }, DecodeErr)
 	parse_u64 = |_, state| {
 		value_parts = take_header_value(state.raw)?
 
-		match U64.from_str(value_parts.value) {
-			Ok(value) => Ok({ value, rest: { raw: value_parts.after } })
-			Err(_) => Err(Headers.DecodeErr.BadHeader)
+		match u64_from_str(value_parts.value) {
+			Ok(value) => Ok({ value, rest: State.{ raw: value_parts.after } })
+			Err(_) => Err(DecodeErr.BadHeader)
 		}
 	}
 
-	parse_record_field : HeaderEncoding, Str.FieldName.FieldNames(_shape), Headers -> Try(
+	parse_record_field : HttpHeader, Encoding.FieldName.FieldNames(_shape), State -> Try(
 		[
-			Field({ field : Str.FieldName(_shape), rest : Headers }),
-			TryField({ name : Str, rest : Headers }),
-			TryFieldCaseless({ name : Str, rest : Headers }),
-			Continue({ rest : Headers }),
-			Done({ rest : Headers }),
+			Field({ field : Encoding.FieldName(_shape), rest : State }),
+			TryField({ name : Str, rest : State }),
+			TryFieldCaseless({ name : Str, rest : State }),
+			Continue({ rest : State }),
+			Done({ rest : State }),
 		],
-		Headers.DecodeErr,
+		DecodeErr,
 	)
 	parse_record_field = |_, fields, state|
 		parse_record_field_from_headers(fields, state.raw)
 
-	skip_record_field : HeaderEncoding, Headers -> Try(Headers, Headers.DecodeErr)
+	skip_record_field : HttpHeader, State -> Try(State, DecodeErr)
 	skip_record_field = |_, state| {
 		parts = take_header_value(state.raw)?
-		Ok({ raw: parts.after })
+		Ok(State.{ raw: parts.after })
 	}
 
-	missing_record_field : HeaderEncoding, Str, Headers -> Headers.DecodeErr
-	missing_record_field = |_, _, _| Headers.DecodeErr.MissingRequired
+	missing_record_field : HttpHeader, Str, State -> DecodeErr
+	missing_record_field = |_, _, _| DecodeErr.MissingRequired
 
-	missing_optional_field : HeaderEncoding, Str, Headers -> [Missing]
+	missing_optional_field : HttpHeader, Str, State -> [Missing]
 	missing_optional_field = |_, _, _| Missing
 }
 ```
@@ -1487,107 +1490,97 @@ The exact derived parser type for a header record with mixed field shapes is:
 	cache_control : Str,
 	content_length : U64,
 	x_auth_token : Try(Str, [Missing]),
-}.parser_for : HeaderEncoding -> (Headers -> Try(
+}.parser_for : Encoding.HttpHeader -> (Encoding.HttpHeader.State -> Try(
 	{
 		value : {
 			cache_control : Str,
 			content_length : U64,
 			x_auth_token : Try(Str, [Missing]),
 		},
-		rest : Headers,
+		rest : Encoding.HttpHeader.State,
 	},
-	Headers.DecodeErr,
+	Encoding.HttpHeader.DecodeErr,
 ))
 ```
 
-Because `HeaderEncoding` does not define `parse_tag_union`, trying to parse a
+Because `Encoding.HttpHeader` does not define `parse_tag_union`, trying to parse a
 header record that contains a tag union is a compile-time static-dispatch error:
 
 ```roc
-bad : Try({ mode : [On, Off] }, Headers.DecodeErr)
-bad = Headers.parse("mode: On\r\n")
+bad : Try({ mode : [On, Off] }, Encoding.HttpHeader.DecodeErr)
+bad = Encoding.HttpHeader.parse("mode: On\r\n")
 ```
 
-The missing requirement is `HeaderEncoding.parse_tag_union`; the compiler does
+The missing requirement is `Encoding.HttpHeader.parse_tag_union`; the compiler does
 not wait until runtime to discover that this format does not support tags.
 
 Concrete JSON parser code has this shape:
 
 ```roc
-JsonState := [Input(Str)]
+Json :: [Default, CamelCase].{
+	DecodeErr := [MissingRequired, InvalidJson].{}
 
-JsonEncoding :: [Default, CamelCase].{
-	rename_field : JsonEncoding, Str -> Str
+	State := [Input(Str)]
+
+	rename_field : Json, Str -> Str
 	rename_field = |encoding, name|
 		match encoding {
 			Default => name
 			CamelCase => snake_to_camel(name)
 		}
 
-	parse_str : JsonEncoding, JsonState -> Try({ value : Str, rest : JsonState }, Json.DecodeErr)
-	parse_record_field : JsonEncoding, Str.FieldName.FieldNames(_shape), JsonState -> Try(
+	parse_str : Json, State -> Try({ value : Str, rest : State }, DecodeErr)
+	parse_record_field : Json, Encoding.FieldName.FieldNames(_shape), State -> Try(
 		[
-			Field({ field : Str.FieldName(_shape), rest : JsonState }),
-			TryField({ name : Str, rest : JsonState }),
-			TryFieldCaseless({ name : Str, rest : JsonState }),
-			Continue({ rest : JsonState }),
-			Done({ rest : JsonState }),
+			Field({ field : Encoding.FieldName(_shape), rest : State }),
+			TryField({ name : Str, rest : State }),
+			TryFieldCaseless({ name : Str, rest : State }),
+			Continue({ rest : State }),
+			Done({ rest : State }),
 		],
-		Json.DecodeErr,
+		DecodeErr,
 	)
-	skip_record_field : JsonEncoding, JsonState -> Try(JsonState, Json.DecodeErr)
-	missing_record_field : JsonEncoding, Str, JsonState -> Json.DecodeErr
-	missing_optional_field : JsonEncoding, Str, JsonState -> [Missing]
-	parse_tag_union : JsonEncoding, ParseTagUnionSpec(a), JsonState -> Try({ value : a, rest : JsonState }, Json.DecodeErr)
-}
+	skip_record_field : Json, State -> Try(State, DecodeErr)
+	missing_record_field : Json, Str, State -> DecodeErr
+	missing_optional_field : Json, Str, State -> [Missing]
+	parse_tag_union : Json, Encoding.ParseTagUnionSpec(a), State -> Try({ value : a, rest : State }, DecodeErr)
 
-Json :: [].{
-	DecodeErr := [MissingRequired, InvalidJson].{}
-
-	Token := { raw : Str }.{
-		parser_for : JsonEncoding -> (JsonState -> Try({ value : Token, rest : JsonState }, Json.DecodeErr))
-		parser_for = |encoding| |state| {
-			parsed = JsonEncoding.parse_str(encoding, state)?
-			Ok({ value: { raw: "custom-token" }, rest: parsed.rest })
-		}
-	}
-
-	parse : Str -> Try(a, Json.DecodeErr)
+	parse : Str -> Try(a, DecodeErr)
 		where [
-			a.parser_for : JsonEncoding -> (JsonState -> Try({ value : a, rest : JsonState }, Json.DecodeErr)),
+			a.parser_for : Json -> (State -> Try({ value : a, rest : State }, DecodeErr)),
 		]
 	parse = |json| {
 		Shape : a
-		parse_shape = Shape.parser_for(JsonEncoding.Default)
-		parsed = parse_shape(JsonState.Input(json))?
+		parse_shape = Shape.parser_for(Json.Default)
+		parsed = parse_shape(State.Input(json))?
 
 		match parsed.rest {
 			Input(rest) =>
 				if Str.is_empty(Str.trim_start(rest)) {
 					Ok(parsed.value)
 				} else {
-					Err(Json.DecodeErr.InvalidJson)
+					Err(DecodeErr.InvalidJson)
 				}
 		}
 	}
 
-	parser_camel : () -> (Str -> Try(a, Json.DecodeErr))
+	parser_camel : () -> (Str -> Try(a, DecodeErr))
 		where [
-			a.parser_for : JsonEncoding -> (JsonState -> Try({ value : a, rest : JsonState }, Json.DecodeErr)),
+			a.parser_for : Json -> (State -> Try({ value : a, rest : State }, DecodeErr)),
 		]
 	parser_camel = || {
 		Shape : a
-		parse_shape = Shape.parser_for(JsonEncoding.CamelCase)
+		parse_shape = Shape.parser_for(Json.CamelCase)
 
 		|json| {
-			parsed = parse_shape(JsonState.Input(json))?
+			parsed = parse_shape(State.Input(json))?
 
 			match parsed.rest {
 				Input(rest) =>
 					if Str.is_empty(Str.trim_start(rest)) {
 						Ok(parsed.value)
 					} else {
-						Err(Json.DecodeErr.InvalidJson)
+						Err(DecodeErr.InvalidJson)
 					}
 			}
 		}
@@ -1602,14 +1595,14 @@ The exact derived parser type for a JSON record is:
 	cache_control : Str,
 	nested_record : { inner_value : Str },
 	user_id : Str,
-}.parser_for : JsonEncoding -> (JsonState -> Try(
+}.parser_for : Json -> (Json.State -> Try(
 	{
 		value : {
 			cache_control : Str,
 			nested_record : { inner_value : Str },
 			user_id : Str,
 		},
-		rest : JsonState,
+		rest : Json.State,
 	},
 	Json.DecodeErr,
 ))
@@ -1618,16 +1611,16 @@ The exact derived parser type for a JSON record is:
 The exact derived parser type for an externally tagged JSON union is:
 
 ```roc
-[Admin({ name : Str }), Guest].parser_for : JsonEncoding -> (JsonState -> Try(
+[Admin({ name : Str }), Guest].parser_for : Json -> (Json.State -> Try(
 	{
 		value : [Admin({ name : Str }), Guest],
-		rest : JsonState,
+		rest : Json.State,
 	},
 	Json.DecodeErr,
 ))
 ```
 
-With `JsonEncoding.Default`, this parses values like:
+With `Json.Default`, this parses values like:
 
 ```json
 { "Admin": { "name": "Sam" } }

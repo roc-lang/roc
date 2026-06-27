@@ -1,7 +1,5 @@
 app [main!] { pf: platform "./platform/main.roc" }
 
-import pf.Headers
-
 Shape : {
 	cache_control : Str,
 	content_length : U64,
@@ -13,7 +11,7 @@ Shape : {
 	x_auth_token : Try(Str, [Missing]),
 }
 
-parse_headers : Headers -> Try(
+parse_headers : Encoding.HttpHeader.State -> Try(
 	{
 		value : {
 			cache_control : Str,
@@ -25,15 +23,15 @@ parse_headers : Headers -> Try(
 			wildcard_optional : Try(Str, [Missing]),
 			x_auth_token : Try(Str, [Missing]),
 		},
-		rest : Headers,
+		rest : Encoding.HttpHeader.State,
 	},
-	Headers.DecodeErr,
+	Encoding.HttpHeader.DecodeErr,
 )
-parse_headers = Headers.parser_for()
+parse_headers = Encoding.HttpHeader.parser_for()
 
 main! : Str => U64
 main! = |headers| {
-	state = Headers.{ raw: headers }
+	state = Encoding.HttpHeader.State.{ raw: headers }
 
 	decoded_result : Try(
 		{
@@ -46,7 +44,7 @@ main! = |headers| {
 			wildcard_optional : Try(Str, _),
 			x_auth_token : Try(Str, [Missing]),
 		},
-		Headers.DecodeErr,
+		Encoding.HttpHeader.DecodeErr,
 	)
 	decoded_result = match parse_headers(state) {
 		Ok(parsed) => Ok(parsed.value)

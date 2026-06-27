@@ -1,5 +1,5 @@
 Builtin :: [].{
-	Str :: [ProvidedByCompiler].{
+	Encoding :: {}.{
 		# Compiler-generated structural record field-name metadata used by derived
 		# parsers. The phantom _shape ties a FieldName handle to the exact
 		# FieldNames value that produced it, so generated parsers can dispatch
@@ -22,6 +22,637 @@ Builtin :: [].{
 			parse : ParseTagUnionSpec(_shape), { tag : Str, encoding : _encoding, state : _state, missing : _err } -> Try({ value : _shape, rest : _state }, _err)
 		}
 
+		Json :: [Default, CamelCase].{
+			DecodeErr := [MissingRequired, InvalidJson].{}
+
+			State := [Input(Str)]
+
+			rename_field : Json, Str -> Str
+			rename_field = |encoding, name|
+				match encoding {
+					Default => name
+					CamelCase => Json.snake_to_camel(name)
+				}
+
+			parse_str : Json, State -> Try({ value : Str, rest : State }, DecodeErr)
+			parse_str = |_, state|
+				match state {
+					Input(raw) => {
+						trimmed = Str.trim_start(raw)
+						if Str.starts_with(trimmed, "\"") {
+							string_parts = Json.split_json_string_tail(Str.drop_prefix(trimmed, "\""))?
+							rest = Str.trim_start(string_parts.after)
+							Ok({ value: string_parts.value, rest: State.Input(rest) })
+						} else {
+							Err(Json.invalid_json)
+						}
+					}
+				}
+
+			parse_u64 : Json, State -> Try({ value : U64, rest : State }, DecodeErr)
+			parse_u64 = |_, state|
+				match state {
+					Input(raw) => {
+						trimmed = Str.trim_start(raw)
+						parts = Json.split_json_scalar_tail(trimmed)
+
+						match parts {
+							Ok(scalar) =>
+								match u64_from_str(scalar.value) {
+									Ok(value) => Ok({ value, rest: State.Input(Str.trim_start(scalar.after)) })
+									Err(_) => Err(Json.invalid_json)
+								}
+
+							Err(_) => Err(Json.invalid_json)
+						}
+					}
+				}
+
+			parse_record_field : Json, FieldName.FieldNames(_shape), State -> Try(
+				[
+					Field({ field : FieldName(_shape), rest : State }),
+					TryField({ name : Str, rest : State }),
+					TryFieldCaseless({ name : Str, rest : State }),
+					Continue({ rest : State }),
+					Done({ rest : State }),
+				],
+				DecodeErr,
+			)
+			parse_record_field = |_, _, state|
+				match state {
+					Input(raw) => Json.parse_record_field_from_object(raw)
+				}
+
+			skip_record_field : Json, State -> Try(State, DecodeErr)
+			skip_record_field = |_, state| Json.skip_json_value(state)
+
+			missing_record_field : Json, Str, State -> DecodeErr
+			missing_record_field = |_, _, _| DecodeErr.MissingRequired
+
+			missing_optional_field : Json, Str, State -> [Missing]
+			missing_optional_field = |_, _, _| Missing
+
+			parse_tag_union : Json, ParseTagUnionSpec(a), State -> Try({ value : a, rest : State }, DecodeErr)
+			parse_tag_union = |encoding, spec, state|
+				match state {
+					Input(value) => Json.parse_tag_union_from_json(value, encoding, spec)
+				}
+
+			parse : Str -> Try(a, DecodeErr)
+				where [
+					a.parser_for : Json -> (State -> Try({ value : a, rest : State }, DecodeErr)),
+				]
+			parse = |json| {
+				Shape : a
+				parse_shape = Shape.parser_for(Json.Default)
+				parsed = parse_shape(State.Input(json))?
+
+				match parsed.rest {
+					Input(rest) =>
+						if Str.is_empty(Str.trim_start(rest)) {
+							Ok(parsed.value)
+						} else {
+							Err(Json.invalid_json)
+						}
+				}
+			}
+
+			parser_camel : () -> (Str -> Try(a, DecodeErr))
+				where [
+					a.parser_for : Json -> (State -> Try({ value : a, rest : State }, DecodeErr)),
+				]
+			parser_camel = || {
+				Shape : a
+				parse_shape = Shape.parser_for(Json.CamelCase)
+
+				|json| {
+					parsed = parse_shape(State.Input(json))?
+
+					match parsed.rest {
+						Input(rest) =>
+							if Str.is_empty(Str.trim_start(rest)) {
+								Ok(parsed.value)
+							} else {
+								Err(Json.invalid_json)
+							}
+						}
+				}
+			}
+
+			invalid_json : DecodeErr
+			invalid_json = DecodeErr.InvalidJson
+
+			parse_record_field_from_object : Str -> Try(
+				[
+					Field({ field : FieldName(_shape), rest : State }),
+					TryField({ name : Str, rest : State }),
+					TryFieldCaseless({ name : Str, rest : State }),
+					Continue({ rest : State }),
+					Done({ rest : State }),
+				],
+				DecodeErr,
+			)
+			parse_record_field_from_object = |raw| {
+				remaining = Str.trim_start(raw)
+
+				if Str.starts_with(remaining, "{") {
+					return Json.parse_record_field_from_object(Str.trim_start(Str.drop_prefix(remaining, "{")))
+				}
+
+				if Str.starts_with(remaining, ",") {
+					return Json.parse_record_field_from_object(Str.trim_start(Str.drop_prefix(remaining, ",")))
+				}
+
+				if Str.starts_with(remaining, "}") {
+					after_record = Str.trim_start(Str.drop_prefix(remaining, "}"))
+					return Ok(Done({ rest: State.Input(after_record) }))
+				}
+
+				if !Str.starts_with(remaining, "\"") {
+					return Err(Json.invalid_json)
+				}
+
+				key_parts = Json.split_json_string_tail(Str.drop_prefix(remaining, "\""))?
+				key = key_parts.value
+				after_key = Str.trim_start(key_parts.after)
+
+				if !Str.starts_with(after_key, ":") {
+					return Err(Json.invalid_json)
+				}
+
+				after_colon = Str.trim_start(Str.drop_prefix(after_key, ":"))
+				rest = State.Input(after_colon)
+
+				Ok(TryField({ name: key, rest }))
+			}
+
+			snake_to_camel : Str -> Str
+			snake_to_camel = |text|
+				match Str.find_first(text, "_") {
+					Ok({ before, after }) =>
+						before.concat(Json.upper_first_ascii(Json.snake_to_camel(after)))
+
+					Err(NotFound) => text
+				}
+
+			upper_first_ascii : Str -> Str
+			upper_first_ascii = |text| {
+				bytes = Str.to_utf8(text)
+
+				match List.first(bytes) {
+					Ok(first) => {
+						upper = if first >= 97 {
+							if first <= 122 {
+								first - 32
+							} else {
+								first
+							}
+						} else {
+							first
+						}
+
+						match Str.from_utf8([upper].concat(List.drop_first(bytes, 1))) {
+							Ok(value) => value
+							Err(_) => text
+						}
+					}
+
+					Err(_) => text
+				}
+			}
+
+			skip_json_value : State -> Try(State, DecodeErr)
+			skip_json_value = |state|
+				match state {
+					Input(raw) => {
+						trimmed = Str.trim_start(raw)
+
+						if Str.starts_with(trimmed, "\"") {
+							value_parts = Json.split_json_string_tail(Str.drop_prefix(trimmed, "\""))?
+							Ok(State.Input(Str.trim_start(value_parts.after)))
+						} else if Str.starts_with(trimmed, "{") {
+							end_parts = Json.find_object_end(trimmed)?
+							Ok(State.Input(Str.trim_start(end_parts.after)))
+						} else {
+							scalar_parts = Json.split_json_scalar_tail(trimmed)?
+							Ok(State.Input(Str.trim_start(scalar_parts.after)))
+						}
+					}
+				}
+
+			parse_tag_union_from_json : Str, Json, ParseTagUnionSpec(a) -> Try({ value : a, rest : State }, DecodeErr)
+			parse_tag_union_from_json = |raw, encoding, spec| {
+				remaining = Str.trim_start(raw)
+
+				if !Str.starts_with(remaining, "{") {
+					return Err(Json.invalid_json)
+				}
+
+				after_open = Str.trim_start(Str.drop_prefix(remaining, "{"))
+
+				if !Str.starts_with(after_open, "\"") {
+					return Err(Json.invalid_json)
+				}
+
+				key_split = Json.split_json_string_tail(Str.drop_prefix(after_open, "\""))
+
+				match key_split {
+					Ok(key_parts) => {
+						tag_name = key_parts.value
+						after_key = Str.trim_start(key_parts.after)
+
+						if !Str.starts_with(after_key, ":") {
+							return Err(Json.invalid_json)
+						}
+
+						payload = Str.trim_start(Str.drop_prefix(after_key, ":"))
+
+						parsed = ParseTagUnionSpec.parse(spec, {
+							tag: tag_name,
+							encoding,
+							state: State.Input(payload),
+							missing: DecodeErr.MissingRequired,
+						})?
+
+						match parsed.rest {
+							Input(after_payload) => Json.finish_tag_payload(parsed.value, after_payload)
+						}
+					}
+					Err(_) => Err(Json.invalid_json)
+				}
+			}
+
+			finish_tag_payload : a, Str -> Try({ value : a, rest : State }, DecodeErr)
+			finish_tag_payload = |value, raw| {
+				remaining = Str.trim_start(raw)
+
+				if Str.starts_with(remaining, "}") {
+					after_close = Str.trim_start(Str.drop_prefix(remaining, "}"))
+					return Ok({ value, rest: State.Input(after_close) })
+				}
+
+				empty_payload = Json.consume_empty_json_object(remaining)?
+				after_payload = Str.trim_start(empty_payload.after)
+
+				if Str.starts_with(after_payload, "}") {
+					after_close = Str.trim_start(Str.drop_prefix(after_payload, "}"))
+					Ok({ value, rest: State.Input(after_close) })
+				} else {
+					Err(Json.invalid_json)
+				}
+			}
+
+			consume_empty_json_object : Str -> Try({ after : Str }, DecodeErr)
+			consume_empty_json_object = |raw| {
+				remaining = Str.trim_start(raw)
+
+				if !Str.starts_with(remaining, "{") {
+					return Err(Json.invalid_json)
+				}
+
+				after_open = Str.trim_start(Str.drop_prefix(remaining, "{"))
+
+				if Str.starts_with(after_open, "}") {
+					Ok({ after: Str.drop_prefix(after_open, "}") })
+				} else {
+					Err(Json.invalid_json)
+				}
+			}
+
+			split_json_string_tail : Str -> Try({ value : Str, after : Str }, DecodeErr)
+			split_json_string_tail = |tail| {
+				quote_split = Str.find_first(tail, "\"")
+
+				match quote_split {
+					Ok(quote_parts) => {
+						slash_split = Str.find_first(tail, "\\")
+
+						match slash_split {
+							Ok(slash_parts) =>
+								if Str.count_utf8_bytes(slash_parts.before) < Str.count_utf8_bytes(quote_parts.before) {
+									Err(Json.invalid_json)
+								} else {
+									Ok({ value: quote_parts.before, after: quote_parts.after })
+								}
+							Err(NotFound) => Ok({ value: quote_parts.before, after: quote_parts.after })
+						}
+					}
+					Err(NotFound) => Err(Json.invalid_json)
+				}
+			}
+
+			split_json_scalar_tail : Str -> Try({ value : Str, after : Str }, DecodeErr)
+			split_json_scalar_tail = |raw| {
+				var $value = raw
+				var $after = ""
+				var $offset = Str.count_utf8_bytes(raw)
+
+				match Str.find_first(raw, ",") {
+					Ok(parts) => {
+						parts_offset = Str.count_utf8_bytes(parts.before)
+						if parts_offset < $offset {
+							$value = parts.before
+							$after = ",".concat(parts.after)
+							$offset = parts_offset
+						}
+					}
+					Err(NotFound) => {}
+				}
+
+				match Str.find_first(raw, "}") {
+					Ok(parts) => {
+						parts_offset = Str.count_utf8_bytes(parts.before)
+						if parts_offset < $offset {
+							$value = parts.before
+							$after = "}".concat(parts.after)
+							$offset = parts_offset
+						}
+					}
+					Err(NotFound) => {}
+				}
+
+				match Str.find_first(raw, "]") {
+					Ok(parts) => {
+						parts_offset = Str.count_utf8_bytes(parts.before)
+						if parts_offset < $offset {
+							$value = parts.before
+							$after = "]".concat(parts.after)
+							$offset = parts_offset
+						}
+					}
+					Err(NotFound) => {}
+				}
+
+				match Str.find_first(raw, " ") {
+					Ok(parts) => {
+						parts_offset = Str.count_utf8_bytes(parts.before)
+						if parts_offset < $offset {
+							$value = parts.before
+							$after = " ".concat(parts.after)
+							$offset = parts_offset
+						}
+					}
+					Err(NotFound) => {}
+				}
+
+				match Str.find_first(raw, "\n") {
+					Ok(parts) => {
+						parts_offset = Str.count_utf8_bytes(parts.before)
+						if parts_offset < $offset {
+							$value = parts.before
+							$after = "\n".concat(parts.after)
+							$offset = parts_offset
+						}
+					}
+					Err(NotFound) => {}
+				}
+
+				match Str.find_first(raw, "\t") {
+					Ok(parts) => {
+						parts_offset = Str.count_utf8_bytes(parts.before)
+						if parts_offset < $offset {
+							$value = parts.before
+							$after = "\t".concat(parts.after)
+							$offset = parts_offset
+						}
+					}
+					Err(NotFound) => {}
+				}
+
+				if Str.is_empty($value) {
+					Err(Json.invalid_json)
+				} else {
+					Ok({ value: $value, after: $after })
+				}
+			}
+
+			split_before : Try({ before : Str, after : Str }, [NotFound]), U64 -> Bool
+			split_before = |split, offset|
+				match split {
+					Ok(parts) => Str.count_utf8_bytes(parts.before) < offset
+					Err(NotFound) => False
+				}
+
+				find_object_end : Str -> Try({ after : Str }, DecodeErr)
+				find_object_end = |object_text| {
+					var $remaining = object_text
+					var $depth = 0
+
+				while True {
+					quote_split = Str.find_first($remaining, "\"")
+					open_split = Str.find_first($remaining, "{")
+					close_split = Str.find_first($remaining, "}")
+					var $skipped_string = False
+
+					match quote_split {
+						Ok(quote_parts) => {
+							quote_offset = Str.count_utf8_bytes(quote_parts.before)
+
+							if !Json.split_before(open_split, quote_offset) {
+								if !Json.split_before(close_split, quote_offset) {
+									string_parts = Json.split_json_string_tail(quote_parts.after)?
+									$remaining = string_parts.after
+									$skipped_string = True
+								}
+							}
+						}
+						Err(NotFound) => {}
+					}
+
+					if $skipped_string == False {
+						match open_split {
+							Ok(open_parts) => {
+								match close_split {
+									Ok(close_parts) => {
+										if Str.count_utf8_bytes(open_parts.before) < Str.count_utf8_bytes(close_parts.before) {
+											$depth = $depth + 1
+											$remaining = open_parts.after
+										} else {
+											if $depth == 0 {
+												return Err(Json.invalid_json)
+											}
+
+											$depth = $depth - 1
+											$remaining = close_parts.after
+
+											if $depth == 0 {
+												return Ok({ after: $remaining })
+											}
+										}
+									}
+									Err(NotFound) => {
+										$depth = $depth + 1
+										$remaining = open_parts.after
+									}
+								}
+							}
+							Err(NotFound) => {
+								match close_split {
+									Ok(close_parts) => {
+										if $depth == 0 {
+											return Err(Json.invalid_json)
+										}
+
+										$depth = $depth - 1
+										$remaining = close_parts.after
+
+										if $depth == 0 {
+											return Ok({ after: $remaining })
+										}
+									}
+									Err(NotFound) => return Err(Json.invalid_json)
+								}
+							}
+						}
+						}
+					}
+				}
+			}
+
+			HttpHeader :: [Caseless].{
+				DecodeErr := [MissingRequired, BadHeader].{}
+
+				State := { raw : Str }
+
+				parser_for : () -> (State -> Try({ value : output, rest : State }, DecodeErr))
+					where [
+						output.parser_for : HttpHeader -> (State -> Try({ value : output, rest : State }, DecodeErr)),
+					]
+				parser_for = || {
+					Output : output
+
+					parse_output : State -> Try({ value : output, rest : State }, DecodeErr)
+					parse_output = Output.parser_for(HttpHeader.Caseless)
+
+					parse_output
+				}
+
+				parse : Str -> Try(output, DecodeErr)
+					where [
+						output.parser_for : HttpHeader -> (State -> Try({ value : output, rest : State }, DecodeErr)),
+					]
+				parse = |raw| {
+					Output : output
+
+					parse_output = Output.parser_for(HttpHeader.Caseless)
+					parsed = parse_output(State.{ raw })?
+
+					Ok(parsed.value)
+				}
+
+				rename_field : HttpHeader, Str -> Str
+				rename_field = |_, name| HttpHeader.underscores_to_dashes(name)
+
+				parse_str : HttpHeader, State -> Try({ value : Str, rest : State }, DecodeErr)
+				parse_str = |_, state| {
+					value_parts = HttpHeader.take_header_value(state.raw)?
+					Ok({ value: value_parts.value, rest: State.{ raw: value_parts.after } })
+				}
+
+				parse_u64 : HttpHeader, State -> Try({ value : U64, rest : State }, DecodeErr)
+				parse_u64 = |_, state| {
+					value_parts = HttpHeader.take_header_value(state.raw)?
+
+					match u64_from_str(value_parts.value) {
+						Ok(value) => Ok({ value, rest: State.{ raw: value_parts.after } })
+						Err(_) => Err(DecodeErr.BadHeader)
+					}
+				}
+
+				parse_record_field : HttpHeader, FieldName.FieldNames(_shape), State -> Try(
+					[
+						Field({ field : FieldName(_shape), rest : State }),
+						TryField({ name : Str, rest : State }),
+						TryFieldCaseless({ name : Str, rest : State }),
+						Continue({ rest : State }),
+						Done({ rest : State }),
+					],
+					DecodeErr,
+				)
+				parse_record_field = |_, fields, state|
+					HttpHeader.parse_record_field_from_headers(fields, state.raw)
+
+				skip_record_field : HttpHeader, State -> Try(State, DecodeErr)
+				skip_record_field = |_, state| {
+					parts = HttpHeader.take_header_value(state.raw)?
+					Ok(State.{ raw: parts.after })
+				}
+
+				missing_record_field : HttpHeader, Str, State -> DecodeErr
+				missing_record_field = |_, _, _| DecodeErr.MissingRequired
+
+				missing_optional_field : HttpHeader, Str, State -> [Missing]
+				missing_optional_field = |_, _, _| Missing
+
+				parse_record_field_from_headers : FieldName.FieldNames(_shape), Str -> Try(
+					[
+						Field({ field : FieldName(_shape), rest : State }),
+						TryField({ name : Str, rest : State }),
+						TryFieldCaseless({ name : Str, rest : State }),
+						Continue({ rest : State }),
+						Done({ rest : State }),
+					],
+					DecodeErr,
+				)
+				parse_record_field_from_headers = |fields, headers|
+					if Str.is_empty(headers) {
+						Ok(Done({ rest: State.{ raw: "" } }))
+					} else {
+						line_parts = match Str.find_first(headers, "\r\n") {
+							Ok(parts) => parts
+							Err(NotFound) => { before: headers, after: "" }
+						}
+
+						if Str.is_empty(line_parts.before) {
+							Ok(Done({ rest: State.{ raw: line_parts.after } }))
+						} else {
+							match Str.find_first(headers, ":") {
+								Ok({ before: name, after: value_start }) => {
+									name_len = Str.count_utf8_bytes(name)
+									line_len = Str.count_utf8_bytes(line_parts.before)
+
+									if name_len >= line_len {
+										Err(DecodeErr.BadHeader)
+									} else {
+										if name_len < FieldName.FieldNames.shortest_name(fields) {
+											Ok(Continue({ rest: State.{ raw: line_parts.after } }))
+										} else {
+											if name_len > FieldName.FieldNames.longest_name(fields) {
+												Ok(Continue({ rest: State.{ raw: line_parts.after } }))
+											} else {
+												Ok(TryFieldCaseless({
+													name,
+													rest: State.{ raw: value_start },
+												}))
+											}
+										}
+									}
+								}
+
+								Err(NotFound) => Err(DecodeErr.BadHeader)
+							}
+						}
+					}
+
+				take_header_value : Str -> Try({ value : Str, after : Str }, DecodeErr)
+				take_header_value = |raw|
+					match Str.find_first(raw, "\r\n") {
+						Ok({ before, after }) => Ok({ value: Str.trim(before), after })
+						Err(NotFound) => Ok({ value: Str.trim(raw), after: "" })
+					}
+
+				underscores_to_dashes : Str -> Str
+				underscores_to_dashes = |text|
+					match Str.find_first(text, "_") {
+						Ok({ before, after }) =>
+							Str.concat(Str.concat(before, "-"), HttpHeader.underscores_to_dashes(after))
+
+						Err(NotFound) => text
+					}
+			}
+		}
+
+		Str :: [ProvidedByCompiler].{
 		Utf8Problem := [
 			InvalidStartByte,
 			UnexpectedEndOfSequence,
@@ -7665,7 +8296,7 @@ Builtin :: [].{
 
 			## Convert a numeric literal into a [U64]. This is the hook the
 			## compiler uses when a literal is given type [U64]; most code should
-			## parse user text with [U64.from_str] instead.
+			## parse user text with [u64_from_str] instead.
 			from_numeral : Numeral -> Try(U64, [InvalidNumeral(Str)])
 			from_numeral = |numeral| from_numeral_with(numeral, |str| u64_from_str(str))
 
@@ -7673,9 +8304,9 @@ Builtin :: [].{
 			## not a valid non-negative integer, or if the parsed value does not fit
 			## in a [U64] (`0` to `18446744073709551615`).
 			## ```roc
-			## expect U64.from_str("42") == Ok(42)
+			## expect u64_from_str("42") == Ok(42)
 			##
-			## expect U64.from_str("-1") == Err(BadNumStr)
+			## expect u64_from_str("-1") == Err(BadNumStr)
 			## ```
 			from_str : Str -> Try(U64, [BadNumStr, ..])
 
