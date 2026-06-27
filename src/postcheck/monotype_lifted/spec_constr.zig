@@ -442,6 +442,7 @@ const ValueDemand = union(enum) {
     materialize,
     record: []const FieldDemand,
     tuple: []const ItemDemand,
+    tag: TagDemand,
     nominal: *const ValueDemand,
     callable: CallableDemand,
 };
@@ -454,6 +455,10 @@ const FieldDemand = struct {
 const ItemDemand = struct {
     index: u32,
     demand: *const ValueDemand,
+};
+
+const TagDemand = struct {
+    payloads: []const ItemDemand,
 };
 
 const CallableDemand = struct {
@@ -933,6 +938,10 @@ const Pass = struct {
             .none, .materialize => unreachable,
             .record => try self.mergeRecordDemand(existing.record, incoming.record),
             .tuple => try self.mergeTupleDemand(existing.tuple, incoming.tuple),
+            .tag => blk: {
+                const payloads = try self.mergeTupleDemand(existing.tag.payloads, incoming.tag.payloads);
+                break :blk ValueDemand{ .tag = .{ .payloads = payloads.tuple } };
+            },
             .nominal => blk: {
                 const merged = try self.mergeValueDemand(existing.nominal.*, incoming.nominal.*);
                 break :blk ValueDemand{ .nominal = try self.storedDemand(merged) };
@@ -7181,6 +7190,15 @@ fn valueDemandEql(lhs: ValueDemand, rhs: ValueDemand) bool {
             }
             break :blk true;
         },
+        .tag => |lhs_tag| blk: {
+            const rhs_payloads = rhs.tag.payloads;
+            if (lhs_tag.payloads.len != rhs_payloads.len) break :blk false;
+            for (lhs_tag.payloads) |lhs_payload| {
+                const rhs_payload = itemDemandByIndex(rhs_payloads, lhs_payload.index) orelse break :blk false;
+                if (!valueDemandEql(lhs_payload.demand.*, rhs_payload.demand.*)) break :blk false;
+            }
+            break :blk true;
+        },
         .nominal => valueDemandEql(lhs.nominal.*, rhs.nominal.*),
         .callable => |lhs_callable| blk: {
             const rhs_callable = rhs.callable;
@@ -7500,6 +7518,62 @@ fn demandedKnownValueFromDemand(
                 .ty = tuple.ty,
                 .items = try arena.dupe(DemandedKnownIndexedValue, items.items),
             } };
+        },
+        .tag => |tag_demand| blk: {
+            if (known_value == .nominal) {
+                const demanded_backing = (try demandedKnownValueFromDemand(arena, known_value.nominal.backing.*, demand)) orelse break :blk null;
+                const backing = try arena.create(DemandedKnownValue);
+                backing.* = demanded_backing;
+                break :blk DemandedKnownValue{ .nominal = .{
+                    .ty = known_value.nominal.ty,
+                    .backing = backing,
+                } };
+            }
+
+            switch (known_value) {
+                .tag => |tag| {
+                    var payloads = std.ArrayList(DemandedKnownIndexedValue).empty;
+                    defer payloads.deinit(arena);
+                    for (tag.payloads, 0..) |payload, index| {
+                        const payload_demand = itemDemandByIndex(tag_demand.payloads, @intCast(index)) orelse continue;
+                        const demanded_payload = (try demandedKnownValueFromDemand(arena, payload, payload_demand.demand.*)) orelse continue;
+                        try payloads.append(arena, .{
+                            .index = @intCast(index),
+                            .known_value = demanded_payload,
+                        });
+                    }
+                    break :blk DemandedKnownValue{ .tag = .{
+                        .ty = tag.ty,
+                        .name = tag.name,
+                        .payloads = try arena.dupe(DemandedKnownIndexedValue, payloads.items),
+                    } };
+                },
+                .finite_tags => |finite_tags| {
+                    const alternatives = try arena.alloc(DemandedKnownTag, finite_tags.alternatives.len);
+                    for (finite_tags.alternatives, alternatives) |alternative, *out| {
+                        var payloads = std.ArrayList(DemandedKnownIndexedValue).empty;
+                        defer payloads.deinit(arena);
+                        for (alternative.payloads, 0..) |payload, index| {
+                            const payload_demand = itemDemandByIndex(tag_demand.payloads, @intCast(index)) orelse continue;
+                            const demanded_payload = (try demandedKnownValueFromDemand(arena, payload, payload_demand.demand.*)) orelse continue;
+                            try payloads.append(arena, .{
+                                .index = @intCast(index),
+                                .known_value = demanded_payload,
+                            });
+                        }
+                        out.* = .{
+                            .ty = alternative.ty,
+                            .name = alternative.name,
+                            .payloads = try arena.dupe(DemandedKnownIndexedValue, payloads.items),
+                        };
+                    }
+                    break :blk DemandedKnownValue{ .finite_tags = .{
+                        .ty = finite_tags.ty,
+                        .alternatives = alternatives,
+                    } };
+                },
+                else => break :blk null,
+            }
         },
         .nominal => |backing_demand| blk: {
             const nominal = switch (known_value) {
@@ -8342,6 +8416,19 @@ test "value demand equality ignores projection order" {
         .{ .tuple = &tuple_rhs_items },
     ));
 
+    const tag_lhs_payloads = [_]ItemDemand{
+        .{ .index = 2, .demand = &none },
+        .{ .index = 0, .demand = &materialize },
+    };
+    const tag_rhs_payloads = [_]ItemDemand{
+        .{ .index = 0, .demand = &materialize },
+        .{ .index = 2, .demand = &none },
+    };
+    try std.testing.expect(valueDemandEql(
+        .{ .tag = .{ .payloads = &tag_lhs_payloads } },
+        .{ .tag = .{ .payloads = &tag_rhs_payloads } },
+    ));
+
     const record_missing_field = [_]FieldDemand{
         .{ .name = field_a, .demand = &materialize },
     };
@@ -8409,6 +8496,76 @@ test "demanded known value omits tuple siblings" {
     try std.testing.expectEqual(@as(usize, 1), demanded.tuple.items.len);
     try std.testing.expectEqual(@as(u32, 1), demanded.tuple.items[0].index);
     try std.testing.expectEqual(second_ty, demanded.tuple.items[0].known_value.any);
+}
+
+test "demanded known value preserves tag choice without payload demand" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const tag_ty: Type.TypeId = @enumFromInt(70);
+    const first_ty: Type.TypeId = @enumFromInt(71);
+    const second_ty: Type.TypeId = @enumFromInt(72);
+    const tag_name: names.TagNameId = @enumFromInt(4);
+    const payloads = [_]KnownValue{
+        .{ .leaf = first_ty },
+        .{ .any = second_ty },
+    };
+    const known = KnownValue{ .tag = .{
+        .ty = tag_ty,
+        .name = tag_name,
+        .payloads = &payloads,
+    } };
+
+    const demanded = (try demandedKnownValueFromDemand(arena.allocator(), known, .{
+        .tag = .{ .payloads = &.{} },
+    })) orelse return error.TestUnexpectedResult;
+
+    try std.testing.expectEqual(tag_ty, demanded.tag.ty);
+    try std.testing.expectEqual(tag_name, demanded.tag.name);
+    try std.testing.expectEqual(@as(usize, 0), demanded.tag.payloads.len);
+}
+
+test "demanded known value preserves finite tag choices without payload demand" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const tag_ty: Type.TypeId = @enumFromInt(80);
+    const payload_ty: Type.TypeId = @enumFromInt(81);
+    const first_name: names.TagNameId = @enumFromInt(5);
+    const second_name: names.TagNameId = @enumFromInt(6);
+    const first_payloads = [_]KnownValue{
+        .{ .leaf = payload_ty },
+    };
+    const second_payloads = [_]KnownValue{
+        .{ .any = payload_ty },
+    };
+    const alternatives = [_]KnownTag{
+        .{
+            .ty = tag_ty,
+            .name = first_name,
+            .payloads = &first_payloads,
+        },
+        .{
+            .ty = tag_ty,
+            .name = second_name,
+            .payloads = &second_payloads,
+        },
+    };
+    const known = KnownValue{ .finite_tags = .{
+        .ty = tag_ty,
+        .alternatives = &alternatives,
+    } };
+
+    const demanded = (try demandedKnownValueFromDemand(arena.allocator(), known, .{
+        .tag = .{ .payloads = &.{} },
+    })) orelse return error.TestUnexpectedResult;
+
+    try std.testing.expectEqual(tag_ty, demanded.finite_tags.ty);
+    try std.testing.expectEqual(@as(usize, 2), demanded.finite_tags.alternatives.len);
+    try std.testing.expectEqual(first_name, demanded.finite_tags.alternatives[0].name);
+    try std.testing.expectEqual(second_name, demanded.finite_tags.alternatives[1].name);
+    try std.testing.expectEqual(@as(usize, 0), demanded.finite_tags.alternatives[0].payloads.len);
+    try std.testing.expectEqual(@as(usize, 0), demanded.finite_tags.alternatives[1].payloads.len);
 }
 
 test "demanded known value distinguishes omitted capture from unknown carried capture" {
