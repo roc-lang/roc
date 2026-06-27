@@ -1364,6 +1364,7 @@ const Inserter = struct {
             .frames = takeRewriteFrames(path),
             .result = path.result,
         };
+        errdefer if (!queued) self.destroyForwardJoinKeeps(&state.forward_join_keeps);
         self.next_loop_keep_id += 1;
         var carried_body_keep = try state.body_keep.clone();
         defer carried_body_keep.deinit();
@@ -1421,15 +1422,17 @@ const Inserter = struct {
                 else => return,
             };
             const keep = try self.store.allocator.create(OwnedSet);
-            errdefer self.store.allocator.destroy(keep);
+            var keep_stored = false;
+            errdefer if (!keep_stored) self.store.allocator.destroy(keep);
             keep.* = try self.joinBodyOwnedSet(entry_keep, join_stmt.params, join_stmt.maybe_uninitialized_params, join_stmt.body);
-            errdefer keep.deinit();
+            errdefer if (!keep_stored) keep.deinit();
 
-            try owned_sets.append(self.store.allocator, keep);
             try join_keeps.append(self.store.allocator, .{
                 .target = join_stmt.id,
                 .keep = keep,
             });
+            try owned_sets.append(self.store.allocator, keep);
+            keep_stored = true;
             cursor = join_stmt.remainder;
         }
     }
@@ -2170,15 +2173,19 @@ const Inserter = struct {
         _ = self.active_loop_keep_ids.remove(@intFromPtr(&state.body_keep));
         self.destroyFrames(&state.frames);
         if (state.join_keeps.len != 0) self.store.allocator.free(state.join_keeps);
-        for (state.forward_join_keeps.items) |keep| {
-            keep.deinit();
-            self.store.allocator.destroy(keep);
-        }
-        state.forward_join_keeps.deinit(self.store.allocator);
+        self.destroyForwardJoinKeeps(&state.forward_join_keeps);
         state.incoming_owned.deinit();
         state.entry_keep.deinit();
         state.body_keep.deinit();
         self.store.allocator.destroy(state);
+    }
+
+    fn destroyForwardJoinKeeps(self: *Inserter, forward_join_keeps: *std.ArrayList(*OwnedSet)) void {
+        for (forward_join_keeps.items) |keep| {
+            keep.deinit();
+            self.store.allocator.destroy(keep);
+        }
+        forward_join_keeps.deinit(self.store.allocator);
     }
 
     fn destroyRewriteSwitchNoContinuation(self: *Inserter, state: *RewriteSwitchNoContinuationTask) void {
@@ -5346,6 +5353,40 @@ test "RC join loop exit releases body-only list and preserves returned state" {
     try f.expectRc(scratch, 0, 1, 0);
     // The carried state moves out on return.
     try f.expectRc(state, 0, 0, 0);
+}
+
+test "RC join body can jump to forward sibling join" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const source = try f.local(f.list_i64);
+    const state = try f.local(f.list_i64);
+    const forwarded = try f.local(f.list_i64);
+    const loop_id = f.freshJoinPointId();
+    const exit_id = f.freshJoinPointId();
+
+    const exit_body = try f.ret(forwarded);
+    const exit_jump = try f.store.addCFStmt(.{ .jump = .{ .target = exit_id } });
+    const initialize_forwarded = try f.setLocal(forwarded, state, .initialize_join_param, exit_jump);
+
+    const initial_jump = try f.store.addCFStmt(.{ .jump = .{ .target = loop_id } });
+    const initialize_state = try f.setLocal(state, source, .initialize_join_param, initial_jump);
+    const entry = try f.assignList(source, &.{}, initialize_state);
+    const exit_join = try f.store.addCFStmt(.{ .join = .{
+        .id = exit_id,
+        .params = try f.span(&.{forwarded}),
+        .body = exit_body,
+        .remainder = entry,
+    } });
+    const loop_join = try f.store.addCFStmt(.{ .join = .{
+        .id = loop_id,
+        .params = try f.span(&.{state}),
+        .body = initialize_forwarded,
+        .remainder = exit_join,
+    } });
+
+    _ = try f.addProc(&.{}, loop_join, f.list_i64);
+    try f.run();
+    try testing.expectEqual(@as(usize, 0), f.countAllRc());
 }
 
 test "RC maybe-initialized join payload releases conditionally on loop exit" {
