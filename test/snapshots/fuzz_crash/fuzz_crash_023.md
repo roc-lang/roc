@@ -277,9 +277,9 @@ MISSING METHOD - fuzz_crash_023.md:99:3:99:8
 MISSING METHOD - fuzz_crash_023.md:101:3:101:8
 TYPE MISMATCH - fuzz_crash_023.md:84:2:84:2
 DECLARATION HAS NO VALUE - fuzz_crash_023.md:178:47:178:71
+TYPE MISMATCH - fuzz_crash_023.md:150:3:150:6
 TOO FEW ARGS - fuzz_crash_023.md:155:2:157:3
 TYPE MISMATCH - fuzz_crash_023.md:167:3:167:3
-TYPE MISMATCH - fuzz_crash_023.md:178:42:178:45
 DECLARATION HAS NO VALUE - fuzz_crash_023.md:178:47:178:71
 DECLARATION HAS NO VALUE - fuzz_crash_023.md:201:1:201:25
 MISSING METHOD - fuzz_crash_023.md:189:26:189:40
@@ -1070,6 +1070,26 @@ MISSING METHOD - fuzz_crash_023.md:189:26:189:66
     they are published through the host boundary.
 
 
+┌───────────────┐
+│ TYPE MISMATCH ├─ This `return` does not match the function's return type. ──┐
+└┬──────────────┘                                                             │
+ │                                                                            │
+ │  tag # Comment after return statement                                      │
+ │  ‾‾‾                                                                       │
+ └─────────────────────────────────────────────────── fuzz_crash_023.md:150:3 ┘
+
+    It has the type:
+
+        [Blue, ..]
+
+    But the function's return type is:
+
+        Try({}, _d)
+
+    Hint: All `return` statements and the final expression in a function must
+    have the same type.
+
+
 ┌──────────────┐
 │ TOO FEW ARGS ├─ The `match_time` function expects 2 arguments, but it got ──┐
 └┬─────────────┘  1 instead.                                                  │
@@ -1105,22 +1125,6 @@ MISSING METHOD - fuzz_crash_023.md:189:26:189:66
     But `add_one` needs the first argument to be:
 
         U64
-
-
-┌───────────────┐
-│ TYPE MISMATCH ├─ This expression produces a value, but it's not being ──────┐
-└┬──────────────┘  used.                                                      │
- │                                                                            │
- │  record = { foo: 123, bar: "Hello", ;az: tag, qux: Ok(world), punned }     │
- │                                          ‾‾‾                               │
- └────────────────────────────────────────────────── fuzz_crash_023.md:178:42 ┘
-
-    It has the type:
-
-        [Blue, ..]
-
-    Since this expression is used as a statement, it must evaluate to `{}`.
-    If you don't need the value, you can ignore it with `_ =`.
 
 
 ┌──────────────────────────┐
@@ -2539,7 +2543,7 @@ expect {
 					(e-if
 						(if-branches
 							(if-branch
-								(e-dispatch-call (method "is_gt") (constraint-fn-var 5066)
+								(e-dispatch-call (method "is_gt") (constraint-fn-var 5067)
 									(receiver
 										(e-match
 											(match
@@ -2564,7 +2568,7 @@ expect {
 														(value
 															(e-num (value "12"))))))))
 									(args
-										(e-dispatch-call (method "times") (constraint-fn-var 5061)
+										(e-dispatch-call (method "times") (constraint-fn-var 5062)
 											(receiver
 												(e-num (value "5")))
 											(args
@@ -2579,18 +2583,18 @@ expect {
 										(e-if
 											(if-branches
 												(if-branch
-													(e-dispatch-call (method "is_lt") (constraint-fn-var 5183)
+													(e-dispatch-call (method "is_lt") (constraint-fn-var 5184)
 														(receiver
-															(e-dispatch-call (method "plus") (constraint-fn-var 5145)
+															(e-dispatch-call (method "plus") (constraint-fn-var 5146)
 																(receiver
 																	(e-num (value "13")))
 																(args
 																	(e-num (value "2")))))
 														(args
 															(e-num (value "5"))))
-													(e-dispatch-call (method "is_gte") (constraint-fn-var 5292)
+													(e-dispatch-call (method "is_gte") (constraint-fn-var 5293)
 														(receiver
-															(e-dispatch-call (method "minus") (constraint-fn-var 5254)
+															(e-dispatch-call (method "minus") (constraint-fn-var 5255)
 																(receiver
 																	(e-num (value "10")))
 																(args
@@ -2605,11 +2609,11 @@ expect {
 											(builtin)
 											(e-tag (name "True")))))
 								(if-else
-									(e-dispatch-call (method "is_lte") (constraint-fn-var 5411)
+									(e-dispatch-call (method "is_lte") (constraint-fn-var 5412)
 										(receiver
 											(e-num (value "12")))
 										(args
-											(e-dispatch-call (method "div_by") (constraint-fn-var 5406)
+											(e-dispatch-call (method "div_by") (constraint-fn-var 5407)
 												(receiver
 													(e-num (value "3")))
 												(args
@@ -2624,12 +2628,12 @@ expect {
 										(e-match
 											(match
 												(cond
-													(e-dispatch-call (method "next_static_dispatch_method") (constraint-fn-var 5477)
+													(e-dispatch-call (method "next_static_dispatch_method") (constraint-fn-var 5478)
 														(receiver
 															(e-match
 																(match
 																	(cond
-																		(e-dispatch-call (method "static_dispatch_method") (constraint-fn-var 5444)
+																		(e-dispatch-call (method "static_dispatch_method") (constraint-fn-var 5445)
 																			(receiver
 																				(e-match
 																					(match

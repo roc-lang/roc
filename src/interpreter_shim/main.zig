@@ -12,6 +12,7 @@ const eval = @import("eval");
 const ipc = @import("ipc");
 const layout = @import("layout");
 const lir = @import("lir");
+const TargetUsize = @import("base").target.TargetUsize;
 const shim_host_abi = @import("shim_host_abi");
 const shim_io = @import("shim_io");
 
@@ -70,7 +71,9 @@ fn openRuntimeState(gpa: Allocator) RuntimeStateError!RuntimeState {
     if (image_magic != lir.LirImage.MAGIC) return error.InvalidLirImage;
 
     const header: *const lir.LirImage.Header = @ptrCast(@alignCast(shm.base_ptr + header_offset));
-    const view = try lir.LirImage.viewMappedImageWithAllocator(header, shm.base_ptr, shm.total_size, gpa);
+    // The shim interprets the image with native memory layout, so it resolves
+    // the width-independent image for the native pointer width.
+    const view = try lir.LirImage.viewMappedImageWithAllocator(header, shm.base_ptr, shm.total_size, TargetUsize.native, gpa);
 
     return .{
         .shm = shm,
@@ -199,7 +202,7 @@ fn viewEmbeddedLirImage(image_base: *anyopaque, image_len: usize, ops: *RocOps) 
         ops.crash("LIR shim received a non-LIR embedded image");
         return error.ImageUnavailable;
     }
-    return lir.LirImage.viewMappedImageWithAllocator(header, base_ptr, image_len, allocator()) catch {
+    return lir.LirImage.viewMappedImageWithAllocator(header, base_ptr, image_len, TargetUsize.native, allocator()) catch {
         ops.crash("LIR shim could not view the embedded LIR image");
         return error.ImageUnavailable;
     };

@@ -1,6 +1,9 @@
 Builder := {
     value : Str,
     count : U64,
+    # Opt into declared-order layout so the host can mirror this struct's field
+    # order (value before count). Without it, the record lays out structurally.
+    _ : {},
 }.{
     new : Str -> Builder
     new = |val| {
