@@ -667,9 +667,9 @@ The term `runtime image` is banned in new post-check docs and code. Use
 `LirImage` for the contiguous, viewable ARC-inserted LIR image plus layout store
 and entrypoint tables.
 
-The words `publish` and `fact` are banned in new post-check docs and code,
-including their common variants. Use `output` for phase output, or use the
-exact owner/data name.
+The word `publish` and vague data-owner terms are banned in new post-check docs
+and code, including their common variants. Use `output` for phase output, or
+use the exact owner/data name.
 
 The word `physical` is banned in new post-check docs and code. Use `layout`
 only for memory shape data such as size, alignment, field offsets, and payload
@@ -677,7 +677,7 @@ layout. Use `runtime encoding` for the broader category that includes layouts,
 discriminants, callable variant encodings, erased callable code entries, ABI
 shape, and runtime schemas.
 
-The word `artifact` is banned in new post-check docs and code. Use the precise
+Vague owner terms are banned in new post-check docs and code. Use the precise
 owner instead: `CheckedModule`, `CheckedModuleBuilder`, `checked module cache`,
 checked module data, platform relation data, or another exact producer/consumer
 name.
@@ -1366,26 +1366,26 @@ that typing model. Roc keeps the concrete public type `Iter(item)` and the
 concrete public type `Stream(item)`, and different branches that produce
 different adapter chains still unify as one `Iter(item)` or `Stream(item)`.
 
-Roc carries the adapter facts through ordinary function values instead. The
+Roc carries the adapter known_values through ordinary function values instead. The
 step field is a normal callable, and lambda-set solving records the finite set
 of possible step functions plus their captures. The optimizer uses those
-ordinary record, tag, tuple, nominal, callable, and primitive facts to produce
+ordinary record, tag, tuple, nominal, callable, and primitive known_values to produce
 private cursor state. This is how Roc aims for the same optimized result as
 Rust's `Iterator` lowering while keeping Roc's public API purely functional and
 concrete. The adapter chain is neither represented in the user-facing type
 system nor erased into an opaque closure before optimization has had a chance
 to see it.
 
-A known-value fact is optimizer data about what an expression already is. It is
+A known value is optimizer data about what an expression already is. It is
 not a new runtime value and it is not limited to aggregate source syntax. The
-fact model has these categories:
+KnownValue model has these categories:
 
 - unknown value
 - expression leaf, including primitive values and ordinary runtime expressions
-- record, tuple, tag, or nominal constructor with known child facts
-- callable target with known capture facts
+- record, tuple, tag, or nominal constructor with known child known_values
+- callable target with known capture known_values
 
-Records and tuples are only one way to expose child facts. A primitive wrapped
+Records and tuples are only one way to expose child known_values. A primitive wrapped
 in `{ value : primitive }` must not become more optimizable merely because it
 was wrapped. The wrapper can expose a named field, but the primitive leaf itself
 is already valid private state. If a loop's best cursor state is just a `U64`
@@ -1393,22 +1393,22 @@ index, the loop should carry that `U64`; it should not need a synthetic
 single-field record to qualify for specialization.
 
 The lambda set is the key difference from both obvious alternatives. It carries
-the exact callable targets and capture facts that Rust carries in concrete
+the exact callable targets and capture known_values that Rust carries in concrete
 iterator adapter types, but it does so behind the ordinary Roc type
 `Iter(item)`/`Stream(item)`. It also avoids the allocation-heavy erased-closure
 model: when a consumer can see a finite lambda set, the optimizer can split the
 captures into private loop state instead of building a heap wrapper and
 indirectly calling through it. If a value crosses a true materialization
 boundary and only an erased callable remains, the compiler lowers the ordinary
-public value; it must not recover facts later by recognizing builtin names or
-backend artifacts.
+public value; it must not recover known_values later by recognizing builtin names or
+backend output.
 
 The post-check pipeline must not add a separate builtin iterator-plan IR. There
 is no `iter_plan` expression, no iterator-plan side store, and no lowering path
 that recognizes builtin iterator behavior by source names, generated symbols,
 public closure layout, wasm bytes, object bytes, or backend output. If an
-optimization needs constructor or callable facts, it consumes ordinary checked
-direct-call targets, lifted function ids, captures, known-value facts, and type
+optimization needs constructor or callable known_values, it consumes ordinary checked
+direct-call targets, lifted function ids, captures, known values, and type
 data produced by earlier stages.
 
 The existing constructor/callable specialization pass is the owner of this
@@ -1416,10 +1416,10 @@ optimization direction, but the target model is known-value specialization,
 not aggregate-only "shape" handling. It is general over primitive leaves,
 records, tuples, tags, nominals, callables, and ordinary expression leaves;
 `Iter` and `Stream` are important clients, not special cases. Source `for`
-lowering emits ordinary `.iter` and `.next` calls for language semantics. The
+lowering emits ordinary `.iter` and `.next` calls for source meaning. The
 optimizer must not have a second, special iterator lowering for performance.
 
-The known-value specialization engine has one fact model and two outputs:
+The known-value specialization engine has one KnownValue model and two outputs:
 
 1. It rewrites every original Roc function body in place while preserving that
    function's public ABI: the same function id, arguments, captures, return
@@ -1431,11 +1431,11 @@ This separation is required. Local optimizations such as loop-state splitting
 must not depend on whether some caller happened to pass a constructor-valued
 argument. A function taking `I64` should get the same local loop-state
 specialization as the same function taking `{ n : I64 }` when the loop state
-inside the function has the same known facts. Constructor-valued arguments are
+inside the function has the same known values. Constructor-valued arguments are
 only relevant to interprocedural worker ABIs; they are not the permission slip
 for optimizing the callee's own body. More generally, source wrappers must not
 be required to unlock a local optimization. The optimizer should specialize the
-value facts demanded by the body, whether those facts are exposed by fields,
+known values demanded by the body, whether those known_values are exposed by fields,
 lambda captures, tag payloads, or direct primitive leaves.
 
 The pass should therefore operate as a worklist:
@@ -1452,19 +1452,19 @@ The pass should therefore operate as a worklist:
   until the worklist is empty.
 
 There should not be a separate post-clone cleanup pass whose job is to scan the
-finished program and rewrite calls after the fact. Calls are rewritten while
-their containing body is cloned, using the same explicit known-value facts as
+finished program and rewrite calls after cloning. Calls are rewritten while
+their containing body is cloned, using the same explicit known values as
 every other transformation. That keeps the source of truth single and prevents
 one pass from guessing at information another pass already had.
 
-The pass may expose known-value facts through a direct call when the caller is
-currently using that result in a fact-demanding context, such as field access,
+The pass may expose known values through a direct call when the caller is
+currently using that result in a decomposition-demanding context, such as field access,
 tag matching, calling a returned callable, loop-state splitting, or a
 specialized call argument. This uses the ordinary direct-call body and
 preserves argument evaluation order. It must not decide based on method names
 such as `iter`, `append`, `next`, or `map`.
 
-Known-value facts must flow through ordinary local bindings, blocks, `if`,
+Known-known values must flow through ordinary local bindings, blocks, `if`,
 `match`, loop initial values, and loop `continue` values. When branches share a
 common outer constructor, such as an `Iter` record with `len_if_known` and
 `step` fields, the optimizer may keep that outer constructor while leaving
@@ -1474,7 +1474,7 @@ conditions, scrutinees, guards, branch-local `dbg`, `expect`, `crash`, stream
 effects, and appended item expressions remain at their source evaluation
 positions; optimization never replays a declaration body later at a consumer.
 
-When a loop starts with useful known-value facts, the loop parameter may be
+When a loop starts with useful known values, the loop parameter may be
 split into private leaves. For `Iter` and `Stream`, that means the public
 wrapper can disappear from the hot loop. The loop carries private fields such
 as list pointer, index, length, phase, selected callable target, and captured
@@ -1524,12 +1524,12 @@ as an ordinary value, passing it to unspecialized code, or directly observing
 the public result of `Iter.next`/`Stream.next!`. At those boundaries the
 compiler builds the ordinary public record and callable value. That is normal
 lowering, not a cleanup pass. The optimizer wins only when ordinary
-specialization keeps enough facts available at the consuming use.
+specialization keeps enough known_values available at the consuming use.
 
 Finite and infinite iterators use the same public model. An unbounded range or
 custom Fibonacci-style iterator is just a step callable that may never produce
 `Done` unless a later adapter does. Optimized finite consumers may still become
-bounded loops when the facts prove a bound; otherwise they remain ordinary
+bounded loops when the known_values prove a bound; otherwise they remain ordinary
 potentially nonterminating Roc computations.
 
 LIR and backends consume only ordinary values, control flow, calls, committed

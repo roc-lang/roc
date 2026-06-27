@@ -1,4 +1,4 @@
-//! Make calls cheaper when they pass values with known facts to code that
+//! Make calls cheaper when they pass values with known values to code that
 //! immediately takes those values apart.
 //!
 //! The most obvious case is a freshly created tag union value that immediately
@@ -80,7 +80,7 @@
 //! ```
 //!
 //! After wrapper inlining exposes the `Stream` operations, the lifted program has
-//! the same fact as this Roc code. The range is wrapped in a stream record; map
+//! the same known_value as this Roc code. The range is wrapped in a stream record; map
 //! wraps that stream in another stream record; collect loops over that mapped
 //! stream by calling the carried step thunk:
 //!
@@ -140,16 +140,16 @@
 //! }
 //! ```
 //!
-//! In that inlined form, the loop state `$rest` has a known constructor fact:
+//! In that inlined form, the loop state `$rest` has a known constructor known_value:
 //! it is a `Stream` record whose `step!` field is the lifted function created by
 //! `Stream.map`, with captures for the source step thunk and the mapping
-//! function. Each `One` or `Skip` branch constructs the same mapped stream fact
+//! function. Each `One` or `Skip` branch constructs the same mapped stream known_value
 //! for the next iteration. Without this pass, the compiler lowers that as a loop
 //! over a single stream value, repacking stream fields and rebuilding the step
 //! closure before immediately reading them again.
 //!
-//! This pass specializes the collect worker for the known stream fact. Written
-//! in pure Roc terms, the optimized fact is:
+//! This pass specializes the collect worker for the known stream known_value. Written
+//! in pure Roc terms, the optimized known_value is:
 //!
 //! ```roc
 //! starting_plants! = || {
@@ -188,7 +188,7 @@
 //!    rewrite can specialize local loop state even when the function was called
 //!    with only primitive arguments.
 //! 3. While cloning a base body or worker, record direct-call patterns as soon as
-//!    known-fact arguments reach a callee that reads them. Recording a pattern
+//!    known-value arguments reach a callee that reads them. Recording a pattern
 //!    immediately reserves a worker id and pushes a worker job.
 //! 4. Drain the worker worklist by cloning each source body into the reserved
 //!    worker. Known constructor arguments are split into leaves; ordinary
@@ -222,72 +222,72 @@ const names = @import("check").CheckedNames;
 
 const Allocator = std.mem.Allocator;
 
-/// Specialize recursive direct calls whose arguments are known constructor facts.
+/// Specialize recursive direct calls whose arguments are known constructor known_values.
 pub fn run(allocator: Allocator, program: *Ast.Program) Common.LowerError!void {
     var pass = try Pass.init(allocator, program, null);
     defer pass.deinit();
     try pass.run();
 }
 
-/// Specialize with Lambda Solved type data available for checked-call facts.
+/// Specialize with Lambda Solved type data available for checked-call known_values.
 pub fn runWithSolved(allocator: Allocator, solved: *Solved.Program) Common.LowerError!void {
     var pass = try Pass.init(allocator, &solved.lifted, solved);
     defer pass.deinit();
     try pass.run();
 }
 
-const ValueFact = union(enum) {
+const KnownValue = union(enum) {
     any: Type.TypeId,
     leaf: Type.TypeId,
-    tag: TagFact,
-    record: RecordFact,
-    tuple: TupleFact,
-    nominal: NominalFact,
-    callable: CallableFact,
-    finite_tags: FiniteTagsFact,
-    finite_callables: FiniteCallablesFact,
+    tag: KnownTag,
+    record: KnownRecord,
+    tuple: KnownTuple,
+    nominal: KnownNominal,
+    callable: KnownCallable,
+    finite_tags: KnownTags,
+    finite_callables: KnownCallables,
 };
 
-const TagFact = struct {
+const KnownTag = struct {
     ty: Type.TypeId,
     name: names.TagNameId,
-    payloads: []const ValueFact,
+    payloads: []const KnownValue,
 };
 
-const FieldFact = struct {
+const KnownField = struct {
     name: names.RecordFieldNameId,
-    fact: ValueFact,
+    known_value: KnownValue,
 };
 
-const RecordFact = struct {
+const KnownRecord = struct {
     ty: Type.TypeId,
-    fields: []const FieldFact,
+    fields: []const KnownField,
 };
 
-const TupleFact = struct {
+const KnownTuple = struct {
     ty: Type.TypeId,
-    items: []const ValueFact,
+    items: []const KnownValue,
 };
 
-const NominalFact = struct {
+const KnownNominal = struct {
     ty: Type.TypeId,
-    backing: *const ValueFact,
+    backing: *const KnownValue,
 };
 
-const CallableFact = struct {
+const KnownCallable = struct {
     ty: Type.TypeId,
     fn_id: Ast.FnId,
-    captures: []const ValueFact,
+    captures: []const KnownValue,
 };
 
-const FiniteTagsFact = struct {
+const KnownTags = struct {
     ty: Type.TypeId,
-    alternatives: []const TagFact,
+    alternatives: []const KnownTag,
 };
 
-const FiniteCallablesFact = struct {
+const KnownCallables = struct {
     ty: Type.TypeId,
-    alternatives: []const CallableFact,
+    alternatives: []const KnownCallable,
 };
 
 const KnownMatchMode = enum {
@@ -297,7 +297,7 @@ const KnownMatchMode = enum {
 
 const Value = union(enum) {
     expr: Ast.ExprId,
-    expr_with_known_fact: ExprWithKnownFactValue,
+    expr_with_known_value: ExprWithKnownValue,
     let_: LetValue,
     if_: IfValue,
     tag: TagValue,
@@ -309,9 +309,9 @@ const Value = union(enum) {
     finite_callables: FiniteCallablesValue,
 };
 
-const ExprWithKnownFactValue = struct {
+const ExprWithKnownValue = struct {
     expr: Ast.ExprId,
-    fact: ValueFact,
+    known_value: KnownValue,
 };
 
 const LetValue = struct {
@@ -375,7 +375,7 @@ const FiniteCallablesValue = struct {
 };
 
 const CallPattern = struct {
-    args: []const ValueFact,
+    args: []const KnownValue,
 };
 
 const Spec = struct {
@@ -401,7 +401,7 @@ const WorkerJob = struct {
 
 const CallableSpecialization = struct {
     source_fn: Ast.FnId,
-    captures: []const ValueFact,
+    captures: []const KnownValue,
     fn_id: Ast.FnId,
 };
 
@@ -419,7 +419,7 @@ const PendingLet = struct {
     local: Ast.LocalId,
     ty: Type.TypeId,
     value: Ast.ExprId,
-    fact: ?ValueFact = null,
+    known_value: ?KnownValue = null,
 };
 
 const BlockTail = struct {
@@ -428,13 +428,13 @@ const BlockTail = struct {
 };
 
 const LoopPattern = struct {
-    values: []const ValueFact,
-    refinements: []?ValueFact,
+    values: []const KnownValue,
+    refinements: []?KnownValue,
 };
 
 const ActiveInline = struct {
     fn_id: Ast.FnId,
-    args: ?[]const ValueFact = null,
+    args: ?[]const KnownValue = null,
 };
 
 const Pass = struct {
@@ -766,21 +766,21 @@ const Pass = struct {
         const fn_args = self.program.typedLocalSpan(self.program.fns.items[raw].args);
         if (values.len != fn_args.len) Common.invariant("direct call arity differed from lifted function arity");
 
-        const facts = try self.arena.allocator().alloc(ValueFact, values.len);
+        const known_values = try self.arena.allocator().alloc(KnownValue, values.len);
         var has_constructor = false;
         for (values, 0..) |value, index| {
             if (self.plans[raw].used_args[index]) {
-                if (try self.factFromValue(value)) |fact| {
-                    facts[index] = fact;
+                if (try self.knownValueFromValue(value)) |known_value| {
+                    known_values[index] = known_value;
                     has_constructor = true;
                     continue;
                 }
             }
-            facts[index] = .{ .any = valueType(self.program, value) };
+            known_values[index] = .{ .any = valueType(self.program, value) };
         }
         if (!has_constructor) return;
 
-        const pattern: CallPattern = .{ .args = facts };
+        const pattern: CallPattern = .{ .args = known_values };
         for (self.plans[raw].specs.items) |spec| {
             if (patternEql(self.program, spec.pattern, pattern)) return;
         }
@@ -847,7 +847,7 @@ const Pass = struct {
         try self.copyProcDebugName(source_fn.symbol, symbol);
     }
 
-    fn constructorFact(self: *Pass, expr_id: Ast.ExprId) Allocator.Error!?ValueFact {
+    fn constructorKnownValue(self: *Pass, expr_id: Ast.ExprId) Allocator.Error!?KnownValue {
         const expr = self.program.exprs.items[@intFromEnum(expr_id)];
         return switch (expr.data) {
             .unit,
@@ -858,52 +858,52 @@ const Pass = struct {
             .str_lit,
             .static_data,
             .list,
-            => ValueFact{ .leaf = expr.ty },
+            => KnownValue{ .leaf = expr.ty },
             .tag => |tag| blk: {
                 const payloads = self.program.exprSpan(tag.payloads);
-                const facts = try self.arena.allocator().alloc(ValueFact, payloads.len);
+                const known_values = try self.arena.allocator().alloc(KnownValue, payloads.len);
                 for (payloads, 0..) |payload, index| {
-                    facts[index] = (try self.constructorFact(payload)) orelse
+                    known_values[index] = (try self.constructorKnownValue(payload)) orelse
                         .{ .any = self.program.exprs.items[@intFromEnum(payload)].ty };
                 }
-                break :blk ValueFact{ .tag = .{
+                break :blk KnownValue{ .tag = .{
                     .ty = expr.ty,
                     .name = tag.name,
-                    .payloads = facts,
+                    .payloads = known_values,
                 } };
             },
             .record => |fields_span| blk: {
                 const fields = self.program.fieldExprSpan(fields_span);
-                const facts = try self.arena.allocator().alloc(FieldFact, fields.len);
+                const known_values = try self.arena.allocator().alloc(KnownField, fields.len);
                 for (fields, 0..) |field, index| {
-                    facts[index] = .{
+                    known_values[index] = .{
                         .name = field.name,
-                        .fact = (try self.constructorFact(field.value)) orelse
+                        .known_value = (try self.constructorKnownValue(field.value)) orelse
                             .{ .any = self.program.exprs.items[@intFromEnum(field.value)].ty },
                     };
                 }
-                break :blk ValueFact{ .record = .{
+                break :blk KnownValue{ .record = .{
                     .ty = expr.ty,
-                    .fields = facts,
+                    .fields = known_values,
                 } };
             },
             .tuple => |items_span| blk: {
                 const items = self.program.exprSpan(items_span);
-                const facts = try self.arena.allocator().alloc(ValueFact, items.len);
+                const known_values = try self.arena.allocator().alloc(KnownValue, items.len);
                 for (items, 0..) |item, index| {
-                    facts[index] = (try self.constructorFact(item)) orelse
+                    known_values[index] = (try self.constructorKnownValue(item)) orelse
                         .{ .any = self.program.exprs.items[@intFromEnum(item)].ty };
                 }
-                break :blk ValueFact{ .tuple = .{
+                break :blk KnownValue{ .tuple = .{
                     .ty = expr.ty,
-                    .items = facts,
+                    .items = known_values,
                 } };
             },
             .nominal => |backing| blk: {
-                const backing_fact = (try self.constructorFact(backing)) orelse break :blk null;
-                const stored = try self.arena.allocator().create(ValueFact);
-                stored.* = backing_fact;
-                break :blk ValueFact{ .nominal = .{
+                const backing_known_value = (try self.constructorKnownValue(backing)) orelse break :blk null;
+                const stored = try self.arena.allocator().create(KnownValue);
+                stored.* = backing_known_value;
+                break :blk KnownValue{ .nominal = .{
                     .ty = expr.ty,
                     .backing = stored,
                 } };
@@ -911,104 +911,104 @@ const Pass = struct {
             .fn_ref => |fn_id| blk: {
                 const fn_ = self.program.fns.items[@intFromEnum(fn_id)];
                 const captures = self.program.typedLocalSpan(fn_.captures);
-                const capture_facts = try self.arena.allocator().alloc(ValueFact, captures.len);
+                const capture_known_values = try self.arena.allocator().alloc(KnownValue, captures.len);
                 for (captures, 0..) |capture, index| {
-                    capture_facts[index] = .{ .any = capture.ty };
+                    capture_known_values[index] = .{ .any = capture.ty };
                 }
-                break :blk ValueFact{ .callable = .{
+                break :blk KnownValue{ .callable = .{
                     .ty = expr.ty,
                     .fn_id = fn_id,
-                    .captures = capture_facts,
+                    .captures = capture_known_values,
                 } };
             },
             else => null,
         };
     }
 
-    fn factFromValue(self: *Pass, value: Value) Allocator.Error!?ValueFact {
+    fn knownValueFromValue(self: *Pass, value: Value) Allocator.Error!?KnownValue {
         return switch (value) {
-            .expr => |expr| try self.constructorFact(expr),
-            .expr_with_known_fact => |known_fact_expr| known_fact_expr.fact,
-            .let_ => |let_value| try self.factFromValue(let_value.body.*),
+            .expr => |expr| try self.constructorKnownValue(expr),
+            .expr_with_known_value => |known_value_expr| known_value_expr.known_value,
+            .let_ => |let_value| try self.knownValueFromValue(let_value.body.*),
             .if_ => |if_value| blk: {
-                var joined: ?ValueFact = null;
+                var joined: ?KnownValue = null;
                 for (if_value.branches) |branch| {
-                    const branch_fact = (try self.factFromValue(branch.body)) orelse break :blk null;
+                    const branch_known_value = (try self.knownValueFromValue(branch.body)) orelse break :blk null;
                     joined = if (joined) |existing|
-                        (try joinFactsInArena(self.program, self.arena.allocator(), existing, branch_fact)) orelse break :blk null
+                        (try joinKnownValuesInArena(self.program, self.arena.allocator(), existing, branch_known_value)) orelse break :blk null
                     else
-                        branch_fact;
+                        branch_known_value;
                 }
-                const final_fact = (try self.factFromValue(if_value.final_else.*)) orelse break :blk null;
+                const final_known_value = (try self.knownValueFromValue(if_value.final_else.*)) orelse break :blk null;
                 break :blk if (joined) |existing|
-                    (try joinFactsInArena(self.program, self.arena.allocator(), existing, final_fact)) orelse null
+                    (try joinKnownValuesInArena(self.program, self.arena.allocator(), existing, final_known_value)) orelse null
                 else
-                    final_fact;
+                    final_known_value;
             },
             .tag => |tag| blk: {
-                const payloads = try self.arena.allocator().alloc(ValueFact, tag.payloads.len);
+                const payloads = try self.arena.allocator().alloc(KnownValue, tag.payloads.len);
                 for (tag.payloads, 0..) |payload, index| {
-                    payloads[index] = (try self.factFromValue(payload)) orelse
+                    payloads[index] = (try self.knownValueFromValue(payload)) orelse
                         .{ .any = valueType(self.program, payload) };
                 }
-                break :blk ValueFact{ .tag = .{
+                break :blk KnownValue{ .tag = .{
                     .ty = tag.ty,
                     .name = tag.name,
                     .payloads = payloads,
                 } };
             },
             .record => |record| blk: {
-                const fields = try self.arena.allocator().alloc(FieldFact, record.fields.len);
+                const fields = try self.arena.allocator().alloc(KnownField, record.fields.len);
                 for (record.fields, 0..) |field, index| {
                     fields[index] = .{
                         .name = field.name,
-                        .fact = (try self.factFromValue(field.value)) orelse
+                        .known_value = (try self.knownValueFromValue(field.value)) orelse
                             .{ .any = valueType(self.program, field.value) },
                     };
                 }
-                break :blk ValueFact{ .record = .{
+                break :blk KnownValue{ .record = .{
                     .ty = record.ty,
                     .fields = fields,
                 } };
             },
             .tuple => |tuple| blk: {
-                const items = try self.arena.allocator().alloc(ValueFact, tuple.items.len);
+                const items = try self.arena.allocator().alloc(KnownValue, tuple.items.len);
                 for (tuple.items, 0..) |item, index| {
-                    items[index] = (try self.factFromValue(item)) orelse
+                    items[index] = (try self.knownValueFromValue(item)) orelse
                         .{ .any = valueType(self.program, item) };
                 }
-                break :blk ValueFact{ .tuple = .{
+                break :blk KnownValue{ .tuple = .{
                     .ty = tuple.ty,
                     .items = items,
                 } };
             },
             .nominal => |nominal| blk: {
-                const backing_fact = (try self.factFromValue(nominal.backing.*)) orelse break :blk null;
-                const stored = try self.arena.allocator().create(ValueFact);
-                stored.* = backing_fact;
-                break :blk ValueFact{ .nominal = .{
+                const backing_known_value = (try self.knownValueFromValue(nominal.backing.*)) orelse break :blk null;
+                const stored = try self.arena.allocator().create(KnownValue);
+                stored.* = backing_known_value;
+                break :blk KnownValue{ .nominal = .{
                     .ty = nominal.ty,
                     .backing = stored,
                 } };
             },
             .callable => |callable| blk: {
-                const captures = try self.arena.allocator().alloc(ValueFact, callable.captures.len);
+                const captures = try self.arena.allocator().alloc(KnownValue, callable.captures.len);
                 for (callable.captures, 0..) |capture, index| {
-                    captures[index] = (try self.factFromValue(capture)) orelse
+                    captures[index] = (try self.knownValueFromValue(capture)) orelse
                         .{ .any = valueType(self.program, capture) };
                 }
-                break :blk ValueFact{ .callable = .{
+                break :blk KnownValue{ .callable = .{
                     .ty = callable.ty,
                     .fn_id = callable.fn_id,
                     .captures = captures,
                 } };
             },
             .finite_tags => |finite_tags| blk: {
-                const alternatives = try self.arena.allocator().alloc(TagFact, finite_tags.alternatives.len);
+                const alternatives = try self.arena.allocator().alloc(KnownTag, finite_tags.alternatives.len);
                 for (finite_tags.alternatives, alternatives) |alternative, *out| {
-                    const payloads = try self.arena.allocator().alloc(ValueFact, alternative.payloads.len);
+                    const payloads = try self.arena.allocator().alloc(KnownValue, alternative.payloads.len);
                     for (alternative.payloads, payloads) |payload, *payload_out| {
-                        payload_out.* = (try self.factFromValue(payload)) orelse
+                        payload_out.* = (try self.knownValueFromValue(payload)) orelse
                             .{ .any = valueType(self.program, payload) };
                     }
                     out.* = .{
@@ -1017,17 +1017,17 @@ const Pass = struct {
                         .payloads = payloads,
                     };
                 }
-                break :blk ValueFact{ .finite_tags = .{
+                break :blk KnownValue{ .finite_tags = .{
                     .ty = finite_tags.ty,
                     .alternatives = alternatives,
                 } };
             },
             .finite_callables => |finite_callables| blk: {
-                const alternatives = try self.arena.allocator().alloc(CallableFact, finite_callables.alternatives.len);
+                const alternatives = try self.arena.allocator().alloc(KnownCallable, finite_callables.alternatives.len);
                 for (finite_callables.alternatives, alternatives) |alternative, *out| {
-                    const captures = try self.arena.allocator().alloc(ValueFact, alternative.captures.len);
+                    const captures = try self.arena.allocator().alloc(KnownValue, alternative.captures.len);
                     for (alternative.captures, captures) |capture, *capture_out| {
-                        capture_out.* = (try self.factFromValue(capture)) orelse
+                        capture_out.* = (try self.knownValueFromValue(capture)) orelse
                             .{ .any = valueType(self.program, capture) };
                     }
                     out.* = .{
@@ -1036,7 +1036,7 @@ const Pass = struct {
                         .captures = captures,
                     };
                 }
-                break :blk ValueFact{ .finite_callables = .{
+                break :blk KnownValue{ .finite_callables = .{
                     .ty = finite_callables.ty,
                     .alternatives = alternatives,
                 } };
@@ -1135,16 +1135,16 @@ const Cloner = struct {
         var args = std.ArrayList(Ast.TypedLocal).empty;
         defer args.deinit(self.pass.allocator);
 
-        for (source_args, self.pattern.args) |source_arg, fact| {
-            const value = try self.valueFromFactArgs(fact, &args);
+        for (source_args, self.pattern.args) |source_arg, known_value| {
+            const value = try self.valueFromKnownValueArgs(known_value, &args);
             try self.putSubst(source_arg.local, value);
         }
 
         return try self.pass.program.addTypedLocalSpan(args.items);
     }
 
-    fn valueFromFactArgs(self: *Cloner, fact: ValueFact, args: *std.ArrayList(Ast.TypedLocal)) Allocator.Error!Value {
-        switch (fact) {
+    fn valueFromKnownValueArgs(self: *Cloner, known_value: KnownValue, args: *std.ArrayList(Ast.TypedLocal)) Allocator.Error!Value {
+        switch (known_value) {
             .any => |ty| {
                 const local = try self.pass.program.addLocal(self.pass.symbols.fresh(), ty);
                 try args.append(self.pass.allocator, .{ .local = local, .ty = ty });
@@ -1164,7 +1164,7 @@ const Cloner = struct {
             .tag => |tag| {
                 const payloads = try self.pass.arena.allocator().alloc(Value, tag.payloads.len);
                 for (tag.payloads, 0..) |payload, index| {
-                    payloads[index] = try self.valueFromFactArgs(payload, args);
+                    payloads[index] = try self.valueFromKnownValueArgs(payload, args);
                 }
                 return .{ .tag = .{
                     .ty = tag.ty,
@@ -1177,7 +1177,7 @@ const Cloner = struct {
                 for (record.fields, 0..) |field, index| {
                     fields[index] = .{
                         .name = field.name,
-                        .value = try self.valueFromFactArgs(field.fact, args),
+                        .value = try self.valueFromKnownValueArgs(field.known_value, args),
                     };
                 }
                 return .{ .record = .{
@@ -1188,7 +1188,7 @@ const Cloner = struct {
             .tuple => |tuple| {
                 const items = try self.pass.arena.allocator().alloc(Value, tuple.items.len);
                 for (tuple.items, 0..) |item, index| {
-                    items[index] = try self.valueFromFactArgs(item, args);
+                    items[index] = try self.valueFromKnownValueArgs(item, args);
                 }
                 return .{ .tuple = .{
                     .ty = tuple.ty,
@@ -1197,7 +1197,7 @@ const Cloner = struct {
             },
             .nominal => |nominal| {
                 const backing = try self.pass.arena.allocator().create(Value);
-                backing.* = try self.valueFromFactArgs(nominal.backing.*, args);
+                backing.* = try self.valueFromKnownValueArgs(nominal.backing.*, args);
                 return .{ .nominal = .{
                     .ty = nominal.ty,
                     .backing = backing,
@@ -1206,7 +1206,7 @@ const Cloner = struct {
             .callable => |callable| {
                 const captures = try self.pass.arena.allocator().alloc(Value, callable.captures.len);
                 for (callable.captures, 0..) |capture, index| {
-                    captures[index] = try self.valueFromFactArgs(capture, args);
+                    captures[index] = try self.valueFromKnownValueArgs(capture, args);
                 }
                 return .{ .callable = .{
                     .ty = callable.ty,
@@ -1226,8 +1226,8 @@ const Cloner = struct {
                 const alternatives = try self.pass.arena.allocator().alloc(TagValue, finite_tags.alternatives.len);
                 for (finite_tags.alternatives, alternatives) |alternative, *out| {
                     const payloads = try self.pass.arena.allocator().alloc(Value, alternative.payloads.len);
-                    for (alternative.payloads, payloads) |payload_fact, *payload_out| {
-                        payload_out.* = try self.valueFromFactArgs(payload_fact, args);
+                    for (alternative.payloads, payloads) |payload_known_value, *payload_out| {
+                        payload_out.* = try self.valueFromKnownValueArgs(payload_known_value, args);
                     }
                     out.* = .{
                         .ty = alternative.ty,
@@ -1254,8 +1254,8 @@ const Cloner = struct {
                 const alternatives = try self.pass.arena.allocator().alloc(CallableValue, finite_callables.alternatives.len);
                 for (finite_callables.alternatives, alternatives) |alternative, *out| {
                     const captures = try self.pass.arena.allocator().alloc(Value, alternative.captures.len);
-                    for (alternative.captures, captures) |capture_fact, *capture_out| {
-                        capture_out.* = try self.valueFromFactArgs(capture_fact, args);
+                    for (alternative.captures, captures) |capture_known_value, *capture_out| {
+                        capture_out.* = try self.valueFromKnownValueArgs(capture_known_value, args);
                     }
                     out.* = .{
                         .ty = alternative.ty,
@@ -1307,7 +1307,7 @@ const Cloner = struct {
                 defer self.pass.allocator.free(payload_exprs);
                 const payloads = try self.pass.arena.allocator().alloc(Value, payload_exprs.len);
                 for (payload_exprs, 0..) |payload, index| {
-                    payloads[index] = try self.cloneExprValueDemandingFact(payload);
+                    payloads[index] = try self.cloneExprValueDemandingKnownValue(payload);
                 }
                 return .{ .tag = .{
                     .ty = expr.ty,
@@ -1322,7 +1322,7 @@ const Cloner = struct {
                 for (source_fields, 0..) |field, index| {
                     fields[index] = .{
                         .name = field.name,
-                        .value = try self.cloneExprValueDemandingFact(field.value),
+                        .value = try self.cloneExprValueDemandingKnownValue(field.value),
                     };
                 }
                 return .{ .record = .{
@@ -1335,7 +1335,7 @@ const Cloner = struct {
                 defer self.pass.allocator.free(source_items);
                 const items = try self.pass.arena.allocator().alloc(Value, source_items.len);
                 for (source_items, 0..) |item, index| {
-                    items[index] = try self.cloneExprValueDemandingFact(item);
+                    items[index] = try self.cloneExprValueDemandingKnownValue(item);
                 }
                 return .{ .tuple = .{
                     .ty = expr.ty,
@@ -1343,7 +1343,7 @@ const Cloner = struct {
                 } };
             },
             .nominal => |backing| {
-                const backing_value = try self.cloneExprValueDemandingFact(backing);
+                const backing_value = try self.cloneExprValueDemandingKnownValue(backing);
                 return .{ .nominal = .{
                     .ty = expr.ty,
                     .backing = try self.copyValue(backing_value),
@@ -1351,7 +1351,7 @@ const Cloner = struct {
             },
             .let_ => |let_| return try self.cloneLetValue(let_),
             .field_access => |field| {
-                const receiver = try self.cloneExprValueDemandingFact(field.receiver);
+                const receiver = try self.cloneExprValueDemandingKnownValue(field.receiver);
                 if (try self.fieldFromKnownValue(receiver, field.field)) |value| return value;
                 if (try self.solvedSingleCallable(expr_id)) |callable| return callable;
                 return .{ .expr = try self.addExpr(.{ .ty = expr.ty, .data = .{ .field_access = .{
@@ -1360,7 +1360,7 @@ const Cloner = struct {
                 } } }) };
             },
             .tuple_access => |access| {
-                const receiver = try self.cloneExprValueDemandingFact(access.tuple);
+                const receiver = try self.cloneExprValueDemandingKnownValue(access.tuple);
                 if (try self.itemFromKnownValue(receiver, access.elem_index)) |value| return value;
                 if (try self.solvedSingleCallable(expr_id)) |callable| return callable;
                 return .{ .expr = try self.addExpr(.{ .ty = expr.ty, .data = .{ .tuple_access = .{
@@ -1369,24 +1369,24 @@ const Cloner = struct {
                 } } }) };
             },
             .match_ => |match| {
-                const scrutinee = try self.cloneExprValueDemandingFact(match.scrutinee);
+                const scrutinee = try self.cloneExprValueDemandingKnownValue(match.scrutinee);
                 if (try self.simplifyKnownMatchValue(expr.ty, scrutinee, match.branches)) |value| return value;
                 const scrutinee_expr = try self.materialize(scrutinee);
                 if (try self.cloneCaseOfCaseValue(expr.ty, scrutinee_expr, match.branches)) |value| return value;
-                const scrutinee_fact = try self.pass.factFromValue(scrutinee);
-                return try self.cloneMatchJoinedValue(expr.ty, scrutinee_expr, match, scrutinee_fact);
+                const scrutinee_known_value = try self.pass.knownValueFromValue(scrutinee);
+                return try self.cloneMatchJoinedValue(expr.ty, scrutinee_expr, match, scrutinee_known_value);
             },
             .if_ => |if_| return try self.cloneIfValue(expr.ty, if_),
             .block => |block| return try self.cloneBlockValue(expr.ty, block),
             .call_value => |call| {
-                const callee = try self.cloneExprValueDemandingFact(call.callee);
+                const callee = try self.cloneExprValueDemandingKnownValue(call.callee);
                 return try self.callKnownValue(expr.ty, callee, call.args, false);
             },
             .call_proc => |call| {
                 if (call.is_cold) return .{ .expr = try self.cloneExprPlain(expr_id) };
                 if (!self.inline_direct_calls) return .{ .expr = try self.cloneExprPlain(expr_id) };
-                const has_known_fact_arg = try self.directCallHasKnownFactArg(call.args);
-                if (self.inline_direct_requires_known_arg and !has_known_fact_arg) {
+                const has_known_value_arg = try self.directCallHasKnownValueArg(call.args);
+                if (self.inline_direct_requires_known_arg and !has_known_value_arg) {
                     return .{ .expr = try self.cloneExprPlain(expr_id) };
                 }
                 return try self.inlineDirectCallValue(
@@ -1400,11 +1400,11 @@ const Cloner = struct {
         }
     }
 
-    fn cloneExprValueDemandingFact(self: *Cloner, expr_id: Ast.ExprId) Common.LowerError!Value {
+    fn cloneExprValueDemandingKnownValue(self: *Cloner, expr_id: Ast.ExprId) Common.LowerError!Value {
         const expr = self.pass.program.exprs.items[@intFromEnum(expr_id)];
         switch (expr.data) {
             .call_value => |call| {
-                const callee = try self.cloneExprValueDemandingFact(call.callee);
+                const callee = try self.cloneExprValueDemandingKnownValue(call.callee);
                 return try self.callKnownValue(expr.ty, callee, call.args, true);
             },
             .call_proc => |call| {
@@ -1417,38 +1417,38 @@ const Cloner = struct {
                     true,
                 );
             },
-            .block => |block| return try self.cloneBlockValueDemandingFact(expr.ty, block),
-            .comptime_branch_taken => |taken| return try self.cloneExprValueDemandingFact(taken.body),
+            .block => |block| return try self.cloneBlockValueDemandingKnownValue(expr.ty, block),
+            .comptime_branch_taken => |taken| return try self.cloneExprValueDemandingKnownValue(taken.body),
             else => return try self.cloneExprValue(expr_id),
         }
     }
 
-    fn directCallHasKnownFactArg(self: *Cloner, args_span: Ast.Span(Ast.ExprId)) Allocator.Error!bool {
+    fn directCallHasKnownValueArg(self: *Cloner, args_span: Ast.Span(Ast.ExprId)) Allocator.Error!bool {
         for (self.pass.program.exprSpan(args_span)) |arg| {
-            if (try self.exprHasKnownFact(arg)) return true;
+            if (try self.exprHasKnownValue(arg)) return true;
         }
         return false;
     }
 
-    fn directCallActiveArgFacts(self: *Cloner, args_span: Ast.Span(Ast.ExprId)) Allocator.Error![]const ValueFact {
+    fn directCallActiveArgKnownValues(self: *Cloner, args_span: Ast.Span(Ast.ExprId)) Allocator.Error![]const KnownValue {
         const args = self.pass.program.exprSpan(args_span);
-        const facts = try self.pass.arena.allocator().alloc(ValueFact, args.len);
+        const known_values = try self.pass.arena.allocator().alloc(KnownValue, args.len);
         for (args, 0..) |arg, index| {
-            facts[index] = (try self.exprKnownFactNoInline(arg)) orelse .{
+            known_values[index] = (try self.exprKnownValueNoInline(arg)) orelse .{
                 .any = self.pass.program.exprs.items[@intFromEnum(arg)].ty,
             };
         }
-        return facts;
+        return known_values;
     }
 
-    fn exprKnownFactNoInline(self: *Cloner, expr_id: Ast.ExprId) Allocator.Error!?ValueFact {
+    fn exprKnownValueNoInline(self: *Cloner, expr_id: Ast.ExprId) Allocator.Error!?KnownValue {
         const expr = self.pass.program.exprs.items[@intFromEnum(expr_id)];
         return switch (expr.data) {
             .local => |local| if (self.subst.get(local)) |value|
-                try self.pass.factFromValue(value)
+                try self.pass.knownValueFromValue(value)
             else
                 null,
-            .fn_ref => |fn_id| try self.callableFact(expr.ty, fn_id),
+            .fn_ref => |fn_id| try self.knownCallable(expr.ty, fn_id),
             .tag,
             .record,
             .tuple,
@@ -1461,29 +1461,29 @@ const Cloner = struct {
             .str_lit,
             .static_data,
             .list,
-            => try self.pass.constructorFact(expr_id),
+            => try self.pass.constructorKnownValue(expr_id),
             .field_access => |field| blk: {
                 const receiver_local = localExpr(self.pass.program, field.receiver) orelse break :blk null;
                 const receiver = self.subst.get(receiver_local) orelse break :blk null;
                 const value = fieldFromValue(receiver, field.field) orelse break :blk null;
-                break :blk try self.pass.factFromValue(value);
+                break :blk try self.pass.knownValueFromValue(value);
             },
             .tuple_access => |access| blk: {
                 const tuple_local = localExpr(self.pass.program, access.tuple) orelse break :blk null;
                 const tuple = self.subst.get(tuple_local) orelse break :blk null;
                 const value = itemFromValue(tuple, access.elem_index) orelse break :blk null;
-                break :blk try self.pass.factFromValue(value);
+                break :blk try self.pass.knownValueFromValue(value);
             },
-            .comptime_branch_taken => |taken| try self.exprKnownFactNoInline(taken.body),
+            .comptime_branch_taken => |taken| try self.exprKnownValueNoInline(taken.body),
             else => null,
         };
     }
 
-    fn exprHasKnownFact(self: *Cloner, expr_id: Ast.ExprId) Allocator.Error!bool {
+    fn exprHasKnownValue(self: *Cloner, expr_id: Ast.ExprId) Allocator.Error!bool {
         const expr = self.pass.program.exprs.items[@intFromEnum(expr_id)];
         return switch (expr.data) {
             .local => |local| if (self.subst.get(local)) |value|
-                (try self.pass.factFromValue(value)) != null
+                (try self.pass.knownValueFromValue(value)) != null
             else
                 false,
             .fn_ref => true,
@@ -1499,21 +1499,21 @@ const Cloner = struct {
             .str_lit,
             .static_data,
             .list,
-            => (try self.pass.constructorFact(expr_id)) != null,
+            => (try self.pass.constructorKnownValue(expr_id)) != null,
             .static_data_candidate => true,
             .field_access => |field| blk: {
                 const receiver_local = localExpr(self.pass.program, field.receiver) orelse break :blk false;
                 const receiver = self.subst.get(receiver_local) orelse break :blk false;
                 const value = fieldFromValue(receiver, field.field) orelse break :blk false;
-                break :blk (try self.pass.factFromValue(value)) != null;
+                break :blk (try self.pass.knownValueFromValue(value)) != null;
             },
             .tuple_access => |access| blk: {
                 const tuple_local = localExpr(self.pass.program, access.tuple) orelse break :blk false;
                 const tuple = self.subst.get(tuple_local) orelse break :blk false;
                 const value = itemFromValue(tuple, access.elem_index) orelse break :blk false;
-                break :blk (try self.pass.factFromValue(value)) != null;
+                break :blk (try self.pass.knownValueFromValue(value)) != null;
             },
-            .comptime_branch_taken => |taken| try self.exprHasKnownFact(taken.body),
+            .comptime_branch_taken => |taken| try self.exprHasKnownValue(taken.body),
             .comptime_exhaustiveness_failed => false,
             else => false,
         };
@@ -1572,7 +1572,7 @@ const Cloner = struct {
                 }
                 break :blk true;
             },
-            .expr_with_known_fact => |known_fact_expr| self.exprCanSubstitute(known_fact_expr.expr),
+            .expr_with_known_value => |known_value_expr| self.exprCanSubstitute(known_value_expr.expr),
         };
     }
 
@@ -1615,13 +1615,13 @@ const Cloner = struct {
         } };
     }
 
-    fn callableFact(self: *Cloner, ty: Type.TypeId, fn_id: Ast.FnId) Allocator.Error!ValueFact {
+    fn knownCallable(self: *Cloner, ty: Type.TypeId, fn_id: Ast.FnId) Allocator.Error!KnownValue {
         const fn_ = self.pass.program.fns.items[@intFromEnum(fn_id)];
         const source_captures = self.pass.program.typedLocalSpan(fn_.captures);
-        const captures = try self.pass.arena.allocator().alloc(ValueFact, source_captures.len);
+        const captures = try self.pass.arena.allocator().alloc(KnownValue, source_captures.len);
         for (source_captures, 0..) |capture, index| {
             captures[index] = if (self.subst.get(capture.local)) |value|
-                (try self.pass.factFromValue(value)) orelse .{ .any = valueType(self.pass.program, value) }
+                (try self.pass.knownValueFromValue(value)) orelse .{ .any = valueType(self.pass.program, value) }
             else
                 .{ .any = capture.ty };
         }
@@ -1773,7 +1773,7 @@ const Cloner = struct {
     }
 
     fn cloneLetValue(self: *Cloner, let_: anytype) Common.LowerError!Value {
-        const raw_value = try self.cloneExprValueDemandingFact(let_.value);
+        const raw_value = try self.cloneExprValueDemandingKnownValue(let_.value);
         var pending_lets = std.ArrayList(PendingLet).empty;
         defer pending_lets.deinit(self.pass.allocator);
 
@@ -1781,7 +1781,7 @@ const Cloner = struct {
         var value = raw_value;
         while (value == .let_) {
             try pending_lets.appendSlice(self.pass.allocator, value.let_.lets);
-            try self.bindPendingLetFacts(value.let_.lets);
+            try self.bindPendingLetKnownValues(value.let_.lets);
             value = value.let_.body.*;
         }
 
@@ -1803,7 +1803,7 @@ const Cloner = struct {
 
         const value_expr = try self.materialize(raw_value);
         const change_start = self.changes.items.len;
-        if (try self.bindPatToMaterializedFact(let_.bind, raw_value)) {
+        if (try self.bindPatToMaterializedKnownValue(let_.bind, raw_value)) {
             const rest_value = try self.cloneExprValue(let_.rest);
             const rest = try self.materialize(rest_value);
             self.restore(change_start);
@@ -1837,7 +1837,7 @@ const Cloner = struct {
             self.restore(change_start);
             break :blk cloned;
         } else blk: {
-            if (try self.bindPatToMaterializedFact(let_.bind, value)) {
+            if (try self.bindPatToMaterializedKnownValue(let_.bind, value)) {
                 const cloned = try self.cloneExpr(let_.rest);
                 self.restore(change_start);
                 break :blk cloned;
@@ -1957,7 +1957,7 @@ const Cloner = struct {
         const values = try self.pass.allocator.alloc(Value, initial_values.len);
         defer self.pass.allocator.free(values);
         for (initial_values, 0..) |initial, index| {
-            values[index] = try self.cloneExprValueDemandingFact(initial);
+            values[index] = try self.cloneExprValueDemandingKnownValue(initial);
         }
         return try self.cloneLoopFromInitialValues(ty, loop, params, values);
     }
@@ -1972,19 +1972,19 @@ const Cloner = struct {
         if (try self.cloneLoopUnwrappedLet(ty, loop, params, values)) |unwrapped| return unwrapped;
         if (try self.cloneLoopDistributedIf(ty, loop, params, values)) |distributed| return distributed;
 
-        const facts = try self.pass.arena.allocator().alloc(ValueFact, values.len);
+        const known_values = try self.pass.arena.allocator().alloc(KnownValue, values.len);
         var has_constructor = false;
         for (values, 0..) |value, index| {
             const initial_value_ty = valueType(self.pass.program, value);
-            if (try self.pass.factFromValue(value)) |fact| {
-                if (try self.projectableLoopFactForValue(fact, value)) |loop_fact| {
-                    facts[index] = loop_fact;
+            if (try self.pass.knownValueFromValue(value)) |known_value| {
+                if (try self.projectableLoopKnownValueForValue(known_value, value)) |loop_known_value| {
+                    known_values[index] = loop_known_value;
                     has_constructor = true;
                 } else {
-                    facts[index] = .{ .any = initial_value_ty };
+                    known_values[index] = .{ .any = initial_value_ty };
                 }
             } else {
-                facts[index] = .{ .any = initial_value_ty };
+                known_values[index] = .{ .any = initial_value_ty };
             }
         }
         if (!has_constructor) {
@@ -2007,34 +2007,34 @@ const Cloner = struct {
             defer new_initials.deinit(self.pass.allocator);
 
             var initial_split_failed = false;
-            for (params, facts, values, 0..) |param, *fact, value, index| {
-                const param_value = try self.valueFromFactArgs(fact.*, &new_params);
+            for (params, known_values, values, 0..) |param, *known_value, value, index| {
+                const param_value = try self.valueFromKnownValueArgs(known_value.*, &new_params);
                 try self.putSubst(param.local, param_value);
-                if (!try self.appendFieldReadExprsFromValue(fact.*, value, &new_initials)) {
-                    const downgrade_ty = factType(fact.*);
-                    facts[index] = .{ .any = downgrade_ty };
+                if (!try self.appendFieldReadExprsFromValue(known_value.*, value, &new_initials)) {
+                    const downgrade_ty = known_valueType(known_value.*);
+                    known_values[index] = .{ .any = downgrade_ty };
                     initial_split_failed = true;
                     break;
                 }
             }
             if (initial_split_failed) continue;
 
-            const refinements = try self.pass.allocator.alloc(?ValueFact, facts.len);
+            const refinements = try self.pass.allocator.alloc(?KnownValue, known_values.len);
             defer self.pass.allocator.free(refinements);
             @memset(refinements, null);
 
             try self.loop_stack.append(self.pass.allocator, .{
-                .values = facts,
+                .values = known_values,
                 .refinements = refinements,
             });
             const body = try self.cloneExpr(loop.body);
             _ = self.loop_stack.pop();
 
             var refined = false;
-            for (facts, refinements, 0..) |*fact, maybe_refinement, index| {
+            for (known_values, refinements, 0..) |*known_value, maybe_refinement, index| {
                 const refinement = maybe_refinement orelse continue;
-                if (factEql(self.pass.program, fact.*, refinement)) continue;
-                facts[index] = refinement;
+                if (known_valueEql(self.pass.program, known_value.*, refinement)) continue;
+                known_values[index] = refinement;
                 refined = true;
             }
             if (refined) continue;
@@ -2066,7 +2066,7 @@ const Cloner = struct {
 
             const change_start = self.changes.items.len;
             defer self.restore(change_start);
-            try self.bindPendingLetFacts(let_value.lets);
+            try self.bindPendingLetKnownValues(let_value.lets);
 
             const body = try self.cloneLoopFromInitialValues(ty, loop, params, unwrapped_values);
             return try self.wrapPendingLetsAroundExpr(ty, body, let_value.lets);
@@ -2112,146 +2112,146 @@ const Cloner = struct {
         return null;
     }
 
-    fn projectableLoopFactForValue(self: *Cloner, fact: ValueFact, value: Value) Allocator.Error!?ValueFact {
+    fn projectableLoopKnownValueForValue(self: *Cloner, known_value: KnownValue, value: Value) Allocator.Error!?KnownValue {
         return switch (value) {
             .record => |record_value| blk: {
-                const record_fact = switch (fact) {
+                const record_known_value = switch (known_value) {
                     .record => |record| record,
                     else => break :blk null,
                 };
-                if (record_fact.fields.len != record_value.fields.len) Common.invariant("record loop state changed field count before specialization");
-                const fields = try self.pass.arena.allocator().alloc(FieldFact, record_fact.fields.len);
-                for (record_fact.fields, record_value.fields, 0..) |field_fact, field_value, index| {
-                    if (field_fact.name != field_value.name) Common.invariant("record loop state changed field order before specialization");
-                    const projected = try self.projectableLoopFactForValue(field_fact.fact, field_value.value);
+                if (record_known_value.fields.len != record_value.fields.len) Common.invariant("record loop state changed field count before specialization");
+                const fields = try self.pass.arena.allocator().alloc(KnownField, record_known_value.fields.len);
+                for (record_known_value.fields, record_value.fields, 0..) |field_known_value, field_value, index| {
+                    if (field_known_value.name != field_value.name) Common.invariant("record loop state changed field order before specialization");
+                    const projected = try self.projectableLoopKnownValueForValue(field_known_value.known_value, field_value.value);
                     fields[index] = .{
-                        .name = field_fact.name,
-                        .fact = projected orelse .{ .any = factType(field_fact.fact) },
+                        .name = field_known_value.name,
+                        .known_value = projected orelse .{ .any = known_valueType(field_known_value.known_value) },
                     };
                 }
-                break :blk ValueFact{ .record = .{
-                    .ty = record_fact.ty,
+                break :blk KnownValue{ .record = .{
+                    .ty = record_known_value.ty,
                     .fields = fields,
                 } };
             },
             .tuple => |tuple_value| blk: {
-                const tuple_fact = switch (fact) {
+                const tuple_known_value = switch (known_value) {
                     .tuple => |tuple| tuple,
                     else => break :blk null,
                 };
-                if (tuple_fact.items.len != tuple_value.items.len) Common.invariant("tuple loop state changed item count before specialization");
-                const items = try self.pass.arena.allocator().alloc(ValueFact, tuple_fact.items.len);
-                for (tuple_fact.items, tuple_value.items, 0..) |item_fact, item_value, index| {
-                    items[index] = (try self.projectableLoopFactForValue(item_fact, item_value)) orelse
-                        .{ .any = factType(item_fact) };
+                if (tuple_known_value.items.len != tuple_value.items.len) Common.invariant("tuple loop state changed item count before specialization");
+                const items = try self.pass.arena.allocator().alloc(KnownValue, tuple_known_value.items.len);
+                for (tuple_known_value.items, tuple_value.items, 0..) |item_known_value, item_value, index| {
+                    items[index] = (try self.projectableLoopKnownValueForValue(item_known_value, item_value)) orelse
+                        .{ .any = known_valueType(item_known_value) };
                 }
-                break :blk ValueFact{ .tuple = .{
-                    .ty = tuple_fact.ty,
+                break :blk KnownValue{ .tuple = .{
+                    .ty = tuple_known_value.ty,
                     .items = items,
                 } };
             },
             .nominal => |nominal_value| blk: {
-                const nominal_fact = switch (fact) {
+                const nominal_known_value = switch (known_value) {
                     .nominal => |nominal| nominal,
                     else => break :blk null,
                 };
-                const backing = (try self.projectableLoopFactForValue(nominal_fact.backing.*, nominal_value.backing.*)) orelse break :blk null;
-                const stored = try self.pass.arena.allocator().create(ValueFact);
+                const backing = (try self.projectableLoopKnownValueForValue(nominal_known_value.backing.*, nominal_value.backing.*)) orelse break :blk null;
+                const stored = try self.pass.arena.allocator().create(KnownValue);
                 stored.* = backing;
-                break :blk ValueFact{ .nominal = .{
-                    .ty = nominal_fact.ty,
+                break :blk KnownValue{ .nominal = .{
+                    .ty = nominal_known_value.ty,
                     .backing = stored,
                 } };
             },
             .callable => |callable_value| blk: {
-                if (factMatchesValue(self.pass.program, fact, value)) break :blk fact;
-                const callable_fact = switch (fact) {
+                if (knownValueMatchesValue(self.pass.program, known_value, value)) break :blk known_value;
+                const callable_known_value = switch (known_value) {
                     .callable => |callable| callable,
                     else => break :blk null,
                 };
-                if (!callableTargetMatches(self.pass.program, callable_fact.fn_id, callable_value.fn_id) or
-                    callable_fact.captures.len != callable_value.captures.len)
+                if (!callableTargetMatches(self.pass.program, callable_known_value.fn_id, callable_value.fn_id) or
+                    callable_known_value.captures.len != callable_value.captures.len)
                 {
                     break :blk null;
                 }
-                const captures = try self.pass.arena.allocator().alloc(ValueFact, callable_fact.captures.len);
-                for (callable_fact.captures, callable_value.captures, 0..) |capture_fact, capture_value, index| {
-                    const projected = try self.projectableLoopFactForValue(capture_fact, capture_value);
-                    captures[index] = projected orelse .{ .any = factType(capture_fact) };
+                const captures = try self.pass.arena.allocator().alloc(KnownValue, callable_known_value.captures.len);
+                for (callable_known_value.captures, callable_value.captures, 0..) |capture_known_value, capture_value, index| {
+                    const projected = try self.projectableLoopKnownValueForValue(capture_known_value, capture_value);
+                    captures[index] = projected orelse .{ .any = known_valueType(capture_known_value) };
                 }
-                break :blk ValueFact{ .callable = .{
-                    .ty = callable_fact.ty,
-                    .fn_id = callable_fact.fn_id,
+                break :blk KnownValue{ .callable = .{
+                    .ty = callable_known_value.ty,
+                    .fn_id = callable_known_value.fn_id,
                     .captures = captures,
                 } };
             },
             .finite_tags => |finite_value| blk: {
-                const finite_fact = switch (fact) {
+                const finite_known_value = switch (known_value) {
                     .finite_tags => |finite_tags| finite_tags,
                     else => break :blk null,
                 };
-                if (!finiteTagsFactMatchesValue(self.pass.program, finite_fact, finite_value)) break :blk null;
-                break :blk fact;
+                if (!knownTagsMatchesValue(self.pass.program, finite_known_value, finite_value)) break :blk null;
+                break :blk known_value;
             },
             .finite_callables => |finite_value| blk: {
-                const finite_fact = switch (fact) {
+                const finite_known_value = switch (known_value) {
                     .finite_callables => |finite_callables| finite_callables,
                     else => break :blk null,
                 };
-                if (!finiteCallablesFactMatchesValue(self.pass.program, finite_fact, finite_value)) break :blk null;
-                break :blk fact;
+                if (!knownCallablesMatchesValue(self.pass.program, finite_known_value, finite_value)) break :blk null;
+                break :blk known_value;
             },
-            .let_ => |let_value| try self.projectableLoopFactForValue(fact, let_value.body.*),
+            .let_ => |let_value| try self.projectableLoopKnownValueForValue(known_value, let_value.body.*),
             .if_ => null,
-            .expr_with_known_fact => |known| if (canReadFieldsFromExpr(self.pass.program, known.expr))
-                try self.projectableLoopFactFromExpr(known.fact)
+            .expr_with_known_value => |known| if (canReadFieldsFromExpr(self.pass.program, known.expr))
+                try self.projectableLoopKnownValueFromExpr(known.known_value)
             else
                 null,
-            .tag => if (factMatchesValue(self.pass.program, fact, value)) fact else switch (fact) {
-                .finite_tags => |finite_tags| if (finiteTagAlternativeIndex(self.pass.program, finite_tags.alternatives, value.tag) != null) fact else null,
+            .tag => if (knownValueMatchesValue(self.pass.program, known_value, value)) known_value else switch (known_value) {
+                .finite_tags => |finite_tags| if (finiteTagAlternativeIndex(self.pass.program, finite_tags.alternatives, value.tag) != null) known_value else null,
                 else => null,
             },
             .expr,
-            => if (factCanProjectFromExpr(fact)) fact else null,
+            => if (known_valueCanProjectFromExpr(known_value)) known_value else null,
         };
     }
 
-    fn projectableLoopFactFromExpr(self: *Cloner, fact: ValueFact) Allocator.Error!?ValueFact {
-        if (factCanProjectFromExpr(fact)) return fact;
+    fn projectableLoopKnownValueFromExpr(self: *Cloner, known_value: KnownValue) Allocator.Error!?KnownValue {
+        if (known_valueCanProjectFromExpr(known_value)) return known_value;
 
-        return switch (fact) {
-            .any => fact,
-            .leaf => fact,
+        return switch (known_value) {
+            .any => known_value,
+            .leaf => known_value,
             .record => |record| blk: {
-                const fields = try self.pass.arena.allocator().alloc(FieldFact, record.fields.len);
+                const fields = try self.pass.arena.allocator().alloc(KnownField, record.fields.len);
                 for (record.fields, fields) |field, *out| {
                     out.* = .{
                         .name = field.name,
-                        .fact = (try self.projectableLoopFactFromExpr(field.fact)) orelse
-                            .{ .any = factType(field.fact) },
+                        .known_value = (try self.projectableLoopKnownValueFromExpr(field.known_value)) orelse
+                            .{ .any = known_valueType(field.known_value) },
                     };
                 }
-                break :blk ValueFact{ .record = .{
+                break :blk KnownValue{ .record = .{
                     .ty = record.ty,
                     .fields = fields,
                 } };
             },
             .tuple => |tuple| blk: {
-                const items = try self.pass.arena.allocator().alloc(ValueFact, tuple.items.len);
+                const items = try self.pass.arena.allocator().alloc(KnownValue, tuple.items.len);
                 for (tuple.items, items) |item, *out| {
-                    out.* = (try self.projectableLoopFactFromExpr(item)) orelse
-                        .{ .any = factType(item) };
+                    out.* = (try self.projectableLoopKnownValueFromExpr(item)) orelse
+                        .{ .any = known_valueType(item) };
                 }
-                break :blk ValueFact{ .tuple = .{
+                break :blk KnownValue{ .tuple = .{
                     .ty = tuple.ty,
                     .items = items,
                 } };
             },
             .nominal => |nominal| blk: {
-                const backing = (try self.projectableLoopFactFromExpr(nominal.backing.*)) orelse break :blk null;
-                const stored = try self.pass.arena.allocator().create(ValueFact);
+                const backing = (try self.projectableLoopKnownValueFromExpr(nominal.backing.*)) orelse break :blk null;
+                const stored = try self.pass.arena.allocator().create(KnownValue);
                 stored.* = backing;
-                break :blk ValueFact{ .nominal = .{
+                break :blk KnownValue{ .nominal = .{
                     .ty = nominal.ty,
                     .backing = stored,
                 } };
@@ -2290,7 +2290,7 @@ const Cloner = struct {
         return try self.cloneBlockValueWithFinalDemand(ty, block, false);
     }
 
-    fn cloneBlockValueDemandingFact(self: *Cloner, ty: Type.TypeId, block: anytype) Common.LowerError!Value {
+    fn cloneBlockValueDemandingKnownValue(self: *Cloner, ty: Type.TypeId, block: anytype) Common.LowerError!Value {
         return try self.cloneBlockValueWithFinalDemand(ty, block, true);
     }
 
@@ -2298,7 +2298,7 @@ const Cloner = struct {
         self: *Cloner,
         ty: Type.TypeId,
         block: anytype,
-        demand_final_fact: bool,
+        demand_final_known_value: bool,
     ) Common.LowerError!Value {
         const change_start = self.changes.items.len;
         defer self.restore(change_start);
@@ -2315,11 +2315,11 @@ const Cloner = struct {
             });
         }
 
-        const final_value = if (demand_final_fact)
-            try self.cloneExprValueDemandingFact(block.final_expr)
+        const final_value = if (demand_final_known_value)
+            try self.cloneExprValueDemandingKnownValue(block.final_expr)
         else
             try self.cloneExprValue(block.final_expr);
-        if (demand_final_fact) {
+        if (demand_final_known_value) {
             if (statements.items.len == 0) return final_value;
 
             var pending_lets = std.ArrayList(PendingLet).empty;
@@ -2335,10 +2335,10 @@ const Cloner = struct {
             .final_expr = final_expr,
         } } });
 
-        const fact = (try self.pass.factFromValue(final_value)) orelse return .{ .expr = block_expr };
-        return .{ .expr_with_known_fact = .{
+        const known_value = (try self.pass.knownValueFromValue(final_value)) orelse return .{ .expr = block_expr };
+        return .{ .expr_with_known_value = .{
             .expr = block_expr,
-            .fact = fact,
+            .known_value = known_value,
         } };
     }
 
@@ -2361,10 +2361,10 @@ const Cloner = struct {
         defer self.pass.allocator.free(continue_values);
 
         for (source_values, 0..) |value_expr, index| {
-            var value = try self.cloneExprValueDemandingFact(value_expr);
+            var value = try self.cloneExprValueDemandingKnownValue(value_expr);
             while (value == .let_) {
                 try self.appendPendingLetStmts(value.let_.lets, &pending_statements);
-                try self.bindPendingLetFacts(value.let_.lets);
+                try self.bindPendingLetKnownValues(value.let_.lets);
                 value = value.let_.body.*;
             }
             value = try self.hoistNestedLetsFromValue(value, &pending_statements);
@@ -2389,7 +2389,7 @@ const Cloner = struct {
         return switch (value) {
             .let_ => |let_value| blk: {
                 try self.appendPendingLetStmts(let_value.lets, pending_statements);
-                try self.bindPendingLetFacts(let_value.lets);
+                try self.bindPendingLetKnownValues(let_value.lets);
                 break :blk try self.hoistNestedLetsFromValue(let_value.body.*, pending_statements);
             },
             .tag => |tag| blk: {
@@ -2485,7 +2485,7 @@ const Cloner = struct {
             },
             .if_,
             .expr,
-            .expr_with_known_fact,
+            .expr_with_known_value,
             => value,
         };
     }
@@ -2533,10 +2533,10 @@ const Cloner = struct {
         var new_values = std.ArrayList(Ast.ExprId).empty;
         defer new_values.deinit(self.pass.allocator);
 
-        for (loop.values, values, 0..) |fact, value, index| {
-            if (!factMatchesValue(self.pass.program, fact, value)) {
-                if (!try self.appendFieldReadExprsFromValue(fact, value, &new_values)) {
-                    const refined = try self.refineLoopFactForValue(fact, value);
+        for (loop.values, values, 0..) |known_value, value, index| {
+            if (!knownValueMatchesValue(self.pass.program, known_value, value)) {
+                if (!try self.appendFieldReadExprsFromValue(known_value, value, &new_values)) {
+                    const refined = try self.refineLoopKnownValueForValue(known_value, value);
                     try self.noteLoopRefinement(loop, index, refined);
                     if (!try self.appendFieldReadExprsFromValue(refined, value, &new_values)) {
                         Common.invariant("refined continue value did not match specialized loop state");
@@ -2544,7 +2544,7 @@ const Cloner = struct {
                 }
                 continue;
             }
-            try self.appendExprsFromValue(fact, value, &new_values);
+            try self.appendExprsFromValue(known_value, value, &new_values);
         }
 
         return .{ .continue_ = .{
@@ -2552,46 +2552,46 @@ const Cloner = struct {
         } };
     }
 
-    fn noteLoopRefinement(self: *Cloner, loop: LoopPattern, index: usize, refinement: ValueFact) Allocator.Error!void {
+    fn noteLoopRefinement(self: *Cloner, loop: LoopPattern, index: usize, refinement: KnownValue) Allocator.Error!void {
         if (index >= loop.refinements.len) Common.invariant("loop refinement index exceeded active loop state");
         loop.refinements[index] = if (loop.refinements[index]) |existing|
-            try self.commonLoopFact(existing, refinement)
+            try self.commonLoopKnownValue(existing, refinement)
         else
             refinement;
     }
 
-    fn refineLoopFactForValue(self: *Cloner, fact: ValueFact, value: Value) Common.LowerError!ValueFact {
-        if (factMatchesValue(self.pass.program, fact, value)) return fact;
+    fn refineLoopKnownValueForValue(self: *Cloner, known_value: KnownValue, value: Value) Common.LowerError!KnownValue {
+        if (knownValueMatchesValue(self.pass.program, known_value, value)) return known_value;
 
-        return switch (fact) {
-            .any => fact,
-            .leaf => fact,
+        return switch (known_value) {
+            .any => known_value,
+            .leaf => known_value,
             .record => |record| blk: {
-                const fields = try self.pass.arena.allocator().alloc(FieldFact, record.fields.len);
+                const fields = try self.pass.arena.allocator().alloc(KnownField, record.fields.len);
                 if (recordFromValue(value)) |record_value| {
                     if (record.fields.len != record_value.fields.len) Common.invariant("record loop state changed field count");
                     for (record.fields, record_value.fields, 0..) |field, field_value, index| {
                         if (field.name != field_value.name) Common.invariant("record loop state changed field order");
                         fields[index] = .{
                             .name = field.name,
-                            .fact = try self.refineLoopFactForValue(field.fact, field_value.value),
+                            .known_value = try self.refineLoopKnownValueForValue(field.known_value, field_value.value),
                         };
                     }
-                    break :blk ValueFact{ .record = .{ .ty = record.ty, .fields = fields } };
+                    break :blk KnownValue{ .record = .{ .ty = record.ty, .fields = fields } };
                 }
 
-                const receiver = projectableExprFromValue(value) orelse break :blk ValueFact{ .any = record.ty };
-                if (!canReadFieldsFromExpr(self.pass.program, receiver)) break :blk ValueFact{ .any = record.ty };
-                const actual_fact = switch (value) {
-                    .expr_with_known_fact => |known_fact_expr| known_fact_expr.fact,
+                const receiver = projectableExprFromValue(value) orelse break :blk KnownValue{ .any = record.ty };
+                if (!canReadFieldsFromExpr(self.pass.program, receiver)) break :blk KnownValue{ .any = record.ty };
+                const actual_known_value = switch (value) {
+                    .expr_with_known_value => |known_value_expr| known_value_expr.known_value,
                     else => null,
                 };
                 for (record.fields, 0..) |field, index| {
-                    const actual_field = if (actual_fact) |actual|
-                        fieldFactFromFact(actual, field.name)
+                    const actual_field = if (actual_known_value) |actual|
+                        fieldKnownValueFromKnownValue(actual, field.name)
                     else
                         null;
-                    const field_expr = try self.addExpr(.{ .ty = factType(field.fact), .data = .{ .field_access = .{
+                    const field_expr = try self.addExpr(.{ .ty = known_valueType(field.known_value), .data = .{ .field_access = .{
                         .receiver = receiver,
                         .field = field.name,
                     } } });
@@ -2601,33 +2601,33 @@ const Cloner = struct {
                         Value{ .expr = field_expr };
                     fields[index] = .{
                         .name = field.name,
-                        .fact = try self.refineLoopFactForValue(field.fact, field_value),
+                        .known_value = try self.refineLoopKnownValueForValue(field.known_value, field_value),
                     };
                 }
-                break :blk ValueFact{ .record = .{ .ty = record.ty, .fields = fields } };
+                break :blk KnownValue{ .record = .{ .ty = record.ty, .fields = fields } };
             },
             .tuple => |tuple| blk: {
-                const items = try self.pass.arena.allocator().alloc(ValueFact, tuple.items.len);
+                const items = try self.pass.arena.allocator().alloc(KnownValue, tuple.items.len);
                 if (tupleFromValue(value)) |tuple_value| {
                     if (tuple.items.len != tuple_value.items.len) Common.invariant("tuple loop state changed item count");
                     for (tuple.items, tuple_value.items, 0..) |item, item_value, index| {
-                        items[index] = try self.refineLoopFactForValue(item, item_value);
+                        items[index] = try self.refineLoopKnownValueForValue(item, item_value);
                     }
-                    break :blk ValueFact{ .tuple = .{ .ty = tuple.ty, .items = items } };
+                    break :blk KnownValue{ .tuple = .{ .ty = tuple.ty, .items = items } };
                 }
 
-                const receiver = projectableExprFromValue(value) orelse break :blk ValueFact{ .any = tuple.ty };
-                if (!canReadFieldsFromExpr(self.pass.program, receiver)) break :blk ValueFact{ .any = tuple.ty };
-                const actual_fact = switch (value) {
-                    .expr_with_known_fact => |known_fact_expr| known_fact_expr.fact,
+                const receiver = projectableExprFromValue(value) orelse break :blk KnownValue{ .any = tuple.ty };
+                if (!canReadFieldsFromExpr(self.pass.program, receiver)) break :blk KnownValue{ .any = tuple.ty };
+                const actual_known_value = switch (value) {
+                    .expr_with_known_value => |known_value_expr| known_value_expr.known_value,
                     else => null,
                 };
                 for (tuple.items, 0..) |item, index| {
-                    const actual_item = if (actual_fact) |actual|
-                        itemFactFromFact(actual, @as(u32, @intCast(index)))
+                    const actual_item = if (actual_known_value) |actual|
+                        itemKnownValueFromKnownValue(actual, @as(u32, @intCast(index)))
                     else
                         null;
-                    const item_expr = try self.addExpr(.{ .ty = factType(item), .data = .{ .tuple_access = .{
+                    const item_expr = try self.addExpr(.{ .ty = known_valueType(item), .data = .{ .tuple_access = .{
                         .tuple = receiver,
                         .elem_index = @as(u32, @intCast(index)),
                     } } });
@@ -2635,72 +2635,72 @@ const Cloner = struct {
                         valueFromProjectedExpr(item_expr, actual)
                     else
                         Value{ .expr = item_expr };
-                    items[index] = try self.refineLoopFactForValue(item, item_value);
+                    items[index] = try self.refineLoopKnownValueForValue(item, item_value);
                 }
-                break :blk ValueFact{ .tuple = .{ .ty = tuple.ty, .items = items } };
+                break :blk KnownValue{ .tuple = .{ .ty = tuple.ty, .items = items } };
             },
             .nominal => |nominal| blk: {
                 const value_nominal = switch (value) {
                     .nominal => |nominal_value| nominal_value,
-                    else => break :blk ValueFact{ .any = nominal.ty },
+                    else => break :blk KnownValue{ .any = nominal.ty },
                 };
-                const backing = try self.pass.arena.allocator().create(ValueFact);
-                backing.* = try self.refineLoopFactForValue(nominal.backing.*, value_nominal.backing.*);
-                break :blk ValueFact{ .nominal = .{ .ty = nominal.ty, .backing = backing } };
+                const backing = try self.pass.arena.allocator().create(KnownValue);
+                backing.* = try self.refineLoopKnownValueForValue(nominal.backing.*, value_nominal.backing.*);
+                break :blk KnownValue{ .nominal = .{ .ty = nominal.ty, .backing = backing } };
             },
             .tag => |tag| blk: {
                 const value_tag = switch (value) {
                     .tag => |tag_value| tag_value,
-                    else => break :blk ValueFact{ .any = tag.ty },
+                    else => break :blk KnownValue{ .any = tag.ty },
                 };
-                const value_fact = (try self.pass.factFromValue(.{ .tag = value_tag })) orelse break :blk ValueFact{ .any = tag.ty };
-                break :blk try self.commonLoopFact(fact, value_fact);
+                const value_known_value = (try self.pass.knownValueFromValue(.{ .tag = value_tag })) orelse break :blk KnownValue{ .any = tag.ty };
+                break :blk try self.commonLoopKnownValue(known_value, value_known_value);
             },
             .callable => |callable| blk: {
                 const callable_value = switch (value) {
                     .callable => |callable_value| callable_value,
-                    else => break :blk ValueFact{ .any = callable.ty },
+                    else => break :blk KnownValue{ .any = callable.ty },
                 };
-                const value_fact = (try self.pass.factFromValue(.{ .callable = callable_value })) orelse break :blk ValueFact{ .any = callable.ty };
-                break :blk try self.commonLoopFact(fact, value_fact);
+                const value_known_value = (try self.pass.knownValueFromValue(.{ .callable = callable_value })) orelse break :blk KnownValue{ .any = callable.ty };
+                break :blk try self.commonLoopKnownValue(known_value, value_known_value);
             },
             .finite_tags => |finite_tags| blk: {
                 switch (value) {
                     .tag => |tag_value| {
-                        const value_fact = (try self.pass.factFromValue(.{ .tag = tag_value })) orelse break :blk ValueFact{ .any = finite_tags.ty };
-                        break :blk try self.commonLoopFact(fact, value_fact);
+                        const value_known_value = (try self.pass.knownValueFromValue(.{ .tag = tag_value })) orelse break :blk KnownValue{ .any = finite_tags.ty };
+                        break :blk try self.commonLoopKnownValue(known_value, value_known_value);
                     },
                     .finite_tags => |finite_value| {
-                        const value_fact = (try self.pass.factFromValue(.{ .finite_tags = finite_value })) orelse break :blk ValueFact{ .any = finite_tags.ty };
-                        break :blk try self.commonLoopFact(fact, value_fact);
+                        const value_known_value = (try self.pass.knownValueFromValue(.{ .finite_tags = finite_value })) orelse break :blk KnownValue{ .any = finite_tags.ty };
+                        break :blk try self.commonLoopKnownValue(known_value, value_known_value);
                     },
-                    else => break :blk ValueFact{ .any = finite_tags.ty },
+                    else => break :blk KnownValue{ .any = finite_tags.ty },
                 }
             },
             .finite_callables => |finite_callables| blk: {
                 switch (value) {
                     .callable => |callable_value| {
-                        const value_fact = (try self.pass.factFromValue(.{ .callable = callable_value })) orelse break :blk ValueFact{ .any = finite_callables.ty };
-                        break :blk try self.commonLoopFact(fact, value_fact);
+                        const value_known_value = (try self.pass.knownValueFromValue(.{ .callable = callable_value })) orelse break :blk KnownValue{ .any = finite_callables.ty };
+                        break :blk try self.commonLoopKnownValue(known_value, value_known_value);
                     },
                     .finite_callables => |finite_value| {
-                        const value_fact = (try self.pass.factFromValue(.{ .finite_callables = finite_value })) orelse break :blk ValueFact{ .any = finite_callables.ty };
-                        break :blk try self.commonLoopFact(fact, value_fact);
+                        const value_known_value = (try self.pass.knownValueFromValue(.{ .finite_callables = finite_value })) orelse break :blk KnownValue{ .any = finite_callables.ty };
+                        break :blk try self.commonLoopKnownValue(known_value, value_known_value);
                     },
-                    else => break :blk ValueFact{ .any = finite_callables.ty },
+                    else => break :blk KnownValue{ .any = finite_callables.ty },
                 }
             },
         };
     }
 
-    fn commonLoopFact(self: *Cloner, lhs: ValueFact, rhs: ValueFact) Allocator.Error!ValueFact {
-        if (factEql(self.pass.program, lhs, rhs)) return lhs;
-        const ty = factType(lhs);
-        if (!sameType(self.pass.program, ty, factType(rhs))) Common.invariant("loop state refinement changed type");
-        if (try commonFiniteTagsFact(self.pass.program, self.pass.arena.allocator(), lhs, rhs)) |finite_tags| {
+    fn commonLoopKnownValue(self: *Cloner, lhs: KnownValue, rhs: KnownValue) Allocator.Error!KnownValue {
+        if (known_valueEql(self.pass.program, lhs, rhs)) return lhs;
+        const ty = known_valueType(lhs);
+        if (!sameType(self.pass.program, ty, known_valueType(rhs))) Common.invariant("loop state refinement changed type");
+        if (try commonKnownTags(self.pass.program, self.pass.arena.allocator(), lhs, rhs)) |finite_tags| {
             return finite_tags;
         }
-        if (try commonFiniteCallablesFact(self.pass.program, self.pass.arena.allocator(), lhs, rhs)) |finite_callables| {
+        if (try commonKnownCallables(self.pass.program, self.pass.arena.allocator(), lhs, rhs)) |finite_callables| {
             return finite_callables;
         }
         if (std.meta.activeTag(lhs) != std.meta.activeTag(rhs)) return .{ .any = ty };
@@ -2710,44 +2710,44 @@ const Cloner = struct {
             .leaf => .{ .leaf = ty },
             .record => |lhs_record| blk: {
                 const rhs_record = rhs.record;
-                if (lhs_record.fields.len != rhs_record.fields.len) break :blk ValueFact{ .any = ty };
-                const fields = try self.pass.arena.allocator().alloc(FieldFact, lhs_record.fields.len);
+                if (lhs_record.fields.len != rhs_record.fields.len) break :blk KnownValue{ .any = ty };
+                const fields = try self.pass.arena.allocator().alloc(KnownField, lhs_record.fields.len);
                 for (lhs_record.fields, rhs_record.fields, 0..) |lhs_field, rhs_field, index| {
-                    if (lhs_field.name != rhs_field.name) break :blk ValueFact{ .any = ty };
+                    if (lhs_field.name != rhs_field.name) break :blk KnownValue{ .any = ty };
                     fields[index] = .{
                         .name = lhs_field.name,
-                        .fact = try self.commonLoopFact(lhs_field.fact, rhs_field.fact),
+                        .known_value = try self.commonLoopKnownValue(lhs_field.known_value, rhs_field.known_value),
                     };
                 }
-                break :blk ValueFact{ .record = .{ .ty = lhs_record.ty, .fields = fields } };
+                break :blk KnownValue{ .record = .{ .ty = lhs_record.ty, .fields = fields } };
             },
             .tuple => |lhs_tuple| blk: {
                 const rhs_tuple = rhs.tuple;
-                if (lhs_tuple.items.len != rhs_tuple.items.len) break :blk ValueFact{ .any = ty };
-                const items = try self.pass.arena.allocator().alloc(ValueFact, lhs_tuple.items.len);
+                if (lhs_tuple.items.len != rhs_tuple.items.len) break :blk KnownValue{ .any = ty };
+                const items = try self.pass.arena.allocator().alloc(KnownValue, lhs_tuple.items.len);
                 for (lhs_tuple.items, rhs_tuple.items, 0..) |lhs_item, rhs_item, index| {
-                    items[index] = try self.commonLoopFact(lhs_item, rhs_item);
+                    items[index] = try self.commonLoopKnownValue(lhs_item, rhs_item);
                 }
-                break :blk ValueFact{ .tuple = .{ .ty = lhs_tuple.ty, .items = items } };
+                break :blk KnownValue{ .tuple = .{ .ty = lhs_tuple.ty, .items = items } };
             },
             .nominal => |lhs_nominal| blk: {
                 const rhs_nominal = rhs.nominal;
-                const backing = try self.pass.arena.allocator().create(ValueFact);
-                backing.* = try self.commonLoopFact(lhs_nominal.backing.*, rhs_nominal.backing.*);
-                break :blk ValueFact{ .nominal = .{ .ty = lhs_nominal.ty, .backing = backing } };
+                const backing = try self.pass.arena.allocator().create(KnownValue);
+                backing.* = try self.commonLoopKnownValue(lhs_nominal.backing.*, rhs_nominal.backing.*);
+                break :blk KnownValue{ .nominal = .{ .ty = lhs_nominal.ty, .backing = backing } };
             },
             .callable => |lhs_callable| blk: {
                 const rhs_callable = rhs.callable;
                 if (!callableTargetMatches(self.pass.program, lhs_callable.fn_id, rhs_callable.fn_id) or
                     lhs_callable.captures.len != rhs_callable.captures.len)
                 {
-                    break :blk ValueFact{ .any = ty };
+                    break :blk KnownValue{ .any = ty };
                 }
-                const captures = try self.pass.arena.allocator().alloc(ValueFact, lhs_callable.captures.len);
+                const captures = try self.pass.arena.allocator().alloc(KnownValue, lhs_callable.captures.len);
                 for (lhs_callable.captures, rhs_callable.captures, 0..) |lhs_capture, rhs_capture, index| {
-                    captures[index] = try self.commonLoopFact(lhs_capture, rhs_capture);
+                    captures[index] = try self.commonLoopKnownValue(lhs_capture, rhs_capture);
                 }
-                break :blk ValueFact{ .callable = .{
+                break :blk KnownValue{ .callable = .{
                     .ty = lhs_callable.ty,
                     .fn_id = lhs_callable.fn_id,
                     .captures = captures,
@@ -2867,53 +2867,53 @@ const Cloner = struct {
         out: *std.ArrayList(Ast.ExprId),
     ) Common.LowerError!bool {
         if (pattern.args.len != args.len) Common.invariant("call-pattern arity differed from direct call arity");
-        for (pattern.args, args) |fact, arg| {
-            if (!try self.appendClonedExprsForFact(fact, arg, out)) return false;
+        for (pattern.args, args) |known_value, arg| {
+            if (!try self.appendClonedExprsForKnownValue(known_value, arg, out)) return false;
         }
         return true;
     }
 
-    fn appendClonedExprsForFact(
+    fn appendClonedExprsForKnownValue(
         self: *Cloner,
-        fact: ValueFact,
+        known_value: KnownValue,
         expr_id: Ast.ExprId,
         out: *std.ArrayList(Ast.ExprId),
     ) Common.LowerError!bool {
-        switch (fact) {
+        switch (known_value) {
             .any => {
                 try out.append(self.pass.allocator, try self.cloneExpr(expr_id));
                 return true;
             },
             else => {
                 const value = try self.valueForCallArg(expr_id);
-                if (!factMatchesValue(self.pass.program, fact, value)) return false;
-                try self.appendExprsFromValue(fact, value, out);
+                if (!knownValueMatchesValue(self.pass.program, known_value, value)) return false;
+                try self.appendExprsFromValue(known_value, value, out);
                 return true;
             },
         }
     }
 
     fn valueForCallArg(self: *Cloner, expr_id: Ast.ExprId) Common.LowerError!Value {
-        return try self.cloneExprValueDemandingFact(expr_id);
+        return try self.cloneExprValueDemandingKnownValue(expr_id);
     }
 
     fn appendExprsFromValue(
         self: *Cloner,
-        fact: ValueFact,
+        known_value: KnownValue,
         value: Value,
         out: *std.ArrayList(Ast.ExprId),
     ) Common.LowerError!void {
-        if (value == .expr_with_known_fact) switch (fact) {
+        if (value == .expr_with_known_value) switch (known_value) {
             .any => {},
             else => {
-                if (!try self.appendFieldReadExprsFromValue(fact, value, out)) {
-                    Common.invariant("known-fact expression could not be split into requested fact");
+                if (!try self.appendFieldReadExprsFromValue(known_value, value, out)) {
+                    Common.invariant("known-value expression could not be split into requested known_value");
                 }
                 return;
             },
         };
 
-        switch (fact) {
+        switch (known_value) {
             .any,
             .leaf,
             => try out.append(self.pass.allocator, try self.materializePublic(value)),
@@ -2922,8 +2922,8 @@ const Cloner = struct {
                     .tag => |tag_value| tag_value,
                     else => Common.invariant("tag call pattern matched a non-tag value"),
                 };
-                for (tag.payloads, tag_value.payloads) |payload_fact, payload| {
-                    try self.appendExprsFromValue(payload_fact, payload, out);
+                for (tag.payloads, tag_value.payloads) |payload_known_value, payload| {
+                    try self.appendExprsFromValue(payload_known_value, payload, out);
                 }
             },
             .record => |record| {
@@ -2931,9 +2931,9 @@ const Cloner = struct {
                     .record => |record_value| record_value,
                     else => Common.invariant("record call pattern matched a non-record value"),
                 };
-                for (record.fields, record_value.fields) |field_fact, field| {
-                    if (field_fact.name != field.name) Common.invariant("record call-pattern field order changed after matching");
-                    try self.appendExprsFromValue(field_fact.fact, field.value, out);
+                for (record.fields, record_value.fields) |field_known_value, field| {
+                    if (field_known_value.name != field.name) Common.invariant("record call-pattern field order changed after matching");
+                    try self.appendExprsFromValue(field_known_value.known_value, field.value, out);
                 }
             },
             .tuple => |tuple| {
@@ -2941,8 +2941,8 @@ const Cloner = struct {
                     .tuple => |tuple_value| tuple_value,
                     else => Common.invariant("tuple call pattern matched a non-tuple value"),
                 };
-                for (tuple.items, tuple_value.items) |item_fact, item| {
-                    try self.appendExprsFromValue(item_fact, item, out);
+                for (tuple.items, tuple_value.items) |item_known_value, item| {
+                    try self.appendExprsFromValue(item_known_value, item, out);
                 }
             },
             .nominal => |nominal| {
@@ -2957,25 +2957,25 @@ const Cloner = struct {
                     .callable => |callable_value| callable_value,
                     else => Common.invariant("callable call pattern matched a non-callable value"),
                 };
-                for (callable.captures, callable_value.captures) |capture_fact, capture_value| {
-                    try self.appendExprsFromValue(capture_fact, capture_value, out);
+                for (callable.captures, callable_value.captures) |capture_known_value, capture_value| {
+                    try self.appendExprsFromValue(capture_known_value, capture_value, out);
                 }
             },
             .finite_callables => |finite_callables| {
                 if (value == .finite_callables) {
                     const finite_value = value.finite_callables;
-                    if (!finiteCallablesFactMatchesValue(self.pass.program, finite_callables, finite_value)) {
-                        Common.invariant("finite callable fact matched a different finite callable value");
+                    if (!knownCallablesMatchesValue(self.pass.program, finite_callables, finite_value)) {
+                        Common.invariant("finite callable known_value matched a different finite callable value");
                     }
                     try out.append(self.pass.allocator, finite_value.selector);
-                    for (finite_callables.alternatives, finite_value.alternatives) |alternative_fact, alternative_value| {
-                        if (!callableTargetMatches(self.pass.program, alternative_fact.fn_id, alternative_value.fn_id) or
-                            alternative_fact.captures.len != alternative_value.captures.len)
+                    for (finite_callables.alternatives, finite_value.alternatives) |alternative_known_value, alternative_value| {
+                        if (!callableTargetMatches(self.pass.program, alternative_known_value.fn_id, alternative_value.fn_id) or
+                            alternative_known_value.captures.len != alternative_value.captures.len)
                         {
                             Common.invariant("finite callable value alternatives changed after matching");
                         }
-                        for (alternative_fact.captures, alternative_value.captures) |capture_fact, capture_value| {
-                            try self.appendExprsFromValue(capture_fact, capture_value, out);
+                        for (alternative_known_value.captures, alternative_value.captures) |capture_known_value, capture_value| {
+                            try self.appendExprsFromValue(capture_known_value, capture_value, out);
                         }
                     }
                     return;
@@ -2986,16 +2986,16 @@ const Cloner = struct {
                     else => Common.invariant("finite callable call pattern matched a non-callable value"),
                 };
                 const active_index = finiteCallableAlternativeIndex(self.pass.program, finite_callables.alternatives, callable_value) orelse
-                    Common.invariant("finite callable fact did not contain the continued callable value");
+                    Common.invariant("finite callable known_value did not contain the continued callable value");
                 try out.append(self.pass.allocator, try self.selectorLiteral(@intCast(active_index)));
-                for (finite_callables.alternatives, 0..) |alternative_fact, alternative_index| {
+                for (finite_callables.alternatives, 0..) |alternative_known_value, alternative_index| {
                     if (alternative_index == active_index) {
-                        for (alternative_fact.captures, callable_value.captures) |capture_fact, capture_value| {
-                            try self.appendExprsFromValue(capture_fact, capture_value, out);
+                        for (alternative_known_value.captures, callable_value.captures) |capture_known_value, capture_value| {
+                            try self.appendExprsFromValue(capture_known_value, capture_value, out);
                         }
                     } else {
-                        for (alternative_fact.captures) |capture_fact| {
-                            try self.appendUninitializedExprsForFact(capture_fact, out);
+                        for (alternative_known_value.captures) |capture_known_value| {
+                            try self.appendUninitializedExprsForKnownValue(capture_known_value, out);
                         }
                     }
                 }
@@ -3003,16 +3003,16 @@ const Cloner = struct {
             .finite_tags => |finite_tags| {
                 if (value == .finite_tags) {
                     const finite_value = value.finite_tags;
-                    if (!finiteTagsFactMatchesValue(self.pass.program, finite_tags, finite_value)) {
-                        Common.invariant("finite tag fact matched a different finite tag value");
+                    if (!knownTagsMatchesValue(self.pass.program, finite_tags, finite_value)) {
+                        Common.invariant("finite tag known_value matched a different finite tag value");
                     }
                     try out.append(self.pass.allocator, finite_value.selector);
-                    for (finite_tags.alternatives, finite_value.alternatives) |alternative_fact, alternative_value| {
-                        if (alternative_fact.name != alternative_value.name or alternative_fact.payloads.len != alternative_value.payloads.len) {
+                    for (finite_tags.alternatives, finite_value.alternatives) |alternative_known_value, alternative_value| {
+                        if (alternative_known_value.name != alternative_value.name or alternative_known_value.payloads.len != alternative_value.payloads.len) {
                             Common.invariant("finite tag value alternatives changed after matching");
                         }
-                        for (alternative_fact.payloads, alternative_value.payloads) |payload_fact, payload_value| {
-                            try self.appendExprsFromValue(payload_fact, payload_value, out);
+                        for (alternative_known_value.payloads, alternative_value.payloads) |payload_known_value, payload_value| {
+                            try self.appendExprsFromValue(payload_known_value, payload_value, out);
                         }
                     }
                     return;
@@ -3023,16 +3023,16 @@ const Cloner = struct {
                     else => Common.invariant("finite tag call pattern matched a non-tag value"),
                 };
                 const active_index = finiteTagAlternativeIndex(self.pass.program, finite_tags.alternatives, tag_value) orelse
-                    Common.invariant("finite tag fact did not contain the continued tag value");
+                    Common.invariant("finite tag known_value did not contain the continued tag value");
                 try out.append(self.pass.allocator, try self.selectorLiteral(@intCast(active_index)));
-                for (finite_tags.alternatives, 0..) |alternative_fact, alternative_index| {
+                for (finite_tags.alternatives, 0..) |alternative_known_value, alternative_index| {
                     if (alternative_index == active_index) {
-                        for (alternative_fact.payloads, tag_value.payloads) |payload_fact, payload_value| {
-                            try self.appendExprsFromValue(payload_fact, payload_value, out);
+                        for (alternative_known_value.payloads, tag_value.payloads) |payload_known_value, payload_value| {
+                            try self.appendExprsFromValue(payload_known_value, payload_value, out);
                         }
                     } else {
-                        for (alternative_fact.payloads) |payload_fact| {
-                            try self.appendUninitializedExprsForFact(payload_fact, out);
+                        for (alternative_known_value.payloads) |payload_known_value| {
+                            try self.appendUninitializedExprsForKnownValue(payload_known_value, out);
                         }
                     }
                 }
@@ -3040,40 +3040,40 @@ const Cloner = struct {
         }
     }
 
-    fn appendUninitializedExprsForFact(
+    fn appendUninitializedExprsForKnownValue(
         self: *Cloner,
-        fact: ValueFact,
+        known_value: KnownValue,
         out: *std.ArrayList(Ast.ExprId),
     ) Common.LowerError!void {
-        switch (fact) {
+        switch (known_value) {
             .any,
             .leaf,
             => |ty| try out.append(self.pass.allocator, try self.addExpr(.{ .ty = ty, .data = .uninitialized })),
             .tag => |tag| {
-                for (tag.payloads) |payload| try self.appendUninitializedExprsForFact(payload, out);
+                for (tag.payloads) |payload| try self.appendUninitializedExprsForKnownValue(payload, out);
             },
             .record => |record| {
-                for (record.fields) |field| try self.appendUninitializedExprsForFact(field.fact, out);
+                for (record.fields) |field| try self.appendUninitializedExprsForKnownValue(field.known_value, out);
             },
             .tuple => |tuple| {
-                for (tuple.items) |item| try self.appendUninitializedExprsForFact(item, out);
+                for (tuple.items) |item| try self.appendUninitializedExprsForKnownValue(item, out);
             },
-            .nominal => |nominal| try self.appendUninitializedExprsForFact(nominal.backing.*, out),
+            .nominal => |nominal| try self.appendUninitializedExprsForKnownValue(nominal.backing.*, out),
             .callable => |callable| {
-                for (callable.captures) |capture| try self.appendUninitializedExprsForFact(capture, out);
+                for (callable.captures) |capture| try self.appendUninitializedExprsForKnownValue(capture, out);
             },
             .finite_callables => |finite_callables| {
                 const selector_ty = try self.pass.primitiveType(.u64);
                 try out.append(self.pass.allocator, try self.addExpr(.{ .ty = selector_ty, .data = .uninitialized }));
                 for (finite_callables.alternatives) |alternative| {
-                    for (alternative.captures) |capture| try self.appendUninitializedExprsForFact(capture, out);
+                    for (alternative.captures) |capture| try self.appendUninitializedExprsForKnownValue(capture, out);
                 }
             },
             .finite_tags => |finite_tags| {
                 const selector_ty = try self.pass.primitiveType(.u64);
                 try out.append(self.pass.allocator, try self.addExpr(.{ .ty = selector_ty, .data = .uninitialized }));
                 for (finite_tags.alternatives) |alternative| {
-                    for (alternative.payloads) |payload| try self.appendUninitializedExprsForFact(payload, out);
+                    for (alternative.payloads) |payload| try self.appendUninitializedExprsForKnownValue(payload, out);
                 }
             },
         }
@@ -3081,16 +3081,16 @@ const Cloner = struct {
 
     fn appendFieldReadExprsFromValue(
         self: *Cloner,
-        fact: ValueFact,
+        known_value: KnownValue,
         value: Value,
         out: *std.ArrayList(Ast.ExprId),
     ) Common.LowerError!bool {
-        if (value != .expr_with_known_fact and factMatchesValue(self.pass.program, fact, value)) {
-            try self.appendExprsFromValue(fact, value, out);
+        if (value != .expr_with_known_value and knownValueMatchesValue(self.pass.program, known_value, value)) {
+            try self.appendExprsFromValue(known_value, value, out);
             return true;
         }
 
-        switch (fact) {
+        switch (known_value) {
             .any,
             .leaf,
             => {
@@ -3100,9 +3100,9 @@ const Cloner = struct {
             .record => |record| {
                 if (recordFromValue(value)) |record_value| {
                     if (record.fields.len != record_value.fields.len) return false;
-                    for (record.fields, record_value.fields) |field_fact, field_value| {
-                        if (field_fact.name != field_value.name) return false;
-                        if (!try self.appendFieldReadExprsFromValue(field_fact.fact, field_value.value, out)) return false;
+                    for (record.fields, record_value.fields) |field_known_value, field_value| {
+                        if (field_known_value.name != field_value.name) return false;
+                        if (!try self.appendFieldReadExprsFromValue(field_known_value.known_value, field_value.value, out)) return false;
                     }
                     return true;
                 }
@@ -3110,19 +3110,19 @@ const Cloner = struct {
                 const receiver = projectableExprFromValue(value) orelse return false;
                 if (!canReadFieldsFromExpr(self.pass.program, receiver)) return false;
                 for (record.fields) |field| {
-                    const field_expr = try self.addExpr(.{ .ty = factType(field.fact), .data = .{ .field_access = .{
+                    const field_expr = try self.addExpr(.{ .ty = known_valueType(field.known_value), .data = .{ .field_access = .{
                         .receiver = receiver,
                         .field = field.name,
                     } } });
-                    if (!try self.appendFieldReadExprsFromValue(field.fact, .{ .expr = field_expr }, out)) return false;
+                    if (!try self.appendFieldReadExprsFromValue(field.known_value, .{ .expr = field_expr }, out)) return false;
                 }
                 return true;
             },
             .tuple => |tuple| {
                 if (tupleFromValue(value)) |tuple_value| {
                     if (tuple.items.len != tuple_value.items.len) return false;
-                    for (tuple.items, tuple_value.items) |item_fact, item_value| {
-                        if (!try self.appendFieldReadExprsFromValue(item_fact, item_value, out)) return false;
+                    for (tuple.items, tuple_value.items) |item_known_value, item_value| {
+                        if (!try self.appendFieldReadExprsFromValue(item_known_value, item_value, out)) return false;
                     }
                     return true;
                 }
@@ -3130,7 +3130,7 @@ const Cloner = struct {
                 const receiver = projectableExprFromValue(value) orelse return false;
                 if (!canReadFieldsFromExpr(self.pass.program, receiver)) return false;
                 for (tuple.items, 0..) |item, index| {
-                    const item_expr = try self.addExpr(.{ .ty = factType(item), .data = .{ .tuple_access = .{
+                    const item_expr = try self.addExpr(.{ .ty = known_valueType(item), .data = .{ .tuple_access = .{
                         .tuple = receiver,
                         .elem_index = @as(u32, @intCast(index)),
                     } } });
@@ -3149,19 +3149,19 @@ const Cloner = struct {
                 {
                     return false;
                 }
-                for (callable.captures, callable_value.captures) |capture_fact, capture_value| {
-                    if (!try self.appendFieldReadExprsFromValue(capture_fact, capture_value, out)) return false;
+                for (callable.captures, callable_value.captures) |capture_known_value, capture_value| {
+                    if (!try self.appendFieldReadExprsFromValue(capture_known_value, capture_value, out)) return false;
                 }
                 return true;
             },
             .finite_callables => |finite_callables| {
                 if (value == .finite_callables) {
                     const finite_value = value.finite_callables;
-                    if (!finiteCallablesFactMatchesValue(self.pass.program, finite_callables, finite_value)) return false;
+                    if (!knownCallablesMatchesValue(self.pass.program, finite_callables, finite_value)) return false;
                     try out.append(self.pass.allocator, finite_value.selector);
-                    for (finite_callables.alternatives, finite_value.alternatives) |alternative_fact, alternative_value| {
-                        for (alternative_fact.captures, alternative_value.captures) |capture_fact, capture_value| {
-                            if (!try self.appendFieldReadExprsFromValue(capture_fact, capture_value, out)) return false;
+                    for (finite_callables.alternatives, finite_value.alternatives) |alternative_known_value, alternative_value| {
+                        for (alternative_known_value.captures, alternative_value.captures) |capture_known_value, capture_value| {
+                            if (!try self.appendFieldReadExprsFromValue(capture_known_value, capture_value, out)) return false;
                         }
                     }
                     return true;
@@ -3172,14 +3172,14 @@ const Cloner = struct {
                 };
                 const active_index = finiteCallableAlternativeIndex(self.pass.program, finite_callables.alternatives, callable_value) orelse return false;
                 try out.append(self.pass.allocator, try self.selectorLiteral(@intCast(active_index)));
-                for (finite_callables.alternatives, 0..) |alternative_fact, alternative_index| {
+                for (finite_callables.alternatives, 0..) |alternative_known_value, alternative_index| {
                     if (alternative_index == active_index) {
-                        for (alternative_fact.captures, callable_value.captures) |capture_fact, capture_value| {
-                            if (!try self.appendFieldReadExprsFromValue(capture_fact, capture_value, out)) return false;
+                        for (alternative_known_value.captures, callable_value.captures) |capture_known_value, capture_value| {
+                            if (!try self.appendFieldReadExprsFromValue(capture_known_value, capture_value, out)) return false;
                         }
                     } else {
-                        for (alternative_fact.captures) |capture_fact| {
-                            try self.appendUninitializedExprsForFact(capture_fact, out);
+                        for (alternative_known_value.captures) |capture_known_value| {
+                            try self.appendUninitializedExprsForKnownValue(capture_known_value, out);
                         }
                     }
                 }
@@ -3188,11 +3188,11 @@ const Cloner = struct {
             .finite_tags => |finite_tags| {
                 if (value == .finite_tags) {
                     const finite_value = value.finite_tags;
-                    if (!finiteTagsFactMatchesValue(self.pass.program, finite_tags, finite_value)) return false;
+                    if (!knownTagsMatchesValue(self.pass.program, finite_tags, finite_value)) return false;
                     try out.append(self.pass.allocator, finite_value.selector);
-                    for (finite_tags.alternatives, finite_value.alternatives) |alternative_fact, alternative_value| {
-                        for (alternative_fact.payloads, alternative_value.payloads) |payload_fact, payload_value| {
-                            if (!try self.appendFieldReadExprsFromValue(payload_fact, payload_value, out)) return false;
+                    for (finite_tags.alternatives, finite_value.alternatives) |alternative_known_value, alternative_value| {
+                        for (alternative_known_value.payloads, alternative_value.payloads) |payload_known_value, payload_value| {
+                            if (!try self.appendFieldReadExprsFromValue(payload_known_value, payload_value, out)) return false;
                         }
                     }
                     return true;
@@ -3203,14 +3203,14 @@ const Cloner = struct {
                 };
                 const active_index = finiteTagAlternativeIndex(self.pass.program, finite_tags.alternatives, tag_value) orelse return false;
                 try out.append(self.pass.allocator, try self.selectorLiteral(@intCast(active_index)));
-                for (finite_tags.alternatives, 0..) |alternative_fact, alternative_index| {
+                for (finite_tags.alternatives, 0..) |alternative_known_value, alternative_index| {
                     if (alternative_index == active_index) {
-                        for (alternative_fact.payloads, tag_value.payloads) |payload_fact, payload_value| {
-                            if (!try self.appendFieldReadExprsFromValue(payload_fact, payload_value, out)) return false;
+                        for (alternative_known_value.payloads, tag_value.payloads) |payload_known_value, payload_value| {
+                            if (!try self.appendFieldReadExprsFromValue(payload_known_value, payload_value, out)) return false;
                         }
                     } else {
-                        for (alternative_fact.payloads) |payload_fact| {
-                            try self.appendUninitializedExprsForFact(payload_fact, out);
+                        for (alternative_known_value.payloads) |payload_known_value| {
+                            try self.appendUninitializedExprsForKnownValue(payload_known_value, out);
                         }
                     }
                 }
@@ -3243,7 +3243,7 @@ const Cloner = struct {
     }
 
     fn cloneFieldAccess(self: *Cloner, ty: Type.TypeId, field: anytype) Common.LowerError!Ast.ExprId {
-        const receiver = try self.cloneExprValueDemandingFact(field.receiver);
+        const receiver = try self.cloneExprValueDemandingKnownValue(field.receiver);
         if (try self.fieldFromKnownValue(receiver, field.field)) |value| return try self.materialize(value);
         return try self.addExpr(.{ .ty = ty, .data = .{ .field_access = .{
             .receiver = try self.materialize(receiver),
@@ -3252,7 +3252,7 @@ const Cloner = struct {
     }
 
     fn cloneTupleAccess(self: *Cloner, ty: Type.TypeId, access: anytype) Common.LowerError!Ast.ExprId {
-        const receiver = try self.cloneExprValueDemandingFact(access.tuple);
+        const receiver = try self.cloneExprValueDemandingKnownValue(access.tuple);
         if (try self.itemFromKnownValue(receiver, access.elem_index)) |value| return try self.materialize(value);
         return try self.addExpr(.{ .ty = ty, .data = .{ .tuple_access = .{
             .tuple = try self.materialize(receiver),
@@ -3263,35 +3263,35 @@ const Cloner = struct {
     fn fieldFromKnownValue(self: *Cloner, receiver: Value, field: names.RecordFieldNameId) Common.LowerError!?Value {
         if (fieldFromValue(receiver, field)) |value| return value;
 
-        const known_fact_expr = switch (receiver) {
-            .expr_with_known_fact => |known_fact_expr| known_fact_expr,
+        const known_value_expr = switch (receiver) {
+            .expr_with_known_value => |known_value_expr| known_value_expr,
             else => return null,
         };
-        if (!canReadFieldsFromExpr(self.pass.program, known_fact_expr.expr)) return null;
+        if (!canReadFieldsFromExpr(self.pass.program, known_value_expr.expr)) return null;
 
-        const field_fact = fieldFactFromFact(known_fact_expr.fact, field) orelse return null;
-        const field_expr = try self.addExpr(.{ .ty = factType(field_fact), .data = .{ .field_access = .{
-            .receiver = known_fact_expr.expr,
+        const field_known_value = fieldKnownValueFromKnownValue(known_value_expr.known_value, field) orelse return null;
+        const field_expr = try self.addExpr(.{ .ty = known_valueType(field_known_value), .data = .{ .field_access = .{
+            .receiver = known_value_expr.expr,
             .field = field,
         } } });
-        return valueFromProjectedExpr(field_expr, field_fact);
+        return valueFromProjectedExpr(field_expr, field_known_value);
     }
 
     fn itemFromKnownValue(self: *Cloner, receiver: Value, index: u32) Common.LowerError!?Value {
         if (itemFromValue(receiver, index)) |value| return value;
 
-        const known_fact_expr = switch (receiver) {
-            .expr_with_known_fact => |known_fact_expr| known_fact_expr,
+        const known_value_expr = switch (receiver) {
+            .expr_with_known_value => |known_value_expr| known_value_expr,
             else => return null,
         };
-        if (!canReadFieldsFromExpr(self.pass.program, known_fact_expr.expr)) return null;
+        if (!canReadFieldsFromExpr(self.pass.program, known_value_expr.expr)) return null;
 
-        const item_fact = itemFactFromFact(known_fact_expr.fact, index) orelse return null;
-        const item_expr = try self.addExpr(.{ .ty = factType(item_fact), .data = .{ .tuple_access = .{
-            .tuple = known_fact_expr.expr,
+        const item_known_value = itemKnownValueFromKnownValue(known_value_expr.known_value, index) orelse return null;
+        const item_expr = try self.addExpr(.{ .ty = known_valueType(item_known_value), .data = .{ .tuple_access = .{
+            .tuple = known_value_expr.expr,
             .elem_index = index,
         } } });
-        return valueFromProjectedExpr(item_expr, item_fact);
+        return valueFromProjectedExpr(item_expr, item_known_value);
     }
 
     fn cloneIfValue(self: *Cloner, ty: Type.TypeId, if_: anytype) Common.LowerError!Value {
@@ -3309,17 +3309,17 @@ const Cloner = struct {
         final_else: Ast.ExprId,
     ) Common.LowerError!Value {
         if (index == source_branches.len) {
-            return try self.cloneExprValueDemandingFact(final_else);
+            return try self.cloneExprValueDemandingKnownValue(final_else);
         }
 
         const branch = source_branches[index];
-        const cond_value = try self.cloneExprValueDemandingFact(branch.cond);
+        const cond_value = try self.cloneExprValueDemandingKnownValue(branch.cond);
         if (knownIfConditionBoolTag(self.pass.program, cond_value)) |cond| {
-            if (cond) return try self.cloneExprValueDemandingFact(branch.body);
+            if (cond) return try self.cloneExprValueDemandingKnownValue(branch.body);
             return try self.cloneIfValueFromBranches(ty, source_branches, index + 1, final_else);
         }
         if (finiteBoolTagsValue(self.pass.program, cond_value)) |finite_bool| {
-            const true_value = try self.cloneExprValueDemandingFact(branch.body);
+            const true_value = try self.cloneExprValueDemandingKnownValue(branch.body);
             const false_value = try self.cloneIfValueFromBranches(ty, source_branches, index + 1, final_else);
             return try self.selectFiniteBoolValue(ty, finite_bool, true_value, false_value);
         }
@@ -3327,7 +3327,7 @@ const Cloner = struct {
         const if_branches = try self.pass.arena.allocator().alloc(IfValueBranch, 1);
         if_branches[0] = .{
             .cond = try self.materialize(cond_value),
-            .body = try self.cloneExprValueDemandingFact(branch.body),
+            .body = try self.cloneExprValueDemandingKnownValue(branch.body),
         };
         const else_value = try self.pass.arena.allocator().create(Value);
         else_value.* = try self.cloneIfValueFromBranches(ty, source_branches, index + 1, final_else);
@@ -3381,7 +3381,7 @@ const Cloner = struct {
         ty: Type.TypeId,
         scrutinee_expr: Ast.ExprId,
         match: @import("../monotype/ast.zig").MatchExpr,
-        scrutinee_fact: ?ValueFact,
+        scrutinee_known_value: ?KnownValue,
     ) Common.LowerError!Value {
         const source_branches = try self.pass.allocator.dupe(Ast.Branch, self.pass.program.branchSpan(match.branches));
         defer self.pass.allocator.free(source_branches);
@@ -3392,19 +3392,19 @@ const Cloner = struct {
         defer body_values.deinit(self.pass.allocator);
 
         for (source_branches) |branch| {
-            if (scrutinee_fact) |fact| {
-                if (patternDefinitelyExcludedByFact(self.pass.program, branch.pat, fact)) continue;
+            if (scrutinee_known_value) |known_value| {
+                if (patternDefinitelyExcludedByKnownValue(self.pass.program, branch.pat, known_value)) continue;
             }
             const change_start = self.changes.items.len;
-            if (scrutinee_fact) |fact| {
-                _ = try self.bindPatToExprWithKnownFact(branch.pat, fact);
+            if (scrutinee_known_value) |known_value| {
+                _ = try self.bindPatToExprWithKnownValue(branch.pat, known_value);
             }
             const cloned_branch = Ast.Branch{
                 .pat = try self.clonePat(branch.pat),
                 .guard = if (branch.guard) |guard| try self.cloneExpr(guard) else null,
                 .body = undefined,
             };
-            const body_value = try self.cloneExprValueDemandingFact(branch.body);
+            const body_value = try self.cloneExprValueDemandingKnownValue(branch.body);
             try branches.append(self.pass.allocator, .{
                 .pat = cloned_branch.pat,
                 .guard = cloned_branch.guard,
@@ -3414,67 +3414,67 @@ const Cloner = struct {
             self.restore(change_start);
         }
 
-        const fact = try self.joinValueFacts(body_values.items);
+        const known_value = try self.joinKnownValuesFromValues(body_values.items);
         const match_expr = try self.addExpr(.{ .ty = ty, .data = .{ .match_ = .{
             .scrutinee = scrutinee_expr,
             .branches = try self.pass.program.addBranchSpan(branches.items),
             .comptime_site = match.comptime_site,
         } } });
 
-        if (fact == null) return .{ .expr = match_expr };
+        if (known_value == null) return .{ .expr = match_expr };
 
-        return .{ .expr_with_known_fact = .{
+        return .{ .expr_with_known_value = .{
             .expr = match_expr,
-            .fact = fact.?,
+            .known_value = known_value.?,
         } };
     }
 
-    fn joinValueFacts(self: *Cloner, values: []const Value) Allocator.Error!?ValueFact {
+    fn joinKnownValuesFromValues(self: *Cloner, values: []const Value) Allocator.Error!?KnownValue {
         if (values.len == 0) return null;
-        var joined = (try self.pass.factFromValue(values[0])) orelse return null;
+        var joined = (try self.pass.knownValueFromValue(values[0])) orelse return null;
         for (values[1..]) |value| {
-            const next = (try self.pass.factFromValue(value)) orelse return null;
-            joined = (try self.joinFacts(joined, next)) orelse return null;
+            const next = (try self.pass.knownValueFromValue(value)) orelse return null;
+            joined = (try self.joinKnownValuePair(joined, next)) orelse return null;
         }
         return joined;
     }
 
-    fn joinFacts(self: *Cloner, lhs: ValueFact, rhs: ValueFact) Allocator.Error!?ValueFact {
-        return try joinFactsInArena(self.pass.program, self.pass.arena.allocator(), lhs, rhs);
+    fn joinKnownValuePair(self: *Cloner, lhs: KnownValue, rhs: KnownValue) Allocator.Error!?KnownValue {
+        return try joinKnownValuesInArena(self.pass.program, self.pass.arena.allocator(), lhs, rhs);
     }
 
     fn cloneMatch(self: *Cloner, ty: Type.TypeId, match: @import("../monotype/ast.zig").MatchExpr) Common.LowerError!Ast.ExprId {
-        const scrutinee = try self.cloneExprValueDemandingFact(match.scrutinee);
+        const scrutinee = try self.cloneExprValueDemandingKnownValue(match.scrutinee);
         if (try self.simplifyKnownMatch(ty, scrutinee, match.branches)) |body| return body;
 
         const scrutinee_expr = try self.materialize(scrutinee);
-        const scrutinee_fact = try self.pass.factFromValue(scrutinee);
+        const scrutinee_known_value = try self.pass.knownValueFromValue(scrutinee);
         return try self.addExpr(.{ .ty = ty, .data = .{ .match_ = .{
             .scrutinee = scrutinee_expr,
-            .branches = try self.cloneBranchSpanWithScrutineeFact(match.branches, scrutinee_fact),
+            .branches = try self.cloneBranchSpanWithScrutineeKnownValue(match.branches, scrutinee_known_value),
             .comptime_site = match.comptime_site,
         } } });
     }
 
     fn simplifyKnownMatch(self: *Cloner, ty: Type.TypeId, scrutinee: Value, branches_span: Ast.Span(Ast.Branch)) Common.LowerError!?Ast.ExprId {
-        if (try self.simplifyKnownMatchValueWithFactPreservation(ty, scrutinee, branches_span, false)) |value| {
+        if (try self.simplifyKnownMatchValueWithKnownValuePreservation(ty, scrutinee, branches_span, false)) |value| {
             return try self.materialize(value);
         }
         return null;
     }
 
     fn simplifyKnownMatchValue(self: *Cloner, ty: Type.TypeId, scrutinee: Value, branches_span: Ast.Span(Ast.Branch)) Common.LowerError!?Value {
-        return try self.simplifyKnownMatchValueWithFactPreservation(ty, scrutinee, branches_span, true);
+        return try self.simplifyKnownMatchValueWithKnownValuePreservation(ty, scrutinee, branches_span, true);
     }
 
-    fn simplifyKnownMatchValueWithFactPreservation(
+    fn simplifyKnownMatchValueWithKnownValuePreservation(
         self: *Cloner,
         ty: Type.TypeId,
         scrutinee: Value,
         branches_span: Ast.Span(Ast.Branch),
-        preserve_branch_fact: bool,
+        preserve_branch_known_value: bool,
     ) Common.LowerError!?Value {
-        return try self.simplifyKnownMatchValueMode(ty, scrutinee, branches_span, .strict, preserve_branch_fact);
+        return try self.simplifyKnownMatchValueMode(ty, scrutinee, branches_span, .strict, preserve_branch_known_value);
     }
 
     fn simplifyKnownMatchValueMode(
@@ -3483,21 +3483,21 @@ const Cloner = struct {
         scrutinee: Value,
         branches_span: Ast.Span(Ast.Branch),
         mode: KnownMatchMode,
-        preserve_branch_fact: bool,
+        preserve_branch_known_value: bool,
     ) Common.LowerError!?Value {
         switch (scrutinee) {
             .expr,
-            .expr_with_known_fact,
+            .expr_with_known_value,
             => return null,
             .let_ => |let_value| {
                 const change_start = self.changes.items.len;
                 defer self.restore(change_start);
-                try self.bindPendingLetFacts(let_value.lets);
-                const body = (try self.simplifyKnownMatchValueMode(ty, let_value.body.*, branches_span, mode, preserve_branch_fact)) orelse return null;
+                try self.bindPendingLetKnownValues(let_value.lets);
+                const body = (try self.simplifyKnownMatchValueMode(ty, let_value.body.*, branches_span, mode, preserve_branch_known_value)) orelse return null;
                 return try self.wrapPendingLets(body, let_value.lets, true);
             },
-            .if_ => |if_value| return try self.simplifyKnownMatchIfValue(ty, if_value, branches_span, preserve_branch_fact),
-            .finite_tags => |finite_tags| return try self.simplifyKnownMatchFiniteTagsValue(ty, finite_tags, branches_span, preserve_branch_fact),
+            .if_ => |if_value| return try self.simplifyKnownMatchIfValue(ty, if_value, branches_span, preserve_branch_known_value),
+            .finite_tags => |finite_tags| return try self.simplifyKnownMatchFiniteTagsValue(ty, finite_tags, branches_span, preserve_branch_known_value),
             else => {},
         }
         for (self.pass.program.branchSpan(branches_span)) |branch| {
@@ -3517,7 +3517,7 @@ const Cloner = struct {
             }
             const body = try self.cloneExprValue(branch.body);
             self.restore(change_start);
-            return try self.wrapPendingLets(body, pending_lets.items, preserve_branch_fact);
+            return try self.wrapPendingLets(body, pending_lets.items, preserve_branch_known_value);
         }
         switch (mode) {
             .strict => Common.invariant("known constructor match had no matching branch"),
@@ -3530,19 +3530,19 @@ const Cloner = struct {
         ty: Type.TypeId,
         if_value: IfValue,
         branches_span: Ast.Span(Ast.Branch),
-        preserve_branch_fact: bool,
+        preserve_branch_known_value: bool,
     ) Common.LowerError!?Value {
         const branches = try self.pass.arena.allocator().alloc(IfValueBranch, if_value.branches.len);
         for (if_value.branches, 0..) |branch, index| {
             branches[index] = .{
                 .cond = branch.cond,
-                .body = (try self.simplifyKnownMatchValueMode(ty, branch.body, branches_span, .speculative, preserve_branch_fact)) orelse
+                .body = (try self.simplifyKnownMatchValueMode(ty, branch.body, branches_span, .speculative, preserve_branch_known_value)) orelse
                     return null,
             };
         }
 
         const final_else = try self.pass.arena.allocator().create(Value);
-        final_else.* = (try self.simplifyKnownMatchValueMode(ty, if_value.final_else.*, branches_span, .speculative, preserve_branch_fact)) orelse
+        final_else.* = (try self.simplifyKnownMatchValueMode(ty, if_value.final_else.*, branches_span, .speculative, preserve_branch_known_value)) orelse
             return null;
 
         return .{ .if_ = .{
@@ -3557,13 +3557,13 @@ const Cloner = struct {
         ty: Type.TypeId,
         finite_tags: FiniteTagsValue,
         branches_span: Ast.Span(Ast.Branch),
-        preserve_branch_fact: bool,
+        preserve_branch_known_value: bool,
     ) Common.LowerError!?Value {
         if (finite_tags.alternatives.len == 0) {
             Common.invariant("finite tag match had no alternatives");
         }
         if (finite_tags.alternatives.len == 1) {
-            return try self.simplifyKnownMatchValueMode(ty, .{ .tag = finite_tags.alternatives[0] }, branches_span, .speculative, preserve_branch_fact);
+            return try self.simplifyKnownMatchValueMode(ty, .{ .tag = finite_tags.alternatives[0] }, branches_span, .speculative, preserve_branch_known_value);
         }
 
         const branch_count = finite_tags.alternatives.len - 1;
@@ -3571,13 +3571,13 @@ const Cloner = struct {
         for (finite_tags.alternatives[0..branch_count], branches, 0..) |alternative, *branch, index| {
             branch.* = .{
                 .cond = try self.selectorEquals(finite_tags.selector, @intCast(index)),
-                .body = (try self.simplifyKnownMatchValueMode(ty, .{ .tag = alternative }, branches_span, .speculative, preserve_branch_fact)) orelse
+                .body = (try self.simplifyKnownMatchValueMode(ty, .{ .tag = alternative }, branches_span, .speculative, preserve_branch_known_value)) orelse
                     return null,
             };
         }
 
         const final_else = try self.pass.arena.allocator().create(Value);
-        final_else.* = (try self.simplifyKnownMatchValueMode(ty, .{ .tag = finite_tags.alternatives[branch_count] }, branches_span, .speculative, preserve_branch_fact)) orelse
+        final_else.* = (try self.simplifyKnownMatchValueMode(ty, .{ .tag = finite_tags.alternatives[branch_count] }, branches_span, .speculative, preserve_branch_known_value)) orelse
             return null;
 
         return .{ .if_ = .{
@@ -3726,7 +3726,7 @@ const Cloner = struct {
     fn unsafeLeafCount(self: *Cloner, value: Value) usize {
         return switch (value) {
             .expr => |expr| if (self.exprCanSubstitute(expr)) 0 else 1,
-            .expr_with_known_fact => |known_fact_expr| if (self.exprCanSubstitute(known_fact_expr.expr)) 0 else 1,
+            .expr_with_known_value => |known_value_expr| if (self.exprCanSubstitute(known_value_expr.expr)) 0 else 1,
             .let_ => |let_value| blk: {
                 var count: usize = let_value.lets.len;
                 count += self.unsafeLeafCount(let_value.body.*);
@@ -3795,22 +3795,22 @@ const Cloner = struct {
                     .data = .{ .local = local },
                 }) };
             },
-            .expr_with_known_fact => |known_fact_expr| blk: {
-                const ty = self.pass.program.exprs.items[@intFromEnum(known_fact_expr.expr)].ty;
+            .expr_with_known_value => |known_value_expr| blk: {
+                const ty = self.pass.program.exprs.items[@intFromEnum(known_value_expr.expr)].ty;
                 const local = try self.pass.program.addLocal(self.pass.symbols.fresh(), ty);
                 try pending_lets.append(self.pass.allocator, .{
                     .local = local,
                     .ty = ty,
-                    .value = known_fact_expr.expr,
-                    .fact = known_fact_expr.fact,
+                    .value = known_value_expr.expr,
+                    .known_value = known_value_expr.known_value,
                 });
                 const local_expr = try self.addExpr(.{
                     .ty = ty,
                     .data = .{ .local = local },
                 });
-                break :blk Value{ .expr_with_known_fact = .{
+                break :blk Value{ .expr_with_known_value = .{
                     .expr = local_expr,
-                    .fact = known_fact_expr.fact,
+                    .known_value = known_value_expr.known_value,
                 } };
             },
             .let_ => |let_value| blk: {
@@ -3931,11 +3931,11 @@ const Cloner = struct {
         };
     }
 
-    fn wrapPendingLets(self: *Cloner, body: Value, pending_lets: []const PendingLet, preserve_fact: bool) Common.LowerError!Value {
+    fn wrapPendingLets(self: *Cloner, body: Value, pending_lets: []const PendingLet, preserve_known_value: bool) Common.LowerError!Value {
         if (pending_lets.len == 0) return body;
 
-        const fact = if (preserve_fact) try self.pass.factFromValue(body) else null;
-        if (fact != null) {
+        const known_value = if (preserve_known_value) try self.pass.knownValueFromValue(body) else null;
+        if (known_value != null) {
             const lets = try self.pass.arena.allocator().dupe(PendingLet, pending_lets);
             return .{ .let_ = .{
                 .lets = lets,
@@ -4018,7 +4018,7 @@ const Cloner = struct {
         ty: Type.TypeId,
         callable: CallableValue,
         args_span: Ast.Span(Ast.ExprId),
-        demand_result_fact: bool,
+        demand_result_known_value: bool,
     ) Common.LowerError!Value {
         for (self.inline_stack.items) |active| {
             if (active.fn_id == callable.fn_id) {
@@ -4099,11 +4099,11 @@ const Cloner = struct {
             try self.putSubst(source_arg.local, arg_value);
         }
 
-        const body_value = if (demand_result_fact)
-            try self.cloneExprValueDemandingFact(body)
+        const body_value = if (demand_result_known_value)
+            try self.cloneExprValueDemandingKnownValue(body)
         else
             try self.cloneExprValue(body);
-        return try self.wrapPendingLets(body_value, pending_lets.items, demand_result_fact);
+        return try self.wrapPendingLets(body_value, pending_lets.items, demand_result_known_value);
     }
 
     fn callKnownValue(
@@ -4111,12 +4111,12 @@ const Cloner = struct {
         ty: Type.TypeId,
         callee: Value,
         args_span: Ast.Span(Ast.ExprId),
-        demand_result_fact: bool,
+        demand_result_known_value: bool,
     ) Common.LowerError!Value {
         return switch (callee) {
-            .callable => |callable| try self.inlineCallableCallValue(ty, callable, args_span, demand_result_fact),
-            .finite_callables => |finite_callables| try self.callFiniteCallablesValue(ty, finite_callables, args_span, demand_result_fact),
-            .if_ => |if_value| try self.callIfValue(ty, if_value, args_span, demand_result_fact),
+            .callable => |callable| try self.inlineCallableCallValue(ty, callable, args_span, demand_result_known_value),
+            .finite_callables => |finite_callables| try self.callFiniteCallablesValue(ty, finite_callables, args_span, demand_result_known_value),
+            .if_ => |if_value| try self.callIfValue(ty, if_value, args_span, demand_result_known_value),
             else => .{ .expr = try self.addExpr(.{ .ty = ty, .data = .{ .call_value = .{
                 .callee = try self.materialize(callee),
                 .args = try self.cloneExprSpan(args_span),
@@ -4129,13 +4129,13 @@ const Cloner = struct {
         ty: Type.TypeId,
         finite_callables: FiniteCallablesValue,
         args_span: Ast.Span(Ast.ExprId),
-        demand_result_fact: bool,
+        demand_result_known_value: bool,
     ) Common.LowerError!Value {
         if (finite_callables.alternatives.len == 0) {
             Common.invariant("finite callable value had no alternatives");
         }
         if (finite_callables.alternatives.len == 1) {
-            return try self.inlineCallableCallValue(ty, finite_callables.alternatives[0], args_span, demand_result_fact);
+            return try self.inlineCallableCallValue(ty, finite_callables.alternatives[0], args_span, demand_result_known_value);
         }
 
         const branch_count = finite_callables.alternatives.len - 1;
@@ -4143,12 +4143,12 @@ const Cloner = struct {
         for (finite_callables.alternatives[0..branch_count], branches, 0..) |alternative, *branch, index| {
             branch.* = .{
                 .cond = try self.selectorEquals(finite_callables.selector, @intCast(index)),
-                .body = try self.inlineCallableCallValue(ty, alternative, args_span, demand_result_fact),
+                .body = try self.inlineCallableCallValue(ty, alternative, args_span, demand_result_known_value),
             };
         }
 
         const final_else = try self.pass.arena.allocator().create(Value);
-        final_else.* = try self.inlineCallableCallValue(ty, finite_callables.alternatives[branch_count], args_span, demand_result_fact);
+        final_else.* = try self.inlineCallableCallValue(ty, finite_callables.alternatives[branch_count], args_span, demand_result_known_value);
         return .{ .if_ = .{
             .ty = ty,
             .branches = branches,
@@ -4161,17 +4161,17 @@ const Cloner = struct {
         ty: Type.TypeId,
         if_value: IfValue,
         args_span: Ast.Span(Ast.ExprId),
-        demand_result_fact: bool,
+        demand_result_known_value: bool,
     ) Common.LowerError!Value {
         const branches = try self.pass.arena.allocator().alloc(IfValueBranch, if_value.branches.len);
         for (if_value.branches, 0..) |branch, index| {
             branches[index] = .{
                 .cond = branch.cond,
-                .body = try self.callKnownValue(ty, branch.body, args_span, demand_result_fact),
+                .body = try self.callKnownValue(ty, branch.body, args_span, demand_result_known_value),
             };
         }
         const final_else = try self.pass.arena.allocator().create(Value);
-        final_else.* = try self.callKnownValue(ty, if_value.final_else.*, args_span, demand_result_fact);
+        final_else.* = try self.callKnownValue(ty, if_value.final_else.*, args_span, demand_result_known_value);
         return .{ .if_ = .{
             .ty = ty,
             .branches = branches,
@@ -4184,13 +4184,13 @@ const Cloner = struct {
         callee: Ast.FnId,
         args_span: Ast.Span(Ast.ExprId),
         original_expr: Ast.ExprId,
-        demand_result_fact: bool,
+        demand_result_known_value: bool,
     ) Common.LowerError!Value {
-        const active_arg_facts = try self.directCallActiveArgFacts(args_span);
+        const active_arg_known_values = try self.directCallActiveArgKnownValues(args_span);
         for (self.inline_stack.items) |active| {
             if (active.fn_id != callee) continue;
             const active_args = active.args orelse return .{ .expr = try self.cloneExprPlain(original_expr) };
-            if (!factsStrictlyDescend(self.pass.program, active_args, active_arg_facts)) {
+            if (!known_valuesStrictlyDescend(self.pass.program, active_args, active_arg_known_values)) {
                 return .{ .expr = try self.cloneExprPlain(original_expr) };
             }
         }
@@ -4234,7 +4234,7 @@ const Cloner = struct {
             &.{};
         for (args, 0..) |arg_expr, index| {
             arg_values[index] = if (index < callee_uses.len and callee_uses[index])
-                try self.cloneExprValueDemandingFact(arg_expr)
+                try self.cloneExprValueDemandingKnownValue(arg_expr)
             else
                 try self.cloneExprValue(arg_expr);
         }
@@ -4255,7 +4255,7 @@ const Cloner = struct {
 
         try self.inline_stack.append(self.pass.allocator, .{
             .fn_id = callee,
-            .args = active_arg_facts,
+            .args = active_arg_known_values,
         });
         defer {
             const popped = self.inline_stack.pop() orelse Common.invariant("call-pattern inline stack underflow");
@@ -4266,11 +4266,11 @@ const Cloner = struct {
             try self.putSubst(source_arg.local, arg_value);
         }
 
-        const body_value = if (demand_result_fact)
-            try self.cloneExprValueDemandingFact(body)
+        const body_value = if (demand_result_known_value)
+            try self.cloneExprValueDemandingKnownValue(body)
         else
             try self.cloneExprValue(body);
-        return try self.wrapPendingLets(body_value, pending_lets.items, demand_result_fact);
+        return try self.wrapPendingLets(body_value, pending_lets.items, demand_result_known_value);
     }
 
     fn bindPatToValue(self: *Cloner, pat_id: Ast.PatId, value: Value) Common.LowerError!bool {
@@ -4373,12 +4373,12 @@ const Cloner = struct {
         });
     }
 
-    fn bindPatToMaterializedFact(self: *Cloner, pat_id: Ast.PatId, value: Value) Common.LowerError!bool {
-        const fact = (try self.pass.factFromValue(value)) orelse return false;
-        return try self.bindPatToExprWithKnownFact(pat_id, fact);
+    fn bindPatToMaterializedKnownValue(self: *Cloner, pat_id: Ast.PatId, value: Value) Common.LowerError!bool {
+        const known_value = (try self.pass.knownValueFromValue(value)) orelse return false;
+        return try self.bindPatToExprWithKnownValue(pat_id, known_value);
     }
 
-    fn bindPatToExprWithKnownFact(self: *Cloner, pat_id: Ast.PatId, fact: ValueFact) Common.LowerError!bool {
+    fn bindPatToExprWithKnownValue(self: *Cloner, pat_id: Ast.PatId, known_value: KnownValue) Common.LowerError!bool {
         const pat = self.pass.program.pats.items[@intFromEnum(pat_id)];
         switch (pat.data) {
             .bind => |local| {
@@ -4387,57 +4387,57 @@ const Cloner = struct {
                     .ty = local_ty,
                     .data = .{ .local = local },
                 });
-                try self.putSubst(local, .{ .expr_with_known_fact = .{
+                try self.putSubst(local, .{ .expr_with_known_value = .{
                     .expr = local_expr,
-                    .fact = fact,
+                    .known_value = known_value,
                 } });
                 return true;
             },
             .wildcard => return true,
             .as => |as| {
-                if (!try self.bindPatToExprWithKnownFact(as.pattern, fact)) return false;
+                if (!try self.bindPatToExprWithKnownValue(as.pattern, known_value)) return false;
                 const local_ty = self.pass.program.locals.items[@intFromEnum(as.local)].ty;
                 const local_expr = try self.addExpr(.{
                     .ty = local_ty,
                     .data = .{ .local = as.local },
                 });
-                try self.putSubst(as.local, .{ .expr_with_known_fact = .{
+                try self.putSubst(as.local, .{ .expr_with_known_value = .{
                     .expr = local_expr,
-                    .fact = fact,
+                    .known_value = known_value,
                 } });
                 return true;
             },
             .record => |fields_span| {
                 const fields = self.pass.program.recordDestructSpan(fields_span);
                 for (fields) |field| {
-                    const field_fact = fieldFactFromFact(fact, field.name) orelse return false;
-                    if (!try self.bindPatToExprWithKnownFact(field.pattern, field_fact)) return false;
+                    const field_known_value = fieldKnownValueFromKnownValue(known_value, field.name) orelse return false;
+                    if (!try self.bindPatToExprWithKnownValue(field.pattern, field_known_value)) return false;
                 }
                 return true;
             },
             .tuple => |items_span| {
                 const pats = self.pass.program.patSpan(items_span);
                 for (pats, 0..) |child_pat, index| {
-                    const item_fact = itemFactFromFact(fact, @as(u32, @intCast(index))) orelse return false;
-                    if (!try self.bindPatToExprWithKnownFact(child_pat, item_fact)) return false;
+                    const item_known_value = itemKnownValueFromKnownValue(known_value, @as(u32, @intCast(index))) orelse return false;
+                    if (!try self.bindPatToExprWithKnownValue(child_pat, item_known_value)) return false;
                 }
                 return true;
             },
             .tag => |tag_pat| {
-                const tag_fact = tagFactForPattern(fact, tag_pat.name) orelse return false;
+                const tag_known_value = knownTagForPattern(known_value, tag_pat.name) orelse return false;
                 const pats = self.pass.program.patSpan(tag_pat.payloads);
-                if (pats.len != tag_fact.payloads.len) return false;
-                for (pats, tag_fact.payloads) |child_pat, payload_fact| {
-                    if (!try self.bindPatToExprWithKnownFact(child_pat, payload_fact)) return false;
+                if (pats.len != tag_known_value.payloads.len) return false;
+                for (pats, tag_known_value.payloads) |child_pat, payload_known_value| {
+                    if (!try self.bindPatToExprWithKnownValue(child_pat, payload_known_value)) return false;
                 }
                 return true;
             },
             .nominal => |backing_pat| {
-                const backing_fact = switch (fact) {
+                const backing_known_value = switch (known_value) {
                     .nominal => |nominal| nominal.backing.*,
                     else => return false,
                 };
-                return try self.bindPatToExprWithKnownFact(backing_pat, backing_fact);
+                return try self.bindPatToExprWithKnownValue(backing_pat, backing_known_value);
             },
             .list,
             .int_lit,
@@ -4522,7 +4522,7 @@ const Cloner = struct {
                 var value = if (let_.recursive)
                     try self.cloneExprValue(let_.value)
                 else
-                    try self.cloneExprValueDemandingFact(let_.value);
+                    try self.cloneExprValueDemandingKnownValue(let_.value);
                 if (!let_.recursive) {
                     while (value == .let_) {
                         try self.appendPendingLetStmts(value.let_.lets, out);
@@ -4549,7 +4549,7 @@ const Cloner = struct {
                 if (!let_.recursive and try self.bindPatToReusableValue(let_.pat, value)) {
                     return;
                 }
-                _ = try self.bindPatToMaterializedFact(let_.pat, value);
+                _ = try self.bindPatToMaterializedKnownValue(let_.pat, value);
                 break :blk .{ .let_ = .{
                     .pat = try self.clonePat(let_.pat),
                     .value = value_expr,
@@ -4585,16 +4585,16 @@ const Cloner = struct {
         }
     }
 
-    fn bindPendingLetFacts(self: *Cloner, pending_lets: []const PendingLet) Common.LowerError!void {
+    fn bindPendingLetKnownValues(self: *Cloner, pending_lets: []const PendingLet) Common.LowerError!void {
         for (pending_lets) |pending| {
-            const fact = pending.fact orelse continue;
+            const known_value = pending.known_value orelse continue;
             const local_expr = try self.addExpr(.{
                 .ty = pending.ty,
                 .data = .{ .local = pending.local },
             });
-            try self.putSubst(pending.local, .{ .expr_with_known_fact = .{
+            try self.putSubst(pending.local, .{ .expr_with_known_value = .{
                 .expr = local_expr,
-                .fact = fact,
+                .known_value = known_value,
             } });
         }
     }
@@ -4624,7 +4624,7 @@ const Cloner = struct {
                 .local = local,
                 .ty = pat.ty,
                 .value = let_.value,
-                .fact = try self.pass.constructorFact(let_.value),
+                .known_value = try self.pass.constructorKnownValue(let_.value),
             });
         }
         return true;
@@ -4680,10 +4680,10 @@ const Cloner = struct {
         return try self.pass.program.addRecordDestructSpan(values);
     }
 
-    fn cloneBranchSpanWithScrutineeFact(
+    fn cloneBranchSpanWithScrutineeKnownValue(
         self: *Cloner,
         span: Ast.Span(Ast.Branch),
-        scrutinee_fact: ?ValueFact,
+        scrutinee_known_value: ?KnownValue,
     ) Common.LowerError!Ast.Span(Ast.Branch) {
         const source = try self.pass.allocator.dupe(Ast.Branch, self.pass.program.branchSpan(span));
         defer self.pass.allocator.free(source);
@@ -4691,12 +4691,12 @@ const Cloner = struct {
         var values = std.ArrayList(Ast.Branch).empty;
         defer values.deinit(self.pass.allocator);
         for (source) |branch| {
-            if (scrutinee_fact) |fact| {
-                if (patternDefinitelyExcludedByFact(self.pass.program, branch.pat, fact)) continue;
+            if (scrutinee_known_value) |known_value| {
+                if (patternDefinitelyExcludedByKnownValue(self.pass.program, branch.pat, known_value)) continue;
             }
             const change_start = self.changes.items.len;
-            if (scrutinee_fact) |fact| {
-                _ = try self.bindPatToExprWithKnownFact(branch.pat, fact);
+            if (scrutinee_known_value) |known_value| {
+                _ = try self.bindPatToExprWithKnownValue(branch.pat, known_value);
             }
             try values.append(self.pass.allocator, .{
                 .pat = try self.clonePat(branch.pat),
@@ -4726,7 +4726,7 @@ const Cloner = struct {
     fn materialize(self: *Cloner, value: Value) Common.LowerError!Ast.ExprId {
         switch (value) {
             .expr => |expr| return expr,
-            .expr_with_known_fact => |known_fact_expr| return known_fact_expr.expr,
+            .expr_with_known_value => |known_value_expr| return known_value_expr.expr,
             .let_ => |let_value| {
                 const body = try self.materialize(let_value.body.*);
                 return try self.wrapPendingLetsAroundExpr(valueType(self.pass.program, let_value.body.*), body, let_value.lets);
@@ -4791,7 +4791,7 @@ const Cloner = struct {
     fn materializePublic(self: *Cloner, value: Value) Common.LowerError!Ast.ExprId {
         switch (value) {
             .expr => |expr| return expr,
-            .expr_with_known_fact => |known_fact_expr| return known_fact_expr.expr,
+            .expr_with_known_value => |known_value_expr| return known_value_expr.expr,
             .let_ => |let_value| {
                 const body = try self.materializePublic(let_value.body.*);
                 return try self.wrapPendingLetsAroundExpr(valueType(self.pass.program, let_value.body.*), body, let_value.lets);
@@ -4949,14 +4949,14 @@ const Cloner = struct {
     }
 
     fn specializedCallableRef(self: *Cloner, callable: CallableValue) Common.LowerError!Ast.ExprId {
-        const capture_facts = try self.callableCaptureFacts(callable);
-        if (self.existingCallableSpecialization(callable.fn_id, capture_facts)) |existing| {
+        const capture_known_values = try self.callableCaptureKnownValues(callable);
+        if (self.existingCallableSpecialization(callable.fn_id, capture_known_values)) |existing| {
             const existing_fn = self.pass.program.fns.items[@intFromEnum(existing)];
-            return try self.materializeCallableWithCaptureFacts(
+            return try self.materializeCallableWithCaptureKnownValues(
                 callable.ty,
                 existing,
                 existing_fn.captures,
-                capture_facts,
+                capture_known_values,
                 callable.captures,
             );
         }
@@ -4981,8 +4981,8 @@ const Cloner = struct {
 
         try self.clearBinderSubstitutionsForInline();
 
-        for (source_captures, capture_facts) |source_capture, capture_fact| {
-            const capture_value = try self.valueFromFactArgs(capture_fact, &captures);
+        for (source_captures, capture_known_values) |source_capture, capture_known_value| {
+            const capture_value = try self.valueFromKnownValueArgs(capture_known_value, &captures);
             try self.putSubst(source_capture.local, capture_value);
         }
 
@@ -5010,16 +5010,16 @@ const Cloner = struct {
         });
         try self.pass.callable_specializations.append(self.pass.allocator, .{
             .source_fn = callable.fn_id,
-            .captures = capture_facts,
+            .captures = capture_known_values,
             .fn_id = fn_id,
         });
         try self.pass.copyProcDebugName(source_fn.symbol, symbol);
 
-        const result = try self.materializeCallableWithCaptureFacts(
+        const result = try self.materializeCallableWithCaptureKnownValues(
             callable.ty,
             fn_id,
             captures_span,
-            capture_facts,
+            capture_known_values,
             callable.captures,
         );
 
@@ -5044,14 +5044,14 @@ const Cloner = struct {
         return result;
     }
 
-    fn callableCaptureFacts(self: *Cloner, callable: CallableValue) Allocator.Error![]const ValueFact {
-        const captures = try self.pass.arena.allocator().alloc(ValueFact, callable.captures.len);
+    fn callableCaptureKnownValues(self: *Cloner, callable: CallableValue) Allocator.Error![]const KnownValue {
+        const captures = try self.pass.arena.allocator().alloc(KnownValue, callable.captures.len);
         for (callable.captures, captures) |capture, *out| {
-            const fact = (try self.pass.factFromValue(capture)) orelse {
+            const known_value = (try self.pass.knownValueFromValue(capture)) orelse {
                 out.* = .{ .any = valueType(self.pass.program, capture) };
                 continue;
             };
-            out.* = (try self.projectableLoopFactForValue(fact, capture)) orelse
+            out.* = (try self.projectableLoopKnownValueForValue(known_value, capture)) orelse
                 .{ .any = valueType(self.pass.program, capture) };
         }
         return captures;
@@ -5060,14 +5060,14 @@ const Cloner = struct {
     fn existingCallableSpecialization(
         self: *Cloner,
         source_fn: Ast.FnId,
-        capture_facts: []const ValueFact,
+        capture_known_values: []const KnownValue,
     ) ?Ast.FnId {
         for (self.pass.callable_specializations.items) |specialization| {
             if (specialization.source_fn != source_fn) continue;
-            if (specialization.captures.len != capture_facts.len) continue;
+            if (specialization.captures.len != capture_known_values.len) continue;
             var matches = true;
-            for (specialization.captures, capture_facts) |existing, requested| {
-                if (!factEql(self.pass.program, existing, requested)) {
+            for (specialization.captures, capture_known_values) |existing, requested| {
+                if (!known_valueEql(self.pass.program, existing, requested)) {
                     matches = false;
                     break;
                 }
@@ -5077,12 +5077,12 @@ const Cloner = struct {
         return null;
     }
 
-    fn materializeCallableWithCaptureFacts(
+    fn materializeCallableWithCaptureKnownValues(
         self: *Cloner,
         ty: Type.TypeId,
         fn_id: Ast.FnId,
         captures_span: Ast.Span(Ast.TypedLocal),
-        capture_facts: []const ValueFact,
+        capture_known_values: []const KnownValue,
         values: []const Value,
     ) Common.LowerError!Ast.ExprId {
         var flattened = std.ArrayList(Ast.ExprId).empty;
@@ -5090,12 +5090,12 @@ const Cloner = struct {
         var pending_lets = std.ArrayList(PendingLet).empty;
         defer pending_lets.deinit(self.pass.allocator);
 
-        if (capture_facts.len != values.len) {
-            Common.invariant("callable capture fact count differed from capture value count");
+        if (capture_known_values.len != values.len) {
+            Common.invariant("callable capture known_value count differed from capture value count");
         }
-        for (capture_facts, values) |fact, value| {
-            if (!try self.appendCaptureExprsFromValue(fact, value, &flattened, &pending_lets)) {
-                Common.invariant("callable capture value could not be split into requested fact");
+        for (capture_known_values, values) |known_value, value| {
+            if (!try self.appendCaptureExprsFromValue(known_value, value, &flattened, &pending_lets)) {
+                Common.invariant("callable capture value could not be split into requested known_value");
             }
         }
 
@@ -5131,7 +5131,7 @@ const Cloner = struct {
 
     fn appendCaptureExprsFromValue(
         self: *Cloner,
-        fact: ValueFact,
+        known_value: KnownValue,
         value: Value,
         out: *std.ArrayList(Ast.ExprId),
         pending_lets: *std.ArrayList(PendingLet),
@@ -5139,9 +5139,9 @@ const Cloner = struct {
         return switch (value) {
             .let_ => |let_value| {
                 try pending_lets.appendSlice(self.pass.allocator, let_value.lets);
-                return try self.appendCaptureExprsFromValue(fact, let_value.body.*, out, pending_lets);
+                return try self.appendCaptureExprsFromValue(known_value, let_value.body.*, out, pending_lets);
             },
-            else => try self.appendFieldReadExprsFromValue(fact, value, out),
+            else => try self.appendFieldReadExprsFromValue(known_value, value, out),
         };
     }
 
@@ -5205,7 +5205,7 @@ const Cloner = struct {
             .nominal,
             => true,
             .expr,
-            .expr_with_known_fact,
+            .expr_with_known_value,
             .let_,
             .if_,
             .callable,
@@ -5909,44 +5909,44 @@ fn canReadFieldsFromExpr(program: *const Ast.Program, expr_id: Ast.ExprId) bool 
 fn projectableExprFromValue(value: Value) ?Ast.ExprId {
     return switch (value) {
         .expr => |expr| expr,
-        .expr_with_known_fact => |known_fact_expr| known_fact_expr.expr,
+        .expr_with_known_value => |known_value_expr| known_value_expr.expr,
         else => null,
     };
 }
 
-fn valueFromProjectedExpr(expr: Ast.ExprId, fact: ValueFact) Value {
-    return switch (fact) {
+fn valueFromProjectedExpr(expr: Ast.ExprId, known_value: KnownValue) Value {
+    return switch (known_value) {
         .any => .{ .expr = expr },
-        else => .{ .expr_with_known_fact = .{
+        else => .{ .expr_with_known_value = .{
             .expr = expr,
-            .fact = fact,
+            .known_value = known_value,
         } },
     };
 }
 
-fn fieldFactFromFact(fact: ValueFact, name: names.RecordFieldNameId) ?ValueFact {
-    return switch (fact) {
+fn fieldKnownValueFromKnownValue(known_value: KnownValue, name: names.RecordFieldNameId) ?KnownValue {
+    return switch (known_value) {
         .record => |record| blk: {
             for (record.fields) |field| {
-                if (field.name == name) break :blk field.fact;
+                if (field.name == name) break :blk field.known_value;
             }
             break :blk null;
         },
-        .nominal => |nominal| fieldFactFromFact(nominal.backing.*, name),
+        .nominal => |nominal| fieldKnownValueFromKnownValue(nominal.backing.*, name),
         else => null,
     };
 }
 
-fn itemFactFromFact(fact: ValueFact, index: u32) ?ValueFact {
-    return switch (fact) {
+fn itemKnownValueFromKnownValue(known_value: KnownValue, index: u32) ?KnownValue {
+    return switch (known_value) {
         .tuple => |tuple| if (index < tuple.items.len) tuple.items[index] else null,
-        .nominal => |nominal| itemFactFromFact(nominal.backing.*, index),
+        .nominal => |nominal| itemKnownValueFromKnownValue(nominal.backing.*, index),
         else => null,
     };
 }
 
-fn tagFactForPattern(fact: ValueFact, name: names.TagNameId) ?TagFact {
-    return switch (fact) {
+fn knownTagForPattern(known_value: KnownValue, name: names.TagNameId) ?KnownTag {
+    return switch (known_value) {
         .tag => |tag| if (tag.name == name) tag else null,
         .finite_tags => |finite_tags| blk: {
             for (finite_tags.alternatives) |alternative| {
@@ -5954,32 +5954,32 @@ fn tagFactForPattern(fact: ValueFact, name: names.TagNameId) ?TagFact {
             }
             break :blk null;
         },
-        .nominal => |nominal| tagFactForPattern(nominal.backing.*, name),
+        .nominal => |nominal| knownTagForPattern(nominal.backing.*, name),
         else => null,
     };
 }
 
-fn patternDefinitelyExcludedByFact(program: *const Ast.Program, pat_id: Ast.PatId, fact: ValueFact) bool {
+fn patternDefinitelyExcludedByKnownValue(program: *const Ast.Program, pat_id: Ast.PatId, known_value: KnownValue) bool {
     const pat = program.pats.items[@intFromEnum(pat_id)];
     return switch (pat.data) {
-        .as => |as| patternDefinitelyExcludedByFact(program, as.pattern, fact),
-        .nominal => |backing| switch (fact) {
-            .nominal => |nominal| patternDefinitelyExcludedByFact(program, backing, nominal.backing.*),
+        .as => |as| patternDefinitelyExcludedByKnownValue(program, as.pattern, known_value),
+        .nominal => |backing| switch (known_value) {
+            .nominal => |nominal| patternDefinitelyExcludedByKnownValue(program, backing, nominal.backing.*),
             else => false,
         },
-        .tag => |tag_pat| switch (fact) {
+        .tag => |tag_pat| switch (known_value) {
             .tag,
             .finite_tags,
-            => tagFactForPattern(fact, tag_pat.name) == null,
-            .nominal => |nominal| patternDefinitelyExcludedByFact(program, pat_id, nominal.backing.*),
+            => knownTagForPattern(known_value, tag_pat.name) == null,
+            .nominal => |nominal| patternDefinitelyExcludedByKnownValue(program, pat_id, nominal.backing.*),
             else => false,
         },
         else => false,
     };
 }
 
-fn factType(fact: ValueFact) Type.TypeId {
-    return switch (fact) {
+fn known_valueType(known_value: KnownValue) Type.TypeId {
+    return switch (known_value) {
         .any => |ty| ty,
         .leaf => |ty| ty,
         .tag => |tag| tag.ty,
@@ -5995,7 +5995,7 @@ fn factType(fact: ValueFact) Type.TypeId {
 fn valueType(program: *const Ast.Program, value: Value) Type.TypeId {
     return switch (value) {
         .expr => |expr| program.exprs.items[@intFromEnum(expr)].ty,
-        .expr_with_known_fact => |known_fact_expr| program.exprs.items[@intFromEnum(known_fact_expr.expr)].ty,
+        .expr_with_known_value => |known_value_expr| program.exprs.items[@intFromEnum(known_value_expr.expr)].ty,
         .let_ => |let_value| valueType(program, let_value.body.*),
         .if_ => |if_value| if_value.ty,
         .tag => |tag| tag.ty,
@@ -6022,30 +6022,30 @@ fn sameType(program: *const Ast.Program, lhs: Type.TypeId, rhs: Type.TypeId) boo
 fn patternEql(program: *const Ast.Program, lhs: CallPattern, rhs: CallPattern) bool {
     if (lhs.args.len != rhs.args.len) return false;
     for (lhs.args, rhs.args) |lhs_arg, rhs_arg| {
-        if (!factEql(program, lhs_arg, rhs_arg)) return false;
+        if (!known_valueEql(program, lhs_arg, rhs_arg)) return false;
     }
     return true;
 }
 
-fn joinFactsInArena(
+fn joinKnownValuesInArena(
     program: *const Ast.Program,
     arena: Allocator,
-    lhs: ValueFact,
-    rhs: ValueFact,
-) Allocator.Error!?ValueFact {
-    if (factEql(program, lhs, rhs)) return lhs;
-    if (!sameType(program, factType(lhs), factType(rhs))) return null;
-    if (try commonFiniteTagsFact(program, arena, lhs, rhs)) |finite_tags| return finite_tags;
-    if (try commonFiniteCallablesFact(program, arena, lhs, rhs)) |finite_callables| return finite_callables;
+    lhs: KnownValue,
+    rhs: KnownValue,
+) Allocator.Error!?KnownValue {
+    if (known_valueEql(program, lhs, rhs)) return lhs;
+    if (!sameType(program, known_valueType(lhs), known_valueType(rhs))) return null;
+    if (try commonKnownTags(program, arena, lhs, rhs)) |finite_tags| return finite_tags;
+    if (try commonKnownCallables(program, arena, lhs, rhs)) |finite_callables| return finite_callables;
 
     return switch (lhs) {
-        .any => |ty| ValueFact{ .any = ty },
+        .any => |ty| KnownValue{ .any = ty },
         .leaf => |ty| blk: {
             const rhs_ty = switch (rhs) {
                 .leaf => |rhs_ty| rhs_ty,
                 else => break :blk null,
             };
-            break :blk if (sameType(program, ty, rhs_ty)) ValueFact{ .leaf = ty } else null;
+            break :blk if (sameType(program, ty, rhs_ty)) KnownValue{ .leaf = ty } else null;
         },
         .tag => |lhs_tag| blk: {
             const rhs_tag = switch (rhs) {
@@ -6053,12 +6053,12 @@ fn joinFactsInArena(
                 else => break :blk null,
             };
             if (lhs_tag.name != rhs_tag.name or lhs_tag.payloads.len != rhs_tag.payloads.len) break :blk null;
-            const payloads = try arena.alloc(ValueFact, lhs_tag.payloads.len);
+            const payloads = try arena.alloc(KnownValue, lhs_tag.payloads.len);
             for (lhs_tag.payloads, rhs_tag.payloads, 0..) |lhs_payload, rhs_payload, index| {
-                payloads[index] = (try joinFactsInArena(program, arena, lhs_payload, rhs_payload)) orelse
-                    .{ .any = factType(lhs_payload) };
+                payloads[index] = (try joinKnownValuesInArena(program, arena, lhs_payload, rhs_payload)) orelse
+                    .{ .any = known_valueType(lhs_payload) };
             }
-            break :blk ValueFact{ .tag = .{
+            break :blk KnownValue{ .tag = .{
                 .ty = lhs_tag.ty,
                 .name = lhs_tag.name,
                 .payloads = payloads,
@@ -6070,16 +6070,16 @@ fn joinFactsInArena(
                 else => break :blk null,
             };
             if (lhs_record.fields.len != rhs_record.fields.len) break :blk null;
-            const fields = try arena.alloc(FieldFact, lhs_record.fields.len);
+            const fields = try arena.alloc(KnownField, lhs_record.fields.len);
             for (lhs_record.fields, rhs_record.fields, 0..) |lhs_field, rhs_field, index| {
                 if (lhs_field.name != rhs_field.name) break :blk null;
                 fields[index] = .{
                     .name = lhs_field.name,
-                    .fact = (try joinFactsInArena(program, arena, lhs_field.fact, rhs_field.fact)) orelse
-                        .{ .any = factType(lhs_field.fact) },
+                    .known_value = (try joinKnownValuesInArena(program, arena, lhs_field.known_value, rhs_field.known_value)) orelse
+                        .{ .any = known_valueType(lhs_field.known_value) },
                 };
             }
-            break :blk ValueFact{ .record = .{
+            break :blk KnownValue{ .record = .{
                 .ty = lhs_record.ty,
                 .fields = fields,
             } };
@@ -6090,12 +6090,12 @@ fn joinFactsInArena(
                 else => break :blk null,
             };
             if (lhs_tuple.items.len != rhs_tuple.items.len) break :blk null;
-            const items = try arena.alloc(ValueFact, lhs_tuple.items.len);
+            const items = try arena.alloc(KnownValue, lhs_tuple.items.len);
             for (lhs_tuple.items, rhs_tuple.items, 0..) |lhs_item, rhs_item, index| {
-                items[index] = (try joinFactsInArena(program, arena, lhs_item, rhs_item)) orelse
-                    .{ .any = factType(lhs_item) };
+                items[index] = (try joinKnownValuesInArena(program, arena, lhs_item, rhs_item)) orelse
+                    .{ .any = known_valueType(lhs_item) };
             }
-            break :blk ValueFact{ .tuple = .{
+            break :blk KnownValue{ .tuple = .{
                 .ty = lhs_tuple.ty,
                 .items = items,
             } };
@@ -6105,10 +6105,10 @@ fn joinFactsInArena(
                 .nominal => |nominal| nominal,
                 else => break :blk null,
             };
-            const backing = (try joinFactsInArena(program, arena, lhs_nominal.backing.*, rhs_nominal.backing.*)) orelse break :blk null;
-            const stored = try arena.create(ValueFact);
+            const backing = (try joinKnownValuesInArena(program, arena, lhs_nominal.backing.*, rhs_nominal.backing.*)) orelse break :blk null;
+            const stored = try arena.create(KnownValue);
             stored.* = backing;
-            break :blk ValueFact{ .nominal = .{
+            break :blk KnownValue{ .nominal = .{
                 .ty = lhs_nominal.ty,
                 .backing = stored,
             } };
@@ -6123,12 +6123,12 @@ fn joinFactsInArena(
             {
                 break :blk null;
             }
-            const captures = try arena.alloc(ValueFact, lhs_callable.captures.len);
+            const captures = try arena.alloc(KnownValue, lhs_callable.captures.len);
             for (lhs_callable.captures, rhs_callable.captures, 0..) |lhs_capture, rhs_capture, index| {
-                captures[index] = (try joinFactsInArena(program, arena, lhs_capture, rhs_capture)) orelse
-                    .{ .any = factType(lhs_capture) };
+                captures[index] = (try joinKnownValuesInArena(program, arena, lhs_capture, rhs_capture)) orelse
+                    .{ .any = known_valueType(lhs_capture) };
             }
-            break :blk ValueFact{ .callable = .{
+            break :blk KnownValue{ .callable = .{
                 .ty = lhs_callable.ty,
                 .fn_id = lhs_callable.fn_id,
                 .captures = captures,
@@ -6139,52 +6139,52 @@ fn joinFactsInArena(
     };
 }
 
-fn factsStrictlyDescend(program: *const Ast.Program, active: []const ValueFact, next: []const ValueFact) bool {
+fn known_valuesStrictlyDescend(program: *const Ast.Program, active: []const KnownValue, next: []const KnownValue) bool {
     if (active.len != next.len) return false;
     var descended = false;
-    for (active, next) |active_fact, next_fact| {
-        if (factEql(program, active_fact, next_fact)) continue;
-        if (!factContainsStrictSubfact(program, active_fact, next_fact)) return false;
+    for (active, next) |active_known_value, next_known_value| {
+        if (known_valueEql(program, active_known_value, next_known_value)) continue;
+        if (!known_valueContainsStrictSubknown_value(program, active_known_value, next_known_value)) return false;
         descended = true;
     }
     return descended;
 }
 
-fn factContainsStrictSubfact(program: *const Ast.Program, container: ValueFact, needle: ValueFact) bool {
+fn known_valueContainsStrictSubknown_value(program: *const Ast.Program, container: KnownValue, needle: KnownValue) bool {
     return switch (container) {
         .any => false,
         .leaf => false,
         .tag => |tag| {
             for (tag.payloads) |payload| {
-                if (factEql(program, payload, needle) or factContainsStrictSubfact(program, payload, needle)) return true;
+                if (known_valueEql(program, payload, needle) or known_valueContainsStrictSubknown_value(program, payload, needle)) return true;
             }
             return false;
         },
         .record => |record| {
             for (record.fields) |field| {
-                if (factEql(program, field.fact, needle) or factContainsStrictSubfact(program, field.fact, needle)) return true;
+                if (known_valueEql(program, field.known_value, needle) or known_valueContainsStrictSubknown_value(program, field.known_value, needle)) return true;
             }
             return false;
         },
         .tuple => |tuple| {
             for (tuple.items) |item| {
-                if (factEql(program, item, needle) or factContainsStrictSubfact(program, item, needle)) return true;
+                if (known_valueEql(program, item, needle) or known_valueContainsStrictSubknown_value(program, item, needle)) return true;
             }
             return false;
         },
         .nominal => |nominal| {
-            return factEql(program, nominal.backing.*, needle) or factContainsStrictSubfact(program, nominal.backing.*, needle);
+            return known_valueEql(program, nominal.backing.*, needle) or known_valueContainsStrictSubknown_value(program, nominal.backing.*, needle);
         },
         .callable => |callable| {
             for (callable.captures) |capture| {
-                if (factEql(program, capture, needle) or factContainsStrictSubfact(program, capture, needle)) return true;
+                if (known_valueEql(program, capture, needle) or known_valueContainsStrictSubknown_value(program, capture, needle)) return true;
             }
             return false;
         },
         .finite_tags => |finite_tags| {
             for (finite_tags.alternatives) |alternative| {
                 for (alternative.payloads) |payload| {
-                    if (factEql(program, payload, needle) or factContainsStrictSubfact(program, payload, needle)) return true;
+                    if (known_valueEql(program, payload, needle) or known_valueContainsStrictSubknown_value(program, payload, needle)) return true;
                 }
             }
             return false;
@@ -6192,7 +6192,7 @@ fn factContainsStrictSubfact(program: *const Ast.Program, container: ValueFact, 
         .finite_callables => |finite_callables| {
             for (finite_callables.alternatives) |alternative| {
                 for (alternative.captures) |capture| {
-                    if (factEql(program, capture, needle) or factContainsStrictSubfact(program, capture, needle)) return true;
+                    if (known_valueEql(program, capture, needle) or known_valueContainsStrictSubknown_value(program, capture, needle)) return true;
                 }
             }
             return false;
@@ -6200,7 +6200,7 @@ fn factContainsStrictSubfact(program: *const Ast.Program, container: ValueFact, 
     };
 }
 
-fn factEql(program: *const Ast.Program, lhs: ValueFact, rhs: ValueFact) bool {
+fn known_valueEql(program: *const Ast.Program, lhs: KnownValue, rhs: KnownValue) bool {
     if (std.meta.activeTag(lhs) != std.meta.activeTag(rhs)) return false;
     return switch (lhs) {
         .any => |lhs_ty| sameType(program, lhs_ty, rhs.any),
@@ -6209,7 +6209,7 @@ fn factEql(program: *const Ast.Program, lhs: ValueFact, rhs: ValueFact) bool {
             const rhs_tag = rhs.tag;
             if (!sameType(program, lhs_tag.ty, rhs_tag.ty) or lhs_tag.name != rhs_tag.name or lhs_tag.payloads.len != rhs_tag.payloads.len) break :blk false;
             for (lhs_tag.payloads, rhs_tag.payloads) |lhs_payload, rhs_payload| {
-                if (!factEql(program, lhs_payload, rhs_payload)) break :blk false;
+                if (!known_valueEql(program, lhs_payload, rhs_payload)) break :blk false;
             }
             break :blk true;
         },
@@ -6217,7 +6217,7 @@ fn factEql(program: *const Ast.Program, lhs: ValueFact, rhs: ValueFact) bool {
             const rhs_record = rhs.record;
             if (!sameType(program, lhs_record.ty, rhs_record.ty) or lhs_record.fields.len != rhs_record.fields.len) break :blk false;
             for (lhs_record.fields, rhs_record.fields) |lhs_field, rhs_field| {
-                if (lhs_field.name != rhs_field.name or !factEql(program, lhs_field.fact, rhs_field.fact)) break :blk false;
+                if (lhs_field.name != rhs_field.name or !known_valueEql(program, lhs_field.known_value, rhs_field.known_value)) break :blk false;
             }
             break :blk true;
         },
@@ -6225,13 +6225,13 @@ fn factEql(program: *const Ast.Program, lhs: ValueFact, rhs: ValueFact) bool {
             const rhs_tuple = rhs.tuple;
             if (!sameType(program, lhs_tuple.ty, rhs_tuple.ty) or lhs_tuple.items.len != rhs_tuple.items.len) break :blk false;
             for (lhs_tuple.items, rhs_tuple.items) |lhs_item, rhs_item| {
-                if (!factEql(program, lhs_item, rhs_item)) break :blk false;
+                if (!known_valueEql(program, lhs_item, rhs_item)) break :blk false;
             }
             break :blk true;
         },
         .nominal => |lhs_nominal| {
             const rhs_nominal = rhs.nominal;
-            return sameType(program, lhs_nominal.ty, rhs_nominal.ty) and factEql(program, lhs_nominal.backing.*, rhs_nominal.backing.*);
+            return sameType(program, lhs_nominal.ty, rhs_nominal.ty) and known_valueEql(program, lhs_nominal.backing.*, rhs_nominal.backing.*);
         },
         .callable => |lhs_callable| blk: {
             const rhs_callable = rhs.callable;
@@ -6242,24 +6242,24 @@ fn factEql(program: *const Ast.Program, lhs: ValueFact, rhs: ValueFact) bool {
                 break :blk false;
             }
             for (lhs_callable.captures, rhs_callable.captures) |lhs_capture, rhs_capture| {
-                if (!factEql(program, lhs_capture, rhs_capture)) break :blk false;
+                if (!known_valueEql(program, lhs_capture, rhs_capture)) break :blk false;
             }
             break :blk true;
         },
-        .finite_tags => |lhs_finite| finiteTagsFactEql(program, lhs_finite, rhs.finite_tags),
-        .finite_callables => |lhs_finite| finiteCallablesFactEql(program, lhs_finite, rhs.finite_callables),
+        .finite_tags => |lhs_finite| knownTagsEql(program, lhs_finite, rhs.finite_tags),
+        .finite_callables => |lhs_finite| knownCallablesEql(program, lhs_finite, rhs.finite_callables),
     };
 }
 
-fn factMatchesValue(program: *const Ast.Program, fact: ValueFact, value: Value) bool {
-    if (value == .expr_with_known_fact) {
-        if (fact == .any) return true;
-        if (fact == .leaf) return sameType(program, fact.leaf, valueType(program, value));
-        if (!canReadFieldsFromExpr(program, value.expr_with_known_fact.expr)) return false;
-        return factCanProjectFromExpr(fact) and factMatchesFact(program, fact, value.expr_with_known_fact.fact);
+fn knownValueMatchesValue(program: *const Ast.Program, known_value: KnownValue, value: Value) bool {
+    if (value == .expr_with_known_value) {
+        if (known_value == .any) return true;
+        if (known_value == .leaf) return sameType(program, known_value.leaf, valueType(program, value));
+        if (!canReadFieldsFromExpr(program, value.expr_with_known_value.expr)) return false;
+        return known_valueCanProjectFromExpr(known_value) and knownValueMatchesKnownValue(program, known_value, value.expr_with_known_value.known_value);
     }
 
-    return switch (fact) {
+    return switch (known_value) {
         .any => true,
         .leaf => |ty| sameType(program, ty, valueType(program, value)),
         .tag => |tag| blk: {
@@ -6268,8 +6268,8 @@ fn factMatchesValue(program: *const Ast.Program, fact: ValueFact, value: Value) 
                 else => break :blk false,
             };
             if (!sameType(program, tag.ty, value_tag.ty) or tag.name != value_tag.name or tag.payloads.len != value_tag.payloads.len) break :blk false;
-            for (tag.payloads, value_tag.payloads) |payload_fact, payload_value| {
-                if (!factMatchesValue(program, payload_fact, payload_value)) break :blk false;
+            for (tag.payloads, value_tag.payloads) |payload_known_value, payload_value| {
+                if (!knownValueMatchesValue(program, payload_known_value, payload_value)) break :blk false;
             }
             break :blk true;
         },
@@ -6279,8 +6279,8 @@ fn factMatchesValue(program: *const Ast.Program, fact: ValueFact, value: Value) 
                 else => break :blk false,
             };
             if (!sameType(program, record.ty, value_record.ty) or record.fields.len != value_record.fields.len) break :blk false;
-            for (record.fields, value_record.fields) |field_fact, field_value| {
-                if (field_fact.name != field_value.name or !factMatchesValue(program, field_fact.fact, field_value.value)) break :blk false;
+            for (record.fields, value_record.fields) |field_known_value, field_value| {
+                if (field_known_value.name != field_value.name or !knownValueMatchesValue(program, field_known_value.known_value, field_value.value)) break :blk false;
             }
             break :blk true;
         },
@@ -6290,8 +6290,8 @@ fn factMatchesValue(program: *const Ast.Program, fact: ValueFact, value: Value) 
                 else => break :blk false,
             };
             if (!sameType(program, tuple.ty, value_tuple.ty) or tuple.items.len != value_tuple.items.len) break :blk false;
-            for (tuple.items, value_tuple.items) |item_fact, item_value| {
-                if (!factMatchesValue(program, item_fact, item_value)) break :blk false;
+            for (tuple.items, value_tuple.items) |item_known_value, item_value| {
+                if (!knownValueMatchesValue(program, item_known_value, item_value)) break :blk false;
             }
             break :blk true;
         },
@@ -6300,7 +6300,7 @@ fn factMatchesValue(program: *const Ast.Program, fact: ValueFact, value: Value) 
                 .nominal => |value_nominal| value_nominal,
                 else => break :blk false,
             };
-            break :blk sameType(program, nominal.ty, value_nominal.ty) and factMatchesValue(program, nominal.backing.*, value_nominal.backing.*);
+            break :blk sameType(program, nominal.ty, value_nominal.ty) and knownValueMatchesValue(program, nominal.backing.*, value_nominal.backing.*);
         },
         .callable => |callable| blk: {
             const value_callable = switch (value) {
@@ -6313,45 +6313,45 @@ fn factMatchesValue(program: *const Ast.Program, fact: ValueFact, value: Value) 
             {
                 break :blk false;
             }
-            for (callable.captures, value_callable.captures) |capture_fact, capture_value| {
-                if (!factMatchesValue(program, capture_fact, capture_value)) break :blk false;
+            for (callable.captures, value_callable.captures) |capture_known_value, capture_value| {
+                if (!knownValueMatchesValue(program, capture_known_value, capture_value)) break :blk false;
             }
             break :blk true;
         },
         .finite_tags => |finite_tags| blk: {
             switch (value) {
                 .tag => |tag| break :blk finiteTagAlternativeIndex(program, finite_tags.alternatives, tag) != null,
-                .finite_tags => |finite_value| break :blk finiteTagsFactMatchesValue(program, finite_tags, finite_value),
+                .finite_tags => |finite_value| break :blk knownTagsMatchesValue(program, finite_tags, finite_value),
                 else => break :blk false,
             }
         },
         .finite_callables => |finite_callables| blk: {
             switch (value) {
                 .callable => |callable| break :blk finiteCallableAlternativeIndex(program, finite_callables.alternatives, callable) != null,
-                .finite_callables => |finite_value| break :blk finiteCallablesFactMatchesValue(program, finite_callables, finite_value),
+                .finite_callables => |finite_value| break :blk knownCallablesMatchesValue(program, finite_callables, finite_value),
                 else => break :blk false,
             }
         },
     };
 }
 
-fn factCanProjectFromExpr(fact: ValueFact) bool {
-    return switch (fact) {
+fn known_valueCanProjectFromExpr(known_value: KnownValue) bool {
+    return switch (known_value) {
         .any => true,
         .leaf => true,
         .record => |record| blk: {
             for (record.fields) |field| {
-                if (!factCanProjectFromExpr(field.fact)) break :blk false;
+                if (!known_valueCanProjectFromExpr(field.known_value)) break :blk false;
             }
             break :blk true;
         },
         .tuple => |tuple| blk: {
             for (tuple.items) |item| {
-                if (!factCanProjectFromExpr(item)) break :blk false;
+                if (!known_valueCanProjectFromExpr(item)) break :blk false;
             }
             break :blk true;
         },
-        .nominal => |nominal| factCanProjectFromExpr(nominal.backing.*),
+        .nominal => |nominal| known_valueCanProjectFromExpr(nominal.backing.*),
         .tag,
         .callable,
         .finite_tags,
@@ -6360,10 +6360,10 @@ fn factCanProjectFromExpr(fact: ValueFact) bool {
     };
 }
 
-fn factMatchesFact(program: *const Ast.Program, pattern: ValueFact, actual: ValueFact) bool {
+fn knownValueMatchesKnownValue(program: *const Ast.Program, pattern: KnownValue, actual: KnownValue) bool {
     return switch (pattern) {
         .any => true,
-        .leaf => |ty| sameType(program, ty, factType(actual)),
+        .leaf => |ty| sameType(program, ty, known_valueType(actual)),
         .tag => |pattern_tag| blk: {
             const actual_tag = switch (actual) {
                 .tag => |tag| tag,
@@ -6376,7 +6376,7 @@ fn factMatchesFact(program: *const Ast.Program, pattern: ValueFact, actual: Valu
                 break :blk false;
             }
             for (pattern_tag.payloads, actual_tag.payloads) |pattern_payload, actual_payload| {
-                if (!factMatchesFact(program, pattern_payload, actual_payload)) break :blk false;
+                if (!knownValueMatchesKnownValue(program, pattern_payload, actual_payload)) break :blk false;
             }
             break :blk true;
         },
@@ -6387,7 +6387,7 @@ fn factMatchesFact(program: *const Ast.Program, pattern: ValueFact, actual: Valu
             };
             if (!sameType(program, pattern_record.ty, actual_record.ty) or pattern_record.fields.len != actual_record.fields.len) break :blk false;
             for (pattern_record.fields, actual_record.fields) |pattern_field, actual_field| {
-                if (pattern_field.name != actual_field.name or !factMatchesFact(program, pattern_field.fact, actual_field.fact)) break :blk false;
+                if (pattern_field.name != actual_field.name or !knownValueMatchesKnownValue(program, pattern_field.known_value, actual_field.known_value)) break :blk false;
             }
             break :blk true;
         },
@@ -6398,7 +6398,7 @@ fn factMatchesFact(program: *const Ast.Program, pattern: ValueFact, actual: Valu
             };
             if (!sameType(program, pattern_tuple.ty, actual_tuple.ty) or pattern_tuple.items.len != actual_tuple.items.len) break :blk false;
             for (pattern_tuple.items, actual_tuple.items) |pattern_item, actual_item| {
-                if (!factMatchesFact(program, pattern_item, actual_item)) break :blk false;
+                if (!knownValueMatchesKnownValue(program, pattern_item, actual_item)) break :blk false;
             }
             break :blk true;
         },
@@ -6408,7 +6408,7 @@ fn factMatchesFact(program: *const Ast.Program, pattern: ValueFact, actual: Valu
                 else => break :blk false,
             };
             break :blk sameType(program, pattern_nominal.ty, actual_nominal.ty) and
-                factMatchesFact(program, pattern_nominal.backing.*, actual_nominal.backing.*);
+                knownValueMatchesKnownValue(program, pattern_nominal.backing.*, actual_nominal.backing.*);
         },
         .callable => |pattern_callable| blk: {
             const actual_callable = switch (actual) {
@@ -6422,7 +6422,7 @@ fn factMatchesFact(program: *const Ast.Program, pattern: ValueFact, actual: Valu
                 break :blk false;
             }
             for (pattern_callable.captures, actual_callable.captures) |pattern_capture, actual_capture| {
-                if (!factMatchesFact(program, pattern_capture, actual_capture)) break :blk false;
+                if (!knownValueMatchesKnownValue(program, pattern_capture, actual_capture)) break :blk false;
             }
             break :blk true;
         },
@@ -6430,54 +6430,54 @@ fn factMatchesFact(program: *const Ast.Program, pattern: ValueFact, actual: Valu
             const actual_finite = switch (actual) {
                 .finite_tags => |finite_tags| finite_tags,
                 .tag => |tag| {
-                    break :blk finiteTagFactContainsTagFact(program, pattern_finite, tag);
+                    break :blk finiteKnownTagContainsKnownTag(program, pattern_finite, tag);
                 },
                 else => break :blk false,
             };
-            break :blk finiteTagsFactContainsFact(program, pattern_finite, actual_finite);
+            break :blk knownTagsContainsKnownValue(program, pattern_finite, actual_finite);
         },
         .finite_callables => |pattern_finite| blk: {
             const actual_finite = switch (actual) {
                 .finite_callables => |finite_callables| finite_callables,
                 .callable => |callable| {
-                    break :blk finiteCallableFactContainsCallableFact(program, pattern_finite, callable);
+                    break :blk finiteKnownCallableContainsKnownCallable(program, pattern_finite, callable);
                 },
                 else => break :blk false,
             };
-            break :blk finiteCallablesFactContainsFact(program, pattern_finite, actual_finite);
+            break :blk knownCallablesContainsKnownValue(program, pattern_finite, actual_finite);
         },
     };
 }
 
-fn commonFiniteTagsFact(
+fn commonKnownTags(
     program: *const Ast.Program,
     arena: Allocator,
-    lhs: ValueFact,
-    rhs: ValueFact,
-) Allocator.Error!?ValueFact {
-    const ty = factType(lhs);
-    var alternatives = std.ArrayList(TagFact).empty;
+    lhs: KnownValue,
+    rhs: KnownValue,
+) Allocator.Error!?KnownValue {
+    const ty = known_valueType(lhs);
+    var alternatives = std.ArrayList(KnownTag).empty;
     defer alternatives.deinit(arena);
 
-    if (!try appendFactTagAlternatives(program, arena, &alternatives, lhs)) return null;
-    if (!try appendFactTagAlternatives(program, arena, &alternatives, rhs)) return null;
+    if (!try appendKnownTagAlternatives(program, arena, &alternatives, lhs)) return null;
+    if (!try appendKnownTagAlternatives(program, arena, &alternatives, rhs)) return null;
     if (alternatives.items.len == 0) return null;
-    if (alternatives.items.len == 1) return ValueFact{ .tag = alternatives.items[0] };
+    if (alternatives.items.len == 1) return KnownValue{ .tag = alternatives.items[0] };
 
-    const stored = try arena.dupe(TagFact, alternatives.items);
-    return ValueFact{ .finite_tags = .{
+    const stored = try arena.dupe(KnownTag, alternatives.items);
+    return KnownValue{ .finite_tags = .{
         .ty = ty,
         .alternatives = stored,
     } };
 }
 
-fn appendFactTagAlternatives(
+fn appendKnownTagAlternatives(
     program: *const Ast.Program,
     arena: Allocator,
-    out: *std.ArrayList(TagFact),
-    fact: ValueFact,
+    out: *std.ArrayList(KnownTag),
+    known_value: KnownValue,
 ) Allocator.Error!bool {
-    switch (fact) {
+    switch (known_value) {
         .tag => |tag| return try appendTagAlternative(program, arena, out, tag),
         .finite_tags => |finite_tags| {
             for (finite_tags.alternatives) |alternative| {
@@ -6492,18 +6492,18 @@ fn appendFactTagAlternatives(
 fn appendTagAlternative(
     program: *const Ast.Program,
     arena: Allocator,
-    out: *std.ArrayList(TagFact),
-    candidate: TagFact,
+    out: *std.ArrayList(KnownTag),
+    candidate: KnownTag,
 ) Allocator.Error!bool {
     for (out.items, 0..) |existing, index| {
         if (existing.name != candidate.name) continue;
         if (!sameType(program, existing.ty, candidate.ty)) return false;
         if (existing.payloads.len != candidate.payloads.len) return false;
 
-        const payloads = try arena.alloc(ValueFact, existing.payloads.len);
+        const payloads = try arena.alloc(KnownValue, existing.payloads.len);
         for (existing.payloads, candidate.payloads, payloads) |lhs_payload, rhs_payload, *payload_out| {
-            payload_out.* = (try joinFactsInArena(program, arena, lhs_payload, rhs_payload)) orelse
-                .{ .any = factType(lhs_payload) };
+            payload_out.* = (try joinKnownValuesInArena(program, arena, lhs_payload, rhs_payload)) orelse
+                .{ .any = known_valueType(lhs_payload) };
         }
         out.items[index] = .{
             .ty = existing.ty,
@@ -6519,14 +6519,14 @@ fn appendTagAlternative(
 
 fn finiteTagAlternativeIndex(
     program: *const Ast.Program,
-    alternatives: []const TagFact,
+    alternatives: []const KnownTag,
     value: TagValue,
 ) ?usize {
     for (alternatives, 0..) |alternative, index| {
         if (!sameType(program, alternative.ty, value.ty)) continue;
         if (alternative.name != value.name or alternative.payloads.len != value.payloads.len) continue;
-        for (alternative.payloads, value.payloads) |payload_fact, payload_value| {
-            if (!factMatchesValue(program, payload_fact, payload_value)) break;
+        for (alternative.payloads, value.payloads) |payload_known_value, payload_value| {
+            if (!knownValueMatchesValue(program, payload_known_value, payload_value)) break;
         } else {
             return index;
         }
@@ -6534,28 +6534,28 @@ fn finiteTagAlternativeIndex(
     return null;
 }
 
-fn finiteTagsFactMatchesValue(
+fn knownTagsMatchesValue(
     program: *const Ast.Program,
-    fact: FiniteTagsFact,
+    known_value: KnownTags,
     value: FiniteTagsValue,
 ) bool {
-    if (!sameType(program, fact.ty, value.ty)) return false;
-    if (fact.alternatives.len != value.alternatives.len) return false;
-    for (fact.alternatives, value.alternatives) |fact_alternative, value_alternative| {
-        if (!sameType(program, fact_alternative.ty, value_alternative.ty)) return false;
-        if (fact_alternative.name != value_alternative.name or fact_alternative.payloads.len != value_alternative.payloads.len) return false;
-        for (fact_alternative.payloads, value_alternative.payloads) |payload_fact, payload_value| {
-            if (!factMatchesValue(program, payload_fact, payload_value)) return false;
+    if (!sameType(program, known_value.ty, value.ty)) return false;
+    if (known_value.alternatives.len != value.alternatives.len) return false;
+    for (known_value.alternatives, value.alternatives) |known_value_alternative, value_alternative| {
+        if (!sameType(program, known_value_alternative.ty, value_alternative.ty)) return false;
+        if (known_value_alternative.name != value_alternative.name or known_value_alternative.payloads.len != value_alternative.payloads.len) return false;
+        for (known_value_alternative.payloads, value_alternative.payloads) |payload_known_value, payload_value| {
+            if (!knownValueMatchesValue(program, payload_known_value, payload_value)) return false;
         }
     }
     return true;
 }
 
-fn finiteTagsFactEql(program: *const Ast.Program, lhs: FiniteTagsFact, rhs: FiniteTagsFact) bool {
+fn knownTagsEql(program: *const Ast.Program, lhs: KnownTags, rhs: KnownTags) bool {
     if (!sameType(program, lhs.ty, rhs.ty) or lhs.alternatives.len != rhs.alternatives.len) return false;
     for (lhs.alternatives) |lhs_alternative| {
         for (rhs.alternatives) |rhs_alternative| {
-            if (tagFactEql(program, lhs_alternative, rhs_alternative)) break;
+            if (knownTagEql(program, lhs_alternative, rhs_alternative)) break;
         } else {
             return false;
         }
@@ -6563,19 +6563,19 @@ fn finiteTagsFactEql(program: *const Ast.Program, lhs: FiniteTagsFact, rhs: Fini
     return true;
 }
 
-fn tagFactEql(program: *const Ast.Program, lhs: TagFact, rhs: TagFact) bool {
+fn knownTagEql(program: *const Ast.Program, lhs: KnownTag, rhs: KnownTag) bool {
     if (!sameType(program, lhs.ty, rhs.ty) or
         lhs.name != rhs.name or lhs.payloads.len != rhs.payloads.len)
     {
         return false;
     }
     for (lhs.payloads, rhs.payloads) |lhs_payload, rhs_payload| {
-        if (!factEql(program, lhs_payload, rhs_payload)) return false;
+        if (!known_valueEql(program, lhs_payload, rhs_payload)) return false;
     }
     return true;
 }
 
-fn finiteTagFactContainsTagFact(program: *const Ast.Program, finite: FiniteTagsFact, tag: TagFact) bool {
+fn finiteKnownTagContainsKnownTag(program: *const Ast.Program, finite: KnownTags, tag: KnownTag) bool {
     for (finite.alternatives) |alternative| {
         if (!sameType(program, alternative.ty, tag.ty) or
             alternative.name != tag.name or
@@ -6584,7 +6584,7 @@ fn finiteTagFactContainsTagFact(program: *const Ast.Program, finite: FiniteTagsF
             continue;
         }
         for (alternative.payloads, tag.payloads) |pattern_payload, actual_payload| {
-            if (!factMatchesFact(program, pattern_payload, actual_payload)) break;
+            if (!knownValueMatchesKnownValue(program, pattern_payload, actual_payload)) break;
         } else {
             return true;
         }
@@ -6592,43 +6592,43 @@ fn finiteTagFactContainsTagFact(program: *const Ast.Program, finite: FiniteTagsF
     return false;
 }
 
-fn finiteTagsFactContainsFact(program: *const Ast.Program, pattern: FiniteTagsFact, actual: FiniteTagsFact) bool {
+fn knownTagsContainsKnownValue(program: *const Ast.Program, pattern: KnownTags, actual: KnownTags) bool {
     if (!sameType(program, pattern.ty, actual.ty)) return false;
     for (actual.alternatives) |alternative| {
-        if (!finiteTagFactContainsTagFact(program, pattern, alternative)) return false;
+        if (!finiteKnownTagContainsKnownTag(program, pattern, alternative)) return false;
     }
     return true;
 }
 
-fn commonFiniteCallablesFact(
+fn commonKnownCallables(
     program: *const Ast.Program,
     arena: Allocator,
-    lhs: ValueFact,
-    rhs: ValueFact,
-) Allocator.Error!?ValueFact {
-    const ty = factType(lhs);
-    var alternatives = std.ArrayList(CallableFact).empty;
+    lhs: KnownValue,
+    rhs: KnownValue,
+) Allocator.Error!?KnownValue {
+    const ty = known_valueType(lhs);
+    var alternatives = std.ArrayList(KnownCallable).empty;
     defer alternatives.deinit(arena);
 
-    if (!try appendFactCallableAlternatives(program, arena, &alternatives, lhs)) return null;
-    if (!try appendFactCallableAlternatives(program, arena, &alternatives, rhs)) return null;
+    if (!try appendKnownCallableAlternatives(program, arena, &alternatives, lhs)) return null;
+    if (!try appendKnownCallableAlternatives(program, arena, &alternatives, rhs)) return null;
     if (alternatives.items.len == 0) return null;
-    if (alternatives.items.len == 1) return ValueFact{ .callable = alternatives.items[0] };
+    if (alternatives.items.len == 1) return KnownValue{ .callable = alternatives.items[0] };
 
-    const stored = try arena.dupe(CallableFact, alternatives.items);
-    return ValueFact{ .finite_callables = .{
+    const stored = try arena.dupe(KnownCallable, alternatives.items);
+    return KnownValue{ .finite_callables = .{
         .ty = ty,
         .alternatives = stored,
     } };
 }
 
-fn appendFactCallableAlternatives(
+fn appendKnownCallableAlternatives(
     program: *const Ast.Program,
     arena: Allocator,
-    out: *std.ArrayList(CallableFact),
-    fact: ValueFact,
+    out: *std.ArrayList(KnownCallable),
+    known_value: KnownValue,
 ) Allocator.Error!bool {
-    switch (fact) {
+    switch (known_value) {
         .callable => |callable| return try appendCallableAlternative(program, arena, out, callable),
         .finite_callables => |finite_callables| {
             for (finite_callables.alternatives) |alternative| {
@@ -6643,18 +6643,18 @@ fn appendFactCallableAlternatives(
 fn appendCallableAlternative(
     program: *const Ast.Program,
     arena: Allocator,
-    out: *std.ArrayList(CallableFact),
-    candidate: CallableFact,
+    out: *std.ArrayList(KnownCallable),
+    candidate: KnownCallable,
 ) Allocator.Error!bool {
     for (out.items, 0..) |existing, index| {
         if (!callableTargetMatches(program, existing.fn_id, candidate.fn_id)) continue;
         if (!sameType(program, existing.ty, candidate.ty)) return false;
         if (existing.captures.len != candidate.captures.len) return false;
 
-        const captures = try arena.alloc(ValueFact, existing.captures.len);
+        const captures = try arena.alloc(KnownValue, existing.captures.len);
         for (existing.captures, candidate.captures, captures) |lhs_capture, rhs_capture, *capture_out| {
-            capture_out.* = (try joinFactsInArena(program, arena, lhs_capture, rhs_capture)) orelse
-                .{ .any = factType(lhs_capture) };
+            capture_out.* = (try joinKnownValuesInArena(program, arena, lhs_capture, rhs_capture)) orelse
+                .{ .any = known_valueType(lhs_capture) };
         }
         out.items[index] = .{
             .ty = existing.ty,
@@ -6670,14 +6670,14 @@ fn appendCallableAlternative(
 
 fn finiteCallableAlternativeIndex(
     program: *const Ast.Program,
-    alternatives: []const CallableFact,
+    alternatives: []const KnownCallable,
     value: CallableValue,
 ) ?usize {
     for (alternatives, 0..) |alternative, index| {
         if (!sameType(program, alternative.ty, value.ty)) continue;
         if (!callableTargetMatches(program, alternative.fn_id, value.fn_id) or alternative.captures.len != value.captures.len) continue;
-        for (alternative.captures, value.captures) |capture_fact, capture_value| {
-            if (!factMatchesValue(program, capture_fact, capture_value)) break;
+        for (alternative.captures, value.captures) |capture_known_value, capture_value| {
+            if (!knownValueMatchesValue(program, capture_known_value, capture_value)) break;
         } else {
             return index;
         }
@@ -6685,32 +6685,32 @@ fn finiteCallableAlternativeIndex(
     return null;
 }
 
-fn finiteCallablesFactMatchesValue(
+fn knownCallablesMatchesValue(
     program: *const Ast.Program,
-    fact: FiniteCallablesFact,
+    known_value: KnownCallables,
     value: FiniteCallablesValue,
 ) bool {
-    if (!sameType(program, fact.ty, value.ty)) return false;
-    if (fact.alternatives.len != value.alternatives.len) return false;
-    for (fact.alternatives, value.alternatives) |fact_alternative, value_alternative| {
-        if (!sameType(program, fact_alternative.ty, value_alternative.ty)) return false;
-        if (!callableTargetMatches(program, fact_alternative.fn_id, value_alternative.fn_id) or
-            fact_alternative.captures.len != value_alternative.captures.len)
+    if (!sameType(program, known_value.ty, value.ty)) return false;
+    if (known_value.alternatives.len != value.alternatives.len) return false;
+    for (known_value.alternatives, value.alternatives) |known_value_alternative, value_alternative| {
+        if (!sameType(program, known_value_alternative.ty, value_alternative.ty)) return false;
+        if (!callableTargetMatches(program, known_value_alternative.fn_id, value_alternative.fn_id) or
+            known_value_alternative.captures.len != value_alternative.captures.len)
         {
             return false;
         }
-        for (fact_alternative.captures, value_alternative.captures) |capture_fact, capture_value| {
-            if (!factMatchesValue(program, capture_fact, capture_value)) return false;
+        for (known_value_alternative.captures, value_alternative.captures) |capture_known_value, capture_value| {
+            if (!knownValueMatchesValue(program, capture_known_value, capture_value)) return false;
         }
     }
     return true;
 }
 
-fn finiteCallablesFactEql(program: *const Ast.Program, lhs: FiniteCallablesFact, rhs: FiniteCallablesFact) bool {
+fn knownCallablesEql(program: *const Ast.Program, lhs: KnownCallables, rhs: KnownCallables) bool {
     if (!sameType(program, lhs.ty, rhs.ty) or lhs.alternatives.len != rhs.alternatives.len) return false;
     for (lhs.alternatives) |lhs_alternative| {
         for (rhs.alternatives) |rhs_alternative| {
-            if (callableFactEql(program, lhs_alternative, rhs_alternative)) break;
+            if (knownCallableEql(program, lhs_alternative, rhs_alternative)) break;
         } else {
             return false;
         }
@@ -6718,7 +6718,7 @@ fn finiteCallablesFactEql(program: *const Ast.Program, lhs: FiniteCallablesFact,
     return true;
 }
 
-fn callableFactEql(program: *const Ast.Program, lhs: CallableFact, rhs: CallableFact) bool {
+fn knownCallableEql(program: *const Ast.Program, lhs: KnownCallable, rhs: KnownCallable) bool {
     if (!sameType(program, lhs.ty, rhs.ty) or
         !callableTargetMatches(program, lhs.fn_id, rhs.fn_id) or
         lhs.captures.len != rhs.captures.len)
@@ -6726,12 +6726,12 @@ fn callableFactEql(program: *const Ast.Program, lhs: CallableFact, rhs: Callable
         return false;
     }
     for (lhs.captures, rhs.captures) |lhs_capture, rhs_capture| {
-        if (!factEql(program, lhs_capture, rhs_capture)) return false;
+        if (!known_valueEql(program, lhs_capture, rhs_capture)) return false;
     }
     return true;
 }
 
-fn finiteCallableFactContainsCallableFact(program: *const Ast.Program, finite: FiniteCallablesFact, callable: CallableFact) bool {
+fn finiteKnownCallableContainsKnownCallable(program: *const Ast.Program, finite: KnownCallables, callable: KnownCallable) bool {
     for (finite.alternatives) |alternative| {
         if (!sameType(program, alternative.ty, callable.ty) or
             !callableTargetMatches(program, alternative.fn_id, callable.fn_id) or
@@ -6740,7 +6740,7 @@ fn finiteCallableFactContainsCallableFact(program: *const Ast.Program, finite: F
             continue;
         }
         for (alternative.captures, callable.captures) |pattern_capture, actual_capture| {
-            if (!factMatchesFact(program, pattern_capture, actual_capture)) break;
+            if (!knownValueMatchesKnownValue(program, pattern_capture, actual_capture)) break;
         } else {
             return true;
         }
@@ -6748,10 +6748,10 @@ fn finiteCallableFactContainsCallableFact(program: *const Ast.Program, finite: F
     return false;
 }
 
-fn finiteCallablesFactContainsFact(program: *const Ast.Program, pattern: FiniteCallablesFact, actual: FiniteCallablesFact) bool {
+fn knownCallablesContainsKnownValue(program: *const Ast.Program, pattern: KnownCallables, actual: KnownCallables) bool {
     if (!sameType(program, pattern.ty, actual.ty)) return false;
     for (actual.alternatives) |alternative| {
-        if (!finiteCallableFactContainsCallableFact(program, pattern, alternative)) return false;
+        if (!finiteKnownCallableContainsKnownCallable(program, pattern, alternative)) return false;
     }
     return true;
 }
