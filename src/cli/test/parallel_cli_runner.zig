@@ -386,6 +386,7 @@ const CustomCase = enum {
     glue_zig_opaque_box,
     glue_zig_box_payload_alignment,
     glue_rust,
+    glue_zig_duplicate_tag_unions,
     glue_rust_duplicate_tag_unions,
     glue_rust_box_payload_alignment,
     glue_zig_bang_record_fields,
@@ -708,6 +709,7 @@ const glue_cases = [_]CliCase{
     .{ .id = 0, .suite = .glue, .name = "glue regression: ZigGlue uses RocBox for opaque boxed app types", .body = .{ .custom = .glue_zig_opaque_box } },
     .{ .id = 0, .suite = .glue, .name = "glue regression: ZigGlue decrefs non-refcounted boxed payloads with payload alignment", .body = .{ .custom = .glue_zig_box_payload_alignment } },
     .{ .id = 0, .suite = .glue, .name = "glue regression: RustGlue succeeds on fx platform", .body = .{ .custom = .glue_rust } },
+    .{ .id = 0, .suite = .glue, .name = "glue regression: ZigGlue handles duplicate tag-union names", .body = .{ .custom = .glue_zig_duplicate_tag_unions } },
     .{ .id = 0, .suite = .glue, .name = "glue regression: RustGlue handles duplicate tag-union names", .body = .{ .custom = .glue_rust_duplicate_tag_unions } },
     .{ .id = 0, .suite = .glue, .name = "glue regression: RustGlue decrefs non-refcounted boxed payloads with payload alignment", .body = .{ .custom = .glue_rust_box_payload_alignment } },
     .{ .id = 0, .suite = .glue, .name = "glue regression: ZigGlue quotes bang record fields", .body = .{ .custom = .glue_zig_bang_record_fields } },
@@ -790,7 +792,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "roc build reports missing host symbols before linking", .body = .{ .command = .{ .args = &.{ "build", "--no-cache", "--target=x64musl" }, .roc_file = "test/missing-host-symbol/app.roc", .exit = .failure, .contains = &.{ .{ .stream = .stderr, .text = "MISSING HOST SYMBOLS" }, .{ .stream = .stderr, .text = "roc_host_vanish" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc check writes parse errors to stderr", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/has_parse_error.roc", .exit = .failure, .stderr_min_len = 1, .contains_any = &.{.{ .needles = &parse_error_needles }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc check displays correct file path in parse error messages", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/has_parse_error.roc", .exit = .failure, .stderr_min_len = 1, .contains = &.{.{ .stream = .stderr, .text = "has_parse_error.roc" }}, .not_contains = &.{.{ .stream = .stderr, .text = "\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa" }} } } },
-    .{ .id = 0, .suite = .subcommands, .name = "roc check rejects invalid hosted sections", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/hosted-section-errors/platform/main.roc", .exit = .failure, .stderr_min_len = 1, .contains = &.{ .{ .stream = .stderr, .text = "INVALID HOSTED SECTION" }, .{ .stream = .stderr, .text = "Host.nonexistent" }, .{ .stream = .stderr, .text = "Host.quadruple" }, .{ .stream = .stderr, .text = "roc_alloc" }, .{ .stream = .stderr, .text = "roc__sneaky" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc check rejects invalid hosted sections", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/hosted-section-errors/platform/main.roc", .exit = .failure, .stderr_min_len = 1, .contains = &.{ .{ .stream = .stderr, .text = "INVALID HOSTED SECTION" }, .{ .stream = .stderr, .text = "Host.nonexistent" }, .{ .stream = .stderr, .text = "Host.quadruple" }, .{ .stream = .stderr, .text = "roc-host-bad" }, .{ .stream = .stderr, .text = "roc_alloc" }, .{ .stream = .stderr, .text = "roc__sneaky" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc check accepts a valid hosted section", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/fx/platform/main.roc", .not_contains = &.{.{ .stream = .stderr, .text = "INVALID HOSTED SECTION" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc check succeeds on valid file", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/simple_success.roc", .not_contains = &.{ .{ .stream = .stderr, .text = "Failed to check" }, .{ .stream = .stderr, .text = "error" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc run prints warning diagnostics once (issue 9509)", .body = .{ .command = .{ .args = &.{"--no-cache"}, .roc_file = "test/cli/Issue9509WarningOnly.roc", .exit = .{ .code = 2 }, .stderr_min_len = 1, .occurrences = &.{ .{ .stream = .stderr, .text = "UNUSED VARIABLE", .count = 1 }, .{ .stream = .stderr, .text = "Found 0 error(s) and 1 warning(s)", .count = 1 } } } } },
@@ -1869,6 +1871,7 @@ fn runCustomCase(
         .glue_zig_opaque_box => customGlueZigOpaqueBox(io, allocator, &env, &timer, timeout_ms),
         .glue_zig_box_payload_alignment => customGlueZigBoxPayloadAlignment(io, allocator, &env, &timer, timeout_ms),
         .glue_rust => customGlueRust(io, allocator, &env, &timer, timeout_ms),
+        .glue_zig_duplicate_tag_unions => customGlueZigDuplicateTagUnions(io, allocator, &env, &timer, timeout_ms),
         .glue_rust_duplicate_tag_unions => customGlueRustDuplicateTagUnions(io, allocator, &env, &timer),
         .glue_rust_box_payload_alignment => customGlueRustBoxPayloadAlignment(io, allocator, &env, &timer, timeout_ms),
         .glue_zig_bang_record_fields => customGlueZigBangRecordFieldNames(io, allocator, &env, &timer, timeout_ms),
@@ -4814,6 +4817,45 @@ fn customGlueRustDuplicateTagUnions(io: std.Io, allocator: Allocator, env: *cons
             return customFailure(allocator, timer, "generated Rust duplicate-tag fixture missing {s}", .{needle});
         }
     }
+
+    return null;
+}
+
+fn customGlueZigDuplicateTagUnions(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
+    const output_dir = createWorkSubdir(io, allocator, env, "zig-duplicate-tag-glue-out") catch |err|
+        return customInfraFailure(allocator, timer, "failed to create glue output dir: {}", .{err});
+    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+        .args = &.{ "glue", "src/glue/src/ZigGlue.roc", output_dir, "test/glue/rust-duplicate-tag-platform/main.roc" },
+        .not_contains = &.{ .{ .stream = .stderr, .text = "PANIC" }, .{ .stream = .stderr, .text = "unreachable" } },
+    })) |failure| return failure;
+
+    const generated_path = std.fs.path.join(allocator, &.{ output_dir, "roc_platform_abi.zig" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate generated Zig path: {}", .{err});
+    const generated = std.Io.Dir.cwd().readFileAlloc(io, generated_path, allocator, .limited(1024 * 1024)) catch |err|
+        return customFailure(allocator, timer, "failed to read generated Zig file: {}", .{err});
+
+    for ([_][]const u8{
+        "pub const TryType",
+        "pub const IOErrType",
+        "pub fn decrefTryType",
+        "pub extern fn roc_a_nested",
+        "pub extern fn roc_d_nested",
+    }) |needle| {
+        if (std.mem.find(u8, generated, needle) == null) {
+            return customFailure(allocator, timer, "generated Zig duplicate-tag fixture missing {s}", .{needle});
+        }
+    }
+
+    const test_o_path = std.fs.path.join(allocator, &.{ output_dir, "roc_platform_abi.o" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate generated Zig object path: {}", .{err});
+    const emit_flag = std.fmt.allocPrint(allocator, "-femit-bin={s}", .{test_o_path}) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate generated Zig emit flag: {}", .{err});
+    if (runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{
+        "zig",
+        "build-obj",
+        generated_path,
+        emit_flag,
+    }, project_root_path, .{ .args = &.{} })) |failure| return failure;
 
     return null;
 }

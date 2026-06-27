@@ -68,7 +68,6 @@ compare_by_index = |a, b| {
 # =============================================================================
 
 ## Map a type table entry to its Rust type string using structured TypeRepr
-type_id_to_rust : List(TypeRepr), List(Str), U64 -> Str
 type_id_to_rust = |type_table, duplicate_names, type_id| {
 	type_repr = TypeTable.get(TypeTable.from_list(type_table), type_id)
 	match type_repr {
@@ -86,7 +85,6 @@ type_id_to_rust = |type_table, duplicate_names, type_id| {
 ## Render one struct field declaration for a record field. Unnamed
 ## nominal-record padding fields become fixed-size byte arrays (`[u8; size]`);
 ## named fields use their resolved Rust type.
-rust_record_field_decl : List(TypeRepr), List(Str), RecordField -> Str
 rust_record_field_decl = |type_table, duplicate_names, field| {
 	field_name = name_to_rust_field_ident(field.name)
 	rust_type = if field.is_padding {
@@ -98,7 +96,6 @@ rust_record_field_decl = |type_table, duplicate_names, field| {
 }
 
 ## Convert a TypeRepr to its Rust type string
-type_repr_to_rust : List(TypeRepr), List(Str), U64, TypeRepr -> Str
 type_repr_to_rust = |type_table, duplicate_names, type_id, type_repr| {
 	match type_repr {
 		RocBool => "bool"
@@ -1354,7 +1351,6 @@ generate_index_constants_rust = |hosted_functions, count| {
 }
 
 ## Generate #[repr(C)] structs for element types found in the type table.
-generate_element_type_structs_rust : List(TypeRepr), List(Str) -> Str
 generate_element_type_structs_rust = |type_table, duplicate_names| {
 	var $structs = ""
 	var $seen_names = []
@@ -1362,26 +1358,28 @@ generate_element_type_structs_rust = |type_table, duplicate_names| {
 	for type_repr in type_table {
 		match type_repr {
 			RocRecord(rec) =>
-				if rec.name != "" and !(List.contains($seen_names, rec.name)) {
-					$seen_names = $seen_names.append(rec.name)
-
+				if rec.name != "" {
 					struct_name = name_to_struct_name(rec.name)
-					var $field_strs = ""
-					for field in rec.fields {
-						$field_strs = Str.concat($field_strs, rust_record_field_decl(type_table, duplicate_names, field))
-					}
+					if !(List.contains($seen_names, struct_name)) {
+						$seen_names = $seen_names.append(struct_name)
 
-					# Size/alignment assertions (guarded by pointer width)
-					assertions = if rec.size > 0 {
-						"const _: () = assert!(core::mem::size_of::<${struct_name}>() == ${U64.to_str(rec.size)}, \"${struct_name} size mismatch\");\nconst _: () = assert!(core::mem::align_of::<${struct_name}>() == ${U64.to_str(rec.alignment)}, \"${struct_name} alignment mismatch\");\n\n"
-					} else {
-						""
-					}
+						var $field_strs = ""
+						for field in rec.fields {
+							$field_strs = Str.concat($field_strs, rust_record_field_decl(type_table, duplicate_names, field))
+						}
 
-					$structs = Str.concat(
-						$structs,
-						"/// Element type for ${rec.name}\n#[repr(C)]\n#[derive(Clone, Copy)]\npub struct ${struct_name} {\n${$field_strs}}\n\n${assertions}",
-					)
+						# Size/alignment assertions (guarded by pointer width)
+						assertions = if rec.size > 0 {
+							"const _: () = assert!(core::mem::size_of::<${struct_name}>() == ${U64.to_str(rec.size)}, \"${struct_name} size mismatch\");\nconst _: () = assert!(core::mem::align_of::<${struct_name}>() == ${U64.to_str(rec.alignment)}, \"${struct_name} alignment mismatch\");\n\n"
+						} else {
+							""
+						}
+
+						$structs = Str.concat(
+							$structs,
+							"/// Element type for ${rec.name}\n#[repr(C)]\n#[derive(Clone, Copy)]\npub struct ${struct_name} {\n${$field_strs}}\n\n${assertions}",
+						)
+					}
 				}
 			_ => {}
 		}
@@ -1391,7 +1389,6 @@ generate_element_type_structs_rust = |type_table, duplicate_names| {
 }
 
 ## Generate #[repr(C)] structs for tag union types found in the type table.
-generate_tag_union_structs_rust : List(TypeRepr), List(Str) -> Str
 generate_tag_union_structs_rust = |type_table, duplicate_names| {
 	var $structs = ""
 	var $seen_names = []
@@ -1770,8 +1767,8 @@ incref_stmt_for_repr_rust = |type_table, duplicate_names, type_id, type_repr, ex
 
 generate_record_refcount_helpers_rust = |type_table, duplicate_names, rec| {
 	struct_name = name_to_struct_name(rec.name)
-	decref_name = "decref_${name_to_rust_fn_suffix(rec.name)}"
-	incref_name = "incref_${name_to_rust_fn_suffix(rec.name)}"
+	decref_name = "decref_${name_to_rust_fn_suffix(struct_name)}"
+	incref_name = "incref_${name_to_rust_fn_suffix(struct_name)}"
 	var $decref_body = ""
 	var $incref_body = ""
 
@@ -1890,9 +1887,12 @@ generate_refcount_helpers_rust = |type_table, duplicate_names| {
 	for type_repr in type_table {
 		match type_repr {
 			RocRecord(rec) =>
-				if rec.name != "" and !(List.contains($seen_names, rec.name)) {
-					$seen_names = $seen_names.append(rec.name)
-					$helpers = Str.concat($helpers, generate_record_refcount_helpers_rust(type_table, duplicate_names, rec))
+				if rec.name != "" {
+					struct_name = name_to_struct_name(rec.name)
+					if !(List.contains($seen_names, struct_name)) {
+						$seen_names = $seen_names.append(struct_name)
+						$helpers = Str.concat($helpers, generate_record_refcount_helpers_rust(type_table, duplicate_names, rec))
+					}
 				}
 			RocTagUnion(tu) =>
 				if List.len(tu.tags) >= 2 and tu.name != "" {

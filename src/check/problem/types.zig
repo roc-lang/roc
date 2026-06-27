@@ -90,6 +90,8 @@ pub const PlatformHostedSection = struct {
         duplicate_function,
         /// Two hosted/provides entries use the same linker symbol
         duplicate_symbol,
+        /// The symbol is not a valid external C identifier
+        invalid_symbol,
         /// The symbol is one of the fixed runtime symbols (the roc_alloc family)
         reserved_symbol,
         /// The symbol starts with the internal roc__ namespace prefix

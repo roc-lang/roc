@@ -67,39 +67,53 @@ compare_by_index = |a, b| {
 # TypeRepr-based Type Mapping
 # =============================================================================
 
+## Find named multi-variant tag unions whose Roc name appears more than once in
+## the type table. The result is computed once per glue run and reused while
+## rendering type names.
+duplicate_tag_union_names : List(TypeRepr) -> List(Str)
+duplicate_tag_union_names = |type_table| TypeTable.duplicate_tag_union_names(TypeTable.from_list(type_table))
+
+## Return the emitted Zig type name for a multi-variant tag union.
+tag_union_struct_name : List(Str), U64, TagUnionRepr -> Str
+tag_union_struct_name = |duplicate_names, type_id, tu| {
+	base = name_to_struct_name(tu.name)
+
+	if List.contains(duplicate_names, tu.name) {
+		"${base}Type${U64.to_str(type_id)}"
+	} else {
+		base
+	}
+}
+
 ## Map a type table entry to its Zig type string using structured TypeRepr
-type_id_to_zig : List(TypeRepr), U64 -> Str
-type_id_to_zig = |type_table, type_id| {
+type_id_to_zig = |type_table, duplicate_tag_names, type_id| {
 	table = TypeTable.from_list(type_table)
-	type_repr_to_zig(type_table, TypeTable.get(table, type_id))
+	type_repr_to_zig(type_table, duplicate_tag_names, type_id, TypeTable.get(table, type_id))
 }
 
 ## Render one `extern struct` field declaration for a record field. Unnamed
 ## nominal-record padding fields become fixed-size byte arrays (`[size]u8`);
 ## named fields use their resolved Zig type.
-zig_record_field_decl : List(TypeRepr), RecordField -> Str
-zig_record_field_decl = |type_table, field| {
+zig_record_field_decl = |type_table, duplicate_tag_names, field| {
 	field_name = name_to_zig_quoted_ident(field.name)
 	zig_type = if field.is_padding {
 		"[${U64.to_str(field.size)}]u8"
 	} else {
-		type_id_to_zig(type_table, field.type_id)
+		type_id_to_zig(type_table, duplicate_tag_names, field.type_id)
 	}
 	"    ${field_name}: ${zig_type},\n"
 }
 
-zig_record_fields_decl : List(TypeRepr), List(RecordField) -> Str
-zig_record_fields_decl = |type_table, fields| {
+zig_record_fields_decl = |type_table, duplicate_tag_names, fields| {
 	var $field_strs = ""
 	for field in fields {
-		$field_strs = Str.concat($field_strs, zig_record_field_decl(type_table, field))
+		$field_strs = Str.concat($field_strs, zig_record_field_decl(type_table, duplicate_tag_names, field))
 	}
 	$field_strs
 }
 
 ## Convert a TypeRepr to its Zig type string
-type_repr_to_zig : List(TypeRepr), TypeRepr -> Str
-type_repr_to_zig = |type_table, type_repr| {
+type_repr_to_zig = |type_table, duplicate_tag_names, type_id, type_repr| {
 	match type_repr {
 		RocBool => "bool"
 		RocBox(inner_id) =>
@@ -107,7 +121,7 @@ type_repr_to_zig = |type_table, type_repr| {
 				RocFunction(_) => "RocErasedCallable"
 				RocUnknown(_) => "RocBox"
 				_ => {
-					inner_zig = type_id_to_zig(type_table, inner_id)
+					inner_zig = type_id_to_zig(type_table, duplicate_tag_names, inner_id)
 					if inner_zig == "*anyopaque" {
 						"*anyopaque"
 					} else {
@@ -132,9 +146,9 @@ type_repr_to_zig = |type_table, type_repr| {
 		RocDec => "f64"
 		RocList(elem_id) =>
 			if is_type_refcounted(type_table, elem_id) {
-				"RocList(${type_id_to_zig(type_table, elem_id)})"
+				"RocList(${type_id_to_zig(type_table, duplicate_tag_names, elem_id)})"
 			} else {
-				"RocListWith(${type_id_to_zig(type_table, elem_id)}, false)"
+				"RocListWith(${type_id_to_zig(type_table, duplicate_tag_names, elem_id)}, false)"
 			}
 		RocRecord(rec) =>
 			if rec.name == "" {
@@ -142,7 +156,7 @@ type_repr_to_zig = |type_table, type_repr| {
 			} else {
 				name_to_struct_name(rec.name)
 			}
-		RocTagUnion(tu) => resolve_tag_union_type(type_table, tu)
+		RocTagUnion(tu) => resolve_tag_union_type(type_table, duplicate_tag_names, type_id, tu)
 		RocFunction(_) => "*anyopaque"
 		RocUnknown(_) => "*anyopaque"
 	}
@@ -158,13 +172,13 @@ is_repr_refcounted = |type_table, type_repr| TypeTable.repr_is_refcounted(TypeTa
 
 ## Resolve a tag union to a Zig type. Single-variant unions are unwrapped to their payload.
 ## Multi-variant unions with a name return a generated struct name.
-resolve_tag_union_type = |type_table, tu| {
+resolve_tag_union_type = |type_table, duplicate_tag_names, type_id, tu| {
 	match TypeTable.single_variant_payload(tu) {
-		SinglePayload(payload_id) => type_id_to_zig(type_table, payload_id)
+		SinglePayload(payload_id) => type_id_to_zig(type_table, duplicate_tag_names, payload_id)
 		SingleNoPayload => "*anyopaque"
 		NotSingleVariant =>
 			if tu.name != "" {
-				name_to_struct_name(tu.name)
+				tag_union_struct_name(duplicate_tag_names, type_id, tu)
 			} else {
 				"*anyopaque"
 			}
@@ -569,7 +583,11 @@ tag_union_layout_32 = |type_table, tu| {
 			var $max_payload_alignment = 1
 
 			for tag in tu.tags {
-				payload_layout = tag_payload_layout_32(type_table, tag.payload)
+				payload_layout = if tag.payload_size == 0 {
+					{ size: 0, alignment: 1 }
+				} else {
+					tag_payload_layout_32(type_table, tag.payload)
+				}
 				if payload_layout.size > $max_payload_size {
 					$max_payload_size = payload_layout.size
 				}
@@ -604,7 +622,11 @@ tag_union_layout_64 = |type_table, tu| {
 			var $max_payload_alignment = 1
 
 			for tag in tu.tags {
-				payload_layout = tag_payload_layout_64(type_table, tag.payload)
+				payload_layout = if tag.payload_size == 0 {
+					{ size: 0, alignment: 1 }
+				} else {
+					{ size: tag.payload_size, alignment: tag.payload_alignment }
+				}
 				if payload_layout.size > $max_payload_size {
 					$max_payload_size = payload_layout.size
 				}
@@ -719,45 +741,46 @@ record_fields_for_wasm32 = |type_table, fields| {
 
 ## Generate extern structs for element types found in the type table.
 ## Scans for Record types and generates Zig extern structs for them.
-generate_element_type_structs : List(TypeRepr) -> Str
-generate_element_type_structs = |type_table| {
+generate_element_type_structs = |type_table, duplicate_tag_names| {
 	var $structs = ""
 	var $seen_names = []
 
 	for type_repr in type_table {
 		match type_repr {
 			RocRecord(rec) =>
-				if rec.name != "" and !(List.contains($seen_names, rec.name)) {
-					$seen_names = $seen_names.append(rec.name)
-
+				if rec.name != "" {
 					struct_name = name_to_struct_name(rec.name)
-					native_field_strs = zig_record_fields_decl(type_table, rec.fields)
-					wasm32_fields = if rec.anonymous {
-						record_fields_for_wasm32(type_table, rec.fields)
-					} else {
-						rec.fields
-					}
-					wasm32_field_strs = zig_record_fields_decl(type_table, wasm32_fields)
+					if !(List.contains($seen_names, struct_name)) {
+						$seen_names = $seen_names.append(struct_name)
 
-					# Comptime size/alignment assertions (guarded by pointer width)
-					layout = record_layout_from_fields(type_table, rec.fields)
-					wasm32_layout = record_layout_from_fields_32(type_table, wasm32_fields)
-					assertions = if layout.size > 0 or wasm32_layout.size > 0 {
-						"comptime {\n    if (@sizeOf(usize) == 8) {\n        if (@sizeOf(${struct_name}) != ${U64.to_str(layout.size)}) @compileError(\"${struct_name} size mismatch\");\n        if (@alignOf(${struct_name}) != ${U64.to_str(layout.alignment)}) @compileError(\"${struct_name} alignment mismatch\");\n    }\n    if (@sizeOf(usize) == 4) {\n        if (@sizeOf(${struct_name}) != ${U64.to_str(wasm32_layout.size)}) @compileError(\"${struct_name} size mismatch\");\n        if (@alignOf(${struct_name}) != ${U64.to_str(wasm32_layout.alignment)}) @compileError(\"${struct_name} alignment mismatch\");\n    }\n}\n\n"
-					} else {
-						""
-					}
+						native_field_strs = zig_record_fields_decl(type_table, duplicate_tag_names, rec.fields)
+						wasm32_fields = if rec.anonymous {
+							record_fields_for_wasm32(type_table, rec.fields)
+						} else {
+							rec.fields
+						}
+						wasm32_field_strs = zig_record_fields_decl(type_table, duplicate_tag_names, wasm32_fields)
 
-					struct_decl = if rec.anonymous {
-						"/// Element type for ${rec.name}\npub const ${struct_name} = if (@sizeOf(usize) == 4) extern struct {\n${wasm32_field_strs}} else extern struct {\n${native_field_strs}};\n\n"
-					} else {
-						"/// Element type for ${rec.name}\npub const ${struct_name} = extern struct {\n${native_field_strs}};\n\n"
-					}
+						# Comptime size/alignment assertions (guarded by pointer width)
+						layout = record_layout_from_fields(type_table, rec.fields)
+						wasm32_layout = record_layout_from_fields_32(type_table, wasm32_fields)
+						assertions = if layout.size > 0 or wasm32_layout.size > 0 {
+							"comptime {\n    if (@sizeOf(usize) == 8) {\n        if (@sizeOf(${struct_name}) != ${U64.to_str(layout.size)}) @compileError(\"${struct_name} size mismatch\");\n        if (@alignOf(${struct_name}) != ${U64.to_str(layout.alignment)}) @compileError(\"${struct_name} alignment mismatch\");\n    }\n    if (@sizeOf(usize) == 4) {\n        if (@sizeOf(${struct_name}) != ${U64.to_str(wasm32_layout.size)}) @compileError(\"${struct_name} size mismatch\");\n        if (@alignOf(${struct_name}) != ${U64.to_str(wasm32_layout.alignment)}) @compileError(\"${struct_name} alignment mismatch\");\n    }\n}\n\n"
+						} else {
+							""
+						}
 
-					$structs = Str.concat(
-						$structs,
-						"${struct_decl}${assertions}",
-					)
+						struct_decl = if rec.anonymous {
+							"/// Element type for ${rec.name}\npub const ${struct_name} = if (@sizeOf(usize) == 4) extern struct {\n${wasm32_field_strs}} else extern struct {\n${native_field_strs}};\n\n"
+						} else {
+							"/// Element type for ${rec.name}\npub const ${struct_name} = extern struct {\n${native_field_strs}};\n\n"
+						}
+
+						$structs = Str.concat(
+							$structs,
+							"${struct_decl}${assertions}",
+						)
+					}
 				}
 			RocBox(_) => {}
 			RocTagUnion(_) => {}
@@ -781,6 +804,7 @@ generate_element_type_structs = |type_table| {
 			RocUnit => {}
 			RocUnknown(_) => {}
 		}
+
 	}
 
 	$structs
@@ -789,17 +813,20 @@ generate_element_type_structs = |type_table| {
 ## Generate extern structs for tag union types found in the type table.
 ## Multi-variant tag unions get a tag enum, payload extern union, and wrapping extern struct.
 ## Pure enums (all variants have no payload) get just an enum.
-generate_tag_union_structs : List(TypeRepr) -> Str
-generate_tag_union_structs = |type_table| {
+generate_tag_union_structs = |type_table, duplicate_tag_names| {
 	var $structs = ""
 	var $seen_names = []
+	var $type_id = 0
 
 	for type_repr in type_table {
 		match type_repr {
 			RocTagUnion(tu) =>
-				if List.len(tu.tags) >= 2 and tu.name != "" and !(List.contains($seen_names, tu.name)) {
-					$seen_names = $seen_names.append(tu.name)
-					$structs = Str.concat($structs, generate_single_tag_union(type_table, tu))
+				if List.len(tu.tags) >= 2 and tu.name != "" {
+					struct_name = tag_union_struct_name(duplicate_tag_names, $type_id, tu)
+					if !(List.contains($seen_names, struct_name)) {
+						$seen_names = $seen_names.append(struct_name)
+						$structs = Str.concat($structs, generate_single_tag_union(type_table, duplicate_tag_names, $type_id, tu))
+					}
 				}
 			RocBox(_) => {}
 			RocRecord(_) => {}
@@ -823,19 +850,21 @@ generate_tag_union_structs = |type_table| {
 			RocUnit => {}
 			RocUnknown(_) => {}
 		}
+
+		$type_id = $type_id + 1
 	}
 
 	$structs
 }
 
 ## Generate Zig code for a single multi-variant tag union.
-generate_single_tag_union = |type_table, tu| {
-	struct_name = name_to_struct_name(tu.name)
+generate_single_tag_union = |type_table, duplicate_tag_names, type_id, tu| {
+	struct_name = tag_union_struct_name(duplicate_tag_names, type_id, tu)
 	tag_count = List.len(tu.tags)
 	disc_type = disc_type_for_count(tag_count)
 
 	# Check if this is a pure enum (all variants have no payload)
-	is_pure_enum = List.all(tu.tags, |tag| List.is_empty(tag.payload))
+	is_pure_enum = List.all(tu.tags, |tag| tag.payload_size == 0)
 
 	if is_pure_enum {
 		# Pure enum: just emit the enum type
@@ -852,12 +881,12 @@ generate_single_tag_union = |type_table, tu| {
 		# Generate tuple structs for any variant with >1 payload
 		var $tuple_structs = ""
 		for tag in tu.tags {
-			if List.len(tag.payload) > 1 {
+			if tag.payload_size > 0 and List.len(tag.payload) > 1 {
 				tuple_name = "${struct_name}${capitalize_first(tag.name)}Payload"
 				var $tuple_fields = ""
 				var $ti = 0
 				for pid in tag.payload {
-					zig_type = type_id_to_zig(type_table, pid)
+					zig_type = type_id_to_zig(type_table, duplicate_tag_names, pid)
 					$tuple_fields = Str.concat($tuple_fields, "    _${U64.to_str($ti)}: ${zig_type},\n")
 					$ti = $ti + 1
 				}
@@ -881,12 +910,12 @@ generate_single_tag_union = |type_table, tu| {
 		var $wasm32_accessors = ""
 		for union_tag in tu.tags {
 			snake = to_lower_snake_case(union_tag.name)
-			if List.is_empty(union_tag.payload) {
+			if union_tag.payload_size == 0 {
 				# No-payload variant: use [0]u8 (Zig extern unions can't have void)
 				$union_fields = Str.concat($union_fields, "        ${snake}: [0]u8,\n")
 			} else if List.len(union_tag.payload) == 1 {
 				zig_type = match List.first(union_tag.payload) {
-					Ok(pid) => type_id_to_zig(type_table, pid)
+					Ok(pid) => type_id_to_zig(type_table, duplicate_tag_names, pid)
 					Err(_) => "*anyopaque"
 				}
 				$union_fields = Str.concat($union_fields, "        ${snake}: ${zig_type},\n")
@@ -946,7 +975,7 @@ indent_lines = |text, prefix| {
 
 box_payload_decref_name = |inner_id| "decrefBoxPayloadType${U64.to_str(inner_id)}"
 
-decref_helper_name_from_repr = |type_repr| {
+decref_helper_name_from_repr = |duplicate_tag_names, type_id, type_repr| {
 	match type_repr {
 		RocRecord(rec) =>
 			if rec.name == "" {
@@ -956,7 +985,7 @@ decref_helper_name_from_repr = |type_repr| {
 			}
 		RocTagUnion(tu) =>
 			if List.len(tu.tags) >= 2 and tu.name != "" {
-				"decref${name_to_struct_name(tu.name)}"
+				"decref${tag_union_struct_name(duplicate_tag_names, type_id, tu)}"
 			} else {
 				""
 			}
@@ -964,7 +993,7 @@ decref_helper_name_from_repr = |type_repr| {
 	}
 }
 
-incref_helper_name_from_repr = |type_repr| {
+incref_helper_name_from_repr = |duplicate_tag_names, type_id, type_repr| {
 	match type_repr {
 		RocRecord(rec) =>
 			if rec.name == "" {
@@ -974,7 +1003,7 @@ incref_helper_name_from_repr = |type_repr| {
 			}
 		RocTagUnion(tu) =>
 			if List.len(tu.tags) >= 2 and tu.name != "" {
-				"incref${name_to_struct_name(tu.name)}"
+				"incref${tag_union_struct_name(duplicate_tag_names, type_id, tu)}"
 			} else {
 				""
 			}
@@ -982,17 +1011,17 @@ incref_helper_name_from_repr = |type_repr| {
 	}
 }
 
-decref_stmt_for_type_id = |type_table, type_id, expr| {
+decref_stmt_for_type_id = |type_table, duplicate_tag_names, type_id, expr| {
 	type_repr = TypeTable.get(TypeTable.from_list(type_table), type_id)
-	decref_stmt_for_repr(type_table, type_repr, expr)
+	decref_stmt_for_repr(type_table, duplicate_tag_names, type_id, type_repr, expr)
 }
 
-decref_stmt_for_repr = |type_table, type_repr, expr| {
+decref_stmt_for_repr = |type_table, duplicate_tag_names, type_id, type_repr, expr| {
 	match type_repr {
 		RocStr => "    ${expr}.decref(roc_host);\n"
 		RocList(elem_id) => {
 			if is_type_refcounted(type_table, elem_id) {
-				elem_stmt = decref_stmt_for_type_id(type_table, elem_id, "item")
+				elem_stmt = decref_stmt_for_type_id(type_table, duplicate_tag_names, elem_id, "item")
 				if elem_stmt == "" {
 					"    comptime { @compileError(\"missing decref helper for refcounted list element type id ${U64.to_str(elem_id)}\"); }\n"
 				} else {
@@ -1006,7 +1035,7 @@ decref_stmt_for_repr = |type_table, type_repr, expr| {
 			match TypeTable.get(TypeTable.from_list(type_table), inner_id) {
 				RocFunction(_) => "    decrefErasedCallable(${expr}, roc_host);\n"
 				_ => {
-					inner_zig = type_id_to_zig(type_table, inner_id)
+					inner_zig = type_id_to_zig(type_table, duplicate_tag_names, inner_id)
 					if inner_zig == "*anyopaque" {
 						"    decrefBox(@ptrCast(${expr}), roc_host);\n"
 					} else if is_type_refcounted(type_table, inner_id) {
@@ -1015,9 +1044,9 @@ decref_stmt_for_repr = |type_table, type_repr, expr| {
 						"    decrefBoxWith(@ptrCast(${expr}), @alignOf(${inner_zig}), false, null, roc_host);\n"
 					}
 				}
-			}
+		}
 		RocRecord(_) => {
-			helper = decref_helper_name_from_repr(type_repr)
+			helper = decref_helper_name_from_repr(duplicate_tag_names, type_id, type_repr)
 			if helper == "" {
 				""
 			} else {
@@ -1026,10 +1055,10 @@ decref_stmt_for_repr = |type_table, type_repr, expr| {
 		}
 		RocTagUnion(tu) =>
 			match TypeTable.single_variant_payload(tu) {
-				SinglePayload(payload_id) => decref_stmt_for_type_id(type_table, payload_id, expr)
+				SinglePayload(payload_id) => decref_stmt_for_type_id(type_table, duplicate_tag_names, payload_id, expr)
 				SingleNoPayload => ""
 				NotSingleVariant => {
-					helper = decref_helper_name_from_repr(type_repr)
+					helper = decref_helper_name_from_repr(duplicate_tag_names, type_id, type_repr)
 					if helper == "" {
 						""
 					} else {
@@ -1041,12 +1070,12 @@ decref_stmt_for_repr = |type_table, type_repr, expr| {
 	}
 }
 
-incref_stmt_for_type_id = |type_table, type_id, expr| {
+incref_stmt_for_type_id = |type_table, duplicate_tag_names, type_id, expr| {
 	type_repr = TypeTable.get(TypeTable.from_list(type_table), type_id)
-	incref_stmt_for_repr(type_table, type_repr, expr)
+	incref_stmt_for_repr(type_table, duplicate_tag_names, type_id, type_repr, expr)
 }
 
-incref_stmt_for_repr = |type_table, type_repr, expr| {
+incref_stmt_for_repr = |type_table, duplicate_tag_names, type_id, type_repr, expr| {
 	match type_repr {
 		RocStr => "    ${expr}.incref(amount);\n"
 		RocList(_) => "    ${expr}.incref(amount);\n"
@@ -1056,7 +1085,7 @@ incref_stmt_for_repr = |type_table, type_repr, expr| {
 				_ => "    increfBox(@ptrCast(${expr}), amount);\n"
 			}
 		RocRecord(_) => {
-			helper = incref_helper_name_from_repr(type_repr)
+			helper = incref_helper_name_from_repr(duplicate_tag_names, type_id, type_repr)
 			if helper == "" {
 				""
 			} else {
@@ -1068,13 +1097,13 @@ incref_stmt_for_repr = |type_table, type_repr, expr| {
 				match List.first(tu.tags) {
 					Ok(tag) =>
 						match List.first(tag.payload) {
-							Ok(payload_id) => incref_stmt_for_type_id(type_table, payload_id, expr)
+							Ok(payload_id) => incref_stmt_for_type_id(type_table, duplicate_tag_names, payload_id, expr)
 							_ => ""
 						}
 					_ => ""
 				}
 			} else {
-				helper = incref_helper_name_from_repr(type_repr)
+				helper = incref_helper_name_from_repr(duplicate_tag_names, type_id, type_repr)
 				if helper == "" {
 					""
 				} else {
@@ -1085,7 +1114,7 @@ incref_stmt_for_repr = |type_table, type_repr, expr| {
 	}
 }
 
-generate_record_refcount_helpers = |type_table, rec| {
+generate_record_refcount_helpers = |type_table, duplicate_tag_names, rec| {
 	struct_name = name_to_struct_name(rec.name)
 	var $decref_body = ""
 	var $incref_body = ""
@@ -1095,8 +1124,8 @@ generate_record_refcount_helpers = |type_table, rec| {
 		# refcounted and contribute no incref/decref statements.
 		if !field.is_padding {
 			field_expr = "value.${name_to_zig_quoted_ident(field.name)}"
-			$decref_body = Str.concat($decref_body, decref_stmt_for_type_id(type_table, field.type_id, field_expr))
-			$incref_body = Str.concat($incref_body, incref_stmt_for_type_id(type_table, field.type_id, field_expr))
+			$decref_body = Str.concat($decref_body, decref_stmt_for_type_id(type_table, duplicate_tag_names, field.type_id, field_expr))
+			$incref_body = Str.concat($incref_body, incref_stmt_for_type_id(type_table, duplicate_tag_names, field.type_id, field_expr))
 		}
 	}
 
@@ -1110,9 +1139,9 @@ generate_record_refcount_helpers = |type_table, rec| {
 	"/// Recursively decrement Roc-owned fields in ${struct_name}.\npub fn decref${struct_name}(value: ${struct_name}, roc_host: *RocHost) void {\n${$decref_body}}\n\n/// Increment Roc-owned fields in ${struct_name}.\npub fn incref${struct_name}(value: ${struct_name}, amount: isize) void {\n${$incref_body}}\n\n"
 }
 
-generate_tag_payload_refcount_branch = |type_table, tag, mode| {
+generate_tag_payload_refcount_branch = |type_table, duplicate_tag_names, tag, mode| {
 	snake = to_lower_snake_case(tag.name)
-	if List.is_empty(tag.payload) {
+	if tag.payload_size == 0 {
 		return "        .${tag.name} => {},\n"
 	}
 
@@ -1121,9 +1150,9 @@ generate_tag_payload_refcount_branch = |type_table, tag, mode| {
 			match List.first(tag.payload) {
 				Ok(payload_id) =>
 					if mode == "decref" {
-						decref_stmt_for_type_id(type_table, payload_id, "value.payload_${snake}()")
+						decref_stmt_for_type_id(type_table, duplicate_tag_names, payload_id, "value.payload_${snake}()")
 					} else {
-						incref_stmt_for_type_id(type_table, payload_id, "value.payload_${snake}()")
+						incref_stmt_for_type_id(type_table, duplicate_tag_names, payload_id, "value.payload_${snake}()")
 					}
 				_ => ""
 			}
@@ -1139,9 +1168,9 @@ generate_tag_payload_refcount_branch = |type_table, tag, mode| {
 		for payload_id in tag.payload {
 			field_expr = "payload._${U64.to_str($idx)}"
 			stmt = if mode == "decref" {
-				decref_stmt_for_type_id(type_table, payload_id, field_expr)
+				decref_stmt_for_type_id(type_table, duplicate_tag_names, payload_id, field_expr)
 			} else {
-				incref_stmt_for_type_id(type_table, payload_id, field_expr)
+				incref_stmt_for_type_id(type_table, duplicate_tag_names, payload_id, field_expr)
 			}
 			$body = Str.concat($body, indent_lines(stmt, "    "))
 			$idx = $idx + 1
@@ -1151,19 +1180,43 @@ generate_tag_payload_refcount_branch = |type_table, tag, mode| {
 	}
 }
 
-generate_tag_union_refcount_helpers = |type_table, tu| {
-	struct_name = name_to_struct_name(tu.name)
+tag_payload_refcount_uses_param = |type_table, duplicate_tag_names, tag, mode| {
+	if tag.payload_size == 0 {
+		return Bool.False
+	}
+
+	List.any(tag.payload, |payload_id| {
+		stmt = if mode == "decref" {
+			decref_stmt_for_type_id(type_table, duplicate_tag_names, payload_id, "payload")
+		} else {
+			incref_stmt_for_type_id(type_table, duplicate_tag_names, payload_id, "payload")
+		}
+		stmt != ""
+	})
+}
+
+tag_union_refcount_uses_param = |type_table, duplicate_tag_names, tu, mode| {
+	List.any(tu.tags, |tag| tag_payload_refcount_uses_param(type_table, duplicate_tag_names, tag, mode))
+}
+
+generate_tag_union_refcount_helpers = |type_table, duplicate_tag_names, type_id, tu| {
+	struct_name = tag_union_struct_name(duplicate_tag_names, type_id, tu)
 	var $decref_branches = ""
 	var $incref_branches = ""
 	for tag in tu.tags {
-		$decref_branches = Str.concat($decref_branches, generate_tag_payload_refcount_branch(type_table, tag, "decref"))
-		$incref_branches = Str.concat($incref_branches, generate_tag_payload_refcount_branch(type_table, tag, "incref"))
+		$decref_branches = Str.concat($decref_branches, generate_tag_payload_refcount_branch(type_table, duplicate_tag_names, tag, "decref"))
+		$incref_branches = Str.concat($incref_branches, generate_tag_payload_refcount_branch(type_table, duplicate_tag_names, tag, "incref"))
 	}
 
-	"/// Recursively decrement Roc-owned payloads in ${struct_name}.\npub fn decref${struct_name}(value: ${struct_name}, roc_host: *RocHost) void {\n    switch (value.tag) {\n${$decref_branches}    }\n}\n\n/// Increment Roc-owned payloads in ${struct_name}.\npub fn incref${struct_name}(value: ${struct_name}, amount: isize) void {\n    switch (value.tag) {\n${$incref_branches}    }\n}\n\n"
+	decref_uses_param = tag_union_refcount_uses_param(type_table, duplicate_tag_names, tu, "decref")
+	incref_uses_param = tag_union_refcount_uses_param(type_table, duplicate_tag_names, tu, "incref")
+	decref_unused = if decref_uses_param { "" } else { "    _ = roc_host;\n" }
+	incref_unused = if incref_uses_param { "" } else { "    _ = amount;\n" }
+
+	"/// Recursively decrement Roc-owned payloads in ${struct_name}.\npub fn decref${struct_name}(value: ${struct_name}, roc_host: *RocHost) void {\n${decref_unused}    switch (value.tag) {\n${$decref_branches}    }\n}\n\n/// Increment Roc-owned payloads in ${struct_name}.\npub fn incref${struct_name}(value: ${struct_name}, amount: isize) void {\n${incref_unused}    switch (value.tag) {\n${$incref_branches}    }\n}\n\n"
 }
 
-generate_box_payload_decref_helpers = |type_table| {
+generate_box_payload_decref_helpers = |type_table, duplicate_tag_names| {
 	var $helpers = ""
 	var $seen_inner_ids = []
 
@@ -1175,9 +1228,9 @@ generate_box_payload_decref_helpers = |type_table| {
 					match TypeTable.get(TypeTable.from_list(type_table), inner_id) {
 						RocFunction(_) => {}
 						_ => {
-							inner_zig = type_id_to_zig(type_table, inner_id)
+							inner_zig = type_id_to_zig(type_table, duplicate_tag_names, inner_id)
 							if inner_zig != "*anyopaque" and is_type_refcounted(type_table, inner_id) {
-								stmt = decref_stmt_for_type_id(type_table, inner_id, "payload.*")
+								stmt = decref_stmt_for_type_id(type_table, duplicate_tag_names, inner_id, "payload.*")
 								$helpers = Str.concat(
 									$helpers,
 									"fn ${box_payload_decref_name(inner_id)}(data_ptr: ?*anyopaque, roc_host: *RocHost) callconv(.c) void {\n    const payload: *${inner_zig} = @ptrCast(@alignCast(data_ptr orelse return));\n${stmt}}\n\n",
@@ -1194,27 +1247,36 @@ generate_box_payload_decref_helpers = |type_table| {
 	$helpers
 }
 
-generate_refcount_helpers = |type_table| {
+generate_refcount_helpers = |type_table, duplicate_tag_names| {
 	var $helpers = "// =============================================================================\n// Generated Refcount Helpers\n// =============================================================================\n\n"
 	var $seen_names = []
+	var $type_id = 0
 
 	for type_repr in type_table {
 		match type_repr {
 			RocRecord(rec) =>
-				if rec.name != "" and !(List.contains($seen_names, rec.name)) {
-					$seen_names = $seen_names.append(rec.name)
-					$helpers = Str.concat($helpers, generate_record_refcount_helpers(type_table, rec))
+				if rec.name != "" {
+					struct_name = name_to_struct_name(rec.name)
+					if !(List.contains($seen_names, struct_name)) {
+						$seen_names = $seen_names.append(struct_name)
+						$helpers = Str.concat($helpers, generate_record_refcount_helpers(type_table, duplicate_tag_names, rec))
+					}
 				}
 			RocTagUnion(tu) =>
-				if List.len(tu.tags) >= 2 and tu.name != "" and !(List.contains($seen_names, tu.name)) {
-					$seen_names = $seen_names.append(tu.name)
-					$helpers = Str.concat($helpers, generate_tag_union_refcount_helpers(type_table, tu))
+				if List.len(tu.tags) >= 2 and tu.name != "" {
+					struct_name = tag_union_struct_name(duplicate_tag_names, $type_id, tu)
+					if !(List.contains($seen_names, struct_name)) {
+						$seen_names = $seen_names.append(struct_name)
+						$helpers = Str.concat($helpers, generate_tag_union_refcount_helpers(type_table, duplicate_tag_names, $type_id, tu))
+					}
 				}
 			_ => {}
 		}
+
+		$type_id = $type_id + 1
 	}
 
-	$helpers.concat(generate_box_payload_decref_helpers(type_table))
+	$helpers.concat(generate_box_payload_decref_helpers(type_table, duplicate_tag_names))
 }
 
 # =============================================================================
@@ -1328,6 +1390,8 @@ lookup_record_from_repr = |type_table, type_repr| {
 
 ## Generate the complete Zig source file
 generate_zig_file = |hosted_functions, type_table, provides_list| {
+	duplicate_tag_names = duplicate_tag_union_names(type_table)
+
 	file_header
 		.concat(generate_imports)
 		.concat("\n")
@@ -1343,19 +1407,19 @@ generate_zig_file = |hosted_functions, type_table, provides_list| {
 		.concat("\n")
 		.concat(generate_roc_env)
 		.concat("\n")
-		.concat(generate_element_type_structs(type_table))
-		.concat(generate_tag_union_structs(type_table))
-		.concat(generate_all_record_structs(hosted_functions, type_table))
-		.concat(generate_all_args_structs(hosted_functions, type_table))
-		.concat(generate_refcount_helpers(type_table))
+		.concat(generate_element_type_structs(type_table, duplicate_tag_names))
+		.concat(generate_tag_union_structs(type_table, duplicate_tag_names))
+		.concat(generate_all_record_structs(hosted_functions, type_table, duplicate_tag_names))
+		.concat(generate_all_args_structs(hosted_functions, type_table, duplicate_tag_names))
+		.concat(generate_refcount_helpers(type_table, duplicate_tag_names))
 		.concat("\n")
 		.concat(generate_runtime_symbol_externs)
 		.concat("\n")
-		.concat(generate_hosted_symbol_externs(hosted_functions, type_table))
+		.concat(generate_hosted_symbol_externs(hosted_functions, type_table, duplicate_tag_names))
 		.concat("\n")
 		.concat(generate_host_helpers)
 		.concat("\n")
-		.concat(generate_entrypoint_externs(provides_list, type_table))
+		.concat(generate_entrypoint_externs(provides_list, type_table, duplicate_tag_names))
 }
 
 ## File header comment
@@ -1710,7 +1774,7 @@ generate_roc_str =
 ## Generate extern structs for record return types using type table (correctly sorted by alignment).
 ## Only generates RetRecord structs when ret_type_id resolves to a record in the type table.
 ## Tag union return types (e.g., Try(Record, Str)) are not yet supported and are skipped.
-generate_all_record_structs = |hosted_functions, type_table| {
+generate_all_record_structs = |hosted_functions, type_table, duplicate_tag_names| {
 	var $structs = ""
 	for func in hosted_functions {
 		# Only generate RetRecord if the return type is actually a record
@@ -1721,7 +1785,7 @@ generate_all_record_structs = |hosted_functions, type_table| {
 
 			var $fields = ""
 			for field in type_table_result.fields {
-				$fields = Str.concat($fields, zig_record_field_decl(type_table, field))
+				$fields = Str.concat($fields, zig_record_field_decl(type_table, duplicate_tag_names, field))
 			}
 
 			assertions = if type_table_result.size > 0 {
@@ -1742,17 +1806,17 @@ generate_all_record_structs = |hosted_functions, type_table| {
 }
 
 ## Generate all argument extern structs
-generate_all_args_structs = |hosted_functions, type_table| {
+generate_all_args_structs = |hosted_functions, type_table, duplicate_tag_names| {
 	var $structs = ""
 	for func in hosted_functions {
-		$structs = Str.concat($structs, generate_args_struct(func, type_table))
+		$structs = Str.concat($structs, generate_args_struct(func, type_table, duplicate_tag_names))
 	}
 	$structs
 }
 
 ## Generate a single argument extern struct (empty string if no args).
 ## Uses type table for single-record args; positional for multi-arg or primitive args.
-generate_args_struct = |func, type_table| {
+generate_args_struct = |func, type_table, duplicate_tag_names| {
 	if !(has_meaningful_args(func, type_table)) {
 		return ""
 	}
@@ -1772,7 +1836,7 @@ generate_args_struct = |func, type_table| {
 	if type_table_result.found {
 		var $fields = ""
 		for field in type_table_result.fields {
-			$fields = Str.concat($fields, zig_record_field_decl(type_table, field))
+			$fields = Str.concat($fields, zig_record_field_decl(type_table, duplicate_tag_names, field))
 		}
 
 		assertions = if type_table_result.size > 0 {
@@ -1789,7 +1853,7 @@ generate_args_struct = |func, type_table| {
 	var $positional_fields = ""
 	var $idx = 0
 	for arg_type_id in func.arg_type_ids {
-		zig_type = type_id_to_zig(type_table, arg_type_id)
+		zig_type = type_id_to_zig(type_table, duplicate_tag_names, arg_type_id)
 		$positional_fields = Str.concat(
 			$positional_fields,
 			"    arg${U64.to_str($idx)}: ${zig_type},\n",
@@ -1817,13 +1881,13 @@ is_anonymous_record_repr = |type_table, type_repr| {
 }
 
 ## Build a natural C ABI parameter list from Roc function argument type IDs.
-direct_param_list = |type_table, arg_type_ids| {
+direct_param_list = |type_table, duplicate_tag_names, arg_type_ids| {
 	var $params = ""
 	var $idx = 0
 
 	for arg_type_id in arg_type_ids {
 		if !is_unit_type_id(type_table, arg_type_id) {
-			arg_zig = type_id_to_zig(type_table, arg_type_id)
+			arg_zig = type_id_to_zig(type_table, duplicate_tag_names, arg_type_id)
 			sep = if $params == "" {
 				""
 			} else {
@@ -1839,7 +1903,7 @@ direct_param_list = |type_table, arg_type_ids| {
 
 ## Build a hosted symbol parameter list, using the generated Args wrapper for
 ## anonymous single-record arguments so direct-symbol glue stays readable.
-direct_hosted_param_list = |type_table, func| {
+direct_hosted_param_list = |type_table, duplicate_tag_names, func| {
 	use_args_wrapper =
 		if List.len(func.arg_type_ids) == 1 {
 			match List.first(func.arg_type_ids) {
@@ -1858,7 +1922,7 @@ direct_hosted_param_list = |type_table, func| {
 			arg_zig = if use_args_wrapper {
 				"${name_to_struct_name(func.name)}Args"
 			} else {
-				type_id_to_zig(type_table, arg_type_id)
+				type_id_to_zig(type_table, duplicate_tag_names, arg_type_id)
 			}
 			sep = if $params == "" {
 				""
@@ -1891,7 +1955,7 @@ generate_runtime_symbol_externs =
 	\\
 
 ## Generate direct extern declarations for hosted symbols.
-generate_hosted_symbol_externs = |hosted_functions, type_table| {
+generate_hosted_symbol_externs = |hosted_functions, type_table, duplicate_tag_names| {
 	if List.is_empty(hosted_functions) {
 		return ""
 	}
@@ -1899,8 +1963,8 @@ generate_hosted_symbol_externs = |hosted_functions, type_table| {
 	var $result = "// =============================================================================\n// Hosted Symbols\n//\n// The platform host must export these symbols with the exact direct C ABI signatures.\n// Refcounted arguments are owned by the hosted function.\n// =============================================================================\n\n"
 
 	for func in hosted_functions {
-		params = direct_hosted_param_list(type_table, func)
-		ret_zig = type_id_to_zig(type_table, func.ret_type_id)
+		params = direct_hosted_param_list(type_table, duplicate_tag_names, func)
+		ret_zig = type_id_to_zig(type_table, duplicate_tag_names, func.ret_type_id)
 
 		$result = Str.concat(
 			$result,
@@ -2094,22 +2158,22 @@ has_meaningful_args = |func, type_table| {
 # Entrypoint Declarations
 # =============================================================================
 
-generate_provided_decl = |entry, type_table, type_repr| {
+generate_provided_decl = |entry, type_table, duplicate_tag_names, type_repr| {
 	match type_repr {
 		RocFunction(func) => {
-			params = direct_param_list(type_table, func.args)
-			ret_zig = type_id_to_zig(type_table, func.ret)
+			params = direct_param_list(type_table, duplicate_tag_names, func.args)
+			ret_zig = type_id_to_zig(type_table, duplicate_tag_names, func.ret)
 			"/// Entrypoint: ${entry.name}\npub extern fn ${entry.ffi_symbol}(${params}) callconv(.c) ${ret_zig};\n\n"
 		}
 		_ => {
-			value_zig = type_repr_to_zig(type_table, type_repr)
+			value_zig = type_id_to_zig(type_table, duplicate_tag_names, entry.type_id)
 			"/// Static provided value: ${entry.name}\npub extern const ${entry.ffi_symbol}: ${value_zig};\n\n"
 		}
 	}
 }
 
 ## Generate extern declarations for entrypoints from the provides clause.
-generate_entrypoint_externs = |provides_list, type_table| {
+generate_entrypoint_externs = |provides_list, type_table, duplicate_tag_names| {
 	if List.is_empty(provides_list) {
 		return ""
 	}
@@ -2118,7 +2182,7 @@ generate_entrypoint_externs = |provides_list, type_table| {
 
 	for entry in provides_list {
 		type_repr = TypeTable.get(TypeTable.from_list(type_table), entry.type_id)
-		$result = Str.concat($result, generate_provided_decl(entry, type_table, type_repr))
+		$result = Str.concat($result, generate_provided_decl(entry, type_table, duplicate_tag_names, type_repr))
 	}
 
 	$result

@@ -2249,6 +2249,29 @@ const Builder = struct {
         };
     }
 
+    fn restoredConstFnTemplateToMono(
+        self: *Builder,
+        store_view: ModuleView,
+        fn_id: checked.ConstFnId,
+        fn_value: check.ConstStore.ConstFn,
+        mono_fn_ty: Type.TypeId,
+    ) Allocator.Error!Ast.FnTemplate {
+        var template = try self.constFnTemplateToMono(fn_value, mono_fn_ty);
+        if (fn_value.captures.len == 0) return template;
+
+        switch (template.fn_def) {
+            .nested => |nested| {
+                template.fn_def = .{ .nested = .{
+                    .owner = nested.owner,
+                    .site = nested.site,
+                    .context_fn_key = restoredConstFnContextKey(store_view.key, fn_id, fn_value.source_fn_key),
+                } };
+            },
+            else => Common.invariant("capturing stored function had no nested function identity"),
+        }
+        return template;
+    }
+
     fn constFnDefToMono(self: *Builder, fn_def: anytype) Allocator.Error!Ast.FnDef {
         return switch (fn_def) {
             .local_template => |template| .{ .local_template = template },
@@ -2284,7 +2307,7 @@ const Builder = struct {
         if (fn_value.fn_def == .encode_to_runtime) {
             return try self.restoreConstEncodeToRuntimeFnExpr(store_view, fn_value, ty);
         }
-        const template = try self.constFnTemplateToMono(fn_value, ty);
+        const template = try self.restoredConstFnTemplateToMono(store_view, fn_id, fn_value, ty);
         if (fn_value.captures.len == 0) {
             const mono_fn_id = try self.lowerRestoredConstFnTemplate(type_view, template);
             return try self.program.addExpr(.{
@@ -15310,6 +15333,20 @@ fn generatedEncodeToRuntimeKey(
     hasher.update(&current_fn_key.bytes);
     var source_expr_bytes = std.mem.nativeToLittle(u32, @intFromEnum(source_expr_id));
     hasher.update(std.mem.asBytes(&source_expr_bytes));
+    return .{ .bytes = hasher.finalResult() };
+}
+
+fn restoredConstFnContextKey(
+    module_key: checked.ModuleId,
+    fn_id: checked.ConstFnId,
+    source_fn_key: names.TypeDigest,
+) names.TypeDigest {
+    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    hasher.update("roc.restored_const_fn_context");
+    hasher.update(&module_key.bytes);
+    hasher.update(&source_fn_key.bytes);
+    var fn_id_bytes = std.mem.nativeToLittle(u32, @intFromEnum(fn_id));
+    hasher.update(std.mem.asBytes(&fn_id_bytes));
     return .{ .bytes = hasher.finalResult() };
 }
 

@@ -59,14 +59,14 @@ render_help = |buffer, node|
         Text(content) => Str.concat(buffer, content)
         Element(tag_name, _, attrs, children) => {
             with_tag_name = "${buffer}<${tag_name}"
-            with_attrs = if List.is_empty(attrs) { with_tag_name } else { List.fold(attrs, "${with_tag_name} ", render_attr) }
+            with_attrs = if List.is_empty(attrs) { with_tag_name } else { List.fold(attrs, with_tag_name, render_attr) }
             with_tag = Str.concat(with_attrs, ">")
             with_children = List.fold(children, with_tag, render_help)
             "${with_children}</${tag_name}>"
         }
         UnclosedElem(tag_name, _, attrs) =>
             if List.is_empty(attrs) { "${buffer}<${tag_name}>" } else {
-                folded = List.fold(attrs, "${buffer}<${tag_name} ", render_attr)
+                folded = List.fold(attrs, "${buffer}<${tag_name}", render_attr)
                 Str.concat(folded, ">")
             }
     }
