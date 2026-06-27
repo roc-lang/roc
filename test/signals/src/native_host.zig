@@ -1620,6 +1620,7 @@ fn zeroRuntimeMetrics() RuntimeMetrics {
     return .{
         .active_graph_records_rebuilt = 0,
         .append_child = 0,
+        .active_intervals_synced = 0,
         .allocs_this_event = 0,
         .bind_event = 0,
         .closure_releases = 0,
@@ -1648,6 +1649,7 @@ fn zeroRuntimeMetrics() RuntimeMetrics {
         .propagation_prunes = 0,
         .recompute_batches = 0,
         .remove_node = 0,
+        .render_indexes_refreshed = 0,
         .retained_alloc_delta = 0,
         .reset_dom = 0,
         .rows_created = 0,
@@ -1660,6 +1662,7 @@ fn zeroRuntimeMetrics() RuntimeMetrics {
         .set_metadata = 0,
         .set_text = 0,
         .set_value = 0,
+        .signal_record_table_rebuilt = 0,
         .stream_nodes_scanned = 0,
         .stream_nodes_scanned_apply = 0,
         .stream_nodes_scanned_children = 0,
@@ -1946,6 +1949,7 @@ fn addRuntimeMetrics(left: RuntimeMetrics, right: RuntimeMetrics) RuntimeMetrics
     return .{
         .active_graph_records_rebuilt = left.active_graph_records_rebuilt + right.active_graph_records_rebuilt,
         .append_child = left.append_child + right.append_child,
+        .active_intervals_synced = left.active_intervals_synced + right.active_intervals_synced,
         .allocs_this_event = left.allocs_this_event + right.allocs_this_event,
         .bind_event = left.bind_event + right.bind_event,
         .closure_releases = left.closure_releases + right.closure_releases,
@@ -1974,6 +1978,7 @@ fn addRuntimeMetrics(left: RuntimeMetrics, right: RuntimeMetrics) RuntimeMetrics
         .propagation_prunes = left.propagation_prunes + right.propagation_prunes,
         .recompute_batches = left.recompute_batches + right.recompute_batches,
         .remove_node = left.remove_node + right.remove_node,
+        .render_indexes_refreshed = left.render_indexes_refreshed + right.render_indexes_refreshed,
         .retained_alloc_delta = left.retained_alloc_delta + right.retained_alloc_delta,
         .reset_dom = left.reset_dom + right.reset_dom,
         .rows_created = left.rows_created + right.rows_created,
@@ -1986,6 +1991,7 @@ fn addRuntimeMetrics(left: RuntimeMetrics, right: RuntimeMetrics) RuntimeMetrics
         .set_metadata = left.set_metadata + right.set_metadata,
         .set_text = left.set_text + right.set_text,
         .set_value = left.set_value + right.set_value,
+        .signal_record_table_rebuilt = left.signal_record_table_rebuilt + right.signal_record_table_rebuilt,
         .stream_nodes_scanned = left.stream_nodes_scanned + right.stream_nodes_scanned,
         .stream_nodes_scanned_apply = left.stream_nodes_scanned_apply + right.stream_nodes_scanned_apply,
         .stream_nodes_scanned_children = left.stream_nodes_scanned_children + right.stream_nodes_scanned_children,
@@ -2004,6 +2010,7 @@ fn u64MetricAsI64(value: u64) i64 {
 
 fn runtimeMetricValue(metrics: RuntimeMetrics, name: []const u8) ?i64 {
     if (std.mem.eql(u8, name, "active_graph_records_rebuilt")) return u64MetricAsI64(metrics.active_graph_records_rebuilt);
+    if (std.mem.eql(u8, name, "active_intervals_synced")) return u64MetricAsI64(metrics.active_intervals_synced);
     if (std.mem.eql(u8, name, "reset_dom")) return u64MetricAsI64(metrics.reset_dom);
     if (std.mem.eql(u8, name, "create_element")) return u64MetricAsI64(metrics.create_element);
     if (std.mem.eql(u8, name, "append_child")) return u64MetricAsI64(metrics.append_child);
@@ -2042,6 +2049,8 @@ fn runtimeMetricValue(metrics: RuntimeMetrics, name: []const u8) ?i64 {
     if (std.mem.eql(u8, name, "rows_removed")) return u64MetricAsI64(metrics.rows_removed);
     if (std.mem.eql(u8, name, "closure_retains")) return u64MetricAsI64(metrics.closure_retains);
     if (std.mem.eql(u8, name, "closure_releases")) return u64MetricAsI64(metrics.closure_releases);
+    if (std.mem.eql(u8, name, "render_indexes_refreshed")) return u64MetricAsI64(metrics.render_indexes_refreshed);
+    if (std.mem.eql(u8, name, "signal_record_table_rebuilt")) return u64MetricAsI64(metrics.signal_record_table_rebuilt);
     if (std.mem.eql(u8, name, "stream_nodes_scanned")) return u64MetricAsI64(metrics.stream_nodes_scanned);
     if (std.mem.eql(u8, name, "stream_nodes_scanned_apply")) return u64MetricAsI64(metrics.stream_nodes_scanned_apply);
     if (std.mem.eql(u8, name, "stream_nodes_scanned_children")) return u64MetricAsI64(metrics.stream_nodes_scanned_children);
@@ -2698,7 +2707,7 @@ fn runBenchmarkIteration(commands: []const SpecCommand, verbose: bool, stats: *B
 }
 
 fn printBenchmarkHeader() void {
-    writeStdout("case,sample,iterations,actions,init_roc_ns,init_apply_ns,dispatch_roc_ns,dispatch_apply_ns,total_ns,allocs,deallocs,retained_alloc_delta,commands,reset_dom,create_element,append_child,remove_node,move_before,set_text,set_value,set_checked,set_disabled,set_metadata,bind_event,active_graph_records_rebuilt,stream_nodes_scanned,stream_nodes_scanned_apply,stream_nodes_scanned_children,stream_nodes_scanned_dirty_scope,stream_nodes_scanned_events,stream_nodes_scanned_mounts,stream_nodes_scanned_remove_target,stream_nodes_scanned_render_scope,stream_nodes_scanned_splice,each_key_compares,each_key_hashes,each_key_reuse_compares,each_key_duplicate_compares,each_item_compares,each_syncs,each_sync_keys,each_sync_existing_rows,allocs_this_event,deallocs_this_event,host_allocs_this_event,host_deallocs_this_event,host_alloc_bytes_this_event,host_dealloc_bytes_this_event,events_processed,nodes_recomputed,propagation_prunes,derived_calls_into_roc,recompute_batches,patches_emitted,scopes_created,scopes_disposed,rows_reused,rows_created,rows_removed,closure_retains,closure_releases,metrics_retained_alloc_delta,host_retained_alloc_delta,host_retained_bytes_delta\n");
+    writeStdout("case,sample,iterations,actions,init_roc_ns,init_apply_ns,dispatch_roc_ns,dispatch_apply_ns,total_ns,allocs,deallocs,retained_alloc_delta,commands,reset_dom,create_element,append_child,remove_node,move_before,set_text,set_value,set_checked,set_disabled,set_metadata,bind_event,active_graph_records_rebuilt,stream_nodes_scanned,stream_nodes_scanned_apply,stream_nodes_scanned_children,stream_nodes_scanned_dirty_scope,stream_nodes_scanned_events,stream_nodes_scanned_mounts,stream_nodes_scanned_remove_target,stream_nodes_scanned_render_scope,stream_nodes_scanned_splice,signal_record_table_rebuilt,active_intervals_synced,render_indexes_refreshed,each_key_compares,each_key_hashes,each_key_reuse_compares,each_key_duplicate_compares,each_item_compares,each_syncs,each_sync_keys,each_sync_existing_rows,allocs_this_event,deallocs_this_event,host_allocs_this_event,host_deallocs_this_event,host_alloc_bytes_this_event,host_dealloc_bytes_this_event,events_processed,nodes_recomputed,propagation_prunes,derived_calls_into_roc,recompute_batches,patches_emitted,scopes_created,scopes_disposed,rows_reused,rows_created,rows_removed,closure_retains,closure_releases,metrics_retained_alloc_delta,host_retained_alloc_delta,host_retained_bytes_delta\n");
 }
 
 fn printBenchmarkRow(case_name: []const u8, sample: usize, iterations: usize, stats: BenchmarkStats) void {
@@ -2738,7 +2747,7 @@ fn printBenchmarkRow(case_name: []const u8, sample: usize, iterations: usize, st
         },
     );
     printStdout(
-        "{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},",
+        "{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},",
         .{
             stats.metrics.active_graph_records_rebuilt,
             stats.metrics.stream_nodes_scanned,
@@ -2750,6 +2759,9 @@ fn printBenchmarkRow(case_name: []const u8, sample: usize, iterations: usize, st
             stats.metrics.stream_nodes_scanned_remove_target,
             stats.metrics.stream_nodes_scanned_render_scope,
             stats.metrics.stream_nodes_scanned_splice,
+            stats.metrics.signal_record_table_rebuilt,
+            stats.metrics.active_intervals_synced,
+            stats.metrics.render_indexes_refreshed,
             stats.metrics.each_key_compares,
             stats.metrics.each_key_hashes,
             stats.metrics.each_key_reuse_compares,
@@ -3406,6 +3418,9 @@ test "signals metrics accumulate propagation pruning counters" {
     left.stream_nodes_scanned_remove_target = 6;
     left.stream_nodes_scanned_render_scope = 7;
     left.stream_nodes_scanned_splice = 8;
+    left.signal_record_table_rebuilt = 9;
+    left.active_intervals_synced = 10;
+    left.render_indexes_refreshed = 11;
 
     var right = zeroRuntimeMetrics();
     right.active_graph_records_rebuilt = 2;
@@ -3446,6 +3461,9 @@ test "signals metrics accumulate propagation pruning counters" {
     right.stream_nodes_scanned_remove_target = 29;
     right.stream_nodes_scanned_render_scope = 31;
     right.stream_nodes_scanned_splice = 37;
+    right.signal_record_table_rebuilt = 41;
+    right.active_intervals_synced = 43;
+    right.render_indexes_refreshed = 47;
     right.retained_alloc_delta = -2;
 
     const total = addRuntimeMetrics(left, right);
@@ -3487,6 +3505,9 @@ test "signals metrics accumulate propagation pruning counters" {
     try std.testing.expectEqual(@as(u64, 35), total.stream_nodes_scanned_remove_target);
     try std.testing.expectEqual(@as(u64, 38), total.stream_nodes_scanned_render_scope);
     try std.testing.expectEqual(@as(u64, 45), total.stream_nodes_scanned_splice);
+    try std.testing.expectEqual(@as(u64, 50), total.signal_record_table_rebuilt);
+    try std.testing.expectEqual(@as(u64, 53), total.active_intervals_synced);
+    try std.testing.expectEqual(@as(u64, 58), total.render_indexes_refreshed);
     try std.testing.expectEqual(@as(i64, -2), total.retained_alloc_delta);
 }
 

@@ -349,6 +349,22 @@ Outcome:
   are the remaining `remove_target`, `splice`, and `render_scope` buckets and
   the still-dark whole-stream splice tail work.
 
+Dark-path attribution counters added on 2026-06-27 and measured with
+`zig build run-signals-bench` after the sparse render-child index. These counters
+are not part of `stream_nodes_scanned`; they count the whole-stream/whole-graph
+work that was previously invisible in the scan split.
+
+| case | signal_record_table_rebuilt | active_intervals_synced | render_indexes_refreshed |
+| --- | ---: | ---: | ---: |
+| signals-large-each-64 | 69240 | 141080 | 90920 |
+| signals-kanban-board | 20960 | 33040 | 20280 |
+
+This confirms that the splice tail is a major uncounted structural cost. On the
+large-N canary, the hidden counters sum to 301240 units, with interval sync as
+the largest single dark path. The next implementation slice should remove the
+whole-stream signal-record table rebuild and active interval graph walk from
+splices before moving to the `remove_target` descriptor index work.
+
 Baseline review outcome:
 
 - Structural `Ui.each` work remains the clear first target, but the hot metric is
@@ -405,19 +421,17 @@ evidence-gated.
 
 Current priority after the Phase 4 review:
 
-1. Add missing attribution counters for whole-stream signal-record table
-   rebuilds, active interval syncs, and render-index refreshes.
-2. Remove the splice tail's whole-stream signal-record table rebuild and active
+1. Remove the splice tail's whole-stream signal-record table rebuild and active
    interval graph walk by maintaining them incrementally over the spliced
    subtree.
-3. Attack `remove_target` with a scope-owned descriptor index and an explicit
+2. Attack `remove_target` with a scope-owned descriptor index and an explicit
    replacement-subtree membership set.
-4. Collapse `render_scope` and `splice` render-range discovery behind an
+3. Collapse `render_scope` and `splice` render-range discovery behind an
    explicit scope-to-render-range index; fold splice's two current render-node
    passes into one as the first step.
-5. Then move transient structural buffers to scratch, starting with making
+4. Then move transient structural buffers to scratch, starting with making
    `streamDirectChildren` allocation-free for callers.
-6. Keep the long-session leak/plateau gate in the loop for monotonic identity
+5. Keep the long-session leak/plateau gate in the loop for monotonic identity
    and dense `_by_elem_id` tables.
 
 ### Persistent rank-ordered propagation queue (design gap, not optimisation)
@@ -459,6 +473,9 @@ Current priority after the Phase 4 review:
 
 ### Structural attribution counters for dark O(N) splice work
 
+- **Status:** implemented. Runtime metrics and benchmark CSV now expose
+  `signal_record_table_rebuilt`, `active_intervals_synced`, and
+  `render_indexes_refreshed`, all gated by the existing `metrics` build option.
 - **Hypothesis:** some remaining one-row structural splice cost is hidden outside
   `stream_nodes_scanned`: the splice tail still rebuilds the active stream's
   signal-record token table, syncs active intervals by walking the whole signal

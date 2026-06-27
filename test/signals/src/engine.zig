@@ -128,6 +128,7 @@ const RenderScalarNodeCache = struct {
 pub const RuntimeMetrics = struct {
     active_graph_records_rebuilt: u64,
     append_child: u64,
+    active_intervals_synced: u64,
     allocs_this_event: u64,
     bind_event: u64,
     closure_releases: u64,
@@ -156,6 +157,7 @@ pub const RuntimeMetrics = struct {
     propagation_prunes: u64,
     recompute_batches: u64,
     remove_node: u64,
+    render_indexes_refreshed: u64,
     retained_alloc_delta: i64,
     reset_dom: u64,
     rows_created: u64,
@@ -168,6 +170,7 @@ pub const RuntimeMetrics = struct {
     set_metadata: u64,
     set_text: u64,
     set_value: u64,
+    signal_record_table_rebuilt: u64,
     stream_nodes_scanned: u64,
     stream_nodes_scanned_apply: u64,
     stream_nodes_scanned_children: u64,
@@ -190,6 +193,7 @@ pub fn zeroRuntimeMetrics() RuntimeMetrics {
     return .{
         .active_graph_records_rebuilt = 0,
         .append_child = 0,
+        .active_intervals_synced = 0,
         .allocs_this_event = 0,
         .bind_event = 0,
         .closure_releases = 0,
@@ -218,6 +222,7 @@ pub fn zeroRuntimeMetrics() RuntimeMetrics {
         .propagation_prunes = 0,
         .recompute_batches = 0,
         .remove_node = 0,
+        .render_indexes_refreshed = 0,
         .retained_alloc_delta = 0,
         .reset_dom = 0,
         .rows_created = 0,
@@ -230,6 +235,7 @@ pub fn zeroRuntimeMetrics() RuntimeMetrics {
         .set_metadata = 0,
         .set_text = 0,
         .set_value = 0,
+        .signal_record_table_rebuilt = 0,
         .stream_nodes_scanned = 0,
         .stream_nodes_scanned_apply = 0,
         .stream_nodes_scanned_children = 0,
@@ -1627,8 +1633,9 @@ pub const HostNodeDescriptorStream = struct {
         return index;
     }
 
-    pub fn refreshRenderIndexesFrom(self: *HostNodeDescriptorStream, allocator: std.mem.Allocator, start_index: usize) void {
+    pub fn refreshRenderIndexesFrom(self: *HostNodeDescriptorStream, allocator: std.mem.Allocator, start_index: usize, metrics: anytype) void {
         if (start_index > self.render_nodes.items.len) @panic("render index refresh started past render node table");
+        metrics.bump(.render_indexes_refreshed, @intCast(self.render_nodes.items.len - start_index));
         for (self.render_nodes.items[start_index..], start_index..) |node, index| {
             self.ensureRenderMetadata(allocator, node.elem_id).render_node = index;
         }
@@ -1654,7 +1661,7 @@ pub const HostNodeDescriptorStream = struct {
         replacement.removeRenderMetadataIfEmpty(elem_id);
     }
 
-    pub fn replaceRenderRangeWithStream(self: *HostNodeDescriptorStream, allocator: std.mem.Allocator, render_start: usize, removed_nodes: []const HostRenderNode, replacement: *HostNodeDescriptorStream) void {
+    pub fn replaceRenderRangeWithStream(self: *HostNodeDescriptorStream, allocator: std.mem.Allocator, render_start: usize, removed_nodes: []const HostRenderNode, replacement: *HostNodeDescriptorStream, metrics: anytype) void {
         const ChildInsert = struct {
             parent_elem_id: u64,
             insertion_index: usize,
@@ -1717,7 +1724,7 @@ pub const HostNodeDescriptorStream = struct {
 
         self.render_nodes.replaceRange(allocator, render_start, removed_nodes.len, replacement.render_nodes.items) catch @panic("out of memory");
         replacement.render_nodes.items.len = 0;
-        self.refreshRenderIndexesFrom(allocator, render_start);
+        self.refreshRenderIndexesFrom(allocator, render_start, metrics);
     }
 
     pub fn setFreshIndex(slot: *?usize, value: usize) void {
@@ -4799,6 +4806,7 @@ pub fn Engine(comptime Ctx: type) type {
 
         fn syncActiveIntervalsFromGraph(self: *Self, ctx: Ctx.Handle) void {
             self.markActiveIntervalsInactive();
+            self.pending_roc_metrics.bump(.active_intervals_synced, @intCast(self.active_signal_graph.items.len));
 
             for (self.active_signal_graph.items) |node| {
                 switch (node.record.payload) {
@@ -5957,6 +5965,14 @@ pub fn Engine(comptime Ctx: type) type {
 
         fn rebuildActiveStreamSignalRecordTable(self: *Self, ctx: Ctx.Handle) void {
             const allocator = Ctx.allocator(ctx);
+            const rebuilt_records =
+                self.active_stream.signal_text_nodes.items.len +
+                self.active_stream.signal_text_attrs.items.len +
+                self.active_stream.signal_bool_attrs.items.len +
+                self.active_stream.on_changes.items.len +
+                self.active_stream.whens.items.len +
+                self.active_stream.eaches.items.len;
+            self.pending_roc_metrics.bump(.signal_record_table_rebuilt, @intCast(rebuilt_records));
             self.active_stream.signal_records_by_token.clearRetainingCapacity();
 
             for (self.active_stream.signal_text_nodes.items) |desc| {
@@ -6046,7 +6062,7 @@ pub fn Engine(comptime Ctx: type) type {
                 replacement_elem_ids[index] = node.elem_id;
             }
 
-            self.active_stream.replaceRenderRangeWithStream(allocator, render_start, removed_render_nodes, replacement);
+            self.active_stream.replaceRenderRangeWithStream(allocator, render_start, removed_render_nodes, replacement, &self.pending_roc_metrics);
             self.removeActiveNonRenderDescriptorsInTarget(ctx, roc_host, target);
             self.adjustActiveScopeSiteRenderInsertIndices(render_insert_index, removed_render_count, replacement_render_count);
             const on_change_start = self.active_stream.on_changes.items.len;
@@ -6707,7 +6723,7 @@ pub fn Engine(comptime Ctx: type) type {
                 reordered_parent_children.appendSlice(allocator, reordered_region_children.items) catch @panic("out of memory");
             }
             self.active_stream.replaceRenderChildrenIndex(allocator, site.parent_elem_id, reordered_parent_children.items);
-            self.active_stream.refreshRenderIndexesFrom(allocator, region_start);
+            self.active_stream.refreshRenderIndexesFrom(allocator, region_start, &self.pending_roc_metrics);
 
             for (self.active_stream.scope_sites.items) |*scope_site| {
                 const row_scope_id = (self.eachSiteRowAncestorScopeId(scope_site.scope_id, each_site) catch @panic("scope descriptor referenced an unknown parent scope")) orelse continue;
