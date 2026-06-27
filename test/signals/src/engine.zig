@@ -1424,6 +1424,7 @@ pub const HostNodeDescriptorStream = struct {
     whens: std.ArrayListUnmanaged(HostNodeWhenDesc) = .empty,
     eaches: std.ArrayListUnmanaged(HostNodeEachDesc) = .empty,
     signal_records_by_token: std.AutoHashMapUnmanaged(usize, *HostSignalRecord) = .{},
+    signal_record_descriptor_uses_by_token: std.AutoHashMapUnmanaged(usize, usize) = .{},
     render_metadata_by_elem_id: std.AutoHashMapUnmanaged(u64, HostRenderElemIndex) = .{},
     descriptor_indexes_by_elem_id: std.ArrayListUnmanaged(HostElemDescriptorIndex) = .empty,
     descriptor_indexes_by_node_id: std.ArrayListUnmanaged(HostNodeDescriptorIndex) = .empty,
@@ -1981,6 +1982,7 @@ pub const HostNodeDescriptorStream = struct {
         self.eaches.deinit(allocator);
 
         self.signal_records_by_token.deinit(allocator);
+        self.signal_record_descriptor_uses_by_token.deinit(allocator);
         self.render_metadata_by_elem_id.deinit(allocator);
         self.descriptor_indexes_by_elem_id.deinit(allocator);
         self.descriptor_indexes_by_node_id.deinit(allocator);
@@ -2002,8 +2004,34 @@ pub const HostNodeDescriptorStream = struct {
         entry.value_ptr.* = record;
     }
 
+    fn incrementSignalRecordDescriptorUse(self: *HostNodeDescriptorStream, allocator: std.mem.Allocator, record: *HostSignalRecord) void {
+        const token = record.token() orelse return;
+        const key = @intFromPtr(token);
+        const entry = self.signal_record_descriptor_uses_by_token.getOrPut(allocator, key) catch @panic("out of memory");
+        if (entry.found_existing) {
+            entry.value_ptr.* += 1;
+        } else {
+            entry.value_ptr.* = 1;
+        }
+    }
+
+    fn decrementSignalRecordDescriptorUse(self: *HostNodeDescriptorStream, record: *HostSignalRecord) void {
+        const token = record.token() orelse return;
+        const key = @intFromPtr(token);
+        const count = self.signal_record_descriptor_uses_by_token.getPtr(key) orelse @panic("signal token descriptor use underflow");
+        if (count.* == 0) @panic("signal token descriptor use underflow");
+        count.* -= 1;
+        if (count.* != 0) return;
+
+        _ = self.signal_record_descriptor_uses_by_token.fetchRemove(key) orelse @panic("signal token descriptor use disappeared during removal");
+        const existing = self.signal_records_by_token.get(key) orelse @panic("signal token descriptor use had no record");
+        if (existing != record) @panic("signal token descriptor use pointed at the wrong record");
+        _ = self.signal_records_by_token.fetchRemove(key) orelse @panic("signal token record disappeared during removal");
+    }
+
     pub fn rememberSignalRecordTree(self: *HostNodeDescriptorStream, allocator: std.mem.Allocator, record: *HostSignalRecord) void {
         self.rememberSignalRecord(allocator, record);
+        self.incrementSignalRecordDescriptorUse(allocator, record);
         switch (record.payload) {
             .ref, .const_value => {},
             .map => |payload| self.rememberSignalRecordTree(allocator, payload.input),
@@ -2014,6 +2042,24 @@ pub const HostNodeDescriptorStream = struct {
             .combine => |payload| {
                 for (payload.children) |child| {
                     self.rememberSignalRecordTree(allocator, child);
+                }
+            },
+            .task_source, .interval_source => {},
+        }
+    }
+
+    pub fn forgetSignalRecordTree(self: *HostNodeDescriptorStream, record: *HostSignalRecord) void {
+        self.decrementSignalRecordDescriptorUse(record);
+        switch (record.payload) {
+            .ref, .const_value => {},
+            .map => |payload| self.forgetSignalRecordTree(payload.input),
+            .map2 => |payload| {
+                self.forgetSignalRecordTree(payload.left);
+                self.forgetSignalRecordTree(payload.right);
+            },
+            .combine => |payload| {
+                for (payload.children) |child| {
+                    self.forgetSignalRecordTree(child);
                 }
             },
             .task_source, .interval_source => {},
@@ -4804,6 +4850,27 @@ pub fn Engine(comptime Ctx: type) type {
             Ctx.sink(ctx).startInterval(token, period_ms);
         }
 
+        fn removeActiveIntervalBySourceToken(self: *Self, ctx: Ctx.Handle, source_token: HostSignalToken) void {
+            const roc_host = self.roc_host orelse @panic("active interval cannot release token without a Roc host");
+            var found_index: ?usize = null;
+            for (self.active_intervals.items, 0..) |interval, index| {
+                if (interval.source_token != source_token) continue;
+                if (found_index != null) @panic("interval source token matched more than one runtime interval");
+                found_index = index;
+            }
+            const index = found_index orelse @panic("active interval removal missed its source token");
+            const interval = self.active_intervals.items[index];
+            if (interval.active) {
+                Ctx.sink(ctx).cancelInterval(interval.token);
+            }
+            releaseHostSignalToken(interval.source_token, roc_host);
+            const last_index = self.active_intervals.items.len - 1;
+            if (index != last_index) {
+                self.active_intervals.items[index] = self.active_intervals.items[last_index];
+            }
+            self.active_intervals.items.len = last_index;
+        }
+
         fn syncActiveIntervalsFromGraph(self: *Self, ctx: Ctx.Handle) void {
             self.markActiveIntervalsInactive();
             self.pending_roc_metrics.bump(.active_intervals_synced, @intCast(self.active_signal_graph.items.len));
@@ -4968,7 +5035,8 @@ pub fn Engine(comptime Ctx: type) type {
 
             switch (record.payload) {
                 .ref => |source_node_id| self.appendActiveSourceSignalRoute(ctx, source_node_id, record_id),
-                .const_value, .task_source, .interval_source => {},
+                .const_value, .task_source => {},
+                .interval_source => |payload| self.ensureActiveInterval(ctx, payload.token, payload.period_ms),
                 .map => |payload| self.appendActiveSignalDependentId(ctx, self.requireActiveSignalRecordId(payload.input), record_id),
                 .map2 => |payload| {
                     self.appendActiveSignalDependentId(ctx, self.requireActiveSignalRecordId(payload.left), record_id);
@@ -5409,7 +5477,8 @@ pub fn Engine(comptime Ctx: type) type {
 
             switch (record.payload) {
                 .ref => |source_node_id| self.removeActiveSourceSignalRoute(source_node_id, record_id),
-                .const_value, .task_source, .interval_source => {},
+                .const_value, .task_source => {},
+                .interval_source => |payload| self.removeActiveIntervalBySourceToken(ctx, payload.token),
                 .map, .map2, .combine => {},
             }
 
@@ -5522,6 +5591,7 @@ pub fn Engine(comptime Ctx: type) type {
                     const record_id = self.requireActiveSignalRecordId(removed.signal.record);
                     self.removeActiveTextSignalRoute(record_id, .text_node, read_index);
                     self.active_stream.clearSignalTextNodeIndex(removed.elem_id, read_index);
+                    self.active_stream.forgetSignalRecordTree(removed.signal.record);
                     self.releaseActiveSignalRecord(ctx, removed.signal.record);
                     self.deinitActiveSignalTextNodeDesc(ctx, roc_host, &removed);
                     continue;
@@ -5561,6 +5631,7 @@ pub fn Engine(comptime Ctx: type) type {
                     const record_id = self.requireActiveSignalRecordId(removed.signal.record);
                     self.removeActiveTextSignalRoute(record_id, .text_attr, read_index);
                     self.active_stream.clearSignalTextAttrIndex(removed.elem_id, removed.field, read_index);
+                    self.active_stream.forgetSignalRecordTree(removed.signal.record);
                     self.releaseActiveSignalRecord(ctx, removed.signal.record);
                     self.deinitActiveSignalTextAttrDesc(ctx, roc_host, &removed);
                     continue;
@@ -5598,6 +5669,7 @@ pub fn Engine(comptime Ctx: type) type {
                     const record_id = self.requireActiveSignalRecordId(removed.signal.record);
                     self.removeActiveBoolSignalRoute(record_id, read_index);
                     self.active_stream.clearSignalBoolAttrIndex(removed.elem_id, removed.field, read_index);
+                    self.active_stream.forgetSignalRecordTree(removed.signal.record);
                     self.releaseActiveSignalRecord(ctx, removed.signal.record);
                     self.deinitActiveSignalBoolAttrDesc(ctx, roc_host, &removed);
                     continue;
@@ -5619,6 +5691,7 @@ pub fn Engine(comptime Ctx: type) type {
                     var removed = desc;
                     const record_id = self.requireActiveSignalRecordId(removed.signal.record);
                     self.removeActiveChangeSignalRoute(record_id, read_index);
+                    self.active_stream.forgetSignalRecordTree(removed.signal.record);
                     self.releaseActiveSignalRecord(ctx, removed.signal.record);
                     self.deinitActiveOnChangeDesc(ctx, roc_host, &removed);
                     continue;
@@ -5735,6 +5808,7 @@ pub fn Engine(comptime Ctx: type) type {
                     const record_id = self.requireActiveSignalRecordId(removed.condition.record);
                     self.removeActiveStructuralSignalRoute(record_id, .when, read_index);
                     self.active_stream.clearWhenIndex(removed.node_id, read_index);
+                    self.active_stream.forgetSignalRecordTree(removed.condition.record);
                     self.releaseActiveSignalRecord(ctx, removed.condition.record);
                     removed.cached_value.deinit(ctx, roc_host, &self.pending_roc_metrics);
                     removed.condition.deinit(Ctx.allocator(ctx), ctx, roc_host, &self.pending_roc_metrics);
@@ -5761,6 +5835,7 @@ pub fn Engine(comptime Ctx: type) type {
                     const record_id = self.requireActiveSignalRecordId(removed.items.record);
                     self.removeActiveStructuralSignalRoute(record_id, .each, read_index);
                     self.active_stream.clearEachIndex(removed.node_id, read_index);
+                    self.active_stream.forgetSignalRecordTree(removed.items.record);
                     self.releaseActiveSignalRecord(ctx, removed.items.record);
                     removed.cached_value.deinit(ctx, roc_host, &self.pending_roc_metrics);
                     removed.items.deinit(Ctx.allocator(ctx), ctx, roc_host, &self.pending_roc_metrics);
@@ -5847,6 +5922,7 @@ pub fn Engine(comptime Ctx: type) type {
                 self.active_stream.recordSignalTextNodeIndex(allocator, desc.elem_id, signal_text_node_base + offset);
             }
             for (replacement.signal_text_nodes.items, 0..) |desc, offset| {
+                self.active_stream.rememberSignalRecordTree(allocator, desc.signal.record);
                 self.retainActiveSignalRecord(ctx, desc.signal.record);
                 const record_id = self.requireActiveSignalRecordId(desc.signal.record);
                 self.appendActiveTextSignalRoute(ctx, record_id, .{
@@ -5869,6 +5945,7 @@ pub fn Engine(comptime Ctx: type) type {
                 self.active_stream.recordSignalTextAttrIndex(allocator, desc.elem_id, desc.field, signal_text_attr_base + offset);
             }
             for (replacement.signal_text_attrs.items, 0..) |desc, offset| {
+                self.active_stream.rememberSignalRecordTree(allocator, desc.signal.record);
                 self.retainActiveSignalRecord(ctx, desc.signal.record);
                 const record_id = self.requireActiveSignalRecordId(desc.signal.record);
                 self.appendActiveTextSignalRoute(ctx, record_id, .{
@@ -5891,6 +5968,7 @@ pub fn Engine(comptime Ctx: type) type {
                 self.active_stream.recordSignalBoolAttrIndex(allocator, desc.elem_id, desc.field, signal_bool_attr_base + offset);
             }
             for (replacement.signal_bool_attrs.items, 0..) |desc, offset| {
+                self.active_stream.rememberSignalRecordTree(allocator, desc.signal.record);
                 self.retainActiveSignalRecord(ctx, desc.signal.record);
                 const record_id = self.requireActiveSignalRecordId(desc.signal.record);
                 self.appendActiveBoolSignalRoute(ctx, record_id, .{
@@ -5902,6 +5980,7 @@ pub fn Engine(comptime Ctx: type) type {
 
             const on_change_base = self.active_stream.on_changes.items.len;
             for (replacement.on_changes.items, 0..) |desc, offset| {
+                self.active_stream.rememberSignalRecordTree(allocator, desc.signal.record);
                 self.retainActiveSignalRecord(ctx, desc.signal.record);
                 const record_id = self.requireActiveSignalRecordId(desc.signal.record);
                 self.appendActiveChangeSignalRoute(ctx, record_id, .{
@@ -5939,6 +6018,7 @@ pub fn Engine(comptime Ctx: type) type {
             const when_base = self.active_stream.whens.items.len;
             for (replacement.whens.items, 0..) |desc, offset| {
                 self.active_stream.recordWhenIndex(allocator, desc.node_id, when_base + offset);
+                self.active_stream.rememberSignalRecordTree(allocator, desc.condition.record);
                 self.retainActiveSignalRecord(ctx, desc.condition.record);
                 const record_id = self.requireActiveSignalRecordId(desc.condition.record);
                 self.appendActiveStructuralSignalRoute(ctx, record_id, .{
@@ -5952,6 +6032,7 @@ pub fn Engine(comptime Ctx: type) type {
             const each_base = self.active_stream.eaches.items.len;
             for (replacement.eaches.items, 0..) |desc, offset| {
                 self.active_stream.recordEachIndex(allocator, desc.node_id, each_base + offset);
+                self.active_stream.rememberSignalRecordTree(allocator, desc.items.record);
                 self.retainActiveSignalRecord(ctx, desc.items.record);
                 const record_id = self.requireActiveSignalRecordId(desc.items.record);
                 self.appendActiveStructuralSignalRoute(ctx, record_id, .{
@@ -5974,6 +6055,7 @@ pub fn Engine(comptime Ctx: type) type {
                 self.active_stream.eaches.items.len;
             self.pending_roc_metrics.bump(.signal_record_table_rebuilt, @intCast(rebuilt_records));
             self.active_stream.signal_records_by_token.clearRetainingCapacity();
+            self.active_stream.signal_record_descriptor_uses_by_token.clearRetainingCapacity();
 
             for (self.active_stream.signal_text_nodes.items) |desc| {
                 self.active_stream.rememberSignalRecordTree(allocator, desc.signal.record);
@@ -6079,8 +6161,6 @@ pub fn Engine(comptime Ctx: type) type {
             }
             self.appendReplacementNonRenderDescriptorsMoved(ctx, replacement, render_insert_index);
             self.validateActiveRenderDescriptorIntegrity();
-            self.rebuildActiveStreamSignalRecordTable(ctx);
-            self.syncActiveIntervalsFromGraph(ctx);
 
             return .{
                 .removed_elem_ids = removed_elem_ids.toOwnedSlice(allocator) catch @panic("out of memory"),

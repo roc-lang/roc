@@ -365,6 +365,32 @@ the largest single dark path. The next implementation slice should remove the
 whole-stream signal-record table rebuild and active interval graph walk from
 splices before moving to the `remove_target` descriptor index work.
 
+Incremental splice-tail signal-record/interval maintenance landed on
+2026-06-27. `HostNodeDescriptorStream` now carries explicit descriptor-tree
+owner counts for signal records, so splices register and forget only the
+removed/inserted signal-record trees instead of rebuilding the active token
+table. Active interval sources now start/cancel at active graph retain/release
+points, so splice updates no longer walk the whole active signal graph to sync
+intervals. The remaining interval-sync count below is the full-rebuild/init
+residue, not the per-splice tail.
+
+| case | total_ns | signal_record_table_rebuilt | active_intervals_synced | render_indexes_refreshed | host_alloc_bytes_this_event |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| signals-large-each-64 | 758172373 | 0 | 2600 | 90920 | 198918280 |
+| signals-kanban-board | 594475033 | 0 | 2120 | 20280 | 90631460 |
+
+Outcome:
+
+- `signal_record_table_rebuilt` dropped to zero in the two structural canaries.
+- `active_intervals_synced` fell from 141080 to 2600 on large-each and from
+  33040 to 2120 on kanban; the remaining count comes from full stream rebuilds,
+  not splice-local updates.
+- `render_indexes_refreshed` is unchanged, confirming render-index restamping is
+  now the only dark splice-tail counter left.
+- Wall time improved in this single sample by about 2.5% on large-each and 1.2%
+  on kanban, while host allocation bytes moved slightly upward. Treat this as a
+  real structural cleanup and measurement win, but not the main scan reduction.
+
 Baseline review outcome:
 
 - Structural `Ui.each` work remains the clear first target, but the hot metric is
@@ -379,10 +405,9 @@ Baseline review outcome:
   reduces total stream scans by the former `children` bucket. The keeper storage
   is sparse render metadata keyed by elem id, not extra fields on the dense
   `HostElemDescriptorIndex`.
-- Three O(N)-capable structural paths are currently dark in the scan split:
-  `rebuildActiveStreamSignalRecordTable`, `syncActiveIntervalsFromGraph`, and
-  render-index refresh after splices/permutations. Add metrics for these before
-  using the scan table to reorder the next major slice.
+- The former dark splice-tail paths are now attributed. The signal-record table
+  rebuild and interval graph walk have been removed from splice updates; render
+  index refresh remains a measured O(N)-capable tail cost.
 - The generated large-N `Ui.each` app is now in the native spec/bench surface at
   N = 8 and N = 64, so the next structural fixes are guarded by N-sensitive
   assertions, not just aggregate six-app samples.
@@ -491,6 +516,10 @@ Current priority after the Phase 4 review:
 
 ### Incremental signal-record table and interval sync on splice
 
+- **Status:** implemented for splice-local updates. Signal-record token lookup is
+  maintained from explicit descriptor-tree owner counts, and interval sources are
+  started/cancelled from active graph retain/release. Full stream rebuilds still
+  use the existing graph-wide interval sync path.
 - **Hypothesis:** maintaining the active stream signal-record token table and
   active intervals for only removed/inserted structural descriptors removes
   hidden O(total signal-bearing descriptors) and O(total signal graph records)
@@ -499,12 +528,14 @@ Current priority after the Phase 4 review:
   re-walks all signal-bearing descriptor tables after each splice, and
   `syncActiveIntervalsFromGraph` walks the entire active signal graph. These are
   the same clear-and-rebuild pattern already removed from sink routes.
-- **How we'll know:** after the attribution counters land, one-row large-N
-  splice counters for signal-record table work, interval sync work, and active
-  graph records rebuilt are bounded by the changed subtree rather than live N.
+- **Result:** `signals-large-each-64` now reports
+  `signal_record_table_rebuilt=0` and `active_intervals_synced=2600`; kanban
+  reports `0` and `2120`. The non-zero interval values are full-rebuild/init
+  residue. The next dark tail is `render_indexes_refreshed`.
 
 ### Scope-owned descriptor removal index
 
+- **Priority:** next major implementation target.
 - **Hypothesis:** a maintained scope-to-owned-descriptor index makes
   `removeActiveNonRenderDescriptorsInTarget` scale with the replaced subtree
   instead of linearly scanning and compacting every descriptor table.
