@@ -308,15 +308,13 @@ pub fn getDocumentSymbolsReturnsTypeDeclarationsForTypeOnlyModule() integration_
     defer h.deinit();
 
     const contents =
-        \\module [Color, User]
-        \\
-        \\Color : [Red, Green]
+        \\Color := [Red, Green]
         \\
         \\User : { name : Str }
         \\
     ;
 
-    try h.writeFile("type_symbols.roc", contents);
+    try h.writeFile("Color.roc", contents);
 
     const symbols = try h.checker.getDocumentSymbols(h.allocator, h.uri.?, contents);
     defer {
@@ -332,7 +330,7 @@ pub fn getDocumentSymbolsReturnsTypeDeclarationsForTypeOnlyModule() integration_
     for (symbols) |sym| {
         if (std.mem.eql(u8, sym.name, "Color")) {
             found_color = true;
-            try std.testing.expectEqual(document_symbol_handler.SymbolKind.class, sym.kind);
+            try std.testing.expectEqual(document_symbol_handler.SymbolKind.@"struct", sym.kind);
         }
         if (std.mem.eql(u8, sym.name, "User")) {
             found_user = true;
