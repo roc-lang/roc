@@ -3648,6 +3648,27 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "[0, 1, 1, 2, 3]" },
     },
     .{
+        .name = "inspect: Iter.collect handles custom iterator exceeding known hint",
+        .source_kind = .module,
+        .source =
+        \\main = {
+        \\    adv : (U64 -> Try((U64, U64), [NoMore]))
+        \\    adv = |n|
+        \\        if n < 9 {
+        \\            Try.Ok((n, n + 1))
+        \\        } else {
+        \\            Try.Err(NoMore)
+        \\        }
+        \\
+        \\    collected : List(U64)
+        \\    collected = Iter.collect(Iter.custom(0.U64, Known(8), adv))
+        \\
+        \\    collected
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[0, 1, 2, 3, 4, 5, 6, 7, 8]" },
+    },
+    .{
         .name = "inspect: Iter.step_by yields first then every nth",
         .source =
         \\{
