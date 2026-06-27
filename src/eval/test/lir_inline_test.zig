@@ -10,6 +10,7 @@ const helpers = eval.test_helpers;
 
 const Allocator = std.mem.Allocator;
 const LIR = lir.LIR;
+const LirProgram = lir.Program;
 const layout_mod = @import("layout");
 const LayoutIdx = layout_mod.Idx;
 
@@ -686,9 +687,17 @@ fn collectProcShape(
     lowered: *const lir.CheckedPipeline.LoweredProgram,
     proc_id: LIR.LirProcSpecId,
 ) anyerror!ProcShape {
-    const proc = lowered.lir_result.store.getProcSpec(proc_id);
+    return collectLirResultProcShape(allocator, &lowered.lir_result, proc_id);
+}
+
+fn collectLirResultProcShape(
+    allocator: Allocator,
+    result: *const LirProgram.Result,
+    proc_id: LIR.LirProcSpecId,
+) anyerror!ProcShape {
+    const proc = result.store.getProcSpec(proc_id);
     var shape = ProcShape{
-        .arg_count = lowered.lir_result.store.getLocalSpan(proc.args).len,
+        .arg_count = result.store.getLocalSpan(proc.args).len,
     };
 
     const body = proc.body orelse return shape;
@@ -704,7 +713,7 @@ fn collectProcShape(
         const visited_entry = try visited.getOrPut(stmt_id);
         if (visited_entry.found_existing) continue;
 
-        switch (lowered.lir_result.store.getCFStmt(stmt_id)) {
+        switch (result.store.getCFStmt(stmt_id)) {
             .assign_ref => |stmt| try work.append(allocator, stmt.next),
             .assign_literal => |stmt| try work.append(allocator, stmt.next),
             .init_uninitialized => |stmt| try work.append(allocator, stmt.next),
@@ -770,7 +779,7 @@ fn collectProcShape(
                 shape.switch_count += 1;
                 if (stmt.continuation) |continuation| try work.append(allocator, continuation);
                 try work.append(allocator, stmt.default_branch);
-                for (lowered.lir_result.store.getCFSwitchBranches(stmt.branches)) |branch| {
+                for (result.store.getCFSwitchBranches(stmt.branches)) |branch| {
                     try work.append(allocator, branch.body);
                 }
             },
@@ -785,7 +794,7 @@ fn collectProcShape(
             },
             .str_match_set => |stmt| {
                 shape.str_match_set_count += 1;
-                for (lowered.lir_result.store.getStrMatchArms(stmt.arms)) |arm| {
+                for (result.store.getStrMatchArms(stmt.arms)) |arm| {
                     try work.append(allocator, arm.on_match);
                 }
                 try work.append(allocator, stmt.on_miss);
@@ -794,7 +803,7 @@ fn collectProcShape(
                 shape.join_count += 1;
                 shape.max_join_param_count = @max(
                     shape.max_join_param_count,
-                    lowered.lir_result.store.getLocalSpan(stmt.params).len,
+                    result.store.getLocalSpan(stmt.params).len,
                 );
                 try work.append(allocator, stmt.body);
                 try work.append(allocator, stmt.remainder);
@@ -1942,6 +1951,91 @@ test "post-check specialization mode gates public iter adapter elimination" {
 
     try std.testing.expect(!try reachableProcDebugName(allocator, &optimized.lowered, "Builtin.Iter.append"));
     try std.testing.expect(try reachableProcDebugName(allocator, &unspecialized.lowered, "Builtin.Iter.append"));
+}
+
+test "state loop lowers to ordinary lir joins" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\module [main]
+        \\
+        \\main : U64
+        \\main = 0
+    ;
+
+    var lifted_source = try liftModuleAfterSpecConstr(allocator, source);
+    defer helpers.cleanupParseAndCanonical(allocator, lifted_source.resources);
+
+    const Lifted = postcheck.MonotypeLifted.Ast;
+    var lifted = lifted_source.lifted;
+    var lifted_owned = true;
+    defer if (lifted_owned) lifted.deinit();
+    lifted_source.lifted = undefined;
+
+    try std.testing.expectEqual(@as(usize, 1), lifted.roots.items.len);
+    const root_fn_id = lifted.roots.items[0].fn_id;
+    const root_fn_index = @intFromEnum(root_fn_id);
+    const ret_ty = lifted.fns.items[root_fn_index].ret;
+    const original_body = switch (lifted.fns.items[root_fn_index].body) {
+        .roc => |body| body,
+        .hosted => return error.TestUnexpectedResult,
+    };
+
+    const empty_params = try lifted.addTypedLocalSpan(&.{});
+    const empty_values = try lifted.addExprSpan(&.{});
+    const state_start: u32 = @intCast(lifted.state_loop_states.items.len);
+    const state0_id: Lifted.StateLoopStateId = @enumFromInt(state_start);
+    const state1_id: Lifted.StateLoopStateId = @enumFromInt(state_start + 1);
+
+    const break_expr = try lifted.addExpr(.{
+        .ty = ret_ty,
+        .data = .{ .break_ = original_body },
+    });
+    const continue_expr = try lifted.addExpr(.{
+        .ty = ret_ty,
+        .data = .{ .state_continue = .{
+            .target_state = state1_id,
+            .values = empty_values,
+        } },
+    });
+    const states = [_]Lifted.StateLoopState{
+        .{
+            .params = empty_params,
+            .body = continue_expr,
+        },
+        .{
+            .params = empty_params,
+            .body = break_expr,
+        },
+    };
+    const state_span = try lifted.addStateLoopStateSpan(&states);
+    const state_loop_expr = try lifted.addExpr(.{
+        .ty = ret_ty,
+        .data = .{ .state_loop = .{
+            .entry_state = state0_id,
+            .entry_values = empty_values,
+            .states = state_span,
+        } },
+    });
+    lifted.fns.items[root_fn_index].body = .{ .roc = state_loop_expr };
+
+    var solved = try postcheck.LambdaSolved.Solve.run(allocator, lifted);
+    lifted_owned = false;
+    lifted = undefined;
+    var solved_owned = true;
+    errdefer if (solved_owned) solved.deinit();
+
+    var output = try postcheck.SolvedLirLower.run(allocator, base.target.TargetUsize.native, solved, .{});
+    solved_owned = false;
+    solved = undefined;
+    defer output.deinit();
+
+    try std.testing.expectEqual(@as(usize, 1), output.lir_result.root_procs.items.len);
+    const root_proc = output.lir_result.root_procs.items[0];
+    const shape = try collectLirResultProcShape(allocator, &output.lir_result, root_proc);
+
+    try std.testing.expectEqual(@as(usize, 2), shape.join_count);
+    try std.testing.expectEqual(@as(usize, 0), shape.max_join_param_count);
+    try std.testing.expectEqual(@as(usize, 2), shape.jump_count);
 }
 
 test "dynamic static list iter append loop splits nested callable captures" {

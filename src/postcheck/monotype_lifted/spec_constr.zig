@@ -723,8 +723,15 @@ const Pass = struct {
                 for (self.program.exprSpan(loop.initial_values)) |initial| try self.markArgUsesInExpr(fn_id, initial, changed);
                 try self.markArgUsesInExpr(fn_id, loop.body, changed);
             },
+            .state_loop => |state_loop| {
+                for (self.program.exprSpan(state_loop.entry_values)) |initial| try self.markArgUsesInExpr(fn_id, initial, changed);
+                for (self.program.stateLoopStateSpan(state_loop.states)) |state| {
+                    try self.markArgUsesInExpr(fn_id, state.body, changed);
+                }
+            },
             .break_ => |maybe| if (maybe) |value| try self.markArgUsesInExpr(fn_id, value, changed),
             .continue_ => |continue_| for (self.program.exprSpan(continue_.values)) |value| try self.markArgUsesInExpr(fn_id, value, changed),
+            .state_continue => |continue_| for (self.program.exprSpan(continue_.values)) |value| try self.markArgUsesInExpr(fn_id, value, changed),
             .if_initialized_payload => |payload_switch| {
                 try self.markArgUsesInExpr(fn_id, payload_switch.cond, changed);
                 try self.markArgUsesInExpr(fn_id, payload_switch.initialized, changed);
@@ -1061,6 +1068,7 @@ const Cloner = struct {
     source_fn: Ast.FnId,
     pattern: CallPattern,
     subst: std.AutoHashMap(Ast.LocalId, Value),
+    state_loop_state_map: std.AutoHashMap(Ast.StateLoopStateId, Ast.StateLoopStateId),
     changes: std.ArrayList(BindingChange),
     inline_stack: std.ArrayList(ActiveInline),
     loop_stack: std.ArrayList(LoopPattern),
@@ -1077,6 +1085,7 @@ const Cloner = struct {
             .source_fn = source_fn,
             .pattern = pattern,
             .subst = std.AutoHashMap(Ast.LocalId, Value).init(pass.allocator),
+            .state_loop_state_map = std.AutoHashMap(Ast.StateLoopStateId, Ast.StateLoopStateId).init(pass.allocator),
             .changes = .empty,
             .inline_stack = .empty,
             .loop_stack = .empty,
@@ -1095,6 +1104,7 @@ const Cloner = struct {
             .source_fn = undefined, // Base-body cloning never calls buildArgs, which is the only reader.
             .pattern = .{ .args = &.{} },
             .subst = std.AutoHashMap(Ast.LocalId, Value).init(pass.allocator),
+            .state_loop_state_map = std.AutoHashMap(Ast.StateLoopStateId, Ast.StateLoopStateId).init(pass.allocator),
             .changes = .empty,
             .inline_stack = .empty,
             .loop_stack = .empty,
@@ -1119,6 +1129,7 @@ const Cloner = struct {
         self.inline_stack.deinit(self.pass.allocator);
         self.loop_stack.deinit(self.pass.allocator);
         self.changes.deinit(self.pass.allocator);
+        self.state_loop_state_map.deinit();
         self.subst.deinit();
     }
 
@@ -1755,8 +1766,20 @@ const Cloner = struct {
             } },
             .block => |block| return try self.cloneBlock(expr.ty, block),
             .loop_ => |loop| return try self.cloneLoop(expr.ty, loop),
+            .state_loop => |state_loop| blk: {
+                const states = try self.cloneStateLoopStateSpan(state_loop.states);
+                break :blk .{ .state_loop = .{
+                    .entry_state = self.cloneStateLoopStateId(state_loop.entry_state),
+                    .entry_values = try self.cloneExprSpan(state_loop.entry_values),
+                    .states = states,
+                } };
+            },
             .break_ => |maybe| .{ .break_ = if (maybe) |value| try self.cloneExpr(value) else null },
             .continue_ => |continue_| try self.cloneContinue(expr.ty, continue_),
+            .state_continue => |continue_| .{ .state_continue = .{
+                .target_state = self.cloneStateLoopStateId(continue_.target_state),
+                .values = try self.cloneExprSpan(continue_.values),
+            } },
             .if_initialized_payload => |payload_switch| .{ .if_initialized_payload = .{
                 .cond = try self.cloneExpr(payload_switch.cond),
                 .cond_mask = payload_switch.cond_mask,
@@ -4972,6 +4995,34 @@ const Cloner = struct {
         return try self.pass.program.addIfBranchSpan(values);
     }
 
+    fn cloneStateLoopStateSpan(self: *Cloner, span: Ast.Span(Ast.StateLoopState)) Common.LowerError!Ast.Span(Ast.StateLoopState) {
+        const source = try self.pass.allocator.dupe(Ast.StateLoopState, self.pass.program.stateLoopStateSpan(span));
+        defer self.pass.allocator.free(source);
+
+        const start: u32 = @intCast(self.pass.program.state_loop_states.items.len);
+        try self.pass.program.state_loop_states.ensureUnusedCapacity(self.pass.program.allocator, source.len);
+        for (source, 0..) |_, index| {
+            const old_id: Ast.StateLoopStateId = @enumFromInt(span.start + @as(u32, @intCast(index)));
+            const new_id: Ast.StateLoopStateId = @enumFromInt(start + @as(u32, @intCast(index)));
+            try self.state_loop_state_map.put(old_id, new_id);
+            self.pass.program.state_loop_states.appendAssumeCapacity(undefined);
+        }
+
+        for (source, 0..) |state, index| {
+            self.pass.program.state_loop_states.items[start + index] = .{
+                .params = state.params,
+                .body = try self.cloneExpr(state.body),
+            };
+        }
+
+        return .{ .start = start, .len = @intCast(source.len) };
+    }
+
+    fn cloneStateLoopStateId(self: *Cloner, id: Ast.StateLoopStateId) Ast.StateLoopStateId {
+        return self.state_loop_state_map.get(id) orelse
+            Common.invariant("state_continue reached SpecConstr clone before its state_loop reserved the target state");
+    }
+
     fn materialize(self: *Cloner, value: Value) Common.LowerError!Ast.ExprId {
         switch (value) {
             .expr => |expr| return expr,
@@ -5747,8 +5798,16 @@ fn exprContainsReturn(program: *const Ast.Program, expr_id: Ast.ExprId) bool {
             exprContainsReturn(program, sequence.ok_body),
         .block => |block| stmtSpanContainsReturn(program, block.statements) or exprContainsReturn(program, block.final_expr),
         .loop_ => |loop| exprSpanContainsReturn(program, loop.initial_values) or exprContainsReturn(program, loop.body),
+        .state_loop => |state_loop| blk: {
+            if (exprSpanContainsReturn(program, state_loop.entry_values)) break :blk true;
+            for (program.stateLoopStateSpan(state_loop.states)) |state| {
+                if (exprContainsReturn(program, state.body)) break :blk true;
+            }
+            break :blk false;
+        },
         .break_ => |maybe| if (maybe) |value| exprContainsReturn(program, value) else false,
         .continue_ => |continue_| exprSpanContainsReturn(program, continue_.values),
+        .state_continue => |continue_| exprSpanContainsReturn(program, continue_.values),
     };
 }
 
@@ -5849,8 +5908,16 @@ fn localUseCountInExpr(program: *const Ast.Program, local: Ast.LocalId, expr_id:
             break :blk count;
         },
         .loop_ => |loop| localUseCountInExprSpan(program, local, loop.initial_values) + localUseCountInExpr(program, local, loop.body),
+        .state_loop => |state_loop| blk: {
+            var count = localUseCountInExprSpan(program, local, state_loop.entry_values);
+            for (program.stateLoopStateSpan(state_loop.states)) |state| {
+                count += localUseCountInExpr(program, local, state.body);
+            }
+            break :blk count;
+        },
         .break_ => |maybe| if (maybe) |value| localUseCountInExpr(program, local, value) else 0,
         .continue_ => |continue_| localUseCountInExprSpan(program, local, continue_.values),
+        .state_continue => |continue_| localUseCountInExprSpan(program, local, continue_.values),
         .if_initialized_payload => |payload_switch| localUseCountInExpr(program, local, payload_switch.cond) +
             (if (payload_switch.payload == local) @as(usize, 1) else 0) +
             localUseCountInExpr(program, local, payload_switch.initialized) +
@@ -5950,8 +6017,17 @@ fn localMaxUseCountPerPathInExpr(program: *const Ast.Program, local: Ast.LocalId
             const body_count = localMaxUseCountPerPathInExpr(program, local, loop.body);
             break :blk initial_count + if (body_count == 0) @as(usize, 0) else @max(body_count, 2);
         },
+        .state_loop => |state_loop| blk: {
+            const initial_count = localMaxUseCountPerPathInExprSpan(program, local, state_loop.entry_values);
+            var max_state_count: usize = 0;
+            for (program.stateLoopStateSpan(state_loop.states)) |state| {
+                max_state_count = @max(max_state_count, localMaxUseCountPerPathInExpr(program, local, state.body));
+            }
+            break :blk initial_count + if (max_state_count == 0) @as(usize, 0) else @max(max_state_count, 2);
+        },
         .break_ => |maybe| if (maybe) |value| localMaxUseCountPerPathInExpr(program, local, value) else 0,
         .continue_ => |continue_| localMaxUseCountPerPathInExprSpan(program, local, continue_.values),
+        .state_continue => |continue_| localMaxUseCountPerPathInExprSpan(program, local, continue_.values),
         .if_initialized_payload => |payload_switch| localMaxUseCountPerPathInExpr(program, local, payload_switch.cond) +
             @max(
                 (if (payload_switch.payload == local) @as(usize, 1) else 0) +
@@ -6013,8 +6089,10 @@ fn discardedExprIsEffectFree(program: *const Ast.Program, expr_id: Ast.ExprId) b
         .if_,
         .block,
         .loop_,
+        .state_loop,
         .break_,
         .continue_,
+        .state_continue,
         .return_,
         .dbg,
         .expect,
@@ -6208,11 +6286,21 @@ fn scanLocalUseInExpr(program: *const Ast.Program, local: Ast.LocalId, expr_id: 
             scanLocalUseInExprSpan(program, local, loop.initial_values, scan);
             scanLocalUseInExpr(program, local, loop.body, scan);
         },
+        .state_loop => |state_loop| {
+            scanLocalUseInExprSpan(program, local, state_loop.entry_values, scan);
+            for (program.stateLoopStateSpan(state_loop.states)) |state| {
+                scanLocalUseInExpr(program, local, state.body, scan);
+            }
+        },
         .break_ => |maybe| {
             if (maybe) |value| scanLocalUseInExpr(program, local, value, scan);
             scan.seen_effect = true;
         },
         .continue_ => |continue_| {
+            scanLocalUseInExprSpan(program, local, continue_.values, scan);
+            scan.seen_effect = true;
+        },
+        .state_continue => |continue_| {
             scanLocalUseInExprSpan(program, local, continue_.values, scan);
             scan.seen_effect = true;
         },

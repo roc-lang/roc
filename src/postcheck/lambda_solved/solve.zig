@@ -53,8 +53,15 @@ const Solver = struct {
     expr_done: []bool,
     loop_results: std.ArrayList(Type.TypeVarId),
     loop_params: std.ArrayList(Type.Span),
+    state_loop_contexts: std.ArrayList(StateLoopContext),
     return_tys: std.ArrayList(Type.TypeVarId),
     active_unifications: std.AutoHashMap(UnifyPair, void),
+
+    const StateLoopContext = struct {
+        result: Type.TypeVarId,
+        state_start: u32,
+        state_param_tys: []const Type.Span,
+    };
 
     const FunctionShape = struct {
         args: Type.Span,
@@ -88,6 +95,7 @@ const Solver = struct {
             .expr_done = expr_done,
             .loop_results = .empty,
             .loop_params = .empty,
+            .state_loop_contexts = .empty,
             .return_tys = .empty,
             .active_unifications = std.AutoHashMap(UnifyPair, void).init(allocator),
         };
@@ -96,6 +104,7 @@ const Solver = struct {
     fn deinit(self: *Solver) void {
         self.active_unifications.deinit();
         self.return_tys.deinit(self.allocator);
+        self.state_loop_contexts.deinit(self.allocator);
         self.loop_params.deinit(self.allocator);
         self.loop_results.deinit(self.allocator);
         self.allocator.free(self.expr_done);
@@ -575,6 +584,41 @@ const Solver = struct {
                 defer _ = self.loop_results.pop();
                 _ = try self.expectExpr(loop.body, expected);
             },
+            .state_loop => |state_loop| {
+                const states = self.program.lifted.stateLoopStateSpan(state_loop.states);
+                const state_param_tys = try self.allocator.alloc(Type.Span, states.len);
+                defer self.allocator.free(state_param_tys);
+
+                for (states, 0..) |state, state_index| {
+                    const params = self.program.lifted.typedLocalSpan(state.params);
+                    const param_tys = try self.allocator.alloc(Type.TypeVarId, params.len);
+                    defer self.allocator.free(param_tys);
+                    for (params, 0..) |param, param_index| {
+                        param_tys[param_index] = self.localTy(param.local);
+                    }
+                    state_param_tys[state_index] = try self.program.types.addSpan(param_tys);
+                }
+
+                const entry_params = self.stateLoopParamsFromSlice(state_loop.states, state_param_tys, state_loop.entry_state);
+                const entry_values = self.program.lifted.exprSpan(state_loop.entry_values);
+                if (entry_params.count() != entry_values.len) Common.invariant("state_loop entry value count differs from entry state parameter count");
+                for (entry_values, 0..) |value, i| {
+                    _ = try self.expectExpr(value, self.program.types.spanItem(entry_params, i));
+                }
+
+                try self.loop_results.append(self.allocator, expected);
+                try self.state_loop_contexts.append(self.allocator, .{
+                    .result = expected,
+                    .state_start = state_loop.states.start,
+                    .state_param_tys = state_param_tys,
+                });
+                defer _ = self.state_loop_contexts.pop();
+                defer _ = self.loop_results.pop();
+
+                for (states) |state| {
+                    _ = try self.expectExpr(state.body, expected);
+                }
+            },
             .break_ => |maybe| {
                 if (maybe) |value| {
                     _ = try self.expectExpr(value, self.currentLoopResult());
@@ -584,6 +628,15 @@ const Solver = struct {
                 const params = self.currentLoopParams();
                 const values = self.program.lifted.exprSpan(continue_.values);
                 if (params.count() != values.len) Common.invariant("continue value count differs from loop parameter count");
+                for (values, 0..) |value, i| {
+                    const param_ty = self.program.types.spanItem(params, i);
+                    _ = try self.expectExpr(value, param_ty);
+                }
+            },
+            .state_continue => |continue_| {
+                const params = self.currentStateLoopParams(continue_.target_state);
+                const values = self.program.lifted.exprSpan(continue_.values);
+                if (params.count() != values.len) Common.invariant("state_continue value count differs from target state parameter count");
                 for (values, 0..) |value, i| {
                     const param_ty = self.program.types.spanItem(params, i);
                     _ = try self.expectExpr(value, param_ty);
@@ -765,6 +818,39 @@ const Solver = struct {
     fn currentLoopParams(self: *Solver) Type.Span {
         if (self.loop_params.items.len == 0) Common.invariant("continue expression reached Lambda Solved outside a loop");
         return self.loop_params.items[self.loop_params.items.len - 1];
+    }
+
+    fn currentStateLoopParams(self: *Solver, state_id: Lifted.StateLoopStateId) Type.Span {
+        if (self.state_loop_contexts.items.len == 0) Common.invariant("state_continue expression reached Lambda Solved outside a state loop");
+        var index = self.state_loop_contexts.items.len;
+        while (index > 0) {
+            index -= 1;
+            const context = self.state_loop_contexts.items[index];
+            if (stateParamIndex(context.state_start, context.state_param_tys.len, state_id)) |param_index| {
+                return context.state_param_tys[param_index];
+            }
+        }
+        Common.invariant("state_continue target state was not in an active state loop");
+    }
+
+    fn stateLoopParamsFromSlice(
+        self: *Solver,
+        states: Lifted.Span(Lifted.StateLoopState),
+        state_param_tys: []const Type.Span,
+        state_id: Lifted.StateLoopStateId,
+    ) Type.Span {
+        const param_index = stateParamIndex(states.start, states.len, state_id) orelse
+            Common.invariant("state_loop entry state was not in its state span");
+        _ = self;
+        return state_param_tys[param_index];
+    }
+
+    fn stateParamIndex(state_start: u32, state_count: usize, state_id: Lifted.StateLoopStateId) ?usize {
+        const raw = @intFromEnum(state_id);
+        if (raw < state_start) return null;
+        const index = raw - state_start;
+        if (index >= state_count) return null;
+        return index;
     }
 
     fn markErasedCallablesReachedByType(self: *Solver, ty: Type.TypeVarId) Allocator.Error!void {

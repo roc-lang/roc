@@ -318,6 +318,29 @@ pub const ContinueExpr = struct {
     values: Span(ExprId),
 };
 
+/// Identifier for one private optimized loop state.
+pub const StateLoopStateId = enum(u32) { _ };
+
+/// One private optimized loop state. This is produced only by optimized
+/// post-check lowering and is lowered to ordinary LIR joins before ARC.
+pub const StateLoopState = struct {
+    params: Span(TypedLocal),
+    body: ExprId,
+};
+
+/// Private optimized loop state graph.
+pub const StateLoopExpr = struct {
+    entry_state: StateLoopStateId,
+    entry_values: Span(ExprId),
+    states: Span(StateLoopState),
+};
+
+/// Edge to another private optimized loop state.
+pub const StateContinueExpr = struct {
+    target_state: StateLoopStateId,
+    values: Span(ExprId),
+};
+
 /// Source control-flow construct observed during compile-time finalization.
 pub const ComptimeSiteKind = enum {
     match,
@@ -418,8 +441,10 @@ pub const ExprData = union(enum) {
     try_record_sequence: TryRecordSequence,
     block: BlockExpr,
     loop_: LoopExpr,
+    state_loop: StateLoopExpr,
     break_: ?ExprId,
     continue_: ContinueExpr,
+    state_continue: StateContinueExpr,
     return_: ExprId,
     crash: StringLiteralId,
     comptime_branch_taken: ComptimeBranchTaken,
@@ -617,6 +642,7 @@ pub const Program = struct {
     str_pattern_steps: std.ArrayList(StrPatternStep),
     branches: std.ArrayList(Branch),
     if_branches: std.ArrayList(IfBranch),
+    state_loop_states: std.ArrayList(StateLoopState),
     string_literals: std.ArrayList(StringLiteral),
     local_proc_contexts: std.ArrayList(LocalProcContext),
     proc_debug_names: ProcDebugNameMap,
@@ -668,6 +694,7 @@ pub const Program = struct {
             .str_pattern_steps = .empty,
             .branches = .empty,
             .if_branches = .empty,
+            .state_loop_states = .empty,
             .string_literals = .empty,
             .local_proc_contexts = .empty,
             .proc_debug_names = ProcDebugNameMap.init(allocator),
@@ -711,6 +738,7 @@ pub const Program = struct {
         for (self.string_literals.items) |literal| self.allocator.free(literal.backing);
         self.string_literals.deinit(self.allocator);
         self.if_branches.deinit(self.allocator);
+        self.state_loop_states.deinit(self.allocator);
         self.branches.deinit(self.allocator);
         self.str_pattern_steps.deinit(self.allocator);
         self.record_destructs.deinit(self.allocator);
@@ -959,6 +987,12 @@ pub const Program = struct {
         return .{ .start = start, .len = @intCast(values.len) };
     }
 
+    pub fn addStateLoopStateSpan(self: *Program, values: []const StateLoopState) std.mem.Allocator.Error!Span(StateLoopState) {
+        const start: u32 = @intCast(self.state_loop_states.items.len);
+        try self.state_loop_states.appendSlice(self.allocator, values);
+        return .{ .start = start, .len = @intCast(values.len) };
+    }
+
     pub fn addStmtSpan(self: *Program, ids: []const StmtId) std.mem.Allocator.Error!Span(StmtId) {
         const start: u32 = @intCast(self.stmt_ids.items.len);
         try self.stmt_ids.appendSlice(self.allocator, ids);
@@ -999,6 +1033,14 @@ pub const Program = struct {
 
     pub fn ifBranchSpan(self: *const Program, span_: Span(IfBranch)) []const IfBranch {
         return self.if_branches.items[span_.start..][0..span_.len];
+    }
+
+    pub fn stateLoopStateSpan(self: *const Program, span_: Span(StateLoopState)) []const StateLoopState {
+        return self.state_loop_states.items[span_.start..][0..span_.len];
+    }
+
+    pub fn stateLoopState(self: *const Program, id: StateLoopStateId) StateLoopState {
+        return self.state_loop_states.items[@intFromEnum(id)];
     }
 };
 

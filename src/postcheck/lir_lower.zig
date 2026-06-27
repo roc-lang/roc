@@ -968,8 +968,10 @@ const Lowerer = struct {
             .try_record_sequence => |sequence| try self.lowerTryRecordSequenceInto(target, expr_data.ty, sequence, next),
             .block => |block| try self.lowerBlockInto(target, block.statements, block.final_expr, next),
             .loop_ => |loop| try self.lowerLoopInto(target, loop, next),
+            .state_loop => Common.invariant("state_loop reached legacy Lambda Mono LIR lowering"),
             .break_ => |value| try self.lowerBreak(value),
             .continue_ => |continue_| try self.lowerContinue(continue_.values),
+            .state_continue => Common.invariant("state_continue reached legacy Lambda Mono LIR lowering"),
             .return_ => |value| try self.lowerReturn(value),
             .crash => |msg| try self.result.store.addCFStmt(.{ .crash = .{
                 .msg = try self.result.store.insertString(self.program.stringLiteralText(msg)),

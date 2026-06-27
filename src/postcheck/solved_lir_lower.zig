@@ -291,6 +291,8 @@ const Lowerer = struct {
     static_data_map: []?LIR.StaticDataId,
     next_join_point: u32 = 0,
     loop_stack: std.ArrayList(LoopContext),
+    state_loop_stack: std.ArrayList(StateLoopContext),
+    control_stack: std.ArrayList(ControlContext),
     active_inline_calls: std.ArrayList(Type.FnId),
     current_ret_ty: ?Type.TypeId = null,
     current_ret_solved_ty: ?SolvedType.TypeVarId = null,
@@ -304,6 +306,29 @@ const Lowerer = struct {
     const LoopContext = struct {
         join_id: LIR.JoinPointId,
         params: LIR.LocalSpan,
+        result_target: LIR.LocalId,
+        after_loop: LIR.CFStmtId,
+    };
+
+    const StateLoopContext = struct {
+        state_start: u32,
+        states: []const StateLoopLoweredState,
+        result_target: LIR.LocalId,
+        after_loop: LIR.CFStmtId,
+    };
+
+    const StateLoopLoweredState = struct {
+        id: Lifted.StateLoopStateId,
+        join_id: LIR.JoinPointId,
+        params: LIR.LocalSpan,
+    };
+
+    const ControlContext = union(enum) {
+        loop: LoopContext,
+        state_loop: StateLoopBreakContext,
+    };
+
+    const StateLoopBreakContext = struct {
         result_target: LIR.LocalId,
         after_loop: LIR.CFStmtId,
     };
@@ -358,6 +383,8 @@ const Lowerer = struct {
             .comptime_site_map = comptime_site_map,
             .static_data_map = static_data_map,
             .loop_stack = .empty,
+            .state_loop_stack = .empty,
+            .control_stack = .empty,
             .active_inline_calls = .empty,
         };
     }
@@ -365,6 +392,8 @@ const Lowerer = struct {
     fn deinit(self: *Lowerer) void {
         self.active_inline_calls.deinit(self.allocator);
         self.folded_map_matches.deinit(self.allocator);
+        self.control_stack.deinit(self.allocator);
+        self.state_loop_stack.deinit(self.allocator);
         self.loop_stack.deinit(self.allocator);
         self.allocator.free(self.static_data_map);
         self.allocator.free(self.comptime_site_map);
@@ -397,6 +426,8 @@ const Lowerer = struct {
         };
         self.folded_map_matches.deinit(self.allocator);
         self.active_inline_calls.deinit(self.allocator);
+        self.control_stack.deinit(self.allocator);
+        self.state_loop_stack.deinit(self.allocator);
         self.loop_stack.deinit(self.allocator);
         self.allocator.free(self.static_data_map);
         self.allocator.free(self.comptime_site_map);
@@ -424,6 +455,8 @@ const Lowerer = struct {
         self.comptime_site_map = &.{};
         self.static_data_map = &.{};
         self.loop_stack = .empty;
+        self.state_loop_stack = .empty;
+        self.control_stack = .empty;
         self.active_inline_calls = .empty;
         self.folded_map_matches = .empty;
         self.local_solved_tys = std.AutoHashMap(LIR.LocalId, SolvedType.TypeVarId).init(self.allocator);
@@ -1885,8 +1918,10 @@ const Lowerer = struct {
             .try_record_sequence => |sequence| try self.lowerTryRecordSequenceInto(target, expr_ty, sequence, next),
             .block => |block| try self.lowerBlockInto(target, block.statements, block.final_expr, next),
             .loop_ => |loop| try self.lowerLoopInto(target, loop, next),
+            .state_loop => |state_loop| try self.lowerStateLoopInto(target, state_loop, next),
             .break_ => |value| try self.lowerBreak(value),
             .continue_ => |continue_| try self.lowerContinue(continue_.values),
+            .state_continue => |continue_| try self.lowerStateContinue(continue_),
             .return_ => |value| try self.lowerReturn(value),
             .crash => |msg| try self.result.store.addCFStmt(.{ .crash = .{
                 .msg = try self.result.store.insertString(self.stringLiteralText(msg)),
@@ -3503,13 +3538,16 @@ const Lowerer = struct {
         const maybe_uninitialized_condition_masks_span = try self.result.store.addU64Span(maybe_uninitialized_condition_masks.items);
         const join_id = self.freshJoinPointId();
 
-        try self.loop_stack.append(self.allocator, .{
+        const loop_context = LoopContext{
             .join_id = join_id,
             .params = param_span,
             .result_target = target,
             .after_loop = next,
-        });
+        };
+        try self.loop_stack.append(self.allocator, loop_context);
+        try self.control_stack.append(self.allocator, .{ .loop = loop_context });
         defer _ = self.loop_stack.pop();
+        defer _ = self.control_stack.pop();
 
         const body = try self.lowerExprInto(target, loop.body, next);
         const jump_args = try self.lowerExprsToJoinTemps(param_span, initial_values);
@@ -3531,12 +3569,86 @@ const Lowerer = struct {
         } });
     }
 
-    fn lowerBreak(self: *Lowerer, value: ?Lifted.ExprId) Common.LowerError!LIR.CFStmtId {
-        const loop = self.currentLoop();
-        if (value) |expr_id| {
-            return try self.lowerExprInto(loop.result_target, expr_id, loop.after_loop);
+    fn lowerStateLoopInto(self: *Lowerer, target: LIR.LocalId, state_loop: Lifted.StateLoopExpr, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
+        const states = self.solved.lifted.stateLoopStateSpan(state_loop.states);
+        if (states.len == 0) Common.invariant("state_loop had no states");
+
+        const lowered_states = try self.allocator.alloc(StateLoopLoweredState, states.len);
+        defer self.allocator.free(lowered_states);
+
+        for (states, 0..) |state, index| {
+            const params = self.solved.lifted.typedLocalSpan(state.params);
+            const param_locals = try self.allocator.alloc(LIR.LocalId, params.len);
+            defer self.allocator.free(param_locals);
+            for (params, 0..) |param, param_index| {
+                param_locals[param_index] = try self.localFor(param.local);
+            }
+            lowered_states[index] = .{
+                .id = @enumFromInt(state_loop.states.start + @as(u32, @intCast(index))),
+                .join_id = self.freshJoinPointId(),
+                .params = try self.result.store.addLocalSpan(param_locals),
+            };
         }
-        return try self.assignZst(loop.result_target, loop.after_loop);
+
+        const entry_state = stateLoopLoweredState(state_loop.states.start, lowered_states, state_loop.entry_state) orelse
+            Common.invariant("state_loop entry state was not in its state span");
+        const entry_values = self.solved.lifted.exprSpan(state_loop.entry_values);
+        if (self.result.store.getLocalSpan(entry_state.params).len != entry_values.len) {
+            Common.invariant("state_loop entry value count differed from entry state parameter count");
+        }
+
+        try self.state_loop_stack.append(self.allocator, .{
+            .state_start = state_loop.states.start,
+            .states = lowered_states,
+            .result_target = target,
+            .after_loop = next,
+        });
+        try self.control_stack.append(self.allocator, .{ .state_loop = .{
+            .result_target = target,
+            .after_loop = next,
+        } });
+        defer _ = self.state_loop_stack.pop();
+        defer _ = self.control_stack.pop();
+
+        const bodies = try self.allocator.alloc(LIR.CFStmtId, states.len);
+        defer self.allocator.free(bodies);
+        for (states, 0..) |state, index| {
+            bodies[index] = try self.lowerExprInto(target, state.body, next);
+        }
+
+        const jump_args = try self.lowerExprsToJoinTemps(entry_state.params, entry_values);
+        defer self.allocator.free(jump_args.ids);
+        var current = try self.result.store.addCFStmt(.{ .jump = .{
+            .target = entry_state.join_id,
+        } });
+        current = try self.prependJoinParamInitializers(entry_state.params, jump_args.ids, current);
+        current = try self.prependJoinExprs(jump_args, current);
+
+        var index = states.len;
+        while (index > 0) {
+            index -= 1;
+            current = try self.result.store.addCFStmt(.{ .join = .{
+                .id = lowered_states[index].join_id,
+                .params = lowered_states[index].params,
+                .body = bodies[index],
+                .remainder = current,
+            } });
+        }
+
+        return current;
+    }
+
+    fn lowerBreak(self: *Lowerer, value: ?Lifted.ExprId) Common.LowerError!LIR.CFStmtId {
+        return switch (self.currentControl()) {
+            .loop => |loop| if (value) |expr_id|
+                try self.lowerExprInto(loop.result_target, expr_id, loop.after_loop)
+            else
+                try self.assignZst(loop.result_target, loop.after_loop),
+            .state_loop => |state_loop| if (value) |expr_id|
+                try self.lowerExprInto(state_loop.result_target, expr_id, state_loop.after_loop)
+            else
+                try self.assignZst(state_loop.result_target, state_loop.after_loop),
+        };
     }
 
     fn lowerContinue(self: *Lowerer, values_span: Lifted.Span(Lifted.ExprId)) Common.LowerError!LIR.CFStmtId {
@@ -3551,6 +3663,22 @@ const Lowerer = struct {
             .target = loop.join_id,
         } });
         jump = try self.prependJoinParamInitializers(loop.params, locals.ids, jump);
+        jump = try self.prependJoinExprs(locals, jump);
+        return jump;
+    }
+
+    fn lowerStateContinue(self: *Lowerer, continue_: Lifted.StateContinueExpr) Common.LowerError!LIR.CFStmtId {
+        const state = self.currentStateLoopState(continue_.target_state);
+        const values = self.solved.lifted.exprSpan(continue_.values);
+        if (self.result.store.getLocalSpan(state.params).len != values.len) {
+            Common.invariant("state_continue value count differed from target state parameter count during direct LIR lowering");
+        }
+        const locals = try self.lowerExprsToJoinTemps(state.params, values);
+        defer self.allocator.free(locals.ids);
+        var jump = try self.result.store.addCFStmt(.{ .jump = .{
+            .target = state.join_id,
+        } });
+        jump = try self.prependJoinParamInitializers(state.params, locals.ids, jump);
         jump = try self.prependJoinExprs(locals, jump);
         return jump;
     }
@@ -5153,6 +5281,22 @@ const Lowerer = struct {
         return self.loop_stack.items[self.loop_stack.items.len - 1];
     }
 
+    fn currentControl(self: *Lowerer) ControlContext {
+        if (self.control_stack.items.len == 0) Common.invariant("break expression reached LIR outside a loop");
+        return self.control_stack.items[self.control_stack.items.len - 1];
+    }
+
+    fn currentStateLoopState(self: *Lowerer, state_id: Lifted.StateLoopStateId) StateLoopLoweredState {
+        if (self.state_loop_stack.items.len == 0) Common.invariant("state_continue expression reached LIR outside a state loop");
+        var index = self.state_loop_stack.items.len;
+        while (index > 0) {
+            index -= 1;
+            const context = self.state_loop_stack.items[index];
+            if (stateLoopLoweredState(context.state_start, context.states, state_id)) |state| return state;
+        }
+        Common.invariant("state_continue target state was not in an active state loop");
+    }
+
     fn freshJoinPointId(self: *Lowerer) LIR.JoinPointId {
         const id: LIR.JoinPointId = @enumFromInt(self.next_join_point);
         self.next_join_point += 1;
@@ -5163,6 +5307,18 @@ const Lowerer = struct {
         return self.solved.lifted.pats.items[@intFromEnum(id)];
     }
 };
+
+fn stateLoopLoweredState(
+    state_start: u32,
+    states: []const Lowerer.StateLoopLoweredState,
+    state_id: Lifted.StateLoopStateId,
+) ?Lowerer.StateLoopLoweredState {
+    const raw = @intFromEnum(state_id);
+    if (raw < state_start) return null;
+    const index = raw - state_start;
+    if (index >= states.len) return null;
+    return states[index];
+}
 
 const TypeEquivalence = struct {
     allocator: std.mem.Allocator,
@@ -5338,6 +5494,7 @@ fn cloneLiftedProgram(allocator: std.mem.Allocator, program: *const Lifted.Progr
         .str_pattern_steps = try cloneArrayList(Lifted.StrPatternStep, allocator, &program.str_pattern_steps),
         .branches = try cloneArrayList(Lifted.Branch, allocator, &program.branches),
         .if_branches = try cloneArrayList(Lifted.IfBranch, allocator, &program.if_branches),
+        .state_loop_states = try cloneArrayList(Lifted.StateLoopState, allocator, &program.state_loop_states),
         .string_literals = string_literals,
         .local_proc_contexts = try cloneArrayList(Lifted.LocalProcContext, allocator, &program.local_proc_contexts),
         .proc_debug_names = try cloneProcDebugNameMap(allocator, &program.proc_debug_names),

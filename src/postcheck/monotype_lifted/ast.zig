@@ -56,6 +56,14 @@ pub const Expr = Mono.Expr;
 
 /// Monotype Lifted expression forms.
 pub const ExprData = Mono.ExprData;
+/// Identifier for one private optimized loop state.
+pub const StateLoopStateId = Mono.StateLoopStateId;
+/// Private optimized loop state shared with Monotype IR.
+pub const StateLoopState = Mono.StateLoopState;
+/// Private optimized loop state graph shared with Monotype IR.
+pub const StateLoopExpr = Mono.StateLoopExpr;
+/// Edge to another private optimized loop state shared with Monotype IR.
+pub const StateContinueExpr = Mono.StateContinueExpr;
 
 /// Typed Monotype Lifted pattern.
 pub const Pat = Mono.Pat;
@@ -144,6 +152,7 @@ pub const Program = struct {
     str_pattern_steps: std.ArrayList(Mono.StrPatternStep),
     branches: std.ArrayList(Branch),
     if_branches: std.ArrayList(IfBranch),
+    state_loop_states: std.ArrayList(StateLoopState),
     string_literals: std.ArrayList(Mono.StringLiteral),
     local_proc_contexts: std.ArrayList(LocalProcContext),
     proc_debug_names: ProcDebugNameMap,
@@ -188,6 +197,7 @@ pub const Program = struct {
         str_pattern_steps: std.ArrayList(Mono.StrPatternStep),
         branches: std.ArrayList(Branch),
         if_branches: std.ArrayList(IfBranch),
+        state_loop_states: std.ArrayList(StateLoopState),
         string_literals: std.ArrayList(Mono.StringLiteral),
         local_proc_contexts: std.ArrayList(LocalProcContext),
         proc_debug_names: ProcDebugNameMap,
@@ -220,6 +230,7 @@ pub const Program = struct {
             .str_pattern_steps = str_pattern_steps,
             .branches = branches,
             .if_branches = if_branches,
+            .state_loop_states = state_loop_states,
             .string_literals = string_literals,
             .local_proc_contexts = local_proc_contexts,
             .proc_debug_names = proc_debug_names,
@@ -263,6 +274,7 @@ pub const Program = struct {
         for (self.string_literals.items) |literal| self.allocator.free(literal.backing);
         self.string_literals.deinit(self.allocator);
         self.if_branches.deinit(self.allocator);
+        self.state_loop_states.deinit(self.allocator);
         self.branches.deinit(self.allocator);
         self.str_pattern_steps.deinit(self.allocator);
         self.record_destructs.deinit(self.allocator);
@@ -419,6 +431,12 @@ pub const Program = struct {
         return .{ .start = start, .len = @intCast(values.len) };
     }
 
+    pub fn addStateLoopStateSpan(self: *Program, values: []const StateLoopState) std.mem.Allocator.Error!Span(StateLoopState) {
+        const start: u32 = @intCast(self.state_loop_states.items.len);
+        try self.state_loop_states.appendSlice(self.allocator, values);
+        return .{ .start = start, .len = @intCast(values.len) };
+    }
+
     pub fn exprSpan(self: *const Program, span_: Span(ExprId)) []const ExprId {
         return self.expr_ids.items[span_.start..][0..span_.len];
     }
@@ -516,6 +534,14 @@ pub const Program = struct {
 
     pub fn ifBranchSpan(self: *const Program, span_: Span(IfBranch)) []const IfBranch {
         return self.if_branches.items[span_.start..][0..span_.len];
+    }
+
+    pub fn stateLoopStateSpan(self: *const Program, span_: Span(StateLoopState)) []const StateLoopState {
+        return self.state_loop_states.items[span_.start..][0..span_.len];
+    }
+
+    pub fn stateLoopState(self: *const Program, id: StateLoopStateId) StateLoopState {
+        return self.state_loop_states.items[@intFromEnum(id)];
     }
 
     pub fn exprCount(self: *const Program) usize {

@@ -263,8 +263,10 @@ const WrapperAnalyzer = struct {
             .try_sequence,
             .try_record_sequence,
             .loop_,
+            .state_loop,
             .break_,
             .continue_,
+            .state_continue,
             .crash,
             .comptime_exhaustiveness_failed,
             => false,
@@ -434,8 +436,15 @@ const WrapperAnalyzer = struct {
                 try self.visitSpanCallees(loop.initial_values);
                 try self.visitBodyCallees(loop.body);
             },
+            .state_loop => |state_loop| {
+                try self.visitSpanCallees(state_loop.entry_values);
+                for (self.solved.lifted.stateLoopStateSpan(state_loop.states)) |state| {
+                    try self.visitBodyCallees(state.body);
+                }
+            },
             .break_ => |maybe| if (maybe) |value| try self.visitBodyCallees(value),
             .continue_ => |continue_| try self.visitSpanCallees(continue_.values),
+            .state_continue => |continue_| try self.visitSpanCallees(continue_.values),
             .return_ => Common.invariant("return-containing inline candidate reached callee visitor"),
             .lambda,
             .fn_def,
@@ -561,8 +570,16 @@ fn exprContainsReturn(program: *const Lifted.Program, expr_id: Lifted.ExprId) bo
             exprContainsReturn(program, sequence.ok_body),
         .block => |block| stmtSpanContainsReturn(program, block.statements) or exprContainsReturn(program, block.final_expr),
         .loop_ => |loop| exprSpanContainsReturn(program, loop.initial_values) or exprContainsReturn(program, loop.body),
+        .state_loop => |state_loop| blk: {
+            if (exprSpanContainsReturn(program, state_loop.entry_values)) break :blk true;
+            for (program.stateLoopStateSpan(state_loop.states)) |state| {
+                if (exprContainsReturn(program, state.body)) break :blk true;
+            }
+            break :blk false;
+        },
         .break_ => |maybe| if (maybe) |value| exprContainsReturn(program, value) else false,
         .continue_ => |continue_| exprSpanContainsReturn(program, continue_.values),
+        .state_continue => |continue_| exprSpanContainsReturn(program, continue_.values),
     };
 }
 

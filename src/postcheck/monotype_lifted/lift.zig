@@ -48,6 +48,8 @@ pub fn run(
     owned.branches = .empty;
     var if_branches = owned.if_branches;
     owned.if_branches = .empty;
+    var state_loop_states = owned.state_loop_states;
+    owned.state_loop_states = .empty;
     var string_literals = owned.string_literals;
     owned.string_literals = .empty;
     var local_proc_contexts = owned.local_proc_contexts;
@@ -90,6 +92,7 @@ pub fn run(
         str_pattern_steps,
         branches,
         if_branches,
+        state_loop_states,
         string_literals,
         local_proc_contexts,
         proc_debug_names,
@@ -117,6 +120,7 @@ pub fn run(
     record_destructs = undefined;
     branches = undefined;
     if_branches = undefined;
+    state_loop_states = undefined;
     string_literals = undefined;
     local_proc_contexts = undefined;
     proc_debug_names = undefined;
@@ -443,8 +447,13 @@ const Lifter = struct {
                 for (self.output.exprSpan(loop.initial_values)) |initial| try self.rewriteExpr(initial);
                 try self.rewriteExpr(loop.body);
             },
+            .state_loop => |state_loop| {
+                for (self.output.exprSpan(state_loop.entry_values)) |initial| try self.rewriteExpr(initial);
+                for (self.output.stateLoopStateSpan(state_loop.states)) |state| try self.rewriteExpr(state.body);
+            },
             .break_ => |maybe| if (maybe) |value| try self.rewriteExpr(value),
             .continue_ => |continue_| for (self.output.exprSpan(continue_.values)) |value| try self.rewriteExpr(value),
+            .state_continue => |continue_| for (self.output.exprSpan(continue_.values)) |value| try self.rewriteExpr(value),
         }
     }
 
@@ -860,8 +869,19 @@ const CaptureSet = struct {
                 try self.collectExpr(loop.body, bound);
                 removeBound(input, bound, added.items);
             },
+            .state_loop => |state_loop| {
+                for (input.exprSpan(state_loop.entry_values)) |initial| try self.collectExpr(initial, bound);
+                for (input.stateLoopStateSpan(state_loop.states)) |state| {
+                    var added = std.ArrayList(Mono.LocalId).empty;
+                    defer added.deinit(self.allocator);
+                    try bindTypedLocalsTracked(self.allocator, input, bound, input.typedLocalSpan(state.params), &added);
+                    try self.collectExpr(state.body, bound);
+                    removeBound(input, bound, added.items);
+                }
+            },
             .break_ => |maybe| if (maybe) |value| try self.collectExpr(value, bound),
             .continue_ => |continue_| for (input.exprSpan(continue_.values)) |value| try self.collectExpr(value, bound),
+            .state_continue => |continue_| for (input.exprSpan(continue_.values)) |value| try self.collectExpr(value, bound),
         }
     }
 

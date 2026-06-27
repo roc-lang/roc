@@ -147,6 +147,7 @@ const Lowerer = struct {
     source_symbols: std.AutoHashMap(Common.Symbol, Lifted.FnId),
     capture_types: CaptureTypeMap,
     captures: std.AutoHashMap(Lifted.LocalId, CaptureBinding),
+    state_loop_state_map: std.AutoHashMap(Lifted.StateLoopStateId, Ast.StateLoopStateId),
     symbols: Common.SymbolGen,
     scratch: std.heap.ArenaAllocator,
     erased_capture_ptr_ty: ?Type.TypeId = null,
@@ -199,6 +200,7 @@ const Lowerer = struct {
             .source_symbols = std.AutoHashMap(Common.Symbol, Lifted.FnId).init(allocator),
             .capture_types = CaptureTypeMap.initContext(allocator, .{}),
             .captures = std.AutoHashMap(Lifted.LocalId, CaptureBinding).init(allocator),
+            .state_loop_state_map = std.AutoHashMap(Lifted.StateLoopStateId, Ast.StateLoopStateId).init(allocator),
             .symbols = .{ .next = solved.lifted.next_symbol },
             .scratch = std.heap.ArenaAllocator.init(allocator),
             .debug_effects = options.debug_effects,
@@ -208,6 +210,7 @@ const Lowerer = struct {
     fn deinit(self: *Lowerer) void {
         self.scratch.deinit();
         self.captures.deinit();
+        self.state_loop_state_map.deinit();
         self.capture_types.deinit();
         self.source_symbols.deinit();
         self.fn_written.deinit(self.allocator);
@@ -603,8 +606,20 @@ const Lowerer = struct {
                 .initial_values = try self.lowerExprSpan(loop.initial_values),
                 .body = try self.lowerExpr(loop.body),
             } },
+            .state_loop => |state_loop| blk: {
+                const states = try self.lowerStateLoopStateSpan(state_loop.states);
+                break :blk .{ .state_loop = .{
+                    .entry_state = self.lowerStateLoopStateId(state_loop.entry_state),
+                    .entry_values = try self.lowerExprSpan(state_loop.entry_values),
+                    .states = states,
+                } };
+            },
             .break_ => |maybe| .{ .break_ = if (maybe) |value| try self.lowerExpr(value) else null },
             .continue_ => |continue_| .{ .continue_ = .{ .values = try self.lowerExprSpan(continue_.values) } },
+            .state_continue => |continue_| .{ .state_continue = .{
+                .target_state = self.lowerStateLoopStateId(continue_.target_state),
+                .values = try self.lowerExprSpan(continue_.values),
+            } },
             .return_ => |value| .{ .return_ = try self.lowerExpr(value) },
             .crash => |msg| .{ .crash = msg },
             .comptime_branch_taken => |taken| .{ .comptime_branch_taken = .{
@@ -1171,6 +1186,33 @@ const Lowerer = struct {
             };
         }
         return try self.program.addIfBranchSpan(lowered);
+    }
+
+    fn lowerStateLoopStateSpan(self: *Lowerer, span: Lifted.Span(Lifted.StateLoopState)) Allocator.Error!Ast.Span(Ast.StateLoopState) {
+        const input_items = self.solved.lifted.stateLoopStateSpan(span);
+        const start: u32 = @intCast(self.program.state_loop_states.items.len);
+
+        try self.program.state_loop_states.ensureUnusedCapacity(self.program.allocator, input_items.len);
+        for (input_items, 0..) |_, index| {
+            const lifted_id: Lifted.StateLoopStateId = @enumFromInt(span.start + @as(u32, @intCast(index)));
+            const lowered_id: Ast.StateLoopStateId = @enumFromInt(start + @as(u32, @intCast(index)));
+            try self.state_loop_state_map.put(lifted_id, lowered_id);
+            self.program.state_loop_states.appendAssumeCapacity(undefined);
+        }
+
+        for (input_items, 0..) |state, index| {
+            self.program.state_loop_states.items[start + index] = .{
+                .params = try self.lowerTypedLocalSpan(state.params),
+                .body = try self.lowerExpr(state.body),
+            };
+        }
+
+        return .{ .start = start, .len = @intCast(input_items.len) };
+    }
+
+    fn lowerStateLoopStateId(self: *Lowerer, id: Lifted.StateLoopStateId) Ast.StateLoopStateId {
+        return self.state_loop_state_map.get(id) orelse
+            Common.invariant("Lambda Mono lowering saw a state_continue before its state_loop reserved the target state");
     }
 };
 
