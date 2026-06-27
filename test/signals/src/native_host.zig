@@ -1394,6 +1394,7 @@ const HostEnv = struct {
         self.engine.signal_cache.deinit(allocator);
         self.clearStates();
         self.engine.states.deinit(allocator);
+        self.engine.state_indexes_by_node_id.deinit(allocator);
         self.clearScopes();
         self.engine.scopes.deinit(allocator);
         self.engine.node_identities.deinit(allocator);

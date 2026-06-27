@@ -391,6 +391,14 @@ Current priority after the Phase 4 review:
 
 ### O(1) identity/descriptor lookup (kill linear-scan-by-id)
 
+- **Status:** first slice landed for node-id lookups. `HostNodeDescriptorStream`
+  now maintains explicit `node_id -> scope_site/state/when/each` descriptor
+  indexes, and the engine maintains `node_id -> state cell` indexes for runtime
+  state. `stateIndexByNodeId`, `activeScopeSiteByNodeId`,
+  `activeWhenIndexByNodeId`, `activeEachIndexByNodeId`, and structural
+  `streamNodeIdInReplacementTarget` no longer scan descriptor tables. Remaining
+  work is the render/stream lookup side (`signalRecordByToken`, render-node
+  subtree scans, child collection, and text/bool field scans).
 - **Hypothesis:** dense side tables for `elem_id → descriptor`, `token → record`,
   and `node_id → active-stream index` — maintained on insert/remove, the way
   `descriptor_indexes_by_elem_id` already is — plus restricting structural

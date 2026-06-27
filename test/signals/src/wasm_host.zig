@@ -553,6 +553,8 @@ fn clearActiveRuntime() void {
     shared_engine.clearStates(WasmCtx{}) catch failHost();
     shared_engine.states.deinit(a);
     shared_engine.states = .empty;
+    shared_engine.state_indexes_by_node_id.deinit(a);
+    shared_engine.state_indexes_by_node_id = .empty;
 
     shared_engine.clearScopes(WasmCtx{}) catch failHost();
     shared_engine.scopes.deinit(a);

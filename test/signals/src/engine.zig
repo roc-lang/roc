@@ -1224,6 +1224,38 @@ pub const HostElemDescriptorIndex = struct {
     events: HostEventDescriptorIndexes = .{},
 };
 
+pub const HostScopeSiteDescriptorIndexes = struct {
+    component: ?usize = null,
+    state: ?usize = null,
+    when: ?usize = null,
+    each: ?usize = null,
+
+    pub fn get(self: HostScopeSiteDescriptorIndexes, kind: HostNodeScopeSiteKind) ?usize {
+        return switch (kind) {
+            .component => self.component,
+            .state => self.state,
+            .when => self.when,
+            .each => self.each,
+        };
+    }
+
+    pub fn slot(self: *HostScopeSiteDescriptorIndexes, kind: HostNodeScopeSiteKind) *?usize {
+        return switch (kind) {
+            .component => &self.component,
+            .state => &self.state,
+            .when => &self.when,
+            .each => &self.each,
+        };
+    }
+};
+
+pub const HostNodeDescriptorIndex = struct {
+    scope_sites: HostScopeSiteDescriptorIndexes = .{},
+    state: ?usize = null,
+    when: ?usize = null,
+    each: ?usize = null,
+};
+
 pub const HostNodeDescriptorStream = struct {
     render_nodes: std.ArrayListUnmanaged(HostRenderNode) = .empty,
     elements: std.ArrayListUnmanaged(HostElementDesc) = .empty,
@@ -1243,6 +1275,7 @@ pub const HostNodeDescriptorStream = struct {
     eaches: std.ArrayListUnmanaged(HostNodeEachDesc) = .empty,
     signal_records_by_token: std.ArrayListUnmanaged(HostSignalRecordTokenEntry) = .empty,
     descriptor_indexes_by_elem_id: std.ArrayListUnmanaged(HostElemDescriptorIndex) = .empty,
+    descriptor_indexes_by_node_id: std.ArrayListUnmanaged(HostNodeDescriptorIndex) = .empty,
     next_elem_id: u64 = 1,
 
     pub fn ensureElemDescriptorIndex(self: *HostNodeDescriptorStream, allocator: std.mem.Allocator, elem_id: u64) *HostElemDescriptorIndex {
@@ -1256,6 +1289,19 @@ pub const HostNodeDescriptorStream = struct {
     pub fn elemDescriptorIndex(self: *const HostNodeDescriptorStream, elem_id: u64) ?HostElemDescriptorIndex {
         if (elem_id >= self.descriptor_indexes_by_elem_id.items.len) return null;
         return self.descriptor_indexes_by_elem_id.items[@intCast(elem_id)];
+    }
+
+    pub fn ensureNodeDescriptorIndex(self: *HostNodeDescriptorStream, allocator: std.mem.Allocator, node_id: u64) *HostNodeDescriptorIndex {
+        const index: usize = @intCast(node_id);
+        while (self.descriptor_indexes_by_node_id.items.len <= index) {
+            self.descriptor_indexes_by_node_id.append(allocator, .{}) catch @panic("out of memory");
+        }
+        return &self.descriptor_indexes_by_node_id.items[index];
+    }
+
+    pub fn nodeDescriptorIndex(self: *const HostNodeDescriptorStream, node_id: u64) ?HostNodeDescriptorIndex {
+        if (node_id >= self.descriptor_indexes_by_node_id.items.len) return null;
+        return self.descriptor_indexes_by_node_id.items[@intCast(node_id)];
     }
 
     pub fn setFreshIndex(slot: *?usize, value: usize) void {
@@ -1370,6 +1416,54 @@ pub const HostNodeDescriptorStream = struct {
         HostNodeDescriptorStream.clearIndex(self.descriptor_indexes_by_elem_id.items[@intCast(elem_id)].events.slot(kind), expected);
     }
 
+    pub fn recordScopeSiteIndex(self: *HostNodeDescriptorStream, allocator: std.mem.Allocator, node_id: u64, kind: HostNodeScopeSiteKind, index: usize) void {
+        HostNodeDescriptorStream.setFreshIndex(self.ensureNodeDescriptorIndex(allocator, node_id).scope_sites.slot(kind), index);
+    }
+
+    pub fn updateScopeSiteIndex(self: *HostNodeDescriptorStream, node_id: u64, kind: HostNodeScopeSiteKind, index: usize) void {
+        HostNodeDescriptorStream.updateIndex(self.descriptor_indexes_by_node_id.items[@intCast(node_id)].scope_sites.slot(kind), index);
+    }
+
+    pub fn clearScopeSiteIndex(self: *HostNodeDescriptorStream, node_id: u64, kind: HostNodeScopeSiteKind, expected: usize) void {
+        HostNodeDescriptorStream.clearIndex(self.descriptor_indexes_by_node_id.items[@intCast(node_id)].scope_sites.slot(kind), expected);
+    }
+
+    pub fn recordStateIndex(self: *HostNodeDescriptorStream, allocator: std.mem.Allocator, node_id: u64, index: usize) void {
+        HostNodeDescriptorStream.setFreshIndex(&self.ensureNodeDescriptorIndex(allocator, node_id).state, index);
+    }
+
+    pub fn updateStateIndex(self: *HostNodeDescriptorStream, node_id: u64, index: usize) void {
+        HostNodeDescriptorStream.updateIndex(&self.descriptor_indexes_by_node_id.items[@intCast(node_id)].state, index);
+    }
+
+    pub fn clearStateIndex(self: *HostNodeDescriptorStream, node_id: u64, expected: usize) void {
+        HostNodeDescriptorStream.clearIndex(&self.descriptor_indexes_by_node_id.items[@intCast(node_id)].state, expected);
+    }
+
+    pub fn recordWhenIndex(self: *HostNodeDescriptorStream, allocator: std.mem.Allocator, node_id: u64, index: usize) void {
+        HostNodeDescriptorStream.setFreshIndex(&self.ensureNodeDescriptorIndex(allocator, node_id).when, index);
+    }
+
+    pub fn updateWhenIndex(self: *HostNodeDescriptorStream, node_id: u64, index: usize) void {
+        HostNodeDescriptorStream.updateIndex(&self.descriptor_indexes_by_node_id.items[@intCast(node_id)].when, index);
+    }
+
+    pub fn clearWhenIndex(self: *HostNodeDescriptorStream, node_id: u64, expected: usize) void {
+        HostNodeDescriptorStream.clearIndex(&self.descriptor_indexes_by_node_id.items[@intCast(node_id)].when, expected);
+    }
+
+    pub fn recordEachIndex(self: *HostNodeDescriptorStream, allocator: std.mem.Allocator, node_id: u64, index: usize) void {
+        HostNodeDescriptorStream.setFreshIndex(&self.ensureNodeDescriptorIndex(allocator, node_id).each, index);
+    }
+
+    pub fn updateEachIndex(self: *HostNodeDescriptorStream, node_id: u64, index: usize) void {
+        HostNodeDescriptorStream.updateIndex(&self.descriptor_indexes_by_node_id.items[@intCast(node_id)].each, index);
+    }
+
+    pub fn clearEachIndex(self: *HostNodeDescriptorStream, node_id: u64, expected: usize) void {
+        HostNodeDescriptorStream.clearIndex(&self.descriptor_indexes_by_node_id.items[@intCast(node_id)].each, expected);
+    }
+
     pub fn deinit(self: *HostNodeDescriptorStream, allocator: std.mem.Allocator, ctx: anytype, roc_host: *abi.RocHost, metrics: anytype) void {
         self.render_nodes.deinit(allocator);
 
@@ -1465,6 +1559,7 @@ pub const HostNodeDescriptorStream = struct {
 
         self.signal_records_by_token.deinit(allocator);
         self.descriptor_indexes_by_elem_id.deinit(allocator);
+        self.descriptor_indexes_by_node_id.deinit(allocator);
 
         self.* = .{};
     }
@@ -1702,6 +1797,7 @@ pub const HostNodeDescriptorStream = struct {
 
     pub fn appendScopeSiteAt(self: *HostNodeDescriptorStream, allocator: std.mem.Allocator, node_id: u64, scope_id: u64, ordinal: u64, parent_elem_id: u64, render_insert_index: usize, kind: HostNodeScopeSiteKind, binder_bindings: []const HostBinderBinding) void {
         const binder_copy = allocator.dupe(HostBinderBinding, binder_bindings) catch @panic("out of memory");
+        const scope_site_index = self.scope_sites.items.len;
         self.scope_sites.append(allocator, .{
             .node_id = node_id,
             .scope_id = scope_id,
@@ -1714,12 +1810,14 @@ pub const HostNodeDescriptorStream = struct {
             allocator.free(binder_copy);
             @panic("out of memory");
         };
+        self.recordScopeSiteIndex(allocator, node_id, kind, scope_site_index);
     }
 
     pub fn appendState(self: *HostNodeDescriptorStream, allocator: std.mem.Allocator, roc_host: *abi.RocHost, metrics: anytype, node_id: u64, initial: abi.RocErasedCallable, cap: HostValueCapability) void {
         _ = retainHostValueCapability(cap, metrics);
         abi.increfErasedCallable(initial, 1);
         metrics.bump(.closure_retains, 1);
+        const state_index = self.states.items.len;
         self.states.append(allocator, .{
             .node_id = node_id,
             .initial = initial,
@@ -1730,6 +1828,7 @@ pub const HostNodeDescriptorStream = struct {
             abi.decrefErasedCallable(initial, roc_host);
             @panic("out of memory");
         };
+        self.recordStateIndex(allocator, node_id, state_index);
     }
 
     pub fn appendWhen(self: *HostNodeDescriptorStream, allocator: std.mem.Allocator, ctx: anytype, roc_host: *abi.RocHost, metrics: anytype, node_id: u64, condition: HostSignalBinding, read: HostBoolRead, when_false: abi.Elem, when_true: abi.Elem) void {
@@ -1737,6 +1836,7 @@ pub const HostNodeDescriptorStream = struct {
         const retained_read = retainHostBoolRead(read, metrics);
         abi.increfElem(when_false, 1);
         abi.increfElem(when_true, 1);
+        const when_index = self.whens.items.len;
         self.whens.append(allocator, .{
             .node_id = node_id,
             .condition = condition,
@@ -1751,11 +1851,13 @@ pub const HostNodeDescriptorStream = struct {
             abi.decrefElem(when_true, roc_host);
             @panic("out of memory");
         };
+        self.recordWhenIndex(allocator, node_id, when_index);
     }
 
     pub fn appendEach(self: *HostNodeDescriptorStream, allocator: std.mem.Allocator, ctx: anytype, roc_host: *abi.RocHost, metrics: anytype, node_id: u64, items: HostSignalBinding, ops: HostEachOps) void {
         self.rememberSignalRecordTree(allocator, items.record);
         const retained_ops = retainHostEachOps(ops, metrics);
+        const each_index = self.eaches.items.len;
         self.eaches.append(allocator, .{
             .node_id = node_id,
             .items = items,
@@ -1766,6 +1868,7 @@ pub const HostNodeDescriptorStream = struct {
             releaseHostEachOps(retained_ops, roc_host, metrics);
             @panic("out of memory");
         };
+        self.recordEachIndex(allocator, node_id, each_index);
     }
 };
 
@@ -2104,6 +2207,7 @@ pub fn Engine(comptime Ctx: type) type {
         signal_dependents: std.ArrayListUnmanaged(HostSignalDependentsRoute) = .empty,
         signal_cache: std.ArrayListUnmanaged(HostSignalCacheSlot) = .empty,
         states: std.ArrayListUnmanaged(HostState) = .empty,
+        state_indexes_by_node_id: std.ArrayListUnmanaged(?usize) = .empty,
         scopes: std.ArrayListUnmanaged(HostScope) = .empty,
         node_identities: std.ArrayListUnmanaged(HostNodeIdentity) = .empty,
         dom_identities: std.ArrayListUnmanaged(HostDomIdentity) = .empty,
@@ -2604,6 +2708,7 @@ pub fn Engine(comptime Ctx: type) type {
                     if (state.active) return RocHostRequiredError.MissingRocHost;
                 }
                 self.states.items.len = 0;
+                self.state_indexes_by_node_id.items.len = 0;
                 return;
             };
             for (self.states.items) |*state| {
@@ -2612,6 +2717,30 @@ pub fn Engine(comptime Ctx: type) type {
                 state.active = false;
             }
             self.states.items.len = 0;
+            self.state_indexes_by_node_id.items.len = 0;
+        }
+
+        fn ensureStateIndexSlot(self: *Self, ctx: Ctx.Handle, node_id: u64) *?usize {
+            const allocator = Ctx.allocator(ctx);
+            const index: usize = @intCast(node_id);
+            while (self.state_indexes_by_node_id.items.len <= index) {
+                self.state_indexes_by_node_id.append(allocator, null) catch @panic("out of memory");
+            }
+            return &self.state_indexes_by_node_id.items[index];
+        }
+
+        fn recordStateCellIndex(self: *Self, ctx: Ctx.Handle, node_id: u64, index: usize) void {
+            const slot = self.ensureStateIndexSlot(ctx, node_id);
+            if (slot.* != null) @panic("state cell index already existed for node id");
+            slot.* = index;
+        }
+
+        fn clearStateCellIndex(self: *Self, node_id: u64, expected: usize) void {
+            if (node_id >= self.state_indexes_by_node_id.items.len) @panic("state cell index clear referenced an unknown node id");
+            const slot = &self.state_indexes_by_node_id.items[@intCast(node_id)];
+            const existing = slot.* orelse @panic("state cell index clear missed its node id");
+            if (existing != expected) @panic("state cell index clear referenced the wrong state index");
+            slot.* = null;
         }
 
         pub fn deactivateState(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, node_id: u64) void {
@@ -2619,6 +2748,7 @@ pub fn Engine(comptime Ctx: type) type {
             const state = &self.states.items[state_index];
             state.cell.deinit(ctx, roc_host, &self.pending_roc_metrics);
             state.active = false;
+            self.clearStateCellIndex(node_id, state_index);
         }
 
         pub fn clearScopes(self: *Self, ctx: Ctx.Handle) RocHostRequiredError!void {
@@ -2997,6 +3127,7 @@ pub fn Engine(comptime Ctx: type) type {
 
             const initial = erased_calls.callValueInitThunk(roc_host, desc.initial);
             var cell = HostValueCell.initRetained(initial, desc.cap, &self.pending_roc_metrics);
+            const state_index = self.states.items.len;
             self.states.append(Ctx.allocator(ctx), .{
                 .state_id = desc.node_id,
                 .cell = cell,
@@ -3006,6 +3137,7 @@ pub fn Engine(comptime Ctx: type) type {
                 cell.deinit(ctx, roc_host, &self.pending_roc_metrics);
                 @panic("out of memory");
             };
+            self.recordStateCellIndex(ctx, desc.node_id, state_index);
         }
 
         fn signalRecordByTokenForStream(self: *Self, stream: *HostNodeDescriptorStream, token: HostSignalToken) ?*HostSignalRecord {
@@ -4537,12 +4669,13 @@ pub fn Engine(comptime Ctx: type) type {
             return self.scopeIsInReplacementTarget(scope_id, target);
         }
 
-        pub fn streamNodeIdInReplacementTarget(self: *Self, previous: *const HostNodeDescriptorStream, node_id: u64, target: HostStructuralReplacementTarget) bool {
-            self.recordStreamNodesScanned(previous.scope_sites.items.len);
-            for (previous.scope_sites.items) |site| {
-                if (site.node_id == node_id and self.scopeIsInReplacementTarget(site.scope_id, target)) return true;
-            }
-            return false;
+        pub fn streamNodeIdInReplacementTarget(self: *Self, previous: *const HostNodeDescriptorStream, node_id: u64, kind: HostNodeScopeSiteKind, target: HostStructuralReplacementTarget) bool {
+            const descriptor_index = previous.nodeDescriptorIndex(node_id) orelse return false;
+            const site_index = descriptor_index.scope_sites.get(kind) orelse return false;
+            if (site_index >= previous.scope_sites.items.len) @panic("scope site descriptor index exceeded descriptor table");
+            const site = previous.scope_sites.items[site_index];
+            if (site.node_id != node_id or site.kind != kind) @panic("scope site descriptor index pointed at the wrong node");
+            return self.scopeIsInReplacementTarget(site.scope_id, target);
         }
 
         fn removeActiveElementDescriptorsInTarget(self: *Self, ctx: Ctx.Handle, target: HostStructuralReplacementTarget) void {
@@ -4761,11 +4894,13 @@ pub fn Engine(comptime Ctx: type) type {
             const allocator = Ctx.allocator(ctx);
             var write_index: usize = 0;
             self.recordStreamNodesScanned(self.active_stream.scope_sites.items.len);
-            for (self.active_stream.scope_sites.items) |desc| {
+            for (self.active_stream.scope_sites.items, 0..) |desc, read_index| {
                 if (self.scopeIsInReplacementTarget(desc.scope_id, target)) {
+                    self.active_stream.clearScopeSiteIndex(desc.node_id, desc.kind, read_index);
                     allocator.free(desc.binder_bindings);
                     continue;
                 }
+                self.active_stream.updateScopeSiteIndex(desc.node_id, desc.kind, write_index);
                 self.active_stream.scope_sites.items[write_index] = desc;
                 write_index += 1;
             }
@@ -4775,13 +4910,15 @@ pub fn Engine(comptime Ctx: type) type {
         fn removeActiveStateDescriptorsInTarget(self: *Self, roc_host: *abi.RocHost, target: HostStructuralReplacementTarget) void {
             var write_index: usize = 0;
             self.recordStreamNodesScanned(self.active_stream.states.items.len);
-            for (self.active_stream.states.items) |desc| {
-                if (self.streamNodeIdInReplacementTarget(&self.active_stream, desc.node_id, target)) {
+            for (self.active_stream.states.items, 0..) |desc, read_index| {
+                if (self.streamNodeIdInReplacementTarget(&self.active_stream, desc.node_id, .state, target)) {
+                    self.active_stream.clearStateIndex(desc.node_id, read_index);
                     self.pending_roc_metrics.bump(.closure_releases, 1);
                     abi.decrefErasedCallable(desc.initial, roc_host);
                     releaseHostValueCapability(desc.cap, roc_host, &self.pending_roc_metrics);
                     continue;
                 }
+                self.active_stream.updateStateIndex(desc.node_id, write_index);
                 self.active_stream.states.items[write_index] = desc;
                 write_index += 1;
             }
@@ -4792,10 +4929,11 @@ pub fn Engine(comptime Ctx: type) type {
             var write_index: usize = 0;
             self.recordStreamNodesScanned(self.active_stream.whens.items.len);
             for (self.active_stream.whens.items, 0..) |desc, read_index| {
-                if (self.streamNodeIdInReplacementTarget(&self.active_stream, desc.node_id, target)) {
+                if (self.streamNodeIdInReplacementTarget(&self.active_stream, desc.node_id, .when, target)) {
                     var removed = desc;
                     const record_id = self.requireActiveSignalRecordId(removed.condition.record);
                     self.removeActiveStructuralSignalRoute(record_id, .when, read_index);
+                    self.active_stream.clearWhenIndex(removed.node_id, read_index);
                     self.releaseActiveSignalRecord(ctx, removed.condition.record);
                     removed.cached_value.deinit(ctx, roc_host, &self.pending_roc_metrics);
                     removed.condition.deinit(Ctx.allocator(ctx), ctx, roc_host, &self.pending_roc_metrics);
@@ -4806,6 +4944,7 @@ pub fn Engine(comptime Ctx: type) type {
                 }
                 const record_id = self.requireActiveSignalRecordId(desc.condition.record);
                 self.updateActiveStructuralSignalRouteIndex(record_id, .when, read_index, write_index);
+                self.active_stream.updateWhenIndex(desc.node_id, write_index);
                 self.active_stream.whens.items[write_index] = desc;
                 write_index += 1;
             }
@@ -4816,10 +4955,11 @@ pub fn Engine(comptime Ctx: type) type {
             var write_index: usize = 0;
             self.recordStreamNodesScanned(self.active_stream.eaches.items.len);
             for (self.active_stream.eaches.items, 0..) |desc, read_index| {
-                if (self.streamNodeIdInReplacementTarget(&self.active_stream, desc.node_id, target)) {
+                if (self.streamNodeIdInReplacementTarget(&self.active_stream, desc.node_id, .each, target)) {
                     var removed = desc;
                     const record_id = self.requireActiveSignalRecordId(removed.items.record);
                     self.removeActiveStructuralSignalRoute(record_id, .each, read_index);
+                    self.active_stream.clearEachIndex(removed.node_id, read_index);
                     self.releaseActiveSignalRecord(ctx, removed.items.record);
                     removed.cached_value.deinit(ctx, roc_host, &self.pending_roc_metrics);
                     removed.items.deinit(Ctx.allocator(ctx), ctx, roc_host, &self.pending_roc_metrics);
@@ -4828,6 +4968,7 @@ pub fn Engine(comptime Ctx: type) type {
                 }
                 const record_id = self.requireActiveSignalRecordId(desc.items.record);
                 self.updateActiveStructuralSignalRouteIndex(record_id, .each, read_index, write_index);
+                self.active_stream.updateEachIndex(desc.node_id, write_index);
                 self.active_stream.eaches.items[write_index] = desc;
                 write_index += 1;
             }
@@ -4977,17 +5118,26 @@ pub fn Engine(comptime Ctx: type) type {
 
             self.appendReplacementEventsMoved(ctx, replacement);
 
+            const scope_site_base = self.active_stream.scope_sites.items.len;
             for (replacement.scope_sites.items) |*desc| {
                 desc.render_insert_index += render_insert_offset;
+            }
+            for (replacement.scope_sites.items, 0..) |desc, offset| {
+                self.active_stream.recordScopeSiteIndex(allocator, desc.node_id, desc.kind, scope_site_base + offset);
             }
             self.active_stream.scope_sites.appendSlice(allocator, replacement.scope_sites.items) catch @panic("out of memory");
             replacement.scope_sites.items.len = 0;
 
+            const state_base = self.active_stream.states.items.len;
+            for (replacement.states.items, 0..) |desc, offset| {
+                self.active_stream.recordStateIndex(allocator, desc.node_id, state_base + offset);
+            }
             self.active_stream.states.appendSlice(allocator, replacement.states.items) catch @panic("out of memory");
             replacement.states.items.len = 0;
 
             const when_base = self.active_stream.whens.items.len;
             for (replacement.whens.items, 0..) |desc, offset| {
+                self.active_stream.recordWhenIndex(allocator, desc.node_id, when_base + offset);
                 self.retainActiveSignalRecord(ctx, desc.condition.record);
                 const record_id = self.requireActiveSignalRecordId(desc.condition.record);
                 self.appendActiveStructuralSignalRoute(ctx, record_id, .{
@@ -5000,6 +5150,7 @@ pub fn Engine(comptime Ctx: type) type {
 
             const each_base = self.active_stream.eaches.items.len;
             for (replacement.eaches.items, 0..) |desc, offset| {
+                self.active_stream.recordEachIndex(allocator, desc.node_id, each_base + offset);
                 self.retainActiveSignalRecord(ctx, desc.items.record);
                 const record_id = self.requireActiveSignalRecordId(desc.items.record);
                 self.appendActiveStructuralSignalRoute(ctx, record_id, .{
@@ -5476,10 +5627,12 @@ pub fn Engine(comptime Ctx: type) type {
         }
 
         pub fn stateIndexByNodeId(self: *Self, node_id: u64) ?usize {
-            for (self.states.items, 0..) |state, index| {
-                if (state.active and state.state_id == node_id) return index;
-            }
-            return null;
+            if (node_id >= self.state_indexes_by_node_id.items.len) return null;
+            const state_index = self.state_indexes_by_node_id.items[@intCast(node_id)] orelse return null;
+            if (state_index >= self.states.items.len) @panic("state cell index exceeded state table");
+            const state = self.states.items[state_index];
+            if (!state.active or state.state_id != node_id) @panic("state cell index pointed at the wrong state");
+            return state_index;
         }
 
         pub fn stateCapability(self: *Self, node_id: u64) StateLookupError!HostValueCapability {
@@ -5493,24 +5646,28 @@ pub fn Engine(comptime Ctx: type) type {
         }
 
         pub fn activeScopeSiteByNodeId(self: *Self, node_id: u64, kind: HostNodeScopeSiteKind) ?HostNodeScopeSiteDesc {
-            for (self.active_stream.scope_sites.items) |site| {
-                if (site.node_id == node_id and site.kind == kind) return site;
-            }
-            return null;
+            const descriptor_index = self.active_stream.nodeDescriptorIndex(node_id) orelse return null;
+            const scope_site_index = descriptor_index.scope_sites.get(kind) orelse return null;
+            if (scope_site_index >= self.active_stream.scope_sites.items.len) @panic("active scope site index exceeded descriptor table");
+            const site = self.active_stream.scope_sites.items[scope_site_index];
+            if (site.node_id != node_id or site.kind != kind) @panic("active scope site index pointed at the wrong node");
+            return site;
         }
 
         pub fn activeWhenIndexByNodeId(self: *Self, node_id: u64) ?usize {
-            for (self.active_stream.whens.items, 0..) |when, index| {
-                if (when.node_id == node_id) return index;
-            }
-            return null;
+            const descriptor_index = self.active_stream.nodeDescriptorIndex(node_id) orelse return null;
+            const when_index = descriptor_index.when orelse return null;
+            if (when_index >= self.active_stream.whens.items.len) @panic("active when index exceeded descriptor table");
+            if (self.active_stream.whens.items[when_index].node_id != node_id) @panic("active when index pointed at the wrong node");
+            return when_index;
         }
 
         pub fn activeEachIndexByNodeId(self: *Self, node_id: u64) ?usize {
-            for (self.active_stream.eaches.items, 0..) |each, index| {
-                if (each.node_id == node_id) return index;
-            }
-            return null;
+            const descriptor_index = self.active_stream.nodeDescriptorIndex(node_id) orelse return null;
+            const each_index = descriptor_index.each orelse return null;
+            if (each_index >= self.active_stream.eaches.items.len) @panic("active each index exceeded descriptor table");
+            if (self.active_stream.eaches.items[each_index].node_id != node_id) @panic("active each index pointed at the wrong node");
+            return each_index;
         }
 
         pub fn recordSliceContains(records: []const *HostSignalRecord, record: *HostSignalRecord) bool {
