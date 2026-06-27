@@ -343,6 +343,12 @@ pub const Expr = struct {
     data: ExprData,
 };
 
+/// A checked early return plus the explicit target lambda return type.
+pub const Return = struct {
+    value: ExprId,
+    target: Type.TypeId,
+};
+
 /// Monotype expression forms.
 pub const ExprData = union(enum) {
     local: LocalId,
@@ -408,7 +414,7 @@ pub const ExprData = union(enum) {
     loop_: LoopExpr,
     break_: ?ExprId,
     continue_: ContinueExpr,
-    return_: ExprId,
+    return_: Return,
     crash: StringLiteralId,
     comptime_branch_taken: ComptimeBranchTaken,
     comptime_exhaustiveness_failed: ComptimeSiteId,
@@ -527,7 +533,7 @@ pub const Stmt = union(enum) {
     expr: ExprId,
     expect: ExprId,
     dbg: ExprId,
-    return_: ExprId,
+    return_: Return,
     crash: StringLiteralId,
 };
 
