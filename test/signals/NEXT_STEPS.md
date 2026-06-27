@@ -300,34 +300,43 @@ captured on 2026-06-27. The keyed row path now keeps an explicit active
 `(parent_scope_id, site_ordinal) -> rows` table with per-site hash heads/links,
 so dirty diffs no longer scan the scope forest or rebuild existing-row bucket
 arrays. The large-N specs tightened `each_key_compares` from four per row to two
-per row for no-collision diffs. The aggregate benchmark `each_key_compares`
-counter is unchanged because it is dominated by required initial/key-material
-hash/equality probes, but host allocation churn drops on the keyed-list cases.
+per row for no-collision diffs. The earlier large keyed-list readings were a CSV
+alignment mistake: the million-scale values are `stream_nodes_scanned`, not
+`each_key_compares`. Key comparison work is now linear and small relative to
+structural stream scanning; host allocation churn still drops on the keyed-list
+cases.
 
-| case | actions | total_ns | each_key_compares | allocs_this_event | deallocs_this_event | host_allocs_this_event | host_deallocs_this_event | host_alloc_bytes_this_event | host_dealloc_bytes_this_event | host_retained_alloc_delta | host_retained_bytes_delta |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| signals-ops-dashboard | 60 | 51947750 | 20 | 33760 | 21200 | 47500 | 23900 | 8296620 | 4079080 | 23600 | 4217540 |
-| signals-large-each-64 | 120 | 726013089 | 1118520 | 160640 | 139940 | 224120 | 171880 | 195850600 | 184879540 | 52160 | 10969940 |
-| signals-async-effects | 180 | 24726132 | 10200 | 16640 | 13700 | 27340 | 20460 | 4984060 | 3599480 | 6800 | 1383760 |
-| signals-checkout-wizard | 180 | 23171172 | 10280 | 17800 | 13140 | 32800 | 22760 | 7716620 | 5547820 | 9980 | 2168000 |
-| signals-identity-stress | 180 | 45778992 | 37060 | 24180 | 19140 | 42760 | 30600 | 11595060 | 8654820 | 12080 | 2939420 |
-| signals-kanban-board | 320 | 549944491 | 454320 | 242180 | 219460 | 313920 | 257520 | 87030340 | 76245640 | 56340 | 10777340 |
-| signals-component-composition | 100 | 9261424 | 5800 | 9260 | 6800 | 16600 | 10140 | 3177080 | 1871940 | 6380 | 1304160 |
+| case | actions | total_ns | stream_nodes_scanned | each_key_compares | allocs_this_event | deallocs_this_event | host_allocs_this_event | host_deallocs_this_event | host_alloc_bytes_this_event | host_dealloc_bytes_this_event | host_retained_alloc_delta | host_retained_bytes_delta |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| signals-ops-dashboard | 60 | 51992067 | 20 | 0 | 33760 | 21200 | 47500 | 23900 | 8296620 | 4079080 | 23600 | 4217540 |
+| signals-large-each-64 | 120 | 722977782 | 1118520 | 14680 | 160640 | 139940 | 224120 | 171880 | 195850600 | 184879540 | 52160 | 10969940 |
+| signals-async-effects | 180 | 24981420 | 10200 | 0 | 16640 | 13700 | 27340 | 20460 | 4984060 | 3599480 | 6800 | 1383760 |
+| signals-checkout-wizard | 180 | 22923971 | 10280 | 40 | 17800 | 13140 | 32800 | 22760 | 7716620 | 5547820 | 9980 | 2168000 |
+| signals-identity-stress | 180 | 38606668 | 37060 | 660 | 24180 | 19140 | 42760 | 30600 | 11595060 | 8654820 | 12080 | 2939420 |
+| signals-kanban-board | 320 | 554785712 | 454320 | 1400 | 242180 | 219460 | 313920 | 257520 | 87030340 | 76245640 | 56340 | 10777340 |
+| signals-component-composition | 100 | 12397755 | 5800 | 220 | 9260 | 6800 | 16600 | 10140 | 3177080 | 1871940 | 6380 | 1304160 |
+
+Stream-scan diagnostic counters added on 2026-06-27 isolate the next large
+structural cost:
+
+| case | stream_nodes_scanned | remove_target | splice | render_scope | children | events | dirty_scope | each_key_compares |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| signals-large-each-64 | 1118520 | 451840 | 300800 | 236360 | 110680 | 12520 | 6320 | 14680 |
+| signals-kanban-board | 454320 | 128520 | 79280 | 82480 | 132340 | 29860 | 1840 | 1400 |
 
 Baseline review outcome:
 
-- Structural `Ui.each` work is the clear first target. The kanban run produced
-  361240 `each_key_compares` and 3500 `active_graph_records_rebuilt` over 300
-  actions; identity stress produced 75720 key compares over 180 actions. That is
-  enough evidence to promote large-N keyed-list gates, incremental splice graph
-  maintenance, and O(1) identity/key lookup ahead of discretionary tuning.
+- Structural `Ui.each` work remains the clear first target, but the hot metric is
+  stream scanning around structural patching, not key comparison. The keyed row
+  lookup path is now linear; the next target is replacing repeated whole-stream
+  scans in descriptor removal, splice range lookup, render-scope lookup, and
+  child-list rebuilds with explicit indexed active-stream data.
 - The generated large-N `Ui.each` app is now in the native spec/bench surface at
   N = 8 and N = 64, so the next structural fixes are guarded by N-sensitive
   assertions, not just aggregate six-app samples.
-- `stream_nodes_scanned` is nonzero but not yet the dominant measured cost in
-  the six-app baseline. It is now gated in the large-N app; filter/re-expand
-  transitions intentionally record the current higher scan ceiling and should be
-  tightened by the sink-route and lookup work below.
+- `stream_nodes_scanned` is the dominant measured structural cost in the
+  large-N and kanban apps. The split counters above should be tightened as the
+  active stream grows explicit indexes for scope ranges and children.
 - Per-event allocations are high, especially in kanban, but they are currently
   mixed with whole-site structural work and retained-value churn. Address
   algorithmic structural gaps before arena/scratch tuning so allocation wins are

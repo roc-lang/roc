@@ -136,6 +136,13 @@ pub const RuntimeMetrics = struct {
     deallocs_this_event: u64,
     derived_calls_into_roc: u64,
     each_key_compares: u64,
+    each_key_hashes: u64,
+    each_key_reuse_compares: u64,
+    each_key_duplicate_compares: u64,
+    each_item_compares: u64,
+    each_syncs: u64,
+    each_sync_keys: u64,
+    each_sync_existing_rows: u64,
     events_processed: u64,
     host_alloc_bytes_this_event: u64,
     host_allocs_this_event: u64,
@@ -162,6 +169,14 @@ pub const RuntimeMetrics = struct {
     set_text: u64,
     set_value: u64,
     stream_nodes_scanned: u64,
+    stream_nodes_scanned_apply: u64,
+    stream_nodes_scanned_children: u64,
+    stream_nodes_scanned_dirty_scope: u64,
+    stream_nodes_scanned_events: u64,
+    stream_nodes_scanned_mounts: u64,
+    stream_nodes_scanned_remove_target: u64,
+    stream_nodes_scanned_render_scope: u64,
+    stream_nodes_scanned_splice: u64,
 
     pub const Field = std.meta.FieldEnum(@This());
 
@@ -183,6 +198,13 @@ pub fn zeroRuntimeMetrics() RuntimeMetrics {
         .deallocs_this_event = 0,
         .derived_calls_into_roc = 0,
         .each_key_compares = 0,
+        .each_key_hashes = 0,
+        .each_key_reuse_compares = 0,
+        .each_key_duplicate_compares = 0,
+        .each_item_compares = 0,
+        .each_syncs = 0,
+        .each_sync_keys = 0,
+        .each_sync_existing_rows = 0,
         .events_processed = 0,
         .host_alloc_bytes_this_event = 0,
         .host_allocs_this_event = 0,
@@ -209,6 +231,14 @@ pub fn zeroRuntimeMetrics() RuntimeMetrics {
         .set_text = 0,
         .set_value = 0,
         .stream_nodes_scanned = 0,
+        .stream_nodes_scanned_apply = 0,
+        .stream_nodes_scanned_children = 0,
+        .stream_nodes_scanned_dirty_scope = 0,
+        .stream_nodes_scanned_events = 0,
+        .stream_nodes_scanned_mounts = 0,
+        .stream_nodes_scanned_remove_target = 0,
+        .stream_nodes_scanned_render_scope = 0,
+        .stream_nodes_scanned_splice = 0,
     };
 }
 
@@ -2449,6 +2479,13 @@ pub fn Engine(comptime Ctx: type) type {
             self.pending_roc_metrics.bump(.stream_nodes_scanned, @intCast(count));
         }
 
+        pub fn recordStreamNodesScannedBy(self: *Self, comptime field: RuntimeMetrics.Field, count: usize) void {
+            var metrics = self.pending_roc_metrics;
+            metrics.bump(.stream_nodes_scanned, @intCast(count));
+            metrics.bump(field, @intCast(count));
+            self.pending_roc_metrics = metrics;
+        }
+
         pub fn recordScopeCreated(self: *Self) void {
             var metrics = self.pending_roc_metrics;
             metrics.bump(.scopes_created, 1);
@@ -2458,6 +2495,41 @@ pub fn Engine(comptime Ctx: type) type {
         pub fn recordEachKeyCompare(self: *Self) void {
             var metrics = self.pending_roc_metrics;
             metrics.bump(.each_key_compares, 1);
+            self.pending_roc_metrics = metrics;
+        }
+
+        pub fn recordEachKeyHash(self: *Self) void {
+            var metrics = self.pending_roc_metrics;
+            metrics.bump(.each_key_compares, 1);
+            metrics.bump(.each_key_hashes, 1);
+            self.pending_roc_metrics = metrics;
+        }
+
+        pub fn recordEachKeyReuseCompare(self: *Self) void {
+            var metrics = self.pending_roc_metrics;
+            metrics.bump(.each_key_compares, 1);
+            metrics.bump(.each_key_reuse_compares, 1);
+            self.pending_roc_metrics = metrics;
+        }
+
+        pub fn recordEachKeyDuplicateCompare(self: *Self) void {
+            var metrics = self.pending_roc_metrics;
+            metrics.bump(.each_key_compares, 1);
+            metrics.bump(.each_key_duplicate_compares, 1);
+            self.pending_roc_metrics = metrics;
+        }
+
+        pub fn recordEachItemCompare(self: *Self) void {
+            var metrics = self.pending_roc_metrics;
+            metrics.bump(.each_item_compares, 1);
+            self.pending_roc_metrics = metrics;
+        }
+
+        pub fn recordEachSync(self: *Self, key_count: usize, existing_count: usize) void {
+            var metrics = self.pending_roc_metrics;
+            metrics.bump(.each_syncs, 1);
+            metrics.bump(.each_sync_keys, @intCast(key_count));
+            metrics.bump(.each_sync_existing_rows, @intCast(existing_count));
             self.pending_roc_metrics = metrics;
         }
 
@@ -3601,7 +3673,7 @@ pub fn Engine(comptime Ctx: type) type {
         }
 
         pub fn firstRenderIndexInScopeSubtree(self: *Self, stream: *const HostNodeDescriptorStream, root_scope_id: u64) ?usize {
-            self.recordStreamNodesScanned(stream.render_nodes.items.len);
+            self.recordStreamNodesScannedBy(.stream_nodes_scanned_render_scope, stream.render_nodes.items.len);
             for (stream.render_nodes.items, 0..) |node, index| {
                 if (self.renderNodeInScopeSubtree(stream, node, root_scope_id)) return index;
             }
@@ -3610,7 +3682,7 @@ pub fn Engine(comptime Ctx: type) type {
 
         pub fn lastRenderEndIndexInScopeSubtree(self: *Self, stream: *const HostNodeDescriptorStream, root_scope_id: u64) ?usize {
             var end_index: ?usize = null;
-            self.recordStreamNodesScanned(stream.render_nodes.items.len);
+            self.recordStreamNodesScannedBy(.stream_nodes_scanned_render_scope, stream.render_nodes.items.len);
             for (stream.render_nodes.items, 0..) |node, index| {
                 if (self.renderNodeInScopeSubtree(stream, node, root_scope_id)) {
                     end_index = index + 1;
@@ -3622,12 +3694,12 @@ pub fn Engine(comptime Ctx: type) type {
         pub fn scopeSubtreeHasDirtyStructuralSource(self: *Self, previous: *const HostNodeDescriptorStream, root_scope_id: u64, dirty_source_node_ids: []const u64) bool {
             if (dirty_source_node_ids.len == 0) return false;
 
-            self.recordStreamNodesScanned(previous.whens.items.len);
+            self.recordStreamNodesScannedBy(.stream_nodes_scanned_dirty_scope, previous.whens.items.len);
             for (previous.whens.items) |desc| {
                 if (!self.streamNodeIdInScopeSubtree(previous, desc.node_id, root_scope_id)) continue;
                 if (sourceNodeIdsIntersect(desc.condition.source_node_ids, dirty_source_node_ids)) return true;
             }
-            self.recordStreamNodesScanned(previous.eaches.items.len);
+            self.recordStreamNodesScannedBy(.stream_nodes_scanned_dirty_scope, previous.eaches.items.len);
             for (previous.eaches.items) |desc| {
                 if (!self.streamNodeIdInScopeSubtree(previous, desc.node_id, root_scope_id)) continue;
                 if (sourceNodeIdsIntersect(desc.items.source_node_ids, dirty_source_node_ids)) return true;
@@ -3859,6 +3931,7 @@ pub fn Engine(comptime Ctx: type) type {
         pub fn eachRowScopeItemEquals(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, scope_id: u64, item: HostValue) bool {
             self.validateScopeId(scope_id) catch @panic("scope id has no host scope descriptor");
             const scope = &self.scopes.items[@intCast(scope_id)];
+            self.recordEachItemCompare();
             return switch (scope.step) {
                 .each_row => |*row| row.item.valueEquals(ctx, roc_host, item),
                 .root, .component, .when_branch => @panic("scope id does not reference an each-row scope"),
@@ -3904,6 +3977,7 @@ pub fn Engine(comptime Ctx: type) type {
             const allocator = Ctx.allocator(ctx);
             const site_index = self.ensureEachRowSiteIndex(allocator, parent_scope_id, site_ordinal);
             const existing_len = self.each_row_sites.items[site_index].scope_ids.items.len;
+            self.recordEachSync(keys.len, existing_len);
 
             const key_cap = ops.key_capability;
             const item_cap = ops.item_capability;
@@ -5077,7 +5151,7 @@ pub fn Engine(comptime Ctx: type) type {
         fn removeActiveElementDescriptorsInTarget(self: *Self, ctx: Ctx.Handle, target: HostStructuralReplacementTarget) void {
             const allocator = Ctx.allocator(ctx);
             var write_index: usize = 0;
-            self.recordStreamNodesScanned(self.active_stream.elements.items.len);
+            self.recordStreamNodesScannedBy(.stream_nodes_scanned_remove_target, self.active_stream.elements.items.len);
             for (self.active_stream.elements.items, 0..) |desc, read_index| {
                 if (self.scopeIsInReplacementTarget(desc.scope_id, target)) {
                     self.active_stream.clearElementIndex(desc.elem_id, read_index);
@@ -5094,7 +5168,7 @@ pub fn Engine(comptime Ctx: type) type {
         fn removeActiveTextNodeDescriptorsInTarget(self: *Self, ctx: Ctx.Handle, target: HostStructuralReplacementTarget) void {
             const allocator = Ctx.allocator(ctx);
             var write_index: usize = 0;
-            self.recordStreamNodesScanned(self.active_stream.text_nodes.items.len);
+            self.recordStreamNodesScannedBy(.stream_nodes_scanned_remove_target, self.active_stream.text_nodes.items.len);
             for (self.active_stream.text_nodes.items, 0..) |desc, read_index| {
                 if (self.scopeIsInReplacementTarget(desc.scope_id, target)) {
                     self.active_stream.clearTextNodeIndex(desc.elem_id, read_index);
@@ -5110,7 +5184,7 @@ pub fn Engine(comptime Ctx: type) type {
 
         fn removeActiveSignalTextNodeDescriptorsInTarget(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, target: HostStructuralReplacementTarget) void {
             var write_index: usize = 0;
-            self.recordStreamNodesScanned(self.active_stream.signal_text_nodes.items.len);
+            self.recordStreamNodesScannedBy(.stream_nodes_scanned_remove_target, self.active_stream.signal_text_nodes.items.len);
             for (self.active_stream.signal_text_nodes.items, 0..) |desc, read_index| {
                 if (self.scopeIsInReplacementTarget(desc.scope_id, target)) {
                     var removed = desc;
@@ -5133,7 +5207,7 @@ pub fn Engine(comptime Ctx: type) type {
         fn removeActiveStaticTextAttrDescriptorsInTarget(self: *Self, ctx: Ctx.Handle, target: HostStructuralReplacementTarget) void {
             const allocator = Ctx.allocator(ctx);
             var write_index: usize = 0;
-            self.recordStreamNodesScanned(self.active_stream.static_text_attrs.items.len);
+            self.recordStreamNodesScannedBy(.stream_nodes_scanned_remove_target, self.active_stream.static_text_attrs.items.len);
             for (self.active_stream.static_text_attrs.items, 0..) |desc, read_index| {
                 if (self.elemIdInReplacementTarget(&self.active_stream, desc.elem_id, target)) {
                     self.active_stream.clearStaticTextAttrIndex(desc.elem_id, desc.field, read_index);
@@ -5149,7 +5223,7 @@ pub fn Engine(comptime Ctx: type) type {
 
         fn removeActiveSignalTextAttrDescriptorsInTarget(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, target: HostStructuralReplacementTarget) void {
             var write_index: usize = 0;
-            self.recordStreamNodesScanned(self.active_stream.signal_text_attrs.items.len);
+            self.recordStreamNodesScannedBy(.stream_nodes_scanned_remove_target, self.active_stream.signal_text_attrs.items.len);
             for (self.active_stream.signal_text_attrs.items, 0..) |desc, read_index| {
                 if (self.elemIdInReplacementTarget(&self.active_stream, desc.elem_id, target)) {
                     var removed = desc;
@@ -5171,7 +5245,7 @@ pub fn Engine(comptime Ctx: type) type {
 
         fn removeActiveStaticBoolAttrDescriptorsInTarget(self: *Self, target: HostStructuralReplacementTarget) void {
             var write_index: usize = 0;
-            self.recordStreamNodesScanned(self.active_stream.static_bool_attrs.items.len);
+            self.recordStreamNodesScannedBy(.stream_nodes_scanned_remove_target, self.active_stream.static_bool_attrs.items.len);
             for (self.active_stream.static_bool_attrs.items, 0..) |desc, read_index| {
                 if (self.elemIdInReplacementTarget(&self.active_stream, desc.elem_id, target)) {
                     self.active_stream.clearStaticBoolAttrIndex(desc.elem_id, desc.field, read_index);
@@ -5186,7 +5260,7 @@ pub fn Engine(comptime Ctx: type) type {
 
         fn removeActiveSignalBoolAttrDescriptorsInTarget(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, target: HostStructuralReplacementTarget) void {
             var write_index: usize = 0;
-            self.recordStreamNodesScanned(self.active_stream.signal_bool_attrs.items.len);
+            self.recordStreamNodesScannedBy(.stream_nodes_scanned_remove_target, self.active_stream.signal_bool_attrs.items.len);
             for (self.active_stream.signal_bool_attrs.items, 0..) |desc, read_index| {
                 if (self.elemIdInReplacementTarget(&self.active_stream, desc.elem_id, target)) {
                     var removed = desc;
@@ -5208,7 +5282,7 @@ pub fn Engine(comptime Ctx: type) type {
 
         fn removeActiveOnChangeDescriptorsInTarget(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, target: HostStructuralReplacementTarget) void {
             var write_index: usize = 0;
-            self.recordStreamNodesScanned(self.active_stream.on_changes.items.len);
+            self.recordStreamNodesScannedBy(.stream_nodes_scanned_remove_target, self.active_stream.on_changes.items.len);
             for (self.active_stream.on_changes.items, 0..) |desc, read_index| {
                 if (self.scopeIsInReplacementTarget(desc.scope_id, target)) {
                     var removed = desc;
@@ -5228,7 +5302,7 @@ pub fn Engine(comptime Ctx: type) type {
 
         fn removeActiveMountDescriptorsInTarget(self: *Self, roc_host: *abi.RocHost, target: HostStructuralReplacementTarget) void {
             var write_index: usize = 0;
-            self.recordStreamNodesScanned(self.active_stream.mounts.items.len);
+            self.recordStreamNodesScannedBy(.stream_nodes_scanned_remove_target, self.active_stream.mounts.items.len);
             for (self.active_stream.mounts.items) |desc| {
                 if (self.scopeIsInReplacementTarget(desc.scope_id, target)) {
                     var removed = desc;
@@ -5244,7 +5318,7 @@ pub fn Engine(comptime Ctx: type) type {
         fn removeActiveCleanupDescriptorsInTarget(self: *Self, ctx: Ctx.Handle, target: HostStructuralReplacementTarget) void {
             const allocator = Ctx.allocator(ctx);
             var write_index: usize = 0;
-            self.recordStreamNodesScanned(self.active_stream.cleanups.items.len);
+            self.recordStreamNodesScannedBy(.stream_nodes_scanned_remove_target, self.active_stream.cleanups.items.len);
             for (self.active_stream.cleanups.items) |desc| {
                 if (self.scopeIsInReplacementTarget(desc.scope_id, target)) {
                     allocator.free(desc.name);
@@ -5262,7 +5336,7 @@ pub fn Engine(comptime Ctx: type) type {
             }
 
             var write_index: usize = 0;
-            self.recordStreamNodesScanned(self.active_stream.events.items.len);
+            self.recordStreamNodesScannedBy(.stream_nodes_scanned_remove_target, self.active_stream.events.items.len);
             for (self.active_stream.events.items, 0..) |desc, event_index| {
                 if (self.elemIdInReplacementTarget(&self.active_stream, desc.elem_id, target)) {
                     if (desc.owns_payload_reducer) {
@@ -5289,7 +5363,7 @@ pub fn Engine(comptime Ctx: type) type {
         fn removeActiveScopeSiteDescriptorsInTarget(self: *Self, ctx: Ctx.Handle, target: HostStructuralReplacementTarget) void {
             const allocator = Ctx.allocator(ctx);
             var write_index: usize = 0;
-            self.recordStreamNodesScanned(self.active_stream.scope_sites.items.len);
+            self.recordStreamNodesScannedBy(.stream_nodes_scanned_remove_target, self.active_stream.scope_sites.items.len);
             for (self.active_stream.scope_sites.items, 0..) |desc, read_index| {
                 if (self.scopeIsInReplacementTarget(desc.scope_id, target)) {
                     self.active_stream.clearScopeSiteIndex(desc.node_id, desc.kind, read_index);
@@ -5305,7 +5379,7 @@ pub fn Engine(comptime Ctx: type) type {
 
         fn removeActiveStateDescriptorsInTarget(self: *Self, roc_host: *abi.RocHost, target: HostStructuralReplacementTarget) void {
             var write_index: usize = 0;
-            self.recordStreamNodesScanned(self.active_stream.states.items.len);
+            self.recordStreamNodesScannedBy(.stream_nodes_scanned_remove_target, self.active_stream.states.items.len);
             for (self.active_stream.states.items, 0..) |desc, read_index| {
                 if (self.streamNodeIdInReplacementTarget(&self.active_stream, desc.node_id, .state, target)) {
                     self.active_stream.clearStateIndex(desc.node_id, read_index);
@@ -5323,7 +5397,7 @@ pub fn Engine(comptime Ctx: type) type {
 
         fn removeActiveWhenDescriptorsInTarget(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, target: HostStructuralReplacementTarget) void {
             var write_index: usize = 0;
-            self.recordStreamNodesScanned(self.active_stream.whens.items.len);
+            self.recordStreamNodesScannedBy(.stream_nodes_scanned_remove_target, self.active_stream.whens.items.len);
             for (self.active_stream.whens.items, 0..) |desc, read_index| {
                 if (self.streamNodeIdInReplacementTarget(&self.active_stream, desc.node_id, .when, target)) {
                     var removed = desc;
@@ -5349,7 +5423,7 @@ pub fn Engine(comptime Ctx: type) type {
 
         fn removeActiveEachDescriptorsInTarget(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, target: HostStructuralReplacementTarget) void {
             var write_index: usize = 0;
-            self.recordStreamNodesScanned(self.active_stream.eaches.items.len);
+            self.recordStreamNodesScannedBy(.stream_nodes_scanned_remove_target, self.active_stream.eaches.items.len);
             for (self.active_stream.eaches.items, 0..) |desc, read_index| {
                 if (self.streamNodeIdInReplacementTarget(&self.active_stream, desc.node_id, .each, target)) {
                     var removed = desc;
@@ -5614,7 +5688,7 @@ pub fn Engine(comptime Ctx: type) type {
             var removed_render_count: usize = 0;
             var target_range_closed = false;
 
-            self.recordStreamNodesScanned(self.active_stream.render_nodes.items.len);
+            self.recordStreamNodesScannedBy(.stream_nodes_scanned_splice, self.active_stream.render_nodes.items.len);
             for (self.active_stream.render_nodes.items, 0..) |node, index| {
                 if (self.renderNodeInReplacementTarget(&self.active_stream, node, target)) {
                     if (target_range_closed) @panic("structural replacement render target is not contiguous");
@@ -5626,7 +5700,7 @@ pub fn Engine(comptime Ctx: type) type {
                 }
             }
 
-            self.recordStreamNodesScanned(self.active_stream.render_nodes.items.len);
+            self.recordStreamNodesScannedBy(.stream_nodes_scanned_splice, self.active_stream.render_nodes.items.len);
             for (self.active_stream.render_nodes.items) |node| {
                 if (!self.renderNodeInReplacementTarget(&self.active_stream, node, target)) continue;
                 const parent_elem_id = renderNodeParentElemId(&self.active_stream, node);
@@ -6120,7 +6194,7 @@ pub fn Engine(comptime Ctx: type) type {
         pub fn eachRowScopeKeyEquals(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, scope_id: u64, key: HostValue) bool {
             self.validateScopeId(scope_id) catch @panic("scope id has no host scope descriptor");
             const scope = &self.scopes.items[@intCast(scope_id)];
-            self.recordEachKeyCompare();
+            self.recordEachKeyReuseCompare();
             return switch (scope.step) {
                 .each_row => |*row| row.key.valueEquals(ctx, roc_host, key),
                 .root, .component, .when_branch => @panic("scope id does not reference an each-row scope"),
@@ -6146,14 +6220,14 @@ pub fn Engine(comptime Ctx: type) type {
         }
 
         pub fn hashEachKeyValue(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, key_text: abi.RocErasedCallable, key_cap: HostValueCapability, key: HostValue) u64 {
-            self.recordEachKeyCompare();
+            self.recordEachKeyHash();
             const text = callHostValueToStrWithCapability(ctx, roc_host, key_cap, key_text, key);
             defer text.decref(roc_host);
             return hashEachKeyText(text.asSlice());
         }
 
         pub fn eachKeysEqual(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, ops: HostEachOps, left: HostValue, right: HostValue) bool {
-            self.recordEachKeyCompare();
+            self.recordEachKeyDuplicateCompare();
             const key_cap = ops.key_capability;
             return callHostValueHostValueToBoolWithCapability(ctx, roc_host, key_cap, hv.hostValueCapabilityEq(key_cap), left, right);
         }
@@ -6188,7 +6262,7 @@ pub fn Engine(comptime Ctx: type) type {
             var ids: std.ArrayListUnmanaged(u64) = .empty;
             errdefer ids.deinit(allocator);
 
-            self.recordStreamNodesScanned(self.active_stream.render_nodes.items.len);
+            self.recordStreamNodesScannedBy(.stream_nodes_scanned_render_scope, self.active_stream.render_nodes.items.len);
             for (self.active_stream.render_nodes.items) |node| {
                 const scope_id = renderNodeScopeId(&self.active_stream, node);
                 const row_scope_id = (self.eachSiteRowAncestorScopeId(scope_id, site) catch @panic("scope descriptor referenced an unknown parent scope")) orelse continue;
@@ -6415,7 +6489,7 @@ pub fn Engine(comptime Ctx: type) type {
 
         pub fn runActiveMountCommandIndices(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, indices: []const usize) render.Counts {
             var counts: render.Counts = .{};
-            self.recordStreamNodesScanned(indices.len);
+            self.recordStreamNodesScannedBy(.stream_nodes_scanned_mounts, indices.len);
             for (indices) |mount_index| {
                 if (mount_index >= self.active_stream.mounts.items.len) @panic("mount descriptor index exceeded active descriptor stream");
                 counts.addAll(self.evalMountCommand(ctx, roc_host, &self.active_stream.mounts.items[mount_index]));
@@ -6425,7 +6499,7 @@ pub fn Engine(comptime Ctx: type) type {
 
         pub fn runActiveMountCommands(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost) render.Counts {
             var counts: render.Counts = .{};
-            self.recordStreamNodesScanned(self.active_stream.mounts.items.len);
+            self.recordStreamNodesScannedBy(.stream_nodes_scanned_mounts, self.active_stream.mounts.items.len);
             for (self.active_stream.mounts.items) |*desc| {
                 counts.addAll(self.evalMountCommand(ctx, roc_host, desc));
             }
@@ -6438,7 +6512,7 @@ pub fn Engine(comptime Ctx: type) type {
             defer allocator.free(required);
             @memset(required, .{});
 
-            self.recordStreamNodesScanned(stream.events.items.len);
+            self.recordStreamNodesScannedBy(.stream_nodes_scanned_events, stream.events.items.len);
             for (stream.events.items, 0..) |desc, index| {
                 if (desc.elem_id >= seen.len or !seen[@intCast(desc.elem_id)]) {
                     @panic("event descriptor referenced an element outside the structural render stream");
@@ -6465,7 +6539,7 @@ pub fn Engine(comptime Ctx: type) type {
             defer allocator.free(required);
             @memset(required, .{});
 
-            self.recordStreamNodesScanned(stream.events.items.len);
+            self.recordStreamNodesScannedBy(.stream_nodes_scanned_events, stream.events.items.len);
             for (stream.events.items, 0..) |desc, index| {
                 if (desc.elem_id >= seen.len or !seen[@intCast(desc.elem_id)]) continue;
                 const event_id: u64 = @intCast(index + 1);
@@ -6501,7 +6575,7 @@ pub fn Engine(comptime Ctx: type) type {
         }
 
         pub fn applyActiveStreamEventBindings(self: *Self, ctx: Ctx.Handle, counts: *render.Counts) void {
-            self.recordStreamNodesScanned(self.active_stream.render_nodes.items.len);
+            self.recordStreamNodesScannedBy(.stream_nodes_scanned_events, self.active_stream.render_nodes.items.len);
             for (self.active_stream.render_nodes.items) |node| {
                 if (node.kind != .element) continue;
                 self.applyStructuralEventBindingsForElem(ctx, node.elem_id, counts);
@@ -6607,7 +6681,7 @@ pub fn Engine(comptime Ctx: type) type {
 
             var counts: render.Counts = .{};
 
-            self.recordStreamNodesScanned(stream.render_nodes.items.len);
+            self.recordStreamNodesScannedBy(.stream_nodes_scanned_apply, stream.render_nodes.items.len);
             for (stream.render_nodes.items) |node| {
                 if (!self.renderNodeInReplacementTarget(stream, node, targets.replacement)) continue;
                 if (node.elem_id >= child_table_len) @panic("render node exceeded structural DOM patch table");
@@ -6620,7 +6694,7 @@ pub fn Engine(comptime Ctx: type) type {
                 appendUniqueU64(allocator, &touched_parents, parent_elem_id);
             }
 
-            self.recordStreamNodesScanned(self.active_stream.render_nodes.items.len);
+            self.recordStreamNodesScannedBy(.stream_nodes_scanned_apply, self.active_stream.render_nodes.items.len);
             for (self.active_stream.render_nodes.items) |node| {
                 if (!self.renderNodeInReplacementTarget(&self.active_stream, node, targets.removed)) continue;
                 if (node.elem_id < seen.len and seen[@intCast(node.elem_id)]) continue;
@@ -6628,7 +6702,7 @@ pub fn Engine(comptime Ctx: type) type {
             }
 
             for (touched_parents.items) |parent_elem_id| {
-                self.recordStreamNodesScanned(stream.render_nodes.items.len);
+                self.recordStreamNodesScannedBy(.stream_nodes_scanned_children, stream.render_nodes.items.len);
                 const children = streamDirectChildren(allocator, stream, parent_elem_id);
                 defer allocator.free(children);
                 self.replaceRenderChildren(ctx, parent_elem_id, children, &counts);
@@ -6652,43 +6726,43 @@ pub fn Engine(comptime Ctx: type) type {
                 }
             }
 
-            self.recordStreamNodesScanned(stream.text_nodes.items.len);
+            self.recordStreamNodesScannedBy(.stream_nodes_scanned_apply, stream.text_nodes.items.len);
             for (stream.text_nodes.items) |desc| {
                 if (desc.elem_id < seen.len and seen[@intCast(desc.elem_id)] and self.applyRenderTextField(ctx, desc.elem_id, .text, desc.value)) {
                     counts.addTextField(.text);
                 }
             }
-            self.recordStreamNodesScanned(stream.signal_text_nodes.items.len);
+            self.recordStreamNodesScannedBy(.stream_nodes_scanned_apply, stream.signal_text_nodes.items.len);
             for (stream.signal_text_nodes.items) |*desc| {
                 if (desc.elem_id < seen.len and seen[@intCast(desc.elem_id)] and self.evalSignalTextField(ctx, roc_host, desc.elem_id, .text, &desc.signal, desc.read, &desc.cached_value)) {
                     counts.addTextField(.text);
                 }
             }
-            self.recordStreamNodesScanned(stream.static_text_attrs.items.len);
+            self.recordStreamNodesScannedBy(.stream_nodes_scanned_apply, stream.static_text_attrs.items.len);
             for (stream.static_text_attrs.items) |desc| {
                 if (desc.elem_id < seen.len and seen[@intCast(desc.elem_id)] and self.applyRenderTextField(ctx, desc.elem_id, desc.field, desc.value)) {
                     counts.addTextField(desc.field);
                 }
             }
-            self.recordStreamNodesScanned(stream.signal_text_attrs.items.len);
+            self.recordStreamNodesScannedBy(.stream_nodes_scanned_apply, stream.signal_text_attrs.items.len);
             for (stream.signal_text_attrs.items) |*desc| {
                 if (desc.elem_id < seen.len and seen[@intCast(desc.elem_id)] and self.evalSignalTextField(ctx, roc_host, desc.elem_id, desc.field, &desc.signal, desc.read, &desc.cached_value)) {
                     counts.addTextField(desc.field);
                 }
             }
-            self.recordStreamNodesScanned(stream.static_bool_attrs.items.len);
+            self.recordStreamNodesScannedBy(.stream_nodes_scanned_apply, stream.static_bool_attrs.items.len);
             for (stream.static_bool_attrs.items) |desc| {
                 if (desc.elem_id < seen.len and seen[@intCast(desc.elem_id)] and self.applyRenderBoolField(ctx, desc.elem_id, desc.field, desc.value)) {
                     counts.addBoolField(desc.field);
                 }
             }
-            self.recordStreamNodesScanned(stream.signal_bool_attrs.items.len);
+            self.recordStreamNodesScannedBy(.stream_nodes_scanned_apply, stream.signal_bool_attrs.items.len);
             for (stream.signal_bool_attrs.items) |*desc| {
                 if (desc.elem_id < seen.len and seen[@intCast(desc.elem_id)] and self.evalSignalBoolField(ctx, roc_host, desc.elem_id, desc.field, &desc.signal, desc.read, &desc.cached_value)) {
                     counts.addBoolField(desc.field);
                 }
             }
-            self.recordStreamNodesScanned(stream.on_changes.items.len);
+            self.recordStreamNodesScannedBy(.stream_nodes_scanned_apply, stream.on_changes.items.len);
             for (stream.on_changes.items) |*desc| {
                 if (self.scopeIsInReplacementTarget(desc.scope_id, targets.replacement)) {
                     self.evalOnChangeInitial(ctx, roc_host, desc);
@@ -6799,7 +6873,7 @@ pub fn Engine(comptime Ctx: type) type {
 
             var counts: render.Counts = .{};
 
-            self.recordStreamNodesScanned(splice.replacement_elem_ids.len);
+            self.recordStreamNodesScannedBy(.stream_nodes_scanned_splice, splice.replacement_elem_ids.len);
             for (splice.replacement_elem_ids) |elem_id| {
                 if (elem_id >= child_table_len) @panic("render node exceeded structural DOM patch table");
 
@@ -6817,7 +6891,7 @@ pub fn Engine(comptime Ctx: type) type {
             }
 
             for (touched_parents.items) |parent_elem_id| {
-                self.recordStreamNodesScanned(self.active_stream.render_nodes.items.len);
+                self.recordStreamNodesScannedBy(.stream_nodes_scanned_children, self.active_stream.render_nodes.items.len);
                 const children = streamDirectChildren(allocator, &self.active_stream, parent_elem_id);
                 defer allocator.free(children);
                 self.replaceRenderChildren(ctx, parent_elem_id, children, &counts);
@@ -6828,7 +6902,7 @@ pub fn Engine(comptime Ctx: type) type {
             }
             self.applyActiveStreamEventBindings(ctx, &counts);
 
-            self.recordStreamNodesScanned(splice.replacement_on_change_indices.len);
+            self.recordStreamNodesScannedBy(.stream_nodes_scanned_splice, splice.replacement_on_change_indices.len);
             for (splice.replacement_on_change_indices) |on_change_index| {
                 if (on_change_index >= self.active_stream.on_changes.items.len) @panic("structural splice on_change index exceeded active descriptor stream");
                 const desc = &self.active_stream.on_changes.items[on_change_index];

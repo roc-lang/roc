@@ -1628,6 +1628,13 @@ fn zeroRuntimeMetrics() RuntimeMetrics {
         .deallocs_this_event = 0,
         .derived_calls_into_roc = 0,
         .each_key_compares = 0,
+        .each_key_hashes = 0,
+        .each_key_reuse_compares = 0,
+        .each_key_duplicate_compares = 0,
+        .each_item_compares = 0,
+        .each_syncs = 0,
+        .each_sync_keys = 0,
+        .each_sync_existing_rows = 0,
         .events_processed = 0,
         .host_alloc_bytes_this_event = 0,
         .host_allocs_this_event = 0,
@@ -1654,6 +1661,14 @@ fn zeroRuntimeMetrics() RuntimeMetrics {
         .set_text = 0,
         .set_value = 0,
         .stream_nodes_scanned = 0,
+        .stream_nodes_scanned_apply = 0,
+        .stream_nodes_scanned_children = 0,
+        .stream_nodes_scanned_dirty_scope = 0,
+        .stream_nodes_scanned_events = 0,
+        .stream_nodes_scanned_mounts = 0,
+        .stream_nodes_scanned_remove_target = 0,
+        .stream_nodes_scanned_render_scope = 0,
+        .stream_nodes_scanned_splice = 0,
     };
 }
 
@@ -1939,6 +1954,13 @@ fn addRuntimeMetrics(left: RuntimeMetrics, right: RuntimeMetrics) RuntimeMetrics
         .deallocs_this_event = left.deallocs_this_event + right.deallocs_this_event,
         .derived_calls_into_roc = left.derived_calls_into_roc + right.derived_calls_into_roc,
         .each_key_compares = left.each_key_compares + right.each_key_compares,
+        .each_key_hashes = left.each_key_hashes + right.each_key_hashes,
+        .each_key_reuse_compares = left.each_key_reuse_compares + right.each_key_reuse_compares,
+        .each_key_duplicate_compares = left.each_key_duplicate_compares + right.each_key_duplicate_compares,
+        .each_item_compares = left.each_item_compares + right.each_item_compares,
+        .each_syncs = left.each_syncs + right.each_syncs,
+        .each_sync_keys = left.each_sync_keys + right.each_sync_keys,
+        .each_sync_existing_rows = left.each_sync_existing_rows + right.each_sync_existing_rows,
         .events_processed = left.events_processed + right.events_processed,
         .host_alloc_bytes_this_event = left.host_alloc_bytes_this_event + right.host_alloc_bytes_this_event,
         .host_allocs_this_event = left.host_allocs_this_event + right.host_allocs_this_event,
@@ -1965,6 +1987,14 @@ fn addRuntimeMetrics(left: RuntimeMetrics, right: RuntimeMetrics) RuntimeMetrics
         .set_text = left.set_text + right.set_text,
         .set_value = left.set_value + right.set_value,
         .stream_nodes_scanned = left.stream_nodes_scanned + right.stream_nodes_scanned,
+        .stream_nodes_scanned_apply = left.stream_nodes_scanned_apply + right.stream_nodes_scanned_apply,
+        .stream_nodes_scanned_children = left.stream_nodes_scanned_children + right.stream_nodes_scanned_children,
+        .stream_nodes_scanned_dirty_scope = left.stream_nodes_scanned_dirty_scope + right.stream_nodes_scanned_dirty_scope,
+        .stream_nodes_scanned_events = left.stream_nodes_scanned_events + right.stream_nodes_scanned_events,
+        .stream_nodes_scanned_mounts = left.stream_nodes_scanned_mounts + right.stream_nodes_scanned_mounts,
+        .stream_nodes_scanned_remove_target = left.stream_nodes_scanned_remove_target + right.stream_nodes_scanned_remove_target,
+        .stream_nodes_scanned_render_scope = left.stream_nodes_scanned_render_scope + right.stream_nodes_scanned_render_scope,
+        .stream_nodes_scanned_splice = left.stream_nodes_scanned_splice + right.stream_nodes_scanned_splice,
     };
 }
 
@@ -1996,6 +2026,13 @@ fn runtimeMetricValue(metrics: RuntimeMetrics, name: []const u8) ?i64 {
     if (std.mem.eql(u8, name, "propagation_prunes")) return u64MetricAsI64(metrics.propagation_prunes);
     if (std.mem.eql(u8, name, "derived_calls_into_roc")) return u64MetricAsI64(metrics.derived_calls_into_roc);
     if (std.mem.eql(u8, name, "each_key_compares")) return u64MetricAsI64(metrics.each_key_compares);
+    if (std.mem.eql(u8, name, "each_key_hashes")) return u64MetricAsI64(metrics.each_key_hashes);
+    if (std.mem.eql(u8, name, "each_key_reuse_compares")) return u64MetricAsI64(metrics.each_key_reuse_compares);
+    if (std.mem.eql(u8, name, "each_key_duplicate_compares")) return u64MetricAsI64(metrics.each_key_duplicate_compares);
+    if (std.mem.eql(u8, name, "each_item_compares")) return u64MetricAsI64(metrics.each_item_compares);
+    if (std.mem.eql(u8, name, "each_syncs")) return u64MetricAsI64(metrics.each_syncs);
+    if (std.mem.eql(u8, name, "each_sync_keys")) return u64MetricAsI64(metrics.each_sync_keys);
+    if (std.mem.eql(u8, name, "each_sync_existing_rows")) return u64MetricAsI64(metrics.each_sync_existing_rows);
     if (std.mem.eql(u8, name, "recompute_batches")) return u64MetricAsI64(metrics.recompute_batches);
     if (std.mem.eql(u8, name, "patches_emitted")) return u64MetricAsI64(metrics.patches_emitted);
     if (std.mem.eql(u8, name, "scopes_created")) return u64MetricAsI64(metrics.scopes_created);
@@ -2006,6 +2043,14 @@ fn runtimeMetricValue(metrics: RuntimeMetrics, name: []const u8) ?i64 {
     if (std.mem.eql(u8, name, "closure_retains")) return u64MetricAsI64(metrics.closure_retains);
     if (std.mem.eql(u8, name, "closure_releases")) return u64MetricAsI64(metrics.closure_releases);
     if (std.mem.eql(u8, name, "stream_nodes_scanned")) return u64MetricAsI64(metrics.stream_nodes_scanned);
+    if (std.mem.eql(u8, name, "stream_nodes_scanned_apply")) return u64MetricAsI64(metrics.stream_nodes_scanned_apply);
+    if (std.mem.eql(u8, name, "stream_nodes_scanned_children")) return u64MetricAsI64(metrics.stream_nodes_scanned_children);
+    if (std.mem.eql(u8, name, "stream_nodes_scanned_dirty_scope")) return u64MetricAsI64(metrics.stream_nodes_scanned_dirty_scope);
+    if (std.mem.eql(u8, name, "stream_nodes_scanned_events")) return u64MetricAsI64(metrics.stream_nodes_scanned_events);
+    if (std.mem.eql(u8, name, "stream_nodes_scanned_mounts")) return u64MetricAsI64(metrics.stream_nodes_scanned_mounts);
+    if (std.mem.eql(u8, name, "stream_nodes_scanned_remove_target")) return u64MetricAsI64(metrics.stream_nodes_scanned_remove_target);
+    if (std.mem.eql(u8, name, "stream_nodes_scanned_render_scope")) return u64MetricAsI64(metrics.stream_nodes_scanned_render_scope);
+    if (std.mem.eql(u8, name, "stream_nodes_scanned_splice")) return u64MetricAsI64(metrics.stream_nodes_scanned_splice);
     if (std.mem.eql(u8, name, "retained_alloc_delta")) return metrics.retained_alloc_delta;
     if (std.mem.eql(u8, name, "host_retained_alloc_delta")) return metrics.host_retained_alloc_delta;
     if (std.mem.eql(u8, name, "host_retained_bytes_delta")) return metrics.host_retained_bytes_delta;
@@ -2653,7 +2698,7 @@ fn runBenchmarkIteration(commands: []const SpecCommand, verbose: bool, stats: *B
 }
 
 fn printBenchmarkHeader() void {
-    writeStdout("case,sample,iterations,actions,init_roc_ns,init_apply_ns,dispatch_roc_ns,dispatch_apply_ns,total_ns,allocs,deallocs,retained_alloc_delta,commands,reset_dom,create_element,append_child,remove_node,move_before,set_text,set_value,set_checked,set_disabled,set_metadata,bind_event,active_graph_records_rebuilt,stream_nodes_scanned,each_key_compares,allocs_this_event,deallocs_this_event,host_allocs_this_event,host_deallocs_this_event,host_alloc_bytes_this_event,host_dealloc_bytes_this_event,events_processed,nodes_recomputed,propagation_prunes,derived_calls_into_roc,recompute_batches,patches_emitted,scopes_created,scopes_disposed,rows_reused,rows_created,rows_removed,closure_retains,closure_releases,metrics_retained_alloc_delta,host_retained_alloc_delta,host_retained_bytes_delta\n");
+    writeStdout("case,sample,iterations,actions,init_roc_ns,init_apply_ns,dispatch_roc_ns,dispatch_apply_ns,total_ns,allocs,deallocs,retained_alloc_delta,commands,reset_dom,create_element,append_child,remove_node,move_before,set_text,set_value,set_checked,set_disabled,set_metadata,bind_event,active_graph_records_rebuilt,stream_nodes_scanned,stream_nodes_scanned_apply,stream_nodes_scanned_children,stream_nodes_scanned_dirty_scope,stream_nodes_scanned_events,stream_nodes_scanned_mounts,stream_nodes_scanned_remove_target,stream_nodes_scanned_render_scope,stream_nodes_scanned_splice,each_key_compares,each_key_hashes,each_key_reuse_compares,each_key_duplicate_compares,each_item_compares,each_syncs,each_sync_keys,each_sync_existing_rows,allocs_this_event,deallocs_this_event,host_allocs_this_event,host_deallocs_this_event,host_alloc_bytes_this_event,host_dealloc_bytes_this_event,events_processed,nodes_recomputed,propagation_prunes,derived_calls_into_roc,recompute_batches,patches_emitted,scopes_created,scopes_disposed,rows_reused,rows_created,rows_removed,closure_retains,closure_releases,metrics_retained_alloc_delta,host_retained_alloc_delta,host_retained_bytes_delta\n");
 }
 
 fn printBenchmarkRow(case_name: []const u8, sample: usize, iterations: usize, stats: BenchmarkStats) void {
@@ -2693,11 +2738,31 @@ fn printBenchmarkRow(case_name: []const u8, sample: usize, iterations: usize, st
         },
     );
     printStdout(
-        "{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d}\n",
+        "{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},",
         .{
             stats.metrics.active_graph_records_rebuilt,
             stats.metrics.stream_nodes_scanned,
+            stats.metrics.stream_nodes_scanned_apply,
+            stats.metrics.stream_nodes_scanned_children,
+            stats.metrics.stream_nodes_scanned_dirty_scope,
+            stats.metrics.stream_nodes_scanned_events,
+            stats.metrics.stream_nodes_scanned_mounts,
+            stats.metrics.stream_nodes_scanned_remove_target,
+            stats.metrics.stream_nodes_scanned_render_scope,
+            stats.metrics.stream_nodes_scanned_splice,
             stats.metrics.each_key_compares,
+            stats.metrics.each_key_hashes,
+            stats.metrics.each_key_reuse_compares,
+            stats.metrics.each_key_duplicate_compares,
+            stats.metrics.each_item_compares,
+            stats.metrics.each_syncs,
+            stats.metrics.each_sync_keys,
+            stats.metrics.each_sync_existing_rows,
+        },
+    );
+    printStdout(
+        "{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d}\n",
+        .{
             stats.metrics.allocs_this_event,
             stats.metrics.deallocs_this_event,
             stats.metrics.host_allocs_this_event,
@@ -3317,6 +3382,13 @@ test "signals metrics accumulate propagation pruning counters" {
     left.propagation_prunes = 3;
     left.derived_calls_into_roc = 4;
     left.each_key_compares = 6;
+    left.each_key_hashes = 2;
+    left.each_key_reuse_compares = 3;
+    left.each_key_duplicate_compares = 1;
+    left.each_item_compares = 4;
+    left.each_syncs = 5;
+    left.each_sync_keys = 6;
+    left.each_sync_existing_rows = 7;
     left.recompute_batches = 2;
     left.patches_emitted = 7;
     left.create_element = 2;
@@ -3326,6 +3398,14 @@ test "signals metrics accumulate propagation pruning counters" {
     left.set_text = 1;
     left.bind_event = 1;
     left.stream_nodes_scanned = 12;
+    left.stream_nodes_scanned_apply = 1;
+    left.stream_nodes_scanned_children = 2;
+    left.stream_nodes_scanned_dirty_scope = 3;
+    left.stream_nodes_scanned_events = 4;
+    left.stream_nodes_scanned_mounts = 5;
+    left.stream_nodes_scanned_remove_target = 6;
+    left.stream_nodes_scanned_render_scope = 7;
+    left.stream_nodes_scanned_splice = 8;
 
     var right = zeroRuntimeMetrics();
     right.active_graph_records_rebuilt = 2;
@@ -3342,6 +3422,13 @@ test "signals metrics accumulate propagation pruning counters" {
     right.propagation_prunes = 11;
     right.derived_calls_into_roc = 6;
     right.each_key_compares = 7;
+    right.each_key_hashes = 5;
+    right.each_key_reuse_compares = 7;
+    right.each_key_duplicate_compares = 11;
+    right.each_item_compares = 13;
+    right.each_syncs = 17;
+    right.each_sync_keys = 19;
+    right.each_sync_existing_rows = 23;
     right.recompute_batches = 1;
     right.patches_emitted = 13;
     right.create_element = 5;
@@ -3351,6 +3438,14 @@ test "signals metrics accumulate propagation pruning counters" {
     right.set_text = 2;
     right.bind_event = 4;
     right.stream_nodes_scanned = 5;
+    right.stream_nodes_scanned_apply = 11;
+    right.stream_nodes_scanned_children = 13;
+    right.stream_nodes_scanned_dirty_scope = 17;
+    right.stream_nodes_scanned_events = 19;
+    right.stream_nodes_scanned_mounts = 23;
+    right.stream_nodes_scanned_remove_target = 29;
+    right.stream_nodes_scanned_render_scope = 31;
+    right.stream_nodes_scanned_splice = 37;
     right.retained_alloc_delta = -2;
 
     const total = addRuntimeMetrics(left, right);
@@ -3368,6 +3463,13 @@ test "signals metrics accumulate propagation pruning counters" {
     try std.testing.expectEqual(@as(u64, 14), total.propagation_prunes);
     try std.testing.expectEqual(@as(u64, 10), total.derived_calls_into_roc);
     try std.testing.expectEqual(@as(u64, 13), total.each_key_compares);
+    try std.testing.expectEqual(@as(u64, 7), total.each_key_hashes);
+    try std.testing.expectEqual(@as(u64, 10), total.each_key_reuse_compares);
+    try std.testing.expectEqual(@as(u64, 12), total.each_key_duplicate_compares);
+    try std.testing.expectEqual(@as(u64, 17), total.each_item_compares);
+    try std.testing.expectEqual(@as(u64, 22), total.each_syncs);
+    try std.testing.expectEqual(@as(u64, 25), total.each_sync_keys);
+    try std.testing.expectEqual(@as(u64, 30), total.each_sync_existing_rows);
     try std.testing.expectEqual(@as(u64, 3), total.recompute_batches);
     try std.testing.expectEqual(@as(u64, 20), total.patches_emitted);
     try std.testing.expectEqual(@as(u64, 7), total.create_element);
@@ -3377,6 +3479,14 @@ test "signals metrics accumulate propagation pruning counters" {
     try std.testing.expectEqual(@as(u64, 3), total.set_text);
     try std.testing.expectEqual(@as(u64, 5), total.bind_event);
     try std.testing.expectEqual(@as(u64, 17), total.stream_nodes_scanned);
+    try std.testing.expectEqual(@as(u64, 12), total.stream_nodes_scanned_apply);
+    try std.testing.expectEqual(@as(u64, 15), total.stream_nodes_scanned_children);
+    try std.testing.expectEqual(@as(u64, 20), total.stream_nodes_scanned_dirty_scope);
+    try std.testing.expectEqual(@as(u64, 23), total.stream_nodes_scanned_events);
+    try std.testing.expectEqual(@as(u64, 28), total.stream_nodes_scanned_mounts);
+    try std.testing.expectEqual(@as(u64, 35), total.stream_nodes_scanned_remove_target);
+    try std.testing.expectEqual(@as(u64, 38), total.stream_nodes_scanned_render_scope);
+    try std.testing.expectEqual(@as(u64, 45), total.stream_nodes_scanned_splice);
     try std.testing.expectEqual(@as(i64, -2), total.retained_alloc_delta);
 }
 
@@ -5955,7 +6065,7 @@ test "signals host keyed row diff hash probes scale linearly" {
     defer freeKeyedRowDiff(&host, initial);
     try std.testing.expectEqual(@as(u64, row_count), initial.rows_created);
 
-    const compare_start = host.engine.pending_roc_metrics.each_key_compares;
+    const metrics_start = host.engine.pending_roc_metrics;
 
     var reordered_keys: [row_count]HostValue = undefined;
     for (&reordered_keys, 0..) |*key, index| {
@@ -5967,8 +6077,17 @@ test "signals host keyed row diff hash probes scale linearly" {
     try std.testing.expectEqual(@as(u64, 0), reordered.rows_created);
     try std.testing.expectEqual(@as(u64, 0), reordered.rows_removed);
 
-    const compare_delta = host.engine.pending_roc_metrics.each_key_compares - compare_start;
+    const metrics_end = host.engine.pending_roc_metrics;
+    const compare_delta = metrics_end.each_key_compares - metrics_start.each_key_compares;
+    const hash_delta = metrics_end.each_key_hashes - metrics_start.each_key_hashes;
+    const reuse_delta = metrics_end.each_key_reuse_compares - metrics_start.each_key_reuse_compares;
+    const duplicate_delta = metrics_end.each_key_duplicate_compares - metrics_start.each_key_duplicate_compares;
+    const item_delta = metrics_end.each_item_compares - metrics_start.each_item_compares;
     try std.testing.expectEqual(@as(u64, row_count * 2), compare_delta);
+    try std.testing.expectEqual(@as(u64, row_count), hash_delta);
+    try std.testing.expectEqual(@as(u64, row_count), reuse_delta);
+    try std.testing.expectEqual(@as(u64, 0), duplicate_delta);
+    try std.testing.expectEqual(@as(u64, row_count), item_delta);
 }
 
 test "signals host row scopes retain key and item capabilities" {
