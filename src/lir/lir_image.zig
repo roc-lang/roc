@@ -24,7 +24,8 @@ pub const MAGIC: u32 = 0x52494c52; // "RLIR" in little-endian bytes.
 /// v6: string-pattern captures are explicit borrowed Str views.
 /// v7: string-pattern match sets add grouped arm storage.
 /// v8: LIR statements carry explicit checked source regions for diagnostics.
-pub const FORMAT_VERSION: u32 = 8;
+/// v9: LIR proc specs carry explicit native stack-probe requirements.
+pub const FORMAT_VERSION: u32 = 9;
 
 /// Public `ImageError` declaration.
 pub const ImageError = error{
