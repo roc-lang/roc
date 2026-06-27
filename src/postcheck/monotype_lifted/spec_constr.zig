@@ -349,6 +349,57 @@ const DemandedKnownIndexedValue = struct {
     known_value: DemandedKnownValue,
 };
 
+const PrivateStateValue = union(enum) {
+    leaf: PrivateStateLeaf,
+    tag: PrivateStateTag,
+    record: PrivateStateRecord,
+    tuple: PrivateStateTuple,
+    nominal: PrivateStateNominal,
+    callable: PrivateStateCallable,
+};
+
+const PrivateStateLeaf = struct {
+    ty: Type.TypeId,
+    expr: Ast.ExprId,
+};
+
+const PrivateStateTag = struct {
+    ty: Type.TypeId,
+    name: names.TagNameId,
+    payloads: []const PrivateStateIndexedValue,
+};
+
+const PrivateStateField = struct {
+    name: names.RecordFieldNameId,
+    value: PrivateStateValue,
+};
+
+const PrivateStateRecord = struct {
+    ty: Type.TypeId,
+    fields: []const PrivateStateField,
+};
+
+const PrivateStateTuple = struct {
+    ty: Type.TypeId,
+    items: []const PrivateStateIndexedValue,
+};
+
+const PrivateStateNominal = struct {
+    ty: Type.TypeId,
+    backing: ?*const PrivateStateValue,
+};
+
+const PrivateStateCallable = struct {
+    ty: Type.TypeId,
+    fn_id: Ast.FnId,
+    captures: []const PrivateStateIndexedValue,
+};
+
+const PrivateStateIndexedValue = struct {
+    index: u32,
+    value: PrivateStateValue,
+};
+
 const KnownMatchMode = enum {
     strict,
     speculative,
@@ -7884,6 +7935,226 @@ fn demandedKnownIndexedValueByIndex(items: []const DemandedKnownIndexedValue, in
     return null;
 }
 
+fn demandedKnownValueProducts(
+    scratch: Allocator,
+    arena: Allocator,
+    known_values: []const DemandedKnownValue,
+) Allocator.Error![]const []const DemandedKnownValue {
+    const options = try scratch.alloc([]const DemandedKnownValue, known_values.len);
+    defer scratch.free(options);
+    for (known_values, 0..) |known_value, index| {
+        options[index] = try expandDemandedKnownValue(scratch, arena, known_value);
+    }
+
+    var products = std.ArrayList([]const DemandedKnownValue).empty;
+    defer products.deinit(scratch);
+    const current = try scratch.alloc(DemandedKnownValue, known_values.len);
+    defer scratch.free(current);
+
+    try appendDemandedKnownValueProducts(scratch, arena, options, 0, current, &products);
+    return try arena.dupe([]const DemandedKnownValue, products.items);
+}
+
+fn appendDemandedKnownValueProducts(
+    scratch: Allocator,
+    arena: Allocator,
+    options: []const []const DemandedKnownValue,
+    index: usize,
+    current: []DemandedKnownValue,
+    products: *std.ArrayList([]const DemandedKnownValue),
+) Allocator.Error!void {
+    if (index == options.len) {
+        try products.append(scratch, try arena.dupe(DemandedKnownValue, current));
+        return;
+    }
+
+    for (options[index]) |option| {
+        current[index] = option;
+        try appendDemandedKnownValueProducts(scratch, arena, options, index + 1, current, products);
+    }
+}
+
+fn expandDemandedKnownValue(
+    scratch: Allocator,
+    arena: Allocator,
+    known_value: DemandedKnownValue,
+) Allocator.Error![]const DemandedKnownValue {
+    return switch (known_value) {
+        .any,
+        .leaf,
+        => try singleDemandedKnownValue(arena, known_value),
+        .tag => |tag| try expandDemandedKnownTag(scratch, arena, tag),
+        .record => |record| try expandDemandedKnownRecord(scratch, arena, record),
+        .tuple => |tuple| try expandDemandedKnownTuple(scratch, arena, tuple),
+        .nominal => |nominal| try expandDemandedKnownNominal(scratch, arena, nominal),
+        .callable => |callable| try expandDemandedKnownCallable(scratch, arena, callable),
+        .finite_tags => |finite_tags| try expandDemandedKnownTags(scratch, arena, finite_tags),
+        .finite_callables => |finite_callables| try expandDemandedKnownCallables(scratch, arena, finite_callables),
+    };
+}
+
+fn singleDemandedKnownValue(arena: Allocator, known_value: DemandedKnownValue) Allocator.Error![]const DemandedKnownValue {
+    const values = try arena.alloc(DemandedKnownValue, 1);
+    values[0] = known_value;
+    return values;
+}
+
+fn expandDemandedKnownRecord(
+    scratch: Allocator,
+    arena: Allocator,
+    record: DemandedKnownRecord,
+) Allocator.Error![]const DemandedKnownValue {
+    const child_values = try scratch.alloc(DemandedKnownValue, record.fields.len);
+    defer scratch.free(child_values);
+    for (record.fields, 0..) |field, index| {
+        child_values[index] = field.known_value;
+    }
+
+    const products = try demandedKnownValueProducts(scratch, arena, child_values);
+    const alternatives = try arena.alloc(DemandedKnownValue, products.len);
+    for (products, alternatives) |product, *out| {
+        const fields = try arena.alloc(DemandedKnownField, record.fields.len);
+        for (record.fields, product, fields) |field, field_known_value, *field_out| {
+            field_out.* = .{
+                .name = field.name,
+                .known_value = field_known_value,
+            };
+        }
+        out.* = .{ .record = .{
+            .ty = record.ty,
+            .fields = fields,
+        } };
+    }
+    return alternatives;
+}
+
+fn expandDemandedKnownTuple(
+    scratch: Allocator,
+    arena: Allocator,
+    tuple: DemandedKnownTuple,
+) Allocator.Error![]const DemandedKnownValue {
+    const alternatives = try expandDemandedKnownIndexedValues(scratch, arena, tuple.items);
+    const values = try arena.alloc(DemandedKnownValue, alternatives.len);
+    for (alternatives, values) |items, *out| {
+        out.* = .{ .tuple = .{
+            .ty = tuple.ty,
+            .items = items,
+        } };
+    }
+    return values;
+}
+
+fn expandDemandedKnownNominal(
+    scratch: Allocator,
+    arena: Allocator,
+    nominal: DemandedKnownNominal,
+) Allocator.Error![]const DemandedKnownValue {
+    const backing = nominal.backing orelse return try singleDemandedKnownValue(arena, .{ .nominal = nominal });
+    const backing_alternatives = try expandDemandedKnownValue(scratch, arena, backing.*);
+    const alternatives = try arena.alloc(DemandedKnownValue, backing_alternatives.len);
+    for (backing_alternatives, alternatives) |backing_alternative, *out| {
+        const stored = try arena.create(DemandedKnownValue);
+        stored.* = backing_alternative;
+        out.* = .{ .nominal = .{
+            .ty = nominal.ty,
+            .backing = stored,
+        } };
+    }
+    return alternatives;
+}
+
+fn expandDemandedKnownTag(
+    scratch: Allocator,
+    arena: Allocator,
+    tag: DemandedKnownTag,
+) Allocator.Error![]const DemandedKnownValue {
+    const alternatives = try expandDemandedKnownIndexedValues(scratch, arena, tag.payloads);
+    const values = try arena.alloc(DemandedKnownValue, alternatives.len);
+    for (alternatives, values) |payloads, *out| {
+        out.* = .{ .tag = .{
+            .ty = tag.ty,
+            .name = tag.name,
+            .payloads = payloads,
+        } };
+    }
+    return values;
+}
+
+fn expandDemandedKnownCallable(
+    scratch: Allocator,
+    arena: Allocator,
+    callable: DemandedKnownCallable,
+) Allocator.Error![]const DemandedKnownValue {
+    const alternatives = try expandDemandedKnownIndexedValues(scratch, arena, callable.captures);
+    const values = try arena.alloc(DemandedKnownValue, alternatives.len);
+    for (alternatives, values) |captures, *out| {
+        out.* = .{ .callable = .{
+            .ty = callable.ty,
+            .fn_id = callable.fn_id,
+            .captures = captures,
+        } };
+    }
+    return values;
+}
+
+fn expandDemandedKnownTags(
+    scratch: Allocator,
+    arena: Allocator,
+    finite_tags: DemandedKnownTags,
+) Allocator.Error![]const DemandedKnownValue {
+    var alternatives = std.ArrayList(DemandedKnownValue).empty;
+    defer alternatives.deinit(scratch);
+
+    for (finite_tags.alternatives) |alternative| {
+        const expanded = try expandDemandedKnownTag(scratch, arena, alternative);
+        try alternatives.appendSlice(scratch, expanded);
+    }
+
+    return try arena.dupe(DemandedKnownValue, alternatives.items);
+}
+
+fn expandDemandedKnownCallables(
+    scratch: Allocator,
+    arena: Allocator,
+    finite_callables: DemandedKnownCallables,
+) Allocator.Error![]const DemandedKnownValue {
+    var alternatives = std.ArrayList(DemandedKnownValue).empty;
+    defer alternatives.deinit(scratch);
+
+    for (finite_callables.alternatives) |alternative| {
+        const expanded = try expandDemandedKnownCallable(scratch, arena, alternative);
+        try alternatives.appendSlice(scratch, expanded);
+    }
+
+    return try arena.dupe(DemandedKnownValue, alternatives.items);
+}
+
+fn expandDemandedKnownIndexedValues(
+    scratch: Allocator,
+    arena: Allocator,
+    indexed: []const DemandedKnownIndexedValue,
+) Allocator.Error![]const []const DemandedKnownIndexedValue {
+    const child_values = try scratch.alloc(DemandedKnownValue, indexed.len);
+    defer scratch.free(child_values);
+    for (indexed, 0..) |child, index| {
+        child_values[index] = child.known_value;
+    }
+
+    const products = try demandedKnownValueProducts(scratch, arena, child_values);
+    const alternatives = try arena.alloc([]const DemandedKnownIndexedValue, products.len);
+    for (products, alternatives) |product, *out| {
+        const values = try arena.alloc(DemandedKnownIndexedValue, indexed.len);
+        for (indexed, product, values) |child, child_known_value, *value_out| {
+            value_out.* = .{
+                .index = child.index,
+                .known_value = child_known_value,
+            };
+        }
+        out.* = values;
+    }
+    return alternatives;
+}
+
 fn known_valueEql(program: *const Ast.Program, lhs: KnownValue, rhs: KnownValue) bool {
     if (std.meta.activeTag(lhs) != std.meta.activeTag(rhs)) return false;
     return switch (lhs) {
@@ -8814,6 +9085,97 @@ test "demanded known value finite-state detection follows demanded children" {
         .ty = wrapper_ty,
         .fields = &.{},
     } }));
+}
+
+test "demanded known value products expand finite tags without materializing omitted payloads" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const tag_ty: Type.TypeId = @enumFromInt(120);
+    const record_ty: Type.TypeId = @enumFromInt(121);
+    const step_field: names.RecordFieldNameId = @enumFromInt(13);
+    const len_field: names.RecordFieldNameId = @enumFromInt(14);
+    const alternatives = [_]DemandedKnownTag{
+        .{
+            .ty = tag_ty,
+            .name = @enumFromInt(15),
+            .payloads = &.{},
+        },
+        .{
+            .ty = tag_ty,
+            .name = @enumFromInt(16),
+            .payloads = &.{},
+        },
+    };
+    const fields = [_]DemandedKnownField{
+        .{ .name = step_field, .known_value = .{ .finite_tags = .{
+            .ty = tag_ty,
+            .alternatives = &alternatives,
+        } } },
+        .{ .name = len_field, .known_value = .{ .leaf = @enumFromInt(122) } },
+    };
+    const roots = [_]DemandedKnownValue{
+        .{ .record = .{
+            .ty = record_ty,
+            .fields = fields[0..1],
+        } },
+    };
+
+    const products = try demandedKnownValueProducts(std.testing.allocator, arena.allocator(), &roots);
+
+    try std.testing.expectEqual(@as(usize, 2), products.len);
+    for (products) |product| {
+        try std.testing.expectEqual(@as(usize, 1), product.len);
+        try std.testing.expectEqual(record_ty, product[0].record.ty);
+        try std.testing.expectEqual(@as(usize, 1), product[0].record.fields.len);
+        try std.testing.expectEqual(step_field, product[0].record.fields[0].name);
+        try std.testing.expectEqual(@as(usize, 0), product[0].record.fields[0].known_value.tag.payloads.len);
+    }
+    try std.testing.expect(products[0].record.fields[0].known_value.tag.name != products[1].record.fields[0].known_value.tag.name);
+}
+
+test "demanded known value products preserve sparse callable capture indexes" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const callable_ty: Type.TypeId = @enumFromInt(130);
+    const capture_ty: Type.TypeId = @enumFromInt(131);
+    const first_fn: Ast.FnId = @enumFromInt(8);
+    const second_fn: Ast.FnId = @enumFromInt(9);
+    const first_captures = [_]DemandedKnownIndexedValue{
+        .{ .index = 2, .known_value = .{ .leaf = capture_ty } },
+    };
+    const second_captures = [_]DemandedKnownIndexedValue{
+        .{ .index = 2, .known_value = .{ .any = capture_ty } },
+    };
+    const alternatives = [_]DemandedKnownCallable{
+        .{
+            .ty = callable_ty,
+            .fn_id = first_fn,
+            .captures = &first_captures,
+        },
+        .{
+            .ty = callable_ty,
+            .fn_id = second_fn,
+            .captures = &second_captures,
+        },
+    };
+    const roots = [_]DemandedKnownValue{
+        .{ .finite_callables = .{
+            .ty = callable_ty,
+            .alternatives = &alternatives,
+        } },
+    };
+
+    const products = try demandedKnownValueProducts(std.testing.allocator, arena.allocator(), &roots);
+
+    try std.testing.expectEqual(@as(usize, 2), products.len);
+    try std.testing.expectEqual(first_fn, products[0][0].callable.fn_id);
+    try std.testing.expectEqual(second_fn, products[1][0].callable.fn_id);
+    try std.testing.expectEqual(@as(usize, 1), products[0][0].callable.captures.len);
+    try std.testing.expectEqual(@as(usize, 1), products[1][0].callable.captures.len);
+    try std.testing.expectEqual(@as(u32, 2), products[0][0].callable.captures[0].index);
+    try std.testing.expectEqual(@as(u32, 2), products[1][0].callable.captures[0].index);
 }
 
 test "demanded known value distinguishes omitted capture from unknown carried capture" {
