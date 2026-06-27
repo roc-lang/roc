@@ -2023,7 +2023,7 @@ const Lowerer = struct {
                 const debug_stmt = try self.result.store.addCFStmt(.{ .debug = .{ .message = temp, .next = next } });
                 break :blk try self.lowerExprInto(temp, expr_id, debug_stmt);
             },
-            .return_ => |expr_id| try self.lowerReturn(expr_id),
+            .return_ => |value| try self.lowerReturn(value),
             .crash => |msg| try self.result.store.addCFStmt(.{ .crash = .{
                 .msg = try self.result.store.insertString(self.program.stringLiteralText(msg)),
             } }),

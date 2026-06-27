@@ -587,7 +587,7 @@ const Lowerer = struct {
             } },
             .break_ => |maybe| .{ .break_ = if (maybe) |value| try self.lowerExpr(value) else null },
             .continue_ => |continue_| .{ .continue_ = .{ .values = try self.lowerExprSpan(continue_.values) } },
-            .return_ => |value| .{ .return_ = try self.lowerExpr(value) },
+            .return_ => |ret| .{ .return_ = try self.lowerExpr(ret.value) },
             .crash => |msg| .{ .crash = msg },
             .comptime_branch_taken => |taken| .{ .comptime_branch_taken = .{
                 .site = try self.lowerComptimeSite(taken.site),
@@ -868,7 +868,7 @@ const Lowerer = struct {
             else
                 .{ .expect = try self.lowerExpr(expr) },
             .dbg => |expr| .{ .dbg = try self.lowerExpr(expr) },
-            .return_ => |expr| .{ .return_ = try self.lowerExpr(expr) },
+            .return_ => |ret| .{ .return_ = try self.lowerExpr(ret.value) },
             .crash => |msg| .{ .crash = msg },
         };
         const lowered = try self.program.addStmt(lowered_stmt);
