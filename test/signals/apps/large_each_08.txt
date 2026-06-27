@@ -12,7 +12,7 @@ expect_text text:"Row 004" "Row 004"
 mark_metrics
 click role:button name:"Update middle row"
 expect_text text:"Row 004 updated" "Row 004 updated"
-expect_metric_delta_at_most each_key_compares 32
+expect_metric_delta_at_most each_key_compares 16
 expect_metric_delta_at_most stream_nodes_scanned 512
 expect_metric_delta_at_most allocs_this_event 1600
 expect_metric_delta_at_most deallocs_this_event 1600
@@ -24,7 +24,7 @@ expect_metric_delta rows_removed 0
 mark_metrics
 click role:button name:"Append one row"
 expect_visible role:region name:"Large row row-008"
-expect_metric_delta_at_most each_key_compares 36
+expect_metric_delta_at_most each_key_compares 18
 expect_metric_delta_at_most stream_nodes_scanned 576
 expect_metric_delta_at_most allocs_this_event 1800
 expect_metric_delta_at_most deallocs_this_event 1800
@@ -36,7 +36,7 @@ expect_metric_delta rows_removed 0
 mark_metrics
 click role:button name:"Remove middle row"
 expect_absent role:region name:"Large row row-004"
-expect_metric_delta_at_most each_key_compares 32
+expect_metric_delta_at_most each_key_compares 16
 expect_metric_delta_at_most stream_nodes_scanned 512
 expect_metric_delta_at_most allocs_this_event 1600
 expect_metric_delta_at_most deallocs_this_event 1600
@@ -49,7 +49,7 @@ mark_metrics
 click role:button name:"Filter even rows"
 expect_visible role:region name:"Large row row-000"
 expect_absent role:region name:"Large row row-001"
-expect_metric_delta_at_most each_key_compares 32
+expect_metric_delta_at_most each_key_compares 16
 expect_metric_delta_at_most stream_nodes_scanned 3072
 expect_metric_delta_at_most allocs_this_event 1600
 expect_metric_delta_at_most deallocs_this_event 1600
@@ -61,7 +61,7 @@ expect_metric_delta rows_removed 4
 mark_metrics
 click role:button name:"Reverse rows"
 expect_visible role:region name:"Large row row-007"
-expect_metric_delta_at_most each_key_compares 32
+expect_metric_delta_at_most each_key_compares 16
 expect_metric_delta_at_most stream_nodes_scanned 4096
 expect_metric_delta_at_most allocs_this_event 1600
 expect_metric_delta_at_most deallocs_this_event 1600
@@ -74,7 +74,7 @@ mark_metrics
 click role:button name:"Reset rows"
 expect_visible role:region name:"Large row row-000"
 expect_visible role:region name:"Large row row-004"
-expect_metric_delta_at_most each_key_compares 32
+expect_metric_delta_at_most each_key_compares 16
 expect_metric_delta_at_most stream_nodes_scanned 512
 expect_metric_delta_at_most allocs_this_event 1600
 expect_metric_delta_at_most deallocs_this_event 1600

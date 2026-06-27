@@ -3263,6 +3263,7 @@ fn deinitTestHostIdentity(host: *HostEnv) void {
     host.engine.scopes.deinit(allocator);
     host.engine.node_identities.deinit(allocator);
     host.engine.dom_identities.deinit(allocator);
+    host.engine.deinitScratch(host);
     if (host.engine.host_values.hasLiveValues()) failHost("test host value registry still owned a typed cell at shutdown");
     host.engine.host_values.deinit(allocator);
     host.test_host_value_kinds.deinit(allocator);

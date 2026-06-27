@@ -149,7 +149,7 @@ def metric_lines(
         else max_stream_nodes_scanned
     )
     lines = [
-        f"expect_metric_delta_at_most each_key_compares {row_count * 4}",
+        f"expect_metric_delta_at_most each_key_compares {row_count * 2}",
         f"expect_metric_delta_at_most stream_nodes_scanned {stream_budget}",
         f"expect_metric_delta_at_most allocs_this_event {row_count * 200}",
         f"expect_metric_delta_at_most deallocs_this_event {row_count * 200}",

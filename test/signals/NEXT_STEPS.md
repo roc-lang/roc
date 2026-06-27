@@ -295,6 +295,25 @@ and byte columns are the primary signal.
 | signals-kanban-board | 320 | 555115227 | 242180 | 219460 | 317400 | 261380 | 87414760 | 76704060 | 55960 | 10703340 |
 | signals-component-composition | 100 | 9469786 | 9260 | 6800 | 17240 | 10980 | 3241120 | 1967400 | 6180 | 1272740 |
 
+Post keyed-row-site index `zig build run-signals-bench` single-sample comparison
+captured on 2026-06-27. The keyed row path now keeps an explicit active
+`(parent_scope_id, site_ordinal) -> rows` table with per-site hash heads/links,
+so dirty diffs no longer scan the scope forest or rebuild existing-row bucket
+arrays. The large-N specs tightened `each_key_compares` from four per row to two
+per row for no-collision diffs. The aggregate benchmark `each_key_compares`
+counter is unchanged because it is dominated by required initial/key-material
+hash/equality probes, but host allocation churn drops on the keyed-list cases.
+
+| case | actions | total_ns | each_key_compares | allocs_this_event | deallocs_this_event | host_allocs_this_event | host_deallocs_this_event | host_alloc_bytes_this_event | host_dealloc_bytes_this_event | host_retained_alloc_delta | host_retained_bytes_delta |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| signals-ops-dashboard | 60 | 51947750 | 20 | 33760 | 21200 | 47500 | 23900 | 8296620 | 4079080 | 23600 | 4217540 |
+| signals-large-each-64 | 120 | 726013089 | 1118520 | 160640 | 139940 | 224120 | 171880 | 195850600 | 184879540 | 52160 | 10969940 |
+| signals-async-effects | 180 | 24726132 | 10200 | 16640 | 13700 | 27340 | 20460 | 4984060 | 3599480 | 6800 | 1383760 |
+| signals-checkout-wizard | 180 | 23171172 | 10280 | 17800 | 13140 | 32800 | 22760 | 7716620 | 5547820 | 9980 | 2168000 |
+| signals-identity-stress | 180 | 45778992 | 37060 | 24180 | 19140 | 42760 | 30600 | 11595060 | 8654820 | 12080 | 2939420 |
+| signals-kanban-board | 320 | 549944491 | 454320 | 242180 | 219460 | 313920 | 257520 | 87030340 | 76245640 | 56340 | 10777340 |
+| signals-component-composition | 100 | 9261424 | 5800 | 9260 | 6800 | 16600 | 10140 | 3177080 | 1871940 | 6380 | 1304160 |
+
 Baseline review outcome:
 
 - Structural `Ui.each` work is the clear first target. The kanban run produced
@@ -420,18 +439,22 @@ Current priority after the Phase 4 review:
 
 ### O(1) identity/descriptor lookup (kill linear-scan-by-id)
 
-- **Status:** node/elem descriptor lookup slices have landed.
+- **Status:** node/elem descriptor lookup slices and keyed row-site indexes have
+  landed.
   `HostNodeDescriptorStream` maintains explicit
   `node_id -> scope_site/state/when/each` and `elem_id -> descriptor` indexes;
   the engine maintains `node_id -> state cell` indexes for runtime state; and
-  signal record reuse now uses an explicit `token -> record` map. The direct
-  lookup helpers (`stateIndexByNodeId`, `activeScopeSiteByNodeId`,
+  signal record reuse now uses an explicit `token -> record` map. Keyed
+  `Ui.each` row diffs consume an engine-owned active row-site table keyed by
+  `(parent_scope_id, site_ordinal)`, with per-site `key_hash -> row` heads and
+  linked rows retained across diffs. The direct lookup helpers
+  (`stateIndexByNodeId`, `activeScopeSiteByNodeId`,
   `activeWhenIndexByNodeId`, `activeEachIndexByNodeId`,
   `streamNodeIdInReplacementTarget`, `streamNodeIdInScopeSubtree`,
   `findElementDesc`, `findTextNodeDesc`, `findSignalTextNodeDesc`,
-  `streamHasTextField`, `streamHasBoolField`, and `signalRecordByToken`) no
-  longer scan descriptor tables. Remaining work is the render-node subtree
-  scans, child collection, and keyed diff lookup discipline.
+  `streamHasTextField`, `streamHasBoolField`, `signalRecordByToken`, and
+  `activeEachRowScopes`) no longer scan descriptor tables or the scope forest.
+  Remaining work is the render-node subtree scans and child collection.
 - **Hypothesis:** finishing dense side tables for active render-node/subtree
   ownership and keyed diff lookup discipline — maintained on insert/remove, the
   way `descriptor_indexes_by_elem_id` already is — plus restricting structural
