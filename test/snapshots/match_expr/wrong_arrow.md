@@ -14,24 +14,24 @@ match l {
 PARSE ERROR - wrong_arrow.md:2:8:2:8
 PARSE ERROR - wrong_arrow.md:3:13:3:13
 # PROBLEMS
-**PARSE ERROR**
-Match branches use `=>` instead of `->`.
 
-**wrong_arrow.md:2:8:2:8:**
-```roc
-    [] -> Err(EmptyList)
-```
-       ^
+┌─────────────┐
+│ PARSE ERROR ├─ Match branches use `=>` instead of `->`. ────────────────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  [] -> Err(EmptyList)                                                      │
+ │     ‾                                                                      │
+ └──────────────────────────────────────────────────────── wrong_arrow.md:2:8 ┘
 
 
-**PARSE ERROR**
-Match branches use `=>` instead of `->`.
 
-**wrong_arrow.md:3:13:3:13:**
-```roc
-    [.., e] -> Ok(e)
-```
-            ^
+┌─────────────┐
+│ PARSE ERROR ├─ Match branches use `=>` instead of `->`. ────────────────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  [.., e] -> Ok(e)                                                          │
+ │          ‾                                                                 │
+ └─────────────────────────────────────────────────────── wrong_arrow.md:3:13 ┘
 
 
 # TOKENS

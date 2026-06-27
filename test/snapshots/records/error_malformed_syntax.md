@@ -11,27 +11,27 @@ type=expr
 PARSE ERROR - error_malformed_syntax.md:1:18:1:19
 PARSE ERROR - error_malformed_syntax.md:1:20:1:22
 # PROBLEMS
-**PARSE ERROR**
-A parsing error occurred: `expected_expr_record_field_name`
-This is an unexpected parsing error. Please check your syntax.
 
-**error_malformed_syntax.md:1:18:1:19:**
-```roc
-{ name: "Alice", : 30, , email: , active Bool.true, "invalid": value, 42: "number key", : }
-```
-                 ^
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: expected_expr_record_field_name ───┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  …Alice", : 30, , email: , active Bool.true, "invalid": value, 42: "number…│
+ │           ‾                                                                │
+ └──────────────────────────────────────────── error_malformed_syntax.md:1:18 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
 
 
-**PARSE ERROR**
-A parsing error occurred: `expected_expr_close_curly_or_comma`
-This is an unexpected parsing error. Please check your syntax.
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: ───────────────────────────────────┐
+└┬────────────┘  expected_expr_close_curly_or_comma                           │
+ │                                                                            │
+ │  …ice", : 30, , email: , active Bool.true, "invalid": value, 42: "number k…│
+ │           ‾‾                                                               │
+ └──────────────────────────────────────────── error_malformed_syntax.md:1:20 ┘
 
-**error_malformed_syntax.md:1:20:1:22:**
-```roc
-{ name: "Alice", : 30, , email: , active Bool.true, "invalid": value, 42: "number key", : }
-```
-                   ^^
-
+    This is an unexpected parsing error. Please check your syntax.
 
 # TOKENS
 ~~~zig

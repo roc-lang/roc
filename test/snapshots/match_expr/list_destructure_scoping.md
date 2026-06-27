@@ -13,22 +13,21 @@ match list {
 # EXPECTED
 POLYMORPHIC VALUE - list_destructure_scoping.md:1:1:4:2
 # PROBLEMS
-**POLYMORPHIC VALUE**
-This top-level value still has an unresolved polymorphic type:
-**list_destructure_scoping.md:1:1:4:2:**
-```roc
-match list {
-    [first] => first
-    [first, second] => first + second
-}
-```
 
+┌───────────────────┐
+│ POLYMORPHIC VALUE ├─ This top-level value still has an unresolved ──────────┐
+└┬──────────────────┘  polymorphic type.                                      │
+ │                                                                            │
+ │  match list {                                                              │
+ │      [first] => first                                                      │
+ │      [first, second] => first + second                                     │
+ │  }                                                                         │
+ │                                                                            │
+ └─────────────────────────────────────────── list_destructure_scoping.md:1:1 ┘
 
-Its type is:
-```roc
-a where [a.plus : a, a -> a]
-```
-Add an annotation or use this value in a way that fixes its concrete type.
+    Its type is:
+    a where [a.plus : a, a -> a]
+    Add an annotation or use this value in a way that fixes its concrete type.
 
 # TOKENS
 ~~~zig

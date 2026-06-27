@@ -14,48 +14,48 @@ UNEXPECTED TOKEN IN TYPE ANNOTATION - fuzz_crash_061.md:2:14:2:15
 PARSE ERROR - fuzz_crash_061.md:1:1:1:9
 PARSE ERROR - fuzz_crash_061.md:2:16:2:22
 # PROBLEMS
-**UNCLOSED STRING**
-This string is missing a closing quote.
 
-**fuzz_crash_061.md:1:9:1:10:**
-```roc
-platform"
-```
-        ^
-
-
-**UNEXPECTED TOKEN IN TYPE ANNOTATION**
-The token **0** is not expected in a type annotation.
-Type annotations should contain types like _Str_, _Num a_, or _List U64_.
-
-**fuzz_crash_061.md:2:14:2:15:**
-```roc
-requires{}{n:0[import S	exposing[
-```
-             ^
+┌─────────────────┐
+│ UNCLOSED STRING ├─ This string is missing a closing quote. ─────────────────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  platform"                                                                 │
+ │          ‾                                                                 │
+ └───────────────────────────────────────────────────── fuzz_crash_061.md:1:9 ┘
 
 
-**PARSE ERROR**
-A parsing error occurred: `expected_requires_signatures_close_curly`
-This is an unexpected parsing error. Please check your syntax.
 
-**fuzz_crash_061.md:1:1:1:9:**
-```roc
-platform"
-```
-^^^^^^^^
+┌─────────────────────────────────────┐
+│ UNEXPECTED TOKEN IN TYPE ANNOTATION ├─ The token 0 is not expected in a ────┐
+└┬────────────────────────────────────┘  type annotation.                     │
+ │                                                                            │
+ │  requires{}{n:0[import S exposing[                                         │
+ │               ‾                                                            │
+ └──────────────────────────────────────────────────── fuzz_crash_061.md:2:14 ┘
+
+    Type annotations should contain types like Str, Num a, or List U64.
 
 
-**PARSE ERROR**
-A parsing error occurred: `import_exposing_no_close`
-This is an unexpected parsing error. Please check your syntax.
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: ───────────────────────────────────┐
+└┬────────────┘  expected_requires_signatures_close_curly                     │
+ │                                                                            │
+ │  platform"                                                                 │
+ │  ‾‾‾‾‾‾‾‾                                                                  │
+ └───────────────────────────────────────────────────── fuzz_crash_061.md:1:1 ┘
 
-**fuzz_crash_061.md:2:16:2:22:**
-```roc
-requires{}{n:0[import S	exposing[
-```
-               ^^^^^^
+    This is an unexpected parsing error. Please check your syntax.
 
+
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: import_exposing_no_close ──────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  requires{}{n:0[import S exposing[                                         │
+ │                 ‾‾‾‾‾‾                                                     │
+ └──────────────────────────────────────────────────── fuzz_crash_061.md:2:16 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
 
 # TOKENS
 ~~~zig

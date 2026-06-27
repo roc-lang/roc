@@ -18,49 +18,49 @@ PARSE ERROR - module.md:1:3:1:4
 PARSE ERROR - module.md:2:2:2:3
 PARSE ERROR - module.md:3:1:3:2
 # PROBLEMS
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
 
-**module.md:1:2:1:3:**
-```roc
-	a,
-```
-	^
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  a,                                                                        │
+ │  ‾                                                                         │
+ └───────────────────────────────────────────────────────────── module.md:1:2 ┘
 
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**module.md:1:3:1:4:**
-```roc
-	a,
-```
-	 ^
+    This is an unexpected parsing error. Please check your syntax.
 
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  a,                                                                        │
+ │   ‾                                                                        │
+ └───────────────────────────────────────────────────────────── module.md:1:3 ┘
 
-**module.md:2:2:2:3:**
-```roc
-	b
-```
-	^
+    This is an unexpected parsing error. Please check your syntax.
 
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  b                                                                         │
+ │  ‾                                                                         │
+ └───────────────────────────────────────────────────────────── module.md:2:2 ┘
 
-**module.md:3:1:3:2:**
-```roc
-]
-```
-^
+    This is an unexpected parsing error. Please check your syntax.
 
+
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  ]                                                                         │
+ │  ‾                                                                         │
+ └───────────────────────────────────────────────────────────── module.md:3:1 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
 
 # TOKENS
 ~~~zig

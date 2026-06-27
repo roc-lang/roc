@@ -53,13 +53,18 @@ const Solver = struct {
     expr_done: []bool,
     loop_results: std.ArrayList(Type.TypeVarId),
     loop_params: std.ArrayList(Type.Span),
-    return_tys: std.ArrayList(Type.TypeVarId),
+    return_contexts: std.ArrayList(ReturnContext),
     active_unifications: std.AutoHashMap(UnifyPair, void),
 
     const FunctionShape = struct {
         args: Type.Span,
         callable: Type.TypeVarId,
         ret: Type.TypeVarId,
+    };
+
+    const ReturnContext = struct {
+        mono_ret: MonoType.TypeId,
+        solved_ret: Type.TypeVarId,
     };
 
     fn init(allocator: Allocator, program: *Ast.Program) Allocator.Error!Solver {
@@ -88,14 +93,14 @@ const Solver = struct {
             .expr_done = expr_done,
             .loop_results = .empty,
             .loop_params = .empty,
-            .return_tys = .empty,
+            .return_contexts = .empty,
             .active_unifications = std.AutoHashMap(UnifyPair, void).init(allocator),
         };
     }
 
     fn deinit(self: *Solver) void {
         self.active_unifications.deinit();
-        self.return_tys.deinit(self.allocator);
+        self.return_contexts.deinit(self.allocator);
         self.loop_params.deinit(self.allocator);
         self.loop_results.deinit(self.allocator);
         self.allocator.free(self.expr_done);
@@ -246,8 +251,11 @@ const Solver = struct {
             try self.unify(self.program.types.spanItem(func.args, i), self.localTy(arg.local));
         }
 
-        try self.return_tys.append(self.allocator, func.ret);
-        defer _ = self.return_tys.pop();
+        try self.return_contexts.append(self.allocator, .{
+            .mono_ret = fn_.ret,
+            .solved_ret = func.ret,
+        });
+        defer _ = self.return_contexts.pop();
 
         switch (fn_.body) {
             .roc => |body| {
@@ -574,7 +582,7 @@ const Solver = struct {
                     _ = try self.expectExpr(value, param_ty);
                 }
             },
-            .return_ => |value| _ = try self.expectExpr(value, self.currentReturnTy()),
+            .return_ => |ret| _ = try self.expectExpr(ret.value, self.returnTargetTy(ret.target)),
             .dbg,
             .expect,
             => |child| _ = try self.inferExpr(child),
@@ -598,7 +606,7 @@ const Solver = struct {
             .expect,
             .dbg,
             => |expr| _ = try self.inferExpr(expr),
-            .return_ => |expr| _ = try self.expectExpr(expr, self.currentReturnTy()),
+            .return_ => |ret| _ = try self.expectExpr(ret.value, self.returnTargetTy(ret.target)),
             .crash => {},
         }
     }
@@ -736,9 +744,20 @@ const Solver = struct {
         return self.local_tys[@intFromEnum(local)] orelse Common.invariant("Lambda Solved local reached solver without a type slot");
     }
 
-    fn currentReturnTy(self: *Solver) Type.TypeVarId {
-        if (self.return_tys.items.len == 0) Common.invariant("return expression reached Lambda Solved outside a function");
-        return self.return_tys.items[self.return_tys.items.len - 1];
+    fn returnTargetTy(self: *Solver, target: MonoType.TypeId) Type.TypeVarId {
+        if (self.return_contexts.items.len == 0) Common.invariant("return expression reached Lambda Solved outside a function");
+        const context = self.return_contexts.items[self.return_contexts.items.len - 1];
+        if (!self.sameMonoType(target, context.mono_ret)) {
+            Common.invariant("return target type differed from enclosing function return type");
+        }
+        return context.solved_ret;
+    }
+
+    fn sameMonoType(self: *Solver, a: MonoType.TypeId, b: MonoType.TypeId) bool {
+        if (a == b) return true;
+        const a_digest = self.program.lifted.types.typeDigest(&self.program.lifted.names, a);
+        const b_digest = self.program.lifted.types.typeDigest(&self.program.lifted.names, b);
+        return std.mem.eql(u8, a_digest.bytes[0..], b_digest.bytes[0..]);
     }
 
     fn currentLoopResult(self: *Solver) Type.TypeVarId {

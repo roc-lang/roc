@@ -93,176 +93,190 @@ MISSING METHOD - Color.md:62:12:62:26
 MISSING METHOD - Color.md:56:26:56:32
 MISSING METHOD - Color.md:57:32:57:38
 # PROBLEMS
-**MODULE HEADER DEPRECATED**
-The `module` header is deprecated.
 
-Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
+┌──────────────────────────┐
+│ MODULE HEADER DEPRECATED ├─ The `module` header is deprecated. ─────────────┐
+└┬─────────────────────────┘                                                  │
+ │                                                                            │
+ │  module [                                                                  │
+ │      Color,                                                                │
+ │      to_str,                                                               │
+ │      rgb,                                                                  │
+ │      rgba,                                                                 │
+ │      hex,                                                                  │
+ │      named,                                                                │
+ │  ]                                                                         │
+ │                                                                            │
+ └────────────────────────────────────────────────────────────── Color.md:1:1 ┘
 
-Remove the `module` header and ensure your file defines a type that matches the filename.
-**Color.md:1:1:8:2:**
-```roc
-module [
-    Color,
-    to_str,
-    rgb,
-    rgba,
-    hex,
-    named,
-]
-```
+    Type modules (headerless files with a top-level type matching the filename)
+    are now the preferred way to define modules.
 
-
-**UNUSED VARIABLE**
-Variable `is_char_in_hex_range` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_is_char_in_hex_range` to suppress this warning.
-The unused variable is declared here:
-**Color.md:30:5:30:25:**
-```roc
-    is_char_in_hex_range = |b| (b >= '0' and b <= '9') or (b >= 'a' and b <= 'f') or (b >= 'A' and b <= 'F')
-```
-    ^^^^^^^^^^^^^^^^^^^^
+    Remove the `module` header and ensure your file defines a type that matches
+    the filename.
 
 
-**DOES NOT EXIST**
-`Num.to_str` does not exist.
+┌─────────────────┐
+│ UNUSED VARIABLE ├─ Variable `is_char_in_hex_range` is defined here and ─────┐
+└┬────────────────┘  then never used.                                         │
+ │                                                                            │
+ │  is_char_in_hex_range = |b| (b >= '0' and b <= '9') or (b >= 'a' and b <=… │
+ │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                      │
+ └───────────────────────────────────────────────────────────── Color.md:30:5 ┘
 
-**Color.md:50:34:50:44:**
-```roc
-    Color.RGB(r, g, b) => "rgb(${Num.to_str(r)}, ${Num.to_str(g)}, ${Num.to_str(b)})"
-```
-                                 ^^^^^^^^^^
-
-
-**DOES NOT EXIST**
-`Num.to_str` does not exist.
-
-**Color.md:50:52:50:62:**
-```roc
-    Color.RGB(r, g, b) => "rgb(${Num.to_str(r)}, ${Num.to_str(g)}, ${Num.to_str(b)})"
-```
-                                                   ^^^^^^^^^^
+    If you don't need this variable, prefix it with an underscore like
+    `_is_char_in_hex_range` to suppress this warning.
 
 
-**DOES NOT EXIST**
-`Num.to_str` does not exist.
-
-**Color.md:50:70:50:80:**
-```roc
-    Color.RGB(r, g, b) => "rgb(${Num.to_str(r)}, ${Num.to_str(g)}, ${Num.to_str(b)})"
-```
-                                                                     ^^^^^^^^^^
-
-
-**DOES NOT EXIST**
-`Num.to_str` does not exist.
-
-**Color.md:51:39:51:49:**
-```roc
-    Color.RGBA(r, g, b, a) => "rgba(${Num.to_str(r)}, ${Num.to_str(g)}, ${Num.to_str(b)}, ${Num.to_str(a)})"
-```
-                                      ^^^^^^^^^^
+┌────────────────┐
+│ DOES NOT EXIST ├─ `Num.to_str` does not exist. ─────────────────────────────┐
+└┬───────────────┘                                                            │
+ │                                                                            │
+ │  … "rgb(${Num.to_str(r)}, ${Num.to_str(g)}, ${Num.to_str(b)})"             │
+ │           ‾‾‾‾‾‾‾‾‾‾                                                       │
+ └──────────────────────────────────────────────────────────── Color.md:50:34 ┘
 
 
-**DOES NOT EXIST**
-`Num.to_str` does not exist.
 
-**Color.md:51:57:51:67:**
-```roc
-    Color.RGBA(r, g, b, a) => "rgba(${Num.to_str(r)}, ${Num.to_str(g)}, ${Num.to_str(b)}, ${Num.to_str(a)})"
-```
-                                                        ^^^^^^^^^^
-
-
-**DOES NOT EXIST**
-`Num.to_str` does not exist.
-
-**Color.md:51:75:51:85:**
-```roc
-    Color.RGBA(r, g, b, a) => "rgba(${Num.to_str(r)}, ${Num.to_str(g)}, ${Num.to_str(b)}, ${Num.to_str(a)})"
-```
-                                                                          ^^^^^^^^^^
+┌────────────────┐
+│ DOES NOT EXIST ├─ `Num.to_str` does not exist. ─────────────────────────────┐
+└┬───────────────┘                                                            │
+ │                                                                            │
+ │  …(r)}, ${Num.to_str(g)}, ${Num.to_str(b)})"                               │
+ │           ‾‾‾‾‾‾‾‾‾‾                                                       │
+ └──────────────────────────────────────────────────────────── Color.md:50:52 ┘
 
 
-**DOES NOT EXIST**
-`Num.to_str` does not exist.
 
-**Color.md:51:93:51:103:**
-```roc
-    Color.RGBA(r, g, b, a) => "rgba(${Num.to_str(r)}, ${Num.to_str(g)}, ${Num.to_str(b)}, ${Num.to_str(a)})"
-```
-                                                                                            ^^^^^^^^^^
+┌────────────────┐
+│ DOES NOT EXIST ├─ `Num.to_str` does not exist. ─────────────────────────────┐
+└┬───────────────┘                                                            │
+ │                                                                            │
+ │  …(g)}, ${Num.to_str(b)})"                                                 │
+ │           ‾‾‾‾‾‾‾‾‾‾                                                       │
+ └──────────────────────────────────────────────────────────── Color.md:50:70 ┘
 
 
-**MISSING METHOD**
-This **to_frac** method is being called on a value whose type doesn't have that method:
-**Color.md:22:17:22:24:**
-```roc
-    rounded = a.to_frac() / 255.0
-```
-                ^^^^^^^
 
-The value's type, which does not have a method named **to_frac**, is:
+┌────────────────┐
+│ DOES NOT EXIST ├─ `Num.to_str` does not exist. ─────────────────────────────┐
+└┬───────────────┘                                                            │
+ │                                                                            │
+ │  …"rgba(${Num.to_str(r)}, ${Num.to_str(g)}, ${Num.to_str(b)}, ${Num.to_str…│
+ │           ‾‾‾‾‾‾‾‾‾‾                                                       │
+ └──────────────────────────────────────────────────────────── Color.md:51:39 ┘
 
-    U8
 
-**Hint:** For this to work, the type would need to have a method named **to_frac** associated with it in the type's declaration.
 
-**MISSING METHOD**
-This **is_char_in_hex_range** method is being called on a value whose type doesn't have that method:
-**Color.md:35:19:35:39:**
-```roc
-                a.is_char_in_hex_range()
-```
-                  ^^^^^^^^^^^^^^^^^^^^
+┌────────────────┐
+│ DOES NOT EXIST ├─ `Num.to_str` does not exist. ─────────────────────────────┐
+└┬───────────────┘                                                            │
+ │                                                                            │
+ │  …(r)}, ${Num.to_str(g)}, ${Num.to_str(b)}, ${Num.to_str(a)})"             │
+ │           ‾‾‾‾‾‾‾‾‾‾                                                       │
+ └──────────────────────────────────────────────────────────── Color.md:51:57 ┘
 
-The value's type, which does not have a method named **is_char_in_hex_range**, is:
 
-    U8
 
-**Hint:** For this to work, the type would need to have a method named **is_char_in_hex_range** associated with it in the type's declaration.
+┌────────────────┐
+│ DOES NOT EXIST ├─ `Num.to_str` does not exist. ─────────────────────────────┐
+└┬───────────────┘                                                            │
+ │                                                                            │
+ │  …(g)}, ${Num.to_str(b)}, ${Num.to_str(a)})"                               │
+ │           ‾‾‾‾‾‾‾‾‾‾                                                       │
+ └──────────────────────────────────────────────────────────── Color.md:51:75 ┘
 
-**MISSING METHOD**
-This **is_named_color** method is being called on a value whose type doesn't have that method:
-**Color.md:62:12:62:26:**
-```roc
-    if str.is_named_color()
-```
-           ^^^^^^^^^^^^^^
 
-The value's type, which does not have a method named **is_named_color**, is:
 
-    Str
+┌────────────────┐
+│ DOES NOT EXIST ├─ `Num.to_str` does not exist. ─────────────────────────────┐
+└┬───────────────┘                                                            │
+ │                                                                            │
+ │  …(b)}, ${Num.to_str(a)})"                                                 │
+ │           ‾‾‾‾‾‾‾‾‾‾                                                       │
+ └──────────────────────────────────────────────────────────── Color.md:51:93 ┘
 
-**Hint:** For this to work, the type would need to have a method named **is_named_color** associated with it in the type's declaration.
 
-**MISSING METHOD**
-This **to_str** method is being called on a value whose type doesn't have that method:
-**Color.md:56:26:56:32:**
-```roc
-expect rgb(124, 56, 245).to_str() == "rgb(124, 56, 245)"
-```
-                         ^^^^^^
 
-The value's type, which does not have a method named **to_str**, is:
+┌────────────────┐
+│ MISSING METHOD ├─ This `to_frac` method is being called on a value whose ───┐
+└┬───────────────┘  type doesn't have that method.                            │
+ │                                                                            │
+ │  rounded = a.to_frac() / 255.0                                             │
+ │              ‾‾‾‾‾‾‾                                                       │
+ └──────────────────────────────────────────────────────────── Color.md:22:17 ┘
 
-    Color
+    The value's type, which does not have a method named `to_frac`, is:
 
-**Hint:** For this to work, the type would need to have a method named **to_str** associated with it in the type's declaration.
+        U8
 
-**MISSING METHOD**
-This **to_str** method is being called on a value whose type doesn't have that method:
-**Color.md:57:32:57:38:**
-```roc
-expect rgba(124, 56, 245, 255).to_str() == "rgba(124, 56, 245, 1.0)"
-```
-                               ^^^^^^
+    Hint: For this to work, the type would need to have a method named
+    `to_frac` associated with it in the type's declaration.
 
-The value's type, which does not have a method named **to_str**, is:
 
-    Color
+┌────────────────┐
+│ MISSING METHOD ├─ This `is_char_in_hex_range` method is being called on a ──┐
+└┬───────────────┘  value whose type doesn't have that method.                │
+ │                                                                            │
+ │  a.is_char_in_hex_range()                                                  │
+ │    ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                    │
+ └──────────────────────────────────────────────────────────── Color.md:35:19 ┘
 
-**Hint:** For this to work, the type would need to have a method named **to_str** associated with it in the type's declaration.
+    The value's type, which does not have a method named
+    `is_char_in_hex_range`, is:
+
+        U8
+
+    Hint: For this to work, the type would need to have a method named
+    `is_char_in_hex_range` associated with it in the type's declaration.
+
+
+┌────────────────┐
+│ MISSING METHOD ├─ This `is_named_color` method is being called on a value ──┐
+└┬───────────────┘  whose type doesn't have that method.                      │
+ │                                                                            │
+ │  if str.is_named_color()                                                   │
+ │         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                     │
+ └──────────────────────────────────────────────────────────── Color.md:62:12 ┘
+
+    The value's type, which does not have a method named `is_named_color`, is:
+
+        Str
+
+    Hint: For this to work, the type would need to have a method named
+    `is_named_color` associated with it in the type's declaration.
+
+
+┌────────────────┐
+│ MISSING METHOD ├─ This `to_str` method is being called on a value whose ────┐
+└┬───────────────┘  type doesn't have that method.                            │
+ │                                                                            │
+ │  expect rgb(124, 56, 245).to_str() == "rgb(124, 56, 245)"                  │
+ │                           ‾‾‾‾‾‾                                           │
+ └──────────────────────────────────────────────────────────── Color.md:56:26 ┘
+
+    The value's type, which does not have a method named `to_str`, is:
+
+        Color
+
+    Hint: For this to work, the type would need to have a method named `to_str`
+    associated with it in the type's declaration.
+
+
+┌────────────────┐
+│ MISSING METHOD ├─ This `to_str` method is being called on a value whose ────┐
+└┬───────────────┘  type doesn't have that method.                            │
+ │                                                                            │
+ │  expect rgba(124, 56, 245, 255).to_str() == "rgba(124, 56, 245, 1.0)"      │
+ │                                 ‾‾‾‾‾‾                                     │
+ └──────────────────────────────────────────────────────────── Color.md:57:32 ┘
+
+    The value's type, which does not have a method named `to_str`, is:
+
+        Color
+
+    Hint: For this to work, the type would need to have a method named `to_str`
+    associated with it in the type's declaration.
 
 # TOKENS
 ~~~zig

@@ -16,28 +16,31 @@ value = "test"
 UNDERSCORE IN TYPE ALIAS - test_error_propagation.md:1:1:1:1
 TYPE MISMATCH - test_error_propagation.md:6:9:6:15
 # PROBLEMS
-**UNDERSCORE IN TYPE ALIAS**
-Underscores are not allowed in type alias declarations.
 
-**test_error_propagation.md:1:1:1:1:**
-```roc
-BadBase := _
-```
-^
+┌──────────────────────────┐
+│ UNDERSCORE IN TYPE ALIAS ├─ Underscores are not allowed in type alias ──────┐
+└┬─────────────────────────┘  declarations.                                   │
+ │                                                                            │
+ │  BadBase := _                                                              │
+ │  ‾                                                                         │
+ └───────────────────────────────────────────── test_error_propagation.md:1:1 ┘
 
-Underscores in type annotations mean "I don't care about this type", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.
+    Underscores in type annotations mean "I don't care about this type", which
+    doesn't make sense when declaring a type. If you need a placeholder type
+    variable, use a named type variable like `a` instead.
 
-**TYPE MISMATCH**
-This string literal is being used where a non-string type is needed:
-**test_error_propagation.md:6:9:6:15:**
-```roc
-value = "test"
-```
-        ^^^^^^
 
-The type was determined to be:
+┌───────────────┐
+│ TYPE MISMATCH ├─ This string literal is being used where a non-string ──────┐
+└┬──────────────┘  type is needed.                                            │
+ │                                                                            │
+ │  value = "test"                                                            │
+ │          ‾‾‾‾‾‾                                                            │
+ └───────────────────────────────────────────── test_error_propagation.md:6:9 ┘
 
-    GoodAlias
+    The type was determined to be:
+
+        GoodAlias
 
 # TOKENS
 ~~~zig

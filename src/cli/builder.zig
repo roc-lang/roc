@@ -447,7 +447,7 @@ pub fn compileBitcodeToObject(gpa: Allocator, std_io: std.Io, config: CompileCon
     defer gpa.free(bitcode_path_z);
 
     if (externs.LLVMCreateMemoryBufferWithContentsOfFile(bitcode_path_z.ptr, &mem_buf, &error_message) != 0) {
-        try renderLLVMError(gpa, "BITCODE LOAD ERROR", "Failed to load bitcode file", std.mem.span(error_message));
+        try renderLLVMError(gpa, "Bitcode Load Error", "Failed to load bitcode file.", std.mem.span(error_message));
         externs.LLVMDisposeMessage(error_message);
         return false;
     }
@@ -458,7 +458,7 @@ pub fn compileBitcodeToObject(gpa: Allocator, std_io: std.Io, config: CompileCon
     std.log.debug("Parsing bitcode into LLVM module...", .{});
     var module: ?*anyopaque = null;
     if (externs.LLVMParseBitcode(mem_buf, &module, &error_message) != 0) {
-        try renderLLVMError(gpa, "BITCODE PARSE ERROR", "Failed to parse bitcode", std.mem.span(error_message));
+        try renderLLVMError(gpa, "Bitcode Parse Error", "Failed to parse bitcode.", std.mem.span(error_message));
         externs.LLVMDisposeMessage(error_message);
         return false;
     }
@@ -731,11 +731,9 @@ pub fn isLLVMAvailable() bool {
 // --- Error Reporting Helpers ---
 
 fn renderLLVMNotAvailableError(allocator: Allocator) Allocator.Error!void {
-    var report = reporting.Report.init(allocator, "LLVM NOT AVAILABLE", .fatal);
+    var report = try reporting.Report.init(allocator, "LLVM Not Available", "LLVM is not available at compile time.", .fatal);
     defer report.deinit();
 
-    try report.document.addText("LLVM is not available at compile time.");
-    try report.document.addLineBreak();
     try report.document.addLineBreak();
     try report.document.addText("This binary was built without LLVM support.");
     try report.document.addLineBreak();
@@ -751,11 +749,9 @@ fn renderLLVMNotAvailableError(allocator: Allocator) Allocator.Error!void {
 }
 
 fn renderFileNotAccessibleError(allocator: Allocator, path: []const u8, err: std.Io.Dir.AccessError) Allocator.Error!void {
-    var report = reporting.Report.init(allocator, "FILE NOT ACCESSIBLE", .fatal);
+    var report = try reporting.Report.init(allocator, "File Not Accessible", "Input bitcode file does not exist or is not accessible.", .fatal);
     defer report.deinit();
 
-    try report.document.addText("Input bitcode file does not exist or is not accessible:");
-    try report.document.addLineBreak();
     try report.document.addLineBreak();
     try report.document.addText("    ");
     try report.document.addAnnotated(path, .path);
@@ -774,11 +770,9 @@ fn renderFileNotAccessibleError(allocator: Allocator, path: []const u8, err: std
 }
 
 fn renderLLVMError(allocator: Allocator, title: []const u8, message: []const u8, llvm_message: []const u8) Allocator.Error!void {
-    var report = reporting.Report.init(allocator, title, .fatal);
+    var report = try reporting.Report.init(allocator, title, message, .fatal);
     defer report.deinit();
 
-    try report.document.addText(message);
-    try report.document.addLineBreak();
     try report.document.addLineBreak();
     try report.document.addText("LLVM error: ");
     try report.document.addAnnotated(llvm_message, .error_highlight);
@@ -793,11 +787,9 @@ fn renderLLVMError(allocator: Allocator, title: []const u8, message: []const u8,
 }
 
 fn renderTargetError(allocator: Allocator, triple: []const u8, llvm_message: []const u8) Allocator.Error!void {
-    var report = reporting.Report.init(allocator, "INVALID TARGET", .fatal);
+    var report = try reporting.Report.init(allocator, "Invalid Target", "Failed to get LLVM target for triple.", .fatal);
     defer report.deinit();
 
-    try report.document.addText("Failed to get LLVM target for triple:");
-    try report.document.addLineBreak();
     try report.document.addLineBreak();
     try report.document.addText("    ");
     try report.document.addAnnotated(triple, .emphasized);
@@ -816,11 +808,9 @@ fn renderTargetError(allocator: Allocator, triple: []const u8, llvm_message: []c
 }
 
 fn renderTargetMachineError(allocator: Allocator, triple: []const u8, cpu: []const u8, features: []const u8) Allocator.Error!void {
-    var report = reporting.Report.init(allocator, "TARGET MACHINE ERROR", .fatal);
+    var report = try reporting.Report.init(allocator, "Target Machine Error", "Failed to create LLVM target machine with configuration.", .fatal);
     defer report.deinit();
 
-    try report.document.addText("Failed to create LLVM target machine with configuration:");
-    try report.document.addLineBreak();
     try report.document.addLineBreak();
     try report.document.addText("    Triple:   ");
     try report.document.addAnnotated(triple, .emphasized);
@@ -852,11 +842,9 @@ fn renderTargetMachineError(allocator: Allocator, triple: []const u8, cpu: []con
 }
 
 fn renderEmitError(allocator: Allocator, output_path: []const u8, llvm_message: []const u8) Allocator.Error!void {
-    var report = reporting.Report.init(allocator, "OBJECT FILE EMIT ERROR", .fatal);
+    var report = try reporting.Report.init(allocator, "Object File Emit Error", "Failed to emit object file.", .fatal);
     defer report.deinit();
 
-    try report.document.addText("Failed to emit object file:");
-    try report.document.addLineBreak();
     try report.document.addLineBreak();
     try report.document.addText("    Output: ");
     try report.document.addAnnotated(output_path, .path);

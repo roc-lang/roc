@@ -133,6 +133,7 @@ fn destroyCheckedArtifact(artifact: *CheckedModuleArtifact, retain_module_env: b
 const OwnedSemanticModuleData = struct {
     module_env: *ModuleEnv,
     checked_artifact: ?*CheckedModuleArtifact = null,
+    user_errors_allow_lowering: bool = false,
 
     fn deinit(self: *OwnedSemanticModuleData) void {
         if (self.checked_artifact) |artifact| {
@@ -423,11 +424,19 @@ pub const ModuleState = struct {
     fn replaceModuleEnv(self: *ModuleState, env: *ModuleEnv) void {
         if (self.semantic) |*semantic| {
             semantic.module_env = env;
+            semantic.user_errors_allow_lowering = false;
         } else {
             self.semantic = .{
                 .module_env = env,
                 .checked_artifact = null,
+                .user_errors_allow_lowering = false,
             };
+        }
+    }
+
+    fn markUserErrorsNotLowerable(self: *ModuleState) void {
+        if (self.semantic) |*semantic| {
+            semantic.user_errors_allow_lowering = false;
         }
     }
 
@@ -2182,11 +2191,23 @@ pub const Coordinator = struct {
     /// Finalize the build's executable artifacts (link app + platform, build
     /// the platform-app relation, republish the root artifact).
     ///
-    /// Must only be called after `coordinatorLoop` returns and after the
-    /// caller has confirmed `hasUserErrors() == false`. Returns
-    /// `error.HasUserErrors` if called while user-facing diagnostics exist.
+    /// Strict callers must only use this after `coordinatorLoop` returns and
+    /// after confirming `hasUserErrors() == false`; use
+    /// `finalizeExecutableArtifactsAllowUserErrors` for run paths that may
+    /// execute artifacts containing checked runtime-error nodes.
     pub fn finalizeExecutableArtifacts(self: *Coordinator) (compile_package.PublishError || error{HasUserErrors})!void {
-        if (self.hasUserErrors()) return error.HasUserErrors;
+        return self.finalizeExecutableArtifactsInternal(false);
+    }
+
+    pub fn finalizeExecutableArtifactsAllowUserErrors(self: *Coordinator) (compile_package.PublishError || error{HasUserErrors})!void {
+        return self.finalizeExecutableArtifactsInternal(true);
+    }
+
+    fn finalizeExecutableArtifactsInternal(
+        self: *Coordinator,
+        allow_user_errors: bool,
+    ) (compile_package.PublishError || error{HasUserErrors})!void {
+        if (self.hasUserErrors() and !allow_user_errors) return error.HasUserErrors;
 
         const app_root = self.findRootModule(.app) orelse self.findRootModule(.default_app) orelse {
             return;
@@ -2207,7 +2228,7 @@ pub const Coordinator = struct {
         defer validation_snapshot.deinit(self.gpa);
 
         try self.appendPlatformRequiredInvalidNumericExpressionReports(app_root.mod, original_app_artifact, platform_declaration_artifact);
-        if (self.hasUserErrors()) return;
+        if (self.hasUserErrors() and !allow_user_errors) return;
 
         try self.republishCheckedArtifact(app_root.pkg, app_root.mod, .{
             .platform_requirement_artifact = check.CheckedArtifact.importedView(platform_declaration_artifact),
@@ -2222,7 +2243,7 @@ pub const Coordinator = struct {
         };
         try self.appendPlatformRequiredUnresolvedDispatchReports(app_root.mod, app_artifact, &validation_snapshot);
         try self.appendPlatformRequiredInvalidNumericPatternReports(app_root.mod, app_artifact, &validation_snapshot);
-        if (self.hasUserErrors()) return;
+        if (self.hasUserErrors() and !allow_user_errors) return;
 
         var relation_result = try check.CheckedArtifact.buildPlatformAppRelation(
             self.gpa,
@@ -2331,15 +2352,13 @@ pub const Coordinator = struct {
         platform_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
         missing: check.CheckedArtifact.PlatformRequirementMissingValue,
     ) compile_package.PublishError!void {
-        var report = Report.init(self.gpa, "MISSING REQUIRED VALUE", .runtime_error);
+        const required_name = platform_artifact.canonical_names.exportNameText(missing.declaration.platform_name);
+        const headline = try std.fmt.allocPrint(self.gpa, "The app does not provide {s}, but the platform requires it.", .{required_name});
+        defer self.gpa.free(headline);
+        var report = try Report.init(self.gpa, "Missing Required Value", headline, .runtime_error);
         errdefer report.deinit();
 
-        const required_name = platform_artifact.canonical_names.exportNameText(missing.declaration.platform_name);
-        try report.document.addText("The app does not provide ");
-        try report.document.addAnnotated(required_name, .inline_code);
-        try report.document.addText(", but the platform requires it.");
-
-        try app_mod.reports.append(self.gpa, report);
+        try self.appendNonLowerableReport(app_mod, report);
     }
 
     fn appendPlatformRequirementTypeMismatchReport(
@@ -2349,17 +2368,11 @@ pub const Coordinator = struct {
         app_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
         mismatch: check.CheckedArtifact.PlatformRequirementTypeMismatch,
     ) Allocator.Error!void {
-        var report = Report.init(self.gpa, "TYPE MISMATCH", .runtime_error);
-        errdefer report.deinit();
-
         const required_name = platform_artifact.canonical_names.exportNameText(mismatch.declaration.platform_name);
-        try report.document.addText("The app provides ");
-        try report.document.addAnnotated(required_name, .inline_code);
-        try report.document.addText(" with a type that does not match the platform's ");
-        try report.document.addAnnotated("requires", .inline_code);
-        try report.document.addText(" entry.");
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        const headline = try std.fmt.allocPrint(self.gpa, "The app provides {s} with a type that does not match the platform's requires entry.", .{required_name});
+        defer self.gpa.free(headline);
+        var report = try Report.init(self.gpa, "Type Mismatch", headline, .runtime_error);
+        errdefer report.deinit();
 
         const actual = try check.CheckedArtifact.formatCheckedTypeAlloc(self.gpa, app_artifact, mismatch.actual);
         defer self.gpa.free(actual);
@@ -2377,7 +2390,7 @@ pub const Coordinator = struct {
         try report.document.addLineBreak();
         try report.document.addCodeBlock(expected);
 
-        try app_mod.reports.append(self.gpa, report);
+        try self.appendNonLowerableReport(app_mod, report);
     }
 
     fn appendPlatformRequiredUnresolvedDispatchReports(
@@ -2395,10 +2408,12 @@ pub const Coordinator = struct {
                 plan,
             )) continue;
 
-            if (!validation_snapshot.dispatchPlanChanged(app_artifact, plan_index, plan)) continue;
+            const plan_changed = validation_snapshot.dispatchPlanChanged(app_artifact, plan_index, plan);
 
             switch (plan.resolution) {
                 .resolved_target => |target| {
+                    if (!plan_changed) continue;
+
                     const target_artifact = switch (target.kind) {
                         .procedure => |procedure| blk: {
                             const target_key = checkedArtifactKeyFromArtifactRef(procedure.template.artifact);
@@ -2431,23 +2446,157 @@ pub const Coordinator = struct {
                 },
                 .unresolved_checked_plan => {},
             }
+            if (!plan_changed) continue;
+            const dispatcher = self.platformRequiredDispatchReportDispatcherType(app_artifact, plan) orelse continue;
             try self.appendPlatformRequiredUnresolvedDispatchReport(
                 app_mod,
                 app_artifact,
                 plan.method,
-                plan.dispatcher_ty,
+                dispatcher.artifact,
+                dispatcher.ty,
             );
         }
         for (app_artifact.static_dispatch_plans.iterator_for_plans, 0..) |plan, plan_index| {
             if (!validation_snapshot.iteratorPlanChanged(app_artifact, plan_index, plan)) continue;
+            const dispatcher = self.platformRequiredIteratorReportDispatcherType(app_artifact, plan.iter) orelse continue;
 
             try self.appendPlatformRequiredUnresolvedDispatchReport(
                 app_mod,
                 app_artifact,
                 plan.iter.method,
-                plan.iter.dispatcher_ty,
+                dispatcher.artifact,
+                dispatcher.ty,
             );
         }
+    }
+
+    const PlatformRequiredDispatchReportType = struct {
+        artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+        ty: check.CheckedIds.CheckedTypeId,
+    };
+
+    fn platformRequiredDispatchReportDispatcherType(
+        self: *Coordinator,
+        app_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+        plan: check.StaticDispatchRegistry.StaticDispatchCallPlan,
+    ) ?PlatformRequiredDispatchReportType {
+        if (!check.CheckedArtifact.checkedTypeRootIsIdentity(app_artifact, plan.dispatcher_ty)) {
+            return .{ .artifact = app_artifact, .ty = plan.dispatcher_ty };
+        }
+        const dispatcher_expr = staticDispatchPlanDispatcherExpr(app_artifact, plan) orelse return null;
+        return self.platformRequiredConcreteExprType(app_artifact, dispatcher_expr);
+    }
+
+    fn platformRequiredIteratorReportDispatcherType(
+        self: *Coordinator,
+        app_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+        plan: check.StaticDispatchRegistry.IteratorDispatchCall,
+    ) ?PlatformRequiredDispatchReportType {
+        if (!check.CheckedArtifact.checkedTypeRootIsIdentity(app_artifact, plan.dispatcher_ty)) {
+            return .{ .artifact = app_artifact, .ty = plan.dispatcher_ty };
+        }
+        const dispatcher_expr = iteratorDispatchPlanDispatcherExpr(app_artifact, plan) orelse return null;
+        return self.platformRequiredConcreteExprType(app_artifact, dispatcher_expr);
+    }
+
+    fn staticDispatchPlanDispatcherExpr(
+        app_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+        plan: check.StaticDispatchRegistry.StaticDispatchCallPlan,
+    ) ?check.CheckedArtifact.CheckedExprId {
+        const index = switch (plan.dispatcher) {
+            .arg => |arg| arg,
+            .type_only => return null,
+        };
+        const args = plan.argsSlice(&app_artifact.static_dispatch_plans);
+        if (index >= args.len) return null;
+        return switch (args[index]) {
+            .checked_expr => |expr| expr,
+            .generated_interpolation_iter,
+            .generated_numeral,
+            .generated_quote,
+            => null,
+        };
+    }
+
+    fn iteratorDispatchPlanDispatcherExpr(
+        app_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+        plan: check.StaticDispatchRegistry.IteratorDispatchCall,
+    ) ?check.CheckedArtifact.CheckedExprId {
+        const args = plan.argsSlice(&app_artifact.static_dispatch_plans);
+        if (plan.dispatcher_arg_index >= args.len) return null;
+        return switch (args[plan.dispatcher_arg_index]) {
+            .checked_expr => |expr| expr,
+            .loop_iterator_state => null,
+        };
+    }
+
+    fn platformRequiredConcreteExprType(
+        self: *Coordinator,
+        app_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+        expr_id: check.CheckedArtifact.CheckedExprId,
+    ) ?PlatformRequiredDispatchReportType {
+        const expr = app_artifact.checked_bodies.expr(expr_id);
+        if (!check.CheckedArtifact.checkedTypeRootIsIdentity(app_artifact, expr.ty)) {
+            return .{ .artifact = app_artifact, .ty = expr.ty };
+        }
+        return switch (expr.data) {
+            .dispatch_call => |plan_id| self.platformRequiredResolvedDispatchReturnType(app_artifact, plan_id orelse return null),
+            .method_eq => |plan_id| self.platformRequiredResolvedDispatchReturnType(app_artifact, plan_id orelse return null),
+            .num_from_numeral,
+            .typed_num_from_numeral,
+            => |plan_id| self.platformRequiredResolvedDispatchReturnType(app_artifact, plan_id orelse return null),
+            .str_from_quote => |quote| self.platformRequiredResolvedDispatchReturnType(app_artifact, quote.plan orelse return null),
+            else => null,
+        };
+    }
+
+    fn platformRequiredResolvedDispatchReturnType(
+        self: *Coordinator,
+        app_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+        plan_id: check.StaticDispatchRegistry.StaticDispatchPlanId,
+    ) ?PlatformRequiredDispatchReportType {
+        const raw = @intFromEnum(plan_id);
+        if (raw >= app_artifact.static_dispatch_plans.plans.len) return null;
+        const plan = app_artifact.static_dispatch_plans.plans[raw];
+        const target = switch (plan.resolution) {
+            .resolved_target => |target| target,
+            .unresolved_checked_plan => return null,
+        };
+        const target_artifact = self.platformRequiredDispatchTargetArtifact(app_artifact, target);
+        if (checkedFunctionReturnType(target_artifact, target.callable_ty)) |target_ret| {
+            if (!check.CheckedArtifact.checkedTypeRootIsIdentity(target_artifact, target_ret)) {
+                return .{ .artifact = target_artifact, .ty = target_ret };
+            }
+        }
+        const plan_ret = checkedFunctionReturnType(app_artifact, plan.callable_ty) orelse return null;
+        if (check.CheckedArtifact.checkedTypeRootIsIdentity(app_artifact, plan_ret)) return null;
+        return .{ .artifact = app_artifact, .ty = plan_ret };
+    }
+
+    fn platformRequiredDispatchTargetArtifact(
+        self: *Coordinator,
+        app_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+        target: check.StaticDispatchRegistry.MethodTarget,
+    ) *const check.CheckedArtifact.CheckedModuleArtifact {
+        return switch (target.kind) {
+            .local_proc => app_artifact,
+            .procedure => |procedure| blk: {
+                const target_key = checkedArtifactKeyFromArtifactRef(procedure.template.artifact);
+                break :blk self.checkedArtifactByKey(target_key) orelse {
+                    coordinatorInvariant("platform-required dispatch target artifact was not available", .{});
+                };
+            },
+        };
+    }
+
+    fn checkedFunctionReturnType(
+        app_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+        callable_ty: check.CheckedIds.CheckedTypeId,
+    ) ?check.CheckedIds.CheckedTypeId {
+        return switch (app_artifact.checked_types.payload(callable_ty)) {
+            .function => |function| function.ret,
+            else => null,
+        };
     }
 
     fn appendPlatformRequiredInvalidNumeralDispatchReportIfNeeded(
@@ -2554,7 +2703,7 @@ pub const Coordinator = struct {
         const actual = try check.CheckedArtifact.formatCheckedTypeAlloc(self.gpa, app_artifact, actual_ty);
         defer self.gpa.free(actual);
 
-        var report = Report.init(self.gpa, "TYPE MISMATCH", .runtime_error);
+        var report = try Report.init(self.gpa, "Type Mismatch", "", .runtime_error);
         errdefer report.deinit();
 
         try report.document.addText("This ");
@@ -2573,7 +2722,7 @@ pub const Coordinator = struct {
         try report.document.addLineBreak();
         try report.document.addCodeBlock(actual);
 
-        try app_mod.reports.append(self.gpa, report);
+        try self.appendNonLowerableReport(app_mod, report);
     }
 
     fn appendPlatformRequiredInvalidNumericPatternReports(
@@ -2612,7 +2761,7 @@ pub const Coordinator = struct {
         const module_env = app_mod.moduleEnv() orelse {
             coordinatorInvariant("platform-required invalid numeric report missing module env", .{});
         };
-        var report = Report.init(self.gpa, "INVALID NUMBER", .runtime_error);
+        var report = try Report.init(self.gpa, "Invalid Number", "", .runtime_error);
         errdefer report.deinit();
 
         try report.document.addText("This numeric literal does not fit in the type required by the platform.");
@@ -2632,7 +2781,7 @@ pub const Coordinator = struct {
         try report.document.addLineBreak();
         try report.document.addCodeBlock(platformRequiredBuiltinNominalText(expected_builtin));
 
-        try app_mod.reports.append(self.gpa, report);
+        try self.appendNonLowerableReport(app_mod, report);
     }
 
     fn platformRequiredBuiltinNominalText(builtin_nominal: check.CheckedArtifact.CheckedBuiltinNominal) []const u8 {
@@ -2669,7 +2818,7 @@ pub const Coordinator = struct {
         const actual = try check.CheckedArtifact.formatCheckedTypeAlloc(self.gpa, app_artifact, pattern_ty);
         defer self.gpa.free(actual);
 
-        var report = Report.init(self.gpa, "TYPE MISMATCH", .runtime_error);
+        var report = try Report.init(self.gpa, "Type Mismatch", "", .runtime_error);
         errdefer report.deinit();
 
         try report.document.addText("This numeric pattern cannot match the type required by the platform.");
@@ -2680,7 +2829,7 @@ pub const Coordinator = struct {
         try report.document.addLineBreak();
         try report.document.addCodeBlock(actual);
 
-        try app_mod.reports.append(self.gpa, report);
+        try self.appendNonLowerableReport(app_mod, report);
     }
 
     fn checkedPatternIsNumericLiteral(data: check.CheckedArtifact.CheckedPatternData) bool {
@@ -2698,18 +2847,19 @@ pub const Coordinator = struct {
     fn appendPlatformRequiredUnresolvedDispatchReport(
         self: *Coordinator,
         app_mod: *ModuleState,
-        app_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+        method_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
         method: check.CanonicalNames.MethodNameId,
+        dispatcher_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
         dispatcher_ty: check.CheckedIds.CheckedTypeId,
     ) Allocator.Error!void {
-        if (check.CheckedArtifact.checkedTypeRootIsIdentity(app_artifact, dispatcher_ty)) return;
+        if (check.CheckedArtifact.checkedTypeRootIsIdentity(dispatcher_artifact, dispatcher_ty)) return;
 
-        const method_name = app_artifact.canonical_names.methodNameText(method);
-        const dispatcher_type = try check.CheckedArtifact.formatCheckedTypeAlloc(self.gpa, app_artifact, dispatcher_ty);
+        const method_name = method_artifact.canonical_names.methodNameText(method);
+        const dispatcher_type = try check.CheckedArtifact.formatCheckedTypeAlloc(self.gpa, dispatcher_artifact, dispatcher_ty);
         defer self.gpa.free(dispatcher_type);
 
         if (std.mem.eql(u8, method_name, "from_numeral")) {
-            var report = Report.init(self.gpa, "TYPE MISMATCH", .runtime_error);
+            var report = try Report.init(self.gpa, "Type Mismatch", "", .runtime_error);
             errdefer report.deinit();
 
             try report.document.addText("This number is being used where a non-number type is needed.");
@@ -2720,11 +2870,11 @@ pub const Coordinator = struct {
             try report.document.addLineBreak();
             try report.document.addCodeBlock(dispatcher_type);
 
-            try app_mod.reports.append(self.gpa, report);
+            try self.appendNonLowerableReport(app_mod, report);
             return;
         }
 
-        var report = Report.init(self.gpa, "MISSING METHOD", .runtime_error);
+        var report = try Report.init(self.gpa, "Missing Method", "", .runtime_error);
         errdefer report.deinit();
 
         try report.document.addText("This ");
@@ -2737,7 +2887,7 @@ pub const Coordinator = struct {
         try report.document.addLineBreak();
         try report.document.addCodeBlock(dispatcher_type);
 
-        try app_mod.reports.append(self.gpa, report);
+        try self.appendNonLowerableReport(app_mod, report);
     }
 
     pub fn hasUserErrors(self: *const Coordinator) bool {
@@ -2754,6 +2904,30 @@ pub const Coordinator = struct {
             }
         }
         return false;
+    }
+
+    pub fn userErrorsAllowExecutableLowering(self: *const Coordinator) bool {
+        var pkg_it = self.packages.iterator();
+        while (pkg_it.next()) |entry| {
+            const pkg = entry.value_ptr.*;
+            for (pkg.modules.items) |*mod| {
+                var has_module_error = false;
+                for (mod.reports.items) |rep| {
+                    switch (rep.severity) {
+                        .info, .warning => {},
+                        .runtime_error, .fatal => {
+                            has_module_error = true;
+                            break;
+                        },
+                    }
+                }
+                if (!has_module_error) continue;
+
+                const semantic = mod.semantic orelse return false;
+                if (!semantic.user_errors_allow_lowering) return false;
+            }
+        }
+        return true;
     }
 
     /// One entry yielded by `ReportIter` — a single diagnostic with the package
@@ -3409,13 +3583,20 @@ pub const Coordinator = struct {
         allocator: Allocator,
         env: *ModuleEnv,
         checked_artifact: ?check.CheckedArtifact.CheckedModuleArtifact,
+        user_errors_allow_lowering: bool,
     ) Allocator.Error!*messages.OwnedSemanticModuleData {
         const semantic = try allocator.create(messages.OwnedSemanticModuleData);
         semantic.* = .{
             .module_env = env,
             .checked_artifact = checked_artifact,
+            .user_errors_allow_lowering = user_errors_allow_lowering,
         };
         return semantic;
+    }
+
+    fn appendNonLowerableReport(self: *Coordinator, app_mod: *ModuleState, report: Report) Allocator.Error!void {
+        app_mod.markUserErrorsNotLowerable();
+        try app_mod.reports.append(self.gpa, report);
     }
 
     fn appendReportOwned(allocator: Allocator, reports: *std.ArrayList(Report), report: Report) Allocator.Error!void {
@@ -3452,11 +3633,11 @@ pub const Coordinator = struct {
         path: []const u8,
         err: WorkerFailureError,
     ) void {
-        var rep = Report.init(allocator, title, .fatal);
-        const msg = std.fmt.allocPrint(allocator, "{s}: {s}", .{ path, @errorName(err) }) catch null;
+        const msg = std.fmt.allocPrint(allocator, "{s}: {s}.", .{ path, @errorName(err) }) catch null;
         defer if (msg) |owned| allocator.free(owned);
-        rep.addErrorMessage(msg orelse @errorName(err)) catch |report_err| {
-            self.bugReport("BUG: failed to add worker failure report message for {s}: {s}\n", .{ path, @errorName(report_err) });
+        var rep = Report.init(allocator, title, msg orelse "A compilation worker failed.", .fatal) catch |headline_err| {
+            self.bugReport("BUG: failed to add worker failure report message for {s}: {s}\n", .{ path, @errorName(headline_err) });
+            return;
         };
         reports.append(allocator, rep) catch |append_err| {
             rep.deinit();
@@ -4127,6 +4308,9 @@ pub const Coordinator = struct {
 
         // Take ownership of semantic module data
         mod.replaceModuleEnv(result.semantic.module_env);
+        if (mod.semantic) |*semantic| {
+            semantic.user_errors_allow_lowering = result.semantic.user_errors_allow_lowering;
+        }
         if (result.semantic.checked_artifact) |artifact| {
             self.unregisterCheckedArtifact(mod);
             const artifact_ptr = try allocateCheckedArtifact(artifact);
@@ -4329,9 +4513,7 @@ pub const Coordinator = struct {
         const child = pkg.getModule(child_id).?;
 
         // Create cycle error report
-        var rep = Report.init(self.gpa, "Import cycle detected", .runtime_error);
-        const msg = try rep.addOwnedString("This module participates in an import cycle. Cycles between modules are not allowed.");
-        try rep.addErrorMessage(msg);
+        const rep = try Report.init(self.gpa, "Import Cycle Detected", "This module participates in an import cycle. Cycles between modules are not allowed.", .runtime_error);
         try mod.reports.append(self.gpa, rep);
 
         // Mark both as done
@@ -4347,9 +4529,7 @@ pub const Coordinator = struct {
             if (self.total_remaining > 0) self.total_remaining -= 1;
 
             // Add report to child too
-            var child_rep = Report.init(self.gpa, "Import cycle detected", .runtime_error);
-            const child_msg = try child_rep.addOwnedString("This module participates in an import cycle.");
-            try child_rep.addErrorMessage(child_msg);
+            const child_rep = try Report.init(self.gpa, "Import Cycle Detected", "This module participates in an import cycle.", .runtime_error);
             try child.reports.append(self.gpa, child_rep);
         }
     }
@@ -4737,8 +4917,8 @@ pub const Coordinator = struct {
             } },
             else => |e| blk: {
                 const title = switch (e) {
-                    error.FileNotFound => "FILE NOT FOUND",
-                    else => "PARSING FAILED",
+                    error.FileNotFound => "File Not Found",
+                    else => "Parsing Failed",
                 };
                 const source_file_state = if (self.track_watch_inputs)
                     sourceFileStateForParseReadError(e)
@@ -4962,7 +5142,7 @@ pub const Coordinator = struct {
                 .module_id = task.module_id,
                 .module_name = task.module_name,
                 .path = task.path,
-                .reports = self.workerFailureReports(allocators.result, "TYPE CHECKING FAILED", task.path, e),
+                .reports = self.workerFailureReports(allocators.result, "Type Checking Failed", task.path, e),
                 .partial_env = task.module_env,
             } },
         };
@@ -5025,7 +5205,12 @@ pub const Coordinator = struct {
             if (typecheck_output.checked_artifact != null) typecheck_output.takeCheckedArtifact() else null;
         errdefer if (checked_artifact) |*artifact| artifact.deinit(artifact.canonical_names.allocator);
 
-        const semantic = try createOwnedSemanticResult(result_alloc, env, checked_artifact);
+        const semantic = try createOwnedSemanticResult(
+            result_alloc,
+            env,
+            checked_artifact,
+            typecheck_output.user_errors_allow_lowering,
+        );
         checked_artifact = null;
 
         return .{

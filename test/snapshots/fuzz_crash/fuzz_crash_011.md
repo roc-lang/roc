@@ -12,50 +12,50 @@ PARSE ERROR - fuzz_crash_011.md:1:8:1:9
 PARSE ERROR - fuzz_crash_011.md:1:9:1:10
 PARSE ERROR - fuzz_crash_011.md:2:1:2:1
 # PROBLEMS
-**PARSE ERROR**
-A parsing error occurred: `header_expected_open_square`
-This is an unexpected parsing error. Please check your syntax.
 
-**fuzz_crash_011.md:1:8:1:9:**
-```roc
-module P]F
-```
-       ^
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: header_expected_open_square ───────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  module P]F                                                                │
+ │         ‾                                                                  │
+ └───────────────────────────────────────────────────── fuzz_crash_011.md:1:8 ┘
 
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_011.md:1:9:1:10:**
-```roc
-module P]F
-```
-        ^
+    This is an unexpected parsing error. Please check your syntax.
 
 
-**PARSE ERROR**
-Type applications require parentheses around their type arguments.
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  module P]F                                                                │
+ │          ‾                                                                 │
+ └───────────────────────────────────────────────────── fuzz_crash_011.md:1:9 ┘
 
-I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+    This is an unexpected parsing error. Please check your syntax.
 
-Instead of:
-    **List U8**
 
-Use:
-    **List(U8)**
+┌─────────────┐
+│ PARSE ERROR ├─ Type applications require parentheses around their type ─────┐
+└┬────────────┘  arguments.                                                   │
+ │                                                                            │
+ │                                                                            │
+ │  ‾                                                                         │
+ └───────────────────────────────────────────────────── fuzz_crash_011.md:2:1 ┘
 
-Other valid examples:
-    `Dict(Str, Num)`
-    `Try(a, Str)`
-    `Maybe(List(U64))`
+    I found a type followed by what looks like a type argument, but they need
+    to be connected with parentheses.
 
-**fuzz_crash_011.md:2:1:2:1:**
-```roc
+    Instead of:
+        List U8
 
-```
-^
+    Use:
+        List(U8)
 
+    Other valid examples:
+        Dict(Str, Num)
+        Try(a, Str)
+        Maybe(List(U64))
 
 # TOKENS
 ~~~zig

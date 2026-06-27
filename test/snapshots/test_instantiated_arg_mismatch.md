@@ -15,17 +15,18 @@ type=expr
 # EXPECTED
 TYPE MISMATCH - test_instantiated_arg_mismatch.md:5:14:5:21
 # PROBLEMS
-**TYPE MISMATCH**
-This string literal is being used where a non-string type is needed:
-**test_instantiated_arg_mismatch.md:5:14:5:21:**
-```roc
-    pair(42, "hello")
-```
-             ^^^^^^^
 
-The type was determined to be:
+┌───────────────┐
+│ TYPE MISMATCH ├─ This string literal is being used where a non-string ──────┐
+└┬──────────────┘  type is needed.                                            │
+ │                                                                            │
+ │  pair(42, "hello")                                                         │
+ │           ‾‾‾‾‾‾‾                                                          │
+ └──────────────────────────────────── test_instantiated_arg_mismatch.md:5:14 ┘
 
-    Dec
+    The type was determined to be:
+
+        Dec
 
 # TOKENS
 ~~~zig

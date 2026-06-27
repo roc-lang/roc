@@ -16,29 +16,31 @@ type=expr
 TYPE MISMATCH - tuple_type.md:5:8:5:9
 TYPE MISMATCH - tuple_type.md:5:11:5:12
 # PROBLEMS
-**TYPE MISMATCH**
-This number is being used where a non-number type is needed:
-**tuple_type.md:5:8:5:9:**
-```roc
-    f((1, 2))
-```
-       ^
 
-Other code expects this to have the type:
+┌───────────────┐
+│ TYPE MISMATCH ├─ This number is being used where a non-number type is ──────┐
+└┬──────────────┘  needed.                                                    │
+ │                                                                            │
+ │  f((1, 2))                                                                 │
+ │     ‾                                                                      │
+ └───────────────────────────────────────────────────────── tuple_type.md:5:8 ┘
 
-    Str
+    Other code expects this to have the type:
 
-**TYPE MISMATCH**
-This number is being used where a non-number type is needed:
-**tuple_type.md:5:11:5:12:**
-```roc
-    f((1, 2))
-```
-          ^
+        Str
 
-Other code expects this to have the type:
 
-    Str
+┌───────────────┐
+│ TYPE MISMATCH ├─ This number is being used where a non-number type is ──────┐
+└┬──────────────┘  needed.                                                    │
+ │                                                                            │
+ │  f((1, 2))                                                                 │
+ │        ‾                                                                   │
+ └──────────────────────────────────────────────────────── tuple_type.md:5:11 ┘
+
+    Other code expects this to have the type:
+
+        Str
 
 # TOKENS
 ~~~zig

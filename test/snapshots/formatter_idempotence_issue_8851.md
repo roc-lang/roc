@@ -10,16 +10,16 @@ a = 0->b().c()
 # EXPECTED
 UNDEFINED VARIABLE - formatter_idempotence_issue_8851.md:1:8:1:9
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `b` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
-**formatter_idempotence_issue_8851.md:1:8:1:9:**
-```roc
-a = 0->b().c()
-```
-       ^
+┌────────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `b` in this scope. ──────────────────┐
+└┬───────────────────┘                                                        │
+ │                                                                            │
+ │  a = 0->b().c()                                                            │
+ │         ‾                                                                  │
+ └─────────────────────────────────── formatter_idempotence_issue_8851.md:1:8 ┘
 
+    Is there an `import` or `exposing` missing up-top?
 
 # TOKENS
 ~~~zig

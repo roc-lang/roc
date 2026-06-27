@@ -43,9 +43,10 @@ set_zst_or_empty = |list, index, replacement|
         Err(_) => []
     }
 
-flat_list_ops_ok : Bool
-flat_list_ops_ok = {
-    appended = List.append([1.U8, 2.U8, 3.U8], 4.U8)
+flat_list_ops_ok : U64 -> Bool
+flat_list_ops_ok = |seed| {
+    first = if seed == 0 { 1.U8 } else { 7.U8 }
+    appended = List.append([first, 2.U8, 3.U8], 4.U8)
     concatted = List.concat(appended, [5.U8, 6.U8])
     dropped = List.drop_at(concatted, 2)
     reversed = List.rev(dropped)
@@ -55,7 +56,7 @@ flat_list_ops_ok = {
         and u8_at(reversed, 1, 5.U8)
         and u8_at(reversed, 2, 4.U8)
         and u8_at(reversed, 3, 2.U8)
-        and u8_at(reversed, 4, 1.U8)
+        and u8_at(reversed, 4, first)
 }
 
 refcounted_list_ops_ok : Bool
@@ -98,8 +99,8 @@ zero_sized_list_set_ok = {
     List.len(updated) == 3
 }
 
-main! = |_seed| {
-    if flat_list_ops_ok and refcounted_list_ops_ok and refcounted_list_set_ok and refcounted_tuple_list_set_ok and zero_sized_list_set_ok {
+main! = |seed| {
+    if flat_list_ops_ok(seed) and refcounted_list_ops_ok and refcounted_list_set_ok and refcounted_tuple_list_set_ok and zero_sized_list_set_ok {
         "ok"
     } else {
         "bad"

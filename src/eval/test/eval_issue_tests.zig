@@ -5,6 +5,59 @@ const TestCase = @import("parallel_runner.zig").TestCase;
 /// Public value `tests`.
 pub const tests = [_]TestCase{
     .{
+        // https://github.com/roc-lang/roc/issues/9796
+        // Two passing top-level expects that both instantiate a parser result
+        // alias through a type module must finalize independently without
+        // corrupting the checked data consumed by the next expect root.
+        .name = "issue 9796: multiple parser expects with forward alias both finalize",
+        .source_kind = .module,
+        .source =
+        \\Parser(input, a) :: { fun : input -> Parser.ParseResult(input, a) }.{
+        \\    ParseResult(input, a) : Try({ val : a, input : input }, [ParsingFailure(Str)])
+        \\
+        \\    build_primitive_parser : (input -> ParseResult(input, a)) -> Parser(input, a)
+        \\    build_primitive_parser = |fun| { { fun } }
+        \\
+        \\    parse_partial : Parser(input, a), input -> ParseResult(input, a)
+        \\    parse_partial = |{ fun }, input| {
+        \\        fun(input)
+        \\    }
+        \\
+        \\    chomp_until : a -> Parser(List(a), List(a)) where [a.is_eq : a, a -> Bool]
+        \\    chomp_until = |char| {
+        \\        build_primitive_parser(
+        \\            |input| {
+        \\                match input.find_first_index(|x| { x == char }) {
+        \\                    Ok(index) => {
+        \\                        val = input.sublist({ start: 0, len: index })
+        \\                        Ok({ val, input: input.drop_first(index) })
+        \\                    }
+        \\                    Err(_) => Err(ParsingFailure("character not found"))
+        \\                }
+        \\            }
+        \\        )
+        \\    }
+        \\}
+        \\
+        \\expect {
+        \\    input = "# H\nR".to_utf8()
+        \\    result = Parser.parse_partial(Parser.chomp_until('\n'), input)
+        \\    result == Ok({ val: ['#', ' ', 'H'], input: ['\n', 'R'] })
+        \\}
+        \\
+        \\expect {
+        \\    match Parser.parse_partial(Parser.chomp_until('\n'), []) {
+        \\        Ok(_) => Bool.False
+        \\        Err(ParsingFailure(_)) => Bool.True
+        \\    }
+        \\}
+        \\
+        \\main : U8
+        \\main = 0
+        ,
+        .expected = .{ .inspect_str = "0" },
+    },
+    .{
         // https://github.com/roc-lang/roc/issues/9686
         // A type alias (`Score : U64`) defined in an imported type module is used
         // as a List element type. The comparator passed to List.sort_with desugars
@@ -327,5 +380,39 @@ pub const tests = [_]TestCase{
         \\}
         ,
         .expected = .{ .inspect_str = "Ok(22.0)" },
+    },
+    .{
+        // https://github.com/roc-lang/roc/issues/9783
+        // The exact mathematical result is 16129, which does not fit in I8.
+        .name = "issue 9783: signed times crashes on overflow",
+        .source = "I8.times(I8.highest, I8.highest)",
+        .expected = .{ .crash = {} },
+    },
+    .{
+        // https://github.com/roc-lang/roc/issues/9812
+        // The exact mathematical result is 128, which does not fit in I8.
+        .name = "issue 9812: signed negate crashes on lowest value",
+        .source = "I8.negate(I8.lowest)",
+        .expected = .{ .crash = {} },
+    },
+    .{
+        // https://github.com/roc-lang/roc/issues/9813
+        // The exact mathematical result is 128, which does not fit in I8.
+        .name = "issue 9813: signed abs crashes on lowest value",
+        .source = "I8.abs(I8.lowest)",
+        .expected = .{ .crash = {} },
+    },
+    .{
+        // https://github.com/roc-lang/roc/issues/9814
+        // The exact mathematical result is 128, which does not fit in I8.
+        .name = "issue 9814: signed div_by crashes on lowest divided by negative one",
+        .source = "I8.div_by(I8.lowest, -1)",
+        .expected = .{ .crash = {} },
+    },
+    .{
+        // The same signed division edge has a defined remainder of zero.
+        .name = "issue 9814: signed rem and mod by negative one return zero",
+        .source = "(I8.rem_by(I8.lowest, -1), I8.mod_by(I8.lowest, -1))",
+        .expected = .{ .inspect_str = "(0, 0)" },
     },
 };

@@ -3978,6 +3978,23 @@ const BodyContext = struct {
         return try self.lowerExprWithType(expr_id, expr_ty);
     }
 
+    fn lowerReturn(self: *BodyContext, ret: anytype) Allocator.Error!Ast.Return {
+        const target = try self.returnTargetType(ret.lambda);
+        return .{
+            .value = try self.lowerExprAtType(ret.expr, target),
+            .target = target,
+        };
+    }
+
+    fn returnTargetType(self: *BodyContext, lambda_id: checked.CheckedExprId) Allocator.Error!Type.TypeId {
+        const lambda_expr = self.view.bodies.expr(lambda_id);
+        const body_id = switch (lambda_expr.data) {
+            .lambda => |lambda| lambda.body,
+            else => Common.invariant("checked return target did not reference a lambda"),
+        };
+        return try self.lowerType(self.view.bodies.expr(body_id).ty);
+    }
+
     fn lowerComptimeRootExprAtType(
         self: *BodyContext,
         expr_id: checked.CheckedExprId,
@@ -4097,8 +4114,8 @@ const BodyContext = struct {
         const data: Ast.ExprData = switch (expr.data) {
             .pending,
             .anno_only,
-            .runtime_error,
             => Common.invariant("non-runtime checked expression reached Monotype lowering"),
+            .runtime_error => return try self.runtimeCrashExpr(ty, "runtime error"),
             .num => |num| self.lowerIntLiteral(num.value, ty),
             .typed_int => |num| self.lowerIntLiteral(num.value, ty),
             .frac_f32 => |frac| self.lowerFracLiteral(.{ .f32 = frac.value }, ty),
@@ -4180,7 +4197,7 @@ const BodyContext = struct {
             } },
             .expect => |child| .{ .expect = try self.lowerExpr(child) },
             .break_ => try self.breakCurrentLoopExprData(),
-            .return_ => |ret| .{ .return_ = try self.lowerExpr(ret.expr) },
+            .return_ => |ret| .{ .return_ = try self.lowerReturn(ret) },
             .for_ => |for_| try self.lowerIteratorFor(for_, ty, &.{}),
             .hosted_lambda => Common.invariant("hosted lambda expression reached ordinary Monotype expression lowering"),
             .run_low_level => |low_level| .{ .low_level = .{ .op = low_level.op, .args = try self.lowerExprSpan(low_level.args) } },
@@ -13370,12 +13387,13 @@ const BodyContext = struct {
             .if_ => |if_| try self.exprIdAsDivergentData(try self.lowerIfExpr(checked_expr_id, if_, ty)),
             .ellipsis => .{ .crash = try self.builder.program.addStringLiteral("not implemented") },
             .crash => |msg| .{ .crash = try self.lowerStringLiteral(msg) },
+            .runtime_error => .{ .crash = try self.builder.program.addStringLiteral("runtime error") },
             .expect_err => |expect_err| .{ .expect_err = .{
                 .msg = try self.lowerExpectErrMessage(expect_err.expr, expect_err.snippet),
                 .region = checked_expr.source_region,
             } },
             .break_ => try self.breakCurrentLoopExprData(),
-            .return_ => |ret| .{ .return_ = try self.lowerExpr(ret.expr) },
+            .return_ => |ret| .{ .return_ = try self.lowerReturn(ret) },
             else => Common.invariant("checked expression was marked divergent but has no divergent lowering path"),
         };
     }
@@ -14261,8 +14279,8 @@ const BodyContext = struct {
             .nominal_decl,
             .type_anno,
             .type_var_alias,
-            .runtime_error,
             => Common.invariant("non-runtime checked statement reached Monotype lowering"),
+            .runtime_error => .{ .crash = try self.builder.program.addStringLiteral("runtime error") },
             .decl => |decl| blk: {
                 if (self.statementValueIsLocalProc(decl.expr)) {
                     try self.registerLocalProc(decl.pattern);
@@ -14354,7 +14372,7 @@ const BodyContext = struct {
                 } };
             },
             .break_ => .{ .expr = try self.breakCurrentLoopExpr() },
-            .return_ => |ret| .{ .return_ = try self.lowerExpr(ret.expr) },
+            .return_ => |ret| .{ .return_ = try self.lowerReturn(ret) },
         };
         return try self.builder.program.addStmt(stmt);
     }

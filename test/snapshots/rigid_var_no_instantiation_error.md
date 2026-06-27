@@ -36,54 +36,52 @@ UNUSED VARIABLE - rigid_var_no_instantiation_error.md:13:5:13:12
 UNUSED VARIABLE - rigid_var_no_instantiation_error.md:17:5:17:12
 UNUSED VARIABLE - rigid_var_no_instantiation_error.md:21:5:21:12
 # PROBLEMS
-**DOES NOT EXIST**
-`Bool.true` does not exist.
 
-`Bool` is in scope, but it has no associated `true`.
+┌────────────────┐
+│ DOES NOT EXIST ├─ `Bool.true` does not exist. ──────────────────────────────┐
+└┬───────────────┘                                                            │
+ │                                                                            │
+ │  result2 = swap((Bool.true, [1, 2, 3]))                                    │
+ │                  ‾‾‾‾‾‾‾‾‾                                                 │
+ └───────────────────────────────── rigid_var_no_instantiation_error.md:17:21 ┘
 
-It's referenced here:
-**rigid_var_no_instantiation_error.md:17:21:17:30:**
-```roc
-    result2 = swap((Bool.true, [1, 2, 3]))
-```
-                    ^^^^^^^^^
-
-
-**UNUSED VARIABLE**
-Variable `result1` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_result1` to suppress this warning.
-The unused variable is declared here:
-**rigid_var_no_instantiation_error.md:13:5:13:12:**
-```roc
-    result1 = swap((42, "hello"))
-```
-    ^^^^^^^
+    `Bool` is in scope, but it has no associated `true`.
 
 
-**UNUSED VARIABLE**
-Variable `result2` is not used anywhere in your code.
+┌─────────────────┐
+│ UNUSED VARIABLE ├─ Variable `result1` is defined here and then never used. ─┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  result1 = swap((42, "hello"))                                             │
+ │  ‾‾‾‾‾‾‾                                                                   │
+ └────────────────────────────────── rigid_var_no_instantiation_error.md:13:5 ┘
 
-If you don't need this variable, prefix it with an underscore like `_result2` to suppress this warning.
-The unused variable is declared here:
-**rigid_var_no_instantiation_error.md:17:5:17:12:**
-```roc
-    result2 = swap((Bool.true, [1, 2, 3]))
-```
-    ^^^^^^^
+    If you don't need this variable, prefix it with an underscore like
+    `_result1` to suppress this warning.
 
 
-**UNUSED VARIABLE**
-Variable `result3` is not used anywhere in your code.
+┌─────────────────┐
+│ UNUSED VARIABLE ├─ Variable `result2` is defined here and then never used. ─┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  result2 = swap((Bool.true, [1, 2, 3]))                                    │
+ │  ‾‾‾‾‾‾‾                                                                   │
+ └────────────────────────────────── rigid_var_no_instantiation_error.md:17:5 ┘
 
-If you don't need this variable, prefix it with an underscore like `_result3` to suppress this warning.
-The unused variable is declared here:
-**rigid_var_no_instantiation_error.md:21:5:21:12:**
-```roc
-    result3 = swap(("foo", "bar"))
-```
-    ^^^^^^^
+    If you don't need this variable, prefix it with an underscore like
+    `_result2` to suppress this warning.
 
+
+┌─────────────────┐
+│ UNUSED VARIABLE ├─ Variable `result3` is defined here and then never used. ─┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  result3 = swap(("foo", "bar"))                                            │
+ │  ‾‾‾‾‾‾‾                                                                   │
+ └────────────────────────────────── rigid_var_no_instantiation_error.md:21:5 ┘
+
+    If you don't need this variable, prefix it with an underscore like
+    `_result3` to suppress this warning.
 
 # TOKENS
 ~~~zig

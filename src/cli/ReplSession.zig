@@ -149,7 +149,7 @@ pub fn stepWithConfig(self: *ReplSession, input: []const u8, report_config: repo
                 self.definitions.restore(self.allocator, &snapshot);
                 // Drop any pending annotation for this name. A `y : Str` typed before a
                 // failed `y = 5` would otherwise survive and poison every subsequent
-                // REPL turn with "DECLARATION HAS NO VALUE".
+                // REPL turn with "Declaration Has No Value".
                 if (input_info.definition_kind == .value and !self.definitions.hasKind(name, .value)) {
                     self.definitions.removeByNameAndKind(self.allocator, name, .annotation);
                 }
@@ -417,11 +417,9 @@ fn renderAstDiagnostics(
 }
 
 fn renderFallbackParseDiagnostic(self: *ReplSession, source: []const u8, report_config: reporting.ReportingConfig) (Allocator.Error || error{WriteFailed})![]u8 {
-    var report = reporting.Report.init(self.allocator, "PARSE ERROR", .runtime_error);
+    var report = try reporting.Report.init(self.allocator, "Parse Error", "The REPL input could not be parsed.", .runtime_error);
     defer report.deinit();
-    try report.document.addReflowingText("The REPL input could not be parsed.");
     if (source.len > 0) {
-        try report.document.addLineBreak();
         try report.document.addLineBreak();
         try report.document.addCodeBlock(source);
     }

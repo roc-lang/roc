@@ -12,48 +12,50 @@ PARSE ERROR - type_annotation_missing_parens.md:2:1:2:1
 TOO FEW ARGS - type_annotation_missing_parens.md:1:8:1:12
 DECLARATION HAS NO VALUE - type_annotation_missing_parens.md:1:1:1:12
 # PROBLEMS
-**PARSE ERROR**
-Type applications require parentheses around their type arguments.
 
-I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+┌─────────────┐
+│ PARSE ERROR ├─ Type applications require parentheses around their type ─────┐
+└┬────────────┘  arguments.                                                   │
+ │                                                                            │
+ │                                                                            │
+ │  ‾                                                                         │
+ └───────────────────────────────────── type_annotation_missing_parens.md:2:1 ┘
 
-Instead of:
-    **List U8**
+    I found a type followed by what looks like a type argument, but they need
+    to be connected with parentheses.
 
-Use:
-    **List(U8)**
+    Instead of:
+        List U8
 
-Other valid examples:
-    `Dict(Str, Num)`
-    `Try(a, Str)`
-    `Maybe(List(U64))`
+    Use:
+        List(U8)
 
-**type_annotation_missing_parens.md:2:1:2:1:**
-```roc
-
-```
-^
-
-
-**TOO FEW ARGS**
-The type _List_ expects 1 argument, but got 0 instead.
-**type_annotation_missing_parens.md:1:8:1:12:**
-```roc
-nums : List U8
-```
-       ^^^^
+    Other valid examples:
+        Dict(Str, Num)
+        Try(a, Str)
+        Maybe(List(U64))
 
 
-**DECLARATION HAS NO VALUE**
-This declaration has a type annotation but no implementation.
-**type_annotation_missing_parens.md:1:1:1:12:**
-```roc
-nums : List U8
-```
-^^^^^^^^^^^
+┌──────────────┐
+│ TOO FEW ARGS ├─ The type List expects 1 argument, but got 0 instead. ───────┐
+└┬─────────────┘                                                              │
+ │                                                                            │
+ │  nums : List U8                                                            │
+ │         ‾‾‾‾                                                               │
+ └───────────────────────────────────── type_annotation_missing_parens.md:1:8 ┘
 
 
-Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+
+┌──────────────────────────┐
+│ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
+└┬─────────────────────────┘  implementation.                                 │
+ │                                                                            │
+ │  nums : List U8                                                            │
+ │  ‾‾‾‾‾‾‾‾‾‾‾                                                               │
+ └───────────────────────────────────── type_annotation_missing_parens.md:1:1 ┘
+
+    Add a value body here, or put hosted functions in a platform type module so
+    they are published through the host boundary.
 
 # TOKENS
 ~~~zig

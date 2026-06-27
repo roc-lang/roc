@@ -19,16 +19,16 @@ main! = |_| {}
 # EXPECTED
 UNDEFINED VARIABLE - type_record_effectful.md:7:5:7:17
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `line!` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
-**type_record_effectful.md:7:5:7:17:**
-```roc
-    Stdout.line!(person.name)
-```
-    ^^^^^^^^^^^^
+┌────────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `line!` in this scope. ──────────────┐
+└┬───────────────────┘                                                        │
+ │                                                                            │
+ │  Stdout.line!(person.name)                                                 │
+ │  ‾‾‾‾‾‾‾‾‾‾‾‾                                                              │
+ └────────────────────────────────────────────── type_record_effectful.md:7:5 ┘
 
+    Is there an `import` or `exposing` missing up-top?
 
 # TOKENS
 ~~~zig

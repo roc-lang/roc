@@ -30,25 +30,29 @@ VAR REASSIGNMENT ERROR - :0:0:0:0
 VAR REASSIGNMENT ERROR - :0:0:0:0
 UNUSED VARIABLE - can_var_scoping_regular_var.md:2:17:2:22
 # PROBLEMS
-**VAR REASSIGNMENT ERROR**
+
+VAR REASSIGNMENT ERROR
+
 Cannot reassign a `var` from outside the function where it was declared.
 Variables declared with `var` can only be reassigned within the same function scope.
 
-**VAR REASSIGNMENT ERROR**
+
+VAR REASSIGNMENT ERROR
+
 Cannot reassign a `var` from outside the function where it was declared.
 Variables declared with `var` can only be reassigned within the same function scope.
 
-**UNUSED VARIABLE**
-Variable `items` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_items` to suppress this warning.
-The unused variable is declared here:
-**can_var_scoping_regular_var.md:2:17:2:22:**
-```roc
-processItems = |items| {
-```
-                ^^^^^
+┌─────────────────┐
+│ UNUSED VARIABLE ├─ Variable `items` is defined here and then never used. ───┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  processItems = |items| {                                                  │
+ │                  ‾‾‾‾‾                                                     │
+ └─────────────────────────────────────── can_var_scoping_regular_var.md:2:17 ┘
 
+    If you don't need this variable, prefix it with an underscore like `_items`
+    to suppress this warning.
 
 # TOKENS
 ~~~zig

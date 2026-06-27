@@ -320,8 +320,8 @@ const Lifter = struct {
             .expr,
             .expect,
             .dbg,
-            .return_,
             => |expr| try self.rewriteExpr(expr),
+            .return_ => |ret| try self.rewriteExpr(ret.value),
             .crash => {},
         }
     }
@@ -352,10 +352,10 @@ const Lifter = struct {
             .record => |fields| for (self.output.fieldExprSpan(fields)) |field| try self.rewriteExpr(field.value),
             .tag => |tag| for (self.output.exprSpan(tag.payloads)) |child| try self.rewriteExpr(child),
             .nominal,
-            .return_,
             .dbg,
             .expect,
             => |child| try self.rewriteExpr(child),
+            .return_ => |ret| try self.rewriteExpr(ret.value),
             .expect_err => |expect_err| try self.rewriteExpr(expect_err.msg),
             .comptime_branch_taken => |taken| try self.rewriteExpr(taken.body),
             .let_ => |let_| {
@@ -751,10 +751,10 @@ const CaptureSet = struct {
             .record => |fields| for (input.fieldExprSpan(fields)) |field| try self.collectExpr(field.value, bound),
             .tag => |tag| for (input.exprSpan(tag.payloads)) |child| try self.collectExpr(child, bound),
             .nominal,
-            .return_,
             .dbg,
             .expect,
             => |child| try self.collectExpr(child, bound),
+            .return_ => |ret| try self.collectExpr(ret.value, bound),
             .expect_err => |expect_err| try self.collectExpr(expect_err.msg, bound),
             .comptime_branch_taken => |taken| try self.collectExpr(taken.body, bound),
             .let_ => |let_| {
@@ -886,8 +886,8 @@ const CaptureSet = struct {
             .expr,
             .expect,
             .dbg,
-            .return_,
             => |expr| try self.collectExpr(expr, bound),
+            .return_ => |ret| try self.collectExpr(ret.value, bound),
             .crash => {},
         }
     }

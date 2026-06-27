@@ -13,61 +13,61 @@ PARSE ERROR - stmt_import.md:1:19:1:22
 PARSE ERROR - stmt_import.md:1:22:1:23
 PARSE ERROR - stmt_import.md:1:27:1:28
 # PROBLEMS
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
 
-**stmt_import.md:1:18:1:19:**
-```roc
-import json.Json [foo, BAR]
-```
-                 ^
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  import json.Json [foo, BAR]                                               │
+ │                   ‾                                                        │
+ └─────────────────────────────────────────────────────── stmt_import.md:1:18 ┘
 
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**stmt_import.md:1:19:1:22:**
-```roc
-import json.Json [foo, BAR]
-```
-                  ^^^
+    This is an unexpected parsing error. Please check your syntax.
 
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  import json.Json [foo, BAR]                                               │
+ │                    ‾‾‾                                                     │
+ └─────────────────────────────────────────────────────── stmt_import.md:1:19 ┘
 
-**stmt_import.md:1:22:1:23:**
-```roc
-import json.Json [foo, BAR]
-```
-                     ^
+    This is an unexpected parsing error. Please check your syntax.
 
 
-**PARSE ERROR**
-Type applications require parentheses around their type arguments.
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  import json.Json [foo, BAR]                                               │
+ │                       ‾                                                    │
+ └─────────────────────────────────────────────────────── stmt_import.md:1:22 ┘
 
-I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+    This is an unexpected parsing error. Please check your syntax.
 
-Instead of:
-    **List U8**
 
-Use:
-    **List(U8)**
+┌─────────────┐
+│ PARSE ERROR ├─ Type applications require parentheses around their type ─────┐
+└┬────────────┘  arguments.                                                   │
+ │                                                                            │
+ │  import json.Json [foo, BAR]                                               │
+ │                            ‾                                               │
+ └─────────────────────────────────────────────────────── stmt_import.md:1:27 ┘
 
-Other valid examples:
-    `Dict(Str, Num)`
-    `Try(a, Str)`
-    `Maybe(List(U64))`
+    I found a type followed by what looks like a type argument, but they need
+    to be connected with parentheses.
 
-**stmt_import.md:1:27:1:28:**
-```roc
-import json.Json [foo, BAR]
-```
-                          ^
+    Instead of:
+        List U8
 
+    Use:
+        List(U8)
+
+    Other valid examples:
+        Dict(Str, Num)
+        Try(a, Str)
+        Maybe(List(U64))
 
 # TOKENS
 ~~~zig

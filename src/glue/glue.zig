@@ -9,7 +9,7 @@
 //! 3. Collect hosted functions and module type info from checked artifacts
 //! 4. Build the glue input type table from artifact-owned checked type data
 //! 5. Materialize the glue input as Roc C-ABI values
-//! 6. Compile the glue spec through checked artifacts, lower to LIR, and run the LIR interpreter
+//! 6. Compile the glue spec through checked artifacts, lower to LIR, and run it with the requested backend
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -19,7 +19,7 @@ const parse = @import("parse");
 const compile = @import("compile");
 const check = @import("check");
 const can = @import("can");
-const echo_platform = @import("echo_platform");
+const backend = @import("backend");
 const roc_target = @import("roc_target");
 const layout = @import("layout");
 const lir = @import("lir");
@@ -37,11 +37,18 @@ const RocList = builtins.list.RocList;
 
 const eval_mod = @import("eval");
 
+/// Backend used to execute the glue spec.
+pub const GlueOpt = enum {
+    dev,
+    interpreter,
+};
+
 /// Arguments for glue code generation.
 pub const GlueArgs = struct {
     glue_spec: []const u8,
     output_dir: []const u8,
     platform_path: []const u8,
+    opt: GlueOpt = .dev,
 };
 
 /// Error types for glue generation operations.
@@ -55,6 +62,7 @@ pub const GlueError = error{
     SyntheticAppWrite,
     BuildEnvInit,
     CompilationFailed,
+    DevBackendUnavailable,
     ModuleRetrieval,
     OutOfMemory,
     WriteFailed,
@@ -77,6 +85,7 @@ pub fn rocGlue(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, a
             error.SyntheticAppWrite => stderr.print("Error: Could not write synthetic app\n", .{}),
             error.BuildEnvInit => stderr.print("Error: Failed to initialize build environment\n", .{}),
             error.CompilationFailed => stderr.print("Error: Compilation failed\n", .{}),
+            error.DevBackendUnavailable => stderr.print("Error: The dev backend is not available for this host. Use `roc glue --opt=interpreter ...`.\n", .{}),
             error.ModuleRetrieval => stderr.print("Error: Failed to get compiled modules\n", .{}),
             error.OutOfMemory => stderr.print("Error: Out of memory\n", .{}),
             error.WriteFailed => stderr.print("Error: Write failed\n", .{}),
@@ -352,26 +361,15 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
         glueInvariant("make_glue expected one List(Types) argument, got {d}", .{arg_layouts.len});
     }
 
-    // 6. Construct List(Types) using the exact committed LIR layout and invoke the LIR interpreter.
-    const hosted_function_ptrs = [_]builtins.host_abi.HostedFn{};
-    var echo_env = echo_platform.EchoEnv{ .std_io = std_io };
-    var roc_ops = echo_platform.makeDefaultRocOps(&echo_env, @constCast(&hosted_function_ptrs));
+    // 6. Construct List(Types) using the exact committed LIR layout and invoke the requested backend.
+    var runtime_env = eval_mod.RuntimeHostEnv.init(gpa);
+    defer runtime_env.deinit();
     const glue_writer = GlueRocValueWriter{
         .layouts = &lowered.lir_result.layouts,
         .schemas = &lowered.runtime_value_schemas,
-        .roc_ops = &roc_ops,
+        .roc_ops = runtime_env.get_ops(),
     };
     var types_list = constructTypesRocList(&glue_writer, collected_modules.items, &platform_info, provides_entries.items, &type_table, &entrypoint_type_ids, &provides_type_ids, arg_layouts[0]);
-
-    var interpreter = eval_mod.LirInterpreter.init(
-        gpa,
-        &lowered.lir_result.store,
-        &lowered.lir_result.layouts,
-        &roc_ops,
-    ) catch {
-        return error.OutOfMemory;
-    };
-    defer interpreter.deinit();
 
     const proc = lowered.lir_result.store.getProcSpec(glue_proc);
     const ret_size_align = lowered.lir_result.layouts.layoutSizeAlign(lowered.lir_result.layouts.getLayout(proc.ret_layout));
@@ -383,16 +381,11 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
     defer gpa.rawFree(result_buf, ret_alignment, @returnAddress());
     if (result_buf.len > 0) @memset(result_buf, 0);
 
-    _ = interpreter.eval(.{
-        .proc_id = glue_proc,
-        .arg_layouts = arg_layouts,
-        .ret_layout = proc.ret_layout,
-        .arg_ptr = @ptrCast(&types_list),
-        .ret_ptr = @ptrCast(result_buf.ptr),
-    }) catch |err| {
-        stderr.print("Error running glue spec: {}\n", .{err}) catch {};
-        return error.CompilationFailed;
-    };
+    switch (args.opt) {
+        .dev => try runGlueSpecDev(gpa, stderr, &lowered, glue_proc, arg_layouts, &types_list, result_buf.ptr, &runtime_env),
+        .interpreter => try runGlueSpecInterpreter(gpa, stderr, &lowered, glue_proc, arg_layouts, &types_list, result_buf.ptr, runtime_env.get_ops()),
+    }
+    try writeHostEvents(stderr, &runtime_env);
 
     const glue_result = try extractGlueResult(gpa, &glue_writer, result_buf.ptr, proc.ret_layout);
     defer glue_result.deinit();
@@ -429,6 +422,110 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
         };
 
         stdout.print("  Wrote: {s}\n", .{file_path}) catch {};
+    }
+}
+
+fn runGlueSpecInterpreter(
+    gpa: Allocator,
+    stderr: *std.Io.Writer,
+    lowered: *lir.CheckedPipeline.LoweredProgram,
+    glue_proc: lir.LirProcSpecId,
+    arg_layouts: []const layout.Idx,
+    types_list: *RocList,
+    result_ptr: [*]u8,
+    roc_ops: *builtins.host_abi.RocOps,
+) GlueError!void {
+    var interpreter = eval_mod.LirInterpreter.init(
+        gpa,
+        &lowered.lir_result.store,
+        &lowered.lir_result.layouts,
+        roc_ops,
+    ) catch return error.OutOfMemory;
+    defer interpreter.deinit();
+
+    const proc = lowered.lir_result.store.getProcSpec(glue_proc);
+    _ = interpreter.eval(.{
+        .proc_id = glue_proc,
+        .arg_layouts = arg_layouts,
+        .ret_layout = proc.ret_layout,
+        .arg_ptr = @ptrCast(types_list),
+        .ret_ptr = @ptrCast(result_ptr),
+    }) catch |err| {
+        stderr.print("Error running glue spec: {}\n", .{err}) catch {};
+        return error.CompilationFailed;
+    };
+}
+
+fn runGlueSpecDev(
+    gpa: Allocator,
+    stderr: *std.Io.Writer,
+    lowered: *lir.CheckedPipeline.LoweredProgram,
+    glue_proc: lir.LirProcSpecId,
+    arg_layouts: []const layout.Idx,
+    types_list: *RocList,
+    result_ptr: [*]u8,
+    runtime_env: *eval_mod.RuntimeHostEnv,
+) GlueError!void {
+    if (comptime !backend.host_lir_codegen_available) {
+        return error.DevBackendUnavailable;
+    } else {
+        var codegen = backend.HostLirCodeGen.init(
+            gpa,
+            &lowered.lir_result.store,
+            &lowered.lir_result.layouts,
+            &.{},
+        ) catch return error.OutOfMemory;
+        defer codegen.deinit();
+
+        codegen.compileAllProcSpecs(lowered.lir_result.store.getProcSpecs()) catch return error.OutOfMemory;
+
+        const proc = lowered.lir_result.store.getProcSpec(glue_proc);
+        const entrypoint = codegen.generateEntrypointWrapper(
+            "roc_make_glue",
+            glue_proc,
+            arg_layouts,
+            proc.ret_layout,
+        ) catch return error.OutOfMemory;
+
+        var executable = backend.ExecutableMemory.initWithEntryOffset(
+            codegen.getGeneratedCode(),
+            entrypoint.offset,
+        ) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return error.CompilationFailed,
+        };
+        defer executable.deinit();
+
+        runtime_env.resetObservation();
+        var crash_boundary = runtime_env.enterCrashBoundary();
+        defer crash_boundary.deinit();
+
+        const sj = crash_boundary.set();
+        if (sj == 0) {
+            executable.callRocABI(
+                @ptrCast(runtime_env.get_ops()),
+                @ptrCast(result_ptr),
+                @ptrCast(types_list),
+            );
+        }
+
+        switch (runtime_env.crashState()) {
+            .did_not_crash => {},
+            .crashed => |message| {
+                stderr.print("Error running glue spec: crashed with message: {s}\n", .{message}) catch {};
+                return error.CompilationFailed;
+            },
+        }
+    }
+}
+
+fn writeHostEvents(stderr: *std.Io.Writer, runtime_env: *const eval_mod.RuntimeHostEnv) GlueError!void {
+    for (runtime_env.events.items) |event| {
+        switch (event) {
+            .dbg => |msg| try stderr.print("[dbg] {s}\n", .{msg}),
+            .expect_failed => |msg| try stderr.print("Expect failed: {s}\n", .{msg}),
+            .crashed => {},
+        }
     }
 }
 
@@ -1103,6 +1200,44 @@ const TypeTable = struct {
         };
     }
 
+    /// Target-independent `SortKey` for a type table entry (see `layout.SortKey`).
+    /// Mirrors `layout.Store.layoutSortKey` over glue's own type representation so
+    /// `roc glue` orders structural records/tuples identically to the layout store
+    /// on both 32-bit and 64-bit targets.
+    fn getSortKey(self: *const TypeTable, type_id: u64) layout.SortKey {
+        if (type_id >= self.entries.items.len) return .align_1;
+        return self.getSortKeyForRepr(self.entries.items[@intCast(type_id)]);
+    }
+
+    fn getSortKeyForRepr(self: *const TypeTable, repr: CollectedTypeRepr) layout.SortKey {
+        return switch (repr) {
+            .bool_, .u8_, .i8_, .unit, .unknown => .align_1,
+            .u16_, .i16_ => .align_2,
+            .u32_, .i32_, .f32_ => .align_4,
+            .u64_, .i64_, .f64_, .dec => .align_8,
+            .u128_, .i128_ => .align_16,
+            .box, .str_, .list, .function => .pointer,
+            .record => |rec| blk: {
+                var key: layout.SortKey = .align_1;
+                for (rec.fields) |field| {
+                    if (field.is_padding) continue;
+                    key = key.max(self.getSortKey(field.type_id));
+                }
+                break :blk key;
+            },
+            .tag_union => |tu| blk: {
+                const disc_size = layout.TagUnionData.discriminantSize(tu.tags.len);
+                var key = layout.SortKey.fromAlignBytes(
+                    layout.TagUnionData.alignmentForDiscriminantSize(disc_size).toByteUnits(),
+                );
+                for (tu.tags) |tag| {
+                    for (tag.payload_ids) |pid| key = key.max(self.getSortKey(pid));
+                }
+                break :blk key;
+            },
+        };
+    }
+
     fn convertCheckedType(
         self: *TypeTable,
         artifact: *const CheckedArtifact.CheckedModuleArtifact,
@@ -1216,13 +1351,13 @@ const TypeTable = struct {
     };
 
     /// Reconstructs a nominal record in DECLARED source order, with unnamed `_` /
-    /// `_name` fields reinstated as padding spacers, then reordered into the
-    /// runtime field order by the shared `field_order.computeNominalFieldOrder`
-    /// (the exact function the layout store uses). Returns `null` when the
-    /// declaration is unavailable (no `source_decl`, declaring module not found,
-    /// or the annotation is not a record), so the caller falls back to the
-    /// structural backing order. `backing` provides each named field's already
-    /// converted `type_id`/size/alignment, matched by field-name text.
+    /// `_name` fields reinstated as padding spacers and C-style padding inserted
+    /// between fields, matching the layout store's `putNominalStructFields`.
+    /// Returns `null` — so the caller falls back to the structural backing order —
+    /// when the record has no `_` field (it then lays out structurally), or when
+    /// the declaration is unavailable (no `source_decl`, declaring module not
+    /// found, or the annotation is not a record). `backing` provides each named
+    /// field's already converted `type_id`/size/alignment, matched by name text.
     fn nominalRecordInDeclaredOrder(
         self: *TypeTable,
         artifact: *const CheckedArtifact.CheckedModuleArtifact,
@@ -1262,8 +1397,6 @@ const TypeTable = struct {
         // record (matched by name); each unnamed field becomes a padding spacer
         // whose size is its declared type's size and whose alignment is 1.
         const collected = try self.gpa.alloc(CollectedRecordField, anno_fields.len);
-        const shapes = try self.gpa.alloc(layout.field_order.FieldShape, anno_fields.len);
-        defer self.gpa.free(shapes);
 
         var padding_cursor: usize = 0;
         var pad_index: usize = 0;
@@ -1292,7 +1425,6 @@ const TypeTable = struct {
                     .alignment = 1,
                     .is_padding = true,
                 };
-                shapes[i] = .{ .size = @intCast(sa.size), .alignment = 1 };
             } else {
                 const field_name = module_env.getIdentText(field.name);
                 const match = backingFieldByName(backing, field_name) orelse {
@@ -1306,25 +1438,23 @@ const TypeTable = struct {
                     .alignment = match.alignment,
                     .is_padding = false,
                 };
-                shapes[i] = .{ .size = @intCast(match.size), .alignment = @intCast(match.alignment) };
             }
             populated = i + 1;
         }
 
-        // Runtime order: the shared nominal field-order permutation. This keeps
-        // declared order when it is already padding-free (the common case).
-        const order = try self.gpa.alloc(u16, anno_fields.len);
-        defer self.gpa.free(order);
-        try layout.field_order.computeNominalFieldOrder(self.gpa, shapes, order);
+        // A nominal record keeps its declared order only when it opts in with an
+        // unnamed `_` field. Without one it lays out like a structural record, so
+        // fall back to the structural backing order.
+        if (pad_index == 0) {
+            self.freeCollectedRecordFields(collected, populated);
+            return null;
+        }
 
-        const ordered = try self.gpa.alloc(CollectedRecordField, anno_fields.len);
-        for (order, 0..) |src, dst| ordered[dst] = collected[src];
-        self.gpa.free(collected);
-
-        // Size/alignment from laying the ordered fields out with no padding.
+        // Declared order, verbatim, with C-style padding inserted between fields as
+        // alignment requires (the padding amount can differ on 32- vs 64-bit).
         var max_alignment: u64 = 1;
         var offset: u64 = 0;
-        for (ordered) |field| {
+        for (collected) |field| {
             if (field.alignment > max_alignment) max_alignment = field.alignment;
             if (field.alignment > 0) {
                 const rem = offset % field.alignment;
@@ -1338,7 +1468,7 @@ const TypeTable = struct {
             if (rem != 0) record_size += max_alignment - rem;
         }
 
-        return .{ .fields = ordered, .size = record_size, .alignment = max_alignment };
+        return .{ .fields = collected, .size = record_size, .alignment = max_alignment };
     }
 
     /// Finds a backing record field by its name text, returning its converted
@@ -1401,13 +1531,13 @@ const TypeTable = struct {
             field_sizes[i] = self.getSizeAlign(field_type_ids[i]);
         }
 
-        // Structural records order by descending alignment then ascending field
+        // Structural records order by descending sort key then ascending field
         // name, computed by the shared field-order module the layout store uses.
         const structural = try self.gpa.alloc(layout.field_order.StructuralField, fields.len);
         defer self.gpa.free(structural);
         for (fields, 0..) |field, i| {
             structural[i] = .{
-                .alignment = @intCast(field_sizes[i].alignment),
+                .sort_key = self.getSortKey(field_type_ids[i]),
                 .name = artifact.canonical_names.recordFieldLabelText(field.name),
             };
         }
@@ -1478,7 +1608,15 @@ const TypeTable = struct {
             field_names[i] = try std.fmt.allocPrint(self.gpa, "_{d}", .{i});
         }
 
-        // Sort by alignment descending, then name ascending (matching Roc ABI)
+        // Sort by sort key descending, then name ascending (matching Roc ABI). The
+        // sort key is target-independent (a pointer sorts between 4- and 8-byte
+        // alignment), so the element order matches the layout store on both targets.
+        const field_sort_keys = try self.gpa.alloc(layout.SortKey, elems.len);
+        defer self.gpa.free(field_sort_keys);
+        for (0..elems.len) |i| {
+            field_sort_keys[i] = self.getSortKey(field_type_ids[i]);
+        }
+
         var field_indices = try self.gpa.alloc(usize, elems.len);
         defer self.gpa.free(field_indices);
         for (0..elems.len) |i| {
@@ -1486,19 +1624,17 @@ const TypeTable = struct {
         }
 
         const SortCtx = struct {
-            sizes: []const SizeAlign,
+            sort_keys: []const layout.SortKey,
             names: []const []const u8,
 
             pub fn lessThan(ctx: @This(), a: usize, b: usize) bool {
-                const a_align = ctx.sizes[a].alignment;
-                const b_align = ctx.sizes[b].alignment;
-                if (a_align != b_align) {
-                    return a_align > b_align; // descending alignment
+                if (ctx.sort_keys[a] != ctx.sort_keys[b]) {
+                    return ctx.sort_keys[a].sortsBefore(ctx.sort_keys[b]);
                 }
                 return std.mem.order(u8, ctx.names[a], ctx.names[b]) == .lt;
             }
         };
-        std.mem.sort(usize, field_indices, SortCtx{ .sizes = field_sizes, .names = field_names }, SortCtx.lessThan);
+        std.mem.sort(usize, field_indices, SortCtx{ .sort_keys = field_sort_keys, .names = field_names }, SortCtx.lessThan);
 
         const collected_fields = try self.gpa.alloc(CollectedRecordField, elems.len);
         var max_alignment: u64 = 0;
@@ -1858,7 +1994,7 @@ const GlueRocValueWriter = struct {
         if (tag_union_layout.tag != .tag_union) {
             glueInvariant("glue expected tag-union layout, got {s}", .{@tagName(tag_union_layout.tag)});
         }
-        self.layouts.getTagUnionInfo(tag_union_layout).data.writeDiscriminant(tag_union_base, tag_index);
+        self.layouts.getTagUnionInfo(tag_union_layout).data.writeDiscriminant(tag_union_base, tag_index, self.layouts.targetUsize());
     }
 
     fn readTagDiscriminant(self: *const GlueRocValueWriter, tag_union_base: [*]const u8, tag_union_layout_idx: layout.Idx) u64 {
@@ -1866,7 +2002,7 @@ const GlueRocValueWriter = struct {
         if (tag_union_layout.tag != .tag_union) {
             glueInvariant("glue expected tag-union layout, got {s}", .{@tagName(tag_union_layout.tag)});
         }
-        return self.layouts.getTagUnionInfo(tag_union_layout).data.readDiscriminant(@constCast(tag_union_base));
+        return self.layouts.getTagUnionInfo(tag_union_layout).data.readDiscriminant(@constCast(tag_union_base), self.layouts.targetUsize());
     }
 };
 

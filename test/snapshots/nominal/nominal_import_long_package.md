@@ -13,15 +13,14 @@ red = ... # not implemented
 # EXPECTED
 UNDECLARED TYPE - nominal_import_long_package.md:3:7:3:9
 # PROBLEMS
-**UNDECLARED TYPE**
-The type _CE_ is not declared in this scope.
 
-This type is referenced here:
-**nominal_import_long_package.md:3:7:3:9:**
-```roc
-red : CE
-```
-      ^^
+┌─────────────────┐
+│ UNDECLARED TYPE ├─ The type `CE` is not declared in this scope. ────────────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  red : CE                                                                  │
+ │        ‾‾                                                                  │
+ └──────────────────────────────────────── nominal_import_long_package.md:3:7 ┘
 
 
 # TOKENS

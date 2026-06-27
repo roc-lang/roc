@@ -10,16 +10,16 @@ type=expr
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - parse_malformed_octal_number.md:1:1:1:3
 # PROBLEMS
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **0o** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
 
-**parse_malformed_octal_number.md:1:1:1:3:**
-```roc
-0o
-```
-^^
+┌────────────────────────────────┐
+│ UNEXPECTED TOKEN IN EXPRESSION ├─ The token 0o is not expected in an ───────┐
+└┬───────────────────────────────┘  expression.                               │
+ │                                                                            │
+ │  0o                                                                        │
+ │  ‾‾                                                                        │
+ └─────────────────────────────────────── parse_malformed_octal_number.md:1:1 ┘
 
+    Expressions can be identifiers, literals, function calls, or operators.
 
 # TOKENS
 ~~~zig

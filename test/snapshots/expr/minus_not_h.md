@@ -10,16 +10,16 @@ type=expr
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - minus_not_h.md:1:1:1:2
 # PROBLEMS
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **-** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
 
-**minus_not_h.md:1:1:1:2:**
-```roc
--!h
-```
-^
+┌────────────────────────────────┐
+│ UNEXPECTED TOKEN IN EXPRESSION ├─ The token - is not expected in an ────────┐
+└┬───────────────────────────────┘  expression.                               │
+ │                                                                            │
+ │  -!h                                                                       │
+ │  ‾                                                                         │
+ └──────────────────────────────────────────────────────── minus_not_h.md:1:1 ┘
 
+    Expressions can be identifiers, literals, function calls, or operators.
 
 # TOKENS
 ~~~zig

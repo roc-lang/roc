@@ -2300,6 +2300,7 @@ pub fn build(b: *std.Build) void {
     const run_fmt_zig_step = b.step("run-fmt-zig", "Format all zig code");
     const run_snapshot_tool_step = b.step("run-snapshot-tool", "Run the snapshot tool to update snapshot files");
     const echo_wasm_step = b.step("build-echo-wasm", "Build the echo platform to zig-out/lib/echo.wasm");
+    const echo_wasm_archive_step = b.step("build-echo-wasm-archive", "Build echo.wasm and zstd-compress it to zig-out/lib/echo.wasm.zst");
 
     const build_test_hosts_step = b.step("build-test-hosts", "Build test platform host libraries");
     const build_release_step = b.step("build-release", "Build optimized release binary for distribution");
@@ -3352,6 +3353,26 @@ pub fn build(b: *std.Build) void {
         });
         build_playground_step.dependOn(&echo_wasm_install.step);
         echo_wasm_step.dependOn(&echo_wasm_install.step);
+
+        // build-echo-wasm-archive: compress echo.wasm into echo.wasm.zst using
+        // the same zstd streaming compressor as `roc bundle` (src/bundle/).
+        const echo_wasm_archive_exe = b.addExecutable(.{
+            .name = "echo_wasm_archive",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/echo_platform/echo_wasm_archive.zig"),
+                .target = target,
+                .optimize = optimize,
+            }),
+        });
+        configureBackend(echo_wasm_archive_exe, target);
+        echo_wasm_archive_exe.root_module.addImport("bundle", roc_modules.bundle);
+        echo_wasm_archive_exe.root_module.linkLibrary(zstd.artifact("zstd"));
+
+        const echo_wasm_archive_cmd = b.addRunArtifact(echo_wasm_archive_exe);
+        echo_wasm_archive_cmd.addFileArg(echo_wasm.getEmittedBin());
+        const echo_wasm_archive_out = echo_wasm_archive_cmd.addOutputFileArg("echo.wasm.zst");
+        const echo_wasm_archive_install = b.addInstallFileWithDir(echo_wasm_archive_out, .lib, "echo.wasm.zst");
+        echo_wasm_archive_step.dependOn(&echo_wasm_archive_install.step);
 
         // Copy the echo platform www files alongside echo.wasm
         inline for (.{ "index.html", "app.js" }) |filename| {
@@ -4925,76 +4946,6 @@ pub fn build(b: *std.Build) void {
         }
     }
 
-    // Build glue platform host at runtime for the native platform.
-    if (run_cli_test_step != null) {
-        if (isNativeishOrMusl(target)) {
-            // Determine the appropriate target for the glue platform host library.
-            // On Linux, we need to use musl explicitly because the platform's
-            // findHostLibrary looks for targets/x64musl/libhost.a.
-            const glue_host_target, const glue_host_target_dir: ?[]const u8 = switch (target.result.os.tag) {
-                .linux => switch (target.result.cpu.arch) {
-                    .x86_64 => .{ b.resolveTargetQuery(.{ .cpu_arch = .x86_64, .os_tag = .linux, .abi = .musl }), "x64musl" },
-                    .aarch64 => .{ b.resolveTargetQuery(.{ .cpu_arch = .aarch64, .os_tag = .linux, .abi = .musl }), "arm64musl" },
-                    else => .{ target, null },
-                },
-                .windows => switch (target.result.cpu.arch) {
-                    .x86_64 => .{ target, "x64win" },
-                    .aarch64 => .{ target, "arm64win" },
-                    else => .{ target, null },
-                },
-                .macos => switch (target.result.cpu.arch) {
-                    .x86_64 => .{ target, "x64mac" },
-                    .aarch64 => .{ target, "arm64mac" },
-                    else => .{ target, null },
-                },
-                else => .{ target, null },
-            };
-
-            if (glue_host_target_dir) |target_dir| {
-                const glue_platform_host_lib = createTestPlatformHostLib(
-                    b,
-                    "glue_platform_host_runtime",
-                    "src/glue/platform/host.zig",
-                    glue_host_target,
-                    optimize,
-                    roc_modules,
-                    strip,
-                    omit_frame_pointer,
-                    .{ .uses_stack_handler = true },
-                );
-
-                // Add compiler modules to glue platform host for type extraction
-                glue_platform_host_lib.root_module.addImport("can", roc_modules.can);
-                glue_platform_host_lib.root_module.addImport("types", roc_modules.types);
-                glue_platform_host_lib.root_module.addImport("layout", roc_modules.layout);
-                glue_platform_host_lib.root_module.addImport("eval", roc_modules.eval);
-                glue_platform_host_lib.root_module.addImport("collections", roc_modules.collections);
-
-                // Copy to the target-specific directory
-                const copy_glue_host = b.addUpdateSourceFiles();
-                const glue_host_filename = if (target.result.os.tag == .windows) "host.lib" else "libhost.a";
-                const target_path = b.pathJoin(&.{ "src/glue/platform/targets", target_dir, glue_host_filename });
-
-                // Ensure the target directory exists
-                const dir_path = b.pathJoin(&.{ "src/glue/platform/targets", target_dir });
-                std.Io.Dir.cwd().createDirPath(b.graph.io, dir_path) catch {};
-
-                copy_glue_host.addCopyFileToSource(glue_platform_host_lib.getEmittedBin(), target_path);
-
-                // Apply archive padding fix for non-Windows targets
-                const final_step: *Step = if (target.result.os.tag != .windows) blk: {
-                    const fix_target = FixArchivePaddingStep.create(b, target_path);
-                    fix_target.step.dependOn(&copy_glue_host.step);
-                    break :blk &fix_target.step;
-                } else &copy_glue_host.step;
-
-                if (run_cli_test_step) |cli_test_step| {
-                    cli_test_step.dependOn(final_step);
-                }
-            }
-        }
-    }
-
     var build_afl = false;
     if (!isNativeishOrMusl(target)) {
         std.log.warn("Cross compilation does not support fuzzing (Only building repro executables)", .{});
@@ -5125,14 +5076,65 @@ fn add_fuzz_target(
 
         const fuzz_exe = if (target.result.os.tag == .macos)
             addMacosAflFuzzExe(b, target, .ReleaseSafe, use_system_afl, fuzz_obj) orelse return
-        else blk: {
-            const afl = b.lazyImport(@This(), "afl_kit") orelse return;
-            break :blk afl.addInstrumentedExe(b, target, .ReleaseSafe, &.{}, use_system_afl, fuzz_obj, &.{"-lm"}) orelse return;
-        };
+        else
+            addAflFuzzExe(b, target, .ReleaseSafe, use_system_afl, fuzz_obj) orelse return;
         const install_fuzz = b.addInstallBinFile(fuzz_exe, name_exe);
         fuzz_step.dependOn(&install_fuzz.step);
         b.getInstallStep().dependOn(&install_fuzz.step);
     }
+}
+
+fn addAflFuzzExe(
+    b: *std.Build,
+    target: ResolvedTarget,
+    optimize: OptimizeMode,
+    use_system_afl: bool,
+    fuzz_obj: *Step.Compile,
+) ?std.Build.LazyPath {
+    const afl_kit = b.lazyDependency("afl_kit", .{}) orelse return null;
+
+    var run_afl_cc: *Step.Run = undefined;
+    if (use_system_afl) {
+        run_afl_cc = b.addSystemCommand(&.{
+            b.findProgram(&.{"afl-cc"}, &.{}) catch @panic("Could not find 'afl-cc', which is required to build"),
+            "-O3",
+        });
+    } else {
+        const afl = afl_kit.builder.lazyDependency("AFLplusplus", .{
+            .target = target,
+            .optimize = optimize,
+            .@"llvm-config-path" = &[_][]const u8{},
+        }) orelse return null;
+
+        const install_tools = b.addInstallDirectory(.{
+            .source_dir = std.Build.LazyPath{
+                .cwd_relative = afl.builder.install_path,
+            },
+            .install_dir = .prefix,
+            .install_subdir = "AFLplusplus",
+        });
+
+        install_tools.step.dependOn(afl.builder.getInstallStep());
+        run_afl_cc = b.addSystemCommand(&.{
+            b.pathJoin(&.{ afl.builder.exe_dir, "afl-cc" }),
+            "-O3",
+        });
+        run_afl_cc.step.dependOn(&afl.builder.top_level_steps.get("llvm_exes").?.step);
+        run_afl_cc.step.dependOn(&install_tools.step);
+    }
+
+    // Keep the object output requested so Zig materializes the LLVM bitcode output.
+    _ = fuzz_obj.getEmittedBin();
+
+    run_afl_cc.addArg("-o");
+    const fuzz_exe = run_afl_cc.addOutputFileArg(fuzz_obj.name);
+    run_afl_cc.addFileArg(afl_kit.path("afl.c"));
+    run_afl_cc.addFileArg(fuzz_obj.getEmittedLlvmBc());
+    // ELF linkers resolve libraries left-to-right, so math libraries must follow the bitcode.
+    run_afl_cc.addArg("-lm");
+    run_afl_cc.addArg("-lquadmath");
+
+    return fuzz_exe;
 }
 
 fn addMacosAflFuzzExe(

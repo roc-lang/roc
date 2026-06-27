@@ -410,6 +410,10 @@ const Pass = struct {
     }
 
     fn collectArgUses(self: *Pass, original_fn_count: usize) Allocator.Error!void {
+        // This loop only reads functions; it must not append to `program.fns`,
+        // whose reallocation would dangle the slice it iterates. Assert that in
+        // debug builds; the check compiles out of release builds.
+        const fns_base = self.program.fns.items.ptr;
         var changed = true;
         while (changed) {
             changed = false;
@@ -422,10 +426,18 @@ const Pass = struct {
                 try self.markArgUsesInExpr(fn_id, body, &changed);
             }
         }
+        if (@import("builtin").mode == .Debug) {
+            std.debug.assert(self.program.fns.items.ptr == fns_base);
+        }
     }
 
     fn collectCallPatterns(self: *Pass, original_fn_count: usize) Allocator.Error!void {
-        for (self.program.fns.items[0..original_fn_count], 0..) |fn_, index| {
+        // Collecting a pattern materializes specialized callables, which appends
+        // to `program.fns` and can reallocate it. Re-read `items` by index each
+        // step rather than iterate a slice captured before the loop.
+        var index: usize = 0;
+        while (index < original_fn_count) : (index += 1) {
+            const fn_ = self.program.fns.items[index];
             const body = switch (fn_.body) {
                 .roc => |body| body,
                 .hosted => continue,
@@ -495,10 +507,10 @@ const Pass = struct {
             .record => |fields| for (self.program.fieldExprSpan(fields)) |field| try self.markArgUsesInExpr(fn_id, field.value, changed),
             .tag => |tag| for (self.program.exprSpan(tag.payloads)) |payload| try self.markArgUsesInExpr(fn_id, payload, changed),
             .nominal,
-            .return_,
             .dbg,
             .expect,
             => |child| try self.markArgUsesInExpr(fn_id, child, changed),
+            .return_ => |ret| try self.markArgUsesInExpr(fn_id, ret.value, changed),
             .expect_err => |expect_err| try self.markArgUsesInExpr(fn_id, expect_err.msg, changed),
             .comptime_branch_taken => |taken| try self.markArgUsesInExpr(fn_id, taken.body, changed),
             .let_ => |let_| {
@@ -592,8 +604,8 @@ const Pass = struct {
             .expr,
             .expect,
             .dbg,
-            .return_,
             => |expr| try self.markArgUsesInExpr(fn_id, expr, changed),
+            .return_ => |ret| try self.markArgUsesInExpr(fn_id, ret.value, changed),
             .uninitialized, .crash => {},
         }
     }
@@ -635,10 +647,10 @@ const Pass = struct {
             .record => |fields| try self.collectCallPatternsInFieldExprSpan(owner, fields),
             .tag => |tag| try self.collectCallPatternsInExprSpan(owner, tag.payloads),
             .nominal,
-            .return_,
             .dbg,
             .expect,
             => |child| try self.collectCallPatternsInExpr(owner, child),
+            .return_ => |ret| try self.collectCallPatternsInExpr(owner, ret.value),
             .expect_err => |expect_err| try self.collectCallPatternsInExpr(owner, expect_err.msg),
             .comptime_branch_taken => |taken| try self.collectCallPatternsInExpr(owner, taken.body),
             .let_ => |let_| {
@@ -747,8 +759,8 @@ const Pass = struct {
             .expr,
             .expect,
             .dbg,
-            .return_,
             => |expr| try self.collectCallPatternsInExpr(owner, expr),
+            .return_ => |ret| try self.collectCallPatternsInExpr(owner, ret.value),
             .uninitialized, .crash => {},
         }
     }
@@ -871,6 +883,10 @@ const Pass = struct {
         defer self.allocator.free(done);
         @memset(done, false);
 
+        // This loop only reads functions; it must not append to `program.fns`,
+        // whose reallocation would dangle the slice it iterates. Assert that in
+        // debug builds; the check compiles out of release builds.
+        const fns_base = self.program.fns.items.ptr;
         const fn_count = self.program.fns.items.len;
         for (self.program.fns.items[0..fn_count]) |fn_| {
             const body = switch (fn_.body) {
@@ -878,6 +894,9 @@ const Pass = struct {
                 .hosted => continue,
             };
             try self.rewriteCallsInExpr(body, done);
+        }
+        if (@import("builtin").mode == .Debug) {
+            std.debug.assert(self.program.fns.items.ptr == fns_base);
         }
     }
 
@@ -907,10 +926,10 @@ const Pass = struct {
             .record => |fields| try self.rewriteCallsInFieldExprSpan(fields, done),
             .tag => |tag| try self.rewriteCallsInExprSpan(tag.payloads, done),
             .nominal,
-            .return_,
             .dbg,
             .expect,
             => |child| try self.rewriteCallsInExpr(child, done),
+            .return_ => |ret| try self.rewriteCallsInExpr(ret.value, done),
             .expect_err => |expect_err| try self.rewriteCallsInExpr(expect_err.msg, done),
             .comptime_branch_taken => |taken| try self.rewriteCallsInExpr(taken.body, done),
             .let_ => |let_| {
@@ -1016,8 +1035,8 @@ const Pass = struct {
             .expr,
             .expect,
             .dbg,
-            .return_,
             => |expr| try self.rewriteCallsInExpr(expr, done),
+            .return_ => |ret| try self.rewriteCallsInExpr(ret.value, done),
             .uninitialized, .crash => {},
         }
     }
@@ -1737,7 +1756,10 @@ const Cloner = struct {
                 .err_is_cold = sequence.err_is_cold,
                 .ok_body = try self.cloneExpr(sequence.ok_body),
             } },
-            .return_ => |value| .{ .return_ = try self.cloneExpr(value) },
+            .return_ => |ret| .{ .return_ = .{
+                .value = try self.cloneExpr(ret.value),
+                .target = ret.target,
+            } },
             .crash => |msg| .{ .crash = msg },
             .comptime_branch_taken => |taken| .{ .comptime_branch_taken = .{
                 .site = taken.site,
@@ -1881,7 +1903,10 @@ const Cloner = struct {
         return switch (expr.data) {
             .crash => |msg| try self.addExpr(.{ .ty = ty, .data = .{ .crash = msg } }),
             .comptime_exhaustiveness_failed => |site| try self.addExpr(.{ .ty = ty, .data = .{ .comptime_exhaustiveness_failed = site } }),
-            .return_ => |value| try self.addExpr(.{ .ty = ty, .data = .{ .return_ = try self.cloneExpr(value) } }),
+            .return_ => |ret| try self.addExpr(.{ .ty = ty, .data = .{ .return_ = .{
+                .value = try self.cloneExpr(ret.value),
+                .target = ret.target,
+            } } }),
             else => null,
         };
     }
@@ -2567,6 +2592,12 @@ const Cloner = struct {
                 .args = try self.cloneExprSpan(args_span),
             } } }) },
         };
+        if (exprContainsReturn(self.pass.program, body)) {
+            return .{ .expr = try self.addExpr(.{ .ty = ty, .data = .{ .call_value = .{
+                .callee = try self.materialize(.{ .callable = callable }),
+                .args = try self.cloneExprSpan(args_span),
+            } } }) };
+        }
 
         const source_args = try self.pass.allocator.dupe(Ast.TypedLocal, self.pass.program.typedLocalSpan(source_fn.args));
         defer self.pass.allocator.free(source_args);
@@ -2637,6 +2668,9 @@ const Cloner = struct {
             .roc => |body| body,
             .hosted => return .{ .expr = try self.cloneExprPlain(original_expr) },
         };
+        if (exprContainsReturn(self.pass.program, body)) {
+            return .{ .expr = try self.cloneExprPlain(original_expr) };
+        }
         const source_args = try self.pass.allocator.dupe(Ast.TypedLocal, self.pass.program.typedLocalSpan(source_fn.args));
         defer self.pass.allocator.free(source_args);
         const args = try self.pass.allocator.dupe(Ast.ExprId, self.pass.program.exprSpan(args_span));
@@ -2830,7 +2864,10 @@ const Cloner = struct {
             .expr => |expr| .{ .expr = try self.cloneExpr(expr) },
             .expect => |expr| .{ .expect = try self.cloneExpr(expr) },
             .dbg => |expr| .{ .dbg = try self.cloneExpr(expr) },
-            .return_ => |expr| .{ .return_ = try self.cloneExpr(expr) },
+            .return_ => |ret| .{ .return_ = .{
+                .value = try self.cloneExpr(ret.value),
+                .target = ret.target,
+            } },
             .crash => |msg| .{ .crash = msg },
         });
     }
@@ -3232,6 +3269,104 @@ fn localExpr(program: *const Ast.Program, expr_id: Ast.ExprId) ?Ast.LocalId {
     };
 }
 
+fn exprContainsReturn(program: *const Ast.Program, expr_id: Ast.ExprId) bool {
+    return switch (program.exprs.items[@intFromEnum(expr_id)].data) {
+        .local,
+        .unit,
+        .int_lit,
+        .frac_f32_lit,
+        .frac_f64_lit,
+        .dec_lit,
+        .str_lit,
+        .fn_ref,
+        .crash,
+        .comptime_exhaustiveness_failed,
+        .uninitialized,
+        .uninitialized_payload,
+        .lambda,
+        .def_ref,
+        .fn_def,
+        => false,
+        .return_ => true,
+        .list,
+        .tuple,
+        => |items| exprSpanContainsReturn(program, items),
+        .record => |fields| {
+            for (program.fieldExprSpan(fields)) |field| {
+                if (exprContainsReturn(program, field.value)) return true;
+            }
+            return false;
+        },
+        .tag => |tag| exprSpanContainsReturn(program, tag.payloads),
+        .nominal,
+        .dbg,
+        .expect,
+        => |child| exprContainsReturn(program, child),
+        .expect_err => |expect_err| exprContainsReturn(program, expect_err.msg),
+        .comptime_branch_taken => |taken| exprContainsReturn(program, taken.body),
+        .let_ => |let_| exprContainsReturn(program, let_.value) or exprContainsReturn(program, let_.rest),
+        .call_value => |call| exprContainsReturn(program, call.callee) or exprSpanContainsReturn(program, call.args),
+        .call_proc => |call| exprSpanContainsReturn(program, call.args),
+        .low_level => |call| exprSpanContainsReturn(program, call.args),
+        .field_access => |field| exprContainsReturn(program, field.receiver),
+        .tuple_access => |access| exprContainsReturn(program, access.tuple),
+        .structural_eq => |eq| exprContainsReturn(program, eq.lhs) or exprContainsReturn(program, eq.rhs),
+        .structural_hash => |h| exprContainsReturn(program, h.value) or exprContainsReturn(program, h.hasher),
+        .match_ => |match| {
+            if (exprContainsReturn(program, match.scrutinee)) return true;
+            for (program.branchSpan(match.branches)) |branch| {
+                if (branch.guard) |guard| {
+                    if (exprContainsReturn(program, guard)) return true;
+                }
+                if (exprContainsReturn(program, branch.body)) return true;
+            }
+            return false;
+        },
+        .if_ => |if_| {
+            for (program.ifBranchSpan(if_.branches)) |branch| {
+                if (exprContainsReturn(program, branch.cond)) return true;
+                if (exprContainsReturn(program, branch.body)) return true;
+            }
+            return exprContainsReturn(program, if_.final_else);
+        },
+        .block => |block| {
+            for (program.stmtSpan(block.statements)) |stmt| {
+                if (stmtContainsReturn(program, stmt)) return true;
+            }
+            return exprContainsReturn(program, block.final_expr);
+        },
+        .loop_ => |loop| exprSpanContainsReturn(program, loop.initial_values) or exprContainsReturn(program, loop.body),
+        .break_ => |maybe| if (maybe) |value| exprContainsReturn(program, value) else false,
+        .continue_ => |continue_| exprSpanContainsReturn(program, continue_.values),
+        .if_initialized_payload => |payload_switch| exprContainsReturn(program, payload_switch.cond) or
+            exprContainsReturn(program, payload_switch.initialized) or
+            exprContainsReturn(program, payload_switch.uninitialized),
+        .try_sequence => |sequence| exprContainsReturn(program, sequence.try_expr) or exprContainsReturn(program, sequence.ok_body),
+        .try_record_sequence => |sequence| exprContainsReturn(program, sequence.try_expr) or exprContainsReturn(program, sequence.ok_body),
+    };
+}
+
+fn exprSpanContainsReturn(program: *const Ast.Program, span: Ast.Span(Ast.ExprId)) bool {
+    for (program.exprSpan(span)) |expr| {
+        if (exprContainsReturn(program, expr)) return true;
+    }
+    return false;
+}
+
+fn stmtContainsReturn(program: *const Ast.Program, stmt_id: Ast.StmtId) bool {
+    return switch (program.stmts.items[@intFromEnum(stmt_id)]) {
+        .return_ => true,
+        .let_ => |let_| exprContainsReturn(program, let_.value),
+        .expr,
+        .expect,
+        .dbg,
+        => |expr| exprContainsReturn(program, expr),
+        .uninitialized,
+        .crash,
+        => false,
+    };
+}
+
 fn localUseCountInExpr(program: *const Ast.Program, local: Ast.LocalId, expr_id: Ast.ExprId) usize {
     return switch (program.exprs.items[@intFromEnum(expr_id)].data) {
         .local => |seen| if (seen == local) 1 else 0,
@@ -3257,10 +3392,10 @@ fn localUseCountInExpr(program: *const Ast.Program, local: Ast.LocalId, expr_id:
         },
         .tag => |tag| localUseCountInExprSpan(program, local, tag.payloads),
         .nominal,
-        .return_,
         .dbg,
         .expect,
         => |child| localUseCountInExpr(program, local, child),
+        .return_ => |ret| localUseCountInExpr(program, local, ret.value),
         .expect_err => |expect_err| localUseCountInExpr(program, local, expect_err.msg),
         .comptime_branch_taken => |taken| localUseCountInExpr(program, local, taken.body),
         .let_ => |let_| localUseCountInExpr(program, local, let_.value) + localUseCountInExpr(program, local, let_.rest),
@@ -3325,8 +3460,8 @@ fn localUseCountInStmt(program: *const Ast.Program, local: Ast.LocalId, stmt_id:
         .expr,
         .expect,
         .dbg,
-        .return_,
         => |expr| localUseCountInExpr(program, local, expr),
+        .return_ => |ret| localUseCountInExpr(program, local, ret.value),
         .crash => 0,
     };
 }
@@ -3374,8 +3509,8 @@ fn scanLocalUseInExpr(program: *const Ast.Program, local: Ast.LocalId, expr_id: 
         },
         .tag => |tag| scanLocalUseInExprSpan(program, local, tag.payloads, scan),
         .nominal => |child| scanLocalUseInExpr(program, local, child, scan),
-        .return_ => |child| {
-            scanLocalUseInExpr(program, local, child, scan);
+        .return_ => |ret| {
+            scanLocalUseInExpr(program, local, ret.value, scan);
             scan.seen_effect = true;
         },
         .dbg,
@@ -3517,8 +3652,8 @@ fn scanLocalUseInStmt(program: *const Ast.Program, local: Ast.LocalId, stmt_id: 
             scanLocalUseInExpr(program, local, expr, scan);
             scan.seen_effect = true;
         },
-        .return_ => |expr| {
-            scanLocalUseInExpr(program, local, expr, scan);
+        .return_ => |ret| {
+            scanLocalUseInExpr(program, local, ret.value, scan);
             scan.seen_effect = true;
         },
         .crash => scan.seen_effect = true,
