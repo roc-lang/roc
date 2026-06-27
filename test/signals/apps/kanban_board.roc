@@ -19,6 +19,7 @@ Card : {
 	tags : List(Str),
 	estimate : U64,
 	status : Str,
+	notes : U64,
 }
 
 DragState := [Idle, Dragging(Str)]
@@ -71,6 +72,7 @@ initial_cards = [
 		tags: ["signals", "engine"],
 		estimate: 5,
 		status: backlog_id,
+		notes: 0,
 	},
 	{
 		id: "CARD-102",
@@ -80,6 +82,7 @@ initial_cards = [
 		tags: ["wasm", "abi"],
 		estimate: 3,
 		status: backlog_id,
+		notes: 0,
 	},
 	{
 		id: "CARD-103",
@@ -89,6 +92,7 @@ initial_cards = [
 		tags: ["ui.each", "metrics"],
 		estimate: 2,
 		status: backlog_id,
+		notes: 0,
 	},
 	{
 		id: "CARD-201",
@@ -98,6 +102,7 @@ initial_cards = [
 		tags: ["browser", "events"],
 		estimate: 2,
 		status: progress_id,
+		notes: 0,
 	},
 	{
 		id: "CARD-301",
@@ -107,6 +112,7 @@ initial_cards = [
 		tags: ["events", "state"],
 		estimate: 4,
 		status: progress_id,
+		notes: 0,
 	},
 	{
 		id: "CARD-401",
@@ -116,6 +122,7 @@ initial_cards = [
 		tags: ["spec", "metrics"],
 		estimate: 1,
 		status: progress_id,
+		notes: 0,
 	},
 	{
 		id: "CARD-501",
@@ -125,6 +132,7 @@ initial_cards = [
 		tags: ["docs"],
 		estimate: 1,
 		status: done_id,
+		notes: 0,
 	},
 ]
 
@@ -378,6 +386,21 @@ clear_hover = |board| {
 	{ ..board, hover: NoHover }
 }
 
+increment_card_notes : Board, Str -> Board
+increment_card_notes = |board, card_id| {
+	{
+		..board,
+		cards: List.map(
+			board.cards,
+			|card| if card.id == card_id {
+				{ ..card, notes: card.notes + 1 }
+			} else {
+				card
+			},
+		),
+	}
+}
+
 insert_before : List(Card), Card, Str -> List(Card)
 insert_before = |cards, moved, before_id| {
 	state =
@@ -486,8 +509,8 @@ card_estimate_text = |card| concat3(card.estimate.to_str(), " pts", "")
 card_tags_text : Card -> Str
 card_tags_text = |card| Str.concat("Tags: ", join_tags(card.tags))
 
-note_label : Card, U64 -> Str
-note_label = |card, count| concat4("Notes on ", card.title, ": ", count.to_str())
+note_label : Card -> Str
+note_label = |card| concat4("Notes on ", card.title, ": ", card.notes.to_str())
 
 render_card : Ui.State(Board), Str, Str, Signal.Signal(Card) -> Elem
 render_card = |board_state, column_id, card_id, card_signal| {
@@ -499,48 +522,43 @@ render_card = |board_state, column_id, card_id, card_signal| {
 	priority_signal = Signal.map(card_signal, card_priority_text)
 	estimate_signal = Signal.map(card_signal, card_estimate_text)
 	tags_signal = Signal.map(card_signal, card_tags_text)
+	note_signal = Signal.map(card_signal, note_label)
 
-	Ui.state(
-		0,
-		|notes| {
-			note_signal = Signal.map2(card_signal, notes.signal(), note_label)
-			Html.section(
-				Str.concat("Card: ", card_title(initial_cards, card_id)),
+	Html.section(
+		Str.concat("Card: ", card_title(initial_cards, card_id)),
+		[
+			Html.class_attr_s(class_signal),
+			Html.on_pointer_down(board_state.on_unit(|board| start_drag(board, card_id))),
+			Html.on_pointer_enter(board_state.on_unit(|board| hover_before(board, column_id, card_id))),
+			Html.on_pointer_up(board_state.on_unit(|board| drop_before(board, column_id, card_id))),
+			Html.on_pointer_leave(board_state.on_unit(clear_hover)),
+		],
+		[
+			Html.div_c(
+				card_header_class,
 				[
-					Html.class_attr_s(class_signal),
-					Html.on_pointer_down(board_state.on_unit(|board| start_drag(board, card_id))),
-					Html.on_pointer_enter(board_state.on_unit(|board| hover_before(board, column_id, card_id))),
-					Html.on_pointer_up(board_state.on_unit(|board| drop_before(board, column_id, card_id))),
-					Html.on_pointer_leave(board_state.on_unit(clear_hover)),
+					Html.paragraph_c(card_id, card_id_class),
+					Html.paragraph_s_c(title_signal, card_title_class),
 				],
+			),
+			Html.div_c(
+				card_meta_grid_class,
 				[
-					Html.div_c(
-						card_header_class,
-						[
-							Html.paragraph_c(card_id, card_id_class),
-							Html.paragraph_s_c(title_signal, card_title_class),
-						],
-					),
-					Html.div_c(
-						card_meta_grid_class,
-						[
-							Html.paragraph_s_c(priority_signal, card_meta_class),
-							Html.paragraph_s_c(estimate_signal, card_meta_class),
-						],
-					),
-					Html.paragraph_s_c(meta_signal, card_meta_class),
-					Html.paragraph_s_c(status_signal, card_meta_class),
-					Html.paragraph_s_c(tags_signal, card_tag_class),
-					Html.div_c(
-						card_footer_class,
-						[
-							Html.paragraph_s_c(note_signal, note_text_class),
-							Html.button_c(Str.concat("Add note ", card_title(initial_cards, card_id)), note_button_class, notes.on_unit(|n| n + 1)),
-						],
-					),
+					Html.paragraph_s_c(priority_signal, card_meta_class),
+					Html.paragraph_s_c(estimate_signal, card_meta_class),
 				],
-			)
-		},
+			),
+			Html.paragraph_s_c(meta_signal, card_meta_class),
+			Html.paragraph_s_c(status_signal, card_meta_class),
+			Html.paragraph_s_c(tags_signal, card_tag_class),
+			Html.div_c(
+				card_footer_class,
+				[
+					Html.paragraph_s_c(note_signal, note_text_class),
+					Html.button_c(Str.concat("Add note ", card_title(initial_cards, card_id)), note_button_class, board_state.on_unit(|board| increment_card_notes(board, card_id))),
+				],
+			),
+		],
 	)
 }
 

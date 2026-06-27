@@ -557,8 +557,8 @@ pub const RocEnv = struct {
 /// Element type for HostValue.CapabilityHandle
 pub const HostValueCapabilityHandle = extern struct {
     @"clone": RocErasedCallable,
-    @"eq": RocErasedCallable,
     @"drop": RocErasedCallable,
+    @"eq": RocErasedCallable,
 };
 
 comptime {
@@ -656,9 +656,9 @@ pub const __AnonStruct53 = if (@sizeOf(usize) == 4) extern struct {
     @"tick": RocErasedCallable,
     @"token": *u64,
 } else extern struct {
+    @"period_ms": u64,
     @"cap": HostValueCapabilityHandle,
     @"initial": RocErasedCallable,
-    @"period_ms": u64,
     @"tick": RocErasedCallable,
     @"token": *u64,
 };
@@ -785,9 +785,9 @@ pub const __AnonStruct69 = if (@sizeOf(usize) == 4) extern struct {
     @"binder": *u64,
     @"payload_reducer": HostValueEventReducerHandle,
 } else extern struct {
-    @"binder": *u64,
     @"payload_accessor": u64,
     @"payload_kind": u64,
+    @"binder": *u64,
     @"payload_reducer": HostValueEventReducerHandle,
 };
 
@@ -1471,15 +1471,15 @@ pub const HostValueTake_with_splitArgs = extern struct {
 /// Recursively decrement Roc-owned fields in HostValueCapabilityHandle.
 pub fn decrefHostValueCapabilityHandle(value: HostValueCapabilityHandle, roc_host: *RocHost) void {
     decrefErasedCallable(value.@"clone", roc_host);
-    decrefErasedCallable(value.@"eq", roc_host);
     decrefErasedCallable(value.@"drop", roc_host);
+    decrefErasedCallable(value.@"eq", roc_host);
 }
 
 /// Increment Roc-owned fields in HostValueCapabilityHandle.
 pub fn increfHostValueCapabilityHandle(value: HostValueCapabilityHandle, amount: isize) void {
     increfErasedCallable(value.@"clone", amount);
-    increfErasedCallable(value.@"eq", amount);
     increfErasedCallable(value.@"drop", amount);
+    increfErasedCallable(value.@"eq", amount);
 }
 
 /// Recursively decrement Roc-owned fields in __AnonStruct22.

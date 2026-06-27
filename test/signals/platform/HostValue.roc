@@ -1,8 +1,8 @@
 HostValue := [HostValue(U64)].{
 	CapabilityHandle := {
 		clone : Box((HostValue -> HostValue)),
-		eq : Box((HostValue, HostValue -> Bool)),
 		drop : Box((HostValue -> {})),
+		eq : Box((HostValue, HostValue -> Bool)),
 	}
 
 	TextReadHandle := {
