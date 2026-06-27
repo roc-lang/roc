@@ -1122,14 +1122,6 @@ const TypeTable = struct {
         fields.deinit(self.gpa);
     }
 
-    /// Free the first `populated` field names in `fields` (each duped) and the
-    /// `fields` array itself. Used to unwind a partially-built declared-order
-    /// nominal record on an error or `null` fallback.
-    fn freeCollectedRecordFields(self: *TypeTable, fields: []const CollectedRecordField, populated: usize) void {
-        self.freeCollectedRecordFieldNames(fields[0..populated]);
-        self.gpa.free(fields);
-    }
-
     /// Clear the checked-type map when switching modules (checked ids are artifact-local).
     fn clearVarMap(self: *TypeTable) void {
         self.var_map.clearRetainingCapacity();
