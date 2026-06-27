@@ -126,6 +126,10 @@ const WasmSink = struct {
         }
     }
 
+    pub fn applyTextAttr(_: WasmSink, elem_id: u64, name: []const u8, value: []const u8) void {
+        appendDynamicSetAttrText(toU32(elem_id), name, value);
+    }
+
     pub fn applyBoolField(_: WasmSink, elem_id: u64, field: RenderBoolField, value: bool) void {
         appendBoolFieldCommand(field, toU32(elem_id), value);
     }
@@ -136,6 +140,10 @@ const WasmSink = struct {
         } else {
             appendStringCommand(field.setOp(), toU32(elem_id), "");
         }
+    }
+
+    pub fn clearTextAttr(_: WasmSink, elem_id: u64, name: []const u8) void {
+        appendDynamicRemoveAttr(toU32(elem_id), name);
     }
 
     pub fn clearBoolField(_: WasmSink, elem_id: u64, field: RenderBoolField) void {

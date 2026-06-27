@@ -22,6 +22,17 @@ step_label = |step| {
 	}
 }
 
+step_attr_value : I64 -> Str
+step_attr_value = |step| {
+	if step == 0 {
+		"cart"
+	} else if step == 1 {
+		"delivery"
+	} else {
+		"review"
+	}
+}
+
 next_step : I64 -> I64
 next_step = |step| {
 	next = step + 1
@@ -129,6 +140,7 @@ main = |_| {
 												|submit_count| {
 													step_signal = step.signal()
 													step_text = Signal.map(step_signal, step_label)
+													step_attr = Signal.map(step_signal, step_attr_value)
 													is_cart = Signal.map(step_signal, |value| value == 0)
 													is_delivery = Signal.map(step_signal, |value| value == 1)
 													terms_signal = terms.signal()
@@ -151,9 +163,9 @@ main = |_| {
 													address_review = Signal.map(address.signal(), |value| Str.concat("Address: ", value))
 
 													cart_panel =
-														Html.section_c(
+														Html.section(
 															"Cart",
-															panel_class,
+															[Html.class_attr(panel_class), Html.attr("data-panel", "cart")],
 															[
 																Html.paragraph("Cart editor"),
 																Html.button_c("Use team plan", primary_button_class, lines.on_unit(|_| team_lines)),
@@ -200,7 +212,7 @@ main = |_| {
 															),
 															Html.button("Back", step.on_unit(prev_step)),
 															Html.button_c("Next", primary_button_class, step.on_unit(next_step)),
-															Html.text_s(step_text),
+															Html.section("Current step", [Html.attr_s("data-step", step_attr)], [Html.text_s(step_text)]),
 															Ui.when(
 																is_cart,
 																|_| cart_panel,

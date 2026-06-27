@@ -10,14 +10,25 @@ Html := [].{
 	Attr : Node.Attr
 
 	class_attr : Str -> Node.Attr
-	class_attr = |value| Node.Attr.StaticText({ field: Node.field_class, value })
+	class_attr = |value| Node.Attr.StaticText({ field: Node.field_class, name: "", value })
 
 	class_attr_s : Signal(Str) -> Node.Attr
 	class_attr_s = |signal| {
 		cap = signal.cap
 		read : HostValue -> Str
 		read = |value| Box.unbox(Capability.get(value, cap))
-		Node.Attr.SignalText({ field: Node.field_class, signal: Signal.to_expr(signal), read: { capability: Capability.handle(cap), read: Box.box(read) } })
+		Node.Attr.SignalText({ field: Node.field_class, name: "", signal: Signal.to_expr(signal), read: { capability: Capability.handle(cap), read: Box.box(read) } })
+	}
+
+	attr : Str, Str -> Node.Attr
+	attr = |name, value| Node.Attr.StaticText({ field: Node.field_custom, name, value })
+
+	attr_s : Str, Signal(Str) -> Node.Attr
+	attr_s = |name, signal| {
+		cap = signal.cap
+		read : HostValue -> Str
+		read = |value| Box.unbox(Capability.get(value, cap))
+		Node.Attr.SignalText({ field: Node.field_custom, name, signal: Signal.to_expr(signal), read: { capability: Capability.handle(cap), read: Box.box(read) } })
 	}
 
 	on_pointer_down : Node.Msg -> Node.Attr
@@ -44,8 +55,8 @@ Html := [].{
 	section : Str, List(Node.Attr), List(Elem) -> Elem
 	section = |label, attrs, children| {
 		base = [
-			Node.Attr.StaticText({ field: Node.field_role, value: "region" }),
-			Node.Attr.StaticText({ field: Node.field_label, value: label }),
+			Node.Attr.StaticText({ field: Node.field_role, name: "", value: "region" }),
+			Node.Attr.StaticText({ field: Node.field_label, name: "", value: label }),
 		]
 		Elem.Element({ tag: "section", attrs: List.concat(base, attrs), children })
 	}
@@ -62,8 +73,8 @@ Html := [].{
 			{
 				tag: "h2",
 				attrs: [
-					Node.Attr.StaticText({ field: Node.field_role, value: "heading" }),
-					Node.Attr.StaticText({ field: Node.field_text, value: text_value }),
+					Node.Attr.StaticText({ field: Node.field_role, name: "", value: "heading" }),
+					Node.Attr.StaticText({ field: Node.field_text, name: "", value: text_value }),
 				],
 				children: [],
 			},
@@ -76,8 +87,8 @@ Html := [].{
 			{
 				tag: "h2",
 				attrs: [
-					Node.Attr.StaticText({ field: Node.field_role, value: "heading" }),
-					Node.Attr.StaticText({ field: Node.field_text, value: text_value }),
+					Node.Attr.StaticText({ field: Node.field_role, name: "", value: "heading" }),
+					Node.Attr.StaticText({ field: Node.field_text, name: "", value: text_value }),
 					class_attr(classes),
 				],
 				children: [],
@@ -90,7 +101,7 @@ Html := [].{
 		Elem.Element(
 			{
 				tag: "p",
-				attrs: [Node.Attr.StaticText({ field: Node.field_text, value: text_value })],
+				attrs: [Node.Attr.StaticText({ field: Node.field_text, name: "", value: text_value })],
 				children: [],
 			},
 		)
@@ -102,7 +113,7 @@ Html := [].{
 			{
 				tag: "p",
 				attrs: [
-					Node.Attr.StaticText({ field: Node.field_text, value: text_value }),
+					Node.Attr.StaticText({ field: Node.field_text, name: "", value: text_value }),
 					class_attr(classes),
 				],
 				children: [],
@@ -122,7 +133,7 @@ Html := [].{
 			{
 				tag: "p",
 				attrs: [
-					Node.Attr.SignalText({ field: Node.field_text, signal: Signal.to_expr(signal), read: { capability: Capability.handle(cap), read: Box.box(read) } }),
+					Node.Attr.SignalText({ field: Node.field_text, name: "", signal: Signal.to_expr(signal), read: { capability: Capability.handle(cap), read: Box.box(read) } }),
 					class_attr(classes),
 				],
 				children: [],
@@ -152,7 +163,7 @@ Html := [].{
 			{
 				tag: "pre",
 				attrs: [
-					Node.Attr.SignalText({ field: Node.field_text, signal: Signal.to_expr(signal), read: { capability: Capability.handle(cap), read: Box.box(read) } }),
+					Node.Attr.SignalText({ field: Node.field_text, name: "", signal: Signal.to_expr(signal), read: { capability: Capability.handle(cap), read: Box.box(read) } }),
 					class_attr(classes),
 				],
 				children: [],
@@ -174,7 +185,7 @@ Html := [].{
 				tag: "button",
 				attrs: List.concat(
 					[
-						Node.Attr.StaticText({ field: Node.field_text, value: label }),
+						Node.Attr.StaticText({ field: Node.field_text, name: "", value: label }),
 						Node.Attr.OnEvent({ kind: Node.event_kind_click, msg }),
 					],
 					attrs,
@@ -201,7 +212,7 @@ Html := [].{
 				tag: "button",
 				attrs: List.concat(
 					[
-						Node.Attr.SignalText({ field: Node.field_text, signal: Signal.to_expr(label), read: { capability: Capability.handle(label_cap), read: Box.box(read_label) } }),
+						Node.Attr.SignalText({ field: Node.field_text, name: "", signal: Signal.to_expr(label), read: { capability: Capability.handle(label_cap), read: Box.box(read_label) } }),
 						Node.Attr.OnEvent({ kind: Node.event_kind_click, msg }),
 					],
 					attrs,
@@ -231,7 +242,7 @@ Html := [].{
 				tag: "button",
 				attrs: List.concat(
 					[
-						Node.Attr.SignalText({ field: Node.field_text, signal: Signal.to_expr(label), read: { capability: Capability.handle(label_cap), read: Box.box(read_label) } }),
+						Node.Attr.SignalText({ field: Node.field_text, name: "", signal: Signal.to_expr(label), read: { capability: Capability.handle(label_cap), read: Box.box(read_label) } }),
 						Node.Attr.SignalBool({ field: Node.bool_field_disabled, signal: Signal.to_expr(disabled), read: { capability: Capability.handle(disabled_cap), read: Box.box(read_disabled) } }),
 						Node.Attr.OnEvent({ kind: Node.event_kind_click, msg }),
 					],
@@ -260,9 +271,9 @@ Html := [].{
 				tag: "input",
 				attrs: List.concat(
 					[
-						Node.Attr.StaticText({ field: Node.field_role, value: "textbox" }),
-						Node.Attr.StaticText({ field: Node.field_label, value: label }),
-						Node.Attr.SignalText({ field: Node.field_value, signal: Signal.to_expr(value), read: { capability: Capability.handle(value_cap), read: Box.box(read_value) } }),
+						Node.Attr.StaticText({ field: Node.field_role, name: "", value: "textbox" }),
+						Node.Attr.StaticText({ field: Node.field_label, name: "", value: label }),
+						Node.Attr.SignalText({ field: Node.field_value, name: "", signal: Signal.to_expr(value), read: { capability: Capability.handle(value_cap), read: Box.box(read_value) } }),
 						Node.Attr.OnEvent({ kind: Node.event_kind_input, msg }),
 					],
 					attrs,
@@ -290,8 +301,8 @@ Html := [].{
 				tag: "input",
 				attrs: List.concat(
 					[
-						Node.Attr.StaticText({ field: Node.field_role, value: "checkbox" }),
-						Node.Attr.StaticText({ field: Node.field_label, value: label }),
+						Node.Attr.StaticText({ field: Node.field_role, name: "", value: "checkbox" }),
+						Node.Attr.StaticText({ field: Node.field_label, name: "", value: label }),
 						Node.Attr.SignalBool({ field: Node.bool_field_checked, signal: Signal.to_expr(checked), read: { capability: Capability.handle(checked_cap), read: Box.box(read_checked) } }),
 						Node.Attr.OnEvent({ kind: Node.event_kind_check, msg }),
 					],

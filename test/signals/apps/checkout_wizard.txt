@@ -2,6 +2,8 @@
 
 expect_visible role:heading name:"Checkout wizard"
 expect_visible role:region name:"Cart"
+expect_attr role:region name:"Cart" data-panel "cart"
+expect_attr role:region name:"Current step" data-step "cart"
 expect_text text:"Step 1 Cart" "Step 1 Cart"
 expect_visible role:region name:"3 seats"
 expect_visible role:region name:"Priority support"
@@ -12,6 +14,7 @@ expect_text text:"3 seats quantity: 2" "3 seats quantity: 2"
 
 click role:button name:"Next"
 expect_visible role:region name:"Delivery"
+expect_attr role:region name:"Current step" data-step "delivery"
 expect_value label:"Email" ""
 fill label:"Email" "team@example.com"
 expect_value label:"Email" "team@example.com"
@@ -21,18 +24,21 @@ expect_checked label:"Accept terms" false
 
 click role:button name:"Next"
 expect_visible role:region name:"Review"
+expect_attr role:region name:"Current step" data-step "review"
 expect_text text:"Email: team@example.com" "Email: team@example.com"
 expect_text text:"Address: 42 Signal Way" "Address: 42 Signal Way"
 expect_disabled role:button name:"Place order" true
 
 click role:button name:"Back"
 expect_visible role:region name:"Delivery"
+expect_attr role:region name:"Current step" data-step "delivery"
 check label:"Accept terms"
 expect_checked label:"Accept terms" true
 expect_text text:"Terms accepted" "Terms accepted"
 
 click role:button name:"Next"
 expect_visible role:region name:"Review"
+expect_attr role:region name:"Current step" data-step "review"
 expect_disabled role:button name:"Place order" false
 click role:button name:"Place order"
 expect_text text:"Orders submitted: 1" "Orders submitted: 1"

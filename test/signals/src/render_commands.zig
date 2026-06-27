@@ -300,6 +300,10 @@ pub const Counts = struct {
         self.addOp(field.setOp());
     }
 
+    pub fn addTextAttr(self: *Counts) void {
+        self.addOp(.extended);
+    }
+
     pub fn addBoolField(self: *Counts, field: BoolField) void {
         self.addOp(field.setOp());
     }
