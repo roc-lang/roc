@@ -10,12 +10,14 @@ platform ""
         HostedFunctionInfo,
         ModuleTypeInfo,
         ProvidesEntry,
+        RocName,
         RecordField,
         RecordFieldInfo,
         RecordRepr,
         TagUnionRepr,
         TagVariant,
         TypeId,
+        TypeTable,
         TypeRepr,
         Types,
     ]
@@ -38,6 +40,8 @@ import TagUnionRepr exposing [TagUnionRepr]
 import TagVariant exposing [TagVariant]
 import TypeRepr exposing [TypeRepr]
 import ProvidesEntry exposing [ProvidesEntry]
+import TypeTable exposing [TypeTable]
+import RocName exposing [RocName]
 
 make_glue_for_host : List(Types) -> Try(List(File), Str)
 make_glue_for_host = |types_list| make_glue(types_list)

@@ -1588,7 +1588,7 @@ const Lowerer = struct {
             .loop_ => |loop| try self.lowerLoopInto(target, loop, next),
             .break_ => |value| try self.lowerBreak(value),
             .continue_ => |continue_| try self.lowerContinue(continue_.values),
-            .return_ => |value| try self.lowerReturn(value),
+            .return_ => |ret| try self.lowerReturn(ret),
             .crash => |msg| try self.result.store.addCFStmt(.{ .crash = .{
                 .msg = try self.result.store.insertString(self.stringLiteralText(msg)),
             } }),
@@ -2233,7 +2233,10 @@ const Lowerer = struct {
     ) Common.LowerError!LIR.CFStmtId {
         const callee = try self.addTemp(try self.lowerExprTy(callee_expr));
         const done = self.freshJoinPointId();
-        const variants = self.types.fnVariantSpan(variants_span);
+        // Branch lowering can lower argument types that append more variants to
+        // self.types, so keep this iteration independent of the store backing.
+        const variants = try self.allocator.dupe(Type.FnVariant, self.types.fnVariantSpan(variants_span));
+        defer self.allocator.free(variants);
         var current = try self.result.store.addCFStmt(.{ .runtime_error = {} });
         var i = variants.len;
         while (i > 0) {
@@ -3224,7 +3227,7 @@ const Lowerer = struct {
                 const debug_stmt = try self.result.store.addCFStmt(.{ .debug = .{ .message = temp, .next = next } });
                 break :blk try self.lowerExprInto(temp, expr_id, debug_stmt);
             },
-            .return_ => |expr_id| try self.lowerReturn(expr_id),
+            .return_ => |ret| try self.lowerReturn(ret),
             .crash => |msg| try self.result.store.addCFStmt(.{ .crash = .{
                 .msg = try self.result.store.insertString(self.stringLiteralText(msg)),
             } }),
@@ -3404,11 +3407,11 @@ const Lowerer = struct {
         return jump;
     }
 
-    fn lowerReturn(self: *Lowerer, expr_id: Lifted.ExprId) Common.LowerError!LIR.CFStmtId {
+    fn lowerReturn(self: *Lowerer, ret: Mono.Return) Common.LowerError!LIR.CFStmtId {
         const ret_ty = self.current_ret_ty orelse Common.invariant("return expression reached LIR lowering outside a function");
         const ret_local = try self.addTemp(ret_ty);
         const ret_stmt = try self.result.store.addCFStmt(.{ .ret = .{ .value = ret_local } });
-        return try self.lowerExprInto(ret_local, expr_id, ret_stmt);
+        return try self.lowerExprInto(ret_local, ret.value, ret_stmt);
     }
 
     fn lowerExpectExprInto(self: *Lowerer, target: LIR.LocalId, child: Lifted.ExprId, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
