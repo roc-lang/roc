@@ -4867,6 +4867,8 @@ pub const Interpreter = struct {
                     elems_rc,
                     if (elems_rc) @ptrCast(&elem_rc_ctx) else null,
                     if (elems_rc) &listElementIncref else &builtins.utils.rcNone,
+                    if (elems_rc) @ptrCast(&elem_rc_ctx) else null,
+                    if (elems_rc) &listElementDecref else &builtins.utils.rcNone,
                     updateModeForArg0(ll.unique_args),
                     &builtins.list.copy_fallback,
                     &self.roc_ops,
@@ -5181,6 +5183,8 @@ pub const Interpreter = struct {
                     elems_rc,
                     if (elems_rc) @ptrCast(&elem_rc_ctx) else null,
                     if (elems_rc) &listElementIncref else &builtins.utils.rcNone,
+                    if (elems_rc) @ptrCast(&elem_rc_ctx) else null,
+                    if (elems_rc) &listElementDecref else &builtins.utils.rcNone,
                     updateModeForArg0(ll.unique_args),
                     &self.roc_ops,
                 );
