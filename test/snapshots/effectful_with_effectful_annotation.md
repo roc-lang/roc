@@ -17,7 +17,7 @@ main! = print_msg!("Hello, world!")
 ~~~
 # EXPECTED
 UNDEFINED VARIABLE - effectful_with_effectful_annotation.md:7:20:7:32
-EFFECTFUL TOP-LEVEL VALUE - effectful_with_effectful_annotation.md:9:9:9:36
+EFFECTFUL TOP LEVEL VALUE - effectful_with_effectful_annotation.md:9:9:9:36
 # PROBLEMS
 
 ┌────────────────────┐
@@ -32,7 +32,7 @@ EFFECTFUL TOP-LEVEL VALUE - effectful_with_effectful_annotation.md:9:9:9:36
 
 
 ┌───────────────────────────┐
-│ EFFECTFUL TOP-LEVEL VALUE ├─ This top-level definition performs an effect ──┐
+│ EFFECTFUL TOP LEVEL VALUE ├─ This top-level definition performs an effect ──┐
 └┬──────────────────────────┘  while initializing.                            │
  │                                                                            │
  │  main! = print_msg!("Hello, world!")                                       │

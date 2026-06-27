@@ -28,10 +28,18 @@ const static_dispatch = check.StaticDispatchRegistry;
 const Ident = base.Ident;
 
 /// Options used while lowering checked modules into Monotype IR.
+pub const InlineExpectMode = enum {
+    run,
+    omit,
+};
+
 pub const Options = struct {
     /// Preserve source-level procedure names for consumers that present runtime
     /// diagnostics from lowered code.
     proc_debug_names: bool = false,
+    /// Whether inline expects should be lowered at all. Optimized runtime builds
+    /// omit them before their conditions can affect control-flow decisions.
+    inline_expects: InlineExpectMode = .run,
 };
 
 /// Lower checked modules and explicit roots into Monotype IR.
@@ -345,6 +353,7 @@ const Builder = struct {
     root_view: checked.ImportedModuleView,
     program: *Ast.Program,
     proc_debug_names: bool,
+    inline_expects: InlineExpectMode,
     symbols: Common.SymbolGen = .{},
     type_cache: std.AutoHashMap(CheckedTypeAddress, Type.TypeId),
     /// Monotypes owned by the builder-global type cache. They are lowered
@@ -376,6 +385,7 @@ const Builder = struct {
             .root_view = checked.importedView(modules.root.module),
             .program = program,
             .proc_debug_names = options.proc_debug_names,
+            .inline_expects = options.inline_expects,
             .type_cache = std.AutoHashMap(CheckedTypeAddress, Type.TypeId).init(allocator),
             .unsolved_monos = std.AutoHashMap(Type.TypeId, void).init(allocator),
             .lowered_templates = std.AutoHashMap(TemplateFamily, std.ArrayList(LoweredTemplate)).init(allocator),
@@ -4178,7 +4188,10 @@ const BodyContext = struct {
                 .msg = try self.lowerExpectErrMessage(expect_err.expr, expect_err.snippet),
                 .region = expr.source_region,
             } },
-            .expect => |child| .{ .expect = try self.lowerExpr(child) },
+            .expect => |child| if (self.builder.inline_expects == .omit)
+                .unit
+            else
+                .{ .expect = try self.lowerExpr(child) },
             .break_ => try self.breakCurrentLoopExprData(),
             .return_ => |ret| .{ .return_ = try self.lowerExpr(ret.expr) },
             .for_ => |for_| try self.lowerIteratorFor(for_, ty, &.{}),
@@ -13313,7 +13326,6 @@ const BodyContext = struct {
             .crash,
             .dbg,
             .expr,
-            .expect,
             .for_,
             .while_,
             .infinite_loop,
@@ -13321,6 +13333,7 @@ const BodyContext = struct {
             .break_,
             .return_,
             => true,
+            .expect => self.builder.inline_expects == .run,
             .import_,
             .alias_decl,
             .nominal_decl,
@@ -14045,8 +14058,10 @@ const BodyContext = struct {
             .unary_minus,
             .unary_not,
             .dbg,
-            .expect,
             => |child| try self.collectReassignedBindersInExpr(child, out),
+            .expect => |child| if (self.builder.inline_expects == .run) {
+                try self.collectReassignedBindersInExpr(child, out);
+            },
             .expect_err => |expect_err| try self.collectReassignedBindersInExpr(expect_err.expr, out),
             .field_access => |field| try self.collectReassignedBindersInExpr(field.receiver, out),
             .structural_eq => |eq| {
@@ -14115,8 +14130,10 @@ const BodyContext = struct {
             },
             .dbg,
             .expr,
-            .expect,
             => |expr| try self.collectReassignedBindersInExpr(expr, out),
+            .expect => |expr| if (self.builder.inline_expects == .run) {
+                try self.collectReassignedBindersInExpr(expr, out);
+            },
             .for_ => |for_| {
                 try self.collectReassignedBindersInExpr(for_.expr, out);
                 try self.collectReassignedBindersInExpr(for_.body, out);
@@ -14278,7 +14295,10 @@ const BodyContext = struct {
             .crash => |msg| .{ .crash = try self.lowerStringLiteral(msg) },
             .dbg => |child| .{ .dbg = try self.lowerDbgMessage(child) },
             .expr => |child| try self.lowerExprStatement(child),
-            .expect => |child| .{ .expect = try self.lowerExpr(child) },
+            .expect => |child| if (self.builder.inline_expects == .omit) blk: {
+                const unit_ty = try self.unitType();
+                break :blk .{ .expr = try self.builder.program.addExpr(.{ .ty = unit_ty, .data = .unit }) };
+            } else .{ .expect = try self.lowerExpr(child) },
             .for_ => |for_| blk: {
                 var reassigned = std.ArrayList(checked.PatternBinderId).empty;
                 defer reassigned.deinit(self.allocator);

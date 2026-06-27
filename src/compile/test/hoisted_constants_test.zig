@@ -472,7 +472,7 @@ test "hoisted constant crash reports original source region" {
     var found = false;
     var report_iter = coord.iterReports();
     while (report_iter.next()) |entry| {
-        if (!std.mem.eql(u8, entry.report.title, "Compile-Time Crash")) continue;
+        if (!std.mem.eql(u8, entry.report.title, "Compile Time Crash")) continue;
         found = true;
         const region = entry.report.getRegionInfo() orelse return error.ComptimeCrashReportHadNoRegion;
         try std.testing.expectEqual(@as(u32, 6), region.start_line_idx);
@@ -574,7 +574,7 @@ test "inlined hoisted constant crash reports hoisted source region" {
     var found = false;
     var report_iter = coord.iterReports();
     while (report_iter.next()) |entry| {
-        if (!std.mem.eql(u8, entry.report.title, "Compile-Time Crash")) continue;
+        if (!std.mem.eql(u8, entry.report.title, "Compile Time Crash")) continue;
         found = true;
         const region = entry.report.getRegionInfo() orelse return error.ComptimeCrashReportHadNoRegion;
         try std.testing.expectEqual(@as(u32, 7), region.start_line_idx);
@@ -671,7 +671,7 @@ test "hoisted pattern extraction failure reports original destructure region" {
     var found = false;
     var report_iter = coord.iterReports();
     while (report_iter.next()) |entry| {
-        if (!std.mem.eql(u8, entry.report.title, "Non-exhaustive Destructure")) continue;
+        if (!std.mem.eql(u8, entry.report.title, "Non Exhaustive Destructure")) continue;
         found = true;
         const region = entry.report.getRegionInfo() orelse return error.NonExhaustiveDestructureReportHadNoRegion;
         try std.testing.expectEqual(@as(u32, 8), region.start_line_idx);
@@ -771,11 +771,11 @@ test "hoisted pattern extraction base match failure reports match" {
     var found_destructure = false;
     var report_iter = coord.iterReports();
     while (report_iter.next()) |entry| {
-        if (std.mem.eql(u8, entry.report.title, "Non-exhaustive Match")) {
+        if (std.mem.eql(u8, entry.report.title, "Non Exhaustive Match")) {
             found_match = true;
             try std.testing.expectEqualStrings("main", entry.module_name);
         }
-        if (std.mem.eql(u8, entry.report.title, "Non-exhaustive Destructure")) {
+        if (std.mem.eql(u8, entry.report.title, "Non Exhaustive Destructure")) {
             found_destructure = true;
         }
     }
@@ -1003,7 +1003,7 @@ test "hoisted successful call does not clear runtime reachable helper exhaustive
     var found = false;
     var report_iter = coord.iterReports();
     while (report_iter.next()) |entry| {
-        if (!std.mem.eql(u8, entry.report.title, "Non-exhaustive Match")) continue;
+        if (!std.mem.eql(u8, entry.report.title, "Non Exhaustive Match")) continue;
         found = true;
         try std.testing.expectEqualStrings("main", entry.module_name);
     }
@@ -1075,7 +1075,7 @@ test "hoisted failing call into runtime reachable helper reports static diagnost
     var found = false;
     var report_iter = coord.iterReports();
     while (report_iter.next()) |entry| {
-        if (!std.mem.eql(u8, entry.report.title, "Non-exhaustive Match")) continue;
+        if (!std.mem.eql(u8, entry.report.title, "Non Exhaustive Match")) continue;
         found = true;
         try std.testing.expectEqualStrings("main", entry.module_name);
         try expectReportDoesNotContain(gpa, entry.report, "empirically during compile-time evaluation");

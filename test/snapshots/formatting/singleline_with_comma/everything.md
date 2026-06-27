@@ -50,7 +50,7 @@ UNUSED VARIABLE - everything.md:21:2:21:4
 UNSUPPORTED WHERE CLAUSE - everything.md:14:19:14:22
 UNSUPPORTED WHERE CLAUSE - everything.md:14:24:14:27
 DECLARATION HAS NO VALUE - everything.md:14:1:14:29
-NON-EXHAUSTIVE MATCH - everything.md:23:2:28:3
+NON EXHAUSTIVE MATCH - everything.md:23:2:28:3
 # PROBLEMS
 
 ┌──────────────────────────────────────────────┐
@@ -222,7 +222,7 @@ NON-EXHAUSTIVE MATCH - everything.md:23:2:28:3
 
 
 ┌──────────────────────┐
-│ NON-EXHAUSTIVE MATCH ├─ This match expression doesn't cover all possible ───┐
+│ NON EXHAUSTIVE MATCH ├─ This match expression doesn't cover all possible ───┐
 └┬─────────────────────┘  cases.                                              │
  │                                                                            │
  │  match x {                                                                 │
