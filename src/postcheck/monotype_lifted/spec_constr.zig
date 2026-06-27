@@ -378,6 +378,29 @@ const CallPattern = struct {
     args: []const KnownValue,
 };
 
+const ValueDemand = union(enum) {
+    none,
+    materialize,
+    record: []const FieldDemand,
+    tuple: []const ItemDemand,
+    nominal: *const ValueDemand,
+    callable: CallableDemand,
+};
+
+const FieldDemand = struct {
+    name: names.RecordFieldNameId,
+    demand: *const ValueDemand,
+};
+
+const ItemDemand = struct {
+    index: u32,
+    demand: *const ValueDemand,
+};
+
+const CallableDemand = struct {
+    captures: []const ValueDemand,
+};
+
 const Spec = struct {
     pattern: CallPattern,
     fn_id: ?Ast.FnId = null,
@@ -386,9 +409,11 @@ const Spec = struct {
 
 const FnPlan = struct {
     used_args: []bool,
+    arg_demands: []ValueDemand,
     specs: std.ArrayList(Spec),
 
     fn deinit(self: *FnPlan, allocator: Allocator) void {
+        allocator.free(self.arg_demands);
         allocator.free(self.used_args);
         self.specs.deinit(allocator);
     }
@@ -469,8 +494,12 @@ const Pass = struct {
             const used_args = try allocator.alloc(bool, args.len);
             errdefer allocator.free(used_args);
             @memset(used_args, false);
+            const arg_demands = try allocator.alloc(ValueDemand, args.len);
+            errdefer allocator.free(arg_demands);
+            @memset(arg_demands, .none);
             plan.* = .{
                 .used_args = used_args,
+                .arg_demands = arg_demands,
                 .specs = .empty,
             };
         }
@@ -685,8 +714,9 @@ const Pass = struct {
                 if (callee_raw < self.plans.len) {
                     const callee_uses = self.plans[callee_raw].used_args;
                     if (args.len != callee_uses.len) Common.invariant("direct call arity differed from lifted function arity while propagating argument uses");
-                    for (args, callee_uses) |arg, callee_uses_arg| {
-                        if (callee_uses_arg) self.markArgUseIfLocal(fn_id, arg, changed);
+                    const callee_demands = self.plans[callee_raw].arg_demands;
+                    for (args, callee_uses, callee_demands) |arg, callee_uses_arg, callee_demand| {
+                        if (callee_uses_arg) try self.markArgDemandIfLocal(fn_id, arg, callee_demand, changed);
                     }
                 }
             },
@@ -694,11 +724,21 @@ const Pass = struct {
                 for (self.program.exprSpan(call.args)) |arg| try self.markArgUsesInExpr(fn_id, arg, changed);
             },
             .field_access => |field| {
-                self.markArgUseIfLocal(fn_id, field.receiver, changed);
+                try self.markArgDemandIfLocal(
+                    fn_id,
+                    field.receiver,
+                    try self.demandRecordField(field.field, .materialize),
+                    changed,
+                );
                 try self.markArgUsesInExpr(fn_id, field.receiver, changed);
             },
             .tuple_access => |access| {
-                self.markArgUseIfLocal(fn_id, access.tuple, changed);
+                try self.markArgDemandIfLocal(
+                    fn_id,
+                    access.tuple,
+                    try self.demandTupleItem(access.elem_index, .materialize),
+                    changed,
+                );
                 try self.markArgUsesInExpr(fn_id, access.tuple, changed);
             },
             .structural_eq => |eq| {
@@ -710,7 +750,7 @@ const Pass = struct {
                 try self.markArgUsesInExpr(fn_id, h.hasher, changed);
             },
             .match_ => |match| {
-                self.markArgUseIfLocal(fn_id, match.scrutinee, changed);
+                try self.markArgUseIfLocal(fn_id, match.scrutinee, changed);
                 try self.markArgUsesInExpr(fn_id, match.scrutinee, changed);
                 for (self.program.branchSpan(match.branches)) |branch| {
                     if (branch.guard) |guard| try self.markArgUsesInExpr(fn_id, guard, changed);
@@ -769,7 +809,18 @@ const Pass = struct {
         }
     }
 
-    fn markArgUseIfLocal(self: *Pass, fn_id: Ast.FnId, expr_id: Ast.ExprId, changed: *bool) void {
+    fn markArgUseIfLocal(self: *Pass, fn_id: Ast.FnId, expr_id: Ast.ExprId, changed: *bool) Allocator.Error!void {
+        try self.markArgDemandIfLocal(fn_id, expr_id, .materialize, changed);
+    }
+
+    fn markArgDemandIfLocal(
+        self: *Pass,
+        fn_id: Ast.FnId,
+        expr_id: Ast.ExprId,
+        demand: ValueDemand,
+        changed: *bool,
+    ) Allocator.Error!void {
+        if (demand == .none) return;
         const local = localExpr(self.program, expr_id) orelse return;
         const args = self.program.typedLocalSpan(self.program.fns.items[@intFromEnum(fn_id)].args);
         for (args, 0..) |arg, index| {
@@ -779,9 +830,110 @@ const Pass = struct {
                     used.* = true;
                     changed.* = true;
                 }
+                const merged = try self.mergeValueDemand(self.plans[@intFromEnum(fn_id)].arg_demands[index], demand);
+                if (!valueDemandEql(self.plans[@intFromEnum(fn_id)].arg_demands[index], merged)) {
+                    self.plans[@intFromEnum(fn_id)].arg_demands[index] = merged;
+                    changed.* = true;
+                }
                 return;
             }
         }
+    }
+
+    fn storedDemand(self: *Pass, demand: ValueDemand) Allocator.Error!*const ValueDemand {
+        const stored = try self.arena.allocator().create(ValueDemand);
+        stored.* = demand;
+        return stored;
+    }
+
+    fn demandRecordField(self: *Pass, field: names.RecordFieldNameId, demand: ValueDemand) Allocator.Error!ValueDemand {
+        const fields = try self.arena.allocator().alloc(FieldDemand, 1);
+        fields[0] = .{
+            .name = field,
+            .demand = try self.storedDemand(demand),
+        };
+        return .{ .record = fields };
+    }
+
+    fn demandTupleItem(self: *Pass, index: u32, demand: ValueDemand) Allocator.Error!ValueDemand {
+        const items = try self.arena.allocator().alloc(ItemDemand, 1);
+        items[0] = .{
+            .index = index,
+            .demand = try self.storedDemand(demand),
+        };
+        return .{ .tuple = items };
+    }
+
+    fn mergeValueDemand(self: *Pass, existing: ValueDemand, incoming: ValueDemand) Allocator.Error!ValueDemand {
+        if (existing == .materialize or incoming == .materialize) return .materialize;
+        if (existing == .none) return incoming;
+        if (incoming == .none) return existing;
+        if (std.meta.activeTag(existing) != std.meta.activeTag(incoming)) return .materialize;
+
+        return switch (existing) {
+            .none, .materialize => unreachable,
+            .record => try self.mergeRecordDemand(existing.record, incoming.record),
+            .tuple => try self.mergeTupleDemand(existing.tuple, incoming.tuple),
+            .nominal => blk: {
+                const merged = try self.mergeValueDemand(existing.nominal.*, incoming.nominal.*);
+                break :blk ValueDemand{ .nominal = try self.storedDemand(merged) };
+            },
+            .callable => |existing_callable| blk: {
+                const incoming_callable = incoming.callable;
+                if (existing_callable.captures.len != incoming_callable.captures.len) break :blk .materialize;
+                const captures = try self.arena.allocator().alloc(ValueDemand, existing_callable.captures.len);
+                for (existing_callable.captures, incoming_callable.captures, captures) |existing_capture, incoming_capture, *out| {
+                    out.* = try self.mergeValueDemand(existing_capture, incoming_capture);
+                }
+                break :blk ValueDemand{ .callable = .{ .captures = captures } };
+            },
+        };
+    }
+
+    fn mergeRecordDemand(
+        self: *Pass,
+        existing: []const FieldDemand,
+        incoming: []const FieldDemand,
+    ) Allocator.Error!ValueDemand {
+        var fields = std.ArrayList(FieldDemand).empty;
+        defer fields.deinit(self.allocator);
+        try fields.appendSlice(self.allocator, existing);
+
+        for (incoming) |incoming_field| {
+            for (fields.items) |*field| {
+                if (field.name != incoming_field.name) continue;
+                const merged = try self.mergeValueDemand(field.demand.*, incoming_field.demand.*);
+                field.demand = try self.storedDemand(merged);
+                break;
+            } else {
+                try fields.append(self.allocator, incoming_field);
+            }
+        }
+
+        return .{ .record = try self.arena.allocator().dupe(FieldDemand, fields.items) };
+    }
+
+    fn mergeTupleDemand(
+        self: *Pass,
+        existing: []const ItemDemand,
+        incoming: []const ItemDemand,
+    ) Allocator.Error!ValueDemand {
+        var items = std.ArrayList(ItemDemand).empty;
+        defer items.deinit(self.allocator);
+        try items.appendSlice(self.allocator, existing);
+
+        for (incoming) |incoming_item| {
+            for (items.items) |*item| {
+                if (item.index != incoming_item.index) continue;
+                const merged = try self.mergeValueDemand(item.demand.*, incoming_item.demand.*);
+                item.demand = try self.storedDemand(merged);
+                break;
+            } else {
+                try items.append(self.allocator, incoming_item);
+            }
+        }
+
+        return .{ .tuple = try self.arena.allocator().dupe(ItemDemand, items.items) };
     }
 
     fn ensureCallPatternForValues(self: *Pass, fn_id: Ast.FnId, values: []const Value) Common.LowerError!void {
@@ -6947,6 +7099,56 @@ fn patternEql(program: *const Ast.Program, lhs: CallPattern, rhs: CallPattern) b
     return true;
 }
 
+fn valueDemandEql(lhs: ValueDemand, rhs: ValueDemand) bool {
+    if (std.meta.activeTag(lhs) != std.meta.activeTag(rhs)) return false;
+    return switch (lhs) {
+        .none,
+        .materialize,
+        => true,
+        .record => |lhs_fields| blk: {
+            const rhs_fields = rhs.record;
+            if (lhs_fields.len != rhs_fields.len) break :blk false;
+            for (lhs_fields) |lhs_field| {
+                const rhs_field = fieldDemandByName(rhs_fields, lhs_field.name) orelse break :blk false;
+                if (!valueDemandEql(lhs_field.demand.*, rhs_field.demand.*)) break :blk false;
+            }
+            break :blk true;
+        },
+        .tuple => |lhs_items| blk: {
+            const rhs_items = rhs.tuple;
+            if (lhs_items.len != rhs_items.len) break :blk false;
+            for (lhs_items) |lhs_item| {
+                const rhs_item = itemDemandByIndex(rhs_items, lhs_item.index) orelse break :blk false;
+                if (!valueDemandEql(lhs_item.demand.*, rhs_item.demand.*)) break :blk false;
+            }
+            break :blk true;
+        },
+        .nominal => valueDemandEql(lhs.nominal.*, rhs.nominal.*),
+        .callable => |lhs_callable| blk: {
+            const rhs_callable = rhs.callable;
+            if (lhs_callable.captures.len != rhs_callable.captures.len) break :blk false;
+            for (lhs_callable.captures, rhs_callable.captures) |lhs_capture, rhs_capture| {
+                if (!valueDemandEql(lhs_capture, rhs_capture)) break :blk false;
+            }
+            break :blk true;
+        },
+    };
+}
+
+fn fieldDemandByName(fields: []const FieldDemand, name: names.RecordFieldNameId) ?FieldDemand {
+    for (fields) |field| {
+        if (field.name == name) return field;
+    }
+    return null;
+}
+
+fn itemDemandByIndex(items: []const ItemDemand, index: u32) ?ItemDemand {
+    for (items) |item| {
+        if (item.index == index) return item;
+    }
+    return null;
+}
+
 fn joinKnownValuesInArena(
     program: *const Ast.Program,
     arena: Allocator,
@@ -7819,6 +8021,47 @@ fn tupleFromValue(value: Value) ?TupleValue {
         .nominal => |nominal| tupleFromValue(nominal.backing.*),
         else => null,
     };
+}
+
+test "value demand equality ignores projection order" {
+    const materialize: ValueDemand = .materialize;
+    const none: ValueDemand = .none;
+    const field_a: names.RecordFieldNameId = @enumFromInt(1);
+    const field_b: names.RecordFieldNameId = @enumFromInt(2);
+
+    const record_lhs_fields = [_]FieldDemand{
+        .{ .name = field_a, .demand = &materialize },
+        .{ .name = field_b, .demand = &none },
+    };
+    const record_rhs_fields = [_]FieldDemand{
+        .{ .name = field_b, .demand = &none },
+        .{ .name = field_a, .demand = &materialize },
+    };
+    try std.testing.expect(valueDemandEql(
+        .{ .record = &record_lhs_fields },
+        .{ .record = &record_rhs_fields },
+    ));
+
+    const tuple_lhs_items = [_]ItemDemand{
+        .{ .index = 0, .demand = &materialize },
+        .{ .index = 3, .demand = &none },
+    };
+    const tuple_rhs_items = [_]ItemDemand{
+        .{ .index = 3, .demand = &none },
+        .{ .index = 0, .demand = &materialize },
+    };
+    try std.testing.expect(valueDemandEql(
+        .{ .tuple = &tuple_lhs_items },
+        .{ .tuple = &tuple_rhs_items },
+    ));
+
+    const record_missing_field = [_]FieldDemand{
+        .{ .name = field_a, .demand = &materialize },
+    };
+    try std.testing.expect(!valueDemandEql(
+        .{ .record = &record_lhs_fields },
+        .{ .record = &record_missing_field },
+    ));
 }
 
 test "call-pattern specialization declarations are referenced" {
