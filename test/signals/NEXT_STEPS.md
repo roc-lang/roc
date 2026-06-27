@@ -324,13 +324,49 @@ structural cost:
 | signals-large-each-64 | 1118520 | 451840 | 300800 | 236360 | 110680 | 12520 | 6320 | 14680 |
 | signals-kanban-board | 454320 | 128520 | 79280 | 82480 | 132340 | 29860 | 1840 | 1400 |
 
+Sparse render-child index `zig build run-signals-bench` single-sample comparison
+captured on 2026-06-27. `HostNodeDescriptorStream` now keeps explicit sparse
+render metadata keyed by elem id, so `streamDirectChildren` walks child links
+instead of scanning `render_nodes`. The first dense-field/dense-side-table shapes
+were rejected because they eliminated scans but regressed host allocation bytes
+materially; the kept sparse map shape preserves the scan win with allocation
+bytes close to the keyed-row-site baseline.
+
+| case | actions | total_ns | stream_nodes_scanned | stream_nodes_scanned_children | each_key_compares | host_allocs_this_event | host_deallocs_this_event | host_alloc_bytes_this_event | host_dealloc_bytes_this_event | host_retained_alloc_delta | host_retained_bytes_delta |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| signals-large-each-64 | 120 | 777513618 | 1007840 | 0 | 14680 | 241960 | 189700 | 198628840 | 187283540 | 52180 | 11344180 |
+| signals-kanban-board | 320 | 601585598 | 321980 | 0 | 1400 | 337480 | 281060 | 90453540 | 79294600 | 56360 | 11151580 |
+
+Outcome:
+
+- The child bucket is gone: `signals-large-each-64` drops exactly 110680 stream
+  scans and `signals-kanban-board` drops exactly 132340 stream scans.
+- Host allocation bytes are close but not free: large-each is about +2.8MB over
+  the keyed-row-site baseline, and kanban is about +3.4MB over it. The rejected
+  dense shapes were much worse, at roughly +27MB and +8MB respectively.
+- Single-sample wall time is noisy and not improved here. Treat this as the
+  bounded child-bucket win plus a probe that confirms the next larger targets
+  are the remaining `remove_target`, `splice`, and `render_scope` buckets and
+  the still-dark whole-stream splice tail work.
+
 Baseline review outcome:
 
 - Structural `Ui.each` work remains the clear first target, but the hot metric is
   stream scanning around structural patching, not key comparison. The keyed row
-  lookup path is now linear; the next target is replacing repeated whole-stream
-  scans in descriptor removal, splice range lookup, render-scope lookup, and
-  child-list rebuilds with explicit indexed active-stream data.
+  lookup path is now linear. The `children` bucket is still worth removing with
+  explicit child indexes, but it is only about 10% of the large-N canary's stream
+  scans. The larger structural targets are `remove_target`, `splice`, and
+  `render_scope`; together they account for about 88% of
+  `signals-large-each-64` stream scans in the split above.
+- The child-index slice validated the semantic direction: indexed
+  `streamDirectChildren` drops `stream_nodes_scanned_children` to zero and
+  reduces total stream scans by the former `children` bucket. The keeper storage
+  is sparse render metadata keyed by elem id, not extra fields on the dense
+  `HostElemDescriptorIndex`.
+- Three O(N)-capable structural paths are currently dark in the scan split:
+  `rebuildActiveStreamSignalRecordTable`, `syncActiveIntervalsFromGraph`, and
+  render-index refresh after splices/permutations. Add metrics for these before
+  using the scan table to reorder the next major slice.
 - The generated large-N `Ui.each` app is now in the native spec/bench surface at
   N = 8 and N = 64, so the next structural fixes are guarded by N-sensitive
   assertions, not just aggregate six-app samples.
@@ -369,12 +405,20 @@ evidence-gated.
 
 Current priority after the Phase 4 review:
 
-1. O(1) identity/descriptor lookup, including keyed diff lookup discipline.
-2. Moves-only reorder proof at large N.
-3. Persistent rank-ordered propagation queue.
-4. Per-cycle scratch/arena allocation cleanup.
-5. Long-session leak experiment and slot reclamation.
-6. Large-N validation for host-private keyed-row hashing.
+1. Add missing attribution counters for whole-stream signal-record table
+   rebuilds, active interval syncs, and render-index refreshes.
+2. Remove the splice tail's whole-stream signal-record table rebuild and active
+   interval graph walk by maintaining them incrementally over the spliced
+   subtree.
+3. Attack `remove_target` with a scope-owned descriptor index and an explicit
+   replacement-subtree membership set.
+4. Collapse `render_scope` and `splice` render-range discovery behind an
+   explicit scope-to-render-range index; fold splice's two current render-node
+   passes into one as the first step.
+5. Then move transient structural buffers to scratch, starting with making
+   `streamDirectChildren` allocation-free for callers.
+6. Keep the long-session leak/plateau gate in the loop for monotonic identity
+   and dense `_by_elem_id` tables.
 
 ### Persistent rank-ordered propagation queue (design gap, not optimisation)
 
@@ -404,16 +448,70 @@ Current priority after the Phase 4 review:
 - **Hypothesis:** patching sink routes only for records in the spliced subtree —
   rather than re-walking the whole active stream — makes structural work scale
   with the change, not the tree, as `DESIGN.md` requires.
-- **Why we suspect it:** `spliceActiveStreamReplacingTarget` calls
-  `rebuildActiveSinkSignalRoutesFromStream`, which re-walks every signal-bearing
+- **Why we suspected it:** the old splice path re-walked every signal-bearing
   table of the entire active stream to rebuild every sink route even for a
-  one-row change. `DESIGN.md` explicitly forbids "clear-and-rebuild of the whole
-  active signal graph on a structural change" and budgets dependency-graph
-  maintenance at O(affected scope). This is the single biggest algorithmic gap.
+  one-row change. That specific gap is closed; do not reintroduce a full
+  `rebuildActiveSinkSignalRoutesFromStream` call on splice.
 - **How we'll know:** `expect_metric_delta active_graph_records_rebuilt` on a
   single-row splice in the large-N app is bounded by the changed set, not N — the
   counter `DESIGN.md` designed specifically to fail this path. The assertion is
   the gate; wiring it is part of the item.
+
+### Structural attribution counters for dark O(N) splice work
+
+- **Hypothesis:** some remaining one-row structural splice cost is hidden outside
+  `stream_nodes_scanned`: the splice tail still rebuilds the active stream's
+  signal-record token table, syncs active intervals by walking the whole signal
+  graph, and refreshes render indexes from the splice point to the end of the
+  render-node table.
+- **Why we suspect it:** these paths are whole-table/whole-graph walks adjacent
+  to the measured splice path, but the current scan split only attributes
+  descriptor-stream scans. That makes the optimization backlog partially blind.
+- **How we'll know:** add metrics for `signal_record_table_rebuilt`,
+  `active_intervals_synced`, and `render_indexes_refreshed`, then rerun the
+  large-N and kanban benchmarks before promoting the next large structural
+  change. These counters should be gated by `build_options.metrics`.
+
+### Incremental signal-record table and interval sync on splice
+
+- **Hypothesis:** maintaining the active stream signal-record token table and
+  active intervals for only removed/inserted structural descriptors removes
+  hidden O(total signal-bearing descriptors) and O(total signal graph records)
+  work from every splice.
+- **Why we suspect it:** `rebuildActiveStreamSignalRecordTable` clears and
+  re-walks all signal-bearing descriptor tables after each splice, and
+  `syncActiveIntervalsFromGraph` walks the entire active signal graph. These are
+  the same clear-and-rebuild pattern already removed from sink routes.
+- **How we'll know:** after the attribution counters land, one-row large-N
+  splice counters for signal-record table work, interval sync work, and active
+  graph records rebuilt are bounded by the changed subtree rather than live N.
+
+### Scope-owned descriptor removal index
+
+- **Hypothesis:** a maintained scope-to-owned-descriptor index makes
+  `removeActiveNonRenderDescriptorsInTarget` scale with the replaced subtree
+  instead of linearly scanning and compacting every descriptor table.
+- **Why we suspect it:** the `remove_target` bucket is the largest measured
+  structural bucket on `signals-large-each-64`. It comes from the many
+  remove-in-target helpers scanning descriptor tables and asking whether each
+  descriptor belongs to the replacement target.
+- **How we'll know:** add or tighten large-N assertions so a one-row splice's
+  `stream_nodes_scanned_remove_target` is bounded by changed descriptors, not
+  total active descriptors. Precomputing the replacement-subtree membership set
+  should remove repeated ancestry walks inside the removal loops.
+
+### Scope render-range index
+
+- **Hypothesis:** maintaining `scope_id -> [render_start, render_end)` for active
+  scope subtrees collapses the current render-range discovery scans used by
+  splice and render-scope lookup.
+- **Why we suspect it:** `splice` and `render_scope` together are more than 40%
+  of the large-N stream-scan split. Both answer the same ownership question:
+  which contiguous render-node range belongs to this scope subtree?
+- **How we'll know:** fold splice's current double render-node pass into one as
+  the small first win, then replace the scan with explicit range lookup and
+  tighten large-N `stream_nodes_scanned_splice` /
+  `stream_nodes_scanned_render_scope` assertions.
 
 ### Per-cycle scratch/arena to remove dispatch allocation churn
 
@@ -440,7 +538,9 @@ Current priority after the Phase 4 review:
 - **Constraint:** the arena is for engine-internal bookkeeping only. Boxed Roc
   values outlive the cycle and must stay on the GPA with their refcounts and the
   `roc_alloc` ledger — they must not be moved onto the arena.
-- **How we'll know:** the long-session `host_retained_alloc_delta` /
+- **How we'll know:** first make `streamDirectChildren` support a caller-owned
+  buffer or iterator so indexed child walks do not allocate an owned slice by
+  default. Then the long-session `host_retained_alloc_delta` /
   `host_retained_bytes_delta` gauges flatten earlier, and per-event
   `host_allocs_this_event` / `host_alloc_bytes_this_event` deltas for the named
   buffers drop to zero after warmup; specs stay green. Roc heap churn continues
@@ -449,7 +549,8 @@ Current priority after the Phase 4 review:
 ### O(1) identity/descriptor lookup (kill linear-scan-by-id)
 
 - **Status:** node/elem descriptor lookup slices and keyed row-site indexes have
-  landed.
+  landed. Render-child indexing has also landed using sparse render metadata
+  keyed by elem id rather than widening the dense elem descriptor index.
   `HostNodeDescriptorStream` maintains explicit
   `node_id -> scope_site/state/when/each` and `elem_id -> descriptor` indexes;
   the engine maintains `node_id -> state cell` indexes for runtime state; and
@@ -463,22 +564,23 @@ Current priority after the Phase 4 review:
   `findElementDesc`, `findTextNodeDesc`, `findSignalTextNodeDesc`,
   `streamHasTextField`, `streamHasBoolField`, `signalRecordByToken`, and
   `activeEachRowScopes`) no longer scan descriptor tables or the scope forest.
-  Remaining work is the render-node subtree scans and child collection.
-- **Hypothesis:** finishing dense side tables for active render-node/subtree
-  ownership and keyed diff lookup discipline — maintained on insert/remove, the
-  way `descriptor_indexes_by_elem_id` already is — plus restricting structural
-  patching to the spliced subtree, remove the O(render_nodes²) behaviour in the
-  structural patch paths.
+  Indexed child collection no longer scans render nodes. Remaining work is the
+  render-node subtree scans and render-range lookup.
+- **Hypothesis:** finishing explicit active render-node/subtree ownership indexes
+  — maintained on insert/remove, the way `descriptor_indexes_by_elem_id` already
+  is — plus restricting structural patching to the spliced subtree, remove the
+  O(render_nodes²) behaviour in the structural patch paths.
 - **Why we suspect it:** `DESIGN.md` forbids answering "what id is this record?"
   or "what descriptor owns this elem_id?" by walking a list. The descriptor and
   token lookups now follow that rule, but the remaining subtree and child
   collection paths still walk active render nodes to rediscover ownership. The
   accelerator pattern already exists in the file; the remaining work is applying
   it to those ownership questions without changing behaviour.
-- **How we'll know:** add `stream_nodes_scanned` assertions on a single-row update
-  in the large-N app; the counter must be bounded by the changed set, not by N,
-  before and after — and the baseline must show the scan is actually a hot path
-  worth removing.
+- **How we'll know:** child indexing removes the `children` bucket without
+  increasing host allocation bytes materially from the keyed-row-site baseline.
+  The later scope-range work adds `stream_nodes_scanned` assertions on a
+  single-row update in the large-N app; the counter must be bounded by the
+  changed set, not by N.
 
 ### Slot reclamation for monotonic identity tables
 

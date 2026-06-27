@@ -14,6 +14,7 @@ click role:button name:"Update middle row"
 expect_text text:"Row 032 updated" "Row 032 updated"
 expect_metric_delta_at_most each_key_compares 128
 expect_metric_delta_at_most stream_nodes_scanned 4096
+expect_metric_delta stream_nodes_scanned_children 0
 expect_metric_delta_at_most allocs_this_event 12800
 expect_metric_delta_at_most deallocs_this_event 12800
 expect_metric_delta_at_most active_graph_records_rebuilt 2
@@ -26,6 +27,7 @@ click role:button name:"Append one row"
 expect_visible role:region name:"Large row row-064"
 expect_metric_delta_at_most each_key_compares 130
 expect_metric_delta_at_most stream_nodes_scanned 4160
+expect_metric_delta stream_nodes_scanned_children 0
 expect_metric_delta_at_most allocs_this_event 13000
 expect_metric_delta_at_most deallocs_this_event 13000
 expect_metric_delta_at_most active_graph_records_rebuilt 4
@@ -38,6 +40,7 @@ click role:button name:"Remove middle row"
 expect_absent role:region name:"Large row row-032"
 expect_metric_delta_at_most each_key_compares 128
 expect_metric_delta_at_most stream_nodes_scanned 4096
+expect_metric_delta stream_nodes_scanned_children 0
 expect_metric_delta_at_most allocs_this_event 12800
 expect_metric_delta_at_most deallocs_this_event 12800
 expect_metric_delta_at_most active_graph_records_rebuilt 0
@@ -51,6 +54,7 @@ expect_visible role:region name:"Large row row-000"
 expect_absent role:region name:"Large row row-001"
 expect_metric_delta_at_most each_key_compares 128
 expect_metric_delta_at_most stream_nodes_scanned 24576
+expect_metric_delta stream_nodes_scanned_children 0
 expect_metric_delta_at_most allocs_this_event 12800
 expect_metric_delta_at_most deallocs_this_event 12800
 expect_metric_delta_at_most active_graph_records_rebuilt 4
@@ -63,6 +67,7 @@ click role:button name:"Reverse rows"
 expect_visible role:region name:"Large row row-063"
 expect_metric_delta_at_most each_key_compares 128
 expect_metric_delta_at_most stream_nodes_scanned 32768
+expect_metric_delta stream_nodes_scanned_children 0
 expect_metric_delta_at_most allocs_this_event 12800
 expect_metric_delta_at_most deallocs_this_event 12800
 expect_metric_delta_at_most active_graph_records_rebuilt 128
@@ -76,6 +81,7 @@ expect_visible role:region name:"Large row row-000"
 expect_visible role:region name:"Large row row-032"
 expect_metric_delta_at_most each_key_compares 128
 expect_metric_delta_at_most stream_nodes_scanned 4096
+expect_metric_delta stream_nodes_scanned_children 0
 expect_metric_delta_at_most allocs_this_event 12800
 expect_metric_delta_at_most deallocs_this_event 12800
 expect_metric_delta_at_most active_graph_records_rebuilt 2
