@@ -5,6 +5,12 @@ main! = |_args| {
         dbg "omitted dbg output"
         crash "inline expect condition was evaluated"
     }
+    _omitted = {
+        expect {
+            dbg "omitted final-expression dbg output"
+            crash "inline expect final expression was evaluated"
+        }
+    }
     echo!("Hello, World!")
     Ok({})
 }
