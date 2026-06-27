@@ -211,6 +211,51 @@ pub const RocList = extern struct {
         );
     }
 
+    fn decrefAfterMovingSliceElements(
+        self: RocList,
+        alignment: u32,
+        element_width: usize,
+        elements_refcounted: bool,
+        dec_context: ?*anyopaque,
+        dec: Dec,
+        roc_ops: *RocOps,
+    ) void {
+        std.debug.assert(self.isSeamlessSlice());
+        std.debug.assert(self.isUnique(roc_ops));
+
+        if (elements_refcounted) {
+            const alloc_ptr = self.getAllocationDataPtr(roc_ops) orelse unreachable;
+            const slice_ptr = self.bytes orelse unreachable;
+            std.debug.assert(element_width > 0);
+
+            const moved_start_bytes = @intFromPtr(slice_ptr) - @intFromPtr(alloc_ptr);
+            std.debug.assert(moved_start_bytes % element_width == 0);
+
+            const moved_start = moved_start_bytes / element_width;
+            const moved_end = moved_start + self.len();
+            const count = self.getAllocationElementCount(true, roc_ops);
+            std.debug.assert(moved_end <= count);
+
+            var i: usize = 0;
+            while (i < moved_start) : (i += 1) {
+                dec(dec_context, alloc_ptr + i * element_width);
+            }
+            i = moved_end;
+            while (i < count) : (i += 1) {
+                dec(dec_context, alloc_ptr + i * element_width);
+            }
+        }
+
+        utils.decref(
+            self.getAllocationDataPtr(roc_ops),
+            self.capacity_or_alloc_ptr,
+            alignment,
+            elements_refcounted,
+            .atomic,
+            roc_ops,
+        );
+    }
+
     pub fn elements(self: RocList, comptime T: type) ?[*]T {
         if (self.bytes) |bytes| {
             return utils.alignedPtrCast([*]T, bytes, @src());
@@ -376,16 +421,15 @@ pub const RocList = extern struct {
         const old_length = self.length;
 
         const result = RocList.list_allocate(alignment, new_length, element_width, elements_refcounted, roc_ops);
+        const move_slice_elements = self.isSeamlessSlice() and self.isUnique(roc_ops);
 
         if (self.bytes) |source_ptr| {
             // transfer the memory
             const dest_ptr = result.bytes orelse unreachable;
 
             @memcpy(dest_ptr[0..(old_length * element_width)], source_ptr[0..(old_length * element_width)]);
-            @memset(dest_ptr[(old_length * element_width)..(new_length * element_width)], 0);
 
-            // Increment refcount of all elements now in a new list.
-            if (elements_refcounted) {
+            if (elements_refcounted and !move_slice_elements) {
                 var i: usize = 0;
                 while (i < old_length) : (i += 1) {
                     inc(inc_context, dest_ptr + i * element_width);
@@ -393,7 +437,11 @@ pub const RocList = extern struct {
             }
         }
 
-        self.decref(alignment, element_width, elements_refcounted, dec_context, dec, roc_ops);
+        if (move_slice_elements) {
+            self.decrefAfterMovingSliceElements(alignment, element_width, elements_refcounted, dec_context, dec, roc_ops);
+        } else {
+            self.decref(alignment, element_width, elements_refcounted, dec_context, dec, roc_ops);
+        }
 
         return result;
     }
@@ -1322,10 +1370,15 @@ pub fn listConcat(
     // 1. NOT use the unique paths (reallocate might free/move the allocation)
     // 2. Only decref once at the end (to avoid double-free)
     // Instead, fall through to the general path that allocates a new list.
+    const can_consume_a = !same_allocation and (update_mode_a == .InPlace or list_a.isUnique(roc_ops));
+    const can_consume_b = !same_allocation and (update_mode_b == .InPlace or list_b.isUnique(roc_ops));
+    const a_reuses_allocation = can_consume_a and !list_a.isSeamlessSlice();
+    const b_reuses_allocation = can_consume_b and !list_b.isSeamlessSlice();
+    const use_a_path = a_reuses_allocation or (can_consume_a and !b_reuses_allocation);
 
-    if (!same_allocation and (update_mode_a == .InPlace or list_a.isUnique(roc_ops))) {
-        const total_length: usize = list_a.len() + list_b.len();
+    const total_length: usize = list_a.len() + list_b.len();
 
+    if (use_a_path) {
         const resized_list_a = list_a.reallocate(
             alignment,
             total_length,
@@ -1360,9 +1413,7 @@ pub fn listConcat(
         list_b.decref(alignment, element_width, elements_refcounted, dec_context, dec, roc_ops);
 
         return resized_list_a;
-    } else if (!same_allocation and (update_mode_b == .InPlace or list_b.isUnique(roc_ops))) {
-        const total_length: usize = list_a.len() + list_b.len();
-
+    } else if (can_consume_b) {
         const resized_list_b = list_b.reallocate(
             alignment,
             total_length,
@@ -1401,7 +1452,6 @@ pub fn listConcat(
 
         return resized_list_b;
     }
-    const total_length: usize = list_a.len() + list_b.len();
 
     const output = RocList.list_allocate(alignment, total_length, element_width, elements_refcounted, roc_ops);
 
@@ -1777,8 +1827,60 @@ test "listConcat refcounted seamless slice releases backing allocation when reus
 
     try std.testing.expect(!result.isSeamlessSlice());
     try std.testing.expectEqual(@as(usize, 4), result.len());
-    try std.testing.expectEqual(@as(usize, 4), inc_count);
-    try std.testing.expectEqual(@as(usize, left_data.len + right_data.len), dec_count);
+    try std.testing.expectEqual(@as(usize, right_data.len), inc_count);
+    try std.testing.expectEqual(@as(usize, left_data.len - slice.len() + right_data.len), dec_count);
+
+    const elements = result.elements(u8).?[0..result.len()];
+    try std.testing.expectEqual(@as(u8, 2), elements[0]);
+    try std.testing.expectEqual(@as(u8, 3), elements[1]);
+    try std.testing.expectEqual(@as(u8, 9), elements[2]);
+    try std.testing.expectEqual(@as(u8, 10), elements[3]);
+}
+
+test "listConcat reuses non-slice allocation before cloning seamless slice" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    const left_data = [_]u8{ 1, 2, 3, 4 };
+    const right_data = [_]u8{ 9, 10 };
+    const left = RocList.fromSlice(u8, left_data[0..], false, test_env.getOps());
+    var right = RocList.fromSlice(u8, right_data[0..], false, test_env.getOps());
+    right = listReserve(right, @alignOf(u8), 2, @sizeOf(u8), false, null, rcNone, null, rcNone, .InPlace, test_env.getOps());
+    const right_bytes = right.bytes;
+
+    const slice = listSublist(
+        left,
+        @alignOf(u8),
+        @sizeOf(u8),
+        false,
+        1,
+        2,
+        null,
+        rcNone,
+        .InPlace,
+        test_env.getOps(),
+    );
+    try std.testing.expect(slice.isSeamlessSlice());
+
+    const result = listConcat(
+        slice,
+        right,
+        @alignOf(u8),
+        @sizeOf(u8),
+        false,
+        null,
+        rcNone,
+        null,
+        rcNone,
+        .InPlace,
+        .InPlace,
+        test_env.getOps(),
+    );
+    defer result.decref(@alignOf(u8), @sizeOf(u8), false, null, rcNone, test_env.getOps());
+
+    try std.testing.expectEqual(right_bytes, result.bytes);
+    try std.testing.expect(!result.isSeamlessSlice());
+    try std.testing.expectEqual(@as(usize, 4), result.len());
 
     const elements = result.elements(u8).?[0..result.len()];
     try std.testing.expectEqual(@as(u8, 2), elements[0]);
@@ -2024,8 +2126,8 @@ test "listReserve refcounted seamless slice releases backing allocation when gro
     try std.testing.expect(!reserved.isSeamlessSlice());
     try std.testing.expect(reserved.getCapacity() >= 3);
     try std.testing.expectEqual(@as(usize, 2), reserved.len());
-    try std.testing.expectEqual(@as(usize, 2), inc_count);
-    try std.testing.expectEqual(@as(usize, data.len), dec_count);
+    try std.testing.expectEqual(@as(usize, 0), inc_count);
+    try std.testing.expectEqual(@as(usize, data.len - slice.len()), dec_count);
 
     const elements = reserved.elements(u8).?[0..reserved.len()];
     try std.testing.expectEqual(@as(u8, 2), elements[0]);
