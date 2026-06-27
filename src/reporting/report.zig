@@ -78,6 +78,18 @@ fn isAsciiAlphaNum(c: u8) bool {
     return isAsciiLower(c) or isAsciiUpper(c) or isAsciiDigit(c);
 }
 
+fn isUtfPrefixedTitleWord(word: []const u8) bool {
+    const prefix = "UTF-";
+    if (!std.mem.startsWith(u8, word, prefix)) return false;
+    if (word.len == prefix.len) return false;
+
+    for (word[prefix.len..]) |c| {
+        if (!isAsciiAlphaNum(c)) return false;
+    }
+
+    return true;
+}
+
 fn containsNewline(text: []const u8) bool {
     return std.mem.findScalar(u8, text, '\n') != null or
         std.mem.findScalar(u8, text, '\r') != null;
@@ -99,8 +111,9 @@ fn isLowercaseTitleParticle(word: []const u8) bool {
 fn isValidTitleWord(word: []const u8, is_first: bool, is_last: bool, has_lower: *bool) bool {
     if (word.len == 0) return false;
 
+    const utf_prefixed = isUtfPrefixedTitleWord(word);
     for (word) |c| {
-        if (!isAsciiAlphaNum(c)) return false;
+        if (!isAsciiAlphaNum(c) and !(utf_prefixed and c == '-')) return false;
         if (isAsciiLower(c)) has_lower.* = true;
     }
 
@@ -133,9 +146,7 @@ fn countTitleTokens(title: []const u8) ?usize {
             i += 1;
         } else {
             const start = i;
-            while (i < title.len and title[i] != ' ' and title[i] != '`') : (i += 1) {
-                if (!isAsciiAlphaNum(title[i])) return null;
-            }
+            while (i < title.len and title[i] != ' ' and title[i] != '`') : (i += 1) {}
             if (start == i) return null;
 
             count += 1;
@@ -464,6 +475,7 @@ test "Report title validation allows backticked code" {
     try testing.expect(isValidReportTitle("`dbg` in Optimized Build"));
     try testing.expect(isValidReportTitle("Type `main!` Should Take 1 Argument"));
     try testing.expect(isValidReportTitle("Try Operator Outside Function"));
+    try testing.expect(isValidReportTitle("Invalid UTF-8"));
 }
 
 test "Report title validation rejects malformed titles" {
@@ -478,6 +490,8 @@ test "Report title validation rejects malformed titles" {
     try testing.expect(!isValidReportTitle("Debug `dbg ` Error"));
     try testing.expect(!isValidReportTitle("Debug `` Error"));
     try testing.expect(!isValidReportTitle("Debug `dbg Error"));
+    try testing.expect(!isValidReportTitle("Debug UTF- Error"));
+    try testing.expect(!isValidReportTitle("Debug UTF-8-16 Error"));
 }
 
 test "Report description validation checks trimming" {
