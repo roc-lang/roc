@@ -16137,26 +16137,13 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         // If this constraint is already an error, the skip this pass
                         continue;
                     }
-                    // Run the builtin-backing walk only when this nominal does not
-                    // define its own literal-conversion method. If it defines its own
-                    // `from_numeral` / `from_quote` / …, that method takes precedence,
-                    // so skip the walk and let the dispatch below resolve and run it.
-                    // Otherwise the walk would validate against the builtin backing and
-                    // shadow the user's own conversion.
-                    const nominal_defines_literal_method = original_env.lookupMethodBindingFromEnvAndDeclConst(
-                        self.cir,
-                        nominal_type.sourceDeclOptional(),
-                        constraint.fn_name,
-                    ) != null;
-                    if (!nominal_defines_literal_method and try self.literalConstraintSatisfiedByNominalBacking(
-                        deferred_constraint.var_,
-                        constraint,
-                        nominal_type,
-                        env,
-                        is_numeric_default_pass,
-                    )) {
-                        continue;
-                    }
+                    // A literal resolves only against the type it was annotated with:
+                    // either this nominal is a builtin (validated just below) or it
+                    // declares its own `from_` (dispatched further down). We do NOT walk
+                    // into the backing chain to manufacture an opt-in the nominal never
+                    // declared — `from_` is the explicit, per-nominal opt-in. To put a
+                    // literal into a transparent newtype that declares no `from_`, use
+                    // explicit construction (`Nominal.(value)`).
                     if (!try self.validateFromNumeralLiteralForBuiltinNominal(
                         deferred_constraint.var_,
                         constraint,
@@ -17580,72 +17567,6 @@ fn validateResolvedOpenNumeralLiterals(
             continue;
         }
         _ = try self.reportInvalidBuiltinFromNumeralInfo(resolved.var_, num_kind, entry.info, env);
-    }
-}
-
-fn literalConstraintSatisfiedByNominalBacking(
-    self: *Self,
-    dispatcher_var: Var,
-    constraint: StaticDispatchConstraint,
-    nominal_type: types_mod.NominalType,
-    env: *Env,
-    is_numeric_default_pass: bool,
-) Allocator.Error!bool {
-    const literal_kind = constraint.origin.literalKind() orelse return false;
-    if (!nominal_type.canLiftInner(self.cir.qualified_module_ident)) return false;
-
-    const visited_top = self.scratch_vars.top();
-    defer self.scratch_vars.clearFrom(visited_top);
-
-    var current = nominal_type;
-    while (true) {
-        const backing_var = self.types.getNominalBackingVar(current);
-        const backing_resolved = self.types.resolveVar(backing_var);
-        if (backing_resolved.desc.content != .structure) return false;
-        const backing_flat = backing_resolved.desc.content.structure;
-        if (backing_flat != .nominal_type) return false;
-
-        const backing_nominal = backing_flat.nominal_type;
-        switch (literal_kind) {
-            .numeral => {
-                if (self.builtinNumKindFromNominalType(backing_nominal) != null) {
-                    _ = try self.validateFromNumeralLiteralForBuiltinNominal(
-                        dispatcher_var,
-                        constraint,
-                        backing_nominal,
-                        env,
-                        is_numeric_default_pass,
-                    );
-                    return true;
-                }
-            },
-            .quote => {
-                if (self.nominalIsBuiltinStrType(backing_nominal)) return true;
-            },
-            .interpolation => {
-                if (self.nominalIsBuiltinStrType(backing_nominal)) {
-                    _ = try self.satisfyBuiltinStrInterpolation(dispatcher_var, constraint, env);
-                    return true;
-                }
-            },
-        }
-
-        // `backing_nominal` didn't match the terminal builtin above, so we are
-        // about to lift *through* it to a deeper backing. Re-check opacity at
-        // this level: a literal must not be coerced through an opaque boundary
-        // this module is not allowed to see past, even when the outer nominal
-        // is transparent.
-        if (!backing_nominal.canLiftInner(self.cir.qualified_module_ident)) return false;
-
-        // Cycle guard: store and compare already-resolved representative vars so
-        // we never re-resolve a visited entry. A representative var is 1:1 with
-        // its descriptor, so this is equivalent to the previous desc_idx compare
-        // but avoids the per-iteration resolveVar (no O(depth) work per step).
-        for (self.scratch_vars.sliceFromStart(visited_top)) |visited_var| {
-            if (visited_var == backing_resolved.var_) return false;
-        }
-        try self.scratch_vars.append(backing_resolved.var_);
-        current = backing_nominal;
     }
 }
 
