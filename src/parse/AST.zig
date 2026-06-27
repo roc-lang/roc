@@ -150,7 +150,7 @@ pub fn tokenizeDiagnosticToReport(self: *AST, diagnostic: tokenize.Diagnostic, a
         .InvalidUnicodeEscapeSequence => "Invalid Unicode Escape Sequence",
         .InvalidEscapeSequence => "Invalid Escape Sequence",
         .UnclosedString => "Unclosed String",
-        .NonPrintableUnicodeInStrLiteral => "Non-printable Unicode In String-like Literal",
+        .NonPrintableUnicodeInStrLiteral => "Nonprintable Unicode in String Literal",
         .InvalidUtf8InSource => "Invalid UTF-8",
         .DollarInMiddleOfIdentifier => "Stray Dollar Sign",
         .SingleQuoteTooLong => "Single Quote Too Long",
