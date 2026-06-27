@@ -1576,6 +1576,84 @@ const Cloner = struct {
         }
     }
 
+    fn privateStateValueFromDemandedKnownValueArgs(
+        self: *Cloner,
+        known_value: DemandedKnownValue,
+        args: *std.ArrayList(Ast.TypedLocal),
+    ) Allocator.Error!PrivateStateValue {
+        return switch (known_value) {
+            .any,
+            .leaf,
+            => |ty| blk: {
+                const local = try self.pass.program.addLocal(self.pass.symbols.fresh(), ty);
+                try args.append(self.pass.allocator, .{ .local = local, .ty = ty });
+                break :blk PrivateStateValue{ .leaf = .{
+                    .ty = ty,
+                    .expr = try self.addExpr(.{
+                        .ty = ty,
+                        .data = .{ .local = local },
+                    }),
+                } };
+            },
+            .tag => |tag| .{ .tag = .{
+                .ty = tag.ty,
+                .name = tag.name,
+                .payloads = try self.privateStateIndexedValuesFromDemandedKnownValues(tag.payloads, args),
+            } },
+            .record => |record| blk: {
+                const fields = try self.pass.arena.allocator().alloc(PrivateStateField, record.fields.len);
+                for (record.fields, fields) |field, *out| {
+                    out.* = .{
+                        .name = field.name,
+                        .value = try self.privateStateValueFromDemandedKnownValueArgs(field.known_value, args),
+                    };
+                }
+                break :blk PrivateStateValue{ .record = .{
+                    .ty = record.ty,
+                    .fields = fields,
+                } };
+            },
+            .tuple => |tuple| .{ .tuple = .{
+                .ty = tuple.ty,
+                .items = try self.privateStateIndexedValuesFromDemandedKnownValues(tuple.items, args),
+            } },
+            .nominal => |nominal| blk: {
+                const backing = if (nominal.backing) |backing_known_value| backing: {
+                    const stored = try self.pass.arena.allocator().create(PrivateStateValue);
+                    stored.* = try self.privateStateValueFromDemandedKnownValueArgs(backing_known_value.*, args);
+                    break :backing stored;
+                } else null;
+                break :blk PrivateStateValue{ .nominal = .{
+                    .ty = nominal.ty,
+                    .backing = backing,
+                } };
+            },
+            .callable => |callable| .{ .callable = .{
+                .ty = callable.ty,
+                .fn_id = callable.fn_id,
+                .captures = try self.privateStateIndexedValuesFromDemandedKnownValues(callable.captures, args),
+            } },
+            .finite_tags,
+            .finite_callables,
+            => Common.invariant("finite demanded state reached private state value construction before expansion"),
+        };
+    }
+
+    fn privateStateIndexedValuesFromDemandedKnownValues(
+        self: *Cloner,
+        known_values: []const DemandedKnownIndexedValue,
+        args: *std.ArrayList(Ast.TypedLocal),
+    ) Allocator.Error![]const PrivateStateIndexedValue {
+        const values = try self.pass.arena.allocator().alloc(PrivateStateIndexedValue, known_values.len);
+        for (known_values, values) |known_value, *out| {
+            out.* = .{
+                .index = known_value.index,
+                .value = try self.privateStateValueFromDemandedKnownValueArgs(known_value.known_value, args),
+            };
+        }
+        return values;
+    }
+
     fn cloneExpr(self: *Cloner, expr_id: Ast.ExprId) Common.LowerError!Ast.ExprId {
         const saved_loc = self.current_loc;
         defer self.current_loc = saved_loc;
@@ -7840,6 +7918,47 @@ fn demandedKnownValueType(known_value: DemandedKnownValue) Type.TypeId {
     };
 }
 
+fn demandedKnownValuePrivateStateParamCount(known_value: DemandedKnownValue) usize {
+    return switch (known_value) {
+        .any,
+        .leaf,
+        => 1,
+        .tag => |tag| demandedKnownIndexedValuesPrivateStateParamCount(tag.payloads),
+        .record => |record| blk: {
+            var count: usize = 0;
+            for (record.fields) |field| {
+                count += demandedKnownValuePrivateStateParamCount(field.known_value);
+            }
+            break :blk count;
+        },
+        .tuple => |tuple| demandedKnownIndexedValuesPrivateStateParamCount(tuple.items),
+        .nominal => |nominal| if (nominal.backing) |backing| demandedKnownValuePrivateStateParamCount(backing.*) else 0,
+        .callable => |callable| demandedKnownIndexedValuesPrivateStateParamCount(callable.captures),
+        .finite_tags => |finite_tags| blk: {
+            var max_count: usize = 0;
+            for (finite_tags.alternatives) |alternative| {
+                max_count = @max(max_count, demandedKnownIndexedValuesPrivateStateParamCount(alternative.payloads));
+            }
+            break :blk max_count;
+        },
+        .finite_callables => |finite_callables| blk: {
+            var max_count: usize = 0;
+            for (finite_callables.alternatives) |alternative| {
+                max_count = @max(max_count, demandedKnownIndexedValuesPrivateStateParamCount(alternative.captures));
+            }
+            break :blk max_count;
+        },
+    };
+}
+
+fn demandedKnownIndexedValuesPrivateStateParamCount(values: []const DemandedKnownIndexedValue) usize {
+    var count: usize = 0;
+    for (values) |value| {
+        count += demandedKnownValuePrivateStateParamCount(value.known_value);
+    }
+    return count;
+}
+
 fn demandedKnownValueEql(program: *const Ast.Program, lhs: DemandedKnownValue, rhs: DemandedKnownValue) bool {
     if (std.meta.activeTag(lhs) != std.meta.activeTag(rhs)) return false;
     return switch (lhs) {
@@ -9176,6 +9295,53 @@ test "demanded known value products preserve sparse callable capture indexes" {
     try std.testing.expectEqual(@as(usize, 1), products[1][0].callable.captures.len);
     try std.testing.expectEqual(@as(u32, 2), products[0][0].callable.captures[0].index);
     try std.testing.expectEqual(@as(u32, 2), products[1][0].callable.captures[0].index);
+}
+
+test "demanded known value private state param count ignores identity-only state" {
+    const tag_ty: Type.TypeId = @enumFromInt(140);
+    const callable_ty: Type.TypeId = @enumFromInt(141);
+    const capture_ty: Type.TypeId = @enumFromInt(142);
+    const step_field: names.RecordFieldNameId = @enumFromInt(17);
+    const len_field: names.RecordFieldNameId = @enumFromInt(18);
+    const captures = [_]DemandedKnownIndexedValue{
+        .{ .index = 2, .known_value = .{ .any = capture_ty } },
+    };
+    const fields = [_]DemandedKnownField{
+        .{ .name = step_field, .known_value = .{ .callable = .{
+            .ty = callable_ty,
+            .fn_id = @enumFromInt(10),
+            .captures = &captures,
+        } } },
+        .{ .name = len_field, .known_value = .{ .tag = .{
+            .ty = tag_ty,
+            .name = @enumFromInt(19),
+            .payloads = &.{},
+        } } },
+    };
+
+    try std.testing.expectEqual(@as(usize, 1), demandedKnownValuePrivateStateParamCount(.{ .record = .{
+        .ty = @enumFromInt(143),
+        .fields = &fields,
+    } }));
+}
+
+test "demanded known value private state param count ignores omitted children" {
+    const callable_ty: Type.TypeId = @enumFromInt(150);
+    const capture_ty: Type.TypeId = @enumFromInt(151);
+    const carried_captures = [_]DemandedKnownIndexedValue{
+        .{ .index = 2, .known_value = .{ .any = capture_ty } },
+    };
+
+    try std.testing.expectEqual(@as(usize, 0), demandedKnownValuePrivateStateParamCount(.{ .callable = .{
+        .ty = callable_ty,
+        .fn_id = @enumFromInt(11),
+        .captures = &.{},
+    } }));
+    try std.testing.expectEqual(@as(usize, 1), demandedKnownValuePrivateStateParamCount(.{ .callable = .{
+        .ty = callable_ty,
+        .fn_id = @enumFromInt(11),
+        .captures = &carried_captures,
+    } }));
 }
 
 test "demanded known value distinguishes omitted capture from unknown carried capture" {
