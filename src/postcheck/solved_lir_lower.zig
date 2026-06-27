@@ -2222,7 +2222,10 @@ const Lowerer = struct {
     ) Common.LowerError!LIR.CFStmtId {
         const callee = try self.addTemp(try self.lowerExprTy(callee_expr));
         const done = self.freshJoinPointId();
-        const variants = self.types.fnVariantSpan(variants_span);
+        // Branch lowering can lower argument types that append more variants to
+        // self.types, so keep this iteration independent of the store backing.
+        const variants = try self.allocator.dupe(Type.FnVariant, self.types.fnVariantSpan(variants_span));
+        defer self.allocator.free(variants);
         var current = try self.result.store.addCFStmt(.{ .runtime_error = {} });
         var i = variants.len;
         while (i > 0) {
