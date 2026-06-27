@@ -47,6 +47,7 @@ pub const TargetConfig = struct {
     target_usize: base.target.TargetUsize = base.target.TargetUsize.native,
     checked_module_state: CheckedModuleState = .complete,
     inline_mode: InlineMode = .none,
+    post_check_specialization: PostCheckSpecializationMode = .off,
     debug_effects: DebugEffectMode = .run,
     /// Allow `List.map` to reuse a unique input list's allocation when the
     /// input and output element layouts are interchangeable. Optimized builds
@@ -73,6 +74,15 @@ pub const RuntimeTagSchema = postcheck.SolvedLirLower.RuntimeTagSchema;
 pub const RuntimeTagUnionSchema = postcheck.SolvedLirLower.RuntimeTagUnionSchema;
 pub const InlineMode = postcheck.SolvedInline.Mode;
 pub const DebugEffectMode = postcheck.SolvedLirLower.DebugEffectMode;
+
+pub const PostCheckSpecializationMode = enum {
+    off,
+    optimized,
+
+    pub fn enabled(self: PostCheckSpecializationMode) bool {
+        return self == .optimized;
+    }
+};
 
 /// Runtime record and tag-union schemas needed by dev tooling.
 pub const RuntimeValueSchemaStore = struct {
@@ -226,7 +236,7 @@ pub fn lowerCheckedModulesToLir(
     var lifted_owned = true;
     errdefer if (lifted_owned) lifted.deinit();
 
-    if (target.inline_mode != .none) {
+    if (target.post_check_specialization.enabled()) {
         var pre_solved = try postcheck.LambdaSolved.Solve.run(allocator, lifted);
         lifted_owned = false;
         var pre_solved_owned = true;
@@ -274,7 +284,7 @@ pub fn lowerCheckedModulesToLir(
 
     try Arc.insert(&lowered.lir_result.store, &lowered.lir_result.layouts, .{
         .roots = lowered.lir_result.root_procs.items,
-        .specialize = target.inline_mode != .none,
+        .specialize = target.post_check_specialization.enabled(),
     });
 
     if (roots.requests.len != 0 and lowered.lir_result.root_procs.items.len == 0) {
@@ -305,6 +315,14 @@ fn verifyCheckedBoundary(modules: CheckedModuleSet, target: TargetConfig) Alloca
     switch (target.checked_module_state) {
         .complete => try modules.root.module.verifyComplete(),
         .checking_finalization => modules.root.module.verifyReadyForCompileTimeLowering(),
+    }
+    if (target.post_check_specialization.enabled()) {
+        if (target.inline_mode == .none) {
+            checkedPipelineInvariant("post-check specialization requires wrapper inline mode");
+        }
+        if (target.checked_module_state != .complete) {
+            checkedPipelineInvariant("post-check specialization cannot run during checking finalization");
+        }
     }
 }
 

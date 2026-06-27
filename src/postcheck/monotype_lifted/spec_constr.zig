@@ -218,7 +218,7 @@ const Type = @import("../monotype/type.zig");
 const Solved = @import("../lambda_solved/ast.zig");
 const SolvedType = @import("../lambda_solved/type.zig");
 const check = @import("check");
-const names = @import("check").CheckedNames;
+const names = check.CheckedNames;
 
 const Allocator = std.mem.Allocator;
 
@@ -407,7 +407,6 @@ const CallableSpecialization = struct {
 
 const BindingTarget = union(enum) {
     local: Ast.LocalId,
-    binder: check.CheckedModule.PatternBinderId,
 };
 
 const BindingChange = struct {
@@ -443,6 +442,7 @@ const Pass = struct {
     program: *Ast.Program,
     solved: ?*const Solved.Program,
     plans: []FnPlan,
+    original_bodies: []const ?Ast.ExprId,
     worker_worklist: std.ArrayList(WorkerJob),
     callable_specializations: std.ArrayList(CallableSpecialization),
     symbols: Common.SymbolGen,
@@ -472,6 +472,7 @@ const Pass = struct {
             .program = program,
             .solved = solved,
             .plans = plans,
+            .original_bodies = &.{},
             .worker_worklist = .empty,
             .callable_specializations = .empty,
             .symbols = .{ .next = program.next_symbol },
@@ -546,12 +547,20 @@ const Pass = struct {
         const original_fn_count = self.plans.len;
         const original_bodies = try self.captureOriginalBodies(original_fn_count);
         defer self.allocator.free(original_bodies);
+        self.original_bodies = original_bodies;
 
         try self.collectArgUses(original_fn_count);
         try self.rewriteBaseBodies(original_bodies);
         try self.createSpecializations(original_bodies);
 
+        self.original_bodies = &.{};
         self.program.next_symbol = self.symbols.next;
+    }
+
+    fn originalBody(self: *const Pass, fn_id: Ast.FnId) ?Ast.ExprId {
+        const index = @intFromEnum(fn_id);
+        if (index >= self.original_bodies.len) return null;
+        return self.original_bodies[index];
     }
 
     fn copyProcDebugName(self: *Pass, source_symbol: Common.Symbol, target_symbol: Common.Symbol) Allocator.Error!void {
@@ -995,6 +1004,7 @@ const Pass = struct {
                 const captures = try self.arena.allocator().alloc(KnownValue, callable.captures.len);
                 for (callable.captures, 0..) |capture, index| {
                     captures[index] = (try self.knownValueFromValue(capture)) orelse
+                        (try leafKnownValueFromValue(self.program, capture)) orelse
                         .{ .any = valueType(self.program, capture) };
                 }
                 break :blk KnownValue{ .callable = .{
@@ -1028,6 +1038,7 @@ const Pass = struct {
                     const captures = try self.arena.allocator().alloc(KnownValue, alternative.captures.len);
                     for (alternative.captures, captures) |capture, *capture_out| {
                         capture_out.* = (try self.knownValueFromValue(capture)) orelse
+                            (try leafKnownValueFromValue(self.program, capture)) orelse
                             .{ .any = valueType(self.program, capture) };
                     }
                     out.* = .{
@@ -1050,16 +1061,13 @@ const Cloner = struct {
     source_fn: Ast.FnId,
     pattern: CallPattern,
     subst: std.AutoHashMap(Ast.LocalId, Value),
-    /// Same-binder substitutions are valid only inside the function body that
-    /// established them. Inline boundaries clear this map before binding callee
-    /// locals because checked binder ids are not global across lifted modules.
-    binder_subst: std.AutoHashMap(check.CheckedModule.PatternBinderId, Value),
     changes: std.ArrayList(BindingChange),
     inline_stack: std.ArrayList(ActiveInline),
     loop_stack: std.ArrayList(LoopPattern),
     inline_direct_calls: bool,
     inline_direct_requires_known_arg: bool,
     record_call_patterns: bool,
+    source_arg_locals_in_scope: bool,
     current_loc: SourceLoc,
     current_region: Region,
 
@@ -1069,13 +1077,13 @@ const Cloner = struct {
             .source_fn = source_fn,
             .pattern = pattern,
             .subst = std.AutoHashMap(Ast.LocalId, Value).init(pass.allocator),
-            .binder_subst = std.AutoHashMap(check.CheckedModule.PatternBinderId, Value).init(pass.allocator),
             .changes = .empty,
             .inline_stack = .empty,
             .loop_stack = .empty,
             .inline_direct_calls = true,
             .inline_direct_requires_known_arg = true,
             .record_call_patterns = true,
+            .source_arg_locals_in_scope = false,
             .current_loc = SourceLoc.none,
             .current_region = Region.zero(),
         };
@@ -1087,13 +1095,13 @@ const Cloner = struct {
             .source_fn = undefined, // Base-body cloning never calls buildArgs, which is the only reader.
             .pattern = .{ .args = &.{} },
             .subst = std.AutoHashMap(Ast.LocalId, Value).init(pass.allocator),
-            .binder_subst = std.AutoHashMap(check.CheckedModule.PatternBinderId, Value).init(pass.allocator),
             .changes = .empty,
             .inline_stack = .empty,
             .loop_stack = .empty,
             .inline_direct_calls = true,
             .inline_direct_requires_known_arg = false,
             .record_call_patterns = true,
+            .source_arg_locals_in_scope = false,
             .current_loc = SourceLoc.none,
             .current_region = Region.zero(),
         };
@@ -1103,6 +1111,7 @@ const Cloner = struct {
         var cloner = Cloner.initForBaseClone(pass);
         cloner.source_fn = source_fn;
         cloner.inline_direct_requires_known_arg = true;
+        cloner.source_arg_locals_in_scope = true;
         return cloner;
     }
 
@@ -1110,7 +1119,6 @@ const Cloner = struct {
         self.inline_stack.deinit(self.pass.allocator);
         self.loop_stack.deinit(self.pass.allocator);
         self.changes.deinit(self.pass.allocator);
-        self.binder_subst.deinit();
         self.subst.deinit();
     }
 
@@ -1295,9 +1303,6 @@ const Cloner = struct {
         switch (expr.data) {
             .local => |local| {
                 if (self.subst.get(local)) |value| return value;
-                if (self.pass.program.locals.items[@intFromEnum(local)].binder) |binder| {
-                    if (self.binder_subst.get(binder)) |value| return value;
-                }
                 if (try self.solvedSingleCallable(expr_id)) |callable| return callable;
                 return .{ .expr = try self.addExpr(.{ .ty = expr.ty, .data = .{ .local = local } }) };
             },
@@ -1402,25 +1407,48 @@ const Cloner = struct {
 
     fn cloneExprValueDemandingKnownValue(self: *Cloner, expr_id: Ast.ExprId) Common.LowerError!Value {
         const expr = self.pass.program.exprs.items[@intFromEnum(expr_id)];
-        switch (expr.data) {
+        const value = blk: switch (expr.data) {
             .call_value => |call| {
                 const callee = try self.cloneExprValueDemandingKnownValue(call.callee);
-                return try self.callKnownValue(expr.ty, callee, call.args, true);
+                break :blk try self.callKnownValue(expr.ty, callee, call.args, true);
             },
             .call_proc => |call| {
-                if (call.is_cold) return try self.cloneExprValue(expr_id);
-                if (!self.inline_direct_calls) return try self.cloneExprValue(expr_id);
-                return try self.inlineDirectCallValue(
+                if (call.is_cold) break :blk try self.cloneExprValue(expr_id);
+                if (!self.inline_direct_calls) break :blk try self.cloneExprValue(expr_id);
+                break :blk try self.inlineDirectCallValue(
                     Ast.callProcCallee(call),
                     call.args,
                     expr_id,
                     true,
                 );
             },
-            .block => |block| return try self.cloneBlockValueDemandingKnownValue(expr.ty, block),
-            .comptime_branch_taken => |taken| return try self.cloneExprValueDemandingKnownValue(taken.body),
-            else => return try self.cloneExprValue(expr_id),
-        }
+            .block => |block| break :blk try self.cloneBlockValueDemandingKnownValue(expr.ty, block),
+            .comptime_branch_taken => |taken| break :blk try self.cloneExprValueDemandingKnownValue(taken.body),
+            else => break :blk try self.cloneExprValue(expr_id),
+        };
+        return try self.ensureDemandedKnownValue(value);
+    }
+
+    fn ensureDemandedKnownValue(self: *Cloner, value: Value) Common.LowerError!Value {
+        if ((try self.pass.knownValueFromValue(value)) != null) return value;
+        return switch (value) {
+            .expr => |expr| blk: {
+                const ty = self.pass.program.exprs.items[@intFromEnum(expr)].ty;
+                if (try typeMayContainRefcounted(self.pass.program, ty)) break :blk value;
+                break :blk Value{ .expr_with_known_value = .{
+                    .expr = expr,
+                    .known_value = .{ .leaf = ty },
+                } };
+            },
+            .let_ => |let_value| blk: {
+                const body = try self.ensureDemandedKnownValue(let_value.body.*);
+                break :blk Value{ .let_ = .{
+                    .lets = let_value.lets,
+                    .body = try self.copyValue(body),
+                } };
+            },
+            else => value,
+        };
     }
 
     fn directCallHasKnownValueArg(self: *Cloner, args_span: Ast.Span(Ast.ExprId)) Allocator.Error!bool {
@@ -1597,21 +1625,14 @@ const Cloner = struct {
     fn callableValue(self: *Cloner, ty: Type.TypeId, fn_id: Ast.FnId) Common.LowerError!Value {
         const fn_ = self.pass.program.fns.items[@intFromEnum(fn_id)];
         const source_captures = self.pass.program.typedLocalSpan(fn_.captures);
-        for (source_captures) |capture| {
-            if (!self.subst.contains(capture.local)) {
-                return .{ .expr = try self.addExpr(.{ .ty = ty, .data = .{ .fn_ref = fn_id } }) };
-            }
-        }
-
         const captures = try self.pass.arena.allocator().alloc(Value, source_captures.len);
         for (source_captures, 0..) |capture, index| {
             if (self.subst.get(capture.local)) |value| {
                 captures[index] = value;
+            } else if (try self.scopedLocalValue(capture)) |value| {
+                captures[index] = value;
             } else {
-                captures[index] = .{ .expr = try self.addExpr(.{
-                    .ty = capture.ty,
-                    .data = .{ .local = capture.local },
-                }) };
+                return .{ .expr = try self.addExpr(.{ .ty = ty, .data = .{ .fn_ref = fn_id } }) };
             }
         }
         return .{ .callable = .{
@@ -1655,14 +1676,12 @@ const Cloner = struct {
             if (capture.local != source_captures[index].local) {
                 Common.invariant("Lambda Solved callable member captures differed from lifted function capture order");
             }
-            if (!self.subst.contains(capture.local)) return null;
             captures[index] = if (self.subst.get(capture.local)) |value|
                 value
+            else if (try self.scopedLocalValue(source_captures[index])) |value|
+                value
             else
-                .{ .expr = try self.addExpr(.{
-                    .ty = source_captures[index].ty,
-                    .data = .{ .local = capture.local },
-                }) };
+                return null;
         }
         return .{ .callable = .{
             .ty = expr.ty,
@@ -1954,6 +1973,31 @@ const Cloner = struct {
         };
     }
 
+    fn scopedLocalValue(self: *Cloner, local: Ast.TypedLocal) Common.LowerError!?Value {
+        if (!self.localCanBeReferencedDirectly(local.local)) return null;
+        return .{ .expr = try self.addExpr(.{
+            .ty = local.ty,
+            .data = .{ .local = local.local },
+        }) };
+    }
+
+    fn localCanBeReferencedDirectly(self: *Cloner, local: Ast.LocalId) bool {
+        const current_fn = self.pass.program.fns.items[@intFromEnum(self.source_fn)];
+        if (localInTypedLocalSpan(self.pass.program.typedLocalSpan(current_fn.captures), local)) return true;
+        if (localInTypedLocalSpan(self.pass.program.typedLocalSpan(current_fn.args), local)) {
+            return self.source_arg_locals_in_scope;
+        }
+
+        for (self.inline_stack.items) |active| {
+            if (active.fn_id == self.source_fn) continue;
+            const active_fn = self.pass.program.fns.items[@intFromEnum(active.fn_id)];
+            if (localInTypedLocalSpan(self.pass.program.typedLocalSpan(active_fn.args), local)) return false;
+            if (localInTypedLocalSpan(self.pass.program.typedLocalSpan(active_fn.captures), local)) return false;
+        }
+
+        return false;
+    }
+
     fn cloneLoop(self: *Cloner, ty: Type.TypeId, loop: anytype) Common.LowerError!Ast.ExprId {
         const params = try self.pass.allocator.dupe(Ast.TypedLocal, self.pass.program.typedLocalSpan(loop.params));
         defer self.pass.allocator.free(params);
@@ -2025,7 +2069,6 @@ const Cloner = struct {
                 }
             }
             if (initial_split_failed) continue;
-
             const refinements = try self.pass.allocator.alloc(?KnownValue, known_values.len);
             defer self.pass.allocator.free(refinements);
             @memset(refinements, null);
@@ -2172,6 +2215,12 @@ const Cloner = struct {
             },
             .callable => |callable_value| blk: {
                 if (knownValueMatchesValue(self.pass.program, known_value, value)) break :blk known_value;
+                if (known_value == .finite_callables) {
+                    const finite_callables = known_value.finite_callables;
+                    if (finiteCallableAlternativeIndex(self.pass.program, finite_callables.alternatives, callable_value) != null) {
+                        break :blk known_value;
+                    }
+                }
                 const callable_known_value = switch (known_value) {
                     .callable => |callable| callable,
                     else => break :blk null,
@@ -2503,6 +2552,31 @@ const Cloner = struct {
         loop: LoopPattern,
         values: []const Value,
     ) Common.LowerError!Ast.ExprData {
+        for (values, 0..) |value, value_index| {
+            const let_value = switch (value) {
+                .let_ => |let_value| let_value,
+                else => continue,
+            };
+
+            var unwrapped_values = try self.pass.allocator.dupe(Value, values);
+            defer self.pass.allocator.free(unwrapped_values);
+            unwrapped_values[value_index] = let_value.body.*;
+
+            const change_start = self.changes.items.len;
+            defer self.restore(change_start);
+            try self.bindPendingLetKnownValues(let_value.lets);
+
+            const continue_expr = try self.addExpr(.{
+                .ty = ty,
+                .data = try self.cloneContinueDataFromValues(ty, loop, unwrapped_values),
+            });
+            const wrapped = try self.wrapPendingLetsAroundExpr(ty, continue_expr, let_value.lets);
+            return .{ .block = .{
+                .statements = try self.pass.program.addStmtSpan(&.{}),
+                .final_expr = wrapped,
+            } };
+        }
+
         for (values, 0..) |value, value_index| {
             const if_value = switch (value) {
                 .if_ => |if_value| if_value,
@@ -3116,12 +3190,24 @@ const Cloner = struct {
 
                 const receiver = projectableExprFromValue(value) orelse return false;
                 if (!canReadFieldsFromExpr(self.pass.program, receiver)) return false;
+                const actual_known_value = switch (value) {
+                    .expr_with_known_value => |known_value_expr| known_value_expr.known_value,
+                    else => null,
+                };
                 for (record.fields) |field| {
+                    const actual_field = if (actual_known_value) |actual|
+                        fieldKnownValueFromKnownValue(actual, field.name)
+                    else
+                        null;
                     const field_expr = try self.addExpr(.{ .ty = known_valueType(field.known_value), .data = .{ .field_access = .{
                         .receiver = receiver,
                         .field = field.name,
                     } } });
-                    if (!try self.appendFieldReadExprsFromValue(field.known_value, .{ .expr = field_expr }, out)) return false;
+                    const field_value = if (actual_field) |actual|
+                        valueFromProjectedExpr(field_expr, actual)
+                    else
+                        Value{ .expr = field_expr };
+                    if (!try self.appendFieldReadExprsFromValue(field.known_value, field_value, out)) return false;
                 }
                 return true;
             },
@@ -3136,16 +3222,34 @@ const Cloner = struct {
 
                 const receiver = projectableExprFromValue(value) orelse return false;
                 if (!canReadFieldsFromExpr(self.pass.program, receiver)) return false;
+                const actual_known_value = switch (value) {
+                    .expr_with_known_value => |known_value_expr| known_value_expr.known_value,
+                    else => null,
+                };
                 for (tuple.items, 0..) |item, index| {
+                    const actual_item = if (actual_known_value) |actual|
+                        itemKnownValueFromKnownValue(actual, @as(u32, @intCast(index)))
+                    else
+                        null;
                     const item_expr = try self.addExpr(.{ .ty = known_valueType(item), .data = .{ .tuple_access = .{
                         .tuple = receiver,
                         .elem_index = @as(u32, @intCast(index)),
                     } } });
-                    if (!try self.appendFieldReadExprsFromValue(item, .{ .expr = item_expr }, out)) return false;
+                    const item_value = if (actual_item) |actual|
+                        valueFromProjectedExpr(item_expr, actual)
+                    else
+                        Value{ .expr = item_expr };
+                    if (!try self.appendFieldReadExprsFromValue(item, item_value, out)) return false;
                 }
                 return true;
             },
-            .nominal => |nominal| return try self.appendFieldReadExprsFromValue(nominal.backing.*, value, out),
+            .nominal => |nominal| {
+                const backing_value = switch (value) {
+                    .nominal => |nominal_value| nominal_value.backing.*,
+                    else => value,
+                };
+                return try self.appendFieldReadExprsFromValue(nominal.backing.*, backing_value, out);
+            },
             .callable => |callable| {
                 const callable_value = switch (value) {
                     .callable => |callable_value| callable_value,
@@ -3322,11 +3426,11 @@ const Cloner = struct {
         const branch = source_branches[index];
         const cond_value = try self.cloneExprValueDemandingKnownValue(branch.cond);
         if (knownIfConditionBoolTag(self.pass.program, cond_value)) |cond| {
-            if (cond) return try self.cloneExprValueDemandingKnownValue(branch.body);
+            if (cond) return try self.cloneScopedExprValueDemandingKnownValue(branch.body);
             return try self.cloneIfValueFromBranches(ty, source_branches, index + 1, final_else);
         }
         if (finiteBoolTagsValue(self.pass.program, cond_value)) |finite_bool| {
-            const true_value = try self.cloneExprValueDemandingKnownValue(branch.body);
+            const true_value = try self.cloneScopedExprValueDemandingKnownValue(branch.body);
             const false_value = try self.cloneIfValueFromBranches(ty, source_branches, index + 1, final_else);
             return try self.selectFiniteBoolValue(ty, finite_bool, true_value, false_value);
         }
@@ -3334,7 +3438,7 @@ const Cloner = struct {
         const if_branches = try self.pass.arena.allocator().alloc(IfValueBranch, 1);
         if_branches[0] = .{
             .cond = try self.materialize(cond_value),
-            .body = try self.cloneExprValueDemandingKnownValue(branch.body),
+            .body = try self.cloneScopedExprValueDemandingKnownValue(branch.body),
         };
         const else_value = try self.pass.arena.allocator().create(Value);
         else_value.* = try self.cloneIfValueFromBranches(ty, source_branches, index + 1, final_else);
@@ -3343,6 +3447,13 @@ const Cloner = struct {
             .branches = if_branches,
             .final_else = else_value,
         } };
+    }
+
+    fn cloneScopedExprValueDemandingKnownValue(self: *Cloner, expr_id: Ast.ExprId) Common.LowerError!Value {
+        const change_start = self.changes.items.len;
+        const value = try self.cloneExprValueDemandingKnownValue(expr_id);
+        self.restore(change_start);
+        return value;
     }
 
     fn selectFiniteBoolValue(
@@ -3541,16 +3652,16 @@ const Cloner = struct {
     ) Common.LowerError!?Value {
         const branches = try self.pass.arena.allocator().alloc(IfValueBranch, if_value.branches.len);
         for (if_value.branches, 0..) |branch, index| {
+            const simplified = try self.simplifyKnownMatchValueMode(ty, branch.body, branches_span, .speculative, preserve_branch_known_value);
             branches[index] = .{
                 .cond = branch.cond,
-                .body = (try self.simplifyKnownMatchValueMode(ty, branch.body, branches_span, .speculative, preserve_branch_known_value)) orelse
-                    return null,
+                .body = simplified orelse return null,
             };
         }
 
         const final_else = try self.pass.arena.allocator().create(Value);
-        final_else.* = (try self.simplifyKnownMatchValueMode(ty, if_value.final_else.*, branches_span, .speculative, preserve_branch_known_value)) orelse
-            return null;
+        const simplified_final_else = try self.simplifyKnownMatchValueMode(ty, if_value.final_else.*, branches_span, .speculative, preserve_branch_known_value);
+        final_else.* = simplified_final_else orelse return null;
 
         return .{ .if_ = .{
             .ty = ty,
@@ -3622,40 +3733,54 @@ const Cloner = struct {
                 return prepared;
             },
             .record => |fields_span| {
-                const record = recordFromValue(value) orelse return null;
                 const fields = self.pass.program.recordDestructSpan(fields_span);
-                const prepared_fields = try self.pass.arena.allocator().alloc(FieldValue, record.fields.len);
-                for (record.fields, 0..) |field, index| {
-                    if (recordPatField(fields, field.name)) |field_pat| {
-                        const prepared = (try self.bindPatToMatchValue(field_pat, field.value, body, unsafe_count, pending_lets)) orelse return null;
-                        prepared_fields[index] = .{
-                            .name = field.name,
-                            .value = prepared,
-                        };
-                    } else {
-                        prepared_fields[index] = .{
-                            .name = field.name,
-                            .value = try self.makeReusableForMatch(field.value, pending_lets),
-                        };
+                if (recordFromValue(value)) |record| {
+                    const prepared_fields = try self.pass.arena.allocator().alloc(FieldValue, record.fields.len);
+                    for (record.fields, 0..) |field, index| {
+                        if (recordPatField(fields, field.name)) |field_pat| {
+                            const prepared = (try self.bindPatToMatchValue(field_pat, field.value, body, unsafe_count, pending_lets)) orelse return null;
+                            prepared_fields[index] = .{
+                                .name = field.name,
+                                .value = prepared,
+                            };
+                        } else {
+                            prepared_fields[index] = .{
+                                .name = field.name,
+                                .value = try self.makeReusableForMatch(field.value, pending_lets),
+                            };
+                        }
                     }
+                    return Value{ .record = .{
+                        .ty = record.ty,
+                        .fields = prepared_fields,
+                    } };
                 }
-                return Value{ .record = .{
-                    .ty = record.ty,
-                    .fields = prepared_fields,
-                } };
+                for (fields) |field| {
+                    const field_ty = self.pass.program.pats.items[@intFromEnum(field.pattern)].ty;
+                    const field_value = (try self.fieldFromPatternValue(value, field.name, field_ty)) orelse return null;
+                    _ = (try self.bindPatToMatchValue(field.pattern, field_value, body, unsafe_count, pending_lets)) orelse return null;
+                }
+                return try self.makeReusableForMatch(value, pending_lets);
             },
             .tuple => |items_span| {
-                const tuple = tupleFromValue(value) orelse return null;
                 const pats = self.pass.program.patSpan(items_span);
-                if (pats.len != tuple.items.len) return null;
-                const items = try self.pass.arena.allocator().alloc(Value, tuple.items.len);
-                for (pats, tuple.items, 0..) |child_pat, child_value, index| {
-                    items[index] = (try self.bindPatToMatchValue(child_pat, child_value, body, unsafe_count, pending_lets)) orelse return null;
+                if (tupleFromValue(value)) |tuple| {
+                    if (pats.len != tuple.items.len) return null;
+                    const items = try self.pass.arena.allocator().alloc(Value, tuple.items.len);
+                    for (pats, tuple.items, 0..) |child_pat, child_value, index| {
+                        items[index] = (try self.bindPatToMatchValue(child_pat, child_value, body, unsafe_count, pending_lets)) orelse return null;
+                    }
+                    return Value{ .tuple = .{
+                        .ty = tuple.ty,
+                        .items = items,
+                    } };
                 }
-                return Value{ .tuple = .{
-                    .ty = tuple.ty,
-                    .items = items,
-                } };
+                for (pats, 0..) |child_pat, index| {
+                    const item_ty = self.pass.program.pats.items[@intFromEnum(child_pat)].ty;
+                    const item_value = (try self.itemFromPatternValue(value, @intCast(index), item_ty)) orelse return null;
+                    _ = (try self.bindPatToMatchValue(child_pat, item_value, body, unsafe_count, pending_lets)) orelse return null;
+                }
+                return try self.makeReusableForMatch(value, pending_lets);
             },
             .tag => |tag_pat| {
                 const tag = tagFromValue(value) orelse return null;
@@ -3831,13 +3956,19 @@ const Cloner = struct {
             .if_ => |if_value| blk: {
                 const branches = try self.pass.arena.allocator().alloc(IfValueBranch, if_value.branches.len);
                 for (if_value.branches, 0..) |branch, index| {
+                    var branch_pending_lets = std.ArrayList(PendingLet).empty;
+                    defer branch_pending_lets.deinit(self.pass.allocator);
+                    const branch_body = try self.makeReusableForMatch(branch.body, &branch_pending_lets);
                     branches[index] = .{
-                        .cond = branch.cond,
-                        .body = try self.makeReusableForMatch(branch.body, pending_lets),
+                        .cond = try self.makeExprReusableForMatch(branch.cond, pending_lets),
+                        .body = try self.wrapPendingLets(branch_body, branch_pending_lets.items, true),
                     };
                 }
                 const final_else = try self.pass.arena.allocator().create(Value);
-                final_else.* = try self.makeReusableForMatch(if_value.final_else.*, pending_lets);
+                var else_pending_lets = std.ArrayList(PendingLet).empty;
+                defer else_pending_lets.deinit(self.pass.allocator);
+                const else_body = try self.makeReusableForMatch(if_value.final_else.*, &else_pending_lets);
+                final_else.* = try self.wrapPendingLets(else_body, else_pending_lets.items, true);
                 break :blk Value{ .if_ = .{
                     .ty = if_value.ty,
                     .branches = branches,
@@ -3912,7 +4043,7 @@ const Cloner = struct {
                 }
                 break :blk Value{ .finite_tags = .{
                     .ty = finite_tags.ty,
-                    .selector = finite_tags.selector,
+                    .selector = try self.makeExprReusableForMatch(finite_tags.selector, pending_lets),
                     .alternatives = alternatives,
                 } };
             },
@@ -3931,11 +4062,32 @@ const Cloner = struct {
                 }
                 break :blk Value{ .finite_callables = .{
                     .ty = finite_callables.ty,
-                    .selector = finite_callables.selector,
+                    .selector = try self.makeExprReusableForMatch(finite_callables.selector, pending_lets),
                     .alternatives = alternatives,
                 } };
             },
         };
+    }
+
+    fn makeExprReusableForMatch(
+        self: *Cloner,
+        expr: Ast.ExprId,
+        pending_lets: *std.ArrayList(PendingLet),
+    ) Common.LowerError!Ast.ExprId {
+        if (self.exprCanSubstitute(expr)) return expr;
+
+        const ty = self.pass.program.exprs.items[@intFromEnum(expr)].ty;
+        const local = try self.pass.program.addLocal(self.pass.symbols.fresh(), ty);
+        try pending_lets.append(self.pass.allocator, .{
+            .local = local,
+            .ty = ty,
+            .value = expr,
+            .known_value = try self.pass.constructorKnownValue(expr),
+        });
+        return try self.addExpr(.{
+            .ty = ty,
+            .data = .{ .local = local },
+        });
     }
 
     fn wrapPendingLets(self: *Cloner, body: Value, pending_lets: []const PendingLet, preserve_known_value: bool) Common.LowerError!Value {
@@ -4037,7 +4189,7 @@ const Cloner = struct {
         }
 
         const source_fn = self.pass.program.fns.items[@intFromEnum(callable.fn_id)];
-        const body = switch (source_fn.body) {
+        const body = self.pass.originalBody(callable.fn_id) orelse switch (source_fn.body) {
             .roc => |body| body,
             .hosted => {
                 return .{ .expr = try self.addExpr(.{ .ty = ty, .data = .{ .call_value = .{
@@ -4093,8 +4245,6 @@ const Cloner = struct {
         for (source_args, arg_values, 0..) |source_arg, arg_value, index| {
             prepared_args[index] = try self.valueForInlineLocal(source_arg.local, arg_value, body, &pending_lets);
         }
-
-        try self.clearBinderSubstitutionsForInline();
 
         try self.inline_stack.append(self.pass.allocator, .{ .fn_id = callable.fn_id });
         defer {
@@ -4203,7 +4353,7 @@ const Cloner = struct {
         }
 
         const source_fn = self.pass.program.fns.items[@intFromEnum(callee)];
-        const body = switch (source_fn.body) {
+        const body = self.pass.originalBody(callee) orelse switch (source_fn.body) {
             .roc => |body| body,
             .hosted => {
                 return .{ .expr = try self.cloneExprPlain(original_expr) };
@@ -4261,8 +4411,6 @@ const Cloner = struct {
             prepared_args[index] = try self.valueForInlineLocal(source_arg.local, arg_value, body, &pending_lets);
         }
 
-        try self.clearBinderSubstitutionsForInline();
-
         try self.inline_stack.append(self.pass.allocator, .{
             .fn_id = callee,
             .args = active_arg_known_values,
@@ -4290,6 +4438,66 @@ const Cloner = struct {
         return true;
     }
 
+    fn fieldFromPatternValue(
+        self: *Cloner,
+        value: Value,
+        field: names.RecordFieldNameId,
+        ty: Type.TypeId,
+    ) Common.LowerError!?Value {
+        if (fieldFromValue(value, field)) |field_value| return field_value;
+
+        const projected_from = try self.projectablePatternValue(value);
+        const known_value = switch (projected_from) {
+            .expr_with_known_value => |known| fieldKnownValueFromKnownValue(known.known_value, field),
+            else => null,
+        };
+        const receiver = projectableExprFromValue(projected_from) orelse return null;
+        if (!canReadFieldsFromExpr(self.pass.program, receiver)) return null;
+        const field_expr = try self.addExpr(.{ .ty = ty, .data = .{ .field_access = .{
+            .receiver = receiver,
+            .field = field,
+        } } });
+        return if (known_value) |known|
+            valueFromProjectedExpr(field_expr, known)
+        else
+            Value{ .expr = field_expr };
+    }
+
+    fn itemFromPatternValue(
+        self: *Cloner,
+        value: Value,
+        index: u32,
+        ty: Type.TypeId,
+    ) Common.LowerError!?Value {
+        if (itemFromValue(value, index)) |item_value| return item_value;
+
+        const projected_from = try self.projectablePatternValue(value);
+        const known_value = switch (projected_from) {
+            .expr_with_known_value => |known| itemKnownValueFromKnownValue(known.known_value, index),
+            else => null,
+        };
+        const receiver = projectableExprFromValue(projected_from) orelse return null;
+        if (!canReadFieldsFromExpr(self.pass.program, receiver)) return null;
+        const item_expr = try self.addExpr(.{ .ty = ty, .data = .{ .tuple_access = .{
+            .tuple = receiver,
+            .elem_index = index,
+        } } });
+        return if (known_value) |known|
+            valueFromProjectedExpr(item_expr, known)
+        else
+            Value{ .expr = item_expr };
+    }
+
+    fn projectablePatternValue(
+        self: *Cloner,
+        value: Value,
+    ) Common.LowerError!Value {
+        if (projectableExprFromValue(value)) |expr| {
+            if (canReadFieldsFromExpr(self.pass.program, expr)) return value;
+        }
+        return value;
+    }
+
     fn bindPatToValue(self: *Cloner, pat_id: Ast.PatId, value: Value) Common.LowerError!bool {
         const pat = self.pass.program.pats.items[@intFromEnum(pat_id)];
         switch (pat.data) {
@@ -4304,20 +4512,34 @@ const Cloner = struct {
                 return true;
             },
             .record => |fields_span| {
-                const record = recordFromValue(value) orelse return false;
                 const fields = self.pass.program.recordDestructSpan(fields_span);
+                if (recordFromValue(value)) |record| {
+                    for (fields) |field| {
+                        const field_value = fieldFromRecord(record, field.name) orelse return false;
+                        if (!try self.bindPatToValue(field.pattern, field_value)) return false;
+                    }
+                    return true;
+                }
                 for (fields) |field| {
-                    const field_value = fieldFromRecord(record, field.name) orelse return false;
+                    const field_ty = self.pass.program.pats.items[@intFromEnum(field.pattern)].ty;
+                    const field_value = (try self.fieldFromPatternValue(value, field.name, field_ty)) orelse return false;
                     if (!try self.bindPatToValue(field.pattern, field_value)) return false;
                 }
                 return true;
             },
             .tuple => |items_span| {
-                const tuple = tupleFromValue(value) orelse return false;
                 const pats = self.pass.program.patSpan(items_span);
-                if (pats.len != tuple.items.len) return false;
-                for (pats, tuple.items) |child_pat, child_value| {
-                    if (!try self.bindPatToValue(child_pat, child_value)) return false;
+                if (tupleFromValue(value)) |tuple| {
+                    if (pats.len != tuple.items.len) return false;
+                    for (pats, tuple.items) |child_pat, child_value| {
+                        if (!try self.bindPatToValue(child_pat, child_value)) return false;
+                    }
+                    return true;
+                }
+                for (pats, 0..) |child_pat, index| {
+                    const item_ty = self.pass.program.pats.items[@intFromEnum(child_pat)].ty;
+                    const item_value = (try self.itemFromPatternValue(value, @intCast(index), item_ty)) orelse return false;
+                    if (!try self.bindPatToValue(child_pat, item_value)) return false;
                 }
                 return true;
             },
@@ -4427,7 +4649,8 @@ const Cloner = struct {
             .record => |fields_span| {
                 const fields = self.pass.program.recordDestructSpan(fields_span);
                 for (fields) |field| {
-                    const field_known_value = fieldKnownValueFromKnownValue(known_value, field.name) orelse return false;
+                    const field_known_value = fieldKnownValueFromKnownValue(known_value, field.name) orelse
+                        KnownValue{ .any = self.pass.program.pats.items[@intFromEnum(field.pattern)].ty };
                     if (!try self.bindPatToExprWithKnownValue(field.pattern, field_known_value)) return false;
                 }
                 return true;
@@ -4435,24 +4658,31 @@ const Cloner = struct {
             .tuple => |items_span| {
                 const pats = self.pass.program.patSpan(items_span);
                 for (pats, 0..) |child_pat, index| {
-                    const item_known_value = itemKnownValueFromKnownValue(known_value, @as(u32, @intCast(index))) orelse return false;
+                    const item_known_value = itemKnownValueFromKnownValue(known_value, @as(u32, @intCast(index))) orelse
+                        KnownValue{ .any = self.pass.program.pats.items[@intFromEnum(child_pat)].ty };
                     if (!try self.bindPatToExprWithKnownValue(child_pat, item_known_value)) return false;
                 }
                 return true;
             },
             .tag => |tag_pat| {
-                const tag_known_value = knownTagForPattern(known_value, tag_pat.name) orelse return false;
                 const pats = self.pass.program.patSpan(tag_pat.payloads);
-                if (pats.len != tag_known_value.payloads.len) return false;
-                for (pats, tag_known_value.payloads) |child_pat, payload_known_value| {
-                    if (!try self.bindPatToExprWithKnownValue(child_pat, payload_known_value)) return false;
+                if (knownTagForPattern(known_value, tag_pat.name)) |tag_known_value| {
+                    if (pats.len != tag_known_value.payloads.len) return false;
+                    for (pats, tag_known_value.payloads) |child_pat, payload_known_value| {
+                        if (!try self.bindPatToExprWithKnownValue(child_pat, payload_known_value)) return false;
+                    }
+                } else {
+                    for (pats) |child_pat| {
+                        const payload_known_value = KnownValue{ .any = self.pass.program.pats.items[@intFromEnum(child_pat)].ty };
+                        if (!try self.bindPatToExprWithKnownValue(child_pat, payload_known_value)) return false;
+                    }
                 }
                 return true;
             },
             .nominal => |backing_pat| {
                 const backing_known_value = switch (known_value) {
                     .nominal => |nominal| nominal.backing.*,
-                    else => return false,
+                    else => KnownValue{ .any = self.pass.program.pats.items[@intFromEnum(backing_pat)].ty },
                 };
                 return try self.bindPatToExprWithKnownValue(backing_pat, backing_known_value);
             },
@@ -4732,10 +4962,12 @@ const Cloner = struct {
         const values = try self.pass.allocator.alloc(Ast.IfBranch, source.len);
         defer self.pass.allocator.free(values);
         for (source, 0..) |branch, index| {
+            const change_start = self.changes.items.len;
             values[index] = .{
                 .cond = try self.cloneExpr(branch.cond),
                 .body = try self.cloneExpr(branch.body),
             };
+            self.restore(change_start);
         }
         return try self.pass.program.addIfBranchSpan(values);
     }
@@ -4979,7 +5211,7 @@ const Cloner = struct {
         }
 
         const source_fn = self.pass.program.fns.items[@intFromEnum(callable.fn_id)];
-        const source_body = switch (source_fn.body) {
+        const source_body = self.pass.originalBody(callable.fn_id) orelse switch (source_fn.body) {
             .roc => |body| body,
             .hosted => Common.invariant("hosted callable value needed capture substitution"),
         };
@@ -4995,8 +5227,6 @@ const Cloner = struct {
 
         const change_start = self.changes.items.len;
         defer self.restore(change_start);
-
-        try self.clearBinderSubstitutionsForInline();
 
         for (source_captures, capture_known_values) |source_capture, capture_known_value| {
             const capture_value = try self.valueFromKnownValueArgs(capture_known_value, &captures);
@@ -5153,13 +5383,153 @@ const Cloner = struct {
         out: *std.ArrayList(Ast.ExprId),
         pending_lets: *std.ArrayList(PendingLet),
     ) Common.LowerError!bool {
-        return switch (value) {
-            .let_ => |let_value| {
-                try pending_lets.appendSlice(self.pass.allocator, let_value.lets);
-                return try self.appendCaptureExprsFromValue(known_value, let_value.body.*, out, pending_lets);
+        if (value == .let_) {
+            const let_value = value.let_;
+            try pending_lets.appendSlice(self.pass.allocator, let_value.lets);
+            return try self.appendCaptureExprsFromValue(known_value, let_value.body.*, out, pending_lets);
+        }
+
+        switch (known_value) {
+            .any,
+            .leaf,
+            => {
+                try out.append(self.pass.allocator, try self.materializePublic(value));
+                return true;
             },
-            else => try self.appendFieldReadExprsFromValue(known_value, value, out),
-        };
+            .tag => |tag| {
+                const tag_value = switch (value) {
+                    .tag => |tag_value| tag_value,
+                    else => return false,
+                };
+                if (!sameType(self.pass.program, tag.ty, tag_value.ty) or
+                    tag.name != tag_value.name or
+                    tag.payloads.len != tag_value.payloads.len)
+                {
+                    return false;
+                }
+                for (tag.payloads, tag_value.payloads) |payload_known_value, payload| {
+                    if (!try self.appendCaptureExprsFromValue(payload_known_value, payload, out, pending_lets)) return false;
+                }
+                return true;
+            },
+            .record => |record| {
+                if (recordFromValue(value)) |record_value| {
+                    if (record.fields.len != record_value.fields.len) return false;
+                    for (record.fields, record_value.fields) |field_known_value, field| {
+                        if (field_known_value.name != field.name) return false;
+                        if (!try self.appendCaptureExprsFromValue(field_known_value.known_value, field.value, out, pending_lets)) return false;
+                    }
+                    return true;
+                }
+                return try self.appendFieldReadExprsFromValue(known_value, value, out);
+            },
+            .tuple => |tuple| {
+                if (tupleFromValue(value)) |tuple_value| {
+                    if (tuple.items.len != tuple_value.items.len) return false;
+                    for (tuple.items, tuple_value.items) |item_known_value, item| {
+                        if (!try self.appendCaptureExprsFromValue(item_known_value, item, out, pending_lets)) return false;
+                    }
+                    return true;
+                }
+                return try self.appendFieldReadExprsFromValue(known_value, value, out);
+            },
+            .nominal => |nominal| {
+                const backing_value = switch (value) {
+                    .nominal => |nominal_value| nominal_value.backing.*,
+                    else => return try self.appendFieldReadExprsFromValue(known_value, value, out),
+                };
+                return try self.appendCaptureExprsFromValue(nominal.backing.*, backing_value, out, pending_lets);
+            },
+            .callable => |callable| {
+                const callable_value = switch (value) {
+                    .callable => |callable_value| callable_value,
+                    else => return try self.appendFieldReadExprsFromValue(known_value, value, out),
+                };
+                if (!callableTargetMatches(self.pass.program, callable.fn_id, callable_value.fn_id) or
+                    callable.captures.len != callable_value.captures.len)
+                {
+                    return false;
+                }
+                for (callable.captures, callable_value.captures) |capture_known_value, capture_value| {
+                    if (!try self.appendCaptureExprsFromValue(capture_known_value, capture_value, out, pending_lets)) return false;
+                }
+                return true;
+            },
+            .finite_callables => |finite_callables| {
+                if (value == .finite_callables) {
+                    const finite_value = value.finite_callables;
+                    if (!knownCallablesMatchesValue(self.pass.program, finite_callables, finite_value)) return false;
+                    try out.append(self.pass.allocator, finite_value.selector);
+                    for (finite_callables.alternatives, finite_value.alternatives) |alternative_known_value, alternative_value| {
+                        if (!callableTargetMatches(self.pass.program, alternative_known_value.fn_id, alternative_value.fn_id) or
+                            alternative_known_value.captures.len != alternative_value.captures.len)
+                        {
+                            return false;
+                        }
+                        for (alternative_known_value.captures, alternative_value.captures) |capture_known_value, capture_value| {
+                            if (!try self.appendCaptureExprsFromValue(capture_known_value, capture_value, out, pending_lets)) return false;
+                        }
+                    }
+                    return true;
+                }
+
+                const callable_value = switch (value) {
+                    .callable => |callable_value| callable_value,
+                    else => return try self.appendFieldReadExprsFromValue(known_value, value, out),
+                };
+                const active_index = finiteCallableAlternativeIndex(self.pass.program, finite_callables.alternatives, callable_value) orelse return false;
+                try out.append(self.pass.allocator, try self.selectorLiteral(@intCast(active_index)));
+                for (finite_callables.alternatives, 0..) |alternative_known_value, alternative_index| {
+                    if (alternative_index == active_index) {
+                        for (alternative_known_value.captures, callable_value.captures) |capture_known_value, capture_value| {
+                            if (!try self.appendCaptureExprsFromValue(capture_known_value, capture_value, out, pending_lets)) return false;
+                        }
+                    } else {
+                        for (alternative_known_value.captures) |capture_known_value| {
+                            try self.appendUninitializedExprsForKnownValue(capture_known_value, out);
+                        }
+                    }
+                }
+                return true;
+            },
+            .finite_tags => |finite_tags| {
+                if (value == .finite_tags) {
+                    const finite_value = value.finite_tags;
+                    if (!knownTagsMatchesValue(self.pass.program, finite_tags, finite_value)) return false;
+                    try out.append(self.pass.allocator, finite_value.selector);
+                    for (finite_tags.alternatives, finite_value.alternatives) |alternative_known_value, alternative_value| {
+                        if (alternative_known_value.name != alternative_value.name or
+                            alternative_known_value.payloads.len != alternative_value.payloads.len)
+                        {
+                            return false;
+                        }
+                        for (alternative_known_value.payloads, alternative_value.payloads) |payload_known_value, payload_value| {
+                            if (!try self.appendCaptureExprsFromValue(payload_known_value, payload_value, out, pending_lets)) return false;
+                        }
+                    }
+                    return true;
+                }
+
+                const tag_value = switch (value) {
+                    .tag => |tag_value| tag_value,
+                    else => return try self.appendFieldReadExprsFromValue(known_value, value, out),
+                };
+                const active_index = finiteTagAlternativeIndex(self.pass.program, finite_tags.alternatives, tag_value) orelse return false;
+                try out.append(self.pass.allocator, try self.selectorLiteral(@intCast(active_index)));
+                for (finite_tags.alternatives, 0..) |alternative_known_value, alternative_index| {
+                    if (alternative_index == active_index) {
+                        for (alternative_known_value.payloads, tag_value.payloads) |payload_known_value, payload_value| {
+                            if (!try self.appendCaptureExprsFromValue(payload_known_value, payload_value, out, pending_lets)) return false;
+                        }
+                    } else {
+                        for (alternative_known_value.payloads) |payload_known_value| {
+                            try self.appendUninitializedExprsForKnownValue(payload_known_value, out);
+                        }
+                    }
+                }
+                return true;
+            },
+        }
     }
 
     fn materializeCallableWithCaptures(
@@ -5215,40 +5585,38 @@ const Cloner = struct {
         });
         try self.subst.put(local, value);
 
-        const subst_binder = switch (value) {
-            .tag,
-            .record,
-            .tuple,
-            .nominal,
-            => true,
-            .expr,
-            .expr_with_known_value,
-            .let_,
-            .if_,
-            .callable,
-            .finite_tags,
-            .finite_callables,
-            => false,
-        };
-        if (subst_binder) if (self.pass.program.locals.items[@intFromEnum(local)].binder) |binder| {
-            const previous_binder = self.binder_subst.get(binder);
-            try self.changes.append(self.pass.allocator, .{
-                .key = .{ .binder = binder },
-                .previous = previous_binder,
-            });
-            try self.binder_subst.put(binder, value);
-        };
+        if (self.pass.program.locals.items[@intFromEnum(local)].binder) |binder| {
+            for (self.pass.program.locals.items, 0..) |candidate, index| {
+                if (candidate.id == local or candidate.binder == null or candidate.binder.? != binder) continue;
+                const candidate_local: Ast.LocalId = @enumFromInt(@as(u32, @intCast(index)));
+                if (!self.localBelongsToCurrentClone(candidate_local)) continue;
+                const candidate_previous = self.subst.get(candidate_local);
+                try self.changes.append(self.pass.allocator, .{
+                    .key = .{ .local = candidate_local },
+                    .previous = candidate_previous,
+                });
+                try self.subst.put(candidate_local, value);
+            }
+        }
     }
 
-    fn clearBinderSubstitutionsForInline(self: *Cloner) Allocator.Error!void {
-        var iter = self.binder_subst.iterator();
-        while (iter.next()) |entry| {
-            try self.changes.append(self.pass.allocator, .{
-                .key = .{ .binder = entry.key_ptr.* },
-                .previous = entry.value_ptr.*,
-            });
+    fn localBelongsToCurrentClone(self: *Cloner, local: Ast.LocalId) bool {
+        if (self.localBelongsToFn(self.source_fn, local)) return true;
+        for (self.inline_stack.items) |active| {
+            if (self.localBelongsToFn(active.fn_id, local)) return true;
         }
-        self.binder_subst.clearRetainingCapacity();
+        return false;
+    }
+
+    fn localBelongsToFn(self: *Cloner, fn_id: Ast.FnId, local: Ast.LocalId) bool {
+        const fn_ = self.pass.program.fns.items[@intFromEnum(fn_id)];
+        if (localInTypedLocalSpan(self.pass.program.typedLocalSpan(fn_.args), local)) return true;
+        if (localInTypedLocalSpan(self.pass.program.typedLocalSpan(fn_.captures), local)) return true;
+        const body = self.pass.originalBody(fn_id) orelse switch (fn_.body) {
+            .roc => |body| body,
+            .hosted => return false,
+        };
+        return localUseCountInExpr(self.pass.program, local, body) != 0;
     }
 
     fn restore(self: *Cloner, start: usize) void {
@@ -5262,13 +5630,6 @@ const Cloner = struct {
                         self.subst.putAssumeCapacity(local, previous);
                     } else {
                         _ = self.subst.remove(local);
-                    }
-                },
-                .binder => |binder| {
-                    if (change.previous) |previous| {
-                        self.binder_subst.putAssumeCapacity(binder, previous);
-                    } else {
-                        _ = self.binder_subst.remove(binder);
                     }
                 },
             }
@@ -5302,6 +5663,13 @@ fn localExpr(program: *const Ast.Program, expr_id: Ast.ExprId) ?Ast.LocalId {
         .local => |local| local,
         else => null,
     };
+}
+
+fn localInTypedLocalSpan(locals: []const Ast.TypedLocal, local: Ast.LocalId) bool {
+    for (locals) |candidate| {
+        if (candidate.local == local) return true;
+    }
+    return false;
 }
 
 /// A body with an early return can be cloned into a worker with the same return
@@ -6025,6 +6393,73 @@ fn valueType(program: *const Ast.Program, value: Value) Type.TypeId {
     };
 }
 
+fn leafKnownValueFromValue(program: *const Ast.Program, value: Value) Allocator.Error!?KnownValue {
+    return switch (value) {
+        .expr => |expr| switch (program.exprs.items[@intFromEnum(expr)].data) {
+            .local => blk: {
+                const ty = program.exprs.items[@intFromEnum(expr)].ty;
+                if (try typeMayContainRefcounted(program, ty)) break :blk null;
+                break :blk KnownValue{ .leaf = ty };
+            },
+            else => null,
+        },
+        else => null,
+    };
+}
+
+fn typeMayContainRefcounted(program: *const Ast.Program, ty: Type.TypeId) Allocator.Error!bool {
+    var stack = std.ArrayList(Type.TypeId).empty;
+    defer stack.deinit(program.allocator);
+    return try typeMayContainRefcountedInner(program, ty, &stack);
+}
+
+fn typeMayContainRefcountedInner(
+    program: *const Ast.Program,
+    ty: Type.TypeId,
+    stack: *std.ArrayList(Type.TypeId),
+) Allocator.Error!bool {
+    for (stack.items) |active| {
+        if (active == ty) return true;
+    }
+
+    try stack.append(program.allocator, ty);
+    defer _ = stack.pop();
+
+    return switch (program.types.get(ty)) {
+        .primitive => |primitive| primitive == .str,
+        .named => |named| if (named.backing) |backing|
+            try typeMayContainRefcountedInner(program, backing.ty, stack)
+        else
+            true,
+        .record => |fields_span| blk: {
+            for (program.types.fieldSpan(fields_span)) |field| {
+                if (try typeMayContainRefcountedInner(program, field.ty, stack)) break :blk true;
+            }
+            break :blk false;
+        },
+        .tuple => |items_span| blk: {
+            for (program.types.span(items_span)) |item| {
+                if (try typeMayContainRefcountedInner(program, item, stack)) break :blk true;
+            }
+            break :blk false;
+        },
+        .tag_union => |tags_span| blk: {
+            for (program.types.tagSpan(tags_span)) |tag| {
+                for (program.types.span(tag.payloads)) |payload| {
+                    if (try typeMayContainRefcountedInner(program, payload, stack)) break :blk true;
+                }
+            }
+            break :blk false;
+        },
+        .zst => false,
+        .list,
+        .box,
+        .func,
+        .erased,
+        => true,
+    };
+}
+
 /// Whether two Monotype ids denote the same type. The type store is not
 /// interned: each specialization materializes its own ids, so structurally
 /// identical types reached from different specializations (a call site and
@@ -6073,7 +6508,7 @@ fn joinKnownValuesInArena(
             const payloads = try arena.alloc(KnownValue, lhs_tag.payloads.len);
             for (lhs_tag.payloads, rhs_tag.payloads, 0..) |lhs_payload, rhs_payload, index| {
                 payloads[index] = (try joinKnownValuesInArena(program, arena, lhs_payload, rhs_payload)) orelse
-                    .{ .any = known_valueType(lhs_payload) };
+                    (joinUnknownChild(program, lhs_payload, rhs_payload) orelse break :blk null);
             }
             break :blk KnownValue{ .tag = .{
                 .ty = lhs_tag.ty,
@@ -6093,7 +6528,7 @@ fn joinKnownValuesInArena(
                 fields[index] = .{
                     .name = lhs_field.name,
                     .known_value = (try joinKnownValuesInArena(program, arena, lhs_field.known_value, rhs_field.known_value)) orelse
-                        .{ .any = known_valueType(lhs_field.known_value) },
+                        (joinUnknownChild(program, lhs_field.known_value, rhs_field.known_value) orelse break :blk null),
                 };
             }
             break :blk KnownValue{ .record = .{
@@ -6110,7 +6545,7 @@ fn joinKnownValuesInArena(
             const items = try arena.alloc(KnownValue, lhs_tuple.items.len);
             for (lhs_tuple.items, rhs_tuple.items, 0..) |lhs_item, rhs_item, index| {
                 items[index] = (try joinKnownValuesInArena(program, arena, lhs_item, rhs_item)) orelse
-                    .{ .any = known_valueType(lhs_item) };
+                    (joinUnknownChild(program, lhs_item, rhs_item) orelse break :blk null);
             }
             break :blk KnownValue{ .tuple = .{
                 .ty = lhs_tuple.ty,
@@ -6143,7 +6578,7 @@ fn joinKnownValuesInArena(
             const captures = try arena.alloc(KnownValue, lhs_callable.captures.len);
             for (lhs_callable.captures, rhs_callable.captures, 0..) |lhs_capture, rhs_capture, index| {
                 captures[index] = (try joinKnownValuesInArena(program, arena, lhs_capture, rhs_capture)) orelse
-                    .{ .any = known_valueType(lhs_capture) };
+                    (joinUnknownChild(program, lhs_capture, rhs_capture) orelse break :blk null);
             }
             break :blk KnownValue{ .callable = .{
                 .ty = lhs_callable.ty,
@@ -6154,6 +6589,14 @@ fn joinKnownValuesInArena(
         .finite_tags => null,
         .finite_callables => null,
     };
+}
+
+fn joinUnknownChild(program: *const Ast.Program, lhs: KnownValue, rhs: KnownValue) ?KnownValue {
+    const lhs_ty = known_valueType(lhs);
+    return if (sameType(program, lhs_ty, known_valueType(rhs)))
+        KnownValue{ .any = lhs_ty }
+    else
+        null;
 }
 
 fn known_valuesStrictlyDescend(program: *const Ast.Program, active: []const KnownValue, next: []const KnownValue) bool {
@@ -6270,14 +6713,14 @@ fn known_valueEql(program: *const Ast.Program, lhs: KnownValue, rhs: KnownValue)
 
 fn knownValueMatchesValue(program: *const Ast.Program, known_value: KnownValue, value: Value) bool {
     if (value == .expr_with_known_value) {
-        if (known_value == .any) return true;
+        if (known_value == .any) return sameType(program, known_value.any, valueType(program, value));
         if (known_value == .leaf) return sameType(program, known_value.leaf, valueType(program, value));
         if (!canReadFieldsFromExpr(program, value.expr_with_known_value.expr)) return false;
         return known_valueCanProjectFromExpr(known_value) and knownValueMatchesKnownValue(program, known_value, value.expr_with_known_value.known_value);
     }
 
     return switch (known_value) {
-        .any => true,
+        .any => |ty| sameType(program, ty, valueType(program, value)),
         .leaf => |ty| sameType(program, ty, valueType(program, value)),
         .tag => |tag| blk: {
             const value_tag = switch (value) {
@@ -6379,7 +6822,7 @@ fn known_valueCanProjectFromExpr(known_value: KnownValue) bool {
 
 fn knownValueMatchesKnownValue(program: *const Ast.Program, pattern: KnownValue, actual: KnownValue) bool {
     return switch (pattern) {
-        .any => true,
+        .any => |ty| sameType(program, ty, known_valueType(actual)),
         .leaf => |ty| sameType(program, ty, known_valueType(actual)),
         .tag => |pattern_tag| blk: {
             const actual_tag = switch (actual) {

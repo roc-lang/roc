@@ -60,6 +60,7 @@ fn lowerModule(
 }
 
 const LowerModuleOptions = struct {
+    post_check_specialization: ?lir.CheckedPipeline.PostCheckSpecializationMode = null,
     debug_effects: lir.CheckedPipeline.DebugEffectMode = .run,
     proc_debug_names: bool = false,
     tag_reachability: bool = false,
@@ -99,6 +100,7 @@ fn lowerModuleWithOptions(
         .{
             .target_usize = base.target.TargetUsize.native,
             .inline_mode = inline_mode,
+            .post_check_specialization = options.post_check_specialization orelse postCheckSpecializationForInlineMode(inline_mode),
             .debug_effects = options.debug_effects,
             .proc_debug_names = options.proc_debug_names,
             .tag_reachability = options.tag_reachability,
@@ -109,6 +111,13 @@ fn lowerModuleWithOptions(
     return .{
         .resources = resources,
         .lowered = lowered,
+    };
+}
+
+fn postCheckSpecializationForInlineMode(inline_mode: lir.CheckedPipeline.InlineMode) lir.CheckedPipeline.PostCheckSpecializationMode {
+    return switch (inline_mode) {
+        .wrappers => .optimized,
+        .none => .off,
     };
 }
 
@@ -995,6 +1004,8 @@ fn expectStaticListIterAppendLoopAvoidsListAppendAllocation(
     try expectReachableProcShapeFieldNoGreater(allocator, &iter_optimized.lowered, &list_optimized.lowered, "list_with_capacity_count");
     try expectReachableProcShapeFieldNoGreater(allocator, &iter_optimized.lowered, &list_optimized.lowered, "list_reserve_count");
     try expectReachableProcShapeFieldNoGreater(allocator, &iter_optimized.lowered, &list_optimized.lowered, "list_append_unsafe_count");
+    try expectReachableProcShapeFieldNoGreater(allocator, &iter_optimized.lowered, &list_optimized.lowered, "box_box_count");
+    try expectReachableProcShapeFieldNoGreater(allocator, &iter_optimized.lowered, &list_optimized.lowered, "switch_count");
 }
 
 fn reachableProcShape(
@@ -1889,6 +1900,85 @@ test "static list iter append loop eliminates public iter adapters" {
     try std.testing.expect(!try reachableProcDebugName(allocator, &iter_optimized.lowered, "Builtin.Iter.append"));
     try std.testing.expect(!try reachableProcDebugName(allocator, &iter_optimized.lowered, "iter_from_step"));
     try std.testing.expect(!try reachableProcDebugName(allocator, &list_optimized.lowered, "Builtin.Iter.append"));
+}
+
+test "post-check specialization mode gates public iter adapter elimination" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\module [main]
+        \\
+        \\sum_points : U64 -> U64
+        \\sum_points = |extra| {
+        \\    base_points = [1, 2, 3].iter()
+        \\
+        \\    collision_points =
+        \\        if extra == 0 {
+        \\            base_points
+        \\        } else {
+        \\            base_points.append(extra)
+        \\        }
+        \\
+        \\    var $sum = 0
+        \\    for point in collision_points {
+        \\        $sum = $sum + point
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main : U64
+        \\main = sum_points(4)
+    ;
+
+    var optimized = try lowerModuleWithOptions(allocator, source, .wrappers, .{
+        .post_check_specialization = .optimized,
+        .proc_debug_names = true,
+    });
+    defer optimized.deinit(allocator);
+    var unspecialized = try lowerModuleWithOptions(allocator, source, .wrappers, .{
+        .post_check_specialization = .off,
+        .proc_debug_names = true,
+    });
+    defer unspecialized.deinit(allocator);
+
+    try std.testing.expect(!try reachableProcDebugName(allocator, &optimized.lowered, "Builtin.Iter.append"));
+    try std.testing.expect(try reachableProcDebugName(allocator, &unspecialized.lowered, "Builtin.Iter.append"));
+}
+
+test "dynamic static list iter append loop splits nested callable captures" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\module [main]
+        \\
+        \\Point : { x : I64, y : I64 }
+        \\
+        \\main : U64 -> I64
+        \\main = |anim_index| {
+        \\    base_points = [
+        \\        { x: 11, y: 2 },
+        \\        { x: 13, y: 3 },
+        \\        { x: 3, y: 5 },
+        \\        { x: 11, y: 6 },
+        \\    ].iter()
+        \\
+        \\    collision_points =
+        \\        if anim_index == 2 {
+        \\            base_points.append({ x: 2, y: 1 }).append({ x: 7, y: 1 })
+        \\        } else if anim_index == 1 {
+        \\            base_points.append({ x: 2, y: 2 })
+        \\        } else {
+        \\            base_points
+        \\        }
+        \\
+        \\    var $sum = 0
+        \\    for { x, y } in collision_points {
+        \\        $sum = $sum + x + y
+        \\    }
+        \\    $sum
+        \\}
+    ;
+
+    var optimized = try lowerModule(allocator, source, .wrappers);
+    defer optimized.deinit(allocator);
 }
 
 test "static record list iter append loop avoids direct-list append allocation" {

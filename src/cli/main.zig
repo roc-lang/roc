@@ -6263,6 +6263,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
         .{
             .target_usize = target_usize,
             .inline_mode = postCheckInlineModeForOpt(args.opt, preserve_default_backtrace_frames),
+            .post_check_specialization = postCheckSpecializationForOpt(args.opt, preserve_default_backtrace_frames),
             .debug_effects = debugEffectsForOpt(args.opt),
             .list_in_place_map = listInPlaceMapForOpt(args.opt),
             .tag_reachability = tagReachabilityForOpt(args.opt),
@@ -6601,6 +6602,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
         .{
             .target_usize = target_usize,
             .inline_mode = postCheckInlineModeForOpt(args.opt, preserve_default_backtrace_frames),
+            .post_check_specialization = postCheckSpecializationForOpt(args.opt, preserve_default_backtrace_frames),
             .debug_effects = debugEffectsForOpt(args.opt),
             .list_in_place_map = listInPlaceMapForOpt(args.opt),
             .tag_reachability = tagReachabilityForOpt(args.opt),
@@ -7479,6 +7481,15 @@ fn postCheckInlineModeForOpt(opt: cli_args.OptLevel, preserve_proc_frames: bool)
     };
 }
 
+fn postCheckSpecializationForOpt(opt: cli_args.OptLevel, preserve_proc_frames: bool) lir.CheckedPipeline.PostCheckSpecializationMode {
+    if (preserve_proc_frames) return .off;
+
+    return switch (opt) {
+        .size, .speed => .optimized,
+        .dev, .interpreter => .off,
+    };
+}
+
 fn listInPlaceMapForOpt(opt: cli_args.OptLevel) bool {
     return switch (opt) {
         .size, .speed => true,
@@ -7835,6 +7846,7 @@ fn runCheckedArtifactTests(
         .{
             .target_usize = base.target.TargetUsize.native,
             .inline_mode = postCheckInlineModeForOpt(opt, false),
+            .post_check_specialization = postCheckSpecializationForOpt(opt, false),
             .list_in_place_map = listInPlaceMapForOpt(opt),
             .tag_reachability = tagReachabilityForOpt(opt),
         },
