@@ -80,8 +80,9 @@ INVALID HOSTED SECTION - :0:0:0:0
 
 INVALID HOSTED SECTION
 
-The platform header maps more than one function to the linker symbol `roc_not
-implemented`. Each provides and hosted entry needs a distinct symbol.
+The platform header uses the linker symbol `roc_not implemented`, but linker
+symbols in platform headers must be valid C identifiers: start with a letter or
+underscore, followed by only letters, digits, and underscores.
 
 
 # TOKENS

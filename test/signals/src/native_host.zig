@@ -2570,7 +2570,7 @@ fn acceptInitElemMeasured(host: *HostEnv, roc_host: *abi.RocHost, root_box: Elem
     if (host.engine.root_elem != null) failHost("Roc root Elem initialized more than once");
     const root = root_box.*;
     host.engine.root_elem = root;
-    abi.decrefBoxWith(@ptrCast(root_box), @alignOf(abi.Elem), &dropMovedElemPayload, roc_host);
+    abi.decrefBoxWith(@ptrCast(root_box), @alignOf(abi.Elem), true, &dropMovedElemPayload, roc_host);
     renderActiveRootMeasured(host, roc_host, &.{}, apply_ns, command_counts);
 }
 
@@ -3836,8 +3836,8 @@ fn testDropHostValue(roc_host: *abi.RocHost, value: HostValue) void {
     const box = host.takeHostValue(value);
     switch (kind) {
         .unit, .i64, .bool => abi.decrefBox(box, roc_host),
-        .str => abi.decrefBoxWith(box, @alignOf(RocStr), &testDropRocStrBoxPayload, roc_host),
-        .i64_list => abi.decrefBoxWith(box, @alignOf(I64List), &testDropI64ListBoxPayload, roc_host),
+        .str => abi.decrefBoxWith(box, @alignOf(RocStr), true, &testDropRocStrBoxPayload, roc_host),
+        .i64_list => abi.decrefBoxWith(box, @alignOf(I64List), true, &testDropI64ListBoxPayload, roc_host),
     }
 }
 

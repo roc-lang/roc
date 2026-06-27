@@ -6983,25 +6983,39 @@ fn checkHostSymbol(
     symbol_text: []const u8,
     symbols: *std.StringHashMap(void),
 ) std.mem.Allocator.Error!void {
-    for (reserved_host_symbols) |reserved| {
-        if (Ident.textEql(symbol_text, reserved)) {
+    const gop = try symbols.getOrPut(symbol_text);
+    if (!isValidHostSymbol(symbol_text)) {
+        if (!gop.found_existing) {
             const name_idx = try self.problems.putExtraString(symbol_text);
             _ = try self.problems.appendProblem(self.gpa, .{ .platform_hosted_section = .{
                 .name = name_idx,
-                .reason = .reserved_symbol,
+                .reason = .invalid_symbol,
             } });
+        }
+        return;
+    }
+    for (reserved_host_symbols) |reserved| {
+        if (Ident.textEql(symbol_text, reserved)) {
+            if (!gop.found_existing) {
+                const name_idx = try self.problems.putExtraString(symbol_text);
+                _ = try self.problems.appendProblem(self.gpa, .{ .platform_hosted_section = .{
+                    .name = name_idx,
+                    .reason = .reserved_symbol,
+                } });
+            }
             return;
         }
     }
     if (Ident.textStartsWith(symbol_text, "roc__")) {
-        const name_idx = try self.problems.putExtraString(symbol_text);
-        _ = try self.problems.appendProblem(self.gpa, .{ .platform_hosted_section = .{
-            .name = name_idx,
-            .reason = .reserved_prefix,
-        } });
+        if (!gop.found_existing) {
+            const name_idx = try self.problems.putExtraString(symbol_text);
+            _ = try self.problems.appendProblem(self.gpa, .{ .platform_hosted_section = .{
+                .name = name_idx,
+                .reason = .reserved_prefix,
+            } });
+        }
         return;
     }
-    const gop = try symbols.getOrPut(symbol_text);
     if (gop.found_existing) {
         const name_idx = try self.problems.putExtraString(symbol_text);
         _ = try self.problems.appendProblem(self.gpa, .{ .platform_hosted_section = .{
@@ -7009,6 +7023,23 @@ fn checkHostSymbol(
             .reason = .duplicate_symbol,
         } });
     }
+}
+
+fn isValidHostSymbol(symbol_text: []const u8) bool {
+    if (symbol_text.len == 0) return false;
+    if (!isHostSymbolStart(symbol_text[0])) return false;
+    for (symbol_text[1..]) |byte| {
+        if (!isHostSymbolContinue(byte)) return false;
+    }
+    return true;
+}
+
+fn isHostSymbolStart(byte: u8) bool {
+    return byte == '_' or std.ascii.isAlphabetic(byte);
+}
+
+fn isHostSymbolContinue(byte: u8) bool {
+    return isHostSymbolStart(byte) or std.ascii.isDigit(byte);
 }
 
 /// Process the requires_types annotations for platform modules, like:

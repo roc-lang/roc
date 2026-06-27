@@ -3479,6 +3479,12 @@ pub const ReportBuilder = struct {
                 D.bytes(".").withNoPrecedingSpace(),
                 D.bytes("Each provides and hosted entry needs a distinct symbol."),
             }, self, &report, &report.headline),
+            .invalid_symbol => try D.renderSliceInto(&.{
+                D.bytes("The platform header uses the linker symbol"),
+                D.bytes(name).withAnnotation(.inline_code),
+                D.bytes(",").withNoPrecedingSpace(),
+                D.bytes("but linker symbols in platform headers must be valid C identifiers: start with a letter or underscore, followed by only letters, digits, and underscores."),
+            }, self, &report, &report.headline),
             .reserved_symbol => try D.renderSliceInto(&.{
                 D.bytes("The platform header uses the linker symbol"),
                 D.bytes(name).withAnnotation(.inline_code),

@@ -65,7 +65,7 @@ pub const ValueKind = enum { unit, str, bool, i64 };
 /// releasing them must not use the pointer-aligned `decrefBox` convenience
 /// helper.
 pub fn releaseU64Box(box: anytype, roc_host: *abi.RocHost) void {
-    abi.decrefBoxWith(@ptrCast(box), @alignOf(u64), null, roc_host);
+    abi.decrefBoxWith(@ptrCast(box), @alignOf(u64), false, null, roc_host);
 }
 
 pub fn retainHostValueCapability(capability: HostValueCapabilityHandle) HostValueCapabilityHandle {

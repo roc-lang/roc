@@ -1007,7 +1007,7 @@ const Builder = struct {
         const family = TemplateFamily.from(template_ref, source_fn_key);
         const family_entry = try self.lowered_templates.getOrPut(family);
         if (!family_entry.found_existing) family_entry.value_ptr.* = .empty;
-        const fn_ty_digest = self.program.types.typeDigest(&self.program.names, fn_ty);
+        const fn_ty_digest = self.program.types.specializationDigest(&self.program.names, fn_ty);
         var reserved_def: ?Ast.DefId = null;
         var lower_fn_ty = fn_ty;
         for (family_entry.value_ptr.items) |*existing| {
@@ -1086,9 +1086,9 @@ const Builder = struct {
             try family_entry.value_ptr.append(self.allocator, .{
                 .def = def_id,
                 .request_fn_ty = lower_fn_ty,
-                .request_digest = self.program.types.typeDigest(&self.program.names, lower_fn_ty),
+                .request_digest = self.program.types.specializationDigest(&self.program.names, lower_fn_ty),
                 .solved_fn_ty = lower_fn_ty,
-                .solved_digest = self.program.types.typeDigest(&self.program.names, lower_fn_ty),
+                .solved_digest = self.program.types.specializationDigest(&self.program.names, lower_fn_ty),
                 .status = .lowering,
             });
             break :blk .{
@@ -1191,7 +1191,7 @@ const Builder = struct {
         const family = TemplateFamily.from(template_ref, source_fn_key);
         const family_entry = try self.lowered_templates.getOrPut(family);
         if (!family_entry.found_existing) family_entry.value_ptr.* = .empty;
-        const fn_ty_digest = self.program.types.typeDigest(&self.program.names, fn_ty);
+        const fn_ty_digest = self.program.types.specializationDigest(&self.program.names, fn_ty);
         for (family_entry.value_ptr.items) |existing| {
             var matched_ty: ?Type.TypeId = null;
             if (existing.request_fn_ty == fn_ty) {
@@ -1256,7 +1256,7 @@ const Builder = struct {
         for (entries.items) |*entry| {
             if (entry.def != def) continue;
             entry.solved_fn_ty = fn_ty;
-            entry.solved_digest = self.program.types.typeDigest(&self.program.names, fn_ty);
+            entry.solved_digest = self.program.types.specializationDigest(&self.program.names, fn_ty);
             entry.status = .ready;
             return;
         }
@@ -1568,13 +1568,14 @@ const Builder = struct {
             }
         }
         const backing = try ctx.lowerType(ctx.nominalBackingRoot(nominal));
-        return try self.structuralBackingForNominal(view, nominal, backing);
+        return try self.structuralBackingForNominal(view, nominal, mono_args, backing);
     }
 
     fn structuralBackingForNominal(
         self: *Builder,
         view: ModuleView,
         nominal: checked.CheckedNominalType,
+        mono_args: []const Type.TypeId,
         backing: Type.TypeId,
     ) Allocator.Error!Type.TypeId {
         const owner_def = try self.typeDef(view, nominal.origin_module, nominal.name, nominal.source_decl);
@@ -1586,13 +1587,27 @@ const Builder = struct {
             try seen.put(current, {});
             switch (self.program.types.get(current)) {
                 .named => |named| {
-                    if (named.kind != .alias and !sameTypeDef(named.def, owner_def)) return current;
+                    if (named.kind != .alias and (!sameTypeDef(named.def, owner_def) or !self.sameNominalArgs(named.args, mono_args))) {
+                        return current;
+                    }
                     const next = named.backing orelse return current;
                     current = next.ty;
                 },
                 else => return current,
             }
         }
+    }
+
+    fn sameNominalArgs(self: *Builder, actual_span: Type.Span, expected: []const Type.TypeId) bool {
+        const actual = self.program.types.span(actual_span);
+        if (actual.len != expected.len) return false;
+        for (actual, expected) |actual_ty, expected_ty| {
+            if (actual_ty == expected_ty) continue;
+            const actual_digest = self.program.types.specializationDigest(&self.program.names, actual_ty);
+            const expected_digest = self.program.types.specializationDigest(&self.program.names, expected_ty);
+            if (!std.mem.eql(u8, actual_digest.bytes[0..], expected_digest.bytes[0..])) return false;
+        }
+        return true;
     }
 
     fn tupleItemTypes(self: *Builder, ty: Type.TypeId) []const Type.TypeId {
@@ -2149,10 +2164,10 @@ const Builder = struct {
         const family = NestedFnFamily.from(nested, fn_template.source_fn_key);
         const family_entry = try self.lowered_nested_fns.getOrPut(family);
         if (!family_entry.found_existing) family_entry.value_ptr.* = .empty;
-        const fn_ty_digest = self.program.types.typeDigest(&self.program.names, fn_template.mono_fn_ty);
+        const fn_ty_digest = self.program.types.specializationDigest(&self.program.names, fn_template.mono_fn_ty);
         for (family_entry.value_ptr.items) |existing| {
             if (existing.fn_ty != fn_template.mono_fn_ty) {
-                const existing_digest = self.program.types.typeDigest(&self.program.names, existing.fn_ty);
+                const existing_digest = self.program.types.specializationDigest(&self.program.names, existing.fn_ty);
                 if (!std.mem.eql(u8, existing_digest.bytes[0..], fn_ty_digest.bytes[0..])) continue;
                 try request.ctx.graph.unify(
                     try request.ctx.graph.importMono(fn_template.mono_fn_ty),
@@ -2249,6 +2264,29 @@ const Builder = struct {
         };
     }
 
+    fn restoredConstFnTemplateToMono(
+        self: *Builder,
+        store_view: ModuleView,
+        fn_id: checked.ConstFnId,
+        fn_value: check.ConstStore.ConstFn,
+        mono_fn_ty: Type.TypeId,
+    ) Allocator.Error!Ast.FnTemplate {
+        var template = try self.constFnTemplateToMono(fn_value, mono_fn_ty);
+        if (fn_value.captures.len == 0) return template;
+
+        switch (template.fn_def) {
+            .nested => |nested| {
+                template.fn_def = .{ .nested = .{
+                    .owner = nested.owner,
+                    .site = nested.site,
+                    .context_fn_key = restoredConstFnContextKey(store_view.key, fn_id, fn_value.source_fn_key),
+                } };
+            },
+            else => Common.invariant("capturing stored function had no nested function identity"),
+        }
+        return template;
+    }
+
     fn constFnDefToMono(self: *Builder, fn_def: anytype) Allocator.Error!Ast.FnDef {
         return switch (fn_def) {
             .local_template => |template| .{ .local_template = template },
@@ -2284,7 +2322,7 @@ const Builder = struct {
         if (fn_value.fn_def == .encode_to_runtime) {
             return try self.restoreConstEncodeToRuntimeFnExpr(store_view, fn_value, ty);
         }
-        const template = try self.constFnTemplateToMono(fn_value, ty);
+        const template = try self.restoredConstFnTemplateToMono(store_view, fn_id, fn_value, ty);
         if (fn_value.captures.len == 0) {
             const mono_fn_id = try self.lowerRestoredConstFnTemplate(type_view, template);
             return try self.program.addExpr(.{
@@ -9551,26 +9589,47 @@ const BodyContext = struct {
     }
 
     fn sameType(self: *BodyContext, expected: Type.TypeId, actual: Type.TypeId) bool {
-        return self.sameTypeInner(expected, actual, 0);
+        var visiting = std.AutoHashMap(TypePair, void).init(self.allocator);
+        defer visiting.deinit();
+        return self.sameTypeInner(expected, actual, &visiting);
     }
 
-    fn sameTypeInner(self: *BodyContext, expected: Type.TypeId, actual: Type.TypeId, depth: u8) bool {
+    const TypePair = struct {
+        expected: Type.TypeId,
+        actual: Type.TypeId,
+    };
+
+    fn sameTypeInner(
+        self: *BodyContext,
+        expected: Type.TypeId,
+        actual: Type.TypeId,
+        visiting: *std.AutoHashMap(TypePair, void),
+    ) bool {
         if (expected == actual) return true;
-        if (depth == 32) return false;
         if (monoAliasBacking(&self.builder.program.types, expected)) |backing| {
-            if (self.sameTypeInner(backing, actual, depth + 1)) return true;
+            if (self.sameTypeInner(backing, actual, visiting)) return true;
         }
         if (monoAliasBacking(&self.builder.program.types, actual)) |backing| {
-            if (self.sameTypeInner(expected, backing, depth + 1)) return true;
+            if (self.sameTypeInner(expected, backing, visiting)) return true;
         }
         const expected_digest = self.builder.program.types.typeDigest(&self.builder.program.names, expected);
         const actual_digest = self.builder.program.types.typeDigest(&self.builder.program.names, actual);
         if (std.mem.eql(u8, expected_digest.bytes[0..], actual_digest.bytes[0..])) return true;
 
-        return self.sameTypeContent(expected, actual, depth + 1);
+        const pair = TypePair{ .expected = expected, .actual = actual };
+        if (visiting.contains(pair)) return true;
+        visiting.put(pair, {}) catch Common.invariant("monotype equality could not record a recursive type pair");
+        defer _ = visiting.remove(pair);
+
+        return self.sameTypeContent(expected, actual, visiting);
     }
 
-    fn sameTypeContent(self: *BodyContext, expected: Type.TypeId, actual: Type.TypeId, depth: u8) bool {
+    fn sameTypeContent(
+        self: *BodyContext,
+        expected: Type.TypeId,
+        actual: Type.TypeId,
+        visiting: *std.AutoHashMap(TypePair, void),
+    ) bool {
         const expected_content = self.builder.program.types.get(expected);
         const actual_content = self.builder.program.types.get(actual);
         return switch (expected_content) {
@@ -9579,32 +9638,32 @@ const BodyContext = struct {
                 else => false,
             },
             .named => |named| switch (actual_content) {
-                .named => |actual_named| self.sameNamedType(named, actual_named, depth),
+                .named => |actual_named| self.sameNamedType(named, actual_named, visiting),
                 else => false,
             },
             .record => |fields| switch (actual_content) {
-                .record => |actual_fields| self.sameRecordFieldNames(fields, actual_fields, depth),
+                .record => |actual_fields| self.sameRecordFieldNames(fields, actual_fields, visiting),
                 else => false,
             },
             .tuple => |items| switch (actual_content) {
-                .tuple => |actual_items| self.sameTypeSpans(items, actual_items, depth),
+                .tuple => |actual_items| self.sameTypeSpans(items, actual_items, visiting),
                 else => false,
             },
             .tag_union => |tags| switch (actual_content) {
-                .tag_union => |actual_tags| self.sameTags(tags, actual_tags, depth),
+                .tag_union => |actual_tags| self.sameTags(tags, actual_tags, visiting),
                 else => false,
             },
             .list => |elem| switch (actual_content) {
-                .list => |actual_elem| self.sameTypeInner(elem, actual_elem, depth),
+                .list => |actual_elem| self.sameTypeInner(elem, actual_elem, visiting),
                 else => false,
             },
             .box => |elem| switch (actual_content) {
-                .box => |actual_elem| self.sameTypeInner(elem, actual_elem, depth),
+                .box => |actual_elem| self.sameTypeInner(elem, actual_elem, visiting),
                 else => false,
             },
             .func => |function| switch (actual_content) {
-                .func => |actual_function| self.sameTypeSpans(function.args, actual_function.args, depth) and
-                    self.sameTypeInner(function.ret, actual_function.ret, depth),
+                .func => |actual_function| self.sameTypeSpans(function.args, actual_function.args, visiting) and
+                    self.sameTypeInner(function.ret, actual_function.ret, visiting),
                 else => false,
             },
             .erased => |erased| switch (actual_content) {
@@ -9618,29 +9677,44 @@ const BodyContext = struct {
         };
     }
 
-    fn sameNamedType(self: *BodyContext, expected: anytype, actual: anytype, depth: u8) bool {
+    fn sameNamedType(
+        self: *BodyContext,
+        expected: anytype,
+        actual: anytype,
+        visiting: *std.AutoHashMap(TypePair, void),
+    ) bool {
         if (!std.mem.eql(u8, expected.named_type.module.bytes[0..], actual.named_type.module.bytes[0..])) return false;
         if (expected.def.module_name != actual.def.module_name) return false;
         if (expected.def.source_decl != actual.def.source_decl) return false;
         if (expected.def.source_decl == null and expected.def.type_name != actual.def.type_name) return false;
         if (expected.kind != actual.kind) return false;
         if (expected.builtin_owner != actual.builtin_owner) return false;
-        if (!self.sameTypeSpans(expected.args, actual.args, depth)) return false;
-        if (!self.sameNamedBacking(expected.backing, actual.backing, depth)) return false;
-        return self.sameDeclaredOrder(expected.declared_order, actual.declared_order, depth);
+        if (!self.sameTypeSpans(expected.args, actual.args, visiting)) return false;
+        if (!self.sameNamedBacking(expected.backing, actual.backing, visiting)) return false;
+        return self.sameDeclaredOrder(expected.declared_order, actual.declared_order, visiting);
     }
 
-    fn sameNamedBacking(self: *BodyContext, expected: anytype, actual: anytype, depth: u8) bool {
+    fn sameNamedBacking(
+        self: *BodyContext,
+        expected: anytype,
+        actual: anytype,
+        visiting: *std.AutoHashMap(TypePair, void),
+    ) bool {
         if (expected == null and actual == null) return true;
         if (expected == null or actual == null) return false;
 
         const expected_backing = expected.?;
         const actual_backing = actual.?;
         if (expected_backing.use != actual_backing.use) return false;
-        return self.sameTypeInner(expected_backing.ty, actual_backing.ty, depth);
+        return self.sameTypeInner(expected_backing.ty, actual_backing.ty, visiting);
     }
 
-    fn sameDeclaredOrder(self: *BodyContext, expected: Type.Span, actual: Type.Span, depth: u8) bool {
+    fn sameDeclaredOrder(
+        self: *BodyContext,
+        expected: Type.Span,
+        actual: Type.Span,
+        visiting: *std.AutoHashMap(TypePair, void),
+    ) bool {
         const expected_entries = self.builder.program.types.declaredFieldSpan(expected);
         const actual_entries = self.builder.program.types.declaredFieldSpan(actual);
         if (expected_entries.len != actual_entries.len) return false;
@@ -9652,41 +9726,56 @@ const BodyContext = struct {
                 },
                 .padding => |expected_ty| switch (actual_entry) {
                     .named => return false,
-                    .padding => |actual_ty| if (!self.sameTypeInner(expected_ty, actual_ty, depth)) return false,
+                    .padding => |actual_ty| if (!self.sameTypeInner(expected_ty, actual_ty, visiting)) return false,
                 },
             }
         }
         return true;
     }
 
-    fn sameTypeSpans(self: *BodyContext, expected: Type.Span, actual: Type.Span, depth: u8) bool {
+    fn sameTypeSpans(
+        self: *BodyContext,
+        expected: Type.Span,
+        actual: Type.Span,
+        visiting: *std.AutoHashMap(TypePair, void),
+    ) bool {
         const expected_items = self.builder.program.types.span(expected);
         const actual_items = self.builder.program.types.span(actual);
         if (expected_items.len != actual_items.len) return false;
         for (expected_items, actual_items) |expected_item, actual_item| {
-            if (!self.sameTypeInner(expected_item, actual_item, depth)) return false;
+            if (!self.sameTypeInner(expected_item, actual_item, visiting)) return false;
         }
         return true;
     }
 
-    fn sameRecordFieldNames(self: *BodyContext, expected: Type.Span, actual: Type.Span, depth: u8) bool {
+    fn sameRecordFieldNames(
+        self: *BodyContext,
+        expected: Type.Span,
+        actual: Type.Span,
+        visiting: *std.AutoHashMap(TypePair, void),
+    ) bool {
         const expected_fields = self.builder.program.types.fieldSpan(expected);
         const actual_fields = self.builder.program.types.fieldSpan(actual);
         if (expected_fields.len != actual_fields.len) return false;
         for (expected_fields, actual_fields) |expected_field, actual_field| {
             if (expected_field.name != actual_field.name) return false;
-            if (!self.sameTypeInner(expected_field.ty, actual_field.ty, depth)) return false;
+            if (!self.sameTypeInner(expected_field.ty, actual_field.ty, visiting)) return false;
         }
         return true;
     }
 
-    fn sameTags(self: *BodyContext, expected: Type.Span, actual: Type.Span, depth: u8) bool {
+    fn sameTags(
+        self: *BodyContext,
+        expected: Type.Span,
+        actual: Type.Span,
+        visiting: *std.AutoHashMap(TypePair, void),
+    ) bool {
         const expected_tags = self.builder.program.types.tagSpan(expected);
         const actual_tags = self.builder.program.types.tagSpan(actual);
         if (expected_tags.len != actual_tags.len) return false;
         for (expected_tags, actual_tags) |expected_tag, actual_tag| {
             if (expected_tag.name != actual_tag.name) return false;
-            if (!self.sameTypeSpans(expected_tag.payloads, actual_tag.payloads, depth)) return false;
+            if (!self.sameTypeSpans(expected_tag.payloads, actual_tag.payloads, visiting)) return false;
         }
         return true;
     }
@@ -14800,6 +14889,42 @@ const BodyContext = struct {
     }
 };
 
+test "monotype sameType keeps failed alias alternatives out of recursion stack" {
+    var program = Ast.Program.init(std.testing.allocator);
+    defer program.deinit();
+
+    const module_name = try program.names.internModuleName("Test");
+    const type_name = try program.names.internTypeName("Alias");
+    const checked_ty: checked.CheckedTypeId = @enumFromInt(1);
+    const i64_ty = try program.types.add(.{ .primitive = .i64 });
+    const str_ty = try program.types.add(.{ .primitive = .str });
+    const alias_i64 = try program.types.add(.{ .named = .{
+        .named_type = .{ .module = .{}, .ty = checked_ty },
+        .def = .{ .module_name = module_name, .type_name = type_name },
+        .kind = .alias,
+        .args = Type.Span.empty(),
+        .backing = .{ .ty = i64_ty, .use = .inspectable },
+    } });
+    const alias_str = try program.types.add(.{ .named = .{
+        .named_type = .{ .module = .{}, .ty = checked_ty },
+        .def = .{ .module_name = module_name, .type_name = type_name },
+        .kind = .alias,
+        .args = Type.Span.empty(),
+        .backing = .{ .ty = str_ty, .use = .inspectable },
+    } });
+
+    var builder: Builder = undefined;
+    builder.program = &program;
+    var ctx: BodyContext = undefined;
+    ctx.allocator = std.testing.allocator;
+    ctx.builder = &builder;
+
+    try std.testing.expect(ctx.sameType(alias_i64, i64_ty));
+    try std.testing.expect(ctx.sameType(str_ty, alias_str));
+    try std.testing.expect(!ctx.sameType(alias_i64, alias_str));
+    try std.testing.expect(!ctx.sameType(alias_str, alias_i64));
+}
+
 /// Structural `is_eq` specifics for the generic derivation driver
 /// (`BodyContext.lowerDerivation`). Equality threads two operands, builds a
 /// component access on each, and conjoins the per-component bools with AND so
@@ -15371,6 +15496,20 @@ fn generatedEncodeToRuntimeKey(
     hasher.update(&current_fn_key.bytes);
     var source_expr_bytes = std.mem.nativeToLittle(u32, @intFromEnum(source_expr_id));
     hasher.update(std.mem.asBytes(&source_expr_bytes));
+    return .{ .bytes = hasher.finalResult() };
+}
+
+fn restoredConstFnContextKey(
+    module_key: checked.ModuleId,
+    fn_id: checked.ConstFnId,
+    source_fn_key: names.TypeDigest,
+) names.TypeDigest {
+    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    hasher.update("roc.restored_const_fn_context");
+    hasher.update(&module_key.bytes);
+    hasher.update(&source_fn_key.bytes);
+    var fn_id_bytes = std.mem.nativeToLittle(u32, @intFromEnum(fn_id));
+    hasher.update(std.mem.asBytes(&fn_id_bytes));
     return .{ .bytes = hasher.finalResult() };
 }
 

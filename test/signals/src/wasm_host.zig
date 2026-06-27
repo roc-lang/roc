@@ -919,7 +919,7 @@ export fn roc_ui_mount() callconv(.c) void {
 
     const root_box: ElemBox = abi.roc_ui_init();
     shared_engine.root_elem = root_box.*;
-    abi.decrefBoxWith(@ptrCast(root_box), @alignOf(abi.Elem), &dropMovedElemPayload, &roc_host);
+    abi.decrefBoxWith(@ptrCast(root_box), @alignOf(abi.Elem), true, &dropMovedElemPayload, &roc_host);
 
     renderActiveRoot(&.{});
 }
