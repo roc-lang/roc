@@ -1361,9 +1361,12 @@ record containing another step callable.
 Optimizing those ordinary Roc functions is not part of the language meaning of
 `Iter` or `Stream`. It is an optimized post-check lowering feature, enabled only
 for `--opt=size` and `--opt=speed`. It is off for `roc check`, compile-time
-finalization, interpreter builds, and dev builds. The mode input is explicit
-pipeline data derived from the requested build mode; no stage may infer this
-work from target triples, wasm output, backend choice, method names, public
+finalization, interpreter builds, and dev builds. In those modes, the optimizer
+does not construct result-demand summaries, private state graphs, or extra
+direct-call workers and then decide not to use them; those data structures are
+owned by the optimized lowering path and are never entered. The mode input is
+explicit pipeline data derived from the requested build mode; no stage may infer
+this work from target triples, wasm output, backend choice, method names, public
 builtin names, or generated symbols.
 
 This boundary is about compiler cost, not correctness. Checking, static
@@ -1464,6 +1467,12 @@ and rewrite calls. Calls are rewritten while their containing body is cloned,
 using the same known values and result demand as every other transformation.
 That keeps a single source of truth and prevents one pass from guessing at
 information another pass already had.
+
+This worklist exists only in the optimized post-check path. Non-optimized
+lowering uses the ordinary public-value path and does not pay for fixed-point
+loop demand, private state reachability, demanded child expansion, or worker
+queue management. The optimized path may spend extra compiler time because the
+user requested size- or speed-optimized generated code.
 
 Result demand is the optimizer's precise statement of how the current
 continuation will use an expression result. Required demand forms are:
@@ -1623,8 +1632,9 @@ reference-count policy for iterator wrappers.
 
 The optimized state pass may spend extra work constructing result-demand
 summaries, reachable private state graphs, and extra direct-call workers because
-users requested optimized code. Unoptimized modes skip only private
-cursor-state specialization and related optimized worker cloning.
+users requested optimized code. Unoptimized modes skip private cursor-state
+specialization and related optimized worker cloning completely; they do not run
+a disabled version of the pass for analysis-only side effects.
 
 Public iterator values remain immutable and reusable. Source such as:
 
