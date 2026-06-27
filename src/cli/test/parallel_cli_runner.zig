@@ -185,8 +185,9 @@ const PlatformCase = struct {
     roc_file: []const u8,
     /// Platform name (for display grouping)
     platform: []const u8,
-    /// Stderr substrings expected during the build step. A build that exits 2
-    /// because of expected warning diagnostics still produces an executable.
+    /// Stderr substrings expected during optimized build steps. A build that
+    /// exits 2 because of expected warning diagnostics still produces an
+    /// executable.
     expected_build_stderr_contains: []const []const u8 = &.{},
     /// What kind of test to run
     test_kind: TestKind,
@@ -1204,13 +1205,14 @@ fn runCompiledTest(
         return .{ .status = .infra_error, .phase = .build, .duration_ns = timer.read(), .build_ns = build_timer.read(), .message = msg };
     };
     const build_ns = build_timer.read();
+    const expected_build_stderr = expectedBuildStderrForBackend(backend, platform.expected_build_stderr_contains);
     if (processTimedOut(build_result.stderr) or hasMemoryErrors(build_result.stderr) != null) {
         return resultFromProcess(build_result, timer, .build, build_ns, 0, "build failed");
     }
-    if (!buildSucceededOrExpectedDiagnostics(build_result, platform.expected_build_stderr_contains)) {
+    if (!buildSucceededOrExpectedDiagnostics(build_result, expected_build_stderr)) {
         return resultFromProcess(build_result, timer, .build, build_ns, 0, "build failed");
     }
-    if (missingExpectedStderr(build_result.stderr, platform.expected_build_stderr_contains)) |needle| {
+    if (missingExpectedStderr(build_result.stderr, expected_build_stderr)) |needle| {
         const msg = std.fmt.allocPrint(allocator, "missing expected build stderr: {s}", .{needle}) catch "missing expected build stderr";
         return .{
             .status = .build_failed,
@@ -1354,6 +1356,13 @@ fn processSucceeded(term: std.process.Child.Term) bool {
     return switch (term) {
         .exited => |code| code == 0,
         else => false,
+    };
+}
+
+fn expectedBuildStderrForBackend(backend: OptMode, expected_stderr_contains: []const []const u8) []const []const u8 {
+    return switch (backend) {
+        .size, .speed => expected_stderr_contains,
+        .interpreter, .dev => &.{},
     };
 }
 
