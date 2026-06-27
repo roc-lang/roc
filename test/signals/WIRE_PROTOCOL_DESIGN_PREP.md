@@ -523,6 +523,13 @@ should reuse the same dynamic framing if they need structured host-to-JS data.
 
 ## Suggested First Milestone
 
+Status: the minimal custom text-attribute portion of this milestone is now
+implemented end to end. The landed slice includes protocol version/features,
+`Extended` dynamic records, `SetAttrText` / `RemoveAttr`, the Roc
+`Html.attr` / `Html.attr_s` API, native `expect_attr` coverage, and browser
+runtime decoding. Generalized events, bool attrs, form properties, and richer
+byte metrics remain future slices.
+
 Implement a protocol vertical slice for generalized attributes/events using the
 hybrid direction:
 

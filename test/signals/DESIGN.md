@@ -388,6 +388,8 @@ Html.text_s : Signal(Str) -> Elem  # signal-backed text (a sink)
 Html.value : Signal(Str) -> Attr
 Html.checked : Signal(Bool) -> Attr
 Html.disabled : Signal(Bool) -> Attr
+Html.attr : Str, Str -> Attr
+Html.attr_s : Str, Signal(Str) -> Attr
 Html.on_click : Msg -> Attr
 Html.on_input : (Str -> Msg) -> Attr
 Html.on_check : (Bool -> Msg) -> Attr
@@ -763,11 +765,12 @@ such as arbitrary text attributes. The shared command vocabulary, command
 counters, metrics accumulator, fixed-width command record, and dynamic-record
 framing live in `src/render_commands.zig`. Each host implements the sink:
 
-- the **native host** applies each command to its `DomElement` array;
+- the **native host** applies each command to its `DomElement` array, including
+  a separate owned custom-attribute table for `Html.attr`/`Html.attr_s`;
 - the **wasm host** serializes each command into a fixed-width record in linear
   memory for the JS executor to apply, with dynamic byte records for metadata
-  attributes (`role`, `aria-label`, `data-testid`, `class`) and future
-  attribute-like extensions.
+  attributes (`role`, `aria-label`, `data-testid`, `class`) and open-ended
+  custom text attributes.
 
 Because the logical command set is shared, a spec on the native host asserts the
 same render semantics the browser will execute. The browser wire can choose a
@@ -984,9 +987,12 @@ UTF-8 before touching the DOM. Unknown dynamic ops and malformed records are
 reported as contract errors. This keeps JS a decoder/executor for explicit data
 the host emitted; it does not reconstruct missing render intent.
 
-Current wasm-host emission uses dynamic records for metadata text attributes:
-`role`, `aria-label`, `data-testid`, and `class`. `SetText`, `SetValue`, bool
-fields, event binds, timers, and tasks remain fixed records.
+Current wasm-host emission uses dynamic records for metadata text attributes
+(`role`, `aria-label`, `data-testid`, and `class`) and for app-authored custom
+text attributes from `Html.attr` / `Html.attr_s`. The Roc descriptor makes the
+custom path explicit with `Node.field_custom` plus a `name` field on text attrs;
+fixed text fields must carry an empty name. `SetText`, `SetValue`, bool fields,
+event binds, timers, and tasks remain fixed records.
 
 ### Marshalling and memory discipline
 

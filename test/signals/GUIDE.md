@@ -188,6 +188,7 @@ The patch command set:
 - `CreateElement`, `CreateText`, `AppendChild`, `RemoveNode`, and `MoveBefore`
 - `SetText`, `SetValue`, `SetChecked`, and `SetDisabled`
 - `SetRole`, `SetLabel`, `SetTestId`, `SetClass`, and dynamic text attributes
+  from `Html.attr` / `Html.attr_s`
 - `BindClick`, `BindInput`, `BindCheck`, pointer-event binds, and `ClearEvent`
 - Timer and task commands for intervals, async starts, and cancellation
 
@@ -200,6 +201,8 @@ separate UTF-8 string buffer. Variable-shape attribute operations use an
 `Extended` record whose operands point into a dynamic byte buffer; version 1
 defines `SetAttrText` and `RemoveAttr`. The JS runtime checks the protocol
 version/feature bits and validates each dynamic record before applying it.
+Native specs can assert app-authored custom attrs with
+`expect_attr <locator> <name> "value"`.
 
 ## One Call Into Roc at Startup, Direct Calls After
 
@@ -482,8 +485,10 @@ choosing a decoder or comparing erased bytes. Built-in types such as `Str`,
   for two, and `Signal.combine` for a list of signals.
 - Use `Html.text` for static text and `Html.text_s` for signal-backed text.
 - Use `Html.value`, `Html.checked`, and `Html.disabled` for signal-backed
-  fields, and role/label/test-id/class helpers for metadata attributes.
-  `Html.on_click`, `Html.on_input`, and `Html.on_check` attach handlers.
+  fields, role/label/test-id/class helpers for common metadata, and
+  `Html.attr` / `Html.attr_s` for app-authored text attributes such as
+  `data-*` and `aria-*`. `Html.on_click`, `Html.on_input`, and
+  `Html.on_check` attach handlers.
 - Use `Ui.when` for conditional regions and `Ui.each` for lists. Use
   `Ui.component` to introduce a named scope when a reusable piece of UI needs its
   own local state.
