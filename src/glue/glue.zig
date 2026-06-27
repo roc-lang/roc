@@ -1010,8 +1010,9 @@ const CollectedRecordField = struct {
     alignment: u64,
     /// True for an unnamed nominal-record padding field (`_` / `_name`). The
     /// emitters render it as a fixed-size `size`-byte array (`[size]u8` in Zig,
-    /// `uint8_t name[size]` in C) and skip it for refcount helpers. `type_id` is
-    /// unused for padding fields.
+    /// `uint8_t name[size]` in C) and skip it for refcount helpers. Zero-sized
+    /// unnamed fields are layout markers only and are not collected. `type_id`
+    /// is unused for padding fields.
     is_padding: bool = false,
 };
 
@@ -1112,11 +1113,12 @@ const TypeTable = struct {
         self.gpa.free(slice);
     }
 
-    /// Free the first `populated` field names in `fields` (each duped) and the
-    /// `fields` array itself. Used to unwind a partially-built declared-order
-    /// nominal record on an error or `null` fallback.
+    fn freeCollectedRecordFieldNames(self: *TypeTable, fields: []const CollectedRecordField) void {
+        for (fields) |field| self.freeDuped(field.name);
+    }
+
     fn freeCollectedRecordFields(self: *TypeTable, fields: []const CollectedRecordField, populated: usize) void {
-        for (fields[0..populated]) |field| self.freeDuped(field.name);
+        self.freeCollectedRecordFieldNames(fields[0..populated]);
         self.gpa.free(fields);
     }
 
@@ -1350,9 +1352,10 @@ const TypeTable = struct {
         alignment: u64,
     };
 
-    /// Reconstructs a nominal record in DECLARED source order, with unnamed `_` /
-    /// `_name` fields reinstated as padding spacers and C-style padding inserted
-    /// between fields, matching the layout store's `putNominalStructFields`.
+    /// Reconstructs a nominal record in DECLARED source order, with nonzero
+    /// unnamed `_` / `_name` fields reinstated as padding spacers and C-style
+    /// padding inserted between fields, matching the layout store's
+    /// `putNominalStructFields`.
     /// Returns `null` — so the caller falls back to the structural backing order —
     /// when the record has no `_` field (it then lays out structurally), or when
     /// the declaration is unavailable (no `source_decl`, declaring module not
@@ -1394,19 +1397,19 @@ const TypeTable = struct {
         const padding_types = nominalDeclarationPaddingTypes(decl_artifact, source_decl) orelse return null;
 
         // Each named declared field recovers its converted shape from the backing
-        // record (matched by name); each unnamed field becomes a padding spacer
-        // whose size is its declared type's size and whose alignment is 1.
+        // record (matched by name); each nonzero unnamed field becomes a padding
+        // spacer whose size is its declared type's size and whose alignment is 1.
         const collected = try self.gpa.alloc(CollectedRecordField, anno_fields.len);
+        var populated: usize = 0;
+        errdefer self.freeCollectedRecordFields(collected, populated);
 
         var padding_cursor: usize = 0;
         var pad_index: usize = 0;
-        var populated: usize = 0;
-        // Free the field names duped into `collected` so far plus the array on any
-        // failure or `null` fallback path. `populated` is read at unwind time.
-        errdefer self.freeCollectedRecordFields(collected, populated);
-        for (anno_fields, 0..) |field_idx, i| {
+        var saw_unnamed_field = false;
+        for (anno_fields) |field_idx| {
             const field = module_env.store.getAnnoRecordField(field_idx);
             if (field.is_unnamed) {
+                saw_unnamed_field = true;
                 if (padding_cursor >= padding_types.len) {
                     self.freeCollectedRecordFields(collected, populated);
                     return null;
@@ -1416,45 +1419,53 @@ const TypeTable = struct {
                 padding_cursor += 1;
                 const padding_type_id = try self.getOrInsert(decl_artifact, padding_ty);
                 const sa = self.getSizeAlign(padding_type_id);
+                if (sa.size == 0) continue;
+
                 const name = try std.fmt.allocPrint(self.gpa, "_pad{d}", .{pad_index});
                 pad_index += 1;
-                collected[i] = .{
+                collected[populated] = .{
                     .name = name,
                     .type_id = 0,
                     .size = sa.size,
                     .alignment = 1,
                     .is_padding = true,
                 };
+                populated += 1;
             } else {
                 const field_name = module_env.getIdentText(field.name);
                 const match = backingFieldByName(backing, field_name) orelse {
                     self.freeCollectedRecordFields(collected, populated);
                     return null;
                 };
-                collected[i] = .{
-                    .name = try self.gpa.dupe(u8, field_name),
+                const name = try self.gpa.dupe(u8, field_name);
+                collected[populated] = .{
+                    .name = name,
                     .type_id = match.type_id,
                     .size = match.size,
                     .alignment = match.alignment,
                     .is_padding = false,
                 };
+                populated += 1;
             }
-            populated = i + 1;
         }
 
         // A nominal record keeps its declared order only when it opts in with an
         // unnamed `_` field. Without one it lays out like a structural record, so
         // fall back to the structural backing order.
-        if (pad_index == 0) {
+        if (!saw_unnamed_field) {
             self.freeCollectedRecordFields(collected, populated);
             return null;
         }
+        const collected_fields = if (populated == collected.len)
+            collected
+        else
+            try self.gpa.realloc(collected, populated);
 
         // Declared order, verbatim, with C-style padding inserted between fields as
         // alignment requires (the padding amount can differ on 32- vs 64-bit).
         var max_alignment: u64 = 1;
         var offset: u64 = 0;
-        for (collected) |field| {
+        for (collected_fields) |field| {
             if (field.alignment > max_alignment) max_alignment = field.alignment;
             if (field.alignment > 0) {
                 const rem = offset % field.alignment;
@@ -1468,7 +1479,7 @@ const TypeTable = struct {
             if (rem != 0) record_size += max_alignment - rem;
         }
 
-        return .{ .fields = collected, .size = record_size, .alignment = max_alignment };
+        return .{ .fields = collected_fields, .size = record_size, .alignment = max_alignment };
     }
 
     /// Finds a backing record field by its name text, returning its converted
