@@ -28,7 +28,7 @@ expect_metric_delta_at_most each_key_compares 36
 expect_metric_delta_at_most stream_nodes_scanned 576
 expect_metric_delta_at_most allocs_this_event 1800
 expect_metric_delta_at_most deallocs_this_event 1800
-expect_metric_delta_at_most active_graph_records_rebuilt 9
+expect_metric_delta_at_most active_graph_records_rebuilt 4
 expect_metric_delta rows_reused 8
 expect_metric_delta rows_created 1
 expect_metric_delta rows_removed 0
@@ -40,7 +40,7 @@ expect_metric_delta_at_most each_key_compares 32
 expect_metric_delta_at_most stream_nodes_scanned 512
 expect_metric_delta_at_most allocs_this_event 1600
 expect_metric_delta_at_most deallocs_this_event 1600
-expect_metric_delta_at_most active_graph_records_rebuilt 8
+expect_metric_delta_at_most active_graph_records_rebuilt 0
 expect_metric_delta rows_reused 7
 expect_metric_delta rows_created 0
 expect_metric_delta rows_removed 2
@@ -53,7 +53,7 @@ expect_metric_delta_at_most each_key_compares 32
 expect_metric_delta_at_most stream_nodes_scanned 3072
 expect_metric_delta_at_most allocs_this_event 1600
 expect_metric_delta_at_most deallocs_this_event 1600
-expect_metric_delta_at_most active_graph_records_rebuilt 8
+expect_metric_delta_at_most active_graph_records_rebuilt 4
 expect_metric_delta rows_reused 3
 expect_metric_delta rows_created 1
 expect_metric_delta rows_removed 4
@@ -65,7 +65,7 @@ expect_metric_delta_at_most each_key_compares 32
 expect_metric_delta_at_most stream_nodes_scanned 4096
 expect_metric_delta_at_most allocs_this_event 1600
 expect_metric_delta_at_most deallocs_this_event 1600
-expect_metric_delta_at_most active_graph_records_rebuilt 8
+expect_metric_delta_at_most active_graph_records_rebuilt 16
 expect_metric_delta rows_reused 4
 expect_metric_delta rows_created 4
 expect_metric_delta rows_removed 0

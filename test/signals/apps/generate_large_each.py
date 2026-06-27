@@ -187,23 +187,23 @@ expect_text text:"{row_label(middle)} updated" "{row_label(middle)} updated"
 mark_metrics
 click role:button name:"Append one row"
 expect_visible role:region name:"Large row {row_id(row_count)}"
-{metric_lines(row_count + 1, rows_reused=row_count, rows_created=1, rows_removed=0, max_graph_rebuilt=row_count + 1)}
+{metric_lines(row_count + 1, rows_reused=row_count, rows_created=1, rows_removed=0, max_graph_rebuilt=4)}
 
 mark_metrics
 click role:button name:"Remove middle row"
 expect_absent role:region name:"Large row {row_id(middle)}"
-{metric_lines(row_count, rows_reused=row_count - 1, rows_created=0, rows_removed=2, max_graph_rebuilt=row_count)}
+{metric_lines(row_count, rows_reused=row_count - 1, rows_created=0, rows_removed=2, max_graph_rebuilt=0)}
 
 mark_metrics
 click role:button name:"Filter even rows"
 expect_visible role:region name:"Large row {row_id(0)}"
 expect_absent role:region name:"Large row {row_id(1)}"
-{metric_lines(row_count, rows_reused=even_count - 1, rows_created=1, rows_removed=row_count - even_count, max_graph_rebuilt=row_count, max_stream_nodes_scanned=row_count * 384)}
+{metric_lines(row_count, rows_reused=even_count - 1, rows_created=1, rows_removed=row_count - even_count, max_graph_rebuilt=4, max_stream_nodes_scanned=row_count * 384)}
 
 mark_metrics
 click role:button name:"Reverse rows"
 expect_visible role:region name:"Large row {row_id(row_count - 1)}"
-{metric_lines(row_count, rows_reused=even_count, rows_created=row_count - even_count, rows_removed=0, max_graph_rebuilt=row_count, max_stream_nodes_scanned=row_count * 512)}
+{metric_lines(row_count, rows_reused=even_count, rows_created=row_count - even_count, rows_removed=0, max_graph_rebuilt=(row_count - even_count) * 4, max_stream_nodes_scanned=row_count * 512)}
 
 mark_metrics
 click role:button name:"Reset rows"

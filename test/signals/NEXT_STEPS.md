@@ -325,13 +325,12 @@ evidence-gated.
 
 Current priority after the Phase 4 review:
 
-1. Incremental sink-route maintenance on splice.
-2. O(1) identity/descriptor lookup, including keyed diff lookup discipline.
-3. Moves-only reorder proof at large N.
-4. Persistent rank-ordered propagation queue.
-5. Per-cycle scratch/arena allocation cleanup.
-6. Long-session leak experiment and slot reclamation.
-7. `key.hash` / `Hasher` API cleanup once the Roc API exists.
+1. O(1) identity/descriptor lookup, including keyed diff lookup discipline.
+2. Moves-only reorder proof at large N.
+3. Persistent rank-ordered propagation queue.
+4. Per-cycle scratch/arena allocation cleanup.
+5. Long-session leak experiment and slot reclamation.
+6. `key.hash` / `Hasher` API cleanup once the Roc API exists.
 
 ### Persistent rank-ordered propagation queue (design gap, not optimisation)
 
@@ -352,6 +351,12 @@ Current priority after the Phase 4 review:
 
 ### Incremental sink-route maintenance on splice (design gap, not optimisation)
 
+- **Status:** implemented in `engine.zig`. Structural splice now removes,
+  rewrites, and appends sink-route entries as descriptor tables change, and
+  active signal record `swapRemove` moves route buckets with the moved record id.
+  The large-N app now gates active graph rebuilds by changed rows: append/filter
+  allow four records for one created row, remove allows zero, and re-expand
+  allows four records per created row.
 - **Hypothesis:** patching sink routes only for records in the spliced subtree —
   rather than re-walking the whole active stream — makes structural work scale
   with the change, not the tree, as `DESIGN.md` requires.
