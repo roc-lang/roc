@@ -13,6 +13,7 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
+const build_options = @import("build_options");
 const abi = @import("roc_platform_abi.zig");
 const scope_tree = @import("scope_tree.zig");
 const erased_calls = @import("erased_calls.zig");
@@ -22,6 +23,8 @@ const identity_table = @import("identity_table.zig");
 const host_value_registry = @import("host_value_registry.zig");
 const keyed_rows = @import("keyed_rows.zig");
 const hv = @import("host_values.zig");
+
+const enable_runtime_metrics = builtin.is_test or build_options.metrics;
 
 pub const RenderTextField = render.TextField;
 pub const RenderBoolField = render.BoolField;
@@ -135,6 +138,12 @@ pub const RuntimeMetrics = struct {
     derived_calls_into_roc: u64,
     each_key_compares: u64,
     events_processed: u64,
+    host_alloc_bytes_this_event: u64,
+    host_allocs_this_event: u64,
+    host_dealloc_bytes_this_event: u64,
+    host_deallocs_this_event: u64,
+    host_retained_alloc_delta: i64,
+    host_retained_bytes_delta: i64,
     move_before: u64,
     nodes_recomputed: u64,
     patches_emitted: u64,
@@ -158,6 +167,7 @@ pub const RuntimeMetrics = struct {
     pub const Field = std.meta.FieldEnum(@This());
 
     pub inline fn bump(self: *RuntimeMetrics, comptime field: Field, n: u64) void {
+        if (comptime !enable_runtime_metrics) return;
         @field(self, @tagName(field)) += n;
     }
 };
@@ -175,6 +185,12 @@ pub fn zeroRuntimeMetrics() RuntimeMetrics {
         .derived_calls_into_roc = 0,
         .each_key_compares = 0,
         .events_processed = 0,
+        .host_alloc_bytes_this_event = 0,
+        .host_allocs_this_event = 0,
+        .host_dealloc_bytes_this_event = 0,
+        .host_deallocs_this_event = 0,
+        .host_retained_alloc_delta = 0,
+        .host_retained_bytes_delta = 0,
         .move_before = 0,
         .nodes_recomputed = 0,
         .patches_emitted = 0,
@@ -1001,6 +1017,27 @@ pub const HostBinderToken = *u64;
 pub const HostBinderBinding = struct {
     token: HostBinderToken,
     node_id: u64,
+};
+
+const EngineScratch = struct {
+    move_child_indexes: std.AutoHashMapUnmanaged(u64, usize) = .empty,
+    move_old_indexes: std.ArrayListUnmanaged(usize) = .empty,
+    move_stable_subsequence: std.ArrayListUnmanaged(usize) = .empty,
+    debug_seen_render_nodes: std.ArrayListUnmanaged(bool) = .empty,
+    debug_expected_children: std.ArrayListUnmanaged(u64) = .empty,
+    binder_stack: std.ArrayListUnmanaged(HostBinderBinding) = .empty,
+    each_keys: std.ArrayListUnmanaged(HostValue) = .empty,
+
+    fn deinit(self: *EngineScratch, allocator: std.mem.Allocator) void {
+        self.move_child_indexes.deinit(allocator);
+        self.move_old_indexes.deinit(allocator);
+        self.move_stable_subsequence.deinit(allocator);
+        self.debug_seen_render_nodes.deinit(allocator);
+        self.debug_expected_children.deinit(allocator);
+        self.binder_stack.deinit(allocator);
+        self.each_keys.deinit(allocator);
+        self.* = .{};
+    }
 };
 
 pub const HostNodeScopeSiteKind = enum {
@@ -2242,9 +2279,22 @@ pub fn Engine(comptime Ctx: type) type {
         // last_runtime_metrics at finish. Engine-owned so both hosts share it.
         dispatch_metrics: DispatchMetrics = .{},
         dirty_signal_generation: u64 = 0,
+        scratch: EngineScratch = .{},
 
         pub fn init() Self {
             return .{};
+        }
+
+        pub fn deinitScratch(self: *Self, ctx: Ctx.Handle) void {
+            self.scratch.deinit(Ctx.allocator(ctx));
+        }
+
+        fn scratchBinderStack(self: *Self, allocator: std.mem.Allocator, base: []const HostBinderBinding) *std.ArrayListUnmanaged(HostBinderBinding) {
+            if (self.scratch.binder_stack.items.len != 0) {
+                @panic("engine binder scratch was already active");
+            }
+            self.scratch.binder_stack.appendSlice(allocator, base) catch @panic("out of memory");
+            return &self.scratch.binder_stack;
         }
 
         fn debugPhase(ctx: Ctx.Handle, phase: u32) void {
@@ -2339,6 +2389,7 @@ pub fn Engine(comptime Ctx: type) type {
         }
 
         pub fn recordDispatch(self: *Self) void {
+            if (comptime !enable_runtime_metrics) return;
             self.dispatch_metrics.events_processed += 1;
             self.dispatch_metrics.recompute_batches += 1;
         }
@@ -2476,24 +2527,27 @@ pub fn Engine(comptime Ctx: type) type {
             const parent = self.activeRenderScalarNode(parent_elem_id);
             if (parent.children.items.len != next_child_ids.len) @panic("pure structural move changed child count");
 
-            var old_child_indexes: std.AutoHashMapUnmanaged(u64, usize) = .{};
-            defer old_child_indexes.deinit(allocator);
+            const old_child_indexes = &self.scratch.move_child_indexes;
+            old_child_indexes.clearRetainingCapacity();
+            defer old_child_indexes.clearRetainingCapacity();
             for (parent.children.items, 0..) |child_id, index| {
                 const entry = old_child_indexes.getOrPut(allocator, child_id) catch @panic("out of memory");
                 if (entry.found_existing) @panic("parent child list contained duplicate element ids");
                 entry.value_ptr.* = index;
             }
 
-            const old_indexes_in_next_order = allocator.alloc(usize, next_child_ids.len) catch @panic("out of memory");
-            defer allocator.free(old_indexes_in_next_order);
+            self.scratch.move_old_indexes.resize(allocator, next_child_ids.len) catch @panic("out of memory");
+            defer self.scratch.move_old_indexes.clearRetainingCapacity();
+            const old_indexes_in_next_order = self.scratch.move_old_indexes.items;
             for (next_child_ids, 0..) |child_id, index| {
                 const child = self.activeRenderScalarNode(child_id);
                 if (child.parent_id == null or child.parent_id.? != parent_elem_id) @panic("pure structural move crossed parent boundary");
                 old_indexes_in_next_order[index] = old_child_indexes.get(child_id) orelse @panic("pure structural move inserted a child");
             }
 
-            const stable_scratch = allocator.alloc(usize, next_child_ids.len) catch @panic("out of memory");
-            defer allocator.free(stable_scratch);
+            self.scratch.move_stable_subsequence.resize(allocator, next_child_ids.len) catch @panic("out of memory");
+            defer self.scratch.move_stable_subsequence.clearRetainingCapacity();
+            const stable_scratch = self.scratch.move_stable_subsequence.items;
             const stable_len = stableSubsequenceLength(old_indexes_in_next_order, stable_scratch);
             const displaced_count = next_child_ids.len - stable_len;
             var displaced_index: usize = 0;
@@ -2573,8 +2627,9 @@ pub fn Engine(comptime Ctx: type) type {
             if (comptime builtin.mode != .Debug) return;
 
             const allocator = Ctx.allocator(ctx);
-            var seen = allocator.alloc(bool, self.render_scalar_nodes.items.len) catch @panic("out of memory");
-            defer allocator.free(seen);
+            self.scratch.debug_seen_render_nodes.resize(allocator, self.render_scalar_nodes.items.len) catch @panic("out of memory");
+            defer self.scratch.debug_seen_render_nodes.clearRetainingCapacity();
+            const seen = self.scratch.debug_seen_render_nodes.items;
             @memset(seen, false);
             if (seen.len != 0) seen[0] = true;
 
@@ -2600,8 +2655,8 @@ pub fn Engine(comptime Ctx: type) type {
 
             for (self.render_scalar_nodes.items, 0..) |cached, parent_id| {
                 if (!cached.active) continue;
-                var expected_children: std.ArrayListUnmanaged(u64) = .empty;
-                defer expected_children.deinit(allocator);
+                const expected_children = &self.scratch.debug_expected_children;
+                expected_children.clearRetainingCapacity();
                 for (stream.render_nodes.items) |node| {
                     if (descriptorStreamNodeParent(stream, node) == parent_id) {
                         expected_children.append(allocator, node.elem_id) catch @panic("out of memory");
@@ -2611,6 +2666,7 @@ pub fn Engine(comptime Ctx: type) type {
                     @panic("descriptor stream child order disagreed with render cache");
                 }
             }
+            self.scratch.debug_expected_children.clearRetainingCapacity();
         }
 
         pub fn debugAssertRenderCacheMatchesSink(self: *Self, ctx: Ctx.Handle) void {
@@ -3768,9 +3824,8 @@ pub fn Engine(comptime Ctx: type) type {
             const branch_scope = self.internWhenBranchScope(Ctx.allocator(ctx), site.scope_id, site.ordinal, active_branch) catch @panic("scope id has no host scope descriptor");
             const branch_scope_id = branch_scope.scope_id;
             const allocator = Ctx.allocator(ctx);
-            var binder_stack: std.ArrayListUnmanaged(HostBinderBinding) = .empty;
-            defer binder_stack.deinit(allocator);
-            binder_stack.appendSlice(allocator, site.binder_bindings) catch @panic("out of memory");
+            const binder_stack = self.scratchBinderStack(allocator, site.binder_bindings);
+            defer self.scratch.binder_stack.clearRetainingCapacity();
 
             const branch_elem = switch (active_branch) {
                 .true_branch => when.when_true,
@@ -3778,7 +3833,7 @@ pub fn Engine(comptime Ctx: type) type {
             };
             var ordinal: u64 = 0;
             var dom_ordinal: u64 = 0;
-            self.collectActiveElemDescriptors(ctx, roc_host, stream, branch_elem, branch_scope_id, site.parent_elem_id, &ordinal, &dom_ordinal, &binder_stack, branch_scope.created, dirty_source_node_ids);
+            self.collectActiveElemDescriptors(ctx, roc_host, stream, branch_elem, branch_scope_id, site.parent_elem_id, &ordinal, &dom_ordinal, binder_stack, branch_scope.created, dirty_source_node_ids);
             return branch_scope_id;
         }
 
@@ -3791,9 +3846,8 @@ pub fn Engine(comptime Ctx: type) type {
 
         pub fn collectActiveEachRowDescriptorsFromDiff(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, stream: *HostNodeDescriptorStream, site: HostNodeScopeSiteDesc, each: HostNodeEachDesc, diff: HostKeyedRowDiffResult, dirty_source_node_ids: []const u64) void {
             const allocator = Ctx.allocator(ctx);
-            var binder_stack: std.ArrayListUnmanaged(HostBinderBinding) = .empty;
-            defer binder_stack.deinit(allocator);
-            binder_stack.appendSlice(allocator, site.binder_bindings) catch @panic("out of memory");
+            const binder_stack = self.scratchBinderStack(allocator, site.binder_bindings);
+            defer self.scratch.binder_stack.clearRetainingCapacity();
 
             for (diff.scope_ids, diff.row_items_changed, diff.scope_created) |row_scope_id, row_item_changed, row_created| {
                 if (!row_item_changed and !self.scopeSubtreeHasDirtyStructuralSource(&self.active_stream, row_scope_id, dirty_source_node_ids)) {
@@ -3807,15 +3861,14 @@ pub fn Engine(comptime Ctx: type) type {
 
                 var ordinal: u64 = 0;
                 var dom_ordinal: u64 = 0;
-                self.collectActiveElemDescriptors(ctx, roc_host, stream, row_elem, row_scope_id, site.parent_elem_id, &ordinal, &dom_ordinal, &binder_stack, row_created, dirty_source_node_ids);
+                self.collectActiveElemDescriptors(ctx, roc_host, stream, row_elem, row_scope_id, site.parent_elem_id, &ordinal, &dom_ordinal, binder_stack, row_created, dirty_source_node_ids);
             }
         }
 
         pub fn collectActiveEachSingleRowDescriptors(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, stream: *HostNodeDescriptorStream, site: HostNodeScopeSiteDesc, each: HostNodeEachDesc, row_scope_id: u64, row_created: bool, dirty_source_node_ids: []const u64) void {
             const allocator = Ctx.allocator(ctx);
-            var binder_stack: std.ArrayListUnmanaged(HostBinderBinding) = .empty;
-            defer binder_stack.deinit(allocator);
-            binder_stack.appendSlice(allocator, site.binder_bindings) catch @panic("out of memory");
+            const binder_stack = self.scratchBinderStack(allocator, site.binder_bindings);
+            defer self.scratch.binder_stack.clearRetainingCapacity();
 
             const row_values = self.eachRowScopeValues(row_scope_id);
             const row_elem = callHostValueHostValueToElemWithCapabilities(ctx, roc_host, each.ops.key_capability, each.ops.item_capability, each.ops.row, row_values.key, row_values.item);
@@ -3823,7 +3876,7 @@ pub fn Engine(comptime Ctx: type) type {
 
             var ordinal: u64 = 0;
             var dom_ordinal: u64 = 0;
-            self.collectActiveElemDescriptors(ctx, roc_host, stream, row_elem, row_scope_id, site.parent_elem_id, &ordinal, &dom_ordinal, &binder_stack, row_created, dirty_source_node_ids);
+            self.collectActiveElemDescriptors(ctx, roc_host, stream, row_elem, row_scope_id, site.parent_elem_id, &ordinal, &dom_ordinal, binder_stack, row_created, dirty_source_node_ids);
         }
 
         pub fn collectActiveElemDescriptors(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, stream: *HostNodeDescriptorStream, elem: abi.Elem, scope_id: u64, parent_elem_id: u64, ordinal: *u64, dom_ordinal: *u64, binder_stack: *std.ArrayListUnmanaged(HostBinderBinding), scope_created: bool, dirty_source_node_ids: []const u64) void {
@@ -3938,8 +3991,9 @@ pub fn Engine(comptime Ctx: type) type {
                     stream.eaches.items[each_index].cached_value.replace(ctx, roc_host, &self.pending_roc_metrics, items_value, each_items_cap);
                     const item_values = items.items();
 
-                    const keys = allocator.alloc(HostValue, item_values.len) catch @panic("out of memory");
-                    defer allocator.free(keys);
+                    self.scratch.each_keys.resize(allocator, item_values.len) catch @panic("out of memory");
+                    defer self.scratch.each_keys.clearRetainingCapacity();
+                    const keys = self.scratch.each_keys.items;
 
                     for (item_values, 0..) |item, index| {
                         keys[index] = callHostValueToHostValueWithCapability(ctx, roc_host, each_desc.ops.item_capability, each_desc.ops.key_of, item);
@@ -3970,11 +4024,11 @@ pub fn Engine(comptime Ctx: type) type {
             const root_scope = self.internRootScope(Ctx.allocator(ctx)) catch @panic("scope id has no host scope descriptor");
             const root_scope_id = root_scope.scope_id;
             const allocator = Ctx.allocator(ctx);
-            var binder_stack: std.ArrayListUnmanaged(HostBinderBinding) = .empty;
-            defer binder_stack.deinit(allocator);
+            const binder_stack = self.scratchBinderStack(allocator, &.{});
+            defer self.scratch.binder_stack.clearRetainingCapacity();
             var ordinal: u64 = 0;
             var dom_ordinal: u64 = 0;
-            self.collectActiveElemDescriptors(ctx, roc_host, stream, root, root_scope_id, 0, &ordinal, &dom_ordinal, &binder_stack, root_scope.created, dirty_source_node_ids);
+            self.collectActiveElemDescriptors(ctx, roc_host, stream, root, root_scope_id, 0, &ordinal, &dom_ordinal, binder_stack, root_scope.created, dirty_source_node_ids);
         }
 
         pub fn clearActiveSignalGraph(self: *Self, ctx: Ctx.Handle) void {
@@ -5969,7 +6023,7 @@ pub fn Engine(comptime Ctx: type) type {
             const children = streamDirectChildren(allocator, &self.active_stream, site.parent_elem_id);
             defer allocator.free(children);
             self.replaceRenderChildrenForMoves(ctx, site.parent_elem_id, children, &counts);
-            self.render_metrics.addCommandCounts(counts);
+            if (comptime enable_runtime_metrics) self.render_metrics.addCommandCounts(counts);
             return counts;
         }
 
@@ -6375,7 +6429,7 @@ pub fn Engine(comptime Ctx: type) type {
             self.debugAssertRenderCacheMatchesSink(ctx);
 
             self.rebuildActiveSignalGraphFromStream(ctx, stream);
-            self.render_metrics.addCommandCounts(counts);
+            if (comptime enable_runtime_metrics) self.render_metrics.addCommandCounts(counts);
             return counts;
         }
 
@@ -6443,7 +6497,7 @@ pub fn Engine(comptime Ctx: type) type {
             self.debugAssertRenderCacheMatchesStream(ctx, stream);
             self.debugAssertRenderCacheMatchesSink(ctx);
             self.rebuildActiveSignalGraphFromStream(ctx, stream);
-            self.render_metrics.addCommandCounts(counts);
+            if (comptime enable_runtime_metrics) self.render_metrics.addCommandCounts(counts);
             return counts;
         }
 
@@ -6513,7 +6567,7 @@ pub fn Engine(comptime Ctx: type) type {
             self.debugAssertRenderCacheMatchesStream(ctx, &self.active_stream);
             self.debugAssertRenderCacheMatchesSink(ctx);
             counts.addAll(self.runActiveMountCommandIndices(ctx, roc_host, splice.replacement_mount_indices));
-            self.render_metrics.addCommandCounts(counts);
+            if (comptime enable_runtime_metrics) self.render_metrics.addCommandCounts(counts);
             return counts;
         }
 
@@ -6622,7 +6676,7 @@ pub fn Engine(comptime Ctx: type) type {
             self.debugAssertRenderCacheMatchesSink(ctx);
 
             self.rebuildActiveSignalGraphFromStream(ctx, stream);
-            self.render_metrics.addCommandCounts(counts);
+            if (comptime enable_runtime_metrics) self.render_metrics.addCommandCounts(counts);
             return counts;
         }
 
@@ -7005,7 +7059,7 @@ pub fn Engine(comptime Ctx: type) type {
                 }
             }
 
-            self.render_metrics.addCommandCounts(counts);
+            if (comptime enable_runtime_metrics) self.render_metrics.addCommandCounts(counts);
             return counts;
         }
     };

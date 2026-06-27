@@ -280,6 +280,21 @@ Fresh `zig build run-signals-bench` single-sample baselines captured on
 | signals-identity-stress | 180 | 180 | 4000 | 300 | 700 | 75720 | 25380 | 20340 | 5000 |
 | signals-checkout-wizard | 180 | 180 | 4280 | 320 | 780 | 16120 | 17840 | 13180 | 4620 |
 
+Post host-allocation-instrumentation `zig build run-signals-bench` single-sample
+baseline captured on 2026-06-27. This is the comparison point for future
+scratch-buffer work; timing is included for context, but the allocation count
+and byte columns are the primary signal.
+
+| case | actions | total_ns | allocs_this_event | deallocs_this_event | host_allocs_this_event | host_deallocs_this_event | host_alloc_bytes_this_event | host_dealloc_bytes_this_event | host_retained_alloc_delta | host_retained_bytes_delta |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| signals-ops-dashboard | 60 | 51619910 | 33760 | 21200 | 47500 | 23900 | 8296620 | 4079080 | 23600 | 4217540 |
+| signals-large-each-64 | 120 | 816326234 | 160640 | 139940 | 241500 | 189460 | 200148680 | 189401620 | 51960 | 10745940 |
+| signals-async-effects | 180 | 24911045 | 16640 | 13700 | 27340 | 20460 | 4984060 | 3599480 | 6800 | 1383760 |
+| signals-checkout-wizard | 180 | 22675915 | 17800 | 13140 | 32720 | 22860 | 7700300 | 5560300 | 9800 | 2139200 |
+| signals-identity-stress | 180 | 38397540 | 24180 | 19140 | 43980 | 32080 | 11723240 | 8834440 | 11820 | 2887980 |
+| signals-kanban-board | 320 | 555115227 | 242180 | 219460 | 317400 | 261380 | 87414760 | 76704060 | 55960 | 10703340 |
+| signals-component-composition | 100 | 9469786 | 9260 | 6800 | 17240 | 10980 | 3241120 | 1967400 | 6180 | 1272740 |
+
 Baseline review outcome:
 
 - Structural `Ui.each` work is the clear first target. The kanban run produced
@@ -374,6 +389,17 @@ Current priority after the Phase 4 review:
 
 ### Per-cycle scratch/arena to remove dispatch allocation churn
 
+- **Status:** partial. `EngineScratch` now owns reused buffers for pure reorder
+  child-index/LIS work, debug render-cache `seen`/expected-child checks,
+  descriptor-collection binder stacks, and inline `Ui.each` key arrays. Native
+  and wasm teardown release the retained scratch storage. The native host now
+  exposes separate `host_allocs_this_event`, `host_deallocs_this_event`,
+  `host_alloc_bytes_this_event`, `host_dealloc_bytes_this_event`,
+  `host_retained_alloc_delta`, and `host_retained_bytes_delta` metrics for total
+  native host-managed allocator traffic, while the existing `allocs_this_event`
+  and `deallocs_this_event` metrics remain the Roc ABI request counters inside
+  that total. Runtime telemetry is behind the comptime `metrics` build option so
+  non-metrics host builds take the direct allocator path and skip counter bumps.
 - **Hypothesis:** threading one arena (reset `.retain_capacity` per dispatch/
   render cycle) plus a few persistent reused scratch buffers on the Engine
   (`seen: []bool`, the dirty/changed/structural worklists) eliminates the bulk of
@@ -386,9 +412,11 @@ Current priority after the Phase 4 review:
 - **Constraint:** the arena is for engine-internal bookkeeping only. Boxed Roc
   values outlive the cycle and must stay on the GPA with their refcounts and the
   `roc_alloc` ledger — they must not be moved onto the arena.
-- **How we'll know:** the long-session `allocs − deallocs` gauge (see the leak
-  experiment) flattens earlier, and per-event allocation deltas for the named
-  buffers drop to zero after warmup; specs stay green.
+- **How we'll know:** the long-session `host_retained_alloc_delta` /
+  `host_retained_bytes_delta` gauges flatten earlier, and per-event
+  `host_allocs_this_event` / `host_alloc_bytes_this_event` deltas for the named
+  buffers drop to zero after warmup; specs stay green. Roc heap churn continues
+  to be categorized separately by `allocs_this_event` / `deallocs_this_event`.
 
 ### O(1) identity/descriptor lookup (kill linear-scan-by-id)
 

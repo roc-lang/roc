@@ -566,6 +566,7 @@ fn clearActiveRuntime() void {
     shared_engine.dom_identities = .empty;
 
     shared_engine.deinitRenderCache(ctx);
+    shared_engine.deinitScratch(ctx);
 
     if (shared_engine.host_values.hasLiveValues()) failHost();
     shared_engine.host_values.deinit(a);

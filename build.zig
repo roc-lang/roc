@@ -1921,6 +1921,7 @@ fn buildAndCopySignalsWasmHostObject(
     b: *std.Build,
     target: ResolvedTarget,
     optimize: OptimizeMode,
+    roc_modules: modules.RocModules,
     strip: bool,
     omit_frame_pointer: ?bool,
 ) *Step {
@@ -1936,6 +1937,7 @@ fn buildAndCopySignalsWasmHostObject(
         }),
     });
     configureBackend(obj, target);
+    obj.root_module.addImport("build_options", roc_modules.build_options);
     obj.link_function_sections = true;
     obj.link_data_sections = true;
 
@@ -2255,6 +2257,7 @@ fn setupTestPlatforms(
             b,
             wasm_target,
             optimize,
+            roc_modules,
             strip,
             omit_frame_pointer,
         );
@@ -2422,6 +2425,7 @@ pub fn build(b: *std.Build) void {
     const flag_tracy_callstack = b.option(bool, "tracy-callstack", "Include callstack information with Tracy data. Does nothing if -Dtracy is not provided") orelse false;
     const flag_tracy_allocation = b.option(bool, "tracy-allocation", "Include allocation information with Tracy data. Does nothing if -Dtracy is not provided") orelse (flag_enable_tracy != null);
     const flag_tracy_callstack_depth: u32 = b.option(u32, "tracy-callstack-depth", "Declare callstack depth for Tracy data. Does nothing if -Dtracy_callstack is not provided") orelse 10;
+    const metrics = b.option(bool, "metrics", "Enable runtime telemetry counters") orelse true;
     if (flag_tracy_callstack) {
         std.log.warn("Tracy callstack is enable. This can significantly skew timings, but is important for understanding source location. Be cautious when generating timing and analyzing results.", .{});
     }
@@ -2434,6 +2438,7 @@ pub fn build(b: *std.Build) void {
     build_options.addOption(bool, "trace_modules", trace_modules);
     build_options.addOption(bool, "trace_build", trace_build);
     build_options.addOption(bool, "debug_gpa", debug_gpa);
+    build_options.addOption(bool, "metrics", metrics);
     build_options.addOption(bool, "has_shared_memory_size", shared_memory_size != null);
     build_options.addOption(u64, "shared_memory_size", shared_memory_size orelse 0);
     build_options.addOption(bool, "print_trmc", print_trmc);
@@ -4143,6 +4148,7 @@ pub fn build(b: *std.Build) void {
         .filters = test_filters,
     });
     signals_host_test.root_module.addImport("base", roc_modules.base);
+    signals_host_test.root_module.addImport("build_options", roc_modules.build_options);
     roc_modules.addModuleDependencies(signals_host_test, .base);
     const run_signals_host_test = b.addRunArtifact(signals_host_test);
     if (run_args.len != 0) {
