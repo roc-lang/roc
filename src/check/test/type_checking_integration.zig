@@ -6164,7 +6164,7 @@ test "check type - annotation with open ext without wildcard is non-exhaustive" 
         \\  }
         \\}
     ;
-    try checkTypesModule(source, .fail, "Non-exhaustive Match");
+    try checkTypesModule(source, .fail, "Non Exhaustive Match");
 }
 
 test "check type - exhaustive match with nested payload is inferred as closed" {

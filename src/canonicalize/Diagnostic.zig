@@ -1521,7 +1521,7 @@ pub const Diagnostic = union(enum) {
         source: []const u8,
         line_starts: []const u32,
     ) Allocator.Error!Report {
-        var report = try Report.init(allocator, "File Not UTF-8", "", .runtime_error);
+        var report = try Report.init(allocator, "File Not UTF8", "", .runtime_error);
 
         const owned_path = try report.addOwnedString(path);
         try report.headline.addReflowingText("The file ");

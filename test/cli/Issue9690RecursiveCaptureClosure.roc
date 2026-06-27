@@ -1,8 +1,8 @@
 # repro for https://github.com/roc-lang/roc/issues/9690
 # A nested, self-recursive closure that captures a value ("radicand") from its
 # enclosing function must compile and run through the LLVM (size/speed) backend.
-# sqrt(625) == 25; the crash guard makes a wrong result observable even though
-# `dbg` output is elided in optimized builds.
+# sqrt(625) == 25; the crash guard makes a wrong result observable without
+# relying on optimized-build `dbg` output.
 square_root : U64 -> U64
 square_root = |radicand| {
 	binary_search = |min, max| {

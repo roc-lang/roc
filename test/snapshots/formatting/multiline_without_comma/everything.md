@@ -210,7 +210,7 @@ UNUSED VARIABLE - everything.md:71:2:71:4
 UNUSED VARIABLE - everything.md:75:2:75:4
 UNUSED VARIABLE - everything.md:79:2:79:4
 DECLARATION HAS NO VALUE - everything.md:56:1:56:17
-NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
+NON EXHAUSTIVE MATCH - everything.md:84:2:107:3
 # PROBLEMS
 
 ┌────────────────────┐
@@ -1334,7 +1334,7 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
 
 
 ┌──────────────────────┐
-│ NON-EXHAUSTIVE MATCH ├─ This match expression doesn't cover all possible ───┐
+│ NON EXHAUSTIVE MATCH ├─ This match expression doesn't cover all possible ───┐
 └┬─────────────────────┘  cases.                                              │
  │                                                                            │
  │  match x {                                                                 │

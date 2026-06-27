@@ -104,19 +104,19 @@ pub const Output = struct {
     }
 };
 
-/// Options used by solved-to-LIR lowering.
-pub const DebugEffectMode = enum {
+/// Whether inline expects should materialize during lowering.
+pub const InlineExpectMode = enum {
     run,
-    erase,
+    omit,
 };
 
 /// Configuration for direct solved-to-LIR lowering.
 pub const Options = struct {
     inline_plan: SolvedInline.Plan = .{},
-    /// Whether inline `dbg` and `expect` are lowered into runtime statements.
-    /// Compile-time finalization and tests leave this enabled; optimized
-    /// runtime builds erase these effects before LIR reaches any backend.
-    debug_effects: DebugEffectMode = .run,
+    /// Whether inline `expect` is lowered into runtime statements. Compile-time
+    /// finalization and tests leave this enabled; optimized runtime builds omit
+    /// inline expects before LIR reaches any backend.
+    inline_expects: InlineExpectMode = .run,
     /// Allow `List.map` to reuse a unique input list's allocation for its
     /// output when the input and output element layouts are interchangeable.
     /// When disabled, `list_map_can_reuse` lowers to a constant 0 and the
@@ -264,7 +264,7 @@ const Lowerer = struct {
     fn_reachable: std.ArrayList(bool),
     fn_reach_queue: std.ArrayList(Type.FnId),
     inline_plan: SolvedInline.Plan,
-    debug_effects: DebugEffectMode,
+    inline_expects: InlineExpectMode,
     list_in_place_map: bool,
     proc_debug_names: bool,
     /// Match sites statically resolved by `foldListMapCanReuseMatch`,
@@ -326,7 +326,7 @@ const Lowerer = struct {
             .fn_reachable = .empty,
             .fn_reach_queue = .empty,
             .inline_plan = options.inline_plan,
-            .debug_effects = options.debug_effects,
+            .inline_expects = options.inline_expects,
             .list_in_place_map = options.list_in_place_map,
             .proc_debug_names = options.proc_debug_names,
             .folded_map_matches = .empty,
@@ -1377,9 +1377,9 @@ const Lowerer = struct {
         errdefer if (clone_owned) solved_clone.deinit();
 
         var materialized = try LambdaMonoLower.run(self.allocator, solved_clone, self.folded_map_matches.items, .{
-            .debug_effects = switch (self.debug_effects) {
+            .inline_expects = switch (self.inline_expects) {
                 .run => .run,
-                .erase => .erase,
+                .omit => .omit,
             },
         });
         clone_owned = false;
@@ -1590,7 +1590,6 @@ const Lowerer = struct {
                 .site = try self.lowerComptimeSite(site),
             } }),
             .dbg => |child| blk: {
-                if (self.debug_effects == .erase) break :blk try self.assignZst(target, next);
                 const after_dbg = try self.assignZst(target, next);
                 const message = try self.addTemp(try self.lowerExprTy(child));
                 const debug_stmt = try self.result.store.addCFStmt(.{ .debug = .{ .message = message, .next = after_dbg } });
@@ -1604,7 +1603,7 @@ const Lowerer = struct {
                 } });
                 break :blk try self.lowerExprInto(message, expect_err.msg, expect_err_stmt);
             },
-            .expect => |child| if (self.debug_effects == .erase)
+            .expect => |child| if (self.inline_expects == .omit)
                 try self.assignZst(target, next)
             else
                 try self.lowerExpectExprInto(target, child, next),
@@ -3163,9 +3162,8 @@ const Lowerer = struct {
                 const temp = try self.addTemp(try self.lowerExprTy(expr_id));
                 break :blk try self.lowerExprInto(temp, expr_id, next);
             },
-            .expect => |expr_id| if (self.debug_effects == .erase) next else try self.lowerExpectStmt(expr_id, next),
+            .expect => |expr_id| if (self.inline_expects == .omit) next else try self.lowerExpectStmt(expr_id, next),
             .dbg => |expr_id| blk: {
-                if (self.debug_effects == .erase) break :blk next;
                 const temp = try self.addTemp(try self.lowerExprTy(expr_id));
                 const debug_stmt = try self.result.store.addCFStmt(.{ .debug = .{ .message = temp, .next = next } });
                 break :blk try self.lowerExprInto(temp, expr_id, debug_stmt);

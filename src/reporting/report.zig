@@ -41,38 +41,165 @@ fn titleContainsIgnoreCase(title: []const u8, needle: []const u8) bool {
     return false;
 }
 
-/// In debug builds, enforce the house style for error-report titles. These are
-/// compiled out of release builds.
+/// In debug builds, enforce the house style for error-report title/description
+/// text. These are compiled out of release builds.
 ///
 /// A title must be:
 ///   - all ASCII;
-///   - title case: every word begins with a capital letter (or a non-letter,
-///     e.g. a digit), and the title has at least one lowercase letter (so it
-///     reads as `Title Case`, not `ALL CAPS` — the box/HTML/LSP renderers shout
-///     it back to ALL CAPS, while markdown keeps the authored case);
+///   - trimmed, with no newlines or consecutive spaces;
+///   - title case outside backticks: every non-minor word begins with a capital
+///     letter (or a digit), every word contains only alphanumeric characters,
+///     and the title has at least one lowercase letter (so it reads as
+///     `Title Case`, not `ALL CAPS` — the box/HTML/LSP renderers shout it back
+///     to ALL CAPS, while markdown keeps the authored case);
+///   - allowed to contain backticked inline code spans, whose contents must be
+///     non-empty and trimmed, but are not title-cased;
 ///   - free of the word "comptime", which is a Zig term, not a Roc one, and so
 ///     must never reach user-facing text;
 ///   - free of any pairing of "annotation" with "need" or "miss" — Roc never
 ///     tells users they must annotate their types (see the panic below).
-fn assertValidTitle(title: []const u8) void {
-    if (builtin.mode != .Debug) return;
+fn isTrimmed(text: []const u8) bool {
+    return std.mem.eql(u8, text, std.mem.trim(u8, text, " \t\r\n"));
+}
 
-    var has_lower = false;
-    var at_word_start = true;
-    for (title) |c| {
-        std.debug.assert(c < 0x80); // titles are ASCII
-        if (c == ' ') {
-            at_word_start = true;
+fn isAsciiLower(c: u8) bool {
+    return c >= 'a' and c <= 'z';
+}
+
+fn isAsciiUpper(c: u8) bool {
+    return c >= 'A' and c <= 'Z';
+}
+
+fn isAsciiDigit(c: u8) bool {
+    return c >= '0' and c <= '9';
+}
+
+fn isAsciiAlphaNum(c: u8) bool {
+    return isAsciiLower(c) or isAsciiUpper(c) or isAsciiDigit(c);
+}
+
+fn containsNewline(text: []const u8) bool {
+    return std.mem.indexOfScalar(u8, text, '\n') != null or
+        std.mem.indexOfScalar(u8, text, '\r') != null;
+}
+
+fn isLowercaseTitleParticle(word: []const u8) bool {
+    const particles = [_][]const u8{
+        "a",   "an",   "and",    "as",      "at",      "but", "by",
+        "for", "from", "in",     "into",    "nor",     "of",  "on",
+        "or",  "over", "per",    "the",     "through", "to",  "via",
+        "vs",  "with", "within", "without",
+    };
+    for (particles) |particle| {
+        if (std.mem.eql(u8, word, particle)) return true;
+    }
+    return false;
+}
+
+fn isValidTitleWord(word: []const u8, is_first: bool, is_last: bool, has_lower: *bool) bool {
+    if (word.len == 0) return false;
+
+    for (word) |c| {
+        if (!isAsciiAlphaNum(c)) return false;
+        if (isAsciiLower(c)) has_lower.* = true;
+    }
+
+    if (isAsciiLower(word[0])) {
+        return !is_first and !is_last and isLowercaseTitleParticle(word);
+    }
+
+    return true;
+}
+
+fn countTitleTokens(title: []const u8) ?usize {
+    var count: usize = 0;
+    var i: usize = 0;
+    while (i < title.len) {
+        if (title[i] == ' ') {
+            i += 1;
             continue;
         }
-        if (at_word_start) {
-            // A word may not begin with a lowercase letter.
-            std.debug.assert(!(c >= 'a' and c <= 'z'));
+
+        if (title[i] == '`') {
+            const start = i + 1;
+            i = start;
+            while (i < title.len and title[i] != '`') : (i += 1) {}
+            if (i == title.len) return null;
+
+            const code = title[start..i];
+            if (code.len == 0 or !isTrimmed(code)) return null;
+
+            count += 1;
+            i += 1;
+        } else {
+            const start = i;
+            while (i < title.len and title[i] != ' ' and title[i] != '`') : (i += 1) {
+                if (!isAsciiAlphaNum(title[i])) return null;
+            }
+            if (start == i) return null;
+
+            count += 1;
         }
-        at_word_start = false;
-        if (c >= 'a' and c <= 'z') has_lower = true;
+
+        if (i < title.len and title[i] != ' ') return null;
     }
-    std.debug.assert(has_lower);
+
+    return count;
+}
+
+fn validateTitleTokens(title: []const u8, token_count: usize) bool {
+    var token_index: usize = 0;
+    var has_lower = false;
+    var i: usize = 0;
+    while (i < title.len) {
+        if (title[i] == ' ') {
+            i += 1;
+            continue;
+        }
+
+        if (title[i] == '`') {
+            i += 1;
+            while (i < title.len and title[i] != '`') : (i += 1) {}
+            if (i == title.len) return false;
+            i += 1;
+            token_index += 1;
+            continue;
+        }
+
+        const start = i;
+        while (i < title.len and title[i] != ' ' and title[i] != '`') : (i += 1) {}
+        if (!isValidTitleWord(title[start..i], token_index == 0, token_index + 1 == token_count, &has_lower)) {
+            return false;
+        }
+        token_index += 1;
+    }
+
+    return token_index == token_count and has_lower;
+}
+
+fn isValidReportTitle(title: []const u8) bool {
+    if (title.len == 0 or !isTrimmed(title) or containsNewline(title)) return false;
+    if (std.mem.indexOf(u8, title, "  ") != null) return false;
+
+    for (title) |c| {
+        if (c >= 0x80) return false;
+    }
+
+    const token_count = countTitleTokens(title) orelse return false;
+    if (token_count == 0) return false;
+
+    return validateTitleTokens(title, token_count);
+}
+
+fn isValidReportDescription(description: []const u8) bool {
+    return isTrimmed(description);
+}
+
+fn assertValidTitleAndDescription(title: []const u8, description: []const u8) void {
+    if (builtin.mode != .Debug) return;
+
+    std.debug.assert(isValidReportTitle(title));
+    std.debug.assert(isValidReportDescription(description));
     std.debug.assert(!titleContainsIgnoreCase(title, "comptime"));
 
     if (titleContainsIgnoreCase(title, "annotation") and
@@ -106,7 +233,7 @@ pub const Report = struct {
     owned_strings: std.array_list.Managed([]const u8),
 
     pub fn init(allocator: Allocator, title: []const u8, headline: []const u8, severity: Severity) Allocator.Error!Report {
-        assertValidTitle(title);
+        assertValidTitleAndDescription(title, headline);
         var report = Report{
             .title = title,
             .headline = Document.init(allocator),
@@ -332,6 +459,33 @@ pub const Report = struct {
 
 // Tests
 const testing = std.testing;
+
+test "Report title validation allows backticked code" {
+    try testing.expect(isValidReportTitle("`dbg` in Optimized Build"));
+    try testing.expect(isValidReportTitle("Type `main!` Should Take 1 Argument"));
+    try testing.expect(isValidReportTitle("Try Operator Outside Function"));
+}
+
+test "Report title validation rejects malformed titles" {
+    try testing.expect(!isValidReportTitle(" Debug Error"));
+    try testing.expect(!isValidReportTitle("Debug Error "));
+    try testing.expect(!isValidReportTitle("Debug\nError"));
+    try testing.expect(!isValidReportTitle("Debug  Error"));
+    try testing.expect(!isValidReportTitle("Debug-Error"));
+    try testing.expect(!isValidReportTitle("debug Error"));
+    try testing.expect(!isValidReportTitle("Debug in"));
+    try testing.expect(!isValidReportTitle("Debug ` dbg` Error"));
+    try testing.expect(!isValidReportTitle("Debug `dbg ` Error"));
+    try testing.expect(!isValidReportTitle("Debug `` Error"));
+    try testing.expect(!isValidReportTitle("Debug `dbg Error"));
+}
+
+test "Report description validation checks trimming" {
+    try testing.expect(isValidReportDescription(""));
+    try testing.expect(isValidReportDescription("Something went wrong."));
+    try testing.expect(!isValidReportDescription(" Something went wrong."));
+    try testing.expect(!isValidReportDescription("Something went wrong. "));
+}
 
 test "Report basic functionality" {
     var report = try Report.init(testing.allocator, "Test Error", "Something went wrong in the test.", .runtime_error);
