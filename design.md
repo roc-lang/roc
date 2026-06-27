@@ -1474,32 +1474,82 @@ conditions, scrutinees, guards, branch-local `dbg`, `expect`, `crash`, stream
 effects, and appended item expressions remain at their source evaluation
 positions; optimization never replays a declaration body later at a consumer.
 
-When a loop starts with useful known values, the loop parameter may be
-split into private leaves. For `Iter` and `Stream`, that means the public
-wrapper can disappear from the hot loop. The loop carries private fields such
-as list pointer, index, length, phase, selected callable target, and captured
-values. The selected callable target is not always one fixed function for the
-whole loop. Real iterator state machines change targets as they advance: an
-append iterator can step through an append wrapper, then through the source
-iterator, then through the empty iterator; a concat iterator can move from the
-first iterator to the second. Loop-state specialization must therefore preserve
-finite callable alternatives, not widen to an opaque callable merely because a
+When a loop starts with useful known values, optimized post-check lowering may
+replace one ordinary loop with an explicit private loop-state graph. This graph
+is compiler IR, not a public iterator model and not a recursive-worker
+encoding:
+
+```text
+state_loop {
+    entry_state: StateId
+    states: []State
+}
+
+State {
+    params: []PrivateLeaf
+    body: Expr
+}
+
+state_continue(target_state: StateId, values: []Expr)
+```
+
+The state graph is built from known-value facts that already exist while the
+function body is cloned. A state key contains only explicit optimizer facts
+that are valid at that program point: finite tags, finite callable targets,
+record/tuple/nominal fields, capture facts, and ordinary expression leaves.
+Numeric, string, list, pointer, and other primitive leaves are carried as
+parameters; the optimizer must not create a distinct state for each runtime
+leaf value. This keeps state creation bounded by reachable control/callable
+structure instead of by arbitrary data values.
+
+For `Iter` and `Stream`, the public wrapper can then disappear from the hot
+loop. The state graph carries private fields such as list pointer, index,
+length, phase, selected callable target, and captured values. The selected
+callable target is not always one fixed function for the whole loop. Real
+iterator state machines change targets as they advance: an append iterator can
+step through an append wrapper, then through the source iterator, then through
+the empty iterator; a concat iterator can move from the first iterator to the
+second. Loop-state specialization must therefore preserve finite callable
+alternatives as loop states, not widen to an opaque callable merely because a
 reachable `continue` value has a different target or capture count.
 
-A step call through a known callable field can be inlined when it has a single
-target. When multiple known targets remain, optimized lowering uses the same
-finite lambda-set dispatch machinery used for ordinary Roc function values,
-and each branch continues with the target's captures as private state. This is
-the Roc equivalent of Rust's adapter enum/state-machine lowering. Matches on
-known step tags simplify through the same ordinary known-tag machinery used for
-all tag unions.
+The state graph is edge-specialized. When a branch, match arm, known tag, or
+known callable call reaches a `continue`, the optimizer records the exact
+target state implied by that edge. A loop parameter whose fact changes among a
+finite set of known tags or callable targets becomes a finite collection of
+states. A loop-carried ordinary leaf stays an ordinary state parameter. This
+is the loop-native version of worker-wrapper and constructor specialization:
+it keeps loop control as loop control, preserves source mutations outside the
+loop through explicit loop-carried parameters, and avoids encoding each loop
+state as an extra Roc function ABI.
 
-This known-value specialization work runs only in optimized post-check
-lowering. `roc check`, compile-time finalization, interpreter builds, and dev
-builds still run all language-required compile-time evaluation and diagnostics,
-but they do not need the extra private cursor-state specialization. `--opt=size`
-and `--opt=speed` enable wrapper inlining and the known-value specialization
-pipeline.
+A step call through a known callable field can be inlined when it has a single
+target. When multiple known targets remain, optimized lowering dispatches over
+the finite state/callable alternatives before the public callable is
+materialized, and each edge continues with that target's captures as private
+state. This is the Roc equivalent of Rust's adapter enum/state-machine
+lowering. Matches on known step tags simplify through the same ordinary
+known-tag machinery used for all tag unions.
+
+The private state graph is lowered to existing LIR control flow before ARC and
+backend code generation. Each state becomes an ordinary LIR join or equivalent
+loop block, and each `state_continue` becomes a direct jump to the selected
+state with explicit values. LIR and backends consume only ordinary values,
+control flow, calls, committed layouts, and explicit ARC statements. They do
+not know iterator rules, stream rules, public step-callable layouts, or
+reference-count policy for iterator wrappers.
+
+This known-value and loop-state specialization work runs only in optimized
+post-check lowering. The pipeline must carry an explicit optimization-mode
+input derived from the requested build mode: off for `roc check`, compile-time
+finalization, interpreter builds, and dev builds; on for `--opt=size` and
+`--opt=speed`. Those unoptimized modes still run all language-required
+compile-time evaluation and diagnostics. They do not run private
+cursor-state specialization. The current CLI shape expresses the boundary by
+enabling post-check wrapper inlining for `--opt=size` and `--opt=speed` and
+using `.none` for dev/interpreter; the state-loop pass must keep that same
+semantic boundary even if the configuration type is later renamed to make the
+optimization mode explicit.
 
 Public iterator values remain immutable and reusable. Source such as:
 
