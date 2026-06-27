@@ -41,6 +41,150 @@ Current command records are optimized for a small closed set of DOM operations.
 Strings cross as `(ptr, len)` UTF-8 slices. JS refreshes typed-array views after
 host calls that may allocate.
 
+## Research Update: Dynamic-Length Protocol Evaluation
+
+The dynamic-length hypothesis is worth pursuing, but not as a wholesale
+replacement of the current command buffer yet. The evidence points toward a
+**hybrid protocol**:
+
+- keep fixed-width records for the current hot render operations;
+- add dynamic-length records for open-ended attrs, events, payload specs, form
+  reconciliation, and structured effect requests;
+- treat reference tables as a later measured optimization, not the first
+  generalization mechanism.
+
+The current wire record is six 32-bit words: `op` plus five operands. It is a
+good fit for `AppendChild`, `RemoveNode`, `MoveBefore`, `SetChecked`, and other
+small closed commands. It becomes awkward when a command naturally carries a
+name plus a value plus options plus a payload descriptor.
+
+Implementation inspection also showed that the closed surface is deeper than the
+browser record. `engine.zig` currently indexes descriptor streams by fixed
+`RenderTextField`, `RenderBoolField`, and `RenderEventKind` values. A wire-only
+change will not unlock arbitrary attrs/events; the descriptor schema and the
+wire protocol need to evolve together.
+
+### Proposed dynamic record shape for a first spike
+
+Use an explicit-length byte record:
+
+```text
+record:
+  op          : u16
+  flags       : u16
+  payload_len : u32
+  payload     : payload_len bytes
+  padding     : zero to next 4-byte boundary
+```
+
+All integer fields are little-endian. Records start 4-byte aligned. JS advances
+with:
+
+```text
+next = offset + 8 + align4(payload_len)
+```
+
+Use opcode-specific typed operands in the first spike, not a tag before every
+operand. Use fixed `u32` integers and `u32` string lengths initially. Do not add
+varints until command-buffer bytes are a measured problem.
+
+Example dynamic operations:
+
+```text
+SetAttrText:
+  elem_id   : u32
+  name_len  : u32
+  name_utf8 : bytes
+  value_len : u32
+  value_utf8: bytes
+
+RemoveAttr:
+  elem_id   : u32
+  name_len  : u32
+  name_utf8 : bytes
+
+BindEvent:
+  elem_id          : u32
+  event_id         : u32
+  event_name_len   : u32
+  event_name_utf8  : bytes
+  listener_options : u32
+  payload_spec_len : u32
+  payload_spec     : bytes
+```
+
+For the first attr/event slice, send strings inline. Interning can be added once
+metrics show repeated names/specs are a real cost. Large payloads, especially
+future HTTP bodies or binary data, should use explicit buffer slices or a
+separate payload buffer instead of one huge inline dynamic record.
+
+Malformed dynamic records must fail clearly. Required checks:
+
+- fewer than 8 bytes remain for a header;
+- `payload_len` extends beyond the dynamic buffer;
+- unsupported nonzero `flags`;
+- unknown opcode;
+- operand decoder reads beyond `payload_len`;
+- invalid UTF-8 once the dynamic decoder uses fatal string decoding.
+
+The runtime must not skip unknown opcodes just because a record length is
+available. Unknown commands mean the wasm artifact and JS runtime disagree.
+
+### Byte estimate
+
+The rough estimate below comes from
+`test/signals/research/wire_protocol_dynamic_size_estimate.mjs`.
+
+Assumptions:
+
+- current fixed records are 24 bytes plus side string bytes;
+- fixed + refs keeps 24-byte records and adds 8 bytes of table metadata per
+  unique string/spec in the scenario;
+- dynamic records use the proposed 8-byte header, 4-byte alignment, `u32` ids,
+  and `u32` string lengths;
+- hybrid keeps current fixed records for hot ops and uses dynamic records only
+  for future open-ended ops.
+
+| Scenario | Current fixed | Fixed + refs | Dynamic | Hybrid |
+| --- | ---: | ---: | ---: | ---: |
+| initial simple mount | 285 | 325 | 204 | 285 |
+| text update | 33 | 41 | 28 | 33 |
+| class update | 50 | 58 | 44 | 50 |
+| keyed row insert | 106 | 122 | 76 | 106 |
+| keyed row move | 24 | 24 | 20 | 24 |
+| future SetAttr aria-label | 40 | 56 | 36 | 36 |
+| future BindEvent key payload | 55 | 71 | 56 | 56 |
+| current StartTask text | 61 | 77 | 60 | 61 |
+| future HTTP request | 76 | 116 | 84 | 84 |
+
+The table does not prove dynamic records are faster or globally better. It does
+show:
+
+- dynamic records are not obviously byte-expensive;
+- fixed + refs can be worse for one-off open-ended data;
+- rich event payloads are dominated by descriptor bytes, so the dynamic benefit
+  is simpler ownership/diagnostics rather than size;
+- structured HTTP likely needs explicit payload slices or a separate effect
+  buffer once bodies grow.
+
+### Browser/runtime cost assessment
+
+Dynamic parsing in JS is more code than a `Uint32Array` stride, but it should be
+acceptable for the open-ended command families:
+
+- fixed hot commands remain allocation-light and fast;
+- dynamic commands can be decoded with `DataView` plus `Uint8Array.subarray`;
+- one host call can still drain in one pass;
+- view refresh after `memory.grow` is unchanged;
+- strings remain borrowed for the drain;
+- event payload specs are sent at bind time and retained by the listener, not
+  resent on every event.
+
+For form-heavy apps, keep `SetValue`, `SetChecked`, and common events fixed
+until reconciliation policy data forces dynamic operands. A form app that emits
+many open-ended attr updates per keystroke should be measured with command-byte
+and drain-time metrics before adding interning.
+
 ## Non-Negotiable Properties
 
 Any generalized protocol must keep these properties:
@@ -84,8 +228,10 @@ General attrs/events require names. Options:
 3. use static enum refs for common names plus dynamic refs for custom names.
 
 Current design already uses `tag_ref` / `accessor_ref` concepts. Generalization
-should probably formalize a string/ref table rather than scattering special
-cases.
+should keep the door open for string/ref tables, but the dynamic-length research
+suggests not making them mandatory in the first slice. Inline dynamic names are
+simpler for one-off attrs/events; interning should be added only after command
+byte metrics show repetition worth optimizing.
 
 ### Versioning
 
@@ -117,11 +263,11 @@ semantics:
 - memory growth/view refresh;
 - effect start/resolve/cancel if included.
 
-## Candidate Direction
+## Candidate Directions
 
-### Keep fixed-width base records, add reference tables
+### Option A: fixed-width base records plus reference tables
 
-A likely near-term shape:
+This remains a viable optimization path:
 
 - command record stays fixed-width for fast draining;
 - operands may refer to side tables for strings, payload specs, event options, and
@@ -148,7 +294,64 @@ SetInputValue { dom_id, value_ref, reconcile_policy_ref }
 ```
 
 This avoids widening every command for rare cases while allowing the app surface
-to grow.
+to grow. It is strongest when names/specs repeat enough to amortize the table
+definitions. It is weakest for one-off open-ended commands, where the table
+becomes extra protocol state just to send data once.
+
+Do not choose this as the first generalization layer unless a real batch shows
+repeated dynamic names/specs dominate command bytes. Reference tables are
+straightforward to add later behind the same dynamic/fixed command vocabulary.
+
+### Option B: dynamic-length command stream
+
+A variable-length stream carries each command's operands directly:
+
+```text
+header: op:u16 flags:u16 payload_len:u32
+payload: opcode-specific typed operands
+```
+
+This is a good fit for:
+
+- arbitrary `SetAttr` / `RemoveAttr`;
+- `BindEvent` with event name, listener options, and payload descriptor bytes;
+- form commands with reconciliation policies or selection data;
+- structured effect start/cancel records.
+
+Use explicit length fields rather than operand tags determining the full command
+length. A length-bearing header gives JS a uniform truncation check and a clear
+byte offset for diagnostics. Operand tags can be used inside payload descriptors,
+but normal render commands should stay opcode-specific so JS does not become a
+generic framework interpreter.
+
+Dynamic records are not a reason for JS to recover meaning. The engine still
+emits explicit commands; JS only executes the opcode's documented DOM/effect
+operation.
+
+### Option C: hybrid fixed hot ops plus dynamic open-ended ops
+
+This is the recommended next direction.
+
+Keep the current fixed-width records for hot closed operations. Add a dynamic
+path only for the command families that are structurally open-ended:
+
+- `SetAttrText`, `RemoveAttr`, `SetBoolAttr`, `RemoveBoolAttr`;
+- `BindEvent` with event name, static listener options, and payload descriptor;
+- future `SetInputValue`, `SetSelection`, `SetValidity`;
+- structured effect records if effects share the same framing.
+
+Two staging shapes are possible:
+
+1. Add one fixed-width `extended` op whose operands point at a dynamic payload
+   slice. This minimizes churn and preserves command ordering in the current
+   buffer, but each dynamic command pays both a fixed record and dynamic bytes.
+2. Add a separate dynamic byte stream and drain fixed and dynamic commands in
+   order through a shared sequencing mechanism. This is cleaner long term but
+   requires more protocol machinery in the first slice.
+
+The first detailed design spike should choose between those staging shapes. It
+should not simultaneously add string interning or generated schemas, because
+that would make the spike harder to evaluate.
 
 ### Separate descriptor protocol from command protocol
 
@@ -202,6 +405,17 @@ Minimum primitives to consider:
 - float;
 - maybe list of strings for file names or selected options.
 
+Payload descriptors should be sent once at bind time and retained by the JS
+listener. Per event, JS executes that explicit descriptor against the browser
+event object and serializes only the requested primitive leaves back to WASM.
+For example, a keyboard payload `{ key, shift_key }` can be represented as a
+record descriptor with `event.key` as text and `event.shiftKey` as bool.
+
+Submit should start with static listener options such as `prevent_default` and
+`stop_propagation` on the binding. Dynamic prevent/stop decisions returned from
+reducers are more expressive, but they couple DOM event policy to reducer
+execution timing and should be a separate design decision.
+
 ## Native vs Browser Parity
 
 `DESIGN.md` asks whether the native spec runner should consume the same command
@@ -218,7 +432,11 @@ Options:
 3. Keep direct native sink but generate both from one command schema.
    - middle ground.
 
-Research should decide this before large protocol expansion.
+Do not force native to consume the dynamic byte stream in the first slice. The
+native host is the observability host, and direct sink calls are still better for
+work-budget assertions. The near-term parity goal should be either generated
+schemas for both runtimes or a native dynamic decoder used as a contract test
+harness, not replacing the native sink immediately.
 
 ## Compatibility and Migration
 
@@ -230,6 +448,17 @@ artifacts may not matter yet. But production eventually needs:
 - stable enough command schema for cached app artifacts;
 - tests that fail when op ids are changed without updating runtime.
 
+Add version checks before the generalized protocol lands:
+
+```text
+roc_ui_protocol_version() -> u32
+roc_ui_protocol_features() -> u32
+```
+
+JS should check these before mount and fail clearly if the wasm artifact and
+runtime disagree. Dynamic record decoders should include byte offsets and op
+names in errors.
+
 ## Performance Questions
 
 - Does a reference-table protocol reduce or increase total bytes for common apps?
@@ -238,6 +467,10 @@ artifacts may not matter yet. But production eventually needs:
 - Does payload descriptor execution in JS matter compared with event handler cost?
 - Are command buffers still drained in one pass without dynamic allocation in JS?
 - How does memory growth during large command batches affect view refresh cost?
+- What is the command-buffer byte split between fixed records, fixed string
+  buffer bytes, dynamic record bytes, and event payload bytes?
+- Does a fixed outer `extended` op add too much overhead compared with a true
+  dynamic stream?
 
 ## Validation Plan
 
@@ -276,26 +509,71 @@ This is the **foundation layer** for the other three prep docs. It should be
 researched first, because the others encode their new capabilities through it:
 
 - `ATTRIBUTE_EVENT_PAYLOAD_BOUNDARY_DESIGN_PREP.md` needs the general
-  `SetAttr`/`RemoveAttr`/`BindEvent` ops and the payload-spec table defined here.
+  `SetAttr`/`RemoveAttr`/`BindEvent` ops and the payload descriptor
+  representation defined here.
 - `CONTROLLED_INPUTS_FORMS_DESIGN_PREP.md` needs reconciliation ops
   (`SetInputValue`, future `SetSelection`) and submit/focus events carried here.
 - `HTTP_EFFECTS_DESIGN_PREP.md` shares the open question of whether effect
   start/cancel commands ride this buffer or a separate effect channel.
 
-Recommended order: land the protocol's reference-table + versioning shape first as
-a thin slice, then build the attribute/event boundary on it, then forms, with
-HTTP/effects proceeding in parallel once the effect-command question is settled.
+Recommended order: land protocol versioning plus a hybrid dynamic attr/event
+slice first, then build the attribute/event boundary on it, then forms. HTTP and
+effects can proceed in parallel once the effect-command question is settled, and
+should reuse the same dynamic framing if they need structured host-to-JS data.
 
 ## Suggested First Milestone
 
-Implement a protocol vertical slice for generalized attributes/events:
+Implement a protocol vertical slice for generalized attributes/events using the
+hybrid direction:
 
 - add protocol version check;
-- add string/name refs for attribute and event names;
-- add `SetAttr` / `RemoveAttr` general ops;
-- add `BindEvent` with event name, options, and primitive payload spec ref;
-- add command-buffer byte/count metrics;
-- add JS contract tests and one app/spec using a real keyboard or submit event.
+- add a dynamic payload path, either a fixed outer `extended` op or a true
+  dynamic byte stream;
+- add `SetAttrText` / `RemoveAttr` general ops with inline names/values;
+- add `BindEvent` with event name, static listener options, and an inline
+  primitive payload descriptor;
+- add command-buffer byte/count metrics for fixed records, fixed string bytes,
+  dynamic bytes, and event payload bytes;
+- add JS contract tests for dynamic attr/event decoding, malformed dynamic
+  records, protocol version mismatch, and memory growth before command drain;
+- add one app/spec using `aria-*` or `data-*` attrs plus a real keyboard or
+  submit event.
 
 Keep existing specialized op-codes for hot fields during the experiment, then use
 measurements to decide whether any should be collapsed into the generalized path.
+
+## Readiness for Detailed Design Spike
+
+There is enough evidence to start a detailed design spike for the hybrid
+attr/event protocol slice.
+
+The spike is ready because the core direction is now constrained:
+
+- JS must remain a thin executor of explicit host commands.
+- The engine keeps event routing and payload kind validation.
+- Fixed hot ops stay unchanged.
+- Dynamic records are reserved for open-ended data.
+- Inline dynamic strings are the first version; interning is deferred until
+  measured.
+- Malformed record handling and version mismatch behavior are required, not
+  follow-up polish.
+
+The spike is **not** ready to decide these broader questions:
+
+- replacing every fixed render command with dynamic records;
+- adding varints;
+- adding per-mount string/spec interning;
+- making native consume the same byte stream as its primary sink;
+- merging DOM render commands and effect commands into one buffer;
+- dynamic prevent-default/stop-propagation returned from reducers.
+
+Detailed design spike deliverables should be:
+
+- exact dynamic record schema and op ids for `SetAttrText`, `RemoveAttr`, and
+  `BindEvent`;
+- exact payload descriptor v1 for unit, text, bool, and small records;
+- staging choice: fixed outer `extended` op vs separate dynamic stream;
+- version/feature check API;
+- malformed-record error contract;
+- files and tests to change;
+- metrics to capture before deciding whether to add refs/interning.

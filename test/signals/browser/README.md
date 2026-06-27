@@ -47,11 +47,12 @@ node --test test/signals/browser/wasm_memory_views.test.mjs
 ## Render Command Buffer
 
 `../src/render_commands.zig` owns the shared render op ids, command-count
-rollup, metrics accumulator, and fixed-width command-buffer record shape. The
-native host consumes the shared counters; the wasm host serializes browser DOM
-patches through the same fixed-width record shape. Browser string payloads are
-stored in the wasm host string buffer and referenced by command records as
-offset/length pairs.
+rollup, metrics accumulator, fixed-width command-buffer record shape, and the
+dynamic-record framing used by the browser wire. The native host consumes the
+shared counters; the wasm host serializes browser DOM patches through fixed
+records for hot operations and `Extended` records that point into a dynamic byte
+buffer for variable-shape attributes. Browser string payloads for fixed records
+are stored in the wasm host string buffer and referenced by offset/length pairs.
 
 `runtime.mjs` is the browser-side command executor. It instantiates a Signals
 wasm app, calls `roc_ui_mount`, applies command-buffer records to the DOM, and
@@ -76,10 +77,11 @@ after a manual interaction.
 surface `runtime.mjs` touches, so the executor can be driven under `node --test`
 without jsdom.
 
-`runtime_contract.test.mjs` keeps the JS-side surface narrow: op-code to DOM-op
-mapping, event payload marshalling, listener cleanup, and command-buffer reads
-after memory growth. It deliberately does not re-assert app semantics or work
-budgets; the native spec runner owns those.
+`runtime_contract.test.mjs` keeps the JS-side surface narrow: protocol
+version/feature checks, op-code to DOM-op mapping, dynamic-record validation,
+event payload marshalling, listener cleanup, telemetry byte accounting, and
+command-buffer reads after memory growth. It deliberately does not re-assert app
+semantics or work budgets; the native spec runner owns those.
 
 Run the guard with:
 
