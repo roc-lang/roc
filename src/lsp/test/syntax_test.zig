@@ -5,6 +5,7 @@ const SyntaxChecker = @import("lsp").syntax.SyntaxChecker;
 const uri_util = @import("lsp").uri;
 const completion_handler = @import("lsp").handlers.completion;
 const CompletionItem = completion_handler.CompletionItem;
+const document_symbol_handler = @import("lsp").handlers.document_symbol;
 const integration_spec = @import("integration_spec.zig");
 const test_env = @import("integration_env.zig");
 
@@ -134,6 +135,7 @@ pub const specs = [_]integration_spec.Spec{
     .{ .name = "syntax checker rebuilds when content changes", .run = syntaxCheckerRebuildsWhenContentChanges },
     .{ .name = "syntax checker reports diagnostics for invalid source", .run = syntaxCheckerReportsDiagnosticsForInvalidSource },
     .{ .name = "getDocumentSymbols returns symbols for valid app file", .run = getDocumentSymbolsReturnsSymbolsForValidAppFile },
+    .{ .name = "getDocumentSymbols returns type declarations for type-only module", .run = getDocumentSymbolsReturnsTypeDeclarationsForTypeOnlyModule },
     .{ .name = "getCompletionsAtPosition returns basic completions", .run = getCompletionsAtPositionReturnsBasicCompletions },
     .{ .name = "record field completion works for modules", .run = recordFieldCompletionWorksForModules },
     .{ .name = "record field completion in sub module", .run = recordFieldCompletionInSubModule },
@@ -298,6 +300,45 @@ pub fn getDocumentSymbolsReturnsSymbolsForValidAppFile() integration_spec.SpecEr
     }
     try std.testing.expect(found_main);
     try std.testing.expect(found_helper);
+}
+
+/// Verifies document symbols include type declarations in modules without values.
+pub fn getDocumentSymbolsReturnsTypeDeclarationsForTypeOnlyModule() integration_spec.SpecError!void {
+    var h = try TestHarness.init();
+    defer h.deinit();
+
+    const contents =
+        \\Color := [Red, Green]
+        \\
+        \\User : { name : Str }
+        \\
+    ;
+
+    try h.writeFile("Color.roc", contents);
+
+    const symbols = try h.checker.getDocumentSymbols(h.allocator, h.uri.?, contents);
+    defer {
+        for (symbols) |*sym| {
+            h.allocator.free(sym.name);
+        }
+        h.allocator.free(symbols);
+    }
+
+    try std.testing.expectEqual(@as(usize, 2), symbols.len);
+    var found_color = false;
+    var found_user = false;
+    for (symbols) |sym| {
+        if (std.mem.eql(u8, sym.name, "Color")) {
+            found_color = true;
+            try std.testing.expectEqual(document_symbol_handler.SymbolKind.@"struct", sym.kind);
+        }
+        if (std.mem.eql(u8, sym.name, "User")) {
+            found_user = true;
+            try std.testing.expectEqual(document_symbol_handler.SymbolKind.class, sym.kind);
+        }
+    }
+    try std.testing.expect(found_color);
+    try std.testing.expect(found_user);
 }
 
 // Completion Tests

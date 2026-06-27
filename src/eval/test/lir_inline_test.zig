@@ -758,7 +758,7 @@ fn procShapeMatchesIterCollect(shape: ProcShape, wanted: IterCollectShape) bool 
         .generic => shape.arg_count == 1 and
             shape.direct_call_count == 4 and
             shape.switch_count == 8 and
-            shape.join_count == 12 and
+            shape.join_count == 11 and
             shape.jump_count == 15 and
             shape.struct_assign_count >= 8,
     };
@@ -854,10 +854,10 @@ fn markReachableLiftedExpr(
         .record => |fields| for (program.fieldExprSpan(fields)) |field| markReachableLiftedExpr(program, field.value, reachable),
         .tag => |tag| for (program.exprSpan(tag.payloads)) |payload| markReachableLiftedExpr(program, payload, reachable),
         .nominal,
-        .return_,
         .dbg,
         .expect,
         => |child| markReachableLiftedExpr(program, child, reachable),
+        .return_ => |ret| markReachableLiftedExpr(program, ret.value, reachable),
         .expect_err => |expect_err| markReachableLiftedExpr(program, expect_err.msg, reachable),
         .comptime_branch_taken => |taken| markReachableLiftedExpr(program, taken.body, reachable),
         .if_initialized_payload => |switch_| {
@@ -936,8 +936,8 @@ fn markReachableLiftedStmt(
         .expr,
         .expect,
         .dbg,
-        .return_,
         => |expr| markReachableLiftedExpr(program, expr, reachable),
+        .return_ => |ret| markReachableLiftedExpr(program, ret.value, reachable),
         .crash => {},
         .uninitialized => {},
     }
