@@ -7528,7 +7528,6 @@ fn demandedKnownValueFromDemand(
             switch (known_value) {
                 .callable => |callable| {
                     const captures = try demandedKnownCapturesFromDemand(arena, callable.captures, callable_demand);
-                    if (captures.len == 0) break :blk null;
                     break :blk DemandedKnownValue{ .callable = .{
                         .ty = callable.ty,
                         .fn_id = callable.fn_id,
@@ -7537,17 +7536,14 @@ fn demandedKnownValueFromDemand(
                 },
                 .finite_callables => |finite_callables| {
                     const alternatives = try arena.alloc(DemandedKnownCallable, finite_callables.alternatives.len);
-                    var has_demanded_capture = false;
                     for (finite_callables.alternatives, alternatives) |alternative, *out| {
                         const captures = try demandedKnownCapturesFromDemand(arena, alternative.captures, callable_demand);
-                        has_demanded_capture = has_demanded_capture or captures.len != 0;
                         out.* = .{
                             .ty = alternative.ty,
                             .fn_id = alternative.fn_id,
                             .captures = captures,
                         };
                     }
-                    if (!has_demanded_capture) break :blk null;
                     break :blk DemandedKnownValue{ .finite_callables = .{
                         .ty = finite_callables.ty,
                         .alternatives = alternatives,
@@ -8447,6 +8443,83 @@ test "demanded known value distinguishes omitted capture from unknown carried ca
     try std.testing.expectEqual(@as(usize, 1), demanded.callable.captures.len);
     try std.testing.expectEqual(@as(u32, 1), demanded.callable.captures[0].index);
     try std.testing.expectEqual(second_ty, demanded.callable.captures[0].known_value.any);
+}
+
+test "demanded known value preserves callable target with no demanded captures" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const callable_ty: Type.TypeId = @enumFromInt(50);
+    const first_ty: Type.TypeId = @enumFromInt(51);
+    const second_ty: Type.TypeId = @enumFromInt(52);
+    const captures = [_]KnownValue{
+        .{ .leaf = first_ty },
+        .{ .any = second_ty },
+    };
+    const fn_id: Ast.FnId = @enumFromInt(3);
+    const known = KnownValue{ .callable = .{
+        .ty = callable_ty,
+        .fn_id = fn_id,
+        .captures = &captures,
+    } };
+    const capture_demands = [_]ValueDemand{
+        .none,
+        .none,
+    };
+
+    const demanded = (try demandedKnownValueFromDemand(arena.allocator(), known, .{
+        .callable = .{ .captures = &capture_demands },
+    })) orelse return error.TestUnexpectedResult;
+
+    try std.testing.expectEqual(callable_ty, demanded.callable.ty);
+    try std.testing.expectEqual(fn_id, demanded.callable.fn_id);
+    try std.testing.expectEqual(@as(usize, 0), demanded.callable.captures.len);
+}
+
+test "demanded known value preserves finite callable alternatives with no demanded captures" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const callable_ty: Type.TypeId = @enumFromInt(60);
+    const capture_ty: Type.TypeId = @enumFromInt(61);
+    const first_fn: Ast.FnId = @enumFromInt(5);
+    const second_fn: Ast.FnId = @enumFromInt(6);
+    const first_captures = [_]KnownValue{
+        .{ .leaf = capture_ty },
+    };
+    const second_captures = [_]KnownValue{
+        .{ .any = capture_ty },
+    };
+    const alternatives = [_]KnownCallable{
+        .{
+            .ty = callable_ty,
+            .fn_id = first_fn,
+            .captures = &first_captures,
+        },
+        .{
+            .ty = callable_ty,
+            .fn_id = second_fn,
+            .captures = &second_captures,
+        },
+    };
+    const known = KnownValue{ .finite_callables = .{
+        .ty = callable_ty,
+        .alternatives = &alternatives,
+    } };
+    const capture_demands = [_]ValueDemand{
+        .none,
+    };
+
+    const demanded = (try demandedKnownValueFromDemand(arena.allocator(), known, .{
+        .callable = .{ .captures = &capture_demands },
+    })) orelse return error.TestUnexpectedResult;
+
+    try std.testing.expectEqual(callable_ty, demanded.finite_callables.ty);
+    try std.testing.expectEqual(@as(usize, 2), demanded.finite_callables.alternatives.len);
+    try std.testing.expectEqual(first_fn, demanded.finite_callables.alternatives[0].fn_id);
+    try std.testing.expectEqual(second_fn, demanded.finite_callables.alternatives[1].fn_id);
+    try std.testing.expectEqual(@as(usize, 0), demanded.finite_callables.alternatives[0].captures.len);
+    try std.testing.expectEqual(@as(usize, 0), demanded.finite_callables.alternatives[1].captures.len);
 }
 
 test "demanded known value omits unused record fields" {
