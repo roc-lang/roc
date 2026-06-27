@@ -2952,7 +2952,7 @@ pub const BuildEnv = struct {
             .s_var => |stmt| try collectDbgRegionsInExpr(allocator, env, regions, stmt.expr),
             .s_reassign => |stmt| try collectDbgRegionsInExpr(allocator, env, regions, stmt.expr),
             .s_expr => |stmt| try collectDbgRegionsInExpr(allocator, env, regions, stmt.expr),
-            .s_expect => |stmt| try collectDbgRegionsInExpr(allocator, env, regions, stmt.body),
+            .s_expect => {},
             .s_dbg => |stmt| {
                 try regions.append(allocator, env.store.getStatementRegion(statement_idx));
                 try collectDbgRegionsInExpr(allocator, env, regions, stmt.expr);
@@ -3084,7 +3084,7 @@ pub const BuildEnv = struct {
                 try collectDbgRegionsInExpr(allocator, env, regions, dbg.expr);
             },
             .e_expect_err => |expect_err| try collectDbgRegionsInExpr(allocator, env, regions, expect_err.expr),
-            .e_expect => |expect_expr| try collectDbgRegionsInExpr(allocator, env, regions, expect_expr.body),
+            .e_expect => {},
             .e_return => |ret| try collectDbgRegionsInExpr(allocator, env, regions, ret.expr),
             .e_for => |for_expr| {
                 try collectDbgRegionsInExpr(allocator, env, regions, for_expr.expr);
