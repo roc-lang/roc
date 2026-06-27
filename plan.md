@@ -791,42 +791,43 @@ It currently fails because the iterator form lowers to substantially more
 reachable LIR than the direct-list form:
 
 ```text
-direct_call_count: iter form has 13, direct-list form has 6
+switch_count: iter form has 29, direct-list form has 4
 ```
 
 The minimized record variant fails for the same reason. The latest
 investigation found these concrete gaps:
 
-- Source `for` lowering calls `.iter` on the iterable. For an `Iter`, this is
-  the identity function `Iter.iter`, but the current direct-call demand logic
-  only demands facts for arguments that the callee immediately destructures.
-  Because `Iter.iter` returns its argument without destructuring it, the demand
-  for known iterator facts does not propagate to the inner
-  `[...].iter().append(...)` expression.
-- Forcing result demand through all direct-call arguments exposes
-  `Iter.append`, but it is not sufficient: the source list/iterator setup is
-  duplicated, and the loop still carries public `Iter` record/step callable
-  churn instead of private cursor leaves. The real fix needs precise
-  result-demand propagation plus sharing/splitting of known callable captures,
-  not an over-broad "demand every argument" rule.
-- Loop refinement currently assumes a callable field has one target and one
-  capture layout. In the append case, a reachable `continue` value changes from
-  the append step wrapper to another known step target such as the empty
-  iterator. The current code widens that field to an ordinary callable, so the
-  loop calls the append step thunk instead of optimizing to a private finite
-  state machine. The fix is to preserve finite callable alternatives through
-  refinement and lower the call through those alternatives.
-- The initial `if` around `collision_points` is already reaching
-  `cloneLoopDistributedIf`; the remaining public iterator churn is introduced
-  after branch loop cloning, when loop refinement sees a `let_`-wrapped rest
-  value and widens the iterator record fact back to `any`.
-- Moving those pending lets outside `continue` as an ad hoc rewrite is not the
-  right fix. A trial rewrite using ordinary `let` expressions broke ARC
-  certification, and a block-scoped version exposed a known-match invariant in
-  the larger iterator-adapter regression. The long-term fix needs explicit
-  known-value control state for loop transitions: pending setup, conditionals,
-  and finite callable alternatives must be represented together before lowering
-  to terminal `continue` expressions.
+- Direct-call/result exposure is now far enough along that the minimized
+  primitive test no longer fails on direct calls. The remaining excess is
+  public iterator control protocol: the `.iter().append(...)` form still
+  lowers to public step-callable and `One`/`Skip`/`Done` tag switches in the
+  hot path.
+- The LIR dump for the primitive failure shows the iterator branch carrying an
+  append step callable as loop state (`tag_union#35`), matching the source
+  iterator's public step result (`tag_union#49`), then matching the outer
+  public iterator step result (`tag_union#43`). The direct-list baseline has
+  only the list cursor loop and the source `use_extra` branch.
+- Preserving already-known tag facts in loop initial state is correct, and
+  loop tag refinement must treat a different tag as a real mismatch. However,
+  that alone does not reduce the switch count: once a reachable `continue`
+  changes from `pending_last = True` to `pending_last = False`, the current
+  common-loop-fact logic still collapses that phase field to an ordinary
+  runtime Bool.
+- `TagReachability` can prune impossible switch arms from path-insensitive tag
+  sets, but it cannot split a loop join by incoming tag/callable state. That
+  means the long-term fix cannot rely on a backend or post-LIR cleanup pass to
+  recover iterator facts after lowering.
+- The missing implementation is explicit finite-state loop specialization.
+  A loop parameter whose fact changes among a finite set of known tags or
+  known callable targets across `continue` edges must remain a finite
+  optimizer state, not widen to `any`. Step calls through those finite states
+  must inline or dispatch through the same known callable machinery while
+  keeping each target's captures as private state.
+- This state must include pending setup and conditional/match branches so that
+  a transition such as append-with-pending-item -> source iterator ->
+  append-with-no-pending-item is represented before the cloner emits terminal
+  `continue` expressions. Moving lets around the terminal `continue`, or
+  recognizing iterator names after the fact, is not a valid fix.
 
 ## Non-Negotiable Invariants
 

@@ -148,6 +148,7 @@ const Lowerer = struct {
     capture_types: CaptureTypeMap,
     captures: std.AutoHashMap(Lifted.LocalId, CaptureBinding),
     symbols: Common.SymbolGen,
+    scratch: std.heap.ArenaAllocator,
     erased_capture_ptr_ty: ?Type.TypeId = null,
     unit_ty: ?Type.TypeId = null,
     debug_effects: DebugEffectMode,
@@ -199,11 +200,13 @@ const Lowerer = struct {
             .capture_types = CaptureTypeMap.initContext(allocator, .{}),
             .captures = std.AutoHashMap(Lifted.LocalId, CaptureBinding).init(allocator),
             .symbols = .{ .next = solved.lifted.next_symbol },
+            .scratch = std.heap.ArenaAllocator.init(allocator),
             .debug_effects = options.debug_effects,
         };
     }
 
     fn deinit(self: *Lowerer) void {
+        self.scratch.deinit();
         self.captures.deinit();
         self.capture_types.deinit();
         self.source_symbols.deinit();
@@ -216,6 +219,10 @@ const Lowerer = struct {
         self.allocator.free(self.pat_map);
         self.allocator.free(self.expr_map);
         self.allocator.free(self.local_map);
+    }
+
+    fn scratchAlloc(self: *Lowerer, comptime T: type, len: usize) Allocator.Error![]T {
+        return try self.scratch.allocator().alloc(T, len);
     }
 
     fn lower(self: *Lowerer) Allocator.Error!void {
@@ -275,6 +282,7 @@ const Lowerer = struct {
         @memset(self.expr_map, null);
         @memset(self.pat_map, null);
         @memset(self.stmt_map, null);
+        defer _ = self.scratch.reset(.retain_capacity);
 
         const solved_fn_ty = spec.solved_fn_ty;
         const func = switch (self.solved.types.rootContent(solved_fn_ty)) {
@@ -695,13 +703,11 @@ const Lowerer = struct {
 
     fn lowerDirectCallArgs(self: *Lowerer, fn_id: Lifted.FnId, args_span: Lifted.Span(Lifted.ExprId)) Allocator.Error!Ast.Span(Ast.ExprId) {
         const args = try self.lowerExprSlice(self.solved.lifted.exprSpan(args_span));
-        defer self.allocator.free(args);
 
         const captures = self.capturesForFn(fn_id);
         if (captures.len != 0) {
             const capture_ty = try self.captureRecordType(captures);
-            const call_args = try self.allocator.alloc(Ast.ExprId, args.len + 1);
-            defer self.allocator.free(call_args);
+            const call_args = try self.scratchAlloc(Ast.ExprId, args.len + 1);
             @memcpy(call_args[0..args.len], args);
             call_args[args.len] = try self.buildCaptureRecord(captures, capture_ty);
             return try self.program.addExprSpan(call_args);
@@ -714,12 +720,10 @@ const Lowerer = struct {
         const callee = try self.lowerExpr(call.callee);
         const callee_ty = self.program.exprs.items[@intFromEnum(callee)].ty;
         const args = try self.lowerExprSlice(self.solved.lifted.exprSpan(call.args));
-        defer self.allocator.free(args);
 
         return switch (self.program.types.get(callee_ty)) {
             .callable => |variants| blk: {
-                const branches = try self.allocator.alloc(Ast.Branch, variants.len);
-                defer self.allocator.free(branches);
+                const branches = try self.scratchAlloc(Ast.Branch, variants.len);
                 for (self.program.types.fnVariantSpan(variants), 0..) |variant, i| {
                     const payload_pat = if (variant.capture_ty) |capture_ty| blk_payload: {
                         const local = try self.program.addLocal(self.symbols.fresh(), capture_ty);
@@ -734,8 +738,7 @@ const Lowerer = struct {
                         } },
                     });
 
-                    const call_args = try self.allocator.alloc(Ast.ExprId, args.len + if (payload_pat != null) @as(usize, 1) else 0);
-                    defer self.allocator.free(call_args);
+                    const call_args = try self.scratchAlloc(Ast.ExprId, args.len + if (payload_pat != null) @as(usize, 1) else 0);
                     @memcpy(call_args[0..args.len], args);
                     if (payload_pat) |pat_id| {
                         const bind_local = switch (self.program.pats.items[@intFromEnum(pat_id)].data) {
@@ -782,8 +785,7 @@ const Lowerer = struct {
         };
         if (captures.len != fields.len) Common.invariant("callable capture payload arity differed from captured locals");
 
-        const values = try self.allocator.alloc(Ast.ExprId, captures.len);
-        defer self.allocator.free(values);
+        const values = try self.scratch.allocator().alloc(Ast.ExprId, captures.len);
         for (captures, fields, 0..) |capture, field, i| {
             if (capture.symbol != field.symbol or capture.binder != field.binder or capture.capture_id != field.capture_id) {
                 Common.invariant("callable capture payload fields differed from captured locals");
@@ -841,8 +843,7 @@ const Lowerer = struct {
 
     fn lowerStrPattern(self: *Lowerer, str: Lifted.StrPattern) Allocator.Error!Ast.StrPattern {
         const input_steps = self.solved.lifted.strPatternStepSpan(str.steps);
-        const steps = try self.allocator.alloc(Ast.StrPatternStep, input_steps.len);
-        defer self.allocator.free(steps);
+        const steps = try self.scratchAlloc(Ast.StrPatternStep, input_steps.len);
 
         for (input_steps, 0..) |step, i| {
             steps[i] = .{
@@ -940,23 +941,19 @@ const Lowerer = struct {
             .box => |elem| .{ .box = try self.lowerType(elem) },
             .tuple => |items| blk: {
                 const lowered = try self.lowerTypeSpan(self.solved.types.span(items));
-                defer self.allocator.free(lowered);
                 break :blk .{ .tuple = try self.program.types.addSpan(lowered) };
             },
             .record => |fields| blk: {
-                const lowered = try self.allocator.alloc(Type.Field, fields.len);
-                defer self.allocator.free(lowered);
+                const lowered = try self.scratchAlloc(Type.Field, fields.len);
                 for (self.solved.types.fieldSpan(fields), 0..) |field, i| {
                     lowered[i] = .{ .name = field.name, .ty = try self.lowerType(field.ty) };
                 }
                 break :blk .{ .record = try self.program.types.addFields(lowered) };
             },
             .tag_union => |tags| blk: {
-                const lowered = try self.allocator.alloc(Type.Tag, tags.len);
-                defer self.allocator.free(lowered);
+                const lowered = try self.scratchAlloc(Type.Tag, tags.len);
                 for (self.solved.types.tagSpan(tags), 0..) |tag, i| {
                     const payloads = try self.lowerTypeSpan(self.solved.types.span(tag.payloads));
-                    defer self.allocator.free(payloads);
                     lowered[i] = .{
                         .name = tag.name,
                         .checked_name = tag.checked_name,
@@ -967,7 +964,6 @@ const Lowerer = struct {
             },
             .named => |named| blk: {
                 const args = try self.lowerTypeSpan(self.solved.types.span(named.args));
-                defer self.allocator.free(args);
                 break :blk .{ .named = .{
                     .named_type = named.named_type,
                     .def = named.def,
@@ -1009,8 +1005,7 @@ const Lowerer = struct {
     fn lowerDeclaredOrder(self: *Lowerer, span: SolvedType.Span) Allocator.Error!Type.Span {
         const source = self.solved.types.declaredFieldSpan(span);
         if (source.len == 0) return Type.Span.empty();
-        const lowered = try self.allocator.alloc(Type.DeclaredField, source.len);
-        defer self.allocator.free(lowered);
+        const lowered = try self.scratchAlloc(Type.DeclaredField, source.len);
         for (source, 0..) |entry, i| {
             lowered[i] = switch (entry) {
                 .named => |name| .{ .named = name },
@@ -1031,8 +1026,7 @@ const Lowerer = struct {
         maybe_solved_fn_ty: ?SolvedType.TypeVarId,
     ) Allocator.Error!Type.Span {
         const solved_members = self.solved.types.memberSpan(members);
-        const variants = try self.allocator.alloc(Type.FnVariant, solved_members.len);
-        defer self.allocator.free(variants);
+        const variants = try self.scratchAlloc(Type.FnVariant, solved_members.len);
         for (solved_members, 0..) |member, i| {
             const captures = self.solved.types.captureSpan(member.captures);
             const source = self.sourceFnForSymbol(member.lambda);
@@ -1057,8 +1051,7 @@ const Lowerer = struct {
         if (self.capture_types.get(id)) |existing| return existing;
 
         const capture_items = self.solved.types.captureSpan(captures);
-        const fields = try self.allocator.alloc(Type.CaptureField, capture_items.len);
-        defer self.allocator.free(fields);
+        const fields = try self.scratchAlloc(Type.CaptureField, capture_items.len);
         for (capture_items, 0..) |capture, i| {
             fields[i] = .{
                 .symbol = capture.symbol,
@@ -1073,8 +1066,7 @@ const Lowerer = struct {
     }
 
     fn lowerTypeSpan(self: *Lowerer, items: []const SolvedType.TypeVarId) Allocator.Error![]Type.TypeId {
-        const lowered = try self.allocator.alloc(Type.TypeId, items.len);
-        errdefer self.allocator.free(lowered);
+        const lowered = try self.scratchAlloc(Type.TypeId, items.len);
         for (items, 0..) |item, i| lowered[i] = try self.lowerType(item);
         return lowered;
     }
@@ -1091,37 +1083,32 @@ const Lowerer = struct {
 
     fn lowerExprSpan(self: *Lowerer, span: Lifted.Span(Lifted.ExprId)) Allocator.Error!Ast.Span(Ast.ExprId) {
         const lowered = try self.lowerExprSlice(self.solved.lifted.exprSpan(span));
-        defer self.allocator.free(lowered);
         return try self.program.addExprSpan(lowered);
     }
 
     fn lowerExprSlice(self: *Lowerer, exprs: []const Lifted.ExprId) Allocator.Error![]Ast.ExprId {
-        const lowered = try self.allocator.alloc(Ast.ExprId, exprs.len);
-        errdefer self.allocator.free(lowered);
+        const lowered = try self.scratchAlloc(Ast.ExprId, exprs.len);
         for (exprs, 0..) |expr, i| lowered[i] = try self.lowerExpr(expr);
         return lowered;
     }
 
     fn lowerPatSpan(self: *Lowerer, span: Lifted.Span(Lifted.PatId)) Allocator.Error!Ast.Span(Ast.PatId) {
         const input_items = self.solved.lifted.patSpan(span);
-        const lowered = try self.allocator.alloc(Ast.PatId, input_items.len);
-        defer self.allocator.free(lowered);
+        const lowered = try self.scratchAlloc(Ast.PatId, input_items.len);
         for (input_items, 0..) |item, i| lowered[i] = try self.lowerPat(item);
         return try self.program.addPatSpan(lowered);
     }
 
     fn lowerStmtSpan(self: *Lowerer, span: Lifted.Span(Lifted.StmtId)) Allocator.Error!Ast.Span(Ast.StmtId) {
         const input_items = self.solved.lifted.stmtSpan(span);
-        const lowered = try self.allocator.alloc(Ast.StmtId, input_items.len);
-        defer self.allocator.free(lowered);
+        const lowered = try self.scratchAlloc(Ast.StmtId, input_items.len);
         for (input_items, 0..) |item, i| lowered[i] = try self.lowerStmt(item);
         return try self.program.addStmtSpan(lowered);
     }
 
     fn lowerTypedLocalSpan(self: *Lowerer, span: Lifted.Span(Lifted.TypedLocal)) Allocator.Error!Ast.Span(Ast.TypedLocal) {
         const input_items = self.solved.lifted.typedLocalSpan(span);
-        const lowered = try self.allocator.alloc(Ast.TypedLocal, input_items.len);
-        defer self.allocator.free(lowered);
+        const lowered = try self.scratchAlloc(Ast.TypedLocal, input_items.len);
         for (input_items, 0..) |item, i| {
             const lifted_local = self.solved.lifted.locals.items[@intFromEnum(item.local)];
             const ty = try self.lowerTypeByLiftedLocal(lifted_local.id);
@@ -1139,8 +1126,7 @@ const Lowerer = struct {
 
     fn lowerFieldExprSpan(self: *Lowerer, span: Lifted.Span(Lifted.FieldExpr)) Allocator.Error!Ast.Span(Ast.FieldExpr) {
         const input_items = self.solved.lifted.fieldExprSpan(span);
-        const lowered = try self.allocator.alloc(Ast.FieldExpr, input_items.len);
-        defer self.allocator.free(lowered);
+        const lowered = try self.scratchAlloc(Ast.FieldExpr, input_items.len);
         for (input_items, 0..) |field, i| {
             lowered[i] = .{
                 .name = field.name,
@@ -1152,8 +1138,7 @@ const Lowerer = struct {
 
     fn lowerRecordDestructSpan(self: *Lowerer, span: Lifted.Span(Lifted.RecordDestruct)) Allocator.Error!Ast.Span(Ast.RecordDestruct) {
         const input_items = self.solved.lifted.recordDestructSpan(span);
-        const lowered = try self.allocator.alloc(Ast.RecordDestruct, input_items.len);
-        defer self.allocator.free(lowered);
+        const lowered = try self.scratchAlloc(Ast.RecordDestruct, input_items.len);
         for (input_items, 0..) |field, i| {
             lowered[i] = .{
                 .name = field.name,
@@ -1165,8 +1150,7 @@ const Lowerer = struct {
 
     fn lowerBranchSpan(self: *Lowerer, span: Lifted.Span(Lifted.Branch)) Allocator.Error!Ast.Span(Ast.Branch) {
         const input_items = self.solved.lifted.branchSpan(span);
-        const lowered = try self.allocator.alloc(Ast.Branch, input_items.len);
-        defer self.allocator.free(lowered);
+        const lowered = try self.scratchAlloc(Ast.Branch, input_items.len);
         for (input_items, 0..) |branch, i| {
             lowered[i] = .{
                 .pat = try self.lowerPat(branch.pat),
@@ -1179,8 +1163,7 @@ const Lowerer = struct {
 
     fn lowerIfBranchSpan(self: *Lowerer, span: Lifted.Span(Lifted.IfBranch)) Allocator.Error!Ast.Span(Ast.IfBranch) {
         const input_items = self.solved.lifted.ifBranchSpan(span);
-        const lowered = try self.allocator.alloc(Ast.IfBranch, input_items.len);
-        defer self.allocator.free(lowered);
+        const lowered = try self.scratchAlloc(Ast.IfBranch, input_items.len);
         for (input_items, 0..) |branch, i| {
             lowered[i] = .{
                 .cond = try self.lowerExpr(branch.cond),

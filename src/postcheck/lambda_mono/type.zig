@@ -217,6 +217,11 @@ pub const Store = struct {
         return self.fn_variants.items[span_.start..][0..span_.len];
     }
 
+    pub fn fnVariantItem(self: *const Store, span_: Span, index: usize) FnVariant {
+        if (index >= span_.len) Common.invariant("Lambda Mono callable variant span index out of bounds");
+        return self.fn_variants.items[@as(usize, span_.start) + index];
+    }
+
     pub fn typeDigest(self: *const Store, name_store: *const names.NameStore, ty: TypeId) names.TypeDigest {
         var hasher = std.crypto.hash.sha2.Sha256.init(.{});
         self.writeTypeDigest(name_store, &hasher, ty);

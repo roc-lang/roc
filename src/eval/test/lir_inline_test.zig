@@ -961,7 +961,23 @@ fn expectReachableProcShapeFieldNoGreater(
     try std.testing.expect(iter_total <= list_total);
 }
 
-fn expectStaticListIterAppendLoopNoBulkierThanDirectList(
+fn expectReachableProcShapeFieldEqual(
+    allocator: Allocator,
+    lowered: *const lir.CheckedPipeline.LoweredProgram,
+    comptime field_name: []const u8,
+    expected: usize,
+) anyerror!void {
+    const actual = try reachableProcShapeFieldTotal(allocator, lowered, field_name);
+    if (actual != expected) {
+        std.debug.print(
+            "{s}: expected {d}, found {d}\n",
+            .{ field_name, expected, actual },
+        );
+    }
+    try std.testing.expectEqual(expected, actual);
+}
+
+fn expectStaticListIterAppendLoopAvoidsListAppendAllocation(
     iter_source: []const u8,
     list_source: []const u8,
 ) anyerror!void {
@@ -971,11 +987,14 @@ fn expectStaticListIterAppendLoopNoBulkierThanDirectList(
     var list_optimized = try lowerModuleWithOptions(allocator, list_source, .wrappers, .{ .tag_reachability = true });
     defer list_optimized.deinit(allocator);
 
-    try expectReachableProcShapeFieldNoGreater(allocator, &iter_optimized.lowered, &list_optimized.lowered, "direct_call_count");
-    try expectReachableProcShapeFieldNoGreater(allocator, &iter_optimized.lowered, &list_optimized.lowered, "switch_count");
-    try expectReachableProcShapeFieldNoGreater(allocator, &iter_optimized.lowered, &list_optimized.lowered, "struct_assign_count");
-    try expectReachableProcShapeFieldNoGreater(allocator, &iter_optimized.lowered, &list_optimized.lowered, "tag_assign_count");
-    try expectReachableProcShapeFieldNoGreater(allocator, &iter_optimized.lowered, &list_optimized.lowered, "join_count");
+    try expectReachableProcShapeFieldEqual(allocator, &iter_optimized.lowered, "erased_call_count", 0);
+    try expectReachableProcShapeFieldEqual(allocator, &iter_optimized.lowered, "packed_erased_fn_count", 0);
+    try expectReachableProcShapeFieldEqual(allocator, &iter_optimized.lowered, "list_with_capacity_count", 0);
+    try expectReachableProcShapeFieldEqual(allocator, &iter_optimized.lowered, "list_reserve_count", 0);
+    try expectReachableProcShapeFieldEqual(allocator, &iter_optimized.lowered, "list_append_unsafe_count", 0);
+    try expectReachableProcShapeFieldNoGreater(allocator, &iter_optimized.lowered, &list_optimized.lowered, "list_with_capacity_count");
+    try expectReachableProcShapeFieldNoGreater(allocator, &iter_optimized.lowered, &list_optimized.lowered, "list_reserve_count");
+    try expectReachableProcShapeFieldNoGreater(allocator, &iter_optimized.lowered, &list_optimized.lowered, "list_append_unsafe_count");
 }
 
 fn reachableProcShape(
@@ -1305,7 +1324,7 @@ test "low level wrapper is inlined when inline mode is enabled" {
     try std.testing.expectEqual(@as(usize, 1), shape.str_count_utf8_bytes_count);
 }
 
-test "user single method is not recognized as builtin single iterator" {
+test "user single wrapper can inline to builtin single iterator" {
     const allocator = std.testing.allocator;
     var lowered_source = try lowerModule(allocator,
         \\module [main]
@@ -1327,7 +1346,9 @@ test "user single method is not recognized as builtin single iterator" {
     defer lowered_source.deinit(allocator);
 
     const shape = try collectProcShape(allocator, &lowered_source.lowered, try rootProc(&lowered_source.lowered));
-    try std.testing.expect(shape.direct_call_count > 0 or shape.tag_assign_count > 0 or shape.store_tag_count > 0);
+    try std.testing.expectEqual(@as(usize, 0), shape.direct_call_count);
+    try std.testing.expectEqual(@as(usize, 0), shape.tag_assign_count);
+    try std.testing.expectEqual(@as(usize, 0), shape.store_tag_count);
 }
 
 test "user iter method is not recognized as builtin list cursor" {
@@ -1533,19 +1554,8 @@ test "destination phase 6: string concat caller uses append variant" {
     const build_proc = try rootDirectCallTarget(allocator, &lowered_source.lowered);
     const build_shape = try collectProcShape(allocator, &lowered_source.lowered, build_proc);
 
-    try std.testing.expectEqual(@as(usize, 1), build_shape.direct_call_count);
-    try std.testing.expectEqual(@as(usize, 0), build_shape.str_concat_count);
-
-    const build_calls = try collectAssignCallProcs(allocator, &lowered_source.lowered, build_proc);
-    defer allocator.free(build_calls);
-
-    try std.testing.expectEqual(@as(usize, 1), build_calls.len);
-
-    const append_shape = try collectProcShape(allocator, &lowered_source.lowered, build_calls[0]);
-
-    try std.testing.expectEqual(@as(usize, 2), append_shape.arg_count);
-    try std.testing.expectEqual(@as(usize, 0), append_shape.direct_call_count);
-    try std.testing.expectEqual(@as(usize, 2), append_shape.str_concat_count);
+    try std.testing.expectEqual(@as(usize, 0), build_shape.direct_call_count);
+    try std.testing.expectEqual(@as(usize, 2), build_shape.str_concat_count);
     try std.testing.expectEqual(@as(usize, 2), try reachableProcShapeFieldTotal(allocator, &lowered_source.lowered, "str_concat_count"));
 }
 
@@ -1623,7 +1633,7 @@ test "mutually recursive direct wrappers are not inlined" {
     , .wrappers);
 }
 
-test "capturing direct wrapper is not inlined" {
+test "capturing direct wrapper is inlined when captures are inline inputs" {
     const allocator = std.testing.allocator;
     var lowered_source = try lowerModule(allocator,
         \\module [main]
@@ -1642,9 +1652,9 @@ test "capturing direct wrapper is not inlined" {
     const root_calls = try collectAssignCallProcs(allocator, &lowered_source.lowered, try rootProc(&lowered_source.lowered));
     defer allocator.free(root_calls);
 
-    try std.testing.expectEqual(@as(usize, 1), root_calls.len);
-    const target_shape = try collectProcShape(allocator, &lowered_source.lowered, root_calls[0]);
-    try std.testing.expectEqual(@as(usize, 2), target_shape.arg_count);
+    try std.testing.expectEqual(@as(usize, 0), root_calls.len);
+    const root_shape = try collectProcShape(allocator, &lowered_source.lowered, try rootProc(&lowered_source.lowered));
+    try std.testing.expectEqual(@as(usize, 0), root_shape.direct_call_count);
 }
 // ─── TRMC pass outcomes through the full pipeline ───
 
@@ -1881,7 +1891,7 @@ test "static list iter append loop eliminates public iter adapters" {
     try std.testing.expect(!try reachableProcDebugName(allocator, &list_optimized.lowered, "Builtin.Iter.append"));
 }
 
-test "static record list iter append loop lowers no bulkier than direct list loop" {
+test "static record list iter append loop avoids direct-list append allocation" {
     const record_iter_source =
         \\module [main]
         \\
@@ -1933,10 +1943,10 @@ test "static record list iter append loop lowers no bulkier than direct list loo
         \\}
     ;
 
-    try expectStaticListIterAppendLoopNoBulkierThanDirectList(record_iter_source, record_list_source);
+    try expectStaticListIterAppendLoopAvoidsListAppendAllocation(record_iter_source, record_list_source);
 }
 
-test "static primitive list iter append loop lowers no bulkier than direct list loop" {
+test "static primitive list iter append loop avoids direct-list append allocation" {
     const primitive_iter_source =
         \\module [main]
         \\
@@ -1980,7 +1990,7 @@ test "static primitive list iter append loop lowers no bulkier than direct list 
         \\}
     ;
 
-    try expectStaticListIterAppendLoopNoBulkierThanDirectList(primitive_iter_source, primitive_list_source);
+    try expectStaticListIterAppendLoopAvoidsListAppendAllocation(primitive_iter_source, primitive_list_source);
 }
 
 test "stream from iterator collect keeps finite step callables" {

@@ -251,6 +251,11 @@ const CaptureBinding = struct {
     ty: Type.TypeId,
 };
 
+const SavedCaptureBinding = struct {
+    local: Lifted.LocalId,
+    previous: ?CaptureBinding,
+};
+
 const Lowerer = struct {
     allocator: std.mem.Allocator,
     solved: *const Solved.Program,
@@ -278,6 +283,7 @@ const Lowerer = struct {
     layout_requests: std.ArrayList(LayoutRequest),
     runtime_schema_requests: std.ArrayList(RuntimeSchemaRequest),
     type_layouts: std.AutoHashMap(Type.TypeId, layout.Idx),
+    local_solved_tys: std.AutoHashMap(LIR.LocalId, SolvedType.TypeVarId),
     const_plan_map: std.AutoHashMap(Type.TypeId, LirProgram.ConstPlanId),
     symbols: Common.SymbolGen,
     local_map: []?LIR.LocalId,
@@ -285,7 +291,9 @@ const Lowerer = struct {
     static_data_map: []?LIR.StaticDataId,
     next_join_point: u32 = 0,
     loop_stack: std.ArrayList(LoopContext),
+    active_inline_calls: std.ArrayList(Type.FnId),
     current_ret_ty: ?Type.TypeId = null,
+    current_ret_solved_ty: ?SolvedType.TypeVarId = null,
     current_proc_locals: ?*ProcLocalSet = null,
     current_fn: ?Type.FnId = null,
     current_proc: ?LIR.LirProcSpecId = null,
@@ -343,22 +351,26 @@ const Lowerer = struct {
             .layout_requests = .empty,
             .runtime_schema_requests = .empty,
             .type_layouts = std.AutoHashMap(Type.TypeId, layout.Idx).init(allocator),
+            .local_solved_tys = std.AutoHashMap(LIR.LocalId, SolvedType.TypeVarId).init(allocator),
             .const_plan_map = std.AutoHashMap(Type.TypeId, LirProgram.ConstPlanId).init(allocator),
             .symbols = .{ .next = solved.lifted.next_symbol },
             .local_map = local_map,
             .comptime_site_map = comptime_site_map,
             .static_data_map = static_data_map,
             .loop_stack = .empty,
+            .active_inline_calls = .empty,
         };
     }
 
     fn deinit(self: *Lowerer) void {
+        self.active_inline_calls.deinit(self.allocator);
         self.folded_map_matches.deinit(self.allocator);
         self.loop_stack.deinit(self.allocator);
         self.allocator.free(self.static_data_map);
         self.allocator.free(self.comptime_site_map);
         self.allocator.free(self.local_map);
         self.const_plan_map.deinit();
+        self.local_solved_tys.deinit();
         self.type_layouts.deinit();
         self.runtime_schema_requests.deinit(self.allocator);
         self.layout_requests.deinit(self.allocator);
@@ -384,11 +396,13 @@ const Lowerer = struct {
             .runtime_schemas = self.runtime_schemas,
         };
         self.folded_map_matches.deinit(self.allocator);
+        self.active_inline_calls.deinit(self.allocator);
         self.loop_stack.deinit(self.allocator);
         self.allocator.free(self.static_data_map);
         self.allocator.free(self.comptime_site_map);
         self.allocator.free(self.local_map);
         self.const_plan_map.deinit();
+        self.local_solved_tys.deinit();
         self.type_layouts.deinit();
         self.runtime_schema_requests.deinit(self.allocator);
         self.layout_requests.deinit(self.allocator);
@@ -410,7 +424,9 @@ const Lowerer = struct {
         self.comptime_site_map = &.{};
         self.static_data_map = &.{};
         self.loop_stack = .empty;
+        self.active_inline_calls = .empty;
         self.folded_map_matches = .empty;
+        self.local_solved_tys = std.AutoHashMap(LIR.LocalId, SolvedType.TypeVarId).init(self.allocator);
         return output;
     }
 
@@ -509,6 +525,7 @@ const Lowerer = struct {
         switch (source_fn.body) {
             .roc => |body_expr| {
                 const saved_ret_ty = self.current_ret_ty;
+                const saved_ret_solved_ty = self.current_ret_solved_ty;
                 const saved_proc_locals = self.current_proc_locals;
                 const saved_current_fn = self.current_fn;
                 const saved_current_proc = self.current_proc;
@@ -517,17 +534,19 @@ const Lowerer = struct {
 
                 self.current_proc_locals = &proc_locals;
                 self.current_ret_ty = entry.ret;
+                self.current_ret_solved_ty = func.ret;
                 self.current_fn = fn_id;
                 self.current_proc = proc_id;
                 defer {
                     self.current_ret_ty = saved_ret_ty;
+                    self.current_ret_solved_ty = saved_ret_solved_ty;
                     self.current_proc_locals = saved_proc_locals;
                     self.current_fn = saved_current_fn;
                     self.current_proc = saved_current_proc;
                 }
 
                 try self.noteLocalSpan(self.result.store.getProcSpec(proc_id).args);
-                const body = try self.lowerExprReturn(body_expr, entry.ret);
+                const body = try self.lowerExprReturn(body_expr, entry.ret, func.ret);
 
                 const frame_locals = try self.writeFrameLocals(&proc_locals);
                 const proc = self.result.store.getProcSpecPtr(proc_id);
@@ -734,6 +753,29 @@ const Lowerer = struct {
                 .symbol = capture.symbol,
                 .ty = field.ty,
             });
+        }
+    }
+
+    fn saveCaptureBindings(self: *Lowerer, captures_id: CaptureSpanId) Common.LowerError![]SavedCaptureBinding {
+        const captures = self.solved.types.captureSpan(.{ .start = captures_id.start, .len = captures_id.len });
+        const saved = try self.allocator.alloc(SavedCaptureBinding, captures.len);
+        for (captures, 0..) |capture, index| {
+            saved[index] = .{
+                .local = capture.local,
+                .previous = self.captures.get(capture.local),
+            };
+        }
+        return saved;
+    }
+
+    fn restoreCaptureBindings(self: *Lowerer, saved: []const SavedCaptureBinding) void {
+        for (saved) |entry| {
+            if (entry.previous) |previous| {
+                const slot = self.captures.getPtr(entry.local) orelse Common.invariant("inline capture binding disappeared before restore");
+                slot.* = previous;
+            } else {
+                _ = self.captures.remove(entry.local);
+            }
         }
     }
 
@@ -1752,8 +1794,13 @@ const Lowerer = struct {
         }
     }
 
-    fn lowerExprReturn(self: *Lowerer, expr_id: Lifted.ExprId, ret_ty: Type.TypeId) Common.LowerError!LIR.CFStmtId {
-        const ret_local = try self.addTemp(ret_ty);
+    fn lowerExprReturn(
+        self: *Lowerer,
+        expr_id: Lifted.ExprId,
+        ret_ty: Type.TypeId,
+        solved_ret_ty: SolvedType.TypeVarId,
+    ) Common.LowerError!LIR.CFStmtId {
+        const ret_local = try self.addTempWithSolvedType(ret_ty, solved_ret_ty);
         const ret_stmt = try self.result.store.addCFStmt(.{ .ret = .{ .value = ret_local } });
         return try self.lowerExprInto(ret_local, expr_id, ret_stmt);
     }
@@ -1825,7 +1872,7 @@ const Lowerer = struct {
             .nominal => |backing| try self.lowerNominalInto(target, expr_ty, backing, next),
             .let_ => |let_| try self.lowerLetInto(target, let_, next),
             .call_proc => |call| try self.lowerDirectProcCallInto(target, Lifted.callProcCallee(call), self.solved.lifted.exprSpan(call.args), call.is_cold, next),
-            .call_value => |call| try self.lowerValueCallInto(target, call.callee, self.solved.lifted.exprSpan(call.args), next),
+            .call_value => |call| try self.lowerValueCallInto(target, expr_id, call.callee, self.solved.lifted.exprSpan(call.args), next),
             .low_level => |call| try self.lowerLowLevelInto(target, call.op, call.args, next),
             .field_access => |field| try self.lowerFieldAccessInto(target, field.receiver, field.field, next),
             .tuple_access => |access| try self.lowerTupleAccessInto(target, access.tuple, access.elem_index, next),
@@ -2469,9 +2516,14 @@ const Lowerer = struct {
         const lowered = try self.lowerExprsToTemps(args);
         defer self.allocator.free(lowered.ids);
 
-        if (capture_arg == null and !is_cold) {
+        if (!is_cold and !self.inlineCallIsActive(callee)) {
             if (try self.inlineBodyForKnownCall(callee)) |body_expr| {
-                var current = try self.lowerInlineKnownCallInto(target, callee, lowered.ids, body_expr, next);
+                try self.active_inline_calls.append(self.allocator, callee);
+                defer {
+                    const popped = self.active_inline_calls.pop() orelse Common.invariant("known-call inline stack underflow");
+                    if (popped != callee) Common.invariant("known-call inline stack was corrupted");
+                }
+                var current = try self.lowerInlineKnownCallInto(target, callee, lowered.ids, capture_arg, body_expr, next);
                 current = try self.prependExprs(lowered, current);
                 return current;
             }
@@ -2505,12 +2557,18 @@ const Lowerer = struct {
         return current;
     }
 
+    fn inlineCallIsActive(self: *const Lowerer, callee: Type.FnId) bool {
+        for (self.active_inline_calls.items) |active| {
+            if (active == callee) return true;
+        }
+        return false;
+    }
+
     fn inlineBodyForKnownCall(self: *Lowerer, callee: Type.FnId) Common.LowerError!?Lifted.ExprId {
         const spec = self.fn_specs.items[@intFromEnum(callee)];
         const body_expr = self.inline_plan.bodyForFn(spec.source) orelse return null;
 
         if (spec.abi != .finite) Common.invariant("inline plan selected a non-finite function spec");
-        if (spec.capture_ty != null) Common.invariant("inline plan selected a capturing function spec");
 
         return body_expr;
     }
@@ -2520,12 +2578,12 @@ const Lowerer = struct {
         target: LIR.LocalId,
         callee: Type.FnId,
         arg_locals: []const LIR.LocalId,
+        capture_arg: ?LIR.LocalId,
         body_expr: Lifted.ExprId,
         next: LIR.CFStmtId,
     ) Common.LowerError!LIR.CFStmtId {
         const spec = self.fn_specs.items[@intFromEnum(callee)];
         if (spec.abi != .finite) Common.invariant("attempted to inline a non-finite function spec");
-        if (spec.capture_ty != null) Common.invariant("attempted to inline a capturing function spec");
 
         const source_fn = self.solved.lifted.fns.items[@intFromEnum(spec.source)];
         const func = switch (self.solved.types.rootContent(spec.solved_fn_ty)) {
@@ -2537,18 +2595,37 @@ const Lowerer = struct {
         if (solved_args.len != lifted_args.len) Common.invariant("direct Lambda Mono function arity changed after Lambda Solved");
         if (arg_locals.len != lifted_args.len) Common.invariant("inline call argument count differed from function arity");
 
-        const saved = try self.allocator.alloc(?LIR.LocalId, lifted_args.len);
-        defer self.allocator.free(saved);
-        for (lifted_args, 0..) |arg, i| {
-            saved[i] = self.local_map[@intFromEnum(arg.local)];
+        const lifted_captures = self.solved.lifted.typedLocalSpan(source_fn.captures);
+        const solved_captures = self.solved.types.captureSpan(.{ .start = spec.captures.start, .len = spec.captures.len });
+        if (solved_captures.len != lifted_captures.len) {
+            Common.invariant("inline call capture count differed between lifted and Lambda Solved");
+        }
+        for (solved_captures, lifted_captures) |solved_capture, lifted_capture| {
+            if (solved_capture.local != lifted_capture.local) {
+                Common.invariant("inline call capture order differed between lifted and Lambda Solved");
+            }
+        }
+
+        var saved_captures: ?[]SavedCaptureBinding = null;
+        defer if (saved_captures) |saved| {
+            self.restoreCaptureBindings(saved);
+            self.allocator.free(saved);
+        };
+        if (spec.capture_ty) |capture_ty| {
+            const capture_local = capture_arg orelse Common.invariant("capturing inline call had no capture argument");
+            saved_captures = try self.saveCaptureBindings(spec.captures);
+            try self.bindCaptureRecord(spec.captures, capture_ty, .{ .record = capture_local });
+        } else if (capture_arg != null) {
+            Common.invariant("non-capturing inline call had a capture argument");
+        }
+
+        const saved_local_map = try self.allocator.dupe(?LIR.LocalId, self.local_map);
+        defer {
+            @memcpy(self.local_map, saved_local_map);
+            self.allocator.free(saved_local_map);
         }
         for (lifted_args, 0..) |arg, i| {
             self.local_map[@intFromEnum(arg.local)] = arg_locals[i];
-        }
-        defer {
-            for (lifted_args, 0..) |arg, i| {
-                self.local_map[@intFromEnum(arg.local)] = saved[i];
-            }
         }
 
         return try self.lowerExprInto(target, body_expr, next);
@@ -2557,16 +2634,59 @@ const Lowerer = struct {
     fn lowerValueCallInto(
         self: *Lowerer,
         target: LIR.LocalId,
+        call_expr: Lifted.ExprId,
         callee_expr: Lifted.ExprId,
         arg_exprs: []const Lifted.ExprId,
         next: LIR.CFStmtId,
     ) Common.LowerError!LIR.CFStmtId {
         const callee_ty = try self.lowerExprTy(callee_expr);
+        const expected_ret_ty = self.solvedTypeForLocal(target) orelse
+            self.solved.types.root(self.solved.expr_tys.items[@intFromEnum(call_expr)]);
+        const call_site_fn_ty = self.callSiteFunctionType(callee_expr, arg_exprs, expected_ret_ty);
         return switch (self.types.get(callee_ty)) {
-            .callable => |variants| try self.lowerCallableValueCallInto(target, callee_expr, variants, arg_exprs, next),
+            .callable => |variants| try self.lowerCallableValueCallInto(target, callee_expr, call_site_fn_ty, variants, arg_exprs, next),
             .erased_fn => try self.lowerErasedValueCallInto(target, callee_expr, arg_exprs, next),
             else => Common.invariant("value call callee had no callable direct Lambda Mono representation"),
         };
+    }
+
+    fn callSiteFunctionType(
+        self: *Lowerer,
+        callee_expr: Lifted.ExprId,
+        arg_exprs: []const Lifted.ExprId,
+        expected_ret_ty: SolvedType.TypeVarId,
+    ) SolvedType.TypeVarId {
+        const expr_ty = self.solved.types.root(self.solved.expr_tys.items[@intFromEnum(callee_expr)]);
+        const callable_ty = switch (self.solved.types.rootContent(expr_ty)) {
+            .func => |func| self.solved.types.root(func.callable),
+            .lambda_set,
+            .erased,
+            => expr_ty,
+            else => Common.invariant("value call callee had no callable Lambda Solved representation"),
+        };
+
+        const ret_ty = self.solved.types.root(expected_ret_ty);
+        for (self.solved.types.vars.items, 0..) |content, index| {
+            const candidate: SolvedType.TypeVarId = @enumFromInt(@as(u32, @intCast(index)));
+            if (self.solved.types.root(candidate) != candidate) continue;
+            const func = switch (content) {
+                .func => |func| func,
+                else => continue,
+            };
+            if (self.solved.types.root(func.callable) != callable_ty) continue;
+            if (self.solved.types.root(func.ret) != ret_ty) continue;
+            const args = self.solved.types.span(func.args);
+            if (args.len != arg_exprs.len) continue;
+            for (args, arg_exprs) |arg_ty, arg_expr| {
+                if (self.solved.types.root(arg_ty) != self.solved.types.root(self.solved.expr_tys.items[@intFromEnum(arg_expr)])) {
+                    break;
+                }
+            } else {
+                return candidate;
+            }
+        }
+        if (self.solved.types.rootContent(expr_ty) == .func) return expr_ty;
+        Common.invariant("value call had no function type matching its explicit call-site return type");
     }
 
     fn lowerErasedValueCallInto(
@@ -2593,21 +2713,21 @@ const Lowerer = struct {
         self: *Lowerer,
         target: LIR.LocalId,
         callee_expr: Lifted.ExprId,
+        call_site_fn_ty: SolvedType.TypeVarId,
         variants_span: Type.Span,
         arg_exprs: []const Lifted.ExprId,
         next: LIR.CFStmtId,
     ) Common.LowerError!LIR.CFStmtId {
         const callee = try self.addTemp(try self.lowerExprTy(callee_expr));
         const done = self.freshJoinPointId();
-        const variants = self.types.fnVariantSpan(variants_span);
         var current = try self.result.store.addCFStmt(.{ .runtime_error = {} });
-        var i = variants.len;
+        var i: usize = variants_span.len;
         while (i > 0) {
             i -= 1;
-            const variant: Type.FnVariant = variants[i];
+            const variant = self.types.fnVariantItem(variants_span, i);
             const variant_index: u16 = @intCast(i);
             const branch_done = try self.joinJump(done);
-            const branch_body = try self.lowerCallableVariantCallInto(target, callee, variant, variant_index, arg_exprs, branch_done);
+            const branch_body = try self.lowerCallableVariantCallInto(target, callee_expr, callee, call_site_fn_ty, variant, variant_index, arg_exprs, branch_done);
             current = try self.discriminantSwitch(callee, variant_index, branch_body, current, false);
         }
         const remainder = try self.lowerExprInto(callee, callee_expr, current);
@@ -2622,15 +2742,18 @@ const Lowerer = struct {
     fn lowerCallableVariantCallInto(
         self: *Lowerer,
         target: LIR.LocalId,
+        callee_expr: Lifted.ExprId,
         callee: LIR.LocalId,
+        call_site_fn_ty: SolvedType.TypeVarId,
         variant: Type.FnVariant,
         variant_index: u16,
         arg_exprs: []const Lifted.ExprId,
         next: LIR.CFStmtId,
     ) Common.LowerError!LIR.CFStmtId {
+        const target_fn = try self.callableVariantTargetForCall(target, callee_expr, call_site_fn_ty, variant);
         if (variant.capture_ty) |_| {
             const payload = try self.addLocalForLayout(self.tagUnionPayloadLayout(self.result.store.getLocal(callee).layout_idx, variant_index));
-            const call = try self.lowerKnownCallInto(target, variant.target, arg_exprs, payload, false, next);
+            const call = try self.lowerKnownCallInto(target, target_fn, arg_exprs, payload, false, next);
             if (self.isZstLocal(payload)) return call;
             return try self.result.store.addCFStmt(.{ .assign_ref = .{
                 .target = payload,
@@ -2642,7 +2765,23 @@ const Lowerer = struct {
                 .next = call,
             } });
         }
-        return try self.lowerKnownCallInto(target, variant.target, arg_exprs, null, false, next);
+        return try self.lowerKnownCallInto(target, target_fn, arg_exprs, null, false, next);
+    }
+
+    fn callableVariantTargetForCall(
+        self: *Lowerer,
+        target: LIR.LocalId,
+        callee_expr: Lifted.ExprId,
+        call_site_fn_ty: SolvedType.TypeVarId,
+        variant: Type.FnVariant,
+    ) Common.LowerError!Type.FnId {
+        const target_layout = self.result.store.getLocal(target).layout_idx;
+        const variant_entry = self.fn_entries.items[@intFromEnum(variant.target)];
+        const variant_ret_layout = try self.layoutOfType(variant_entry.ret);
+        if (self.layoutsAssignable(target_layout, variant_ret_layout)) return variant.target;
+
+        const source = self.sourceFnForSymbol(variant.source);
+        return try self.ensureFnSpec(source, call_site_fn_ty, .finite, self.memberCapturesForExpr(callee_expr, source));
     }
 
     fn lowerLowLevelInto(self: *Lowerer, target: LIR.LocalId, op: can.CIR.Expr.LowLevel, span: Lifted.Span(Lifted.ExprId), next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
@@ -3418,7 +3557,8 @@ const Lowerer = struct {
 
     fn lowerReturn(self: *Lowerer, expr_id: Lifted.ExprId) Common.LowerError!LIR.CFStmtId {
         const ret_ty = self.current_ret_ty orelse Common.invariant("return expression reached LIR lowering outside a function");
-        const ret_local = try self.addTemp(ret_ty);
+        const solved_ret_ty = self.current_ret_solved_ty orelse Common.invariant("return expression reached LIR lowering without a solved return type");
+        const ret_local = try self.addTempWithSolvedType(ret_ty, solved_ret_ty);
         const ret_stmt = try self.result.store.addCFStmt(.{ .ret = .{ .value = ret_local } });
         return try self.lowerExprInto(ret_local, expr_id, ret_stmt);
     }
@@ -4523,6 +4663,20 @@ const Lowerer = struct {
 
     fn addTemp(self: *Lowerer, ty: Type.TypeId) Common.LowerError!LIR.LocalId {
         return try self.addLocalForLayout(try self.layoutOfType(ty));
+    }
+
+    fn addTempWithSolvedType(
+        self: *Lowerer,
+        ty: Type.TypeId,
+        solved_ty: SolvedType.TypeVarId,
+    ) Common.LowerError!LIR.LocalId {
+        const local = try self.addTemp(ty);
+        try self.local_solved_tys.put(local, self.solved.types.root(solved_ty));
+        return local;
+    }
+
+    fn solvedTypeForLocal(self: *Lowerer, local: LIR.LocalId) ?SolvedType.TypeVarId {
+        return self.local_solved_tys.get(local);
     }
 
     fn addLocalForLayout(self: *Lowerer, layout_idx: layout.Idx) Common.LowerError!LIR.LocalId {
