@@ -6,7 +6,7 @@ type=mono
 # SOURCE
 ~~~roc
 func = |offset| {
-	condition = True
+	condition = offset == 1
 	f = if condition |x| x + offset else |x| x * 2
 	f(10)
 }
@@ -16,7 +16,7 @@ result = func(1)
 # MONO
 ~~~roc
 func = |offset| {
-	condition = True
+	condition = offset == 1
 	f = if (condition) |x| x + offset else |x| x * 2
 	f(10)
 }
@@ -35,7 +35,7 @@ NIL
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,OpBar,LowerIdent,OpBar,OpenCurly,
-LowerIdent,OpAssign,UpperIdent,
+LowerIdent,OpAssign,LowerIdent,OpEquals,Int,
 LowerIdent,OpAssign,KwIf,LowerIdent,OpBar,LowerIdent,OpBar,LowerIdent,OpPlus,LowerIdent,KwElse,OpBar,LowerIdent,OpBar,LowerIdent,OpStar,Int,
 LowerIdent,NoSpaceOpenRound,Int,CloseRound,
 CloseCurly,
@@ -56,7 +56,9 @@ EndOfFile,
 					(statements
 						(s-decl
 							(p-ident (raw "condition"))
-							(e-tag (raw "True")))
+							(e-binop (op "==")
+								(e-ident (raw "offset"))
+								(e-int (raw "1"))))
 						(s-decl
 							(p-ident (raw "f"))
 							(e-if-then-else
@@ -93,7 +95,12 @@ EndOfFile,
 			(e-block
 				(s-let
 					(p-assign (ident "condition"))
-					(e-tag (name "True")))
+					(e-method-eq (negated "false")
+						(lhs
+							(e-lookup-local
+								(p-assign (ident "offset"))))
+						(rhs
+							(e-num (value "1")))))
 				(s-let
 					(p-assign (ident "f"))
 					(e-if
@@ -107,7 +114,7 @@ EndOfFile,
 									(e-lambda
 										(args
 											(p-assign (ident "x")))
-										(e-dispatch-call (method "plus") (constraint-fn-var 44)
+										(e-dispatch-call (method "plus") (constraint-fn-var 82)
 											(receiver
 												(e-lookup-local
 													(p-assign (ident "x"))))
@@ -118,19 +125,19 @@ EndOfFile,
 							(e-lambda
 								(args
 									(p-assign (ident "x")))
-								(e-dispatch-call (method "times") (constraint-fn-var 79)
+								(e-dispatch-call (method "times") (constraint-fn-var 117)
 									(receiver
 										(e-lookup-local
 											(p-assign (ident "x"))))
 									(args
 										(e-num (value "2"))))))))
-				(e-call (constraint-fn-var 122)
+				(e-call (constraint-fn-var 160)
 					(e-lookup-local
 						(p-assign (ident "f")))
 					(e-num (value "10"))))))
 	(d-let
 		(p-assign (ident "result"))
-		(e-call (constraint-fn-var 168)
+		(e-call (constraint-fn-var 210)
 			(e-lookup-local
 				(p-assign (ident "func")))
 			(e-num (value "1")))))
@@ -139,9 +146,9 @@ EndOfFile,
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "a -> b where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]), b.plus : b, a -> b, b.times : b, c -> b, c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)])]"))
+		(patt (type "a -> b where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.is_eq : a, a -> Bool, b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]), b.plus : b, a -> b, b.times : b, c -> b, c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)])]"))
 		(patt (type "Dec")))
 	(expressions
-		(expr (type "a -> b where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]), b.plus : b, a -> b, b.times : b, c -> b, c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)])]"))
+		(expr (type "a -> b where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.is_eq : a, a -> Bool, b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]), b.plus : b, a -> b, b.times : b, c -> b, c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)])]"))
 		(expr (type "Dec"))))
 ~~~

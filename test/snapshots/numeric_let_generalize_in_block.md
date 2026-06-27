@@ -15,21 +15,22 @@ type=expr
 # EXPECTED
 TYPE MISMATCH - numeric_let_generalize_in_block.md:4:20:4:21
 # PROBLEMS
-**TYPE MISMATCH**
-The first argument being passed to this function has the wrong type:
-**numeric_let_generalize_in_block.md:4:20:4:21:**
-```roc
-    b = Dec.to_str(n)
-```
-                   ^
 
-This argument has the type:
+┌───────────────┐
+│ TYPE MISMATCH ├─ The first argument being passed to this function has the ──┐
+└┬──────────────┘  wrong type.                                                │
+ │                                                                            │
+ │  b = Dec.to_str(n)                                                         │
+ │                 ‾                                                          │
+ └─────────────────────────────────── numeric_let_generalize_in_block.md:4:20 ┘
 
-    I64
+    This argument has the type:
 
-But the function needs the first argument to be:
+        I64
 
-    Dec
+    But the function needs the first argument to be:
+
+        Dec
 
 # TOKENS
 ~~~zig

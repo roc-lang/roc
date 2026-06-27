@@ -960,7 +960,7 @@ const ComptimeProblemReporting = enum {
 
 fn problemBlocksCheckedArtifact(problem: check.problem.Problem) bool {
     return switch (problem) {
-        .redundant_pattern, .unmatchable_pattern, .comptime_unused_branch, .literal_defaulted => false,
+        .redundant_pattern, .unmatchable_pattern, .comptime_unused_branch, .comptime_condition, .literal_defaulted => false,
         else => true,
     };
 }
@@ -1406,12 +1406,11 @@ fn lowerCheckedRootWithViews(
         shm.base_ptr,
         shm.getUsedSize(),
         &lowered.lir_result,
-        lowered.target_usize,
         &.{},
     );
     shm.updateHeader();
 
-    const view = try LirImage.viewMappedImage(image_header, shm.base_ptr, shm.getUsedSize());
+    const view = try LirImage.viewMappedImage(image_header, shm.base_ptr, shm.getUsedSize(), lowered.target_usize);
     return .{
         .shm = shm,
         .image_header = image_header,

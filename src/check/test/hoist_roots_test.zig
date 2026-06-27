@@ -386,7 +386,7 @@ test "hoist roots selected for single-branch match tuple binders" {
     );
     defer test_env.deinit();
 
-    try test_env.assertNoErrors();
+    try expectOnlyComptimeConditionWarnings(&test_env, 1);
     try std.testing.expectEqual(@as(usize, 2), countPatternExtractionRoots(test_env.checker.selectedHoistedRoots()));
 }
 
@@ -400,7 +400,7 @@ test "hoist roots selected for single-branch match alias binders" {
     );
     defer test_env.deinit();
 
-    try test_env.assertNoErrors();
+    try expectOnlyComptimeConditionWarnings(&test_env, 1);
     try std.testing.expectEqual(@as(usize, 1), countPatternExtractionRoots(test_env.checker.selectedHoistedRoots()));
 }
 
@@ -414,7 +414,7 @@ test "hoist roots selected for single-branch match list rest binders" {
     );
     defer test_env.deinit();
 
-    try test_env.assertNoErrors();
+    try expectOnlyComptimeConditionWarnings(&test_env, 1);
     try std.testing.expectEqual(@as(usize, 1), countPatternExtractionRoots(test_env.checker.selectedHoistedRoots()));
 }
 
@@ -432,7 +432,7 @@ test "hoist roots selected for closed multi-branch match with branch binders" {
     );
     defer test_env.deinit();
 
-    try test_env.assertNoErrors();
+    try expectOnlyComptimeConditionWarnings(&test_env, 1);
     const roots = test_env.checker.selectedHoistedRoots();
     try std.testing.expectEqual(@as(usize, 2), roots.len);
     try std.testing.expectEqual(@as(usize, 1), countMatchExprRoots(&test_env));
@@ -540,6 +540,22 @@ fn expectPatternExtractionRoot(root: hoist_roots.SelectedHoistedRoot) error{ Tes
 
 fn expectExprTag(test_env: *const TestEnv, expr: CIR.Expr.Idx, expected: std.meta.Tag(CIR.Expr)) error{TestExpectedEqual}!void {
     try std.testing.expectEqual(expected, std.meta.activeTag(test_env.checker.cir.store.getExpr(expr)));
+}
+
+fn expectOnlyComptimeConditionWarnings(test_env: *TestEnv, expected_count: usize) error{ OutOfMemory, TestExpectedEqual, TestUnexpectedResult }!void {
+    try std.testing.expect(!test_env.parse_ast.hasErrors());
+
+    const diagnostics = try test_env.module_env.getDiagnostics();
+    defer test_env.gpa.free(diagnostics);
+    try std.testing.expectEqual(@as(usize, 0), diagnostics.len);
+
+    try std.testing.expectEqual(expected_count, test_env.checker.problems.problems.items.len);
+    for (test_env.checker.problems.problems.items) |problem| {
+        switch (problem) {
+            .comptime_condition => {},
+            else => return error.TestUnexpectedResult,
+        }
+    }
 }
 
 fn countPatternExtractionRoots(roots: []const hoist_roots.SelectedHoistedRoot) usize {
@@ -794,7 +810,7 @@ test "hoist match roots with non-concrete contextual binders are pruned" {
     );
     defer test_env.deinit();
 
-    try test_env.assertNoErrors();
+    try expectOnlyComptimeConditionWarnings(&test_env, 1);
     try std.testing.expectEqual(@as(usize, 0), test_env.checker.selectedHoistedRoots().len);
 }
 
@@ -874,7 +890,7 @@ test "hoist roots selected for whole closed conditional expressions" {
     );
     defer test_env.deinit();
 
-    try test_env.assertNoErrors();
+    try expectOnlyComptimeConditionWarnings(&test_env, 1);
     const roots = test_env.checker.selectedHoistedRoots();
     try std.testing.expectEqual(@as(usize, 1), roots.len);
     try std.testing.expectEqual(@as(?CIR.Pattern.Idx, null), roots[0].pattern);

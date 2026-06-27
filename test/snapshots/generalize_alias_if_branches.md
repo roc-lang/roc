@@ -14,17 +14,18 @@ main = (picked(1), picked("a"))
 # EXPECTED
 TYPE MISMATCH - generalize_alias_if_branches.md:5:27:5:30
 # PROBLEMS
-**TYPE MISMATCH**
-This string literal is being used where a non-string type is needed:
-**generalize_alias_if_branches.md:5:27:5:30:**
-```roc
-main = (picked(1), picked("a"))
-```
-                          ^^^
 
-The type was determined to be:
+┌───────────────┐
+│ TYPE MISMATCH ├─ This string literal is being used where a non-string ──────┐
+└┬──────────────┘  type is needed.                                            │
+ │                                                                            │
+ │  main = (picked(1), picked("a"))                                           │
+ │                            ‾‾‾                                             │
+ └────────────────────────────────────── generalize_alias_if_branches.md:5:27 ┘
 
-    Dec
+    The type was determined to be:
+
+        Dec
 
 # TOKENS
 ~~~zig

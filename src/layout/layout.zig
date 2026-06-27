@@ -190,11 +190,12 @@ pub const TupleField = StructField;
 /// Backwards-compat alias for `StructField`.
 pub const TupleFieldLayout = StructField;
 
-/// Struct layout - stores alignment and index to full data in Store.
-/// Unified representation for both records and tuples.
+/// Struct layout - stores the target-independent alignment class (`SortKey`) and
+/// an index to full data in Store. Unified representation for records and tuples.
+/// The actual alignment in bytes is derived per target via `SortKey.alignment`.
 pub const StructLayout = packed struct {
-    /// Alignment of the struct
-    alignment: std.mem.Alignment,
+    /// Target-independent alignment class of the struct.
+    sort_key: SortKey,
     /// Index into the Store's struct data
     idx: StructIdx,
 };
@@ -206,7 +207,7 @@ pub const TupleLayout = StructLayout;
 
 /// Index into the Store's struct data
 pub const StructIdx = packed struct {
-    int_idx: std.meta.Int(.unsigned, layout_bit_size - @bitSizeOf(LayoutTag) - @bitSizeOf(std.mem.Alignment)),
+    int_idx: std.meta.Int(.unsigned, layout_bit_size - @bitSizeOf(LayoutTag) - @bitSizeOf(SortKey)),
 };
 
 /// Backwards-compat alias for `StructIdx`.
@@ -214,10 +215,30 @@ pub const RecordIdx = StructIdx;
 /// Backwards-compat alias for `StructIdx`.
 pub const TupleIdx = StructIdx;
 
+/// A byte value precomputed for both pointer widths, keeping the layout store
+/// target-independent: both targets' values are stored and the right one is a
+/// direct array read once the target is known (no per-read computation). Indexed
+/// by `@intFromEnum(TargetUsize)` — `[0]` is the 32-bit target, `[1]` the 64-bit.
+/// Computing both directly (rather than a pointer count) accounts for the
+/// pointer-width-dependent alignment padding exactly.
+pub fn WidthValues(comptime T: type) type {
+    return struct {
+        per_target: [2]T,
+
+        pub fn get(self: @This(), target_usize: target.TargetUsize) T {
+            return self.per_target[@intFromEnum(target_usize)];
+        }
+
+        pub fn both(value_for_u32: T, value_for_u64: T) @This() {
+            return .{ .per_target = .{ value_for_u32, value_for_u64 } };
+        }
+    };
+}
+
 /// Struct data stored in the layout Store — unified for records and tuples.
 pub const StructData = struct {
-    /// Size of the struct, in bytes
-    size: u32,
+    /// Size of the struct in bytes, precomputed for both pointer widths.
+    size: WidthValues(u32),
     /// Range of fields in the struct_fields list
     fields: collections.NonEmptyRange,
     /// Whether this struct transitively contains refcounted data. Precomputed
@@ -245,26 +266,29 @@ pub const ClosureLayout = packed struct {
     captures_layout_idx: Idx,
 };
 
-/// Tag union layout - stores alignment and index to full data in Store
-/// This preserves variant information needed for correct reference counting.
+/// Tag union layout - stores the target-independent alignment class (`SortKey`)
+/// and an index to full data in Store. This preserves variant information needed
+/// for correct reference counting. Actual alignment is derived per target.
 pub const TagUnionLayout = packed struct {
-    /// Alignment of the tag union
-    alignment: std.mem.Alignment,
+    /// Target-independent alignment class of the tag union
+    sort_key: SortKey,
     /// Index into the Store's tag union data
     idx: TagUnionIdx,
 };
 
 /// Index into the Store's tag union data
 pub const TagUnionIdx = packed struct {
-    int_idx: std.meta.Int(.unsigned, layout_bit_size - @bitSizeOf(LayoutTag) - @bitSizeOf(std.mem.Alignment)),
+    int_idx: std.meta.Int(.unsigned, layout_bit_size - @bitSizeOf(LayoutTag) - @bitSizeOf(SortKey)),
 };
 
 /// Tag union data stored in the layout Store
 pub const TagUnionData = struct {
-    /// Size of the tag union, in bytes (max payload + discriminant, aligned)
-    size: u32,
-    /// Offset of the discriminant within the union (usually after payload)
-    discriminant_offset: u16,
+    /// Size of the tag union in bytes (max payload + discriminant, aligned),
+    /// precomputed for both pointer widths.
+    size: WidthValues(u32),
+    /// Offset of the discriminant within the union (after the payload),
+    /// precomputed for both pointer widths.
+    discriminant_offset: WidthValues(u16),
     /// Size of the discriminant in bytes (0, 1, 2, 4, or 8).
     /// A size of 0 means the tag union has exactly one variant, so the
     /// discriminant is implicit and always 0.
@@ -280,10 +304,10 @@ pub const TagUnionData = struct {
     }
 
     /// Read the discriminant value from memory at the given base pointer.
-    /// Adds discriminant_offset internally to find the discriminant location.
-    pub fn readDiscriminant(self: TagUnionData, base_ptr: [*]const u8) u32 {
+    /// Adds the discriminant offset (for the given target) internally.
+    pub fn readDiscriminant(self: TagUnionData, base_ptr: [*]const u8, target_usize: target.TargetUsize) u32 {
         if (self.discriminant_size == 0) return 0;
-        return self.readDiscriminantFromPtr(base_ptr + self.discriminant_offset);
+        return self.readDiscriminantFromPtr(base_ptr + self.discriminant_offset.get(target_usize));
     }
 
     /// Read the discriminant value from a pointer already at the discriminant location.
@@ -300,10 +324,10 @@ pub const TagUnionData = struct {
     }
 
     /// Write a discriminant value to memory at the given base pointer.
-    /// Adds discriminant_offset internally to find the discriminant location.
-    pub fn writeDiscriminant(self: TagUnionData, base_ptr: [*]u8, value: u32) void {
+    /// Adds the discriminant offset (for the given target) internally.
+    pub fn writeDiscriminant(self: TagUnionData, base_ptr: [*]u8, value: u32, target_usize: target.TargetUsize) void {
         if (self.discriminant_size == 0) return;
-        self.writeDiscriminantToPtr(base_ptr + self.discriminant_offset, value);
+        self.writeDiscriminantToPtr(base_ptr + self.discriminant_offset.get(target_usize), value);
     }
 
     /// Write a discriminant value to a pointer already at the discriminant location.
@@ -407,6 +431,61 @@ pub const RocAlignment = enum(u3) {
     }
 };
 
+/// Target-independent key for ordering aggregate fields by alignment.
+///
+/// This is the target-independent alignment class of a value: it both orders
+/// fields and (given a target) yields the actual alignment in bytes. A pointer
+/// is its own class, sorting strictly between 4-byte and 8-byte alignment —
+/// because a pointer is the only type whose real alignment varies by target
+/// (4 bytes on a 32-bit target, 8 on a 64-bit one), its fixed slot between
+/// `align_4` and `align_8` makes a record/tuple's field order identical on both
+/// targets and lets the alignment be stored target-independently and resolved to
+/// bytes only when a target is known (see `alignment`). This is the foundation
+/// for caching layout across pointer widths.
+pub const SortKey = enum(u3) {
+    align_1 = 0,
+    align_2 = 1,
+    align_4 = 2,
+    pointer = 3,
+    align_8 = 4,
+    align_16 = 5,
+
+    /// Sort key for a fixed (non-pointer) power-of-two alignment in bytes.
+    pub fn fromAlignBytes(bytes: u64) SortKey {
+        return switch (bytes) {
+            1 => .align_1,
+            2 => .align_2,
+            4 => .align_4,
+            8 => .align_8,
+            16 => .align_16,
+            else => unreachable, // alignments are powers of two up to 16
+        };
+    }
+
+    /// The actual alignment in bytes for a given target. A `.pointer` resolves to
+    /// the target's pointer alignment; every other class is target-independent.
+    pub fn alignment(self: SortKey, target_usize: target.TargetUsize) std.mem.Alignment {
+        return switch (self) {
+            .align_1 => .@"1",
+            .align_2 => .@"2",
+            .align_4 => .@"4",
+            .pointer => target_usize.alignment(),
+            .align_8 => .@"8",
+            .align_16 => .@"16",
+        };
+    }
+
+    /// The greater of two sort keys (used to fold an aggregate's children).
+    pub fn max(a: SortKey, b: SortKey) SortKey {
+        return if (@intFromEnum(a) >= @intFromEnum(b)) a else b;
+    }
+
+    /// Whether `a` sorts before `b` in the field order (higher key first).
+    pub fn sortsBefore(a: SortKey, b: SortKey) bool {
+        return @intFromEnum(a) > @intFromEnum(b);
+    }
+};
+
 /// Size and alignment information
 pub const SizeAlign = packed struct(u32) {
     size: u29, // u29 can represent sizes up to ~1GiB (is 1 byte shy of it).
@@ -493,11 +572,13 @@ pub const BoxInfo = struct {
 pub const StructInfo = struct {
     data: *const StructData,
     alignment: std.mem.Alignment,
+    /// Size in bytes, resolved for the store's target.
+    byte_size: u32,
     fields: StructField.SafeMultiList.Slice,
     contains_refcounted: bool,
 
     pub fn size(self: StructInfo) u32 {
-        return self.data.size;
+        return self.byte_size;
     }
 };
 
@@ -511,15 +592,19 @@ pub const TagUnionInfo = struct {
     idx: TagUnionIdx,
     data: *const TagUnionData,
     alignment: std.mem.Alignment,
+    /// Size in bytes, resolved for the store's target.
+    byte_size: u32,
+    /// Discriminant offset, resolved for the store's target.
+    discriminant_offset: u16,
     variants: TagUnionVariant.SafeMultiList.Slice,
     contains_refcounted: bool,
 
     pub fn size(self: TagUnionInfo) u32 {
-        return self.data.size;
+        return self.byte_size;
     }
 
     pub fn readDiscriminant(self: TagUnionInfo, ptr: [*]const u8) u32 {
-        return self.data.readDiscriminantFromPtr(ptr + self.data.discriminant_offset);
+        return self.data.readDiscriminantFromPtr(ptr + self.discriminant_offset);
     }
 };
 
@@ -601,11 +686,29 @@ pub const Layout = packed struct {
             .box, .box_of_zst => target_usize.alignment(),
             .list, .list_of_zst => target_usize.alignment(),
             .erased_callable => target_usize.alignment(),
-            .struct_ => self.getStruct().alignment,
-            .tag_union => self.getTagUnion().alignment,
+            .struct_ => self.getStruct().sort_key.alignment(target_usize),
+            .tag_union => self.getTagUnion().sort_key.alignment(target_usize),
             .closure => target_usize.alignment(),
             .zst => std.mem.Alignment.@"1",
             .ptr => target_usize.alignment(),
+        };
+    }
+
+    /// This layout's target-independent alignment class (see `SortKey`). Pointers
+    /// are `.pointer`; fixed-width scalars map to their alignment band; aggregates
+    /// return the `sort_key` they stored at commit time. Pure (no store, no
+    /// target) — identical on 32-bit and 64-bit targets.
+    pub fn sortKey(self: Layout) SortKey {
+        return switch (self.tag) {
+            .scalar => switch (self.getScalar().tag) {
+                .int => SortKey.fromAlignBytes(self.getScalar().getInt().alignment().toByteUnits()),
+                .frac => SortKey.fromAlignBytes(self.getScalar().getFrac().alignment().toByteUnits()),
+                .str, .opaque_ptr => .pointer,
+            },
+            .box, .box_of_zst, .list, .list_of_zst, .erased_callable, .ptr, .closure => .pointer,
+            .zst => .align_1,
+            .struct_ => self.getStruct().sort_key,
+            .tag_union => self.getTagUnion().sort_key,
         };
     }
 
@@ -627,7 +730,7 @@ pub const Layout = packed struct {
     /// Canonical layout for any two-nullary tag union.
     /// The shared layout store reserves tag-union metadata index 0 for this shape.
     pub fn boolType() Layout {
-        return Layout.tagUnion(.@"1", .{ .int_idx = 0 });
+        return Layout.tagUnion(.align_1, .{ .int_idx = 0 });
     }
 
     /// bool layout (alias for consistency)
@@ -669,10 +772,10 @@ pub const Layout = packed struct {
         return .{ .data = 0, .tag = .list_of_zst };
     }
 
-    /// struct layout with the given alignment and struct metadata (e.g. size and field layouts)
+    /// struct layout with the given alignment class and struct metadata.
     /// Used for both records and tuples — at the layout level they are identical.
-    pub fn struct_(struct_alignment: std.mem.Alignment, struct_idx: StructIdx) Layout {
-        return .{ .data = packData(StructLayout{ .alignment = struct_alignment, .idx = struct_idx }), .tag = .struct_ };
+    pub fn struct_(struct_sort_key: SortKey, struct_idx: StructIdx) Layout {
+        return .{ .data = packData(StructLayout{ .sort_key = struct_sort_key, .idx = struct_idx }), .tag = .struct_ };
     }
 
     /// Backwards-compat aliases
@@ -696,9 +799,9 @@ pub const Layout = packed struct {
         return .{ .data = 0, .tag = .zst };
     }
 
-    /// tag union layout with the given alignment and tag union metadata
-    pub fn tagUnion(tu_alignment: std.mem.Alignment, tu_idx: TagUnionIdx) Layout {
-        return .{ .data = packData(TagUnionLayout{ .alignment = tu_alignment, .idx = tu_idx }), .tag = .tag_union };
+    /// tag union layout with the given alignment class and tag union metadata
+    pub fn tagUnion(tu_sort_key: SortKey, tu_idx: TagUnionIdx) Layout {
+        return .{ .data = packData(TagUnionLayout{ .sort_key = tu_sort_key, .idx = tu_idx }), .tag = .tag_union };
     }
 
     /// Check if a layout represents a heap-allocated type that needs refcounting
@@ -731,12 +834,12 @@ pub const Layout = packed struct {
             .box_of_zst => true, // No additional data
             .list => self.getIdx() == other.getIdx(),
             .list_of_zst => true, // No additional data
-            .struct_ => self.getStruct().alignment == other.getStruct().alignment and
+            .struct_ => self.getStruct().sort_key == other.getStruct().sort_key and
                 self.getStruct().idx.int_idx == other.getStruct().idx.int_idx,
             .closure => self.getClosure().captures_layout_idx == other.getClosure().captures_layout_idx,
             .erased_callable => true,
             .zst => true, // No additional data
-            .tag_union => self.getTagUnion().alignment == other.getTagUnion().alignment and
+            .tag_union => self.getTagUnion().sort_key == other.getTagUnion().sort_key and
                 self.getTagUnion().idx.int_idx == other.getTagUnion().idx.int_idx,
             .ptr => self.getIdx() == other.getIdx(),
         };
@@ -785,8 +888,8 @@ test "Layout.alignment() - struct types" {
     const testing = std.testing;
 
     for (target.TargetUsize.all()) |target_usize| {
-        try testing.expectEqual(std.mem.Alignment.fromByteUnits(4), Layout.struct_(std.mem.Alignment.@"4", StructIdx{ .int_idx = 0 }).alignment(target_usize));
-        try testing.expectEqual(std.mem.Alignment.fromByteUnits(16), Layout.struct_(std.mem.Alignment.@"16", StructIdx{ .int_idx = 1 }).alignment(target_usize));
+        try testing.expectEqual(std.mem.Alignment.fromByteUnits(4), Layout.struct_(.align_4, StructIdx{ .int_idx = 0 }).alignment(target_usize));
+        try testing.expectEqual(std.mem.Alignment.fromByteUnits(16), Layout.struct_(.align_16, StructIdx{ .int_idx = 1 }).alignment(target_usize));
     }
 }
 
@@ -794,7 +897,7 @@ test "StructData.getFields()" {
     const testing = std.testing;
 
     const struct_data = StructData{
-        .size = 40,
+        .size = WidthValues(u32).both(40, 40),
         .fields = .{ .start = 10, .count = 5 },
     };
 
@@ -840,7 +943,7 @@ test "Layout non-scalar types" {
     const list_layout = Layout.list(.bool);
     try testing.expectEqual(LayoutTag.list, list_layout.tag);
 
-    const struct_layout = Layout.struct_(std.mem.Alignment.@"4", StructIdx{ .int_idx = 0 });
+    const struct_layout = Layout.struct_(.align_4, StructIdx{ .int_idx = 0 });
     try testing.expectEqual(LayoutTag.struct_, struct_layout.tag);
 }
 
@@ -963,10 +1066,10 @@ test "Non-scalar layout variants - fallback to indexed approach" {
     try testing.expectEqual(@as(u28, 123), @intFromEnum(list_non_scalar.getIdx()));
 
     // Test struct layout (definitely non-scalar)
-    const struct_layout = Layout.struct_(std.mem.Alignment.@"8", StructIdx{ .int_idx = 456 });
+    const struct_layout = Layout.struct_(.align_8, StructIdx{ .int_idx = 456 });
     try testing.expectEqual(LayoutTag.struct_, struct_layout.tag);
-    try testing.expectEqual(std.mem.Alignment.@"8", struct_layout.getStruct().alignment);
-    try testing.expectEqual(@as(u19, 456), struct_layout.getStruct().idx.int_idx);
+    try testing.expectEqual(SortKey.align_8, struct_layout.getStruct().sort_key);
+    try testing.expectEqual(@as(@TypeOf(struct_layout.getStruct().idx.int_idx), 456), struct_layout.getStruct().idx.int_idx);
 }
 
 test "Layout scalar precision coverage" {
@@ -994,8 +1097,8 @@ test "Layout scalar precision coverage" {
         Layout.boxOfZst(),
         Layout.list(.bool),
         Layout.listOfZst(),
-        Layout.struct_(std.mem.Alignment.@"4", StructIdx{ .int_idx = 0 }),
-        Layout.struct_(std.mem.Alignment.@"8", StructIdx{ .int_idx = 0 }),
+        Layout.struct_(.align_4, StructIdx{ .int_idx = 0 }),
+        Layout.struct_(.align_8, StructIdx{ .int_idx = 0 }),
     };
 
     const expected_tags = [_]LayoutTag{

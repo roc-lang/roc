@@ -1099,6 +1099,7 @@ const Inserter = struct {
                     .rc_effect = assign.rc_effect,
                     .unique_args = frame.unique_args,
                     .args = assign.args,
+                    .interchangeable = assign.interchangeable,
                     .next = next,
                 } });
             },

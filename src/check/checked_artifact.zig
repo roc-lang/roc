@@ -7418,8 +7418,36 @@ const CheckedSourceNodes = struct {
             try self.markExpr(def.expr.idx, &work);
         }
 
+        // Top-level expects have no containing expression, so seed them
+        // directly. Other value statements are reached from their containing
+        // expression or from global defs. Seeding them globally would walk into
+        // the original children of an expression that checking has
+        // intentionally replaced with `e_runtime_error`.
         for (module_env.store.sliceStatements(module_env.all_statements)) |statement_idx| {
-            try self.markStatement(statement_idx, &work);
+            switch (module_env.store.getStatement(statement_idx)) {
+                .s_import,
+                .s_alias_decl,
+                .s_nominal_decl,
+                .s_type_anno,
+                .s_type_var_alias,
+                .s_expect,
+                => try self.markStatement(statement_idx, &work),
+                .s_decl,
+                .s_var,
+                .s_var_uninitialized,
+                .s_reassign,
+                .s_crash,
+                .s_dbg,
+                .s_for,
+                .s_expr,
+                .s_return,
+                .s_while,
+                .s_infinite_loop,
+                .s_breakable_loop,
+                .s_runtime_error,
+                .s_break,
+                => {},
+            }
         }
 
         var next: usize = 0;
@@ -7863,8 +7891,7 @@ pub const CheckedBodyStore = struct {
         var node_idx: u32 = 0;
         while (node_idx < module.nodeCount()) : (node_idx += 1) {
             const node: CIR.Node.Idx = @enumFromInt(node_idx);
-            const tag = module.nodeTag(node);
-            if (isExprNodeTag(tag) and source_nodes.hasExpr(@enumFromInt(node_idx))) {
+            if (source_nodes.hasExpr(@enumFromInt(node_idx))) {
                 const expr_idx: CIR.Expr.Idx = @enumFromInt(node_idx);
                 const ty = checked_types.rootForSourceVar(module, module.exprType(expr_idx)) orelse {
                     if (builtin.mode == .Debug) {
@@ -7880,7 +7907,7 @@ pub const CheckedBodyStore = struct {
                     .data = .pending,
                 });
                 try source_node_map.putExpr(node_idx, id);
-            } else if (isPatternNodeTag(tag) and source_nodes.hasPattern(@enumFromInt(node_idx))) {
+            } else if (source_nodes.hasPattern(@enumFromInt(node_idx))) {
                 const pattern_idx: CIR.Pattern.Idx = @enumFromInt(node_idx);
                 const ty = checked_types.rootForSourceVar(module, checkedPatternSourceTypeVar(module, &top_level_defs, pattern_idx)) orelse {
                     if (builtin.mode == .Debug) {
@@ -7896,7 +7923,7 @@ pub const CheckedBodyStore = struct {
                     .data = .pending,
                 });
                 try source_node_map.putPattern(node_idx, id);
-            } else if (isStatementNodeTag(tag) and source_nodes.hasStatement(@enumFromInt(node_idx))) {
+            } else if (source_nodes.hasStatement(@enumFromInt(node_idx))) {
                 const id: CheckedStatementId = @enumFromInt(try checkedSourceNodeIdFromLen(statements.items.len));
                 try statements.append(allocator, .{
                     .id = id,
@@ -7940,15 +7967,13 @@ pub const CheckedBodyStore = struct {
 
         node_idx = 0;
         while (node_idx < module.nodeCount()) : (node_idx += 1) {
-            const node: CIR.Node.Idx = @enumFromInt(node_idx);
-            const tag = module.nodeTag(node);
-            if (isExprNodeTag(tag) and source_nodes.hasExpr(@enumFromInt(node_idx))) {
+            if (source_nodes.hasExpr(@enumFromInt(node_idx))) {
                 const id = source_node_map.exprAtRawNode(node_idx) orelse unreachable;
                 exprs.items[@intFromEnum(id)].data = try copier.copyExprData(@enumFromInt(node_idx));
-            } else if (isPatternNodeTag(tag) and source_nodes.hasPattern(@enumFromInt(node_idx))) {
+            } else if (source_nodes.hasPattern(@enumFromInt(node_idx))) {
                 const id = source_node_map.patternAtRawNode(node_idx) orelse unreachable;
                 patterns.items[@intFromEnum(id)].data = try copier.copyPatternData(@enumFromInt(node_idx));
-            } else if (isStatementNodeTag(tag) and source_nodes.hasStatement(@enumFromInt(node_idx))) {
+            } else if (source_nodes.hasStatement(@enumFromInt(node_idx))) {
                 const id = source_node_map.statementAtRawNode(node_idx) orelse unreachable;
                 statements.items[@intFromEnum(id)].data = try copier.copyStatementData(@enumFromInt(node_idx));
             }

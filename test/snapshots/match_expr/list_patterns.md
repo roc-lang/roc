@@ -18,62 +18,62 @@ UNDEFINED VARIABLE - list_patterns.md:2:11:2:14
 UNUSED VARIABLE - list_patterns.md:3:6:3:11
 UNUSED VARIABLE - list_patterns.md:3:15:3:15
 # PROBLEMS
-**BAD LIST REST PATTERN SYNTAX**
-List rest patterns should use the `.. as name` syntax, not `..name`.
-For example, use `[first, .. as rest]` instead of `[first, ..rest]`.
 
-**list_patterns.md:3:13:3:19:**
-```roc
-    [first, ..rest] => 0 # invalid rest pattern should error
-```
-            ^^^^^^
+┌──────────────────────────────┐
+│ BAD LIST REST PATTERN SYNTAX ├─ List rest patterns should use the `.. as ───┐
+└┬─────────────────────────────┘  name` syntax, not `..name`.                 │
+ │                                                                            │
+ │  [first, ..rest] => 0 # invalid rest pattern should error                  │
+ │          ‾‾‾‾‾‾                                                            │
+ └───────────────────────────────────────────────────── list_patterns.md:3:13 ┘
 
-
-**UNDEFINED VARIABLE**
-Nothing is named `numbers` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**list_patterns.md:1:7:1:14:**
-```roc
-match numbers {
-```
-      ^^^^^^^
+    For example, use `[first, .. as rest]` instead of `[first, ..rest]`.
 
 
-**UNDEFINED VARIABLE**
-Nothing is named `acc` in this scope.
-Is there an `import` or `exposing` missing up-top?
+┌────────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `numbers` in this scope. ────────────┐
+└┬───────────────────┘                                                        │
+ │                                                                            │
+ │  match numbers {                                                           │
+ │        ‾‾‾‾‾‾‾                                                             │
+ └────────────────────────────────────────────────────── list_patterns.md:1:7 ┘
 
-**list_patterns.md:2:11:2:14:**
-```roc
-    [] => acc
-```
-          ^^^
-
-
-**UNUSED VARIABLE**
-Variable `first` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_first` to suppress this warning.
-The unused variable is declared here:
-**list_patterns.md:3:6:3:11:**
-```roc
-    [first, ..rest] => 0 # invalid rest pattern should error
-```
-     ^^^^^
+    Is there an `import` or `exposing` missing up-top?
 
 
-**UNUSED VARIABLE**
-Variable `rest` is not used anywhere in your code.
+┌────────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `acc` in this scope. ────────────────┐
+└┬───────────────────┘                                                        │
+ │                                                                            │
+ │  [] => acc                                                                 │
+ │        ‾‾‾                                                                 │
+ └───────────────────────────────────────────────────── list_patterns.md:2:11 ┘
 
-If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
-The unused variable is declared here:
-**list_patterns.md:3:15:3:15:**
-```roc
-    [first, ..rest] => 0 # invalid rest pattern should error
-```
-              ^
+    Is there an `import` or `exposing` missing up-top?
 
+
+┌─────────────────┐
+│ UNUSED VARIABLE ├─ Variable `first` is defined here and then never used. ───┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  [first, ..rest] => 0 # invalid rest pattern should error                  │
+ │   ‾‾‾‾‾                                                                    │
+ └────────────────────────────────────────────────────── list_patterns.md:3:6 ┘
+
+    If you don't need this variable, prefix it with an underscore like `_first`
+    to suppress this warning.
+
+
+┌─────────────────┐
+│ UNUSED VARIABLE ├─ Variable `rest` is defined here and then never used. ────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  [first, ..rest] => 0 # invalid rest pattern should error                  │
+ │            ‾                                                               │
+ └───────────────────────────────────────────────────── list_patterns.md:3:15 ┘
+
+    If you don't need this variable, prefix it with an underscore like `_rest`
+    to suppress this warning.
 
 # TOKENS
 ~~~zig

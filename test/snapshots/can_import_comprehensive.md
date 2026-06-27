@@ -50,111 +50,108 @@ UNDEFINED VARIABLE - can_import_comprehensive.md:17:15:17:18
 UNDEFINED VARIABLE - can_import_comprehensive.md:18:15:18:19
 UNDEFINED VARIABLE - can_import_comprehensive.md:21:16:21:26
 # PROBLEMS
-**DUPLICATE DEFINITION**
-The name `Str` is being redeclared in this scope.
 
-The redeclaration is here:
-**can_import_comprehensive.md:3:1:3:27:**
-```roc
-import utils.String as Str
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^
+┌──────────────────────┐
+│ DUPLICATE DEFINITION ├─ The name `Str` is being redeclared here. ───────────┐
+└┬─────────────────────┘                                                      │
+ │                                                                            │
+ │  import utils.String as Str                                                │
+ │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                │
+ └─────────────────────────────────────────── can_import_comprehensive.md:3:1 ┘
 
-But `Str` was already defined here:
-**can_import_comprehensive.md:1:1:1:1:**
-```roc
-import json.Json
-```
-^
+    In this scope, `Str` was already defined here:
+      ┌───────────────────────────────────────────────────────────────────────┐
+    1 │  import json.Json                                                     │
+      │  ‾                                                                    │
+      └────────────────────────────────────── can_import_comprehensive.md:1:1 ┘
 
 
-**UNDEFINED VARIABLE**
-Nothing is named `get` in this scope.
-Is there an `import` or `exposing` missing up-top?
+┌────────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `get` in this scope. ────────────────┐
+└┬───────────────────┘                                                        │
+ │                                                                            │
+ │  client = Http.get                                                         │
+ │           ‾‾‾‾‾‾‾‾                                                         │
+ └────────────────────────────────────────── can_import_comprehensive.md:6:14 ┘
 
-**can_import_comprehensive.md:6:14:6:22:**
-```roc
-    client = Http.get
-```
-             ^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `utf8` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**can_import_comprehensive.md:7:14:7:23:**
-```roc
-    parser = Json.utf8
-```
-             ^^^^^^^^^
+    Is there an `import` or `exposing` missing up-top?
 
 
-**UNDEFINED VARIABLE**
-Nothing is named `trim` in this scope.
-Is there an `import` or `exposing` missing up-top?
+┌────────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `utf8` in this scope. ───────────────┐
+└┬───────────────────┘                                                        │
+ │                                                                            │
+ │  parser = Json.utf8                                                        │
+ │           ‾‾‾‾‾‾‾‾‾                                                        │
+ └────────────────────────────────────────── can_import_comprehensive.md:7:14 ┘
 
-**can_import_comprehensive.md:8:14:8:22:**
-```roc
-    helper = Str.trim
-```
-             ^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `parse` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**can_import_comprehensive.md:11:15:11:25:**
-```roc
-    result1 = Json.parse
-```
-              ^^^^^^^^^^
+    Is there an `import` or `exposing` missing up-top?
 
 
-**UNDEFINED VARIABLE**
-Nothing is named `post` in this scope.
-Is there an `import` or `exposing` missing up-top?
+┌────────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `trim` in this scope. ───────────────┐
+└┬───────────────────┘                                                        │
+ │                                                                            │
+ │  helper = Str.trim                                                         │
+ │           ‾‾‾‾‾‾‾‾                                                         │
+ └────────────────────────────────────────── can_import_comprehensive.md:8:14 ┘
 
-**can_import_comprehensive.md:14:15:14:24:**
-```roc
-    result2 = Http.post
-```
-              ^^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `get` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**can_import_comprehensive.md:17:15:17:18:**
-```roc
-    result3 = get
-```
-              ^^^
+    Is there an `import` or `exposing` missing up-top?
 
 
-**UNDEFINED VARIABLE**
-Nothing is named `post` in this scope.
-Is there an `import` or `exposing` missing up-top?
+┌────────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `parse` in this scope. ──────────────┐
+└┬───────────────────┘                                                        │
+ │                                                                            │
+ │  result1 = Json.parse                                                      │
+ │            ‾‾‾‾‾‾‾‾‾‾                                                      │
+ └───────────────────────────────────────── can_import_comprehensive.md:11:15 ┘
 
-**can_import_comprehensive.md:18:15:18:19:**
-```roc
-    result4 = post
-```
-              ^^^^
+    Is there an `import` or `exposing` missing up-top?
 
 
-**UNDEFINED VARIABLE**
-Nothing is named `concat` in this scope.
-Is there an `import` or `exposing` missing up-top?
+┌────────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `post` in this scope. ───────────────┐
+└┬───────────────────┘                                                        │
+ │                                                                            │
+ │  result2 = Http.post                                                       │
+ │            ‾‾‾‾‾‾‾‾‾                                                       │
+ └───────────────────────────────────────── can_import_comprehensive.md:14:15 ┘
 
-**can_import_comprehensive.md:21:16:21:26:**
-```roc
-    combined = Str.concat
-```
-               ^^^^^^^^^^
+    Is there an `import` or `exposing` missing up-top?
 
+
+┌────────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `get` in this scope. ────────────────┐
+└┬───────────────────┘                                                        │
+ │                                                                            │
+ │  result3 = get                                                             │
+ │            ‾‾‾                                                             │
+ └───────────────────────────────────────── can_import_comprehensive.md:17:15 ┘
+
+    Is there an `import` or `exposing` missing up-top?
+
+
+┌────────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `post` in this scope. ───────────────┐
+└┬───────────────────┘                                                        │
+ │                                                                            │
+ │  result4 = post                                                            │
+ │            ‾‾‾‾                                                            │
+ └───────────────────────────────────────── can_import_comprehensive.md:18:15 ┘
+
+    Is there an `import` or `exposing` missing up-top?
+
+
+┌────────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `concat` in this scope. ─────────────┐
+└┬───────────────────┘                                                        │
+ │                                                                            │
+ │  combined = Str.concat                                                     │
+ │             ‾‾‾‾‾‾‾‾‾‾                                                     │
+ └───────────────────────────────────────── can_import_comprehensive.md:21:16 ┘
+
+    Is there an `import` or `exposing` missing up-top?
 
 # TOKENS
 ~~~zig

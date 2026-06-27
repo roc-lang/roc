@@ -4114,8 +4114,8 @@ const BodyContext = struct {
         const data: Ast.ExprData = switch (expr.data) {
             .pending,
             .anno_only,
-            .runtime_error,
             => Common.invariant("non-runtime checked expression reached Monotype lowering"),
+            .runtime_error => return try self.runtimeCrashExpr(ty, "runtime error"),
             .num => |num| self.lowerIntLiteral(num.value, ty),
             .typed_int => |num| self.lowerIntLiteral(num.value, ty),
             .frac_f32 => |frac| self.lowerFracLiteral(.{ .f32 = frac.value }, ty),
@@ -13431,6 +13431,7 @@ const BodyContext = struct {
             .if_ => |if_| try self.exprIdAsDivergentData(try self.lowerIfExpr(checked_expr_id, if_, ty)),
             .ellipsis => .{ .crash = try self.builder.program.addStringLiteral("not implemented") },
             .crash => |msg| .{ .crash = try self.lowerStringLiteral(msg) },
+            .runtime_error => .{ .crash = try self.builder.program.addStringLiteral("runtime error") },
             .expect_err => |expect_err| .{ .expect_err = .{
                 .msg = try self.lowerExpectErrMessage(expect_err.expr, expect_err.snippet),
                 .region = checked_expr.source_region,
@@ -14322,8 +14323,8 @@ const BodyContext = struct {
             .nominal_decl,
             .type_anno,
             .type_var_alias,
-            .runtime_error,
             => Common.invariant("non-runtime checked statement reached Monotype lowering"),
+            .runtime_error => .{ .crash = try self.builder.program.addStringLiteral("runtime error") },
             .decl => |decl| blk: {
                 if (self.statementValueIsLocalProc(decl.expr)) {
                     try self.registerLocalProc(decl.pattern);

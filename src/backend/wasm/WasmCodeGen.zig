@@ -7398,6 +7398,7 @@ fn generateCFStmtNode(self: *Self, work: *std.ArrayList(StmtWork), wa: Allocator
                 .args = assign.args,
                 .ret_layout = self.procLocalLayoutIdx(assign.target),
                 .unique_args = assign.unique_args,
+                .interchangeable = assign.interchangeable,
             });
             try self.bindAssignedLocal(assign.target);
             try work.append(wa, .{ .node = .{ .stmt_id = assign.next, .stop = stop } });
@@ -9678,6 +9679,13 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         },
 
         .list_map_can_reuse => {
+            // On a width where the element layouts are not interchangeable, the
+            // in-place branch is statically dead, so the result is a constant 0
+            // and the uniqueness check must not run.
+            if (!ll.interchangeable.get(self.getLayoutStore().targetUsize())) {
+                try self.emitI32Const(0);
+                return;
+            }
             // list_map_can_reuse(list, transform) -> U8: the list uniquely owns
             // its allocation and is not a seamless slice. Wasm is
             // single-threaded, so a plain refcount load suffices.
@@ -10772,7 +10780,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                             const inner_tu = ls.getTagUnionData(err_layout.getTagUnion().idx);
                             if (try self.findBadUtf8Variant(inner_tu)) |info| {
                                 err_record_idx = info.struct_idx;
-                                inner_disc_offset = inner_tu.discriminant_offset;
+                                inner_disc_offset = inner_tu.discriminant_offset.get(ls.targetUsize());
                                 inner_disc_size = inner_tu.discriminant_size;
                                 inner_bad_utf8_disc = info.disc;
                             }
@@ -15894,7 +15902,7 @@ fn resolveListElementPairLayout(self: *Self, ret_layout: layout.Idx) ListElement
     const field0_is_list = field0_val.tag == .list or field0_val.tag == .list_of_zst;
 
     return .{
-        .result_size = record_data.size,
+        .result_size = record_data.size.get(ls.targetUsize()),
         .result_align = @intCast(ret_layout_val.alignment(ls.targetUsize()).toByteUnits()),
         .elem_offset = if (field0_is_list)
             ls.getStructFieldOffset(record_idx, 1)
@@ -16143,6 +16151,6 @@ test "final static data address tracking keeps referenced data through DCE" {
     try codegen.module.eliminateDeadCode(called_fns);
 
     try std.testing.expectEqual(@as(usize, 1), codegen.module.data_segments.items.len);
-    try std.testing.expect(std.mem.indexOf(u8, codegen.module.data_segments.items[0].data, "live") != null);
-    try std.testing.expect(std.mem.indexOf(u8, codegen.module.data_segments.items[0].data, "dead") == null);
+    try std.testing.expect(std.mem.find(u8, codegen.module.data_segments.items[0].data, "live") != null);
+    try std.testing.expect(std.mem.find(u8, codegen.module.data_segments.items[0].data, "dead") == null);
 }

@@ -13,16 +13,16 @@ world = "World"
 # EXPECTED
 UNDEFINED VARIABLE - simple_module_no_blanks.md:2:10:2:22
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `line!` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
-**simple_module_no_blanks.md:2:10:2:22:**
-```roc
-hello! = Stdout.line!("Hello")
-```
-         ^^^^^^^^^^^^
+┌────────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `line!` in this scope. ──────────────┐
+└┬───────────────────┘                                                        │
+ │                                                                            │
+ │  hello! = Stdout.line!("Hello")                                            │
+ │           ‾‾‾‾‾‾‾‾‾‾‾‾                                                     │
+ └─────────────────────────────────────────── simple_module_no_blanks.md:2:10 ┘
 
+    Is there an `import` or `exposing` missing up-top?
 
 # TOKENS
 ~~~zig

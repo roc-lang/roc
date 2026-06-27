@@ -21,50 +21,47 @@ MODULE NOT FOUND - nominal_external_fully_qualified.md:6:20:6:30
 MODULE NOT FOUND - nominal_external_fully_qualified.md:7:20:7:30
 UNUSED VARIABLE - nominal_external_fully_qualified.md:7:35:7:39
 # PROBLEMS
-**MODULE NOT FOUND**
-The type `MyTryType` is qualified by the module `MyTryModule`, but that module was not found in this Roc project.
 
-You're attempting to use this type here:
-**nominal_external_fully_qualified.md:3:24:3:34:**
-```roc
-handleTry : MyTryModule.MyTryType(Str, I32) -> Str
-```
-                       ^^^^^^^^^^
-
-
-**MODULE NOT FOUND**
-The type `MyTryType` is qualified by the module `MyTryModule`, but that module was not found in this Roc project.
-
-You're attempting to use this type here:
-**nominal_external_fully_qualified.md:6:20:6:30:**
-```roc
-        MyTryModule.MyTryType.Ok(value) => value
-```
-                   ^^^^^^^^^^
+┌──────────────────┐
+│ MODULE NOT FOUND ├─ This `MyTryType` type is declared to be in ─────────────┐
+└┬─────────────────┘  `MyTryModule`, which does not exist.                    │
+ │                                                                            │
+ │  handleTry : MyTryModule.MyTryType(Str, I32) -> Str                        │
+ │                         ‾‾‾‾‾‾‾‾‾‾                                         │
+ └────────────────────────────────── nominal_external_fully_qualified.md:3:24 ┘
 
 
-**MODULE NOT FOUND**
-The type `MyTryType` is qualified by the module `MyTryModule`, but that module was not found in this Roc project.
 
-You're attempting to use this type here:
-**nominal_external_fully_qualified.md:7:20:7:30:**
-```roc
-        MyTryModule.MyTryType.Err(code) => "Error: $(code.toStr())"
-```
-                   ^^^^^^^^^^
+┌──────────────────┐
+│ MODULE NOT FOUND ├─ This `MyTryType` type is declared to be in ─────────────┐
+└┬─────────────────┘  `MyTryModule`, which does not exist.                    │
+ │                                                                            │
+ │  MyTryModule.MyTryType.Ok(value) => value                                  │
+ │             ‾‾‾‾‾‾‾‾‾‾                                                     │
+ └────────────────────────────────── nominal_external_fully_qualified.md:6:20 ┘
 
 
-**UNUSED VARIABLE**
-Variable `code` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_code` to suppress this warning.
-The unused variable is declared here:
-**nominal_external_fully_qualified.md:7:35:7:39:**
-```roc
-        MyTryModule.MyTryType.Err(code) => "Error: $(code.toStr())"
-```
-                                  ^^^^
+┌──────────────────┐
+│ MODULE NOT FOUND ├─ This `MyTryType` type is declared to be in ─────────────┐
+└┬─────────────────┘  `MyTryModule`, which does not exist.                    │
+ │                                                                            │
+ │  MyTryModule.MyTryType.Err(code) => "Error: $(code.toStr())"               │
+ │             ‾‾‾‾‾‾‾‾‾‾                                                     │
+ └────────────────────────────────── nominal_external_fully_qualified.md:7:20 ┘
 
+
+
+┌─────────────────┐
+│ UNUSED VARIABLE ├─ Variable `code` is defined here and then never used. ────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  MyTryModule.MyTryType.Err(code) => "Error: $(code.toStr())"               │
+ │                            ‾‾‾‾                                            │
+ └────────────────────────────────── nominal_external_fully_qualified.md:7:35 ┘
+
+    If you don't need this variable, prefix it with an underscore like `_code`
+    to suppress this warning.
 
 # TOKENS
 ~~~zig

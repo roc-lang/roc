@@ -180,7 +180,7 @@ pub const Resolver = struct {
 
     /// Return the byte offset of the discriminant for a tag-union helper.
     pub fn tagUnionDiscriminantOffset(self: *const Resolver, tag_plan: TagUnionPlan) u16 {
-        return self.store.getTagUnionData(tag_plan.tag_union_idx).discriminant_offset;
+        return self.store.getTagUnionDiscriminantOffset(tag_plan.tag_union_idx);
     }
 
     /// Return the discriminant width for a tag-union helper.
@@ -190,7 +190,7 @@ pub const Resolver = struct {
 
     /// Return the total size of the tag-union layout.
     pub fn tagUnionTotalSize(self: *const Resolver, tag_plan: TagUnionPlan) u32 {
-        return self.store.getTagUnionData(tag_plan.tag_union_idx).size;
+        return self.store.getTagUnionSize(tag_plan.tag_union_idx);
     }
 
     /// Return the payload helper for one variant, if that payload contains RC data.

@@ -10,16 +10,16 @@ type=expr
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - unknown_operator.md:1:4:1:5
 # PROBLEMS
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **+** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
 
-**unknown_operator.md:1:4:1:5:**
-```roc
-1 ++ 2
-```
-   ^
+┌────────────────────────────────┐
+│ UNEXPECTED TOKEN IN EXPRESSION ├─ The token + is not expected in an ────────┐
+└┬───────────────────────────────┘  expression.                               │
+ │                                                                            │
+ │  1 ++ 2                                                                    │
+ │     ‾                                                                      │
+ └─────────────────────────────────────────────────── unknown_operator.md:1:4 ┘
 
+    Expressions can be identifiers, literals, function calls, or operators.
 
 # TOKENS
 ~~~zig

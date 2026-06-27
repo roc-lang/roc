@@ -10,16 +10,16 @@ type=expr
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - parse_malformed_hex_number.md:1:1:1:3
 # PROBLEMS
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **0x** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
 
-**parse_malformed_hex_number.md:1:1:1:3:**
-```roc
-0x
-```
-^^
+┌────────────────────────────────┐
+│ UNEXPECTED TOKEN IN EXPRESSION ├─ The token 0x is not expected in an ───────┐
+└┬───────────────────────────────┘  expression.                               │
+ │                                                                            │
+ │  0x                                                                        │
+ │  ‾‾                                                                        │
+ └───────────────────────────────────────── parse_malformed_hex_number.md:1:1 ┘
 
+    Expressions can be identifiers, literals, function calls, or operators.
 
 # TOKENS
 ~~~zig

@@ -925,9 +925,11 @@ fn hostedStdoutLine(str: RocStr) callconv(.c) void {
 /// Hosted function: Builder.print_value! (index 0 - sorted alphabetically: "Builder.print_value!" comes before "Stderr.line!")
 /// Follows RocCall ABI: (ops, ret_ptr, args_ptr)
 /// Returns {} and takes Builder as argument
-// Mirrors `Builder := { value : Str, count : U64 }`. Nominal records lay out in
-// declared field order, so the host struct lists `value` before `count` to match
-// the Roc declaration (not alphabetical order).
+// Mirrors `Builder := { value : Str, count : U64, _ : {} }`. A nominal record
+// keeps its declared field order only when it includes an unnamed `_` field;
+// Builder does, so the host struct lists `value` before `count` to match the Roc
+// declaration. Without the `_` it would lay out structurally (by descending
+// alignment, hoisting `count` ahead of `value`).
 const BuilderArgs = extern struct {
     value: RocStr,
     count: u64,
