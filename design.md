@@ -1460,6 +1460,20 @@ body, and `continue` edges under the demand created by reachable uses of loop
 parameters. If the context needs the public value, the demand is materialization
 and the ordinary public representation is preserved.
 
+Loop-carried demand is a fixed point, not a one-shot body-use query. The loop
+body creates demands on loop parameters from ordinary observations such as field
+reads, tag matches, tuple reads, callable calls, and public materialization.
+Each `continue` edge then clones the value for parameter `i` under the current
+demand for parameter `i`; that clone may add new demands to other loop
+parameters through the values it reads. The loop demand is complete only when
+cloning all reachable body observations and all reachable `continue` edges no
+longer changes any loop-parameter demand. A source-body scan that marks every
+expression mentioned in a `continue` value is incorrect, because it treats
+construction of unobserved carried data as observation. That is exactly the
+case for iterator size hints: `Iter.append` can construct a new `len_if_known`
+value for the public iterator, but a private stepping loop must not demand that
+field unless some reachable source use reads or materializes it.
+
 This distinction is important for `Iter` and `Stream`. A consuming loop that
 only steps an iterator demands the `step` field and the captures needed by that
 step callable. It does not demand `len_if_known`, so private loop state must not
@@ -1522,6 +1536,17 @@ set of known tags or callable targets becomes a finite collection of states only
 if the loop body demands that distinction. A loop-carried ordinary leaf stays an
 ordinary state parameter when demanded, and disappears when no reachable
 demanded use needs it.
+
+Demanded `continue` cloning is the rule that prevents public-wrapper work from
+leaking into private state. If parameter `rest` is demanded only through
+`rest.step`, the `continue` expression that constructs the next `rest` is cloned
+under the demand "record field `step`", not under materialization demand for the
+whole `Iter` record. Therefore adapter code that exists only to maintain
+`len_if_known` is not emitted into the private state graph. If another reachable
+use later reads `rest.len_if_known`, stores `rest`, returns it, or passes it to
+unspecialized code, the fixed point widens the parameter demand to include that
+public field or to materialization, and the generated state carries the data
+needed for that source behavior.
 
 A step call through a known callable field can be inlined when it has a single
 target. When multiple known targets remain, optimized lowering dispatches over
