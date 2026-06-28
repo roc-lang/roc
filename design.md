@@ -1574,6 +1574,15 @@ belongs to the optimized lowering context. If ordinary public-value lowering
 needs the same source program to compile, it must do so through the ordinary
 materializing path without constructing dormant optimized state.
 
+This mode gate is also a test boundary. Focused optimizer regressions must
+prove both sides of it: dev, check, interpreter, and compile-time-finalization
+paths do not construct optimized contexts, and `--opt=size` plus `--opt=speed`
+enter the same callable-state specialization path. Assertions about
+optimizer-owned facts, such as sparse demand shape, finite callable alternatives,
+loop-demand fixed points, and public materialization boundaries, must be checked
+in both optimized modes unless the assertion is explicitly about a later
+backend size-vs-speed preference.
+
 The optimized entrypoint may contain internal helper phases, but those phases
 are ordered by data dependency, not by source syntax:
 
@@ -1863,6 +1872,12 @@ optimized hot-path state, no public iterator wrapper allocation, no
 unobserved `len_if_known` work, and no iterator-specific rules in LIR, ARC, or
 backends. Rust's iterator output is the performance reference shape, not the
 source-language model Roc should copy.
+
+The implementation is complete only when those focused tests explain the
+generated-code shape without consulting wasm size, disassembly, generated symbol
+names, or Rocci Bird-specific source structure. Disassembly and byte-size
+comparisons are still useful final evidence, but they are not the source of
+truth for deciding whether the optimizer may fire.
 
 ### Structural Serialization Methods
 
