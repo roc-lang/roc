@@ -13,7 +13,6 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
-const build_options = @import("build_options");
 const abi = @import("roc_platform_abi.zig");
 const scope_tree = @import("scope_tree.zig");
 const erased_calls = @import("erased_calls.zig");
@@ -22,8 +21,10 @@ const signal_graph = @import("signal_graph.zig");
 const identity_table = @import("identity_table.zig");
 const host_value_registry = @import("host_value_registry.zig");
 const hv = @import("host_values.zig");
+const engine_metrics = @import("engine_metrics.zig");
+const engine_contract = @import("engine_contract.zig");
 
-const enable_runtime_metrics = builtin.is_test or build_options.metrics;
+const enable_runtime_metrics = engine_metrics.enable_runtime_metrics;
 
 pub const RenderTextField = render.TextField;
 pub const RenderBoolField = render.BoolField;
@@ -35,6 +36,14 @@ const node_field_custom: u64 = NodeFieldCustom;
 
 pub const HostValue = u64;
 pub const HostValueList = abi.RocListWith(HostValue, false);
+pub const RuntimeMetrics = engine_metrics.RuntimeMetrics;
+pub const NoMetrics = engine_metrics.NoMetrics;
+pub const DispatchMetrics = engine_metrics.DispatchMetrics;
+pub const zeroRuntimeMetrics = engine_metrics.zeroRuntimeMetrics;
+pub const verifyRegistryOps = engine_contract.verifyRegistryOps;
+pub const verifySink = engine_contract.verifySink;
+pub const verifyMetrics = engine_contract.verifyMetrics;
+pub const verifyCtx = engine_contract.verifyCtx;
 
 const render_event_kinds = [_]RenderEventKind{ .click, .input, .check, .pointer_down, .pointer_up, .pointer_enter, .pointer_leave };
 
@@ -173,238 +182,6 @@ const RenderScalarNodeCache = struct {
         };
     }
 };
-
-pub const RuntimeMetrics = struct {
-    active_graph_records_rebuilt: u64,
-    append_child: u64,
-    active_intervals_synced: u64,
-    allocs_this_event: u64,
-    bind_event: u64,
-    closure_releases: u64,
-    closure_retains: u64,
-    create_element: u64,
-    deallocs_this_event: u64,
-    derived_calls_into_roc: u64,
-    each_key_compares: u64,
-    each_key_hashes: u64,
-    each_key_reuse_compares: u64,
-    each_key_duplicate_compares: u64,
-    each_item_compares: u64,
-    each_syncs: u64,
-    each_sync_keys: u64,
-    each_sync_existing_rows: u64,
-    events_processed: u64,
-    host_alloc_bytes_this_event: u64,
-    host_allocs_this_event: u64,
-    host_dealloc_bytes_this_event: u64,
-    host_deallocs_this_event: u64,
-    host_retained_alloc_delta: i64,
-    host_retained_bytes_delta: i64,
-    move_before: u64,
-    nodes_recomputed: u64,
-    patches_emitted: u64,
-    propagation_prunes: u64,
-    recompute_batches: u64,
-    remove_node: u64,
-    render_indexes_refreshed: u64,
-    retained_alloc_delta: i64,
-    reset_dom: u64,
-    rows_created: u64,
-    rows_removed: u64,
-    rows_reused: u64,
-    scopes_created: u64,
-    scopes_disposed: u64,
-    set_checked: u64,
-    set_disabled: u64,
-    set_metadata: u64,
-    set_text: u64,
-    set_value: u64,
-    signal_record_table_rebuilt: u64,
-    stream_nodes_scanned: u64,
-    stream_nodes_scanned_apply: u64,
-    stream_nodes_scanned_children: u64,
-    stream_nodes_scanned_dirty_scope: u64,
-    stream_nodes_scanned_events: u64,
-    stream_nodes_scanned_mounts: u64,
-    stream_nodes_scanned_remove_target: u64,
-    stream_nodes_scanned_render_scope: u64,
-    stream_nodes_scanned_splice: u64,
-
-    pub const Field = std.meta.FieldEnum(@This());
-
-    pub inline fn bump(self: *RuntimeMetrics, comptime field: Field, n: u64) void {
-        if (comptime !enable_runtime_metrics) return;
-        @field(self, @tagName(field)) += n;
-    }
-};
-
-pub fn zeroRuntimeMetrics() RuntimeMetrics {
-    return .{
-        .active_graph_records_rebuilt = 0,
-        .append_child = 0,
-        .active_intervals_synced = 0,
-        .allocs_this_event = 0,
-        .bind_event = 0,
-        .closure_releases = 0,
-        .closure_retains = 0,
-        .create_element = 0,
-        .deallocs_this_event = 0,
-        .derived_calls_into_roc = 0,
-        .each_key_compares = 0,
-        .each_key_hashes = 0,
-        .each_key_reuse_compares = 0,
-        .each_key_duplicate_compares = 0,
-        .each_item_compares = 0,
-        .each_syncs = 0,
-        .each_sync_keys = 0,
-        .each_sync_existing_rows = 0,
-        .events_processed = 0,
-        .host_alloc_bytes_this_event = 0,
-        .host_allocs_this_event = 0,
-        .host_dealloc_bytes_this_event = 0,
-        .host_deallocs_this_event = 0,
-        .host_retained_alloc_delta = 0,
-        .host_retained_bytes_delta = 0,
-        .move_before = 0,
-        .nodes_recomputed = 0,
-        .patches_emitted = 0,
-        .propagation_prunes = 0,
-        .recompute_batches = 0,
-        .remove_node = 0,
-        .render_indexes_refreshed = 0,
-        .retained_alloc_delta = 0,
-        .reset_dom = 0,
-        .rows_created = 0,
-        .rows_removed = 0,
-        .rows_reused = 0,
-        .scopes_created = 0,
-        .scopes_disposed = 0,
-        .set_checked = 0,
-        .set_disabled = 0,
-        .set_metadata = 0,
-        .set_text = 0,
-        .set_value = 0,
-        .signal_record_table_rebuilt = 0,
-        .stream_nodes_scanned = 0,
-        .stream_nodes_scanned_apply = 0,
-        .stream_nodes_scanned_children = 0,
-        .stream_nodes_scanned_dirty_scope = 0,
-        .stream_nodes_scanned_events = 0,
-        .stream_nodes_scanned_mounts = 0,
-        .stream_nodes_scanned_remove_target = 0,
-        .stream_nodes_scanned_render_scope = 0,
-        .stream_nodes_scanned_splice = 0,
-    };
-}
-
-/// Zero-size stand-in for `RuntimeMetrics`: every `bump` is a comptime no-op.
-pub const NoMetrics = struct {
-    pub const Field = RuntimeMetrics.Field;
-
-    pub inline fn bump(_: *NoMetrics, comptime _: Field, _: u64) void {}
-};
-
-/// Dispatch counters, accumulated per host event and folded into the finalized
-/// runtime metrics. Engine-owned so both hosts share one dispatch path.
-pub const DispatchMetrics = struct {
-    events_processed: u64 = 0,
-    recompute_batches: u64 = 0,
-};
-
-fn verifyDeclFn(comptime owner_name: []const u8, comptime Owner: type, comptime decl_name: []const u8, comptime params: anytype, comptime return_type: type) void {
-    if (!@hasDecl(Owner, decl_name)) {
-        @compileError(owner_name ++ " is missing " ++ decl_name);
-    }
-
-    const fn_type = @TypeOf(@field(Owner, decl_name));
-    const type_info = @typeInfo(fn_type);
-    if (type_info != .@"fn") {
-        @compileError(owner_name ++ "." ++ decl_name ++ " must be a function");
-    }
-
-    const fn_info = type_info.@"fn";
-    if (fn_info.params.len != params.len) {
-        @compileError(owner_name ++ "." ++ decl_name ++ " has the wrong parameter count");
-    }
-    inline for (params, 0..) |expected, index| {
-        const actual = fn_info.params[index].type orelse {
-            @compileError(owner_name ++ "." ++ decl_name ++ " must not use anytype parameters");
-        };
-        if (actual != expected) {
-            @compileError(owner_name ++ "." ++ decl_name ++ " has an incompatible parameter type");
-        }
-    }
-    const actual_return = fn_info.return_type orelse void;
-    if (actual_return != return_type) {
-        @compileError(owner_name ++ "." ++ decl_name ++ " has an incompatible return type");
-    }
-}
-
-fn verifyTypeDecl(comptime owner_name: []const u8, comptime Owner: type, comptime decl_name: []const u8) void {
-    if (!@hasDecl(Owner, decl_name)) {
-        @compileError(owner_name ++ " is missing " ++ decl_name);
-    }
-    if (@TypeOf(@field(Owner, decl_name)) != type) {
-        @compileError(owner_name ++ "." ++ decl_name ++ " must be a type");
-    }
-}
-
-pub fn verifyRegistryOps(comptime Ops: type) void {
-    verifyDeclFn("engine RegistryOps", Ops, "retainCapability", .{ Ops, HostValueCapability }, void);
-    verifyDeclFn("engine RegistryOps", Ops, "releaseCapability", .{ Ops, HostValueCapability }, void);
-    verifyDeclFn("engine RegistryOps", Ops, "capabilitiesMatch", .{ Ops, HostValueCapability, HostValueCapability }, bool);
-    verifyDeclFn("engine RegistryOps", Ops, "capabilityIsActive", .{ Ops, HostValueCapability }, bool);
-    verifyDeclFn("engine RegistryOps", Ops, "cloneValueWithCapability", .{ Ops, HostValue, HostValueCapability }, HostValue);
-    verifyDeclFn("engine RegistryOps", Ops, "callHostValueToHostValueWithCapability", .{ Ops, HostValueCapability, abi.RocErasedCallable, HostValue }, HostValue);
-    verifyDeclFn("engine RegistryOps", Ops, "splitBoxWithSplit", .{ Ops, abi.RocBox, abi.RocErasedCallable }, erased_calls.RocBoxPair);
-}
-
-pub fn verifySink(comptime Sink: type) void {
-    verifyDeclFn("engine Sink", Sink, "reset", .{Sink}, void);
-    verifyDeclFn("engine Sink", Sink, "appendNode", .{ Sink, u64, u64, []const u8 }, void);
-    verifyDeclFn("engine Sink", Sink, "ensureNode", .{ Sink, u64, []const u8 }, void);
-    verifyDeclFn("engine Sink", Sink, "removeNode", .{ Sink, u64 }, void);
-    verifyDeclFn("engine Sink", Sink, "replaceChildren", .{ Sink, u64, []const u64 }, void);
-    verifyDeclFn("engine Sink", Sink, "replaceChildrenForMoves", .{ Sink, u64, []const u64 }, void);
-    verifyDeclFn("engine Sink", Sink, "applyTextField", .{ Sink, u64, RenderTextField, []const u8 }, void);
-    verifyDeclFn("engine Sink", Sink, "applyTextAttr", .{ Sink, u64, []const u8, []const u8 }, void);
-    verifyDeclFn("engine Sink", Sink, "applyBoolField", .{ Sink, u64, RenderBoolField, bool }, void);
-    verifyDeclFn("engine Sink", Sink, "clearTextField", .{ Sink, u64, RenderTextField }, void);
-    verifyDeclFn("engine Sink", Sink, "clearTextAttr", .{ Sink, u64, []const u8 }, void);
-    verifyDeclFn("engine Sink", Sink, "clearBoolField", .{ Sink, u64, RenderBoolField }, void);
-    verifyDeclFn("engine Sink", Sink, "bindEventKind", .{ Sink, u64, RenderEventKind, u64, EventPayloadAccessor }, void);
-    verifyDeclFn("engine Sink", Sink, "clearEvent", .{ Sink, u64, RenderEventKind }, void);
-    verifyDeclFn("engine Sink", Sink, "bindEventName", .{ Sink, u64, []const u8, u64, u32, EventPayloadKind, EventPayloadAccessor }, void);
-    verifyDeclFn("engine Sink", Sink, "clearEventName", .{ Sink, u64, []const u8 }, void);
-    verifyDeclFn("engine Sink", Sink, "startInterval", .{ Sink, u64, u64 }, void);
-    verifyDeclFn("engine Sink", Sink, "cancelInterval", .{ Sink, u64 }, void);
-    verifyDeclFn("engine Sink", Sink, "startTask", .{ Sink, u64, []const u8, []const u8 }, void);
-    verifyDeclFn("engine Sink", Sink, "cancelTask", .{ Sink, u64 }, void);
-    verifyDeclFn("engine Sink", Sink, "debugAssertNode", .{ Sink, u64, bool, ?[]const u8, ?u64, []const u64, ?u64, ?u64, ?u64, ?u64, ?u64, ?u64, ?u64 }, void);
-}
-
-pub fn verifyMetrics(comptime Metrics: type) void {
-    verifyDeclFn("engine Metrics", Metrics, "bump", .{ *Metrics, RuntimeMetrics.Field, u64 }, void);
-}
-
-pub fn verifyCtx(comptime Ctx: type) void {
-    verifyTypeDecl("engine Ctx", Ctx, "Handle");
-    verifyTypeDecl("engine Ctx", Ctx, "RegistryOps");
-    verifyTypeDecl("engine Ctx", Ctx, "Metrics");
-    verifyTypeDecl("engine Ctx", Ctx, "Sink");
-
-    verifyDeclFn("engine Ctx", Ctx, "zeroMetrics", .{}, Ctx.Metrics);
-    verifyDeclFn("engine Ctx", Ctx, "allocator", .{Ctx.Handle}, std.mem.Allocator);
-    verifyDeclFn("engine Ctx", Ctx, "cloneHostValue", .{ Ctx.Handle, HostValue }, HostValue);
-    verifyDeclFn("engine Ctx", Ctx, "pushHostValueCapabilities", .{ Ctx.Handle, []const HostValueCapability }, void);
-    verifyDeclFn("engine Ctx", Ctx, "popHostValueCapabilities", .{Ctx.Handle}, void);
-    verifyDeclFn("engine Ctx", Ctx, "stateValueByNodeId", .{ Ctx.Handle, u64 }, HostValue);
-    verifyDeclFn("engine Ctx", Ctx, "stateCapability", .{ Ctx.Handle, u64 }, HostValueCapability);
-    verifyDeclFn("engine Ctx", Ctx, "sink", .{Ctx.Handle}, Ctx.Sink);
-    verifyRegistryOps(Ctx.RegistryOps);
-    verifyMetrics(Ctx.Metrics);
-    verifySink(Ctx.Sink);
-}
 
 fn u64SliceContains(items: []const u64, target: u64) bool {
     for (items) |item| {
