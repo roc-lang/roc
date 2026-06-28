@@ -1421,6 +1421,15 @@ queues just to discard them. The mode decision is explicit compiler input; no
 stage may infer it from target triples, wasm output, backend choice, method
 names, builtin names, generated symbols, object bytes, or backend output.
 
+This gate is part of the optimizer's data-ownership model. Optimized demand
+state is not a dormant field on ordinary lowering, and ordinary lowering must
+not be able to manufacture an optimized context. `--opt=size` and `--opt=speed`
+enter the same callable-state specialization entrypoint and use the same
+producer-under-demand semantics; any later size-vs-speed differences belong to
+backend optimization preferences, not to the callable-state optimizer.
+Focused regressions for optimizer-owned facts must therefore run in both
+optimized modes with the same expected private-state shape.
+
 The optimized path is a different post-check lowering entrypoint, not a cleanup
 pass after ordinary lowering. It may create extra private workers, private
 state loops, and demand-specific direct calls while cloning optimized code. The
