@@ -911,7 +911,7 @@ const Builder = struct {
                 const fn_id = try self.lowerFnTemplateDef(view, fn_template);
                 break :blk try self.program.addExpr(.{
                     .ty = self.program.fnSource(fn_id).mono_fn_ty,
-                    .data = .{ .fn_def = fn_id },
+                    .data = .{ .fn_def = .{ .fn_id = fn_id } },
                 });
             },
             .callable_eval_template => |template_id| try self.lowerCallableEvalBindingValue(view, template_id, mono_fn_ty),
@@ -2338,7 +2338,7 @@ const Builder = struct {
             const mono_fn_id = try self.lowerRestoredConstFnTemplate(type_view, template);
             return try self.program.addExpr(.{
                 .ty = self.program.fnSource(mono_fn_id).mono_fn_ty,
-                .data = .{ .fn_def = mono_fn_id },
+                .data = .{ .fn_def = .{ .fn_id = mono_fn_id } },
             });
         }
 
@@ -2357,9 +2357,9 @@ const Builder = struct {
 
         const captures = try self.allocator.alloc(struct {
             binder: checked.PatternBinderId,
+            local: Ast.LocalId,
             previous: ?Ast.LocalId,
             value: Ast.ExprId,
-            pat: Ast.PatId,
         }, fn_value.captures.len);
         var initialized: usize = 0;
         errdefer {
@@ -2384,14 +2384,13 @@ const Builder = struct {
             const value_expr = try fn_ctx.restoreConstNodeAtType(store_view, fn_view, capture.value, lowered_ty);
             const local = try self.program.addLocalWithBinder(self.symbols.fresh(), lowered_ty, binder);
             try bindLocalName(self.program, fn_view, local, binder);
-            const pat = try self.program.addPat(.{ .ty = lowered_ty, .data = .{ .bind = local } });
             const previous = fn_ctx.binders.get(binder);
             try fn_ctx.binders.put(binder, local);
             captures[index] = .{
                 .binder = binder,
+                .local = local,
                 .previous = previous,
                 .value = value_expr,
-                .pat = pat,
             };
             initialized += 1;
         }
@@ -2409,25 +2408,22 @@ const Builder = struct {
             }
         }
 
-        var expr = try self.program.addExpr(.{
+        const capture_values = try self.allocator.alloc(Ast.FnDefCapture, captures.len);
+        defer self.allocator.free(capture_values);
+        for (captures, 0..) |capture, index| {
+            capture_values[index] = .{ .local = capture.local, .value = capture.value };
+        }
+
+        const expr = try self.program.addExpr(.{
             .ty = ty,
             .data = switch (lambda_expr.data) {
-                .lambda => try fn_ctx.lowerLambdaExpr(lambda_expr_id, template),
+                .lambda => .{ .fn_def = .{
+                    .fn_id = try self.lowerNestedFnFromContext(&fn_ctx, lambda_expr_id, template),
+                    .captures = try self.program.addFnDefCaptureSpan(capture_values),
+                } },
                 else => Common.invariant("stored capturing function did not reference a checked lambda"),
             },
         });
-        var index = captures.len;
-        while (index > 0) {
-            index -= 1;
-            expr = try self.program.addExpr(.{
-                .ty = ty,
-                .data = .{ .let_ = .{
-                    .bind = captures[index].pat,
-                    .value = captures[index].value,
-                    .rest = expr,
-                } },
-            });
-        }
         try self.drainSpecRequests(graph);
         return expr;
     }
@@ -4457,7 +4453,7 @@ const BodyContext = struct {
             switch (record.ref) {
                 .local_proc => |local| return try self.builder.program.addExpr(.{
                     .ty = ty,
-                    .data = .{ .fn_def = try self.fnTemplateForLocalProcWithMono(local, expr.ty, self.view.types.rootKey(expr.ty), ty) },
+                    .data = .{ .fn_def = .{ .fn_id = try self.fnTemplateForLocalProcWithMono(local, expr.ty, self.view.types.rootKey(expr.ty), ty) } },
                 }),
                 .top_level_proc,
                 .imported_proc,
@@ -4491,7 +4487,7 @@ const BodyContext = struct {
                         const fn_id = try self.builder.lowerFnTemplateDef(view, fn_template);
                         break :blk try self.builder.program.addExpr(.{
                             .ty = mono_fn_ty,
-                            .data = .{ .fn_def = fn_id },
+                            .data = .{ .fn_def = .{ .fn_id = fn_id } },
                         });
                     }
                 }
@@ -4508,7 +4504,7 @@ const BodyContext = struct {
                     mono_fn_ty,
                 );
                 const fn_id = try self.builder.lowerFnTemplateDefFromContext(self, fn_template);
-                break :blk try self.builder.program.addExpr(.{ .ty = mono_fn_ty, .data = .{ .fn_def = fn_id } });
+                break :blk try self.builder.program.addExpr(.{ .ty = mono_fn_ty, .data = .{ .fn_def = .{ .fn_id = fn_id } } });
             },
             .platform_required => Common.invariant("platform required procedure reached parse intrinsic callback lowering"),
         };
@@ -4519,41 +4515,16 @@ const BodyContext = struct {
         if (raw >= self.view.resolved_refs.records.len) {
             Common.invariant("checked direct call target is outside resolved value table");
         }
-        const record = self.view.resolved_refs.records[raw];
-        switch (record.ref) {
-            .imported_proc => |proc| {
-                const imported = switch (proc.binding) {
-                    .imported => |imported| imported,
-                    else => return null,
-                };
-                const view = self.builder.moduleForId(checked.importedProcedureModuleId(imported));
-                return self.parseIntrinsicForBuiltinDef(view, imported.def);
-            },
-            .top_level_proc,
-            .promoted_top_level_proc,
-            => |proc| return self.parseIntrinsicForBuiltinProcedureUse(proc),
-            else => return null,
-        }
-    }
-
-    fn parseIntrinsicForBuiltinProcedureUse(self: *BodyContext, proc: checked.ProcedureUseTemplate) ?ParseIntrinsic {
-        const top_level = switch (proc.binding) {
-            .top_level => |top_level| top_level,
+        const proc = switch (self.view.resolved_refs.records[raw].ref) {
+            .imported_proc => |proc| proc,
             else => return null,
         };
-        const view = self.builder.moduleForId(checked.topLevelProcedureModuleId(top_level));
-        if (view.module_env.module_role != .builtin) return null;
-        const binding = view.top_level_procedure_bindings.get(top_level.binding);
-        const template = switch (binding.body) {
-            .direct_template => |direct| switch (direct.template) {
-                .checked => |template| template,
-                .lifted, .synthetic => return null,
-            },
-            .callable_eval_template => return null,
+        const imported = switch (proc.binding) {
+            .imported => |imported| imported,
+            else => return null,
         };
-        const proc_base = view.names.procBase(template.proc_base);
-        const export_name = proc_base.export_name orelse return null;
-        return parseIntrinsicForBuiltinText(view.names.exportNameText(export_name));
+        const view = self.builder.moduleForId(checked.importedProcedureModuleId(imported));
+        return self.parseIntrinsicForBuiltinDef(view, imported.def);
     }
 
     fn parseIntrinsicForBuiltinDef(_: *BodyContext, view: ModuleView, def_idx: can.CIR.Def.Idx) ?ParseIntrinsic {
@@ -4565,17 +4536,14 @@ const BodyContext = struct {
             .assign => |assign| assign.ident,
             else => return null,
         };
-        return parseIntrinsicForBuiltinText(view.module_env.getIdentText(ident));
-    }
-
-    fn parseIntrinsicForBuiltinText(text: []const u8) ?ParseIntrinsic {
-        if (Ident.textEql(text, "Builtin.Encoding.ParseTagUnionSpec.parse")) return .tag_union_parse;
-        if (Ident.textEql(text, "Builtin.Encoding.FieldName.FieldNames.rename_fields")) return .fields_rename_fields;
-        if (Ident.textEql(text, "Builtin.Encoding.FieldName.FieldNames.shortest_name")) return .fields_shortest_name;
-        if (Ident.textEql(text, "Builtin.Encoding.FieldName.FieldNames.longest_name")) return .fields_longest_name;
-        if (Ident.textEql(text, "Builtin.Encoding.FieldName.FieldNames.iter")) return .fields_iter;
-        if (Ident.textEql(text, "Builtin.Encoding.FieldName.FieldNames.for_size")) return .fields_for_size;
-        if (Ident.textEql(text, "Builtin.Encoding.FieldName.name")) return .field_name;
+        const text = view.module_env.getIdentText(ident);
+        if (Ident.textEql(text, "Builtin.Str.ParseTagUnionSpec.parse")) return .tag_union_parse;
+        if (Ident.textEql(text, "Builtin.Str.FieldName.FieldNames.rename_fields")) return .fields_rename_fields;
+        if (Ident.textEql(text, "Builtin.Str.FieldName.FieldNames.shortest_name")) return .fields_shortest_name;
+        if (Ident.textEql(text, "Builtin.Str.FieldName.FieldNames.longest_name")) return .fields_longest_name;
+        if (Ident.textEql(text, "Builtin.Str.FieldName.FieldNames.iter")) return .fields_iter;
+        if (Ident.textEql(text, "Builtin.Str.FieldName.FieldNames.for_size")) return .fields_for_size;
+        if (Ident.textEql(text, "Builtin.Str.FieldName.name")) return .field_name;
         return null;
     }
 
@@ -8900,7 +8868,7 @@ const BodyContext = struct {
             .pattern_binder,
             .selected_hoisted_const,
             => Common.invariant("local lookup reached Monotype without a current local binding"),
-            .local_proc => |local| .{ .fn_def = try self.fnTemplateForLocalProcWithMono(local, checked_ty, self.view.types.rootKey(checked_ty), ty) },
+            .local_proc => |local| .{ .fn_def = .{ .fn_id = try self.fnTemplateForLocalProcWithMono(local, checked_ty, self.view.types.rootKey(checked_ty), ty) } },
             .top_level_proc,
             .imported_proc,
             .hosted_proc,
@@ -8955,7 +8923,7 @@ const BodyContext = struct {
                     mono_fn_ty,
                 );
                 const fn_id = try self.builder.lowerFnTemplateDefFromContext(self, fn_template);
-                break :blk try self.builder.program.addExpr(.{ .ty = mono_fn_ty, .data = .{ .fn_def = fn_id } });
+                break :blk try self.builder.program.addExpr(.{ .ty = mono_fn_ty, .data = .{ .fn_def = .{ .fn_id = fn_id } } });
             },
             .platform_required => |required| blk: {
                 const view = self.builder.moduleForId(checked.requiredProcedureModuleId(required));
@@ -9882,10 +9850,37 @@ const BodyContext = struct {
         return switch (lambda.data) {
             .lambda => blk: {
                 const nested = try self.builder.fnTemplateForNestedExprWithMono(self.view, self.owner_template, expr_id, lambda.ty, self.view.types.rootKey(lambda.ty), closure_ty, self.current_fn_key);
-                break :blk try self.lowerLambdaExpr(expr_id, nested);
+                switch (nested.fn_def) {
+                    .nested => {},
+                    else => Common.invariant("closure expression was not assigned a nested function identity"),
+                }
+                break :blk .{ .fn_def = .{
+                    .fn_id = try self.builder.lowerNestedFnFromContext(self, expr_id, nested),
+                    .captures = try self.lowerClosureCaptureExprSpan(closure.captures),
+                } };
             },
             else => Common.invariant("checked closure did not point at a lambda expression"),
         };
+    }
+
+    fn lowerClosureCaptureExprSpan(self: *BodyContext, captures: []const checked.CheckedCapture) Allocator.Error!Ast.Span(Ast.FnDefCapture) {
+        if (captures.len == 0) return .empty();
+
+        var capture_values = std.ArrayList(Ast.FnDefCapture).empty;
+        defer capture_values.deinit(self.allocator);
+
+        for (captures) |capture| {
+            const binder = checkedCaptureBinder(self.view, capture.pattern);
+            const local = self.binders.get(binder) orelse continue;
+            const ty = self.builder.program.locals.items[@intFromEnum(local)].ty;
+            const value = try self.builder.program.addExpr(.{
+                .ty = ty,
+                .data = .{ .local = local },
+            });
+            try capture_values.append(self.allocator, .{ .local = local, .value = value });
+        }
+
+        return try self.builder.program.addFnDefCaptureSpan(capture_values.items);
     }
 
     fn closureFunctionType(self: *BodyContext, closure: anytype) Allocator.Error!Type.TypeId {
@@ -9924,7 +9919,7 @@ const BodyContext = struct {
             .nested => {},
             else => Common.invariant("expression-position lambda was not assigned a nested function identity"),
         }
-        return .{ .fn_def = try self.builder.lowerNestedFnFromContext(self, expr_id, nested) };
+        return .{ .fn_def = .{ .fn_id = try self.builder.lowerNestedFnFromContext(self, expr_id, nested) } };
     }
 
     fn lowerDispatchExpr(
@@ -15826,6 +15821,13 @@ fn checkedBinderType(view: ModuleView, binder: checked.PatternBinderId) checked.
     const pattern_raw = @intFromEnum(pattern);
     if (pattern_raw >= view.bodies.patternCount()) Common.invariant("stored function capture pattern is outside checked body store");
     return view.bodies.pattern(@enumFromInt(pattern_raw)).ty;
+}
+
+fn checkedCaptureBinder(view: ModuleView, pattern: checked.CheckedPatternId) checked.PatternBinderId {
+    const raw = @intFromEnum(pattern);
+    if (raw >= view.bodies.pattern_binder_by_pattern.len) Common.invariant("checked closure capture pattern was outside the binder index");
+    return view.bodies.pattern_binder_by_pattern[raw] orelse
+        Common.invariant("checked closure capture pattern had no binder");
 }
 
 fn constCaptureBinder(id: check.ConstStore.CaptureId) checked.PatternBinderId {
