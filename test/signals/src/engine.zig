@@ -28,6 +28,7 @@ const retained_values = @import("retained_values.zig");
 const signal_records = @import("signal_records.zig");
 const active_graph = @import("active_signal_graph.zig");
 const scope_runtime = @import("scope_runtime.zig");
+const each_runtime = @import("each_runtime.zig");
 
 const enable_runtime_metrics = engine_metrics.enable_runtime_metrics;
 
@@ -132,46 +133,10 @@ fn hashEachKeyText(bytes: []const u8) u64 {
     return std.hash.Wyhash.hash(0, bytes);
 }
 
-const missing_each_row_index = std.math.maxInt(usize);
-
-const HostEachRowSiteKey = struct {
-    parent_scope_id: u64,
-    site_ordinal: u64,
-};
-
-const HostEachRowSiteKeyContext = struct {
-    pub fn hash(_: @This(), key: HostEachRowSiteKey) u64 {
-        var hasher = std.hash.Wyhash.init(0);
-        hasher.update(std.mem.asBytes(&key.parent_scope_id));
-        hasher.update(std.mem.asBytes(&key.site_ordinal));
-        return hasher.final();
-    }
-
-    pub fn eql(_: @This(), left: HostEachRowSiteKey, right: HostEachRowSiteKey) bool {
-        return left.parent_scope_id == right.parent_scope_id and left.site_ordinal == right.site_ordinal;
-    }
-};
-
-const HostEachRowSiteIndexMap = std.HashMapUnmanaged(HostEachRowSiteKey, usize, HostEachRowSiteKeyContext, std.hash_map.default_max_load_percentage);
-
-const HostEachRowMembership = struct {
-    site_index: usize,
-    row_index: usize,
-};
-
-const HostEachRowSite = struct {
-    key: HostEachRowSiteKey,
-    scope_ids: std.ArrayListUnmanaged(u64) = .empty,
-    hash_heads: std.AutoHashMapUnmanaged(u64, usize) = .empty,
-    hash_links: std.ArrayListUnmanaged(usize) = .empty,
-
-    fn deinit(self: *HostEachRowSite, allocator: std.mem.Allocator) void {
-        self.scope_ids.deinit(allocator);
-        self.hash_heads.deinit(allocator);
-        self.hash_links.deinit(allocator);
-        self.* = undefined;
-    }
-};
+const missing_each_row_index = each_runtime.missing_row_index;
+const HostEachRowSiteIndexMap = each_runtime.SiteIndexMap;
+const HostEachRowMembership = each_runtime.Membership;
+const HostEachRowSite = each_runtime.Site;
 
 // Descriptor layer
 //
@@ -1686,6 +1651,14 @@ pub fn Engine(comptime Ctx: type) type {
             }
         };
 
+        const EachRowScopeKeyLookup = struct {
+            engine: *Self,
+
+            pub fn rowKeyHash(self: *@This(), scope_id: u64) u64 {
+                return self.engine.eachRowScopeKeyHash(scope_id);
+            }
+        };
+
         pub fn init() Self {
             return .{};
         }
@@ -2110,182 +2083,29 @@ pub fn Engine(comptime Ctx: type) type {
         }
 
         fn clearEachRowSites(self: *Self, allocator: std.mem.Allocator) void {
-            for (self.each_row_sites.items) |*site| {
-                site.deinit(allocator);
-            }
-            self.each_row_sites.deinit(allocator);
-            self.each_row_site_indexes.deinit(allocator);
-            self.each_row_memberships_by_scope_id.deinit(allocator);
-            self.each_row_sites = .empty;
-            self.each_row_site_indexes = .empty;
-            self.each_row_memberships_by_scope_id = .empty;
-        }
-
-        fn ensureEachRowMembershipSlot(self: *Self, allocator: std.mem.Allocator, scope_id: u64) *?HostEachRowMembership {
-            const index: usize = @intCast(scope_id);
-            while (self.each_row_memberships_by_scope_id.items.len <= index) {
-                self.each_row_memberships_by_scope_id.append(allocator, null) catch @panic("out of memory");
-            }
-            return &self.each_row_memberships_by_scope_id.items[index];
+            each_runtime.clearSites(allocator, &self.each_row_sites, &self.each_row_site_indexes, &self.each_row_memberships_by_scope_id);
         }
 
         fn ensureEachRowSiteIndex(self: *Self, allocator: std.mem.Allocator, parent_scope_id: u64, site_ordinal: u64) usize {
-            const key: HostEachRowSiteKey = .{
-                .parent_scope_id = parent_scope_id,
-                .site_ordinal = site_ordinal,
-            };
-            const entry = self.each_row_site_indexes.getOrPut(allocator, key) catch @panic("out of memory");
-            if (entry.found_existing) return entry.value_ptr.*;
-
-            const site_index = self.each_row_sites.items.len;
-            self.each_row_sites.append(allocator, .{ .key = key }) catch @panic("out of memory");
-            entry.value_ptr.* = site_index;
-            return site_index;
+            return each_runtime.ensureSiteIndex(allocator, &self.each_row_sites, &self.each_row_site_indexes, parent_scope_id, site_ordinal);
         }
 
         fn activeEachRowSiteIndex(self: *Self, parent_scope_id: u64, site_ordinal: u64) ?usize {
-            return self.each_row_site_indexes.get(.{
-                .parent_scope_id = parent_scope_id,
-                .site_ordinal = site_ordinal,
-            });
+            return each_runtime.activeSiteIndex(&self.each_row_site_indexes, parent_scope_id, site_ordinal);
         }
 
         fn appendEachRowToSiteIndex(self: *Self, allocator: std.mem.Allocator, site_index: usize, scope_id: u64, key_hash: u64) void {
-            if (site_index >= self.each_row_sites.items.len) @panic("each row site index exceeded site table");
-            const site = &self.each_row_sites.items[site_index];
-            const row_index = site.scope_ids.items.len;
-
-            site.scope_ids.append(allocator, scope_id) catch @panic("out of memory");
-            site.hash_links.append(allocator, missing_each_row_index) catch @panic("out of memory");
-            const hash_entry = site.hash_heads.getOrPut(allocator, key_hash) catch @panic("out of memory");
-            if (hash_entry.found_existing) {
-                site.hash_links.items[row_index] = hash_entry.value_ptr.*;
-            }
-            hash_entry.value_ptr.* = row_index;
-
-            const membership = self.ensureEachRowMembershipSlot(allocator, scope_id);
-            if (membership.* != null) @panic("each row scope already had an active row index");
-            membership.* = .{
-                .site_index = site_index,
-                .row_index = row_index,
-            };
-        }
-
-        fn unlinkEachRowHashIndex(site: *HostEachRowSite, hash: u64, row_index: usize) void {
-            const head = site.hash_heads.getPtr(hash) orelse @panic("each row hash bucket was missing");
-            if (head.* == row_index) {
-                const next = site.hash_links.items[row_index];
-                if (next == missing_each_row_index) {
-                    _ = site.hash_heads.remove(hash);
-                } else {
-                    head.* = next;
-                }
-                return;
-            }
-
-            var current = head.*;
-            while (current != missing_each_row_index) {
-                const next = &site.hash_links.items[current];
-                if (next.* == row_index) {
-                    next.* = site.hash_links.items[row_index];
-                    return;
-                }
-                current = next.*;
-            }
-            @panic("each row hash bucket did not contain row index");
-        }
-
-        fn replaceEachRowHashIndex(site: *HostEachRowSite, hash: u64, old_index: usize, new_index: usize) void {
-            if (old_index == new_index) return;
-
-            const head = site.hash_heads.getPtr(hash) orelse @panic("each row hash bucket was missing");
-            if (head.* == old_index) {
-                head.* = new_index;
-                return;
-            }
-
-            var current = head.*;
-            while (current != missing_each_row_index) {
-                const next = &site.hash_links.items[current];
-                if (next.* == old_index) {
-                    next.* = new_index;
-                    return;
-                }
-                current = next.*;
-            }
-            @panic("each row hash bucket did not contain moved row index");
+            each_runtime.appendRowToSiteIndex(allocator, &self.each_row_sites, &self.each_row_memberships_by_scope_id, site_index, scope_id, key_hash);
         }
 
         fn removeEachRowFromSiteIndex(self: *Self, scope_id: u64, key_hash: u64) void {
-            if (scope_id >= self.each_row_memberships_by_scope_id.items.len) @panic("each row scope was missing its row index");
-            const membership = self.each_row_memberships_by_scope_id.items[@intCast(scope_id)] orelse @panic("each row scope was missing its row index");
-            if (membership.site_index >= self.each_row_sites.items.len) @panic("each row membership pointed past site table");
-            const site = &self.each_row_sites.items[membership.site_index];
-            if (membership.row_index >= site.scope_ids.items.len) @panic("each row membership pointed past row table");
-            if (site.scope_ids.items[membership.row_index] != scope_id) @panic("each row membership pointed at the wrong scope");
-
-            const last_index = site.scope_ids.items.len - 1;
-            const moved_scope_id = site.scope_ids.items[last_index];
-            unlinkEachRowHashIndex(site, key_hash, membership.row_index);
-
-            self.each_row_memberships_by_scope_id.items[@intCast(scope_id)] = null;
-
-            if (membership.row_index != last_index) {
-                const moved_hash = self.eachRowScopeKeyHash(moved_scope_id);
-                replaceEachRowHashIndex(site, moved_hash, last_index, membership.row_index);
-                site.scope_ids.items[membership.row_index] = moved_scope_id;
-                site.hash_links.items[membership.row_index] = site.hash_links.items[last_index];
-
-                const moved_membership = &self.each_row_memberships_by_scope_id.items[@intCast(moved_scope_id)];
-                if (moved_membership.*) |*entry| {
-                    entry.row_index = membership.row_index;
-                } else {
-                    @panic("moved each row scope was missing its row index");
-                }
-            }
-
-            _ = site.scope_ids.pop();
-            _ = site.hash_links.pop();
+            var row_keys = EachRowScopeKeyLookup{ .engine = self };
+            each_runtime.removeRowFromSiteIndex(&self.each_row_sites, &self.each_row_memberships_by_scope_id, scope_id, key_hash, &row_keys);
         }
 
         fn replaceEachRowSiteRows(self: *Self, allocator: std.mem.Allocator, site_index: usize, scope_ids: []const u64) void {
-            if (site_index >= self.each_row_sites.items.len) @panic("each row site index exceeded site table");
-            const site = &self.each_row_sites.items[site_index];
-
-            for (site.scope_ids.items) |scope_id| {
-                if (scope_id < self.each_row_memberships_by_scope_id.items.len) {
-                    self.each_row_memberships_by_scope_id.items[@intCast(scope_id)] = null;
-                }
-            }
-
-            site.scope_ids.clearRetainingCapacity();
-            site.scope_ids.appendSlice(allocator, scope_ids) catch @panic("out of memory");
-            site.hash_links.resize(allocator, scope_ids.len) catch @panic("out of memory");
-            @memset(site.hash_links.items, missing_each_row_index);
-            site.hash_heads.clearRetainingCapacity();
-
-            for (scope_ids, 0..) |scope_id, row_index| {
-                self.validateScopeId(scope_id) catch @panic("scope id has no host scope descriptor");
-                const scope = &self.scopes.items[@intCast(scope_id)];
-                if (!scope.active) @panic("each row site index received an inactive scope");
-                const key_hash = switch (scope.step) {
-                    .each_row => |row| row.key_hash,
-                    .root, .component, .when_branch => @panic("each row site index received a non-row scope"),
-                };
-
-                const hash_entry = site.hash_heads.getOrPut(allocator, key_hash) catch @panic("out of memory");
-                if (hash_entry.found_existing) {
-                    site.hash_links.items[row_index] = hash_entry.value_ptr.*;
-                }
-                hash_entry.value_ptr.* = row_index;
-
-                const membership = self.ensureEachRowMembershipSlot(allocator, scope_id);
-                if (membership.* != null) @panic("each row scope already had an active row index");
-                membership.* = .{
-                    .site_index = site_index,
-                    .row_index = row_index,
-                };
-            }
+            var row_keys = EachRowScopeKeyLookup{ .engine = self };
+            each_runtime.replaceSiteRows(allocator, &self.each_row_sites, &self.each_row_memberships_by_scope_id, site_index, scope_ids, &row_keys);
         }
 
         pub fn deactivateState(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, node_id: u64) void {
