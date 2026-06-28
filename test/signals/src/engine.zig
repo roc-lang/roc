@@ -1659,6 +1659,16 @@ pub fn Engine(comptime Ctx: type) type {
             }
         };
 
+        const ScopeIdentityDeactivation = struct {
+            engine: *Self,
+            ctx: Ctx.Handle,
+            roc_host: *abi.RocHost,
+
+            pub fn deactivateNode(self: *@This(), node_id: u64) void {
+                self.engine.deactivateState(self.ctx, self.roc_host, node_id);
+            }
+        };
+
         pub fn init() Self {
             return .{};
         }
@@ -2872,12 +2882,8 @@ pub fn Engine(comptime Ctx: type) type {
                 }
             }
 
-            for (self.node_identities.items) |*identity| {
-                if (identity.active and identity.scope_id == scope_id) {
-                    self.deactivateState(ctx, roc_host, identity.node_id);
-                    identity.active = false;
-                }
-            }
+            var identity_deactivation = ScopeIdentityDeactivation{ .engine = self, .ctx = ctx, .roc_host = roc_host };
+            identity_table.deactivateNodesInScope(&self.node_identities, scope_id, &identity_deactivation);
 
             for (self.active_stream.cleanups.items) |cleanup| {
                 if (cleanup.scope_id == scope_id) {
@@ -2887,11 +2893,7 @@ pub fn Engine(comptime Ctx: type) type {
 
             self.cancelPendingTasksInScopeSubtree(ctx, scope_id);
 
-            for (self.dom_identities.items) |*identity| {
-                if (identity.active and identity.scope_id == scope_id) {
-                    identity.active = false;
-                }
-            }
+            identity_table.deactivateDomsInScope(&self.dom_identities, scope_id);
 
             const scope = &self.scopes.items[@intCast(scope_id)];
             switch (scope.step) {

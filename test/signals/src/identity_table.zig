@@ -54,6 +54,23 @@ pub fn internDom(allocator: std.mem.Allocator, identities: *std.ArrayListUnmanag
     return elem_id;
 }
 
+pub fn deactivateNodesInScope(identities: *std.ArrayListUnmanaged(NodeIdentity), scope_id: u64, hooks: anytype) void {
+    for (identities.items) |*identity| {
+        if (identity.active and identity.scope_id == scope_id) {
+            hooks.deactivateNode(identity.node_id);
+            identity.active = false;
+        }
+    }
+}
+
+pub fn deactivateDomsInScope(identities: *std.ArrayListUnmanaged(DomIdentity), scope_id: u64) void {
+    for (identities.items) |*identity| {
+        if (identity.active and identity.scope_id == scope_id) {
+            identity.active = false;
+        }
+    }
+}
+
 test "node identities reuse active scope ordinal pairs" {
     var identities: std.ArrayListUnmanaged(NodeIdentity) = .empty;
     defer identities.deinit(std.testing.allocator);
@@ -82,4 +99,40 @@ test "dom identities are one-based and reuse active scope ordinal pairs" {
     try std.testing.expectEqual(@as(u64, 1), first);
     try std.testing.expectEqual(first, same);
     try std.testing.expectEqual(@as(u64, 2), next);
+}
+
+const TestDeactivateHook = struct {
+    deactivated_nodes: std.ArrayListUnmanaged(u64) = .empty,
+
+    fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
+        self.deactivated_nodes.deinit(allocator);
+    }
+
+    pub fn deactivateNode(self: *@This(), node_id: u64) void {
+        self.deactivated_nodes.append(std.testing.allocator, node_id) catch @panic("out of memory");
+    }
+};
+
+test "identities deactivate active entries in a disposed scope" {
+    var node_identities: std.ArrayListUnmanaged(NodeIdentity) = .empty;
+    defer node_identities.deinit(std.testing.allocator);
+    var dom_identities: std.ArrayListUnmanaged(DomIdentity) = .empty;
+    defer dom_identities.deinit(std.testing.allocator);
+
+    const node_scope_a = try internNode(std.testing.allocator, &node_identities, 3, 0);
+    const node_scope_b = try internNode(std.testing.allocator, &node_identities, 4, 0);
+    const dom_scope_a = try internDom(std.testing.allocator, &dom_identities, 3, 0);
+    const dom_scope_b = try internDom(std.testing.allocator, &dom_identities, 4, 0);
+
+    var hook = TestDeactivateHook{};
+    defer hook.deinit(std.testing.allocator);
+
+    deactivateNodesInScope(&node_identities, 3, &hook);
+    deactivateDomsInScope(&dom_identities, 3);
+
+    try std.testing.expectEqualSlices(u64, &.{node_scope_a}, hook.deactivated_nodes.items);
+    try std.testing.expect(!node_identities.items[@intCast(node_scope_a)].active);
+    try std.testing.expect(node_identities.items[@intCast(node_scope_b)].active);
+    try std.testing.expect(!dom_identities.items[@intCast(dom_scope_a - 1)].active);
+    try std.testing.expect(dom_identities.items[@intCast(dom_scope_b - 1)].active);
 }
