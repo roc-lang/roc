@@ -4478,7 +4478,7 @@ const BodyContext = struct {
         for (tags, 0..) |tag, index| {
             out[index] = .{
                 .name = try self.builder.tagName(self.view, tag.name),
-                .checked_name = tag.name,
+                .checked_name = try self.builder.tagName(self.view, tag.name),
                 .payloads = try self.instNodeSlice(tag.argsSlice(self.view.types)),
             };
         }
