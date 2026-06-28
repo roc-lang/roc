@@ -67,21 +67,6 @@ is_intentional_error_fixture() {
     return 1
 }
 
-is_non_benchmark_fixture() {
-    local filename="$1"
-
-    # These files are tiny semantic/codegen regression fixtures. They should run
-    # in the FX test suite, but `roc <file> --no-cache` mostly measures fixed
-    # compiler/linker setup for them rather than program execution.
-    case "$filename" in
-        zst_nested_singleton_shapes.roc)
-            return 0
-            ;;
-    esac
-
-    return 1
-}
-
 print_probe_log() {
     local probe_log="$1"
 
@@ -157,10 +142,6 @@ for fx_file in test/fx/*.roc; do
     filename=$(basename "$fx_file")
     if is_intentional_error_fixture "$filename"; then
         echo "Skipping $fx_file (intentional error fixture)"
-        continue
-    fi
-    if is_non_benchmark_fixture "$filename"; then
-        echo "Skipping $fx_file (semantic regression fixture, not an execution benchmark)"
         continue
     fi
     if ! grep -qE '^app[[:space:]]*\[[[:space:]]*main![[:space:]]*\]' "$fx_file" 2>/dev/null; then
