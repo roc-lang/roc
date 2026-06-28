@@ -2,7 +2,7 @@ platform "http-headers"
 	requires {
 		main! : Str => U64
 	}
-	exposes []
+	exposes [Headers]
 	packages {}
 	provides { "roc_main": main_for_host! }
 	targets: {
@@ -14,6 +14,8 @@ platform "http-headers"
 		x64win: { inputs: ["host.lib", app], output: Exe },
 		arm64win: { inputs: ["host.lib", app], output: Exe },
 	}
+
+import Headers
 
 main_for_host! : Str => U64
 main_for_host! = |headers| main!(headers)

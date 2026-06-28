@@ -734,7 +734,8 @@ const Lowerer = struct {
         if (self.captures.get(local)) |capture| {
             return try self.lowerCaptureBindingInto(target, capture, next);
         }
-        return try self.assignLocal(target, try self.localForTyped(local, ty), next);
+        const source = try self.localForTyped(local, ty);
+        return try self.assignBoxBoundary(target, source, self.result.store.getLocal(source).layout_idx, next);
     }
 
     fn lowerCapturedLocalInto(self: *Lowerer, target: LIR.LocalId, local: Lifted.LocalId, ty: Type.TypeId, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
@@ -1572,7 +1573,10 @@ const Lowerer = struct {
             .fn_ref => |fn_id| try self.lowerFnRefInto(target, expr_id, fn_id, next),
             .nominal => |backing| try self.lowerNominalInto(target, expr_ty, backing, next),
             .let_ => |let_| try self.lowerLetInto(target, let_, next),
-            .call_proc => |call| try self.lowerDirectProcCallInto(target, Lifted.callProcCallee(call), self.solved.lifted.exprSpan(call.args), call.is_cold, next),
+            .call_proc => |call| switch (Lifted.directCallee(call)) {
+                .local => |callee| try self.lowerDirectProcCallInto(target, callee, self.solved.lifted.exprSpan(call.args), call.is_cold, next),
+                .imported => Common.invariant("direct LIR lowering requires imported Monotype calls to be linked before this stage"),
+            },
             .call_value => |call| try self.lowerValueCallInto(target, call.callee, self.solved.lifted.exprSpan(call.args), next),
             .low_level => |call| try self.lowerLowLevelInto(target, call.op, call.args, next),
             .field_access => |field| try self.lowerFieldAccessInto(target, field.receiver, field.field, next),
@@ -1940,6 +1944,7 @@ const Lowerer = struct {
         const target_content = self.result.layouts.getLayout(target_layout);
         const source_content = self.result.layouts.getLayout(source_layout);
         if (target_content.eql(source_content)) return try self.assignLocal(target, source, next);
+        if (try self.layoutsEquivalent(target_layout, source_layout)) return try self.assignLocal(target, source, next);
         if (target_content.tag == .box and self.result.layouts.getLayout(target_content.getIdx()).eql(source_content)) {
             return try self.assignUnaryLowLevel(target, .box_box, source, next);
         }
@@ -1953,6 +1958,12 @@ const Lowerer = struct {
             return try self.assignUnaryLowLevel(target, .box_unbox, source, next);
         }
 
+        if (target_content.tag == .struct_ and source_content.tag == .struct_) {
+            if (try self.assignStructBoundary(target, target_content, source, source_content, next)) |converted| {
+                return converted;
+            }
+        }
+
         if (self.isZstLocal(target)) {
             if (!self.isZstLocal(source)) {
                 Common.invariant("box boundary tried to store non-zero-sized source into zero-sized target");
@@ -1960,7 +1971,7 @@ const Lowerer = struct {
             return try self.assignZst(target, next);
         }
 
-        if (@import("builtin").mode == .Debug) {
+        if (builtin.mode == .Debug) {
             if (target_content.tag == .list and source_content.tag == .list) {
                 const target_elem = target_content.getIdx();
                 const source_elem = source_content.getIdx();
@@ -1987,6 +1998,141 @@ const Lowerer = struct {
             );
         }
         unreachable;
+    }
+
+    fn assignStructBoundary(
+        self: *Lowerer,
+        target: LIR.LocalId,
+        target_content: layout.Layout,
+        source: LIR.LocalId,
+        source_content: layout.Layout,
+        next: LIR.CFStmtId,
+    ) Common.LowerError!?LIR.CFStmtId {
+        const target_info = self.result.layouts.getStructInfo(target_content);
+        const source_info = self.result.layouts.getStructInfo(source_content);
+        if (target_info.fields.len != source_info.fields.len) return null;
+
+        const field_count = target_info.fields.len;
+        const filled = try self.allocator.alloc(bool, field_count);
+        defer self.allocator.free(filled);
+        @memset(filled, false);
+
+        for (0..field_count) |i| {
+            const target_field = target_info.fields.get(i);
+            if (target_field.is_padding) return null;
+            if (target_field.index >= field_count) return null;
+            if (filled[target_field.index]) return null;
+            filled[target_field.index] = true;
+        }
+        for (filled) |was_filled| {
+            if (!was_filled) return null;
+        }
+
+        const fields = try self.allocator.alloc(LIR.LocalId, field_count);
+        defer self.allocator.free(fields);
+
+        for (0..field_count) |i| {
+            const target_field = target_info.fields.get(i);
+            fields[target_field.index] = try self.addLocalForLayout(target_field.layout);
+        }
+
+        var current = try self.result.store.addCFStmt(.{ .assign_struct = .{
+            .target = target,
+            .fields = try self.result.store.addLocalSpan(fields),
+            .next = next,
+        } });
+
+        var i = field_count;
+        while (i > 0) {
+            i -= 1;
+            const target_field = target_info.fields.get(i);
+            const source_field = structFieldByOriginalIndex(source_info.fields, target_field.index) orelse return null;
+            if (source_field.is_padding) return null;
+            current = try self.assignRefRead(
+                fields[target_field.index],
+                source_field.layout,
+                .{ .field = .{ .source = source, .field_idx = target_field.index } },
+                current,
+            );
+        }
+
+        return current;
+    }
+
+    fn structFieldByOriginalIndex(fields: layout.StructField.SafeMultiList.Slice, index: u16) ?layout.StructField {
+        for (0..fields.len) |i| {
+            const field = fields.get(i);
+            if (field.index == index) return field;
+        }
+        return null;
+    }
+
+    fn layoutsEquivalent(self: *Lowerer, lhs: layout.Idx, rhs: layout.Idx) Common.LowerError!bool {
+        var visited = std.AutoHashMap(u64, void).init(self.allocator);
+        defer visited.deinit();
+        return try self.layoutsEquivalentInner(lhs, rhs, &visited);
+    }
+
+    fn layoutsEquivalentInner(
+        self: *Lowerer,
+        lhs_idx: layout.Idx,
+        rhs_idx: layout.Idx,
+        visited: *std.AutoHashMap(u64, void),
+    ) Common.LowerError!bool {
+        if (lhs_idx == rhs_idx) return true;
+        const key = (@as(u64, @intFromEnum(lhs_idx)) << 32) | @as(u64, @intFromEnum(rhs_idx));
+        if (visited.contains(key)) return true;
+        try visited.put(key, {});
+
+        const lhs = self.result.layouts.getLayout(lhs_idx);
+        const rhs = self.result.layouts.getLayout(rhs_idx);
+        if (lhs.eql(rhs)) return true;
+        if (lhs.tag != rhs.tag) return false;
+
+        return switch (lhs.tag) {
+            .scalar,
+            .erased_callable,
+            => lhs.eql(rhs),
+            .zst,
+            .box_of_zst,
+            .list_of_zst,
+            => true,
+            .box,
+            .list,
+            .ptr,
+            => try self.layoutsEquivalentInner(lhs.getIdx(), rhs.getIdx(), visited),
+            .closure => try self.layoutsEquivalentInner(lhs.getClosure().captures_layout_idx, rhs.getClosure().captures_layout_idx, visited),
+            .struct_ => blk: {
+                const lhs_info = self.result.layouts.getStructInfo(lhs);
+                const rhs_info = self.result.layouts.getStructInfo(rhs);
+                if (lhs_info.alignment != rhs_info.alignment) break :blk false;
+                if (lhs_info.size() != rhs_info.size()) break :blk false;
+                if (lhs_info.fields.len != rhs_info.fields.len) break :blk false;
+                for (0..lhs_info.fields.len) |index| {
+                    const lhs_field = lhs_info.fields.get(index);
+                    const rhs_field = rhs_info.fields.get(index);
+                    if (lhs_field.index != rhs_field.index) break :blk false;
+                    if (lhs_field.is_padding != rhs_field.is_padding) break :blk false;
+                    if (!try self.layoutsEquivalentInner(lhs_field.layout, rhs_field.layout, visited)) break :blk false;
+                }
+                break :blk true;
+            },
+            .tag_union => blk: {
+                const lhs_info = self.result.layouts.getTagUnionInfo(lhs);
+                const rhs_info = self.result.layouts.getTagUnionInfo(rhs);
+                if (lhs_info.alignment != rhs_info.alignment) break :blk false;
+                if (lhs_info.size() != rhs_info.size()) break :blk false;
+                if (!std.meta.eql(lhs_info.data.discriminant_offset, rhs_info.data.discriminant_offset)) break :blk false;
+                if (lhs_info.data.discriminant_size != rhs_info.data.discriminant_size) break :blk false;
+                if (lhs_info.variants.len != rhs_info.variants.len) break :blk false;
+                for (0..lhs_info.variants.len) |index| {
+                    const lhs_variant = lhs_info.variants.get(index);
+                    const rhs_variant = rhs_info.variants.get(index);
+                    if (!try self.layoutsEquivalentInner(lhs_variant.payload_layout, rhs_variant.payload_layout, visited)) break :blk false;
+                }
+                break :blk true;
+            },
+        };
     }
 
     fn assignRefRead(
@@ -3896,11 +4042,15 @@ const Lowerer = struct {
         const pat_data = self.pat(pat_id);
         const pat_ty = try self.lowerPatTy(pat_id);
         return switch (pat_data.data) {
-            .bind => |local| try self.assignLocal(try self.localForTyped(local, pat_ty), source, next),
+            .bind => |local| blk: {
+                const target = try self.localForTyped(local, pat_ty);
+                break :blk try self.assignBoxBoundary(target, source, self.result.store.getLocal(source).layout_idx, next);
+            },
             .wildcard => next,
             .as => |as| blk: {
                 const bound = try self.bindPattern(as.pattern, source, next);
-                break :blk try self.assignLocal(try self.localForTyped(as.local, pat_ty), source, bound);
+                const target = try self.localForTyped(as.local, pat_ty);
+                break :blk try self.assignBoxBoundary(target, source, self.result.store.getLocal(source).layout_idx, bound);
             },
             .record => |fields| try self.bindRecordPattern(pat_ty, fields, source, next),
             .tuple => |items| try self.bindTuplePattern(items, source, next),
@@ -4706,7 +4856,7 @@ const Lowerer = struct {
                 try self.rememberLayoutForType(@enumFromInt(type_index), commit.value_layouts[@intFromEnum(mapped_node)]);
             }
         }
-        return commit.value_layouts[@intFromEnum(node)];
+        return self.knownLayoutForType(ty) orelse commit.value_layouts[@intFromEnum(node)];
     }
 
     const LayoutGraphBuilder = struct {
@@ -5258,6 +5408,7 @@ fn cloneLiftedProgram(allocator: std.mem.Allocator, program: *const Lifted.Progr
         .names = name_store,
         .next_symbol = program.next_symbol,
         .types = types,
+        .imported_fns = try cloneArrayList(Lifted.ImportedFn, allocator, &program.imported_fns),
         .fns = try cloneArrayList(Lifted.Fn, allocator, &program.fns),
         .exprs = try cloneArrayList(Lifted.Expr, allocator, &program.exprs),
         .pats = try cloneArrayList(Lifted.Pat, allocator, &program.pats),
@@ -5324,10 +5475,9 @@ fn cloneProcDebugNameMap(allocator: std.mem.Allocator, source: *const Lifted.Pro
     var cloned = Lifted.ProcDebugNameMap.init(allocator);
     errdefer cloned.deinit();
 
-    try cloned.ensureTotalCapacity(source.count());
-    var it = source.iterator();
-    while (it.next()) |entry| {
-        cloned.putAssumeCapacity(entry.key_ptr.*, entry.value_ptr.*);
+    try cloned.items.ensureTotalCapacityPrecise(allocator, source.items.items.len);
+    for (source.items.items) |entry| {
+        cloned.items.appendAssumeCapacity(entry);
     }
 
     return cloned;
@@ -5378,10 +5528,13 @@ fn cloneMonoTypeStore(allocator: std.mem.Allocator, source: *const MonoType.Stor
     return .{
         .allocator = allocator,
         .types = try cloneArrayList(MonoType.Content, allocator, &source.types),
+        .type_digests = try cloneArrayList(?check.CheckedNames.TypeDigest, allocator, &source.type_digests),
+        .specialization_digests = try cloneArrayList(?check.CheckedNames.TypeDigest, allocator, &source.specialization_digests),
         .spans = try cloneArrayList(MonoType.TypeId, allocator, &source.spans),
         .fields = try cloneArrayList(MonoType.Field, allocator, &source.fields),
         .tags = try cloneArrayList(MonoType.Tag, allocator, &source.tags),
         .declared_fields = try cloneArrayList(MonoType.DeclaredField, allocator, &source.declared_fields),
+        .frozen = source.isFrozen(),
     };
 }
 

@@ -44,12 +44,6 @@ pub const BuiltinIndices = struct {
     parse_tag_union_spec_type: Statement.Idx,
     fields_type: Statement.Idx,
     field_type: Statement.Idx,
-    json_state_type: Statement.Idx,
-    json_encoding_type: Statement.Idx,
-    json_type: Statement.Idx,
-    http_header_state_type: Statement.Idx,
-    http_header_encoding_type: Statement.Idx,
-    http_header_type: Statement.Idx,
     utf8_problem_type: Statement.Idx,
     u8_type: Statement.Idx,
     i8_type: Statement.Idx,
@@ -80,12 +74,6 @@ pub const BuiltinIndices = struct {
     parse_tag_union_spec_ident: Ident.Idx,
     fields_ident: Ident.Idx,
     field_ident: Ident.Idx,
-    json_state_ident: Ident.Idx,
-    json_encoding_ident: Ident.Idx,
-    json_ident: Ident.Idx,
-    http_header_state_ident: Ident.Idx,
-    http_header_encoding_ident: Ident.Idx,
-    http_header_ident: Ident.Idx,
     utf8_problem_ident: Ident.Idx,
     u8_ident: Ident.Idx,
     i8_ident: Ident.Idx,
@@ -522,7 +510,7 @@ pub const IntValue = struct {
     bytes: [16]u8,
     kind: IntKind,
 
-    pub const IntKind = enum {
+    pub const IntKind = enum(u8) {
         i128,
         u128,
     };

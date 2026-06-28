@@ -528,7 +528,7 @@ const Pass = struct {
             .call_proc => |call| {
                 const args = self.program.exprSpan(call.args);
                 for (args) |arg| try self.markArgUsesInExpr(fn_id, arg, changed);
-                const callee = Ast.callProcCallee(call);
+                const callee = Ast.localDirectCallee(call) orelse return;
                 const callee_raw = @intFromEnum(callee);
                 if (callee_raw < self.plans.len) {
                     const callee_uses = self.plans[callee_raw].used_args;
@@ -667,7 +667,7 @@ const Pass = struct {
             },
             .call_proc => |call| {
                 try self.collectCallPatternsInExprSpan(owner, call.args);
-                const callee = Ast.callProcCallee(call);
+                const callee = Ast.localDirectCallee(call) orelse return;
                 if (@intFromEnum(callee) < self.plans.len) try self.recordCallPattern(callee, call.args);
             },
             .low_level => |call| {
@@ -1042,7 +1042,7 @@ const Pass = struct {
     }
 
     fn rewriteCallProc(self: *Pass, expr_id: Ast.ExprId, call: @import("../monotype/ast.zig").CallProc) Allocator.Error!void {
-        const callee = Ast.callProcCallee(call);
+        const callee = Ast.localDirectCallee(call) orelse return;
         const raw = @intFromEnum(callee);
         if (raw >= self.plans.len) return;
         if (self.plans[raw].specs.items.len == 0) return;
@@ -1554,8 +1554,9 @@ const Cloner = struct {
                 if (self.inline_direct_requires_known_arg and !has_known_shape_arg) {
                     return .{ .expr = try self.cloneExprPlain(expr_id) };
                 }
+                const callee = Ast.localDirectCallee(call) orelse return .{ .expr = try self.cloneExprPlain(expr_id) };
                 return try self.inlineDirectCallValue(
-                    Ast.callProcCallee(call),
+                    callee,
                     call.args,
                     expr_id,
                 );
@@ -2031,7 +2032,11 @@ const Cloner = struct {
             } };
         }
 
-        const callee = Ast.callProcCallee(call);
+        const callee = Ast.localDirectCallee(call) orelse return .{ .call_proc = .{
+            .callee = call.callee,
+            .args = try self.cloneExprSpan(call.args),
+            .is_cold = call.is_cold,
+        } };
         const raw = @intFromEnum(callee);
         if (raw < self.pass.plans.len) {
             const source_args = self.pass.program.exprSpan(call.args);
@@ -3875,6 +3880,45 @@ fn tupleFromValue(value: Value) ?TupleValue {
         .nominal => |nominal| tupleFromValue(nominal.backing.*),
         else => null,
     };
+}
+
+test "call-pattern specialization preserves imported direct calls" {
+    const allocator = std.testing.allocator;
+    var mono = Mono.Program.init(allocator);
+    errdefer mono.deinit();
+
+    const unit_ty = try mono.types.add(.zst);
+    const imported = try mono.addImportedFn(.{
+        .shard = @enumFromInt(1),
+        .fn_id = @enumFromInt(1),
+    });
+    const body = try mono.addExpr(.{ .ty = unit_ty, .data = .{ .call_proc = .{
+        .callee = Mono.importedProcCallee(imported),
+        .args = Mono.Span(Mono.ExprId).empty(),
+    } } });
+    try mono.defs.append(allocator, .{
+        .symbol = @enumFromInt(1),
+        .args = Mono.Span(Mono.TypedLocal).empty(),
+        .body = .{ .roc = body },
+        .ret = unit_ty,
+    });
+
+    var lifted = try @import("lift.zig").run(allocator, mono);
+    defer lifted.deinit();
+
+    try run(allocator, &lifted);
+
+    const call = switch (lifted.exprs.items[@intFromEnum(body)].data) {
+        .call_proc => |call| call,
+        else => return error.TestUnexpectedResult,
+    };
+    switch (call.callee) {
+        .func => |slot| switch (slot) {
+            .imported => |actual| try std.testing.expectEqual(imported, actual),
+            .local => return error.TestUnexpectedResult,
+        },
+        .lifted => return error.TestUnexpectedResult,
+    }
 }
 
 test "call-pattern specialization declarations are referenced" {

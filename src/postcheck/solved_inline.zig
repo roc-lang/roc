@@ -318,7 +318,9 @@ const WrapperAnalyzer = struct {
                 try self.visitSpanCallees(call.args);
             },
             .call_proc => |call| {
-                _ = try self.inlineBody(Lifted.callProcCallee(call));
+                if (Lifted.localDirectCallee(call)) |callee| {
+                    _ = try self.inlineBody(callee);
+                }
                 try self.visitSpanCallees(call.args);
             },
             .low_level => |call| try self.visitSpanCallees(call.args),

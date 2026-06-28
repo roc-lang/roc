@@ -4773,6 +4773,7 @@ pub fn build(b: *std.Build) void {
             const http_app_output = build_http_app.addPrefixedOutputFileArg("--output=", http_app_exe_name);
             build_http_app.addFileArg(b.path("test/http-headers/app.roc"));
             build_http_app.addFileInput(b.path("test/http-headers/platform/main.roc"));
+            build_http_app.addFileInput(b.path("test/http-headers/platform/Headers.roc"));
             build_http_app.step.dependOn(final_http_host_step);
             build_http_app.step.dependOn(build_roc_step);
             const install_http_app = b.addInstallBinFile(http_app_output, http_app_exe_name);
@@ -4856,6 +4857,7 @@ pub fn build(b: *std.Build) void {
             const json_app_output = build_json_app.addPrefixedOutputFileArg("--output=", json_app_exe_name);
             build_json_app.addFileArg(b.path("test/json-decoder/app.roc"));
             build_json_app.addFileInput(b.path("test/json-decoder/platform/main.roc"));
+            build_json_app.addFileInput(b.path("test/json-decoder/platform/Json.roc"));
             build_json_app.step.dependOn(final_json_host_step);
             build_json_app.step.dependOn(build_roc_step);
             const install_json_app = b.addInstallBinFile(json_app_output, json_app_exe_name);
@@ -4873,6 +4875,7 @@ pub fn build(b: *std.Build) void {
             const json_camel_app_output = build_json_camel_app.addPrefixedOutputFileArg("--output=", json_camel_app_exe_name);
             build_json_camel_app.addFileArg(b.path("test/json-decoder/camel_app.roc"));
             build_json_camel_app.addFileInput(b.path("test/json-decoder/platform/main.roc"));
+            build_json_camel_app.addFileInput(b.path("test/json-decoder/platform/Json.roc"));
             build_json_camel_app.step.dependOn(final_json_host_step);
             build_json_camel_app.step.dependOn(build_roc_step);
             const install_json_camel_app = b.addInstallBinFile(json_camel_app_output, json_camel_app_exe_name);
@@ -4890,6 +4893,7 @@ pub fn build(b: *std.Build) void {
             const json_camel_direct_app_output = build_json_camel_direct_app.addPrefixedOutputFileArg("--output=", json_camel_direct_app_exe_name);
             build_json_camel_direct_app.addFileArg(b.path("test/json-decoder/camel_direct_app.roc"));
             build_json_camel_direct_app.addFileInput(b.path("test/json-decoder/platform/main.roc"));
+            build_json_camel_direct_app.addFileInput(b.path("test/json-decoder/platform/Json.roc"));
             build_json_camel_direct_app.step.dependOn(final_json_host_step);
             build_json_camel_direct_app.step.dependOn(build_roc_step);
             const install_json_camel_direct_app = b.addInstallBinFile(json_camel_direct_app_output, json_camel_direct_app_exe_name);

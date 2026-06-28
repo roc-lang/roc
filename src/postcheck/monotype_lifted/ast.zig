@@ -110,12 +110,222 @@ pub const LayoutRequest = struct {
 
 /// Runtime schema requested for a named runtime value shape.
 pub const RuntimeSchemaRequest = Mono.RuntimeSchemaRequest;
+/// Function imported from another Monotype shard.
+pub const ImportedFn = Mono.ImportedFn;
+/// Identifier for an imported function table entry.
+pub const ImportedFnId = Mono.ImportedFnId;
 
-/// Return the lifted function id for a direct call after Monotype lifting.
-pub fn callProcCallee(call: Mono.CallProc) FnId {
+/// Read-only Monotype Lifted program view.
+///
+/// Today this view borrows `Program` arrays. Lambda Solved consumes this shape
+/// so later cache-backed or builder-split lifted programs do not require a
+/// consumer rewrite.
+pub const ProgramView = struct {
+    names: *const names.NameStore,
+    next_symbol: u32,
+    types: Type.Store.View,
+    imported_fns: []const ImportedFn,
+    fns: []const Fn,
+    exprs: []const Expr,
+    pats: []const Pat,
+    stmts: []const Stmt,
+    locals: []const Local,
+    expr_ids: []const ExprId,
+    pat_ids: []const PatId,
+    typed_locals: []const TypedLocal,
+    stmt_ids: []const StmtId,
+    field_exprs: []const FieldExpr,
+    record_destructs: []const RecordDestruct,
+    str_pattern_steps: []const Mono.StrPatternStep,
+    branches: []const Branch,
+    if_branches: []const IfBranch,
+    string_literals: []const Mono.StringLiteral,
+    proc_debug_names: *const ProcDebugNameMap,
+    roots: []const Root,
+    layout_requests: []const LayoutRequest,
+    runtime_schema_requests: []const RuntimeSchemaRequest,
+    comptime_sites: []const ComptimeSite,
+    source_files: []const []const u8,
+    expr_locs: []const base.SourceLoc,
+    expr_regions: []const base.Region,
+    stmt_locs: []const base.SourceLoc,
+    stmt_regions: []const base.Region,
+    local_names: []const []const u8,
+
+    pub fn procDebugName(self: ProgramView, symbol: Common.Symbol) ?names.ExportNameId {
+        return self.proc_debug_names.get(symbol);
+    }
+
+    pub fn exprLoc(self: ProgramView, id: ExprId) base.SourceLoc {
+        return self.expr_locs[@intFromEnum(id)];
+    }
+
+    pub fn exprRegion(self: ProgramView, id: ExprId) base.Region {
+        return self.expr_regions[@intFromEnum(id)];
+    }
+
+    pub fn stmtLoc(self: ProgramView, id: StmtId) base.SourceLoc {
+        return self.stmt_locs[@intFromEnum(id)];
+    }
+
+    pub fn stmtRegion(self: ProgramView, id: StmtId) base.Region {
+        return self.stmt_regions[@intFromEnum(id)];
+    }
+
+    pub fn comptimeSite(self: ProgramView, id: ComptimeSiteId) ComptimeSite {
+        return self.comptime_sites[@intFromEnum(id)];
+    }
+
+    pub fn localName(self: ProgramView, id: LocalId) []const u8 {
+        return self.local_names[@intFromEnum(id)];
+    }
+
+    pub fn exprSpan(self: ProgramView, span_: Span(ExprId)) []const ExprId {
+        return self.expr_ids[span_.start..][0..span_.len];
+    }
+
+    pub fn patSpan(self: ProgramView, span_: Span(PatId)) []const PatId {
+        return self.pat_ids[span_.start..][0..span_.len];
+    }
+
+    pub fn typedLocalSpan(self: ProgramView, span_: Span(TypedLocal)) []const TypedLocal {
+        return self.typed_locals[span_.start..][0..span_.len];
+    }
+
+    pub fn stmtSpan(self: ProgramView, span_: Span(StmtId)) []const StmtId {
+        return self.stmt_ids[span_.start..][0..span_.len];
+    }
+
+    pub fn fieldExprSpan(self: ProgramView, span_: Span(FieldExpr)) []const FieldExpr {
+        return self.field_exprs[span_.start..][0..span_.len];
+    }
+
+    pub fn recordDestructSpan(self: ProgramView, span_: Span(RecordDestruct)) []const RecordDestruct {
+        return self.record_destructs[span_.start..][0..span_.len];
+    }
+
+    pub fn strPatternStepSpan(self: ProgramView, span_: Span(Mono.StrPatternStep)) []const Mono.StrPatternStep {
+        return self.str_pattern_steps[span_.start..][0..span_.len];
+    }
+
+    pub fn branchSpan(self: ProgramView, span_: Span(Branch)) []const Branch {
+        return self.branches[span_.start..][0..span_.len];
+    }
+
+    pub fn ifBranchSpan(self: ProgramView, span_: Span(IfBranch)) []const IfBranch {
+        return self.if_branches[span_.start..][0..span_.len];
+    }
+
+    pub fn exprCount(self: ProgramView) usize {
+        return self.exprs.len;
+    }
+
+    pub fn patCount(self: ProgramView) usize {
+        return self.pats.len;
+    }
+
+    pub fn stmtCount(self: ProgramView) usize {
+        return self.stmts.len;
+    }
+
+    pub fn localCount(self: ProgramView) usize {
+        return self.locals.len;
+    }
+
+    pub fn exprTy(self: ProgramView, id: ExprId) Type.TypeId {
+        return self.exprs[@intFromEnum(id)].ty;
+    }
+
+    pub fn patTy(self: ProgramView, id: PatId) Type.TypeId {
+        return self.pats[@intFromEnum(id)].ty;
+    }
+
+    pub fn pat(self: ProgramView, id: PatId) Pat {
+        return self.pats[@intFromEnum(id)];
+    }
+
+    pub fn stmt(self: ProgramView, id: StmtId) Stmt {
+        return self.stmts[@intFromEnum(id)];
+    }
+
+    /// The two pieces direct LIR lowering needs to consider folding away the
+    /// in-place `List.map` branch: the `list_map_can_reuse` call's arguments
+    /// (to compute layout eligibility) and the body a constant-0 scrutinee
+    /// selects.
+    pub const ListMapCanReuseMatch = struct {
+        call_args: Span(ExprId),
+        zero_branch_body: ExprId,
+    };
+
+    /// Recognizes the `List.map` reuse match: a match whose scrutinee calls
+    /// the Builtin `list_map_can_reuse` wrapper, with guard-free
+    /// integer-literal and wildcard branches. Returns null for any other
+    /// shape. Whether to fold is the caller's layout-aware decision; this
+    /// only identifies the site and the branch a constant 0 reaches.
+    pub fn listMapCanReuseMatch(
+        self: ProgramView,
+        scrutinee: ExprId,
+        branches_span: Span(Branch),
+    ) ?ListMapCanReuseMatch {
+        const call = switch (self.exprs[@intFromEnum(scrutinee)].data) {
+            .call_proc => |call| call,
+            else => return null,
+        };
+        const callee = switch (call.callee) {
+            .lifted => |fn_id| fn_id,
+            .func => return null,
+        };
+        const callee_body = switch (self.fns[@intFromEnum(callee)].body) {
+            .roc => |body| body,
+            .hosted => return null,
+        };
+        if (!self.exprIsListMapCanReuseOp(callee_body)) return null;
+
+        for (self.branchSpan(branches_span)) |branch| {
+            if (branch.guard != null) return null;
+            switch (self.pats[@intFromEnum(branch.pat)].data) {
+                .wildcard => return .{ .call_args = call.args, .zero_branch_body = branch.body },
+                .int_lit => |value| if (value.toI128() == 0) {
+                    return .{ .call_args = call.args, .zero_branch_body = branch.body };
+                },
+                else => return null,
+            }
+        }
+        return null;
+    }
+
+    fn exprIsListMapCanReuseOp(self: ProgramView, expr_id: ExprId) bool {
+        return switch (self.exprs[@intFromEnum(expr_id)].data) {
+            .low_level => |ll| ll.op == .list_map_can_reuse,
+            .block => |block| block.statements.len == 0 and self.exprIsListMapCanReuseOp(block.final_expr),
+            else => false,
+        };
+    }
+};
+
+/// Direct call target after Monotype lifting.
+pub const DirectCallee = union(enum(u8)) {
+    local: FnId,
+    imported: ImportedFnId,
+};
+
+/// Return the lifted direct-call target after Monotype lifting.
+pub fn directCallee(call: Mono.CallProc) DirectCallee {
     return switch (call.callee) {
-        .lifted => |fn_id| fn_id,
-        .func => Common.invariant("Monotype Lifted direct call still referenced a Monotype function id"),
+        .lifted => |fn_id| .{ .local = fn_id },
+        .func => |slot| switch (slot) {
+            .local => Common.invariant("Monotype Lifted direct call still referenced a Monotype function id"),
+            .imported => |imported| .{ .imported = imported },
+        },
+    };
+}
+
+/// Return the local lifted function id for a direct call, or null when it
+/// targets an imported shard.
+pub fn localDirectCallee(call: Mono.CallProc) ?FnId {
+    return switch (directCallee(call)) {
+        .local => |fn_id| fn_id,
+        .imported => null,
     };
 }
 
@@ -125,6 +335,7 @@ pub const Program = struct {
     names: names.NameStore,
     next_symbol: u32,
     types: Type.Store,
+    imported_fns: std.ArrayList(ImportedFn),
     fns: std.ArrayList(Fn),
     exprs: std.ArrayList(Expr),
     pats: std.ArrayList(Pat),
@@ -168,6 +379,7 @@ pub const Program = struct {
         allocator: std.mem.Allocator,
         name_store: names.NameStore,
         types: Type.Store,
+        imported_fns: std.ArrayList(ImportedFn),
         exprs: std.ArrayList(Expr),
         pats: std.ArrayList(Pat),
         stmts: std.ArrayList(Stmt),
@@ -197,6 +409,7 @@ pub const Program = struct {
             .names = name_store,
             .next_symbol = next_symbol,
             .types = types,
+            .imported_fns = imported_fns,
             .fns = .empty,
             .exprs = exprs,
             .pats = pats,
@@ -263,8 +476,44 @@ pub const Program = struct {
         self.pats.deinit(self.allocator);
         self.exprs.deinit(self.allocator);
         self.fns.deinit(self.allocator);
+        self.imported_fns.deinit(self.allocator);
         self.types.deinit();
         self.names.deinit();
+    }
+
+    pub fn view(self: *const Program) ProgramView {
+        return .{
+            .names = &self.names,
+            .next_symbol = self.next_symbol,
+            .types = self.types.view(),
+            .imported_fns = self.imported_fns.items,
+            .fns = self.fns.items,
+            .exprs = self.exprs.items,
+            .pats = self.pats.items,
+            .stmts = self.stmts.items,
+            .locals = self.locals.items,
+            .expr_ids = self.expr_ids.items,
+            .pat_ids = self.pat_ids.items,
+            .typed_locals = self.typed_locals.items,
+            .stmt_ids = self.stmt_ids.items,
+            .field_exprs = self.field_exprs.items,
+            .record_destructs = self.record_destructs.items,
+            .str_pattern_steps = self.str_pattern_steps.items,
+            .branches = self.branches.items,
+            .if_branches = self.if_branches.items,
+            .string_literals = self.string_literals.items,
+            .proc_debug_names = &self.proc_debug_names,
+            .roots = self.roots.items,
+            .layout_requests = self.layout_requests.items,
+            .runtime_schema_requests = self.runtime_schema_requests.items,
+            .comptime_sites = self.comptime_sites.items,
+            .source_files = self.source_files.items,
+            .expr_locs = self.expr_locs.items,
+            .expr_regions = self.expr_regions.items,
+            .stmt_locs = self.stmt_locs.items,
+            .stmt_regions = self.stmt_regions.items,
+            .local_names = self.local_names.items,
+        };
     }
 
     pub fn addFn(self: *Program, fn_: Fn) std.mem.Allocator.Error!FnId {
