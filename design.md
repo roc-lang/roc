@@ -1334,7 +1334,7 @@ The method registry is an exact table keyed by `(MethodOwner, MethodNameId)`.
 It is not an owner-discovery mechanism. Post-check code may use it only after a
 concrete monomorphic dispatcher type has already determined the owner.
 
-### Builtin Iter And Stream Known-Value Specialization
+### Optimized Callable-State Specialization
 
 `Iter` and `Stream` are public Roc builtins whose methods remain ordinary Roc
 functions. Their public representation is the same family:
@@ -1355,327 +1355,147 @@ Stream(item) :: {
 public `Append` step, no private step variant with different public meaning,
 and no compiler-private iterator type exposed to Roc source. The public model is
 a length hint and a zero-argument step function. Adapters such as `append`,
-`concat`, `map`, and filters are ordinary Roc functions that build another
-record containing another step callable.
+`concat`, `map`, filters, ranges, and custom streams are ordinary Roc functions
+that build ordinary records and ordinary step callables.
 
-Optimizing those ordinary Roc functions is not part of the language meaning of
-`Iter` or `Stream`. It is an optimized post-check lowering feature, enabled only
-for `--opt=size` and `--opt=speed`. It is off for `roc check`, compile-time
-finalization, interpreter builds, and dev builds. In those modes, the optimizer
-does not construct result-demand summaries, private state graphs, or extra
-direct-call workers and then decide not to use them; those data structures are
-owned by the optimized lowering path and are never entered. The mode input is
-explicit pipeline data derived from the requested build mode; no stage may infer
-this work from target triples, wasm output, backend choice, method names, public
-builtin names, or generated symbols.
+The optimized implementation target is Rust-like generated code: private cursor
+state, direct stepping, and no heap allocation for adapter wrappers in consuming
+hot paths. Rust gets that shape by making each adapter chain a distinct
+monomorphized iterator type with a `next(&mut state)` method. Roc must not copy
+that public typing design. Roc keeps the concrete public type `Iter(item)` or
+`Stream(item)`, and branches that produce different adapter chains still unify
+as that same Roc type.
 
-This boundary is about compiler cost, not correctness. Checking, static
-dispatch finalization, compile-time root selection, compile-time evaluation,
-static data emission, and `crash`/`dbg`/`expect` diagnostics are required in
-all modes and must not depend on this optimizer. Build modes may differ in
-generated code size, generated code speed, and compile time, but never in
-observable Roc behavior.
+Roc reaches the optimized shape through ordinary lambdas, lambda sets, captures,
+known constructor values, and result demand. A step field is a normal callable.
+Lambda-set solving already records finite callable targets and captures behind
+the single public callable type. Optimized post-check lowering consumes those
+ordinary facts and defunctionalizes reachable callable/capture graphs into
+private state machines when the surrounding code only demands private state.
+This is not an iterator semantic rule; `Iter` and `Stream` are important clients
+of a general callable-state optimization.
 
-The optimized target is the same useful machine code Rust gets from iterators:
-private cursor state with direct stepping and no heap allocation for adapter
-wrappers. Rust reaches that target by representing every adapter chain in
-concrete iterator types and monomorphizing calls to `Iterator::next(&mut
-state)`. Roc must not copy that public typing design. Roc keeps the concrete
-public types `Iter(item)` and `Stream(item)`, and different branches that build
-different adapter chains still unify as the same Roc type.
+The optimization is enabled only for optimized code generation:
 
-Roc gets the optimized state from ordinary lambdas, lambda sets, captures, and
-known values. The `step` field is a normal callable. Lambda-set solving records
-the finite set of possible step functions plus their captures. The optimized
-post-check pass consumes those ordinary callable facts, together with record,
-tuple, tag, nominal, and primitive known values, to build private cursor state.
-This aims for Rust-like generated code while preserving Roc's concrete
-pure-function API and without erasing adapter chains into heap closures before
-optimization can see them.
+- on for `--opt=size`
+- on for `--opt=speed`
+- off for `roc check`
+- off for compile-time finalization
+- off for interpreter builds
+- off for dev builds
 
-A known value is optimizer data about what an expression already is. It is not a
-new runtime value and it is not limited to aggregate source syntax. The
-KnownValue model has these categories:
+This is a hard pipeline boundary. The post-check driver receives explicit
+build-mode data and chooses either ordinary public-value lowering or optimized
+callable-state specialization before constructing the lowering context.
+Non-optimized modes must not allocate result-demand structures, demanded-value
+arenas, private-state graphs, or optimized worker queues just to discard them.
+The mode decision is explicit compiler input; no stage may infer it from target
+triples, wasm output, backend choice, method names, builtin names, generated
+symbols, object bytes, or backend output.
 
-- unknown value
-- expression leaf, including primitive values and ordinary runtime expressions
-- record, tuple, tag, or nominal constructor with demanded child known values
-- callable target with demanded capture known values
-- finite tag alternatives
-- finite callable alternatives
+This boundary is about compiler cost and generated code quality, not
+correctness. Checking, static-dispatch finalization, compile-time root
+selection, compile-time evaluation, static data emission, and
+`crash`/`dbg`/`expect` diagnostics are required in all modes and must not depend
+on this optimizer. Build modes may differ in generated code size, generated
+code speed, and compile time, but never in observable Roc behavior.
 
-Records and tuples are only one way to expose child known values. A primitive
-wrapped in `{ value : primitive }` must not become more optimizable merely
-because it was wrapped. If a loop's useful private cursor is only a `U64` index,
-the loop carries that `U64`; it does not need a synthetic single-field record to
-qualify for specialization.
+Optimized callable-state specialization uses one set of generic compiler facts:
 
-Known children must distinguish "unknown but carried" from "not demanded." Dense
-child arrays cannot represent that distinction for tuples, tag payloads, or
-callable captures. The KnownValue data used by optimized private state therefore
+- direct-call targets
+- finite lambda-set callable targets
+- callable captures
+- known records, tuples, tags, nominals, and primitive leaves
+- checked type and layout decisions
+- explicit result demand
+
+The pass must not recognize source `for`, source `if`, source `match`,
+`Iter.append`, `Stream.next!`, wasm targets, Rocci Bird, public builtin names,
+or generated symbol names as optimization triggers. Source `for` lowers through
+the ordinary public `.iter` and `.next` meaning. Source `if` and `match` lower
+as ordinary control flow. The optimizer rewrites only from the facts already
+available while lowering expressions under demand.
+
+Result demand is the optimizer's exact statement of how the current continuation
+will use a value. Required demand forms are:
+
+- materialize the ordinary public Roc value
+- use a runtime leaf as private state
+- read record fields by field name
+- read tuple items by original item index
+- unwrap nominal backing data
+- inspect a tag and read demanded payloads by original payload index
+- call a callable and read demanded captures by original capture index
+- consume a direct-call result under another demand
+- carry loop values through initial values and `continue` edges
+
+Demand is threaded through cloning. It is not a late program scan and not a
+cleanup pass. Field access clones the receiver under field demand. Tuple access
+clones the receiver under item demand. A tag match clones the scrutinee under
+tag demand. A call through a known callable clones the callable under call
+demand, then clones the selected body under the caller's result demand. A loop
+clones initial values, body observations, and `continue` edges under the
+fixed-point demand for loop parameters. If the surrounding context needs an
+ordinary Roc value, the demand is materialization and public lowering is used.
+
+Known values are optimizer facts, not runtime values. They are not limited to
+aggregate source syntax. Primitive leaves are first-class known values, so a
+`U64` loop cursor must optimize the same way whether it appears directly or
+inside a single-field record. Records and tuples are only one way to expose
+children; wrapping a primitive in a record must never be required to make it
+optimizable.
+
+Known children must distinguish "unknown but carried" from "not demanded."
+Dense child arrays cannot represent that distinction for tuple items, tag
+payloads, or callable captures. The private-state representation therefore
 stores demanded children sparsely by checked child identity: record field name,
 tuple item index, tag payload index, nominal backing value, and callable capture
-index. A missing demanded child means the private state does not carry that
-child. A present child whose fact is `unknown` means the private state carries a
-runtime value for that child but cannot use more precise structure. Public
-materialization demand is the operation that asks for every child needed to
-rebuild the ordinary Roc value.
+index. A missing child means private state does not carry it. A present child
+whose fact is unknown means private state carries the runtime value but has no
+more precise structure.
 
-The post-check pipeline must not add a separate builtin iterator-plan IR. There
-is no `iter_plan` expression, no iterator-plan side store, and no lowering path
-that recognizes builtin iterator behavior by source names, generated symbols,
-public closure layout, wasm bytes, object bytes, or backend output. If an
-optimization needs constructor or callable facts, it consumes checked direct-call
-targets, lifted function ids, captures, known values, and type data produced by
-earlier stages.
+Sparse demanded private state must not be forced through the ordinary dense
+public `Value` representation. Ordinary public values require all children
+needed by the public layout. They cannot represent "capture 2 is present and
+capture 0 is absent" or "the tag choice is present and payloads are absent"
+without inventing fake children. Sparse private state may be converted to an
+ordinary public value only at an explicit materialization boundary.
 
-The constructor/callable specialization pass is the owner of this work, but the
-model is general known-value specialization, not aggregate-only handling.
-`Iter` and `Stream` are important clients, not special cases. Source `for`
-lowering emits ordinary `.iter` and `.next` calls for source meaning. Source
-`if` and `match` remain ordinary control flow. The optimizer must not have a
-second iterator lowering for performance, and it must not add a special
-rewriting rule for `for`, `if`, or `match`.
+Callable-state specialization is defunctionalization driven by result demand.
+When a demanded callable has finite known targets, each target plus its demanded
+captures is a private state alternative. A single known target can inline
+directly. Multiple known targets become a state-machine dispatch before public
+callable materialization. The selected target may change as the state machine
+advances; for example, an append iterator can move from the append wrapper to
+the source iterator and then to the empty iterator. Those finite alternatives
+remain private states instead of being widened to an opaque callable merely
+because different edges have different targets or capture shapes.
 
-The specialization engine has one KnownValue model and two outputs:
+Loop-carried demand is a fixed point. The loop body creates demand on loop
+parameters from observations such as field reads, tuple reads, tag matches,
+callable calls, direct-call results, and public materialization. Each reachable
+`continue` edge then clones the value for parameter `i` under the current demand
+for parameter `i`; that clone may add demand to other loop parameters through
+values it reads. The loop demand is complete only when reachable body
+observations and reachable `continue` edges stop changing loop-parameter
+demand.
 
-1. It rewrites each original Roc function body once as the base specialization
-   while preserving that function's public ABI: the same function id, arguments,
-   captures, return type, and ordinary call sites remain valid.
-2. It creates extra direct-call workers only when an explicit call pattern
-   proves that splitting a callee argument is useful and correct.
+The fixed point is exact, not heuristic. There is no state-count cutoff,
+size-count cutoff, or fallback path. If the graph grows unexpectedly, the fix is
+to make demand propagation more precise, share equivalent states, or remove
+unnecessary source demand. Silently disabling the optimization for a large graph
+would make post-check output depend on an arbitrary implementation limit and is
+not allowed.
 
-Local optimizations such as loop-state splitting do not depend on whether some
-caller passed a constructor-valued argument. A function taking `I64` must get
-the same local loop-state specialization as the same function taking
-`{ n : I64 }` when the loop state inside the function has the same known values.
-Constructor-valued arguments matter to interprocedural worker ABIs; they are not
-required to optimize the callee's own body.
+For `Iter` and `Stream`, a consuming loop that only steps the value demands the
+step callable and the captures needed by that callable. It does not demand
+`len_if_known`, so private loop state must not carry the public size-hint field
+or execute size-hint overflow/sentinel bookkeeping. If source code reads the
+size hint, returns the iterator, stores it, passes it to unspecialized code, or
+directly observes the public step result, that use creates materialization or
+field demand and the ordinary public fields are preserved.
 
-The pass operates as a worklist:
-
-- clone each original Roc body once as the base specialization
-- clone every expression in that body under an explicit result demand
-- compute direct-call argument demand from the calls seen during that cloning
-- record newly discovered direct-call worker patterns while cloning callers
-- pop unwritten worker patterns, reserve their function ids, and clone their
-  bodies with split arguments
-- repeat until the worker queue is empty
-
-There is no post-clone cleanup pass whose job is to scan the finished program
-and rewrite calls. Calls are rewritten while their containing body is cloned,
-using the same known values and result demand as every other transformation.
-That keeps a single source of truth and prevents one pass from guessing at
-information another pass already had.
-
-This worklist exists only in the optimized post-check path. Non-optimized
-lowering uses the ordinary public-value path and does not pay for fixed-point
-loop demand, private state reachability, demanded child expansion, or worker
-queue management. The optimized path may spend extra compiler time because the
-user requested size- or speed-optimized generated code.
-
-The optimized path is selected before creating the body-cloning context. The
-post-check driver receives explicit build-mode data and chooses one of two
-entrypoints:
-
-- ordinary public-value lowering for dev builds, `roc check`,
-  compile-time finalization, interpreter execution, and any other non-optimized
-  consumer
-- optimized known-value specialization for `--opt=size` and `--opt=speed`
-
-There is no "mostly ordinary lowering plus optional iterator optimization"
-mode. The result-demand types, demanded-known-value arena, private-state graph,
-and optimized direct-call worker queue are owned by the optimized entrypoint.
-Constructing them outside that entrypoint is a compiler bug. This keeps
-non-optimized compiler cost predictable and prevents correctness from depending
-on an optimization-only analysis.
-
-The opt-mode boundary is a hard pipeline boundary, not a pass-internal
-preference. The post-check driver selects either ordinary lowering or optimized
-specialization from explicit build-mode data before constructing per-body
-specialization state. `roc check`, compile-time finalization, interpreter
-execution, and dev builds must not enter the result-demand worklist, must not
-allocate private-state graph storage, and must not enqueue optimized workers.
-`--opt=size` and `--opt=speed` both use the same semantic specialization model;
-they may tune later code-generation and inlining policy differently, but they
-must not use different language-level iterator rules. If one of those modes can
-eliminate a public wrapper through known-value specialization, the other mode
-must be able to perform the same semantic rewrite. Any difference between the
-two belongs to later cost decisions such as inlining threshold, outlining,
-Binaryen optimization level, or backend instruction selection.
-
-Result demand is the optimizer's precise statement of how the current
-continuation will use an expression result. Required demand forms are:
-
-- materialize the ordinary public value
-- use a runtime leaf as a private value
-- read record fields
-- read tuple items
-- unwrap nominal backing data
-- inspect a tag and read demanded payloads
-- call a callable and read demanded captures
-- use a direct-call result under another demand
-- carry demanded loop values through initial values and `continue` edges
-
-Demand is not a late whole-body scan. It is threaded through cloning. A field
-access clones its receiver under a field demand. A tag match clones its
-scrutinee under a tag demand. A call through a known callable clones the target
-under the demand imposed by the call's result. A loop clones its initial values,
-body, and `continue` edges under the demand created by reachable uses of loop
-parameters. If the context needs the public value, the demand is materialization
-and the ordinary public representation is preserved.
-
-The result-demand machinery is local to optimized post-check lowering. It is
-not a checked-module data structure, not a compile-time-evaluation input, and
-not visible to LIR, ARC, LirImage, or backends. Those later stages see only the
-ordinary lowered control flow and explicit values produced by specialization.
-
-Loop-carried demand is a fixed point, not a one-shot body-use query. The loop
-body creates demands on loop parameters from ordinary observations such as field
-reads, tag matches, tuple reads, callable calls, and public materialization.
-Each `continue` edge then clones the value for parameter `i` under the current
-demand for parameter `i`; that clone may add new demands to other loop
-parameters through the values it reads. The loop demand is complete only when
-cloning all reachable body observations and all reachable `continue` edges no
-longer changes any loop-parameter demand. A source-body scan that marks every
-expression mentioned in a `continue` value is incorrect, because it treats
-construction of unobserved carried data as observation. That is exactly the
-case for iterator size hints: `Iter.append` can construct a new `len_if_known`
-value for the public iterator, but a private stepping loop must not demand that
-field unless some reachable source use reads or materializes it.
-
-This distinction is important for `Iter` and `Stream`. A consuming loop that
-only steps an iterator demands the `step` field and the captures needed by that
-step callable. It does not demand `len_if_known`, so private loop state must not
-carry the public size-hint field or execute size-hint overflow/sentinel
-bookkeeping. If source code reads the size hint, returns the iterator, stores
-it, passes it to unspecialized code, or directly observes the public step
-result, that use creates a materialization demand and the ordinary fields are
-preserved.
-
-Known values flow through ordinary local bindings, blocks, `if`, `match`, loop
-initial values, and loop `continue` values. Branch conditions, scrutinees,
-guards, branch-local `dbg`, `expect`, `crash`, stream effects, and appended item
-expressions remain at their source evaluation positions; optimization never
-replays a declaration body later at a consumer.
-
-When a loop starts with useful known values, optimized post-check lowering may
-replace one ordinary loop with an explicit private loop-state graph. This graph
-is compiler IR, not a public iterator model and not a recursive-worker encoding:
-
-```text
-state_loop {
-    entry_state: StateId
-    states: []State
-}
-
-State {
-    params: []PrivateLeaf
-    body: Expr
-}
-
-state_continue(target_state: StateId, values: []Expr)
-```
-
-The state graph is built while the function body is cloned. A state identity
-contains only facts that are valid at that program point and demanded by the
-state body or one of its outgoing edges. Finite tags and finite callable targets
-become state dimensions only when a demanded use needs to distinguish them.
-Record fields, tuple items, nominal backing data, tag payloads, and callable
-captures are traversed only along demanded child data. Numeric, string, list,
-pointer, and other primitive leaves that are demanded by the state are carried
-as parameters; the optimizer must not create a distinct state for each runtime
-leaf value. Fields and captures outside the demand closure are absent from
-private state.
-
-Private state splitting must not encode omitted children as `unknown` dense
-children. Doing that would still allocate state parameters or execute producer
-code for data the private loop cannot observe. For example, a demanded callable
-target with one demanded capture and one omitted capture carries only the target
-and the demanded capture. A demanded tuple item carries that item with its
-original tuple index, not a compact tuple whose item positions have changed. A
-demanded tag name with no demanded payloads carries the tag choice without
-payload state.
-
-Demanded private state therefore has its own sparse state-value representation
-while the state graph is being built. It must not be forced through the ordinary
-dense Roc `Value` representation. Ordinary `Value.callable`, `Value.tuple`,
-`Value.tag`, and public record materialization require the public child layout;
-they cannot represent "capture 2 is present and capture 0 is absent" or "tag
-choice is present and payloads are absent" without inventing fake children. A
-state builder may convert demanded state to ordinary `Value` only at an explicit
-materialization boundary where the public representation is demanded. Inside
-private state construction, sparse demanded children remain indexed facts and
-runtime leaves.
-
-For `Iter` and `Stream`, the public wrapper can then disappear from the hot
-loop. The state graph carries private fields such as list pointer, index,
-length, phase, selected callable target, and captured values. The selected
-callable target is not always one fixed function for the whole loop. Real
-iterator state machines change targets as they advance: an append iterator can
-step through an append wrapper, then through the source iterator, then through
-the empty iterator; a concat iterator can move from the first iterator to the
-second. Loop-state specialization must preserve those finite callable
-alternatives as loop states instead of widening to an opaque callable merely
-because a reachable `continue` value has a different target or capture count.
-
-The state graph is edge-specialized. When a branch, match arm, known tag, or
-known callable call reaches a `continue`, the optimizer records the exact target
-state implied by that edge. A loop parameter whose fact changes among a finite
-set of known tags or callable targets becomes a finite collection of states only
-if the loop body demands that distinction. A loop-carried ordinary leaf stays an
-ordinary state parameter when demanded, and disappears when no reachable
-demanded use needs it.
-
-There is no state-count heuristic, cutoff, or fallback. The state graph is the
-exact result of demanded finite facts reachable from the optimized body. If the
-graph grows unexpectedly, the fix is to make demand propagation more precise,
-share equivalent states, or fix the source of unnecessary demand. Silently
-turning the optimization off for a large graph would make performance depend on
-an arbitrary implementation limit and is not allowed in post-check stages.
-
-Demanded `continue` cloning is the rule that prevents public-wrapper work from
-leaking into private state. If parameter `rest` is demanded only through
-`rest.step`, the `continue` expression that constructs the next `rest` is cloned
-under the demand "record field `step`", not under materialization demand for the
-whole `Iter` record. Therefore adapter code that exists only to maintain
-`len_if_known` is not emitted into the private state graph. If another reachable
-use later reads `rest.len_if_known`, stores `rest`, returns it, or passes it to
-unspecialized code, the fixed point widens the parameter demand to include that
-public field or to materialization, and the generated state carries the data
-needed for that source behavior.
-
-A step call through a known callable field can be inlined when it has a single
-target. When multiple known targets remain, optimized lowering dispatches over
-the finite state/callable alternatives before the public callable is
-materialized, and each edge continues with that target's captures as private
-state. Matches on known step tags simplify through the same ordinary known-tag
-machinery used for all tag unions.
-
-The private state graph is lowered to existing LIR control flow before ARC and
-backend code generation. Each state becomes an ordinary LIR join or equivalent
-loop block, and each `state_continue` becomes a direct jump to the selected
-state with explicit values. LIR and backends consume only ordinary values,
-control flow, calls, committed layouts, and explicit ARC statements. They do not
-know iterator rules, stream rules, public step-callable layouts, or
-reference-count policy for iterator wrappers.
-
-The optimized state pass may spend extra work constructing result-demand
-summaries, reachable private state graphs, and extra direct-call workers because
-users requested optimized code. Unoptimized modes skip private cursor-state
-specialization and related optimized worker cloning completely; they do not run
-a disabled version of the pass for analysis-only side effects.
-
-This design deliberately spends extra compiler work only where it can affect the
-optimized output. The expected extra work is proportional to realized
-specialized bodies, realized direct-call worker patterns, and reachable private
-loop states. It is not proportional to all source expressions in non-optimized
-modes, and it is not a late program-wide cleanup scan after lowering. When the
-optimized path needs additional body variants, those variants are created while
-cloning from explicit call patterns and result demands, so the source of truth
-for each generated body is the same data that justified generating it.
-
-Public iterator values remain immutable and reusable. Source such as:
+Public iterator and stream values remain immutable and reusable. Source such as:
 
 ```roc
 iter = [1, 2].iter()
@@ -1688,23 +1508,38 @@ for item in iter {
 use(saved)
 ```
 
-must not mutate `saved`. Any cursor mutation introduced by optimized iteration
-belongs to compiler-created private loop state derived from `iter`, not to the
-public Roc value. This rule is the same for pure `Iter` and effectful `Stream`;
-stream effects still run exactly when the source program steps the stream.
+must not mutate `saved`. Any cursor mutation introduced by optimization belongs
+to compiler-created private loop state derived from `iter`, not to the public
+Roc value. This rule is the same for pure `Iter` and effectful `Stream`; stream
+effects still occur exactly when the source program steps the stream.
 
 Some uses require the public representation: storing or returning an iterator
-as an ordinary value, passing it to unspecialized code, or directly observing
-the public result of `Iter.next`/`Stream.next!`. At those boundaries the
-compiler builds the ordinary public record and callable value. That is normal
-lowering, not a cleanup pass. The optimizer wins only when ordinary
-specialization keeps enough known values available at the consuming use.
+as an ordinary value, passing it to unspecialized code, directly matching on the
+public result of `Iter.next` or `Stream.next!`, or otherwise observing the
+public callable/record value. At those boundaries the compiler builds the
+ordinary public record, callable value, and step-result tag. That is ordinary
+lowering selected by materialization demand, not a post-link cleanup pass.
 
 Finite and infinite iterators use the same public model. An unbounded range or
 custom Fibonacci-style iterator is just a step callable that may never produce
-`Done` unless a later adapter does. Optimized finite consumers may still become
-bounded loops when known values prove a bound; otherwise they remain ordinary
-potentially nonterminating Roc computations.
+`Done` unless a later adapter does. Optimized finite consumers may become
+bounded private loops when known values prove a bound; otherwise they remain
+ordinary potentially nonterminating Roc computations.
+
+The optimization creates extra direct-call workers only from explicit call
+patterns discovered while cloning optimized code. Worker identity includes the
+callee identity, split argument facts, result demand, and relevant type/layout
+decisions. The original public-ABI body remains available. Extra workers are
+implementation details for optimized direct calls and callable-state
+specialization, not replacements for public callable boundaries.
+
+Private state machines lower to existing LIR control flow before ARC and
+backend code generation. Each private state becomes an ordinary join/block or
+equivalent loop shape, and each transition becomes a direct jump with explicit
+values. LIR, ARC, LirImage, the interpreter, LLVM, object, wasm, and Binaryen
+code do not know iterator rules, stream rules, public step-callable layouts, or
+reference-count policy for iterator wrappers. ARC remains the only owner of
+reference-count insertion.
 
 ### Structural Serialization Methods
 
