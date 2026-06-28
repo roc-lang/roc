@@ -221,6 +221,192 @@ pub fn clearIndex(slot: *?usize, expected: usize) void {
     slot.* = null;
 }
 
+pub fn ensureRenderMetadata(comptime Stream: type, stream: *Stream, allocator: std.mem.Allocator, elem_id: u64) *RenderElemIndex {
+    const entry = stream.render_metadata_by_elem_id.getOrPut(allocator, elem_id) catch @panic("out of memory");
+    if (!entry.found_existing) entry.value_ptr.* = .{};
+    return entry.value_ptr;
+}
+
+pub fn removeRenderMetadataIfEmpty(comptime Stream: type, stream: *Stream, elem_id: u64) void {
+    const metadata = stream.render_metadata_by_elem_id.get(elem_id) orelse return;
+    if (metadata.empty()) {
+        _ = stream.render_metadata_by_elem_id.fetchRemove(elem_id) orelse @panic("render metadata disappeared during removal");
+    }
+}
+
+pub fn renderNodeIndex(comptime Stream: type, stream: *const Stream, elem_id: u64) ?usize {
+    const metadata = stream.render_metadata_by_elem_id.get(elem_id) orelse return null;
+    return metadata.render_node;
+}
+
+pub fn recordRenderNodeIndex(comptime Stream: type, stream: *Stream, allocator: std.mem.Allocator, elem_id: u64, index: usize) void {
+    const metadata = ensureRenderMetadata(Stream, stream, allocator, elem_id);
+    if (metadata.render_node != null) @panic("descriptor stream recorded duplicate render index");
+    metadata.render_node = index;
+}
+
+pub fn updateRenderNodeIndex(comptime Stream: type, stream: *Stream, elem_id: u64, index: usize) void {
+    const metadata = stream.render_metadata_by_elem_id.getPtr(elem_id) orelse @panic("descriptor stream updated a missing render index");
+    if (metadata.render_node == null) @panic("descriptor stream updated a missing render index");
+    metadata.render_node = index;
+}
+
+pub fn clearRenderNodeIndex(comptime Stream: type, stream: *Stream, elem_id: u64, expected: usize) void {
+    const metadata = stream.render_metadata_by_elem_id.getPtr(elem_id) orelse @panic("descriptor stream cleared a missing render index");
+    const existing = metadata.render_node orelse @panic("descriptor stream cleared a missing render index");
+    if (existing != expected) @panic("descriptor stream cleared the wrong render index");
+    metadata.render_node = null;
+    removeRenderMetadataIfEmpty(Stream, stream, elem_id);
+}
+
+pub fn ensureFirstRenderChildSlot(comptime Stream: type, stream: *Stream, allocator: std.mem.Allocator, parent_elem_id: u64) *?u64 {
+    return &ensureRenderMetadata(Stream, stream, allocator, parent_elem_id).first_child;
+}
+
+pub fn ensureLastRenderChildSlot(comptime Stream: type, stream: *Stream, allocator: std.mem.Allocator, parent_elem_id: u64) *?u64 {
+    return &ensureRenderMetadata(Stream, stream, allocator, parent_elem_id).last_child;
+}
+
+pub fn ensureNextRenderSiblingSlot(comptime Stream: type, stream: *Stream, allocator: std.mem.Allocator, elem_id: u64) *?u64 {
+    return &ensureRenderMetadata(Stream, stream, allocator, elem_id).next_sibling;
+}
+
+pub fn firstRenderChild(comptime Stream: type, stream: *const Stream, parent_elem_id: u64) ?u64 {
+    const metadata = stream.render_metadata_by_elem_id.get(parent_elem_id) orelse return null;
+    return metadata.first_child;
+}
+
+pub fn lastRenderChild(comptime Stream: type, stream: *const Stream, parent_elem_id: u64) ?u64 {
+    const metadata = stream.render_metadata_by_elem_id.get(parent_elem_id) orelse return null;
+    return metadata.last_child;
+}
+
+pub fn nextRenderSibling(comptime Stream: type, stream: *const Stream, elem_id: u64) ?u64 {
+    const metadata = stream.render_metadata_by_elem_id.get(elem_id) orelse return null;
+    return metadata.next_sibling;
+}
+
+pub fn appendRenderChild(comptime Stream: type, stream: *Stream, allocator: std.mem.Allocator, parent_elem_id: u64, elem_id: u64) void {
+    _ = ensureRenderMetadata(Stream, stream, allocator, parent_elem_id);
+    _ = ensureRenderMetadata(Stream, stream, allocator, elem_id);
+
+    const parent_metadata = stream.render_metadata_by_elem_id.getPtr(parent_elem_id) orelse @panic("render child index was missing its parent links");
+    const elem_metadata = stream.render_metadata_by_elem_id.getPtr(elem_id) orelse @panic("render child index was missing its child links");
+    const last = parent_metadata.last_child;
+    elem_metadata.next_sibling = null;
+    if (last) |last_child| {
+        const last_metadata = stream.render_metadata_by_elem_id.getPtr(last_child) orelse @panic("render child index was missing its last child links");
+        last_metadata.next_sibling = elem_id;
+    } else {
+        parent_metadata.first_child = elem_id;
+    }
+    parent_metadata.last_child = elem_id;
+}
+
+pub fn clearRenderChildren(comptime Stream: type, stream: *Stream, parent_elem_id: u64) void {
+    var child = firstRenderChild(Stream, stream, parent_elem_id);
+    while (child) |child_id| {
+        const next = nextRenderSibling(Stream, stream, child_id);
+        const child_metadata = stream.render_metadata_by_elem_id.getPtr(child_id) orelse @panic("render child index referenced a child without links");
+        child_metadata.next_sibling = null;
+        removeRenderMetadataIfEmpty(Stream, stream, child_id);
+        child = next;
+    }
+    if (stream.render_metadata_by_elem_id.getPtr(parent_elem_id)) |parent_metadata| {
+        parent_metadata.first_child = null;
+        parent_metadata.last_child = null;
+    }
+    removeRenderMetadataIfEmpty(Stream, stream, parent_elem_id);
+}
+
+pub fn removeRenderChild(comptime Stream: type, stream: *Stream, parent_elem_id: u64, elem_id: u64) void {
+    const parent_metadata = stream.render_metadata_by_elem_id.getPtr(parent_elem_id) orelse @panic("render child index was missing its parent list");
+
+    var previous: ?u64 = null;
+    var current = parent_metadata.first_child;
+    while (current) |child_id| {
+        const next = nextRenderSibling(Stream, stream, child_id);
+        if (child_id == elem_id) {
+            if (previous) |previous_id| {
+                const previous_metadata = stream.render_metadata_by_elem_id.getPtr(previous_id) orelse @panic("render child index referenced a previous child without links");
+                previous_metadata.next_sibling = next;
+            } else {
+                parent_metadata.first_child = next;
+            }
+            if (lastRenderChild(Stream, stream, parent_elem_id) == elem_id) {
+                parent_metadata.last_child = previous;
+            }
+            const elem_metadata = stream.render_metadata_by_elem_id.getPtr(elem_id) orelse @panic("render child index removed a child without links");
+            elem_metadata.next_sibling = null;
+            removeRenderMetadataIfEmpty(Stream, stream, elem_id);
+            removeRenderMetadataIfEmpty(Stream, stream, parent_elem_id);
+            return;
+        }
+        previous = child_id;
+        current = next;
+    }
+    @panic("render child index was missing a child");
+}
+
+pub fn insertRenderChildren(comptime Stream: type, stream: *Stream, allocator: std.mem.Allocator, parent_elem_id: u64, index: usize, elem_ids: []const u64) void {
+    if (elem_ids.len == 0) return;
+
+    _ = ensureRenderMetadata(Stream, stream, allocator, parent_elem_id);
+    for (elem_ids) |elem_id| {
+        _ = ensureRenderMetadata(Stream, stream, allocator, elem_id);
+    }
+
+    const parent_metadata = stream.render_metadata_by_elem_id.getPtr(parent_elem_id) orelse @panic("render child insertion was missing parent links");
+
+    var previous: ?u64 = null;
+    var next = parent_metadata.first_child;
+    var cursor: usize = 0;
+    while (cursor < index) : (cursor += 1) {
+        const child_id = next orelse @panic("render child insertion index exceeded parent child list");
+        previous = child_id;
+        next = nextRenderSibling(Stream, stream, child_id);
+    }
+
+    for (elem_ids, 0..) |elem_id, elem_index| {
+        const next_insert = if (elem_index + 1 < elem_ids.len) elem_ids[elem_index + 1] else next;
+        ensureNextRenderSiblingSlot(Stream, stream, allocator, elem_id).* = next_insert;
+    }
+
+    if (previous) |previous_id| {
+        const previous_metadata = stream.render_metadata_by_elem_id.getPtr(previous_id) orelse @panic("render child insertion referenced a previous child without links");
+        previous_metadata.next_sibling = elem_ids[0];
+    } else {
+        parent_metadata.first_child = elem_ids[0];
+    }
+    if (next == null) {
+        parent_metadata.last_child = elem_ids[elem_ids.len - 1];
+    }
+}
+
+pub fn replaceRenderChildrenIndex(comptime Stream: type, stream: *Stream, allocator: std.mem.Allocator, parent_elem_id: u64, elem_ids: []const u64) void {
+    clearRenderChildren(Stream, stream, parent_elem_id);
+    insertRenderChildren(Stream, stream, allocator, parent_elem_id, 0, elem_ids);
+}
+
+pub fn childInsertionIndexForRenderIndex(comptime Stream: type, stream: *const Stream, parent_elem_id: u64, render_insert_index: usize) usize {
+    var index: usize = 0;
+    var child = firstRenderChild(Stream, stream, parent_elem_id);
+    while (child) |child_id| : (index += 1) {
+        const child_render_index = renderNodeIndex(Stream, stream, child_id) orelse @panic("render child index referenced a child without a render index");
+        if (child_render_index >= render_insert_index) return index;
+        child = nextRenderSibling(Stream, stream, child_id);
+    }
+    return index;
+}
+
+pub fn refreshRenderIndexesFrom(comptime Stream: type, stream: *Stream, allocator: std.mem.Allocator, start_index: usize, metrics: anytype) void {
+    if (start_index > stream.render_nodes.items.len) @panic("render index refresh started past render node table");
+    metrics.bump(.render_indexes_refreshed, @intCast(stream.render_nodes.items.len - start_index));
+    for (stream.render_nodes.items[start_index..], start_index..) |node, index| {
+        ensureRenderMetadata(Stream, stream, allocator, node.elem_id).render_node = index;
+    }
+}
+
 pub fn findElementDesc(comptime Stream: type, stream: *const Stream, elem_id: u64) ?Stream.ElementDesc {
     const descriptor_index = stream.elemDescriptorIndex(elem_id) orelse return null;
     const index = descriptor_index.element orelse return null;
@@ -463,8 +649,7 @@ const TestStream = struct {
     static_bool_attrs: std.ArrayListUnmanaged(TestStaticBoolAttrDesc) = .empty,
     signal_bool_attrs: std.ArrayListUnmanaged(TestStaticBoolAttrDesc) = .empty,
     descriptor_indexes_by_elem_id: std.ArrayListUnmanaged(ElemDescriptorIndex) = .empty,
-    first_child_by_parent: std.AutoHashMapUnmanaged(u64, u64) = .empty,
-    next_sibling_by_elem_id: std.AutoHashMapUnmanaged(u64, u64) = .empty,
+    render_metadata_by_elem_id: std.AutoHashMapUnmanaged(u64, RenderElemIndex) = .empty,
 
     fn deinit(self: *TestStream, allocator: std.mem.Allocator) void {
         self.render_nodes.deinit(allocator);
@@ -478,8 +663,7 @@ const TestStream = struct {
         self.static_bool_attrs.deinit(allocator);
         self.signal_bool_attrs.deinit(allocator);
         self.descriptor_indexes_by_elem_id.deinit(allocator);
-        self.first_child_by_parent.deinit(allocator);
-        self.next_sibling_by_elem_id.deinit(allocator);
+        self.render_metadata_by_elem_id.deinit(allocator);
         self.* = .{};
     }
 
@@ -489,11 +673,13 @@ const TestStream = struct {
     }
 
     fn firstRenderChild(self: *const TestStream, parent_elem_id: u64) ?u64 {
-        return self.first_child_by_parent.get(parent_elem_id);
+        const metadata = self.render_metadata_by_elem_id.get(parent_elem_id) orelse return null;
+        return metadata.first_child;
     }
 
     fn nextRenderSibling(self: *const TestStream, elem_id: u64) ?u64 {
-        return self.next_sibling_by_elem_id.get(elem_id);
+        const metadata = self.render_metadata_by_elem_id.get(elem_id) orelse return null;
+        return metadata.next_sibling;
     }
 };
 
@@ -504,6 +690,17 @@ fn ensureTestElemDescriptorIndex(stream: *TestStream, allocator: std.mem.Allocat
     }
     return &stream.descriptor_indexes_by_elem_id.items[index];
 }
+
+const TestMetrics = struct {
+    render_indexes_refreshed: u64 = 0,
+
+    pub fn bump(self: *TestMetrics, comptime field: anytype, count: u64) void {
+        switch (field) {
+            .render_indexes_refreshed => self.render_indexes_refreshed += count,
+            else => {},
+        }
+    }
+};
 
 test "field descriptor indexes round-trip by enum field" {
     var text: TextFieldDescriptorIndexes = .{};
@@ -611,8 +808,8 @@ test "stream reader helpers validate descriptor indexes" {
         .{ .elem_id = 2, .kind = .text },
         .{ .elem_id = 3, .kind = .signal_text },
     }) catch @panic("out of memory");
-    stream.first_child_by_parent.put(allocator, 1, 2) catch @panic("out of memory");
-    stream.next_sibling_by_elem_id.put(allocator, 2, 3) catch @panic("out of memory");
+    appendRenderChild(TestStream, &stream, allocator, 1, 2);
+    appendRenderChild(TestStream, &stream, allocator, 1, 3);
 
     const element = findElementDesc(TestStream, &stream, 1) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqualStrings("div", element.tag);
@@ -628,4 +825,45 @@ test "stream reader helpers validate descriptor indexes" {
     const children = streamDirectChildren(TestStream, allocator, &stream, 1);
     defer allocator.free(children);
     try std.testing.expectEqualSlices(u64, &.{ 2, 3 }, children);
+}
+
+test "render metadata helpers maintain child order and indexes" {
+    const allocator = std.testing.allocator;
+    var stream = TestStream{};
+    defer stream.deinit(allocator);
+
+    stream.render_nodes.appendSlice(allocator, &.{
+        .{ .elem_id = 1, .kind = .element },
+        .{ .elem_id = 2, .kind = .element },
+        .{ .elem_id = 3, .kind = .element },
+    }) catch @panic("out of memory");
+
+    recordRenderNodeIndex(TestStream, &stream, allocator, 1, 0);
+    recordRenderNodeIndex(TestStream, &stream, allocator, 2, 1);
+    recordRenderNodeIndex(TestStream, &stream, allocator, 3, 2);
+    appendRenderChild(TestStream, &stream, allocator, 0, 1);
+    appendRenderChild(TestStream, &stream, allocator, 0, 3);
+    insertRenderChildren(TestStream, &stream, allocator, 0, 1, &.{2});
+
+    var children = streamDirectChildren(TestStream, allocator, &stream, 0);
+    defer allocator.free(children);
+    try std.testing.expectEqualSlices(u64, &.{ 1, 2, 3 }, children);
+    try std.testing.expectEqual(@as(usize, 1), childInsertionIndexForRenderIndex(TestStream, &stream, 0, 1));
+
+    removeRenderChild(TestStream, &stream, 0, 2);
+    allocator.free(children);
+    children = streamDirectChildren(TestStream, allocator, &stream, 0);
+    try std.testing.expectEqualSlices(u64, &.{ 1, 3 }, children);
+
+    clearRenderNodeIndex(TestStream, &stream, 2, 1);
+    try std.testing.expectEqual(@as(?usize, null), renderNodeIndex(TestStream, &stream, 2));
+
+    stream.render_nodes.items[1] = .{ .elem_id = 3, .kind = .element };
+    stream.render_nodes.items[2] = .{ .elem_id = 2, .kind = .element };
+    var metrics = TestMetrics{};
+    refreshRenderIndexesFrom(TestStream, &stream, allocator, 1, &metrics);
+
+    try std.testing.expectEqual(@as(?usize, 1), renderNodeIndex(TestStream, &stream, 3));
+    try std.testing.expectEqual(@as(?usize, 2), renderNodeIndex(TestStream, &stream, 2));
+    try std.testing.expectEqual(@as(u64, 2), metrics.render_indexes_refreshed);
 }

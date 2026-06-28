@@ -989,189 +989,79 @@ pub const HostNodeDescriptorStream = struct {
     }
 
     pub fn ensureRenderMetadata(self: *HostNodeDescriptorStream, allocator: std.mem.Allocator, elem_id: u64) *HostRenderElemIndex {
-        const entry = self.render_metadata_by_elem_id.getOrPut(allocator, elem_id) catch @panic("out of memory");
-        if (!entry.found_existing) entry.value_ptr.* = .{};
-        return entry.value_ptr;
+        return descriptor_stream.ensureRenderMetadata(HostNodeDescriptorStream, self, allocator, elem_id);
     }
 
     pub fn removeRenderMetadataIfEmpty(self: *HostNodeDescriptorStream, elem_id: u64) void {
-        const metadata = self.render_metadata_by_elem_id.get(elem_id) orelse return;
-        if (metadata.empty()) {
-            _ = self.render_metadata_by_elem_id.fetchRemove(elem_id) orelse @panic("render metadata disappeared during removal");
-        }
+        descriptor_stream.removeRenderMetadataIfEmpty(HostNodeDescriptorStream, self, elem_id);
     }
 
     pub fn renderNodeIndex(self: *const HostNodeDescriptorStream, elem_id: u64) ?usize {
-        const metadata = self.render_metadata_by_elem_id.get(elem_id) orelse return null;
-        return metadata.render_node;
+        return descriptor_stream.renderNodeIndex(HostNodeDescriptorStream, self, elem_id);
     }
 
     pub fn recordRenderNodeIndex(self: *HostNodeDescriptorStream, allocator: std.mem.Allocator, elem_id: u64, index: usize) void {
-        const metadata = self.ensureRenderMetadata(allocator, elem_id);
-        if (metadata.render_node != null) @panic("descriptor stream recorded duplicate render index");
-        metadata.render_node = index;
+        descriptor_stream.recordRenderNodeIndex(HostNodeDescriptorStream, self, allocator, elem_id, index);
     }
 
     pub fn updateRenderNodeIndex(self: *HostNodeDescriptorStream, elem_id: u64, index: usize) void {
-        const metadata = self.render_metadata_by_elem_id.getPtr(elem_id) orelse @panic("descriptor stream updated a missing render index");
-        if (metadata.render_node == null) @panic("descriptor stream updated a missing render index");
-        metadata.render_node = index;
+        descriptor_stream.updateRenderNodeIndex(HostNodeDescriptorStream, self, elem_id, index);
     }
 
     pub fn clearRenderNodeIndex(self: *HostNodeDescriptorStream, elem_id: u64, expected: usize) void {
-        const metadata = self.render_metadata_by_elem_id.getPtr(elem_id) orelse @panic("descriptor stream cleared a missing render index");
-        const existing = metadata.render_node orelse @panic("descriptor stream cleared a missing render index");
-        if (existing != expected) @panic("descriptor stream cleared the wrong render index");
-        metadata.render_node = null;
-        self.removeRenderMetadataIfEmpty(elem_id);
+        descriptor_stream.clearRenderNodeIndex(HostNodeDescriptorStream, self, elem_id, expected);
     }
 
     pub fn ensureFirstRenderChildSlot(self: *HostNodeDescriptorStream, allocator: std.mem.Allocator, parent_elem_id: u64) *?u64 {
-        return &self.ensureRenderMetadata(allocator, parent_elem_id).first_child;
+        return descriptor_stream.ensureFirstRenderChildSlot(HostNodeDescriptorStream, self, allocator, parent_elem_id);
     }
 
     pub fn ensureLastRenderChildSlot(self: *HostNodeDescriptorStream, allocator: std.mem.Allocator, parent_elem_id: u64) *?u64 {
-        return &self.ensureRenderMetadata(allocator, parent_elem_id).last_child;
+        return descriptor_stream.ensureLastRenderChildSlot(HostNodeDescriptorStream, self, allocator, parent_elem_id);
     }
 
     pub fn ensureNextRenderSiblingSlot(self: *HostNodeDescriptorStream, allocator: std.mem.Allocator, elem_id: u64) *?u64 {
-        return &self.ensureRenderMetadata(allocator, elem_id).next_sibling;
+        return descriptor_stream.ensureNextRenderSiblingSlot(HostNodeDescriptorStream, self, allocator, elem_id);
     }
 
     pub fn firstRenderChild(self: *const HostNodeDescriptorStream, parent_elem_id: u64) ?u64 {
-        const metadata = self.render_metadata_by_elem_id.get(parent_elem_id) orelse return null;
-        return metadata.first_child;
+        return descriptor_stream.firstRenderChild(HostNodeDescriptorStream, self, parent_elem_id);
     }
 
     pub fn lastRenderChild(self: *const HostNodeDescriptorStream, parent_elem_id: u64) ?u64 {
-        const metadata = self.render_metadata_by_elem_id.get(parent_elem_id) orelse return null;
-        return metadata.last_child;
+        return descriptor_stream.lastRenderChild(HostNodeDescriptorStream, self, parent_elem_id);
     }
 
     pub fn nextRenderSibling(self: *const HostNodeDescriptorStream, elem_id: u64) ?u64 {
-        const metadata = self.render_metadata_by_elem_id.get(elem_id) orelse return null;
-        return metadata.next_sibling;
+        return descriptor_stream.nextRenderSibling(HostNodeDescriptorStream, self, elem_id);
     }
 
     pub fn appendRenderChild(self: *HostNodeDescriptorStream, allocator: std.mem.Allocator, parent_elem_id: u64, elem_id: u64) void {
-        _ = self.ensureRenderMetadata(allocator, parent_elem_id);
-        _ = self.ensureRenderMetadata(allocator, elem_id);
-
-        const parent_metadata = self.render_metadata_by_elem_id.getPtr(parent_elem_id) orelse @panic("render child index was missing its parent links");
-        const elem_metadata = self.render_metadata_by_elem_id.getPtr(elem_id) orelse @panic("render child index was missing its child links");
-        const last = parent_metadata.last_child;
-        elem_metadata.next_sibling = null;
-        if (last) |last_child| {
-            const last_metadata = self.render_metadata_by_elem_id.getPtr(last_child) orelse @panic("render child index was missing its last child links");
-            last_metadata.next_sibling = elem_id;
-        } else {
-            parent_metadata.first_child = elem_id;
-        }
-        parent_metadata.last_child = elem_id;
+        descriptor_stream.appendRenderChild(HostNodeDescriptorStream, self, allocator, parent_elem_id, elem_id);
     }
 
     pub fn clearRenderChildren(self: *HostNodeDescriptorStream, parent_elem_id: u64) void {
-        var child = self.firstRenderChild(parent_elem_id);
-        while (child) |child_id| {
-            const next = self.nextRenderSibling(child_id);
-            const child_metadata = self.render_metadata_by_elem_id.getPtr(child_id) orelse @panic("render child index referenced a child without links");
-            child_metadata.next_sibling = null;
-            self.removeRenderMetadataIfEmpty(child_id);
-            child = next;
-        }
-        if (self.render_metadata_by_elem_id.getPtr(parent_elem_id)) |parent_metadata| {
-            parent_metadata.first_child = null;
-            parent_metadata.last_child = null;
-        }
-        self.removeRenderMetadataIfEmpty(parent_elem_id);
+        descriptor_stream.clearRenderChildren(HostNodeDescriptorStream, self, parent_elem_id);
     }
 
     pub fn removeRenderChild(self: *HostNodeDescriptorStream, parent_elem_id: u64, elem_id: u64) void {
-        const parent_metadata = self.render_metadata_by_elem_id.getPtr(parent_elem_id) orelse @panic("render child index was missing its parent list");
-
-        var previous: ?u64 = null;
-        var current = parent_metadata.first_child;
-        while (current) |child_id| {
-            const next = self.nextRenderSibling(child_id);
-            if (child_id == elem_id) {
-                if (previous) |previous_id| {
-                    const previous_metadata = self.render_metadata_by_elem_id.getPtr(previous_id) orelse @panic("render child index referenced a previous child without links");
-                    previous_metadata.next_sibling = next;
-                } else {
-                    parent_metadata.first_child = next;
-                }
-                if (self.lastRenderChild(parent_elem_id) == elem_id) {
-                    parent_metadata.last_child = previous;
-                }
-                const elem_metadata = self.render_metadata_by_elem_id.getPtr(elem_id) orelse @panic("render child index removed a child without links");
-                elem_metadata.next_sibling = null;
-                self.removeRenderMetadataIfEmpty(elem_id);
-                self.removeRenderMetadataIfEmpty(parent_elem_id);
-                return;
-            }
-            previous = child_id;
-            current = next;
-        }
-        @panic("render child index was missing a child");
+        descriptor_stream.removeRenderChild(HostNodeDescriptorStream, self, parent_elem_id, elem_id);
     }
 
     pub fn insertRenderChildren(self: *HostNodeDescriptorStream, allocator: std.mem.Allocator, parent_elem_id: u64, index: usize, elem_ids: []const u64) void {
-        if (elem_ids.len == 0) return;
-
-        _ = self.ensureRenderMetadata(allocator, parent_elem_id);
-        for (elem_ids) |elem_id| {
-            _ = self.ensureRenderMetadata(allocator, elem_id);
-        }
-
-        const parent_metadata = self.render_metadata_by_elem_id.getPtr(parent_elem_id) orelse @panic("render child insertion was missing parent links");
-
-        var previous: ?u64 = null;
-        var next = parent_metadata.first_child;
-        var cursor: usize = 0;
-        while (cursor < index) : (cursor += 1) {
-            const child_id = next orelse @panic("render child insertion index exceeded parent child list");
-            previous = child_id;
-            next = self.nextRenderSibling(child_id);
-        }
-
-        for (elem_ids, 0..) |elem_id, elem_index| {
-            const next_insert = if (elem_index + 1 < elem_ids.len) elem_ids[elem_index + 1] else next;
-            self.ensureNextRenderSiblingSlot(allocator, elem_id).* = next_insert;
-        }
-
-        if (previous) |previous_id| {
-            const previous_metadata = self.render_metadata_by_elem_id.getPtr(previous_id) orelse @panic("render child insertion referenced a previous child without links");
-            previous_metadata.next_sibling = elem_ids[0];
-        } else {
-            parent_metadata.first_child = elem_ids[0];
-        }
-        if (next == null) {
-            parent_metadata.last_child = elem_ids[elem_ids.len - 1];
-        }
+        descriptor_stream.insertRenderChildren(HostNodeDescriptorStream, self, allocator, parent_elem_id, index, elem_ids);
     }
 
     pub fn replaceRenderChildrenIndex(self: *HostNodeDescriptorStream, allocator: std.mem.Allocator, parent_elem_id: u64, elem_ids: []const u64) void {
-        self.clearRenderChildren(parent_elem_id);
-        self.insertRenderChildren(allocator, parent_elem_id, 0, elem_ids);
+        descriptor_stream.replaceRenderChildrenIndex(HostNodeDescriptorStream, self, allocator, parent_elem_id, elem_ids);
     }
 
     pub fn childInsertionIndexForRenderIndex(self: *const HostNodeDescriptorStream, parent_elem_id: u64, render_insert_index: usize) usize {
-        var index: usize = 0;
-        var child = self.firstRenderChild(parent_elem_id);
-        while (child) |child_id| : (index += 1) {
-            const child_render_index = self.renderNodeIndex(child_id) orelse @panic("render child index referenced a child without a render index");
-            if (child_render_index >= render_insert_index) return index;
-            child = self.nextRenderSibling(child_id);
-        }
-        return index;
+        return descriptor_stream.childInsertionIndexForRenderIndex(HostNodeDescriptorStream, self, parent_elem_id, render_insert_index);
     }
 
     pub fn refreshRenderIndexesFrom(self: *HostNodeDescriptorStream, allocator: std.mem.Allocator, start_index: usize, metrics: anytype) void {
-        if (start_index > self.render_nodes.items.len) @panic("render index refresh started past render node table");
-        metrics.bump(.render_indexes_refreshed, @intCast(self.render_nodes.items.len - start_index));
-        for (self.render_nodes.items[start_index..], start_index..) |node, index| {
-            self.ensureRenderMetadata(allocator, node.elem_id).render_node = index;
-        }
+        descriptor_stream.refreshRenderIndexesFrom(HostNodeDescriptorStream, self, allocator, start_index, metrics);
     }
 
     pub fn moveReplacementRenderChildren(self: *HostNodeDescriptorStream, allocator: std.mem.Allocator, replacement: *HostNodeDescriptorStream, elem_id: u64) void {
