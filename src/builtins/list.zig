@@ -211,6 +211,51 @@ pub const RocList = extern struct {
         );
     }
 
+    fn decrefAfterMovingSliceElements(
+        self: RocList,
+        alignment: u32,
+        element_width: usize,
+        elements_refcounted: bool,
+        dec_context: ?*anyopaque,
+        dec: Dec,
+        roc_ops: *RocOps,
+    ) void {
+        std.debug.assert(self.isSeamlessSlice());
+        std.debug.assert(self.isUnique(roc_ops));
+
+        if (elements_refcounted) {
+            const alloc_ptr = self.getAllocationDataPtr(roc_ops) orelse unreachable;
+            const slice_ptr = self.bytes orelse unreachable;
+            std.debug.assert(element_width > 0);
+
+            const moved_start_bytes = @intFromPtr(slice_ptr) - @intFromPtr(alloc_ptr);
+            std.debug.assert(moved_start_bytes % element_width == 0);
+
+            const moved_start = moved_start_bytes / element_width;
+            const moved_end = moved_start + self.len();
+            const count = self.getAllocationElementCount(true, roc_ops);
+            std.debug.assert(moved_end <= count);
+
+            var i: usize = 0;
+            while (i < moved_start) : (i += 1) {
+                dec(dec_context, alloc_ptr + i * element_width);
+            }
+            i = moved_end;
+            while (i < count) : (i += 1) {
+                dec(dec_context, alloc_ptr + i * element_width);
+            }
+        }
+
+        utils.decref(
+            self.getAllocationDataPtr(roc_ops),
+            self.capacity_or_alloc_ptr,
+            alignment,
+            elements_refcounted,
+            .atomic,
+            roc_ops,
+        );
+    }
+
     pub fn elements(self: RocList, comptime T: type) ?[*]T {
         if (self.bytes) |bytes| {
             return utils.alignedPtrCast([*]T, bytes, @src());
@@ -338,6 +383,8 @@ pub const RocList = extern struct {
         elements_refcounted: bool,
         inc_context: ?*anyopaque,
         inc: Inc,
+        dec_context: ?*anyopaque,
+        dec: Dec,
         roc_ops: *RocOps,
     ) RocList {
         if (self.bytes) |source_ptr| {
@@ -353,7 +400,7 @@ pub const RocList = extern struct {
                     return result;
                 }
             }
-            return self.reallocateFresh(alignment, new_length, element_width, elements_refcounted, inc_context, inc, roc_ops);
+            return self.reallocateFresh(alignment, new_length, element_width, elements_refcounted, inc_context, inc, dec_context, dec, roc_ops);
         }
         return RocList.list_allocate(alignment, new_length, element_width, elements_refcounted, roc_ops);
     }
@@ -367,21 +414,22 @@ pub const RocList = extern struct {
         elements_refcounted: bool,
         inc_context: ?*anyopaque,
         inc: Inc,
+        dec_context: ?*anyopaque,
+        dec: Dec,
         roc_ops: *RocOps,
     ) RocList {
         const old_length = self.length;
 
         const result = RocList.list_allocate(alignment, new_length, element_width, elements_refcounted, roc_ops);
+        const move_slice_elements = self.isSeamlessSlice() and self.isUnique(roc_ops);
 
         if (self.bytes) |source_ptr| {
             // transfer the memory
             const dest_ptr = result.bytes orelse unreachable;
 
             @memcpy(dest_ptr[0..(old_length * element_width)], source_ptr[0..(old_length * element_width)]);
-            @memset(dest_ptr[(old_length * element_width)..(new_length * element_width)], 0);
 
-            // Increment refcount of all elements now in a new list.
-            if (elements_refcounted) {
+            if (elements_refcounted and !move_slice_elements) {
                 var i: usize = 0;
                 while (i < old_length) : (i += 1) {
                     inc(inc_context, dest_ptr + i * element_width);
@@ -389,8 +437,11 @@ pub const RocList = extern struct {
             }
         }
 
-        // Calls utils.decref directly to avoid decrementing the refcount of elements.
-        utils.decref(self.getAllocationDataPtr(roc_ops), self.capacity_or_alloc_ptr, alignment, elements_refcounted, .atomic, roc_ops);
+        if (move_slice_elements) {
+            self.decrefAfterMovingSliceElements(alignment, element_width, elements_refcounted, dec_context, dec, roc_ops);
+        } else {
+            self.decref(alignment, element_width, elements_refcounted, dec_context, dec, roc_ops);
+        }
 
         return result;
     }
@@ -461,6 +512,8 @@ pub fn listWithCapacity(
         elements_refcounted,
         inc_context,
         inc,
+        null,
+        rcNone,
         .InPlace,
         roc_ops,
     );
@@ -498,6 +551,8 @@ pub fn listReserve(
     elements_refcounted: bool,
     inc_context: ?*anyopaque,
     inc: Inc,
+    dec_context: ?*anyopaque,
+    dec: Dec,
     update_mode: UpdateMode,
     roc_ops: *RocOps,
 ) callconv(.c) RocList {
@@ -519,6 +574,8 @@ pub fn listReserve(
             elements_refcounted,
             inc_context,
             inc,
+            dec_context,
+            dec,
             roc_ops,
         );
         output.length = original_len;
@@ -638,6 +695,8 @@ pub fn listAppendSafeC(
         elements_refcounted,
         null, // inc_context
         rcNone, // inc - no refcount increment needed
+        null, // dec_context
+        rcNone, // dec - elements are not refcounted here
         .InPlace, // update_mode - try to update in place
         copy,
         roc_ops,
@@ -662,6 +721,8 @@ pub fn listAppend(
     elements_refcounted: bool,
     inc_context: ?*anyopaque,
     inc: Inc,
+    dec_context: ?*anyopaque,
+    dec: Dec,
     update_mode: UpdateMode,
     copy_fn: CopyFallbackFn,
     roc_ops: *RocOps,
@@ -674,6 +735,8 @@ pub fn listAppend(
         elements_refcounted,
         inc_context,
         inc,
+        dec_context,
+        dec,
         update_mode,
         roc_ops,
     );
@@ -724,6 +787,8 @@ pub fn pushInPlace(
             new_length,
             element_size,
             false,
+            null,
+            rcNone,
             null,
             rcNone,
             roc_ops,
@@ -810,6 +875,8 @@ pub fn listPrepend(
     elements_refcounted: bool,
     inc_context: ?*anyopaque,
     inc: Inc,
+    dec_context: ?*anyopaque,
+    dec: Dec,
     update_mode: UpdateMode,
     copy: CopyFallbackFn,
     roc_ops: *RocOps,
@@ -823,6 +890,8 @@ pub fn listPrepend(
         elements_refcounted,
         inc_context,
         inc,
+        dec_context,
+        dec,
         update_mode,
         roc_ops,
     );
@@ -927,8 +996,12 @@ pub fn listSublist(
     roc_ops: *RocOps,
 ) callconv(.c) RocList {
     const size = list.len();
+    // A seamless slice can have refcount 1 while still sharing allocation
+    // cleanup with a larger window, so it cannot take the in-place path.
+    const can_reuse_allocation = !list.isSeamlessSlice() and
+        (update_mode == .InPlace or list.isUnique(roc_ops));
     if (size == 0 or len_u64 == 0 or start_u64 >= @as(u64, @intCast(size))) {
-        if (update_mode == .InPlace or list.isUnique(roc_ops)) {
+        if (can_reuse_allocation) {
             // Decrement the reference counts of all elements.
             if (list.bytes) |source_ptr| {
                 if (elements_refcounted) {
@@ -962,7 +1035,7 @@ pub fn listSublist(
         // than something that fit in usize.
         const keep_len = @as(usize, @intCast(@min(len_u64, @as(u64, @intCast(size_minus_start)))));
 
-        if (start == 0 and (update_mode == .InPlace or list.isUnique(roc_ops))) {
+        if (start == 0 and can_reuse_allocation) {
             // The list is unique, we actually have to decrement refcounts to elements we aren't keeping around.
             // Decrement the reference counts of elements after `start + keep_len`.
             if (elements_refcounted) {
@@ -978,7 +1051,7 @@ pub fn listSublist(
             output.length = keep_len;
             return output;
         } else {
-            if (update_mode == .InPlace or list.isUnique(roc_ops)) {
+            if (can_reuse_allocation) {
                 // Store original element count for proper cleanup when the slice is freed.
                 // When the seamless slice is later decreffed, it will decref ALL elements
                 // starting from the original allocation pointer, not just the slice elements.
@@ -1079,7 +1152,9 @@ pub fn listDropAt(
         // were >= than `size`, and we know `size` fits in usize.
         const drop_index: usize = @intCast(drop_index_u64);
 
-        if (update_mode == .InPlace or list.isUnique(roc_ops)) {
+        const can_reuse_allocation = !list.isSeamlessSlice() and
+            (update_mode == .InPlace or list.isUnique(roc_ops));
+        if (can_reuse_allocation) {
             if (elements_refcounted) {
                 const element = source_ptr + drop_index * element_width;
                 dec(dec_context, element);
@@ -1295,10 +1370,15 @@ pub fn listConcat(
     // 1. NOT use the unique paths (reallocate might free/move the allocation)
     // 2. Only decref once at the end (to avoid double-free)
     // Instead, fall through to the general path that allocates a new list.
+    const can_consume_a = !same_allocation and (update_mode_a == .InPlace or list_a.isUnique(roc_ops));
+    const can_consume_b = !same_allocation and (update_mode_b == .InPlace or list_b.isUnique(roc_ops));
+    const a_reuses_allocation = can_consume_a and !list_a.isSeamlessSlice();
+    const b_reuses_allocation = can_consume_b and !list_b.isSeamlessSlice();
+    const use_a_path = a_reuses_allocation or (can_consume_a and !b_reuses_allocation);
 
-    if (!same_allocation and (update_mode_a == .InPlace or list_a.isUnique(roc_ops))) {
-        const total_length: usize = list_a.len() + list_b.len();
+    const total_length: usize = list_a.len() + list_b.len();
 
+    if (use_a_path) {
         const resized_list_a = list_a.reallocate(
             alignment,
             total_length,
@@ -1306,6 +1386,8 @@ pub fn listConcat(
             elements_refcounted,
             inc_context,
             inc,
+            dec_context,
+            dec,
             roc_ops,
         );
 
@@ -1331,9 +1413,7 @@ pub fn listConcat(
         list_b.decref(alignment, element_width, elements_refcounted, dec_context, dec, roc_ops);
 
         return resized_list_a;
-    } else if (!same_allocation and (update_mode_b == .InPlace or list_b.isUnique(roc_ops))) {
-        const total_length: usize = list_a.len() + list_b.len();
-
+    } else if (can_consume_b) {
         const resized_list_b = list_b.reallocate(
             alignment,
             total_length,
@@ -1341,6 +1421,8 @@ pub fn listConcat(
             elements_refcounted,
             inc_context,
             inc,
+            dec_context,
+            dec,
             roc_ops,
         );
 
@@ -1370,7 +1452,6 @@ pub fn listConcat(
 
         return resized_list_b;
     }
-    const total_length: usize = list_a.len() + list_b.len();
 
     const output = RocList.list_allocate(alignment, total_length, element_width, elements_refcounted, roc_ops);
 
@@ -1550,7 +1631,7 @@ pub fn listConcatUtf8(
         const combined_length = list.len() + string.len();
 
         // List U8 has alignment 1 and element_width 1
-        const result = list.reallocate(1, combined_length, 1, false, null, &rcNone, roc_ops);
+        const result = list.reallocate(1, combined_length, 1, false, null, &rcNone, null, &rcNone, roc_ops);
         // We just allocated combined_length, which is > 0 because string.len() > 0
         var bytes = result.bytes orelse unreachable;
         @memcpy(bytes[list.len()..combined_length], string.asU8ptr()[0..string.len()]);
@@ -1689,6 +1770,123 @@ test "listConcat: non-unique with unique overlapping" {
     defer wanted.decref(@alignOf(u8), @sizeOf(u8), false, null, rcNone, test_env.getOps());
 
     try std.testing.expect(testBytesEqual(concatted, wanted));
+}
+
+test "listConcat refcounted seamless slice releases backing allocation when reused" {
+    const Counter = struct {
+        fn inc(ctx: ?*anyopaque, _: ?[*]u8) callconv(.c) void {
+            const count: *usize = @ptrCast(@alignCast(ctx.?));
+            count.* += 1;
+        }
+
+        fn dec(ctx: ?*anyopaque, _: ?[*]u8) callconv(.c) void {
+            const count: *usize = @ptrCast(@alignCast(ctx.?));
+            count.* += 1;
+        }
+    };
+
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    const left_data = [_]u8{ 1, 2, 3, 4 };
+    const right_data = [_]u8{ 9, 10 };
+    const left = RocList.fromSlice(u8, left_data[0..], true, test_env.getOps());
+    const right = RocList.fromSlice(u8, right_data[0..], true, test_env.getOps());
+    var inc_count: usize = 0;
+    var dec_count: usize = 0;
+
+    const slice = listSublist(
+        left,
+        @alignOf(u8),
+        @sizeOf(u8),
+        true,
+        1,
+        2,
+        &dec_count,
+        Counter.dec,
+        .InPlace,
+        test_env.getOps(),
+    );
+    try std.testing.expect(slice.isSeamlessSlice());
+
+    const result = listConcat(
+        slice,
+        right,
+        @alignOf(u8),
+        @sizeOf(u8),
+        true,
+        &inc_count,
+        Counter.inc,
+        &dec_count,
+        Counter.dec,
+        .InPlace,
+        .InPlace,
+        test_env.getOps(),
+    );
+    defer result.decref(@alignOf(u8), @sizeOf(u8), true, &dec_count, Counter.dec, test_env.getOps());
+
+    try std.testing.expect(!result.isSeamlessSlice());
+    try std.testing.expectEqual(@as(usize, 4), result.len());
+    try std.testing.expectEqual(@as(usize, right_data.len), inc_count);
+    try std.testing.expectEqual(@as(usize, left_data.len - slice.len() + right_data.len), dec_count);
+
+    const elements = result.elements(u8).?[0..result.len()];
+    try std.testing.expectEqual(@as(u8, 2), elements[0]);
+    try std.testing.expectEqual(@as(u8, 3), elements[1]);
+    try std.testing.expectEqual(@as(u8, 9), elements[2]);
+    try std.testing.expectEqual(@as(u8, 10), elements[3]);
+}
+
+test "listConcat reuses non-slice allocation before cloning seamless slice" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    const left_data = [_]u8{ 1, 2, 3, 4 };
+    const right_data = [_]u8{ 9, 10 };
+    const left = RocList.fromSlice(u8, left_data[0..], false, test_env.getOps());
+    var right = RocList.fromSlice(u8, right_data[0..], false, test_env.getOps());
+    right = listReserve(right, @alignOf(u8), 2, @sizeOf(u8), false, null, rcNone, null, rcNone, .InPlace, test_env.getOps());
+    const right_bytes = right.bytes;
+
+    const slice = listSublist(
+        left,
+        @alignOf(u8),
+        @sizeOf(u8),
+        false,
+        1,
+        2,
+        null,
+        rcNone,
+        .InPlace,
+        test_env.getOps(),
+    );
+    try std.testing.expect(slice.isSeamlessSlice());
+
+    const result = listConcat(
+        slice,
+        right,
+        @alignOf(u8),
+        @sizeOf(u8),
+        false,
+        null,
+        rcNone,
+        null,
+        rcNone,
+        .InPlace,
+        .InPlace,
+        test_env.getOps(),
+    );
+    defer result.decref(@alignOf(u8), @sizeOf(u8), false, null, rcNone, test_env.getOps());
+
+    try std.testing.expectEqual(right_bytes, result.bytes);
+    try std.testing.expect(!result.isSeamlessSlice());
+    try std.testing.expectEqual(@as(usize, 4), result.len());
+
+    const elements = result.elements(u8).?[0..result.len()];
+    try std.testing.expectEqual(@as(u8, 2), elements[0]);
+    try std.testing.expectEqual(@as(u8, 3), elements[1]);
+    try std.testing.expectEqual(@as(u8, 9), elements[2]);
+    try std.testing.expectEqual(@as(u8, 10), elements[3]);
 }
 
 test "listConcatUtf8" {
@@ -1859,7 +2057,7 @@ test "listReserve functionality" {
     const data = [_]u8{ 1, 2, 3 };
     const list = RocList.fromSlice(u8, data[0..], false, test_env.getOps());
 
-    const reserved_list = listReserve(list, @alignOf(u8), 20, @sizeOf(u8), false, null, rcNone, utils.UpdateMode.Immutable, test_env.getOps());
+    const reserved_list = listReserve(list, @alignOf(u8), 20, @sizeOf(u8), false, null, rcNone, null, rcNone, utils.UpdateMode.Immutable, test_env.getOps());
     defer reserved_list.decref(@alignOf(u8), @sizeOf(u8), false, null, rcNone, test_env.getOps());
 
     // Should have at least the requested capacity
@@ -1873,6 +2071,67 @@ test "listReserve functionality" {
     try std.testing.expectEqual(@as(u8, 1), elements[0]);
     try std.testing.expectEqual(@as(u8, 2), elements[1]);
     try std.testing.expectEqual(@as(u8, 3), elements[2]);
+}
+
+test "listReserve refcounted seamless slice releases backing allocation when growing" {
+    const Counter = struct {
+        fn inc(ctx: ?*anyopaque, _: ?[*]u8) callconv(.c) void {
+            const count: *usize = @ptrCast(@alignCast(ctx.?));
+            count.* += 1;
+        }
+
+        fn dec(ctx: ?*anyopaque, _: ?[*]u8) callconv(.c) void {
+            const count: *usize = @ptrCast(@alignCast(ctx.?));
+            count.* += 1;
+        }
+    };
+
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    const data = [_]u8{ 1, 2, 3, 4 };
+    const list = RocList.fromSlice(u8, data[0..], true, test_env.getOps());
+    var inc_count: usize = 0;
+    var dec_count: usize = 0;
+
+    const slice = listSublist(
+        list,
+        @alignOf(u8),
+        @sizeOf(u8),
+        true,
+        1,
+        2,
+        &dec_count,
+        Counter.dec,
+        .InPlace,
+        test_env.getOps(),
+    );
+    try std.testing.expect(slice.isSeamlessSlice());
+
+    const reserved = listReserve(
+        slice,
+        @alignOf(u8),
+        1,
+        @sizeOf(u8),
+        true,
+        &inc_count,
+        Counter.inc,
+        &dec_count,
+        Counter.dec,
+        .InPlace,
+        test_env.getOps(),
+    );
+    defer reserved.decref(@alignOf(u8), @sizeOf(u8), true, &dec_count, Counter.dec, test_env.getOps());
+
+    try std.testing.expect(!reserved.isSeamlessSlice());
+    try std.testing.expect(reserved.getCapacity() >= 3);
+    try std.testing.expectEqual(@as(usize, 2), reserved.len());
+    try std.testing.expectEqual(@as(usize, 0), inc_count);
+    try std.testing.expectEqual(@as(usize, data.len - slice.len()), dec_count);
+
+    const elements = reserved.elements(u8).?[0..reserved.len()];
+    try std.testing.expectEqual(@as(u8, 2), elements[0]);
+    try std.testing.expectEqual(@as(u8, 3), elements[1]);
 }
 
 test "listCapacity function" {
@@ -1912,7 +2171,7 @@ test "listReleaseExcessCapacity functionality" {
     const list_with_data = RocList.fromSlice(u8, data[0..], false, test_env.getOps());
 
     // Reserve excess capacity for it
-    const list_with_excess = listReserve(list_with_data, @alignOf(u8), 100, @sizeOf(u8), false, null, rcNone, utils.UpdateMode.Immutable, test_env.getOps());
+    const list_with_excess = listReserve(list_with_data, @alignOf(u8), 100, @sizeOf(u8), false, null, rcNone, null, rcNone, utils.UpdateMode.Immutable, test_env.getOps());
 
     // Verify it has excess capacity
     try std.testing.expect(list_with_excess.getCapacity() >= 100);
@@ -1972,6 +2231,54 @@ test "listSublist edge cases" {
 
     try std.testing.expectEqual(@as(usize, 0), empty_sublist.len());
     try std.testing.expect(empty_sublist.isEmpty());
+}
+
+test "listSublist empty result from seamless slice releases backing allocation once" {
+    const Counter = struct {
+        fn dec(ctx: ?*anyopaque, _: ?[*]u8) callconv(.c) void {
+            const count: *usize = @ptrCast(@alignCast(ctx.?));
+            count.* += 1;
+        }
+    };
+
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    const data = [_]u8{ 1, 2, 3 };
+    const list = RocList.fromSlice(u8, data[0..], true, test_env.getOps());
+    var dec_count: usize = 0;
+
+    const suffix = listSublist(
+        list,
+        @alignOf(u8),
+        @sizeOf(u8),
+        true,
+        1,
+        2,
+        &dec_count,
+        Counter.dec,
+        .InPlace,
+        test_env.getOps(),
+    );
+    try std.testing.expect(suffix.isSeamlessSlice());
+    try std.testing.expectEqual(@as(usize, 0), dec_count);
+
+    const empty = listSublist(
+        suffix,
+        @alignOf(u8),
+        @sizeOf(u8),
+        true,
+        0,
+        0,
+        &dec_count,
+        Counter.dec,
+        .InPlace,
+        test_env.getOps(),
+    );
+
+    try std.testing.expect(empty.isEmpty());
+    try std.testing.expect(!empty.isSeamlessSlice());
+    try std.testing.expectEqual(@as(usize, data.len), dec_count);
 }
 
 test "listSwap basic functionality" {
@@ -2079,7 +2386,7 @@ test "listReserve followed by listAppendUnsafe reuses reserved allocation" {
     defer test_env.deinit();
 
     var list = RocList.empty();
-    list = listReserve(list, @alignOf(u16), 2, @sizeOf(u16), false, null, rcNone, utils.UpdateMode.Immutable, test_env.getOps());
+    list = listReserve(list, @alignOf(u16), 2, @sizeOf(u16), false, null, rcNone, null, rcNone, utils.UpdateMode.Immutable, test_env.getOps());
 
     const reserved_ptr = list.bytes;
     try std.testing.expect(list.getCapacity() >= 2);
@@ -2123,7 +2430,7 @@ test "listPrepend basic functionality" {
 
     // Prepend an element
     const element: u8 = 1;
-    const result = listPrepend(list, @alignOf(u8), @as(?[*]u8, @ptrCast(@constCast(&element))), @sizeOf(u8), false, null, rcNone, .Immutable, copy_fn, test_env.getOps());
+    const result = listPrepend(list, @alignOf(u8), @as(?[*]u8, @ptrCast(@constCast(&element))), @sizeOf(u8), false, null, rcNone, null, rcNone, .Immutable, copy_fn, test_env.getOps());
     defer result.decref(@alignOf(u8), @sizeOf(u8), false, null, rcNone, test_env.getOps());
 
     try std.testing.expectEqual(@as(usize, 4), result.len());
@@ -2157,7 +2464,7 @@ test "listPrepend to empty list" {
 
     // Prepend an element
     const element: i32 = 42;
-    const result = listPrepend(empty_list, @alignOf(i32), @as(?[*]u8, @ptrCast(@constCast(&element))), @sizeOf(i32), false, null, rcNone, .Immutable, copy_fn, test_env.getOps());
+    const result = listPrepend(empty_list, @alignOf(i32), @as(?[*]u8, @ptrCast(@constCast(&element))), @sizeOf(i32), false, null, rcNone, null, rcNone, .Immutable, copy_fn, test_env.getOps());
     defer result.decref(@alignOf(i32), @sizeOf(i32), false, null, rcNone, test_env.getOps());
 
     try std.testing.expectEqual(@as(usize, 1), result.len());
@@ -2190,11 +2497,11 @@ test "listPrepend multiple elements" {
 
     // Prepend first element
     const element1: u16 = 200;
-    list = listPrepend(list, @alignOf(u16), @as(?[*]u8, @ptrCast(@constCast(&element1))), @sizeOf(u16), false, null, rcNone, .Immutable, copy_fn, test_env.getOps());
+    list = listPrepend(list, @alignOf(u16), @as(?[*]u8, @ptrCast(@constCast(&element1))), @sizeOf(u16), false, null, rcNone, null, rcNone, .Immutable, copy_fn, test_env.getOps());
 
     // Prepend second element
     const element2: u16 = 300;
-    list = listPrepend(list, @alignOf(u16), @as(?[*]u8, @ptrCast(@constCast(&element2))), @sizeOf(u16), false, null, rcNone, .Immutable, copy_fn, test_env.getOps());
+    list = listPrepend(list, @alignOf(u16), @as(?[*]u8, @ptrCast(@constCast(&element2))), @sizeOf(u16), false, null, rcNone, null, rcNone, .Immutable, copy_fn, test_env.getOps());
 
     defer list.decref(@alignOf(u16), @sizeOf(u16), false, null, rcNone, test_env.getOps());
 
@@ -2229,6 +2536,66 @@ test "listDropAt basic functionality" {
     try std.testing.expectEqual(@as(u8, 20), elements[1]);
     try std.testing.expectEqual(@as(u8, 40), elements[2]); // 30 was dropped
     try std.testing.expectEqual(@as(u8, 50), elements[3]);
+}
+
+test "listDropAt middle element from seamless slice clones before shifting" {
+    const Counter = struct {
+        fn inc(ctx: ?*anyopaque, _: ?[*]u8) callconv(.c) void {
+            const count: *usize = @ptrCast(@alignCast(ctx.?));
+            count.* += 1;
+        }
+
+        fn dec(ctx: ?*anyopaque, _: ?[*]u8) callconv(.c) void {
+            const count: *usize = @ptrCast(@alignCast(ctx.?));
+            count.* += 1;
+        }
+    };
+
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    const data = [_]u8{ 1, 2, 3, 4 };
+    const list = RocList.fromSlice(u8, data[0..], true, test_env.getOps());
+    var inc_count: usize = 0;
+    var dec_count: usize = 0;
+
+    const suffix = listSublist(
+        list,
+        @alignOf(u8),
+        @sizeOf(u8),
+        true,
+        1,
+        3,
+        &dec_count,
+        Counter.dec,
+        .InPlace,
+        test_env.getOps(),
+    );
+    try std.testing.expect(suffix.isSeamlessSlice());
+
+    const dropped = listDropAt(
+        suffix,
+        @alignOf(u8),
+        @sizeOf(u8),
+        true,
+        1,
+        &inc_count,
+        Counter.inc,
+        &dec_count,
+        Counter.dec,
+        .InPlace,
+        test_env.getOps(),
+    );
+    defer dropped.decref(@alignOf(u8), @sizeOf(u8), true, &dec_count, Counter.dec, test_env.getOps());
+
+    try std.testing.expect(!dropped.isSeamlessSlice());
+    try std.testing.expectEqual(@as(usize, 2), dropped.len());
+    try std.testing.expectEqual(@as(usize, 2), inc_count);
+    try std.testing.expectEqual(@as(usize, data.len), dec_count);
+
+    const elements = dropped.elements(u8).?[0..dropped.len()];
+    try std.testing.expectEqual(@as(u8, 2), elements[0]);
+    try std.testing.expectEqual(@as(u8, 4), elements[1]);
 }
 
 test "listDropAt first element" {
@@ -2631,7 +2998,7 @@ test "edge case: listPrepend to large list" {
 
     // Prepend an element
     const element: u8 = 255;
-    const result = listPrepend(list, @alignOf(u8), @as(?[*]u8, @ptrCast(@constCast(&element))), @sizeOf(u8), false, null, rcNone, .Immutable, copy_fn, test_env.getOps());
+    const result = listPrepend(list, @alignOf(u8), @as(?[*]u8, @ptrCast(@constCast(&element))), @sizeOf(u8), false, null, rcNone, null, rcNone, .Immutable, copy_fn, test_env.getOps());
     defer result.decref(@alignOf(u8), @sizeOf(u8), false, null, rcNone, test_env.getOps());
 
     try std.testing.expectEqual(@as(usize, 101), result.len());
@@ -3143,10 +3510,10 @@ test "integration: prepend then drop operations" {
 
     // Prepend multiple elements
     const element1: u8 = 1;
-    list = listPrepend(list, @alignOf(u8), @as(?[*]u8, @ptrCast(@constCast(&element1))), @sizeOf(u8), false, null, rcNone, .Immutable, copy_fn, test_env.getOps());
+    list = listPrepend(list, @alignOf(u8), @as(?[*]u8, @ptrCast(@constCast(&element1))), @sizeOf(u8), false, null, rcNone, null, rcNone, .Immutable, copy_fn, test_env.getOps());
 
     const element2: u8 = 2;
-    list = listPrepend(list, @alignOf(u8), @as(?[*]u8, @ptrCast(@constCast(&element2))), @sizeOf(u8), false, null, rcNone, .Immutable, copy_fn, test_env.getOps());
+    list = listPrepend(list, @alignOf(u8), @as(?[*]u8, @ptrCast(@constCast(&element2))), @sizeOf(u8), false, null, rcNone, null, rcNone, .Immutable, copy_fn, test_env.getOps());
 
     // Now we should have [2, 1, 5, 10, 15]
     try std.testing.expectEqual(@as(usize, 5), list.len());
@@ -3314,7 +3681,7 @@ test "memory management: capacity boundary conditions" {
     try std.testing.expectEqual(@as(usize, 0), list.len());
 
     // Use listReserve to ensure we have exactly the capacity we want
-    list = listReserve(list, @alignOf(u32), exact_capacity, @sizeOf(u32), false, null, rcNone, utils.UpdateMode.Immutable, test_env.getOps());
+    list = listReserve(list, @alignOf(u32), exact_capacity, @sizeOf(u32), false, null, rcNone, null, rcNone, utils.UpdateMode.Immutable, test_env.getOps());
     defer list.decref(@alignOf(u32), @sizeOf(u32), false, null, rcNone, test_env.getOps());
 
     // Verify capacity management functions work correctly
@@ -3334,7 +3701,7 @@ test "memory management: release excess capacity edge cases" {
     const small_list = RocList.fromSlice(u8, data[0..], false, test_env.getOps());
 
     // Reserve much more capacity than needed
-    const oversized_list = listReserve(small_list, @alignOf(u8), 1000, @sizeOf(u8), false, null, rcNone, utils.UpdateMode.Immutable, test_env.getOps());
+    const oversized_list = listReserve(small_list, @alignOf(u8), 1000, @sizeOf(u8), false, null, rcNone, null, rcNone, utils.UpdateMode.Immutable, test_env.getOps());
 
     try std.testing.expectEqual(@as(usize, 1), oversized_list.len());
     try std.testing.expect(oversized_list.getCapacity() >= 1000);
@@ -3479,13 +3846,13 @@ test "memory management: multiple reserve operations" {
     var list = RocList.fromSlice(u8, data[0..], false, test_env.getOps());
 
     // Reserve capacity multiple times, each time increasing
-    list = listReserve(list, @alignOf(u8), 10, @sizeOf(u8), false, null, rcNone, utils.UpdateMode.Immutable, test_env.getOps());
+    list = listReserve(list, @alignOf(u8), 10, @sizeOf(u8), false, null, rcNone, null, rcNone, utils.UpdateMode.Immutable, test_env.getOps());
     try std.testing.expect(list.getCapacity() >= 12); // 2 existing + 10 spare
 
-    list = listReserve(list, @alignOf(u8), 20, @sizeOf(u8), false, null, rcNone, utils.UpdateMode.Immutable, test_env.getOps());
+    list = listReserve(list, @alignOf(u8), 20, @sizeOf(u8), false, null, rcNone, null, rcNone, utils.UpdateMode.Immutable, test_env.getOps());
     try std.testing.expect(list.getCapacity() >= 22); // 2 existing + 20 spare
 
-    list = listReserve(list, @alignOf(u8), 5, @sizeOf(u8), false, null, rcNone, utils.UpdateMode.Immutable, test_env.getOps());
+    list = listReserve(list, @alignOf(u8), 5, @sizeOf(u8), false, null, rcNone, null, rcNone, utils.UpdateMode.Immutable, test_env.getOps());
     // Should not decrease capacity, so still >= 22
     try std.testing.expect(list.getCapacity() >= 22);
 
@@ -4077,11 +4444,11 @@ test "listPrepend InPlace reuses the unique allocation without a uniqueness chec
 
     const data = [_]u8{ 2, 3, 4 };
     var list = RocList.fromSlice(u8, data[0..], false, test_env.getOps());
-    list = listReserve(list, @alignOf(u8), 1, @sizeOf(u8), false, null, rcNone, .Immutable, test_env.getOps());
+    list = listReserve(list, @alignOf(u8), 1, @sizeOf(u8), false, null, rcNone, null, rcNone, .Immutable, test_env.getOps());
     const original_bytes = list.bytes;
 
     const element: u8 = 1;
-    const result = listPrepend(list, @alignOf(u8), @as(?[*]u8, @ptrCast(@constCast(&element))), @sizeOf(u8), false, null, rcNone, .InPlace, &copy_fallback, test_env.getOps());
+    const result = listPrepend(list, @alignOf(u8), @as(?[*]u8, @ptrCast(@constCast(&element))), @sizeOf(u8), false, null, rcNone, null, rcNone, .InPlace, &copy_fallback, test_env.getOps());
     defer result.decref(@alignOf(u8), @sizeOf(u8), false, null, rcNone, test_env.getOps());
 
     try std.testing.expectEqual(original_bytes, result.bytes);
@@ -4105,7 +4472,7 @@ test "listPrepend Immutable copies a shared allocation" {
     list.incref(1, false, test_env.getOps());
 
     const element: u8 = 1;
-    const result = listPrepend(list, @alignOf(u8), @as(?[*]u8, @ptrCast(@constCast(&element))), @sizeOf(u8), false, null, rcNone, .Immutable, &copy_fallback, test_env.getOps());
+    const result = listPrepend(list, @alignOf(u8), @as(?[*]u8, @ptrCast(@constCast(&element))), @sizeOf(u8), false, null, rcNone, null, rcNone, .Immutable, &copy_fallback, test_env.getOps());
     defer result.decref(@alignOf(u8), @sizeOf(u8), false, null, rcNone, test_env.getOps());
     defer list.decref(@alignOf(u8), @sizeOf(u8), false, null, rcNone, test_env.getOps());
 
