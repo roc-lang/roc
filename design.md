@@ -1386,19 +1386,22 @@ The optimization is enabled only for optimized code generation:
 
 - on for `--opt=size`
 - on for `--opt=speed`
+- off for every other optimization mode
 - off for `roc check`
 - off for compile-time finalization
 - off for interpreter builds
 - off for dev builds
 
-This is a hard pipeline boundary. The post-check driver receives explicit
-build-mode data and chooses either ordinary public-value lowering or optimized
-callable-state specialization before constructing the lowering context.
-Non-optimized modes must not allocate result-demand structures, demanded-value
-arenas, private-state graphs, or optimized worker queues just to discard them.
-The mode decision is explicit compiler input; no stage may infer it from target
-triples, wasm output, backend choice, method names, builtin names, generated
-symbols, object bytes, or backend output.
+This is a hard allowlist, not a target policy. Wasm targets, native targets,
+tests, package builds, and hosted builds do not get this optimizer unless the
+selected build mode is `--opt=size` or `--opt=speed`. The post-check driver
+receives explicit build-mode data and chooses either ordinary public-value
+lowering or optimized callable-state specialization before constructing the
+lowering context. Non-optimized modes must not allocate result-demand
+structures, demanded-value arenas, private-state graphs, or optimized worker
+queues just to discard them. The mode decision is explicit compiler input; no
+stage may infer it from target triples, wasm output, backend choice, method
+names, builtin names, generated symbols, object bytes, or backend output.
 
 The optimized path is a different post-check lowering entrypoint, not a cleanup
 pass after ordinary lowering. It may create extra private workers, private
@@ -1425,8 +1428,10 @@ This boundary is about compiler cost and generated code quality, not
 correctness. Checking, static-dispatch finalization, compile-time root
 selection, compile-time evaluation, static data emission, and
 `crash`/`dbg`/`expect` diagnostics are required in all modes and must not depend
-on this optimizer. Build modes may differ in generated code size, generated
-code speed, and compile time, but never in observable Roc behavior.
+on this optimizer. Compile-time evaluation may produce constants that optimized
+lowering later consumes, but it must not construct optimized runtime private
+state. Build modes may differ in generated code size, generated code speed, and
+compile time, but never in observable Roc behavior.
 
 The optimizer is opt-mode-only because it deliberately performs extra
 post-check work: demand propagation, finite callable-state splitting,
@@ -1459,8 +1464,9 @@ The pass must not recognize source `for`, source `if`, source `match`,
 `Iter.append`, `Stream.next!`, wasm targets, Rocci Bird, public builtin names,
 or generated symbol names as optimization triggers. Source `for` lowers through
 the ordinary public `.iter` and `.next` meaning. Source `if` and `match` lower
-as ordinary control flow. The optimizer rewrites only from the facts already
-available while lowering expressions under demand.
+as ordinary control flow. The optimizer observes the generic demand and
+callable-state facts created by that lowered code; it never asks which source
+construct produced them.
 
 Result demand is the optimizer's exact statement of how the current continuation
 will use a value. Required demand forms are:
