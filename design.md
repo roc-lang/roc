@@ -1372,8 +1372,15 @@ Lambda-set solving already records finite callable targets and captures behind
 the single public callable type. Optimized post-check lowering consumes those
 ordinary facts and defunctionalizes reachable callable/capture graphs into
 private state machines when the surrounding code only demands private state.
-This is not an iterator semantic rule; `Iter` and `Stream` are important clients
-of a general callable-state optimization.
+This is not an iterator source-meaning rule; `Iter` and `Stream` are important
+clients of a general callable-state optimization.
+
+The optimizer must use actual Roc lambdas and the existing lambda-set model. It
+must not add an iterator-specific lambda-set variation, a second callable type
+system, or a public type-level encoding of adapter chains. If a callable crosses
+an erased or public boundary, ordinary public callable materialization is
+selected by explicit materialization demand. That boundary is part of the source
+program's public value behavior, not a deoptimization fallback.
 
 The optimization is enabled only for optimized code generation:
 
@@ -1393,12 +1400,43 @@ The mode decision is explicit compiler input; no stage may infer it from target
 triples, wasm output, backend choice, method names, builtin names, generated
 symbols, object bytes, or backend output.
 
+The optimized path is a different post-check lowering entrypoint, not a cleanup
+pass after ordinary lowering. It may create extra private workers, private
+state loops, and demand-specific direct calls while cloning optimized code. The
+ordinary public-value path never constructs those optimized-only artifacts.
+Conversely, optimized lowering must not first build public iterator/callable
+wrappers and then try to remove them later; avoided materialization is the
+design, not a post-pass improvement.
+
+There is no iterator-plan value, adapter-chain IR, or separate elimination pass.
+The only representation before LIR is ordinary Monotype/Lambda Mono data plus
+optimized lowering's local demand, known-value, private-state, and worker tables.
+Those tables are consumed while the optimized body is cloned and lowered. The
+output is ordinary LIR control flow and ordinary LIR values.
+
+The optimizer does not introduce a new global pass over finished code. It works
+where the producer and consumer meet: a consumer creates exact demand, the
+producer is cloned under that demand, and any private worker or private state
+loop is emitted from that same cloning context. Later stages should never need
+to infer that an iterator wrapper, callable wrapper, or public record was
+accidentally materialized and should have been avoided.
+
 This boundary is about compiler cost and generated code quality, not
 correctness. Checking, static-dispatch finalization, compile-time root
 selection, compile-time evaluation, static data emission, and
 `crash`/`dbg`/`expect` diagnostics are required in all modes and must not depend
 on this optimizer. Build modes may differ in generated code size, generated
 code speed, and compile time, but never in observable Roc behavior.
+
+The optimizer is opt-mode-only because it deliberately performs extra
+post-check work: demand propagation, finite callable-state splitting,
+demand-specific direct-call worker discovery, and loop-state fixed points. Those
+costs are justified when the user asks for optimized generated code. They are
+not justified for fast feedback paths. Dev builds should favor low compiler
+latency and debuggable public-value code. `roc check` and compile-time
+evaluation must report the same checking results without constructing private
+runtime state. Interpreters and backend-independent consumers must see the
+ordinary public lowering path unless they explicitly request optimized code.
 
 Optimized callable-state specialization uses one set of generic compiler facts:
 
@@ -1408,6 +1446,14 @@ Optimized callable-state specialization uses one set of generic compiler facts:
 - known records, tuples, tags, nominals, and primitive leaves
 - checked type and layout decisions
 - explicit result demand
+
+The same mechanism applies to any ordinary Roc value whose producer and
+consumer expose enough checked facts under demand. `Stream` does not get a
+separate compiler rule, `Iter` does not get a separate compiler rule, and a
+record wrapping a primitive does not get a more powerful rule than the primitive
+itself. The optimizer specializes callable state because the checked program
+contains finite callable facts, not because a value has a particular builtin
+name.
 
 The pass must not recognize source `for`, source `if`, source `match`,
 `Iter.append`, `Stream.next!`, wasm targets, Rocci Bird, public builtin names,
@@ -1437,6 +1483,13 @@ demand, then clones the selected body under the caller's result demand. A loop
 clones initial values, body observations, and `continue` edges under the
 fixed-point demand for loop parameters. If the surrounding context needs an
 ordinary Roc value, the demand is materialization and public lowering is used.
+
+Demand propagation is the only source of private state shape. Optimized
+lowering must not derive private state by starting with a dense public value and
+dropping fields opportunistically. It must also not rediscover demand by
+scanning completed LIR, symbol names, generated code, wasm disassembly, or
+backend artifacts. If a producer needs a private shape, that requirement must be
+visible as explicit demand at the point where the producer is cloned.
 
 Known values are optimizer facts, not runtime values. They are not limited to
 aggregate source syntax. Primitive leaves are first-class known values, so a
@@ -1486,6 +1539,14 @@ to make demand propagation more precise, share equivalent states, or remove
 unnecessary source demand. Silently disabling the optimization for a large graph
 would make post-check output depend on an arbitrary implementation limit and is
 not allowed.
+
+Loop values may include runtime leaves, known aggregate structure, known tags,
+and known callable alternatives. Runtime leaves are loop parameters; they are
+not finite-state dimensions. Known tag and callable choices are finite private
+states only when demanded. This keeps an iterator phase change, such as an
+append wrapper advancing to its source iterator, as an explicit private state
+transition without making ordinary numeric cursor values explode the state
+graph.
 
 For `Iter` and `Stream`, a consuming loop that only steps the value demands the
 step callable and the captures needed by that callable. It does not demand
