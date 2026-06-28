@@ -23,6 +23,7 @@ const host_value_registry = @import("host_value_registry.zig");
 const hv = @import("host_values.zig");
 const engine_metrics = @import("engine_metrics.zig");
 const engine_contract = @import("engine_contract.zig");
+const render_cache_mod = @import("render_cache.zig");
 
 const enable_runtime_metrics = engine_metrics.enable_runtime_metrics;
 
@@ -47,142 +48,6 @@ pub const verifyCtx = engine_contract.verifyCtx;
 
 const render_event_kinds = [_]RenderEventKind{ .click, .input, .check, .pointer_down, .pointer_up, .pointer_enter, .pointer_leave };
 
-const RenderCustomTextAttrCache = struct {
-    name: []const u8,
-    value: []const u8,
-
-    fn deinit(self: RenderCustomTextAttrCache, allocator: std.mem.Allocator) void {
-        allocator.free(self.name);
-        allocator.free(self.value);
-    }
-};
-
-const RenderNamedEventCache = struct {
-    name: []const u8,
-    event_id: u64,
-    options: u32,
-    payload_kind: EventPayloadKind,
-    payload_accessor: EventPayloadAccessor,
-
-    fn deinit(self: RenderNamedEventCache, allocator: std.mem.Allocator) void {
-        allocator.free(self.name);
-    }
-};
-
-const RenderScalarNodeCache = struct {
-    active: bool = false,
-    tag: ?[]const u8 = null,
-    parent_id: ?u64 = null,
-    children: std.ArrayListUnmanaged(u64) = .empty,
-    bound_click_event: ?u64 = null,
-    bound_click_accessor: ?EventPayloadAccessor = null,
-    bound_input_event: ?u64 = null,
-    bound_input_accessor: ?EventPayloadAccessor = null,
-    bound_check_event: ?u64 = null,
-    bound_check_accessor: ?EventPayloadAccessor = null,
-    bound_pointer_down_event: ?u64 = null,
-    bound_pointer_down_accessor: ?EventPayloadAccessor = null,
-    bound_pointer_up_event: ?u64 = null,
-    bound_pointer_up_accessor: ?EventPayloadAccessor = null,
-    bound_pointer_enter_event: ?u64 = null,
-    bound_pointer_enter_accessor: ?EventPayloadAccessor = null,
-    bound_pointer_leave_event: ?u64 = null,
-    bound_pointer_leave_accessor: ?EventPayloadAccessor = null,
-    text: ?[]const u8 = null,
-    role: ?[]const u8 = null,
-    label: ?[]const u8 = null,
-    test_id: ?[]const u8 = null,
-    value: ?[]const u8 = null,
-    class: ?[]const u8 = null,
-    custom_text_attrs: std.ArrayListUnmanaged(RenderCustomTextAttrCache) = .empty,
-    named_events: std.ArrayListUnmanaged(RenderNamedEventCache) = .empty,
-    checked: ?bool = null,
-    disabled: ?bool = null,
-
-    fn deinit(self: *RenderScalarNodeCache, allocator: std.mem.Allocator) void {
-        if (self.tag) |tag| allocator.free(tag);
-        if (self.text) |text| allocator.free(text);
-        if (self.role) |role| allocator.free(role);
-        if (self.label) |label| allocator.free(label);
-        if (self.test_id) |test_id| allocator.free(test_id);
-        if (self.value) |value| allocator.free(value);
-        if (self.class) |class| allocator.free(class);
-        for (self.custom_text_attrs.items) |attr| {
-            attr.deinit(allocator);
-        }
-        self.custom_text_attrs.deinit(allocator);
-        for (self.named_events.items) |event| {
-            event.deinit(allocator);
-        }
-        self.named_events.deinit(allocator);
-        self.children.deinit(allocator);
-        self.* = .{};
-    }
-
-    fn initActive(allocator: std.mem.Allocator, tag: []const u8) RenderScalarNodeCache {
-        return .{
-            .active = true,
-            .tag = allocator.dupe(u8, tag) catch @panic("out of memory"),
-        };
-    }
-
-    fn textSlot(self: *RenderScalarNodeCache, field: RenderTextField) *?[]const u8 {
-        return switch (field) {
-            .text => &self.text,
-            .role => &self.role,
-            .label => &self.label,
-            .test_id => &self.test_id,
-            .value => &self.value,
-            .class => &self.class,
-        };
-    }
-
-    fn boolSlot(self: *RenderScalarNodeCache, field: RenderBoolField) *?bool {
-        return switch (field) {
-            .checked => &self.checked,
-            .disabled => &self.disabled,
-        };
-    }
-
-    fn customTextAttrIndex(self: *const RenderScalarNodeCache, name: []const u8) ?usize {
-        for (self.custom_text_attrs.items, 0..) |attr, index| {
-            if (std.mem.eql(u8, attr.name, name)) return index;
-        }
-        return null;
-    }
-
-    fn namedEventIndex(self: *const RenderScalarNodeCache, name: []const u8) ?usize {
-        for (self.named_events.items, 0..) |event, index| {
-            if (std.mem.eql(u8, event.name, name)) return index;
-        }
-        return null;
-    }
-
-    fn eventSlot(self: *RenderScalarNodeCache, kind: RenderEventKind) *?u64 {
-        return switch (kind) {
-            .click => &self.bound_click_event,
-            .input => &self.bound_input_event,
-            .check => &self.bound_check_event,
-            .pointer_down => &self.bound_pointer_down_event,
-            .pointer_up => &self.bound_pointer_up_event,
-            .pointer_enter => &self.bound_pointer_enter_event,
-            .pointer_leave => &self.bound_pointer_leave_event,
-        };
-    }
-
-    fn eventAccessorSlot(self: *RenderScalarNodeCache, kind: RenderEventKind) *?EventPayloadAccessor {
-        return switch (kind) {
-            .click => &self.bound_click_accessor,
-            .input => &self.bound_input_accessor,
-            .check => &self.bound_check_accessor,
-            .pointer_down => &self.bound_pointer_down_accessor,
-            .pointer_up => &self.bound_pointer_up_accessor,
-            .pointer_enter => &self.bound_pointer_enter_accessor,
-            .pointer_leave => &self.bound_pointer_leave_accessor,
-        };
-    }
-};
-
 fn u64SliceContains(items: []const u64, target: u64) bool {
     for (items) |item| {
         if (item == target) return true;
@@ -195,37 +60,11 @@ pub fn appendUniqueU64(allocator: std.mem.Allocator, values: *std.ArrayListUnman
     values.append(allocator, value) catch @panic("out of memory");
 }
 
-fn u64SliceIndex(items: []const u64, target: u64) ?usize {
-    for (items, 0..) |item, index| {
-        if (item == target) return index;
-    }
-    return null;
-}
-
 fn renderNodeSliceContainsElem(items: []const HostRenderNode, elem_id: u64) bool {
     for (items) |item| {
         if (item.elem_id == elem_id) return true;
     }
     return false;
-}
-
-fn stableSubsequenceLength(indexes: []const usize, scratch: []usize) usize {
-    var len: usize = 0;
-    for (indexes) |index| {
-        var low: usize = 0;
-        var high = len;
-        while (low < high) {
-            const mid = low + (high - low) / 2;
-            if (scratch[mid] < index) {
-                low = mid + 1;
-            } else {
-                high = mid;
-            }
-        }
-        scratch[low] = index;
-        if (low == len) len += 1;
-    }
-    return len;
 }
 
 /// A retained Roc value plus the capability that owns its equality/drop
@@ -930,9 +769,6 @@ pub const HostBinderBinding = struct {
 };
 
 const EngineScratch = struct {
-    move_child_indexes: std.AutoHashMapUnmanaged(u64, usize) = .empty,
-    move_old_indexes: std.ArrayListUnmanaged(usize) = .empty,
-    move_stable_subsequence: std.ArrayListUnmanaged(usize) = .empty,
     debug_seen_render_nodes: std.ArrayListUnmanaged(bool) = .empty,
     debug_expected_children: std.ArrayListUnmanaged(u64) = .empty,
     binder_stack: std.ArrayListUnmanaged(HostBinderBinding) = .empty,
@@ -953,9 +789,6 @@ const EngineScratch = struct {
     remove_named_event_indexes: std.ArrayListUnmanaged(usize) = .empty,
 
     fn deinit(self: *EngineScratch, allocator: std.mem.Allocator) void {
-        self.move_child_indexes.deinit(allocator);
-        self.move_old_indexes.deinit(allocator);
-        self.move_stable_subsequence.deinit(allocator);
         self.debug_seen_render_nodes.deinit(allocator);
         self.debug_expected_children.deinit(allocator);
         self.binder_stack.deinit(allocator);
@@ -2686,7 +2519,7 @@ pub fn Engine(comptime Ctx: type) type {
         active_bool_signal_routes: std.ArrayListUnmanaged(std.ArrayListUnmanaged(HostActiveBoolSignalSink)) = .empty,
         active_change_signal_routes: std.ArrayListUnmanaged(std.ArrayListUnmanaged(HostActiveChangeSignalSink)) = .empty,
         active_structural_signal_routes: std.ArrayListUnmanaged(std.ArrayListUnmanaged(HostActiveStructuralSignal)) = .empty,
-        render_scalar_nodes: std.ArrayListUnmanaged(RenderScalarNodeCache) = .empty,
+        render_cache: render_cache_mod.Cache(Ctx) = .{},
         pending_tasks: std.ArrayListUnmanaged(HostPendingTask) = .empty,
         active_intervals: std.ArrayListUnmanaged(HostActiveInterval) = .empty,
         cleanup_events: std.ArrayListUnmanaged([]const u8) = .empty,
@@ -2871,221 +2704,53 @@ pub fn Engine(comptime Ctx: type) type {
         }
 
         pub fn deinitRenderCache(self: *Self, ctx: Ctx.Handle) void {
-            const allocator = Ctx.allocator(ctx);
-            for (self.render_scalar_nodes.items) |*node| {
-                node.deinit(allocator);
-            }
-            self.render_scalar_nodes.deinit(allocator);
-            self.render_scalar_nodes = .empty;
+            self.render_cache.deinit(ctx);
         }
 
         pub fn hasRenderRoot(self: *const Self) bool {
-            return self.render_scalar_nodes.items.len != 0 and self.render_scalar_nodes.items[0].active;
+            return self.render_cache.hasRoot();
         }
 
         pub fn resetRenderTree(self: *Self, ctx: Ctx.Handle) void {
-            const allocator = Ctx.allocator(ctx);
-            for (self.render_scalar_nodes.items) |*node| {
-                node.deinit(allocator);
-            }
-            self.render_scalar_nodes.items.len = 0;
-            self.render_scalar_nodes.append(allocator, RenderScalarNodeCache.initActive(allocator, "root")) catch @panic("out of memory");
-            Ctx.sink(ctx).reset();
-        }
-
-        fn ensureRenderCacheNode(self: *Self, ctx: Ctx.Handle, elem_id: u64, tag: []const u8) bool {
-            const allocator = Ctx.allocator(ctx);
-            const index: usize = @intCast(elem_id);
-            if (index > self.render_scalar_nodes.items.len) {
-                @panic("render cache node ids must be dense and ordered by elem id");
-            }
-            if (index == self.render_scalar_nodes.items.len) {
-                self.render_scalar_nodes.append(allocator, RenderScalarNodeCache.initActive(allocator, tag)) catch @panic("out of memory");
-                return true;
-            }
-            const node = &self.render_scalar_nodes.items[index];
-            if (!node.active) {
-                @panic("render descriptor referenced an inactive render cache identity");
-            }
-            if (node.tag == null or !std.mem.eql(u8, node.tag.?, tag)) {
-                @panic("render descriptor changed the tag for an existing render cache identity");
-            }
-            return false;
+            self.render_cache.reset(ctx);
         }
 
         pub fn appendRenderNode(self: *Self, ctx: Ctx.Handle, elem_id: u64, parent_elem_id: u64, tag: []const u8) void {
-            const created = self.ensureRenderCacheNode(ctx, elem_id, tag);
-            if (!created) @panic("initial render append reused an existing render cache identity");
-            const parent = self.activeRenderScalarNode(parent_elem_id);
-            const child = self.activeRenderScalarNode(elem_id);
-            child.parent_id = parent_elem_id;
-            parent.children.append(Ctx.allocator(ctx), elem_id) catch @panic("out of memory");
-            Ctx.sink(ctx).appendNode(elem_id, parent_elem_id, tag);
+            self.render_cache.appendNode(ctx, elem_id, parent_elem_id, tag);
         }
 
         pub fn ensureRenderNode(self: *Self, ctx: Ctx.Handle, elem_id: u64, tag: []const u8, counts: *render.Counts) void {
-            if (!self.ensureRenderCacheNode(ctx, elem_id, tag)) return;
-            Ctx.sink(ctx).ensureNode(elem_id, tag);
-            counts.addCreateElement();
+            self.render_cache.ensureNode(ctx, elem_id, tag, counts);
         }
 
         pub fn removeRenderNode(self: *Self, ctx: Ctx.Handle, elem_id: u64, counts: *render.Counts) void {
-            const allocator = Ctx.allocator(ctx);
-            const index: usize = @intCast(elem_id);
-            if (index >= self.render_scalar_nodes.items.len or !self.render_scalar_nodes.items[index].active) {
-                @panic("render cache removed a missing element");
-            }
-            if (elem_id == 0) @panic("render cache attempted to remove the host DOM root");
-
-            if (self.render_scalar_nodes.items[index].parent_id) |parent_id| {
-                const parent_index: usize = @intCast(parent_id);
-                if (parent_index < self.render_scalar_nodes.items.len and self.render_scalar_nodes.items[parent_index].active) {
-                    const parent = &self.render_scalar_nodes.items[parent_index];
-                    if (u64SliceIndex(parent.children.items, elem_id)) |child_index| {
-                        _ = parent.children.orderedRemove(child_index);
-                    }
-                }
-            }
-            self.render_scalar_nodes.items[index].deinit(allocator);
-            Ctx.sink(ctx).removeNode(elem_id);
-            counts.addRemoveNode();
-        }
-
-        fn activeRenderScalarNode(self: *Self, elem_id: u64) *RenderScalarNodeCache {
-            const index: usize = @intCast(elem_id);
-            if (index >= self.render_scalar_nodes.items.len or !self.render_scalar_nodes.items[index].active) {
-                @panic("render command referenced missing element cache");
-            }
-            return &self.render_scalar_nodes.items[index];
+            self.render_cache.removeNode(ctx, elem_id, counts);
         }
 
         pub fn replaceRenderChildren(self: *Self, ctx: Ctx.Handle, parent_elem_id: u64, next_child_ids: []const u64, counts: *render.Counts) void {
-            const allocator = Ctx.allocator(ctx);
-            const parent = self.activeRenderScalarNode(parent_elem_id);
-
-            for (next_child_ids, 0..) |child_id, new_index| {
-                const child = self.activeRenderScalarNode(child_id);
-                const old_parent_id = child.parent_id;
-                const old_child_index = if (old_parent_id) |id| u64SliceIndex(self.activeRenderScalarNode(id).children.items, child_id) else null;
-
-                if (old_parent_id == null or old_parent_id.? != parent_elem_id or old_child_index == null) {
-                    counts.addAppendChild();
-                } else if (old_child_index.? != new_index) {
-                    counts.addMoveBefore();
-                }
-                child.parent_id = parent_elem_id;
-            }
-
-            parent.children.deinit(allocator);
-            parent.children = .empty;
-            parent.children.appendSlice(allocator, next_child_ids) catch @panic("out of memory");
-            Ctx.sink(ctx).replaceChildren(parent_elem_id, next_child_ids);
+            self.render_cache.replaceChildren(ctx, parent_elem_id, next_child_ids, counts);
         }
 
         pub fn replaceRenderChildrenForMoves(self: *Self, ctx: Ctx.Handle, parent_elem_id: u64, next_child_ids: []const u64, counts: *render.Counts) void {
-            const allocator = Ctx.allocator(ctx);
-            const parent = self.activeRenderScalarNode(parent_elem_id);
-            if (parent.children.items.len != next_child_ids.len) @panic("pure structural move changed child count");
-
-            const old_child_indexes = &self.scratch.move_child_indexes;
-            old_child_indexes.clearRetainingCapacity();
-            defer old_child_indexes.clearRetainingCapacity();
-            for (parent.children.items, 0..) |child_id, index| {
-                const entry = old_child_indexes.getOrPut(allocator, child_id) catch @panic("out of memory");
-                if (entry.found_existing) @panic("parent child list contained duplicate element ids");
-                entry.value_ptr.* = index;
-            }
-
-            self.scratch.move_old_indexes.resize(allocator, next_child_ids.len) catch @panic("out of memory");
-            defer self.scratch.move_old_indexes.clearRetainingCapacity();
-            const old_indexes_in_next_order = self.scratch.move_old_indexes.items;
-            for (next_child_ids, 0..) |child_id, index| {
-                const child = self.activeRenderScalarNode(child_id);
-                if (child.parent_id == null or child.parent_id.? != parent_elem_id) @panic("pure structural move crossed parent boundary");
-                old_indexes_in_next_order[index] = old_child_indexes.get(child_id) orelse @panic("pure structural move inserted a child");
-            }
-
-            self.scratch.move_stable_subsequence.resize(allocator, next_child_ids.len) catch @panic("out of memory");
-            defer self.scratch.move_stable_subsequence.clearRetainingCapacity();
-            const stable_scratch = self.scratch.move_stable_subsequence.items;
-            const stable_len = stableSubsequenceLength(old_indexes_in_next_order, stable_scratch);
-            const displaced_count = next_child_ids.len - stable_len;
-            var displaced_index: usize = 0;
-            while (displaced_index < displaced_count) : (displaced_index += 1) {
-                counts.addMoveBefore();
-            }
-
-            for (next_child_ids) |child_id| {
-                self.activeRenderScalarNode(child_id).parent_id = parent_elem_id;
-            }
-            parent.children.deinit(allocator);
-            parent.children = .empty;
-            parent.children.appendSlice(allocator, next_child_ids) catch @panic("out of memory");
-            Ctx.sink(ctx).replaceChildrenForMoves(parent_elem_id, next_child_ids);
+            self.render_cache.replaceChildrenForMoves(ctx, parent_elem_id, next_child_ids, counts);
         }
 
         pub fn applyRenderEventBinding(self: *Self, ctx: Ctx.Handle, elem_id: u64, kind: RenderEventKind, binding: ?HostRequiredEventBinding, counts: *render.Counts) void {
-            const node = self.activeRenderScalarNode(elem_id);
-            const event_slot = node.eventSlot(kind);
-            const accessor_slot = node.eventAccessorSlot(kind);
-            const event_id = if (binding) |payload| payload.event_id else null;
-            const payload_accessor = if (binding) |payload| payload.payload_accessor else null;
-            if (event_slot.* == event_id and accessor_slot.* == payload_accessor) return;
-
-            event_slot.* = event_id;
-            accessor_slot.* = payload_accessor;
-            if (event_id) |id| {
-                Ctx.sink(ctx).bindEventKind(elem_id, kind, id, payload_accessor orelse @panic("event binding was missing payload accessor"));
-            } else {
-                Ctx.sink(ctx).clearEvent(elem_id, kind);
-            }
-            counts.addEventBinding();
+            const cache_binding: ?render_cache_mod.EventBinding = if (binding) |payload| .{
+                .event_id = payload.event_id,
+                .payload_accessor = payload.payload_accessor,
+            } else null;
+            self.render_cache.applyEventBinding(ctx, elem_id, kind, cache_binding, counts);
         }
 
         pub fn applyRenderNamedEventBinding(self: *Self, ctx: Ctx.Handle, elem_id: u64, name: []const u8, binding: ?HostRequiredNamedEventBinding, counts: *render.Counts) void {
-            const allocator = Ctx.allocator(ctx);
-            const node = self.activeRenderScalarNode(elem_id);
-            const existing_index = node.namedEventIndex(name);
-
-            if (binding) |next| {
-                if (existing_index) |index| {
-                    const existing = &node.named_events.items[index];
-                    if (existing.event_id == next.event_id and
-                        existing.options == next.options and
-                        existing.payload_kind == next.payload_kind and
-                        existing.payload_accessor == next.payload_accessor)
-                    {
-                        return;
-                    }
-
-                    existing.event_id = next.event_id;
-                    existing.options = next.options;
-                    existing.payload_kind = next.payload_kind;
-                    existing.payload_accessor = next.payload_accessor;
-                } else {
-                    const name_copy = allocator.dupe(u8, name) catch @panic("out of memory");
-                    node.named_events.append(allocator, .{
-                        .name = name_copy,
-                        .event_id = next.event_id,
-                        .options = next.options,
-                        .payload_kind = next.payload_kind,
-                        .payload_accessor = next.payload_accessor,
-                    }) catch {
-                        allocator.free(name_copy);
-                        @panic("out of memory");
-                    };
-                }
-
-                Ctx.sink(ctx).bindEventName(elem_id, name, next.event_id, next.options, next.payload_kind, next.payload_accessor);
-                counts.addEventBinding();
-                return;
-            }
-
-            const index = existing_index orelse return;
-            const removed = node.named_events.orderedRemove(index);
-            Ctx.sink(ctx).clearEventName(elem_id, removed.name);
-            removed.deinit(allocator);
-            counts.addEventBinding();
+            const cache_binding: ?render_cache_mod.NamedEventBinding = if (binding) |payload| .{
+                .event_id = payload.event_id,
+                .options = payload.options,
+                .payload_kind = payload.payload_kind,
+                .payload_accessor = payload.payload_accessor,
+            } else null;
+            self.render_cache.applyNamedEventBinding(ctx, elem_id, name, cache_binding, counts);
         }
 
         fn descriptorStreamNodeTag(stream: *const HostNodeDescriptorStream, node: HostRenderNode) []const u8 {
@@ -3133,7 +2798,7 @@ pub fn Engine(comptime Ctx: type) type {
             if (comptime builtin.mode != .Debug) return;
 
             const allocator = Ctx.allocator(ctx);
-            self.scratch.debug_seen_render_nodes.resize(allocator, self.render_scalar_nodes.items.len) catch @panic("out of memory");
+            self.scratch.debug_seen_render_nodes.resize(allocator, self.render_cache.nodes.items.len) catch @panic("out of memory");
             defer self.scratch.debug_seen_render_nodes.clearRetainingCapacity();
             const seen = self.scratch.debug_seen_render_nodes.items;
             @memset(seen, false);
@@ -3141,8 +2806,8 @@ pub fn Engine(comptime Ctx: type) type {
 
             for (stream.render_nodes.items) |node| {
                 const index: usize = @intCast(node.elem_id);
-                if (index >= self.render_scalar_nodes.items.len) @panic("descriptor stream referenced render cache node outside table");
-                const cached = &self.render_scalar_nodes.items[index];
+                if (index >= self.render_cache.nodes.items.len) @panic("descriptor stream referenced render cache node outside table");
+                const cached = &self.render_cache.nodes.items[index];
                 if (!cached.active) @panic("descriptor stream referenced inactive render cache node");
                 if (cached.tag == null or !std.mem.eql(u8, cached.tag.?, descriptorStreamNodeTag(stream, node))) {
                     @panic("descriptor stream tag disagreed with render cache");
@@ -3151,8 +2816,8 @@ pub fn Engine(comptime Ctx: type) type {
                 if (cached.parent_id == null or cached.parent_id.? != parent_id) {
                     const indexed_children = streamDirectChildren(allocator, stream, parent_id);
                     defer allocator.free(indexed_children);
-                    const cache_child_count = if (parent_id < self.render_scalar_nodes.items.len and self.render_scalar_nodes.items[@intCast(parent_id)].active)
-                        self.render_scalar_nodes.items[@intCast(parent_id)].children.items.len
+                    const cache_child_count = if (parent_id < self.render_cache.nodes.items.len and self.render_cache.nodes.items[@intCast(parent_id)].active)
+                        self.render_cache.nodes.items[@intCast(parent_id)].children.items.len
                     else
                         0;
                     var message: [160]u8 = undefined;
@@ -3166,12 +2831,12 @@ pub fn Engine(comptime Ctx: type) type {
                 seen[index] = true;
             }
 
-            for (self.render_scalar_nodes.items, 0..) |cached, index| {
+            for (self.render_cache.nodes.items, 0..) |cached, index| {
                 if (index == 0 or !cached.active) continue;
                 if (index >= seen.len or !seen[index]) @panic("active render cache node was absent from descriptor stream");
             }
 
-            for (self.render_scalar_nodes.items, 0..) |cached, parent_id| {
+            for (self.render_cache.nodes.items, 0..) |cached, parent_id| {
                 if (!cached.active) continue;
                 const expected_children = &self.scratch.debug_expected_children;
                 expected_children.clearRetainingCapacity();
@@ -3199,109 +2864,31 @@ pub fn Engine(comptime Ctx: type) type {
         }
 
         pub fn debugAssertRenderCacheMatchesSink(self: *Self, ctx: Ctx.Handle) void {
-            if (comptime builtin.mode != .Debug) return;
-
-            for (self.render_scalar_nodes.items, 0..) |cached, index| {
-                Ctx.sink(ctx).debugAssertNode(
-                    @intCast(index),
-                    cached.active,
-                    cached.tag,
-                    cached.parent_id,
-                    cached.children.items,
-                    cached.bound_click_event,
-                    cached.bound_input_event,
-                    cached.bound_check_event,
-                    cached.bound_pointer_down_event,
-                    cached.bound_pointer_up_event,
-                    cached.bound_pointer_enter_event,
-                    cached.bound_pointer_leave_event,
-                );
-            }
+            self.render_cache.debugAssertMatchesSink(ctx);
         }
 
         pub fn applyRenderTextField(self: *Self, ctx: Ctx.Handle, elem_id: u64, field: RenderTextField, value: []const u8) bool {
-            const allocator = Ctx.allocator(ctx);
-            const slot = self.activeRenderScalarNode(elem_id).textSlot(field);
-            if (slot.*) |existing| {
-                if (std.mem.eql(u8, existing, value)) return false;
-            }
-
-            const value_copy = allocator.dupe(u8, value) catch @panic("out of memory");
-            if (slot.*) |existing| allocator.free(existing);
-            slot.* = value_copy;
-            Ctx.sink(ctx).applyTextField(elem_id, field, value);
-            return true;
+            return self.render_cache.applyTextField(ctx, elem_id, field, value);
         }
 
         pub fn applyRenderTextAttr(self: *Self, ctx: Ctx.Handle, elem_id: u64, name: []const u8, value: []const u8) bool {
-            const allocator = Ctx.allocator(ctx);
-            const node = self.activeRenderScalarNode(elem_id);
-            if (node.customTextAttrIndex(name)) |index| {
-                const attr = &node.custom_text_attrs.items[index];
-                if (std.mem.eql(u8, attr.value, value)) return false;
-
-                const value_copy = allocator.dupe(u8, value) catch @panic("out of memory");
-                allocator.free(attr.value);
-                attr.value = value_copy;
-                Ctx.sink(ctx).applyTextAttr(elem_id, name, value);
-                return true;
-            }
-
-            const name_copy = allocator.dupe(u8, name) catch @panic("out of memory");
-            const value_copy = allocator.dupe(u8, value) catch {
-                allocator.free(name_copy);
-                @panic("out of memory");
-            };
-            node.custom_text_attrs.append(allocator, .{
-                .name = name_copy,
-                .value = value_copy,
-            }) catch {
-                allocator.free(name_copy);
-                allocator.free(value_copy);
-                @panic("out of memory");
-            };
-            Ctx.sink(ctx).applyTextAttr(elem_id, name, value);
-            return true;
+            return self.render_cache.applyTextAttr(ctx, elem_id, name, value);
         }
 
         pub fn applyRenderBoolField(self: *Self, ctx: Ctx.Handle, elem_id: u64, field: RenderBoolField, value: bool) bool {
-            const slot = self.activeRenderScalarNode(elem_id).boolSlot(field);
-            if (slot.*) |existing| {
-                if (existing == value) return false;
-            }
-
-            slot.* = value;
-            Ctx.sink(ctx).applyBoolField(elem_id, field, value);
-            return true;
+            return self.render_cache.applyBoolField(ctx, elem_id, field, value);
         }
 
         pub fn clearRenderTextField(self: *Self, ctx: Ctx.Handle, elem_id: u64, field: RenderTextField) bool {
-            const allocator = Ctx.allocator(ctx);
-            const slot = self.activeRenderScalarNode(elem_id).textSlot(field);
-            const existing = slot.* orelse return false;
-            allocator.free(existing);
-            slot.* = null;
-            Ctx.sink(ctx).clearTextField(elem_id, field);
-            return true;
+            return self.render_cache.clearTextField(ctx, elem_id, field);
         }
 
         pub fn clearRenderTextAttr(self: *Self, ctx: Ctx.Handle, elem_id: u64, name: []const u8) bool {
-            const allocator = Ctx.allocator(ctx);
-            const node = self.activeRenderScalarNode(elem_id);
-            const index = node.customTextAttrIndex(name) orelse return false;
-            const removed = node.custom_text_attrs.orderedRemove(index);
-            Ctx.sink(ctx).clearTextAttr(elem_id, removed.name);
-            removed.deinit(allocator);
-            return true;
+            return self.render_cache.clearTextAttr(ctx, elem_id, name);
         }
 
         pub fn clearRenderBoolField(self: *Self, ctx: Ctx.Handle, elem_id: u64, field: RenderBoolField) bool {
-            const slot = self.activeRenderScalarNode(elem_id).boolSlot(field);
-            const existing = slot.* orelse return false;
-            slot.* = null;
-            if (!existing) return false;
-            Ctx.sink(ctx).clearBoolField(elem_id, field);
-            return true;
+            return self.render_cache.clearBoolField(ctx, elem_id, field);
         }
 
         pub fn clearEventDescriptors(self: *Self) void {
@@ -7480,12 +7067,10 @@ pub fn Engine(comptime Ctx: type) type {
         }
 
         pub fn applyStructuralNamedEventBindingsForElem(self: *Self, ctx: Ctx.Handle, stream: *const HostNodeDescriptorStream, elem_id: u64, counts: *render.Counts) void {
-            const node = self.activeRenderScalarNode(elem_id);
             var cache_index: usize = 0;
-            while (cache_index < node.named_events.items.len) {
-                const cached = node.named_events.items[cache_index];
-                if (namedEventBindingForElemName(stream, elem_id, cached.name) == null) {
-                    self.applyRenderNamedEventBinding(ctx, elem_id, cached.name, null, counts);
+            while (self.render_cache.namedEventNameAt(elem_id, cache_index)) |name| {
+                if (namedEventBindingForElemName(stream, elem_id, name) == null) {
+                    self.applyRenderNamedEventBinding(ctx, elem_id, name, null, counts);
                     continue;
                 }
                 cache_index += 1;
@@ -7551,8 +7136,7 @@ pub fn Engine(comptime Ctx: type) type {
 
         pub fn clearRenderTextAttrsMissingFromStream(self: *Self, ctx: Ctx.Handle, stream: *const HostNodeDescriptorStream, elem_id: u64, counts: *render.Counts) void {
             var index: usize = 0;
-            while (index < self.activeRenderScalarNode(elem_id).custom_text_attrs.items.len) {
-                const name = self.activeRenderScalarNode(elem_id).custom_text_attrs.items[index].name;
+            while (self.render_cache.customTextAttrNameAt(elem_id, index)) |name| {
                 if (streamHasCustomTextAttr(stream, elem_id, name)) {
                     index += 1;
                     continue;
