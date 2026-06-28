@@ -1429,6 +1429,15 @@ queues just to discard them. The mode decision is explicit compiler input; no
 stage may infer it from target triples, wasm output, backend choice, method
 names, builtin names, generated symbols, object bytes, or backend output.
 
+The gate should be represented as a small post-check lowering choice made
+before lowering state exists. One branch constructs the ordinary public-value
+lowering context. The other branch constructs the optimized callable-state
+context. Those context types must not be the same struct with nullable
+optimized fields, because that would let ordinary lowering accidentally pay
+the optimizer's allocation cost or call optimized-only helpers. The explicit
+build-mode decision is consumed at this boundary; after that, optimized helpers
+are reachable only through the optimized context's API.
+
 This gate is part of the optimizer's data-ownership model. Optimized demand
 state is not a dormant field on ordinary lowering, and ordinary lowering must
 not be able to manufacture an optimized context. `--opt=size` and `--opt=speed`
