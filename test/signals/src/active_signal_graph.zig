@@ -385,9 +385,186 @@ pub fn appendInputRecords(comptime Record: type, allocator: std.mem.Allocator, r
     }
 }
 
+pub fn retainRecord(
+    comptime Record: type,
+    allocator: std.mem.Allocator,
+    nodes: *std.ArrayListUnmanaged(Node(Record)),
+    source_routes: *RouteTable(u64),
+    source_node_count: usize,
+    record: *Record,
+    hooks: anytype,
+) u64 {
+    if (record.active_use_count != 0) {
+        record.active_use_count += 1;
+        return 0;
+    }
+
+    record.active_use_count = 1;
+    var node_rank: u64 = 0;
+    var records_rebuilt: u64 = 0;
+
+    switch (record.payload) {
+        .ref, .const_value, .task_source, .interval_source => {},
+        .map => |payload| {
+            records_rebuilt += retainRecord(Record, allocator, nodes, source_routes, source_node_count, payload.input, hooks);
+            const input_id = requireRecordId(Record, nodes.items, payload.input);
+            node_rank = nodes.items[@intCast(input_id)].rank + 1;
+        },
+        .map2 => |payload| {
+            records_rebuilt += retainRecord(Record, allocator, nodes, source_routes, source_node_count, payload.left, hooks);
+            if (payload.right != payload.left) {
+                records_rebuilt += retainRecord(Record, allocator, nodes, source_routes, source_node_count, payload.right, hooks);
+            }
+            const left_id = requireRecordId(Record, nodes.items, payload.left);
+            const right_id = requireRecordId(Record, nodes.items, payload.right);
+            node_rank = @max(
+                nodes.items[@intCast(left_id)].rank,
+                nodes.items[@intCast(right_id)].rank,
+            ) + 1;
+        },
+        .combine => |payload| {
+            for (payload.children, 0..) |child, index| {
+                if (recordSliceContains(Record, payload.children[0..index], child)) continue;
+                records_rebuilt += retainRecord(Record, allocator, nodes, source_routes, source_node_count, child, hooks);
+                const child_id = requireRecordId(Record, nodes.items, child);
+                node_rank = @max(node_rank, nodes.items[@intCast(child_id)].rank + 1);
+            }
+        },
+    }
+
+    const record_id = appendNode(Record, allocator, nodes, record, node_rank);
+    records_rebuilt += 1;
+
+    switch (record.payload) {
+        .ref => |source_node_id| appendSourceRoute(allocator, source_routes, source_node_count, source_node_id, record_id),
+        .const_value, .task_source => {},
+        .interval_source => |payload| hooks.ensureInterval(payload.token, payload.period_ms),
+        .map => |payload| appendDependentId(Record, allocator, nodes.items, requireRecordId(Record, nodes.items, payload.input), record_id),
+        .map2 => |payload| {
+            appendDependentId(Record, allocator, nodes.items, requireRecordId(Record, nodes.items, payload.left), record_id);
+            if (payload.right != payload.left) {
+                appendDependentId(Record, allocator, nodes.items, requireRecordId(Record, nodes.items, payload.right), record_id);
+            }
+        },
+        .combine => |payload| {
+            for (payload.children, 0..) |child, index| {
+                if (recordSliceContains(Record, payload.children[0..index], child)) continue;
+                appendDependentId(Record, allocator, nodes.items, requireRecordId(Record, nodes.items, child), record_id);
+            }
+        },
+    }
+
+    return records_rebuilt;
+}
+
+pub fn releaseRecord(
+    comptime Record: type,
+    allocator: std.mem.Allocator,
+    nodes: *std.ArrayListUnmanaged(Node(Record)),
+    source_routes: *RouteTable(u64),
+    text_routes: *RouteTable(TextSink),
+    bool_routes: *RouteTable(BoolSink),
+    change_routes: *RouteTable(ChangeSink),
+    structural_routes: *RouteTable(StructuralSink),
+    record: *Record,
+    hooks: anytype,
+) void {
+    if (record.active_use_count == 0) @panic("active signal graph record use count underflow");
+    record.active_use_count -= 1;
+    if (record.active_use_count != 0) return;
+
+    const record_id = requireRecordId(Record, nodes.items, record);
+    var input_records: std.ArrayListUnmanaged(*Record) = .empty;
+    defer input_records.deinit(allocator);
+    appendInputRecords(Record, allocator, &input_records, record);
+
+    switch (record.payload) {
+        .ref => |source_node_id| removeSourceRoute(source_routes, source_node_id, record_id),
+        .const_value, .task_source => {},
+        .interval_source => |payload| hooks.removeInterval(payload.token),
+        .map, .map2, .combine => {},
+    }
+
+    for (input_records.items) |input_record| {
+        removeDependentId(Record, allocator, nodes.items, requireRecordId(Record, nodes.items, input_record), record_id);
+    }
+
+    removeNode(Record, allocator, nodes, source_routes, text_routes, bool_routes, change_routes, structural_routes, record_id, record, hooks);
+
+    for (input_records.items) |input_record| {
+        releaseRecord(Record, allocator, nodes, source_routes, text_routes, bool_routes, change_routes, structural_routes, input_record, hooks);
+    }
+}
+
+pub fn clear(comptime Record: type, allocator: std.mem.Allocator, nodes: *std.ArrayListUnmanaged(Node(Record)), hooks: anytype) void {
+    for (nodes.items, 0..) |node, index| {
+        allocator.free(node.dependents);
+        const active_graph_id = node.record.active_graph_id orelse @panic("active signal graph record was missing its dense id");
+        if (active_graph_id != @as(u64, @intCast(index))) @panic("active signal graph record dense id did not match its slot");
+        node.record.active_graph_id = null;
+        node.record.active_use_count = 0;
+        hooks.releaseRecord(node.record);
+    }
+    nodes.items.len = 0;
+}
+
 fn appendUniqueInputRecord(comptime Record: type, allocator: std.mem.Allocator, records: *std.ArrayListUnmanaged(*Record), record: *Record) void {
     if (!recordSliceContains(Record, records.items, record)) {
         records.append(allocator, record) catch @panic("out of memory");
+    }
+}
+
+fn updateMovedRecordEdges(comptime Record: type, nodes: []Node(Record), source_routes: *RouteTable(u64), moved_record: *Record, old_record_id: u64, new_record_id: u64) void {
+    switch (moved_record.payload) {
+        .ref => |source_node_id| replaceSourceRouteId(source_routes, source_node_id, old_record_id, new_record_id),
+        .const_value, .task_source, .interval_source => {},
+        .map => |payload| replaceDependentId(Record, nodes, requireRecordId(Record, nodes, payload.input), old_record_id, new_record_id),
+        .map2 => |payload| {
+            replaceDependentId(Record, nodes, requireRecordId(Record, nodes, payload.left), old_record_id, new_record_id);
+            if (payload.right != payload.left) {
+                replaceDependentId(Record, nodes, requireRecordId(Record, nodes, payload.right), old_record_id, new_record_id);
+            }
+        },
+        .combine => |payload| {
+            for (payload.children, 0..) |child, index| {
+                if (recordSliceContains(Record, payload.children[0..index], child)) continue;
+                replaceDependentId(Record, nodes, requireRecordId(Record, nodes, child), old_record_id, new_record_id);
+            }
+        },
+    }
+}
+
+fn removeNode(
+    comptime Record: type,
+    allocator: std.mem.Allocator,
+    nodes: *std.ArrayListUnmanaged(Node(Record)),
+    source_routes: *RouteTable(u64),
+    text_routes: *RouteTable(TextSink),
+    bool_routes: *RouteTable(BoolSink),
+    change_routes: *RouteTable(ChangeSink),
+    structural_routes: *RouteTable(StructuralSink),
+    record_id: u64,
+    record: *Record,
+    hooks: anytype,
+) void {
+    const record_index: usize = @intCast(record_id);
+    if (record_index >= nodes.items.len) @panic("active signal graph removal referenced an unknown record");
+    if (nodes.items[record_index].record != record) @panic("active signal graph removal referenced the wrong record");
+    if (nodes.items[record_index].dependents.len != 0) @panic("active signal graph removed a record with live dependents");
+
+    allocator.free(nodes.items[record_index].dependents);
+    const last_index = nodes.items.len - 1;
+    removeSinkRoutesForRecordId(allocator, text_routes, bool_routes, change_routes, structural_routes, record_index, last_index);
+    _ = nodes.swapRemove(record_index);
+    record.active_graph_id = null;
+    hooks.releaseRecord(record);
+
+    if (record_index != last_index) {
+        const moved_id: u64 = @intCast(record_index);
+        const old_moved_id: u64 = @intCast(last_index);
+        const moved_record = nodes.items[record_index].record;
+        moved_record.active_graph_id = moved_id;
+        updateMovedRecordEdges(Record, nodes.items, source_routes, moved_record, old_moved_id, moved_id);
     }
 }
 
@@ -442,6 +619,70 @@ fn containsU64(items: []const u64, target: u64) bool {
 
 const TestRecord = struct {
     id: u64,
+};
+
+const LifecycleTestRecord = struct {
+    id: u64,
+    ref_count: usize = 1,
+    payload: Payload,
+    active_graph_id: ?u64 = null,
+    active_use_count: usize = 0,
+
+    const MapPayload = struct {
+        input: *LifecycleTestRecord,
+    };
+
+    const Map2Payload = struct {
+        left: *LifecycleTestRecord,
+        right: *LifecycleTestRecord,
+    };
+
+    const CombinePayload = struct {
+        children: []*LifecycleTestRecord,
+    };
+
+    const IntervalPayload = struct {
+        token: u64,
+        period_ms: u64,
+    };
+
+    const Payload = union(enum) {
+        ref: u64,
+        const_value,
+        map: MapPayload,
+        map2: Map2Payload,
+        combine: CombinePayload,
+        task_source,
+        interval_source: IntervalPayload,
+    };
+
+    pub fn retain(self: *LifecycleTestRecord) *LifecycleTestRecord {
+        self.ref_count += 1;
+        return self;
+    }
+};
+
+const LifecycleTestHooks = struct {
+    interval_ensures: u64 = 0,
+    interval_removes: u64 = 0,
+    record_releases: u64 = 0,
+
+    pub fn ensureInterval(self: *@This(), token: u64, period_ms: u64) void {
+        if (token == 0) @panic("test interval token must be explicit");
+        if (period_ms == 0) @panic("test interval period must be explicit");
+        self.interval_ensures += 1;
+    }
+
+    pub fn removeInterval(self: *@This(), token: u64) void {
+        if (token == 0) @panic("test interval token must be explicit");
+        self.interval_removes += 1;
+    }
+
+    pub fn releaseRecord(self: *@This(), record: *LifecycleTestRecord) void {
+        if (record.ref_count == 0) @panic("test record release underflow");
+        record.ref_count -= 1;
+        self.record_releases += 1;
+    }
 };
 
 test "active graph dirty roots collect reachable dependents once sorted by rank" {
@@ -575,4 +816,118 @@ test "active sink route record removal moves last route entries" {
     try std.testing.expectEqual(@as(usize, 2), text_routes.items.len);
     try std.testing.expectEqualSlices(TextSink, &.{.{ .kind = .text_node, .index = 9 }}, text_routes.items[0].items);
     try std.testing.expectEqualSlices(TextSink, &.{.{ .kind = .text_attr, .index = 4 }}, text_routes.items[1].items);
+}
+
+test "active graph retain and release update moved record ids and routes" {
+    var source_a = LifecycleTestRecord{ .id = 0, .payload = .{ .ref = 1 } };
+    var source_b = LifecycleTestRecord{ .id = 1, .payload = .{ .ref = 2 } };
+    var mapped = LifecycleTestRecord{ .id = 2, .payload = .{ .map = .{ .input = &source_b } } };
+
+    var nodes: std.ArrayListUnmanaged(Node(LifecycleTestRecord)) = .empty;
+    defer nodes.deinit(std.testing.allocator);
+
+    var source_routes: RouteTable(u64) = .empty;
+    var text_routes: RouteTable(TextSink) = .empty;
+    var bool_routes: RouteTable(BoolSink) = .empty;
+    var change_routes: RouteTable(ChangeSink) = .empty;
+    var structural_routes: RouteTable(StructuralSink) = .empty;
+    defer source_routes.deinit(std.testing.allocator);
+    defer text_routes.deinit(std.testing.allocator);
+    defer bool_routes.deinit(std.testing.allocator);
+    defer change_routes.deinit(std.testing.allocator);
+    defer structural_routes.deinit(std.testing.allocator);
+    defer clearRoutes(std.testing.allocator, &source_routes, &text_routes, &bool_routes, &change_routes, &structural_routes);
+
+    var hooks = LifecycleTestHooks{};
+    try std.testing.expectEqual(@as(u64, 1), retainRecord(LifecycleTestRecord, std.testing.allocator, &nodes, &source_routes, 4, &source_a, &hooks));
+    try std.testing.expectEqual(@as(u64, 2), retainRecord(LifecycleTestRecord, std.testing.allocator, &nodes, &source_routes, 4, &mapped, &hooks));
+    try std.testing.expectEqual(@as(usize, 3), nodes.items.len);
+    try std.testing.expectEqual(@as(?u64, 0), source_a.active_graph_id);
+    try std.testing.expectEqual(@as(?u64, 1), source_b.active_graph_id);
+    try std.testing.expectEqual(@as(?u64, 2), mapped.active_graph_id);
+    try std.testing.expectEqualSlices(u64, &.{2}, nodes.items[1].dependents);
+    try std.testing.expectEqualSlices(u64, &.{0}, source_routes.items[1].items);
+    try std.testing.expectEqualSlices(u64, &.{1}, source_routes.items[2].items);
+
+    releaseRecord(
+        LifecycleTestRecord,
+        std.testing.allocator,
+        &nodes,
+        &source_routes,
+        &text_routes,
+        &bool_routes,
+        &change_routes,
+        &structural_routes,
+        &source_a,
+        &hooks,
+    );
+    try std.testing.expectEqual(@as(usize, 2), nodes.items.len);
+    try std.testing.expectEqual(@as(?u64, null), source_a.active_graph_id);
+    try std.testing.expectEqual(@as(?u64, 1), source_b.active_graph_id);
+    try std.testing.expectEqual(@as(?u64, 0), mapped.active_graph_id);
+    try std.testing.expectEqual(&mapped, nodes.items[0].record);
+    try std.testing.expectEqual(&source_b, nodes.items[1].record);
+    try std.testing.expectEqualSlices(u64, &.{0}, nodes.items[1].dependents);
+    try std.testing.expectEqualSlices(u64, &.{}, source_routes.items[1].items);
+    try std.testing.expectEqualSlices(u64, &.{1}, source_routes.items[2].items);
+
+    releaseRecord(
+        LifecycleTestRecord,
+        std.testing.allocator,
+        &nodes,
+        &source_routes,
+        &text_routes,
+        &bool_routes,
+        &change_routes,
+        &structural_routes,
+        &mapped,
+        &hooks,
+    );
+    try std.testing.expectEqual(@as(usize, 0), nodes.items.len);
+    try std.testing.expectEqual(@as(?u64, null), source_b.active_graph_id);
+    try std.testing.expectEqual(@as(?u64, null), mapped.active_graph_id);
+    try std.testing.expectEqual(@as(usize, 1), source_a.ref_count);
+    try std.testing.expectEqual(@as(usize, 1), source_b.ref_count);
+    try std.testing.expectEqual(@as(usize, 1), mapped.ref_count);
+    try std.testing.expectEqual(@as(u64, 3), hooks.record_releases);
+}
+
+test "active graph interval records use explicit lifecycle hooks" {
+    var interval = LifecycleTestRecord{ .id = 0, .payload = .{ .interval_source = .{ .token = 7, .period_ms = 250 } } };
+
+    var nodes: std.ArrayListUnmanaged(Node(LifecycleTestRecord)) = .empty;
+    defer nodes.deinit(std.testing.allocator);
+
+    var source_routes: RouteTable(u64) = .empty;
+    var text_routes: RouteTable(TextSink) = .empty;
+    var bool_routes: RouteTable(BoolSink) = .empty;
+    var change_routes: RouteTable(ChangeSink) = .empty;
+    var structural_routes: RouteTable(StructuralSink) = .empty;
+    defer source_routes.deinit(std.testing.allocator);
+    defer text_routes.deinit(std.testing.allocator);
+    defer bool_routes.deinit(std.testing.allocator);
+    defer change_routes.deinit(std.testing.allocator);
+    defer structural_routes.deinit(std.testing.allocator);
+    defer clearRoutes(std.testing.allocator, &source_routes, &text_routes, &bool_routes, &change_routes, &structural_routes);
+
+    var hooks = LifecycleTestHooks{};
+    try std.testing.expectEqual(@as(u64, 1), retainRecord(LifecycleTestRecord, std.testing.allocator, &nodes, &source_routes, 1, &interval, &hooks));
+    try std.testing.expectEqual(@as(u64, 1), hooks.interval_ensures);
+    try std.testing.expectEqual(@as(usize, 1), nodes.items.len);
+
+    releaseRecord(
+        LifecycleTestRecord,
+        std.testing.allocator,
+        &nodes,
+        &source_routes,
+        &text_routes,
+        &bool_routes,
+        &change_routes,
+        &structural_routes,
+        &interval,
+        &hooks,
+    );
+    try std.testing.expectEqual(@as(usize, 0), nodes.items.len);
+    try std.testing.expectEqual(@as(u64, 1), hooks.interval_removes);
+    try std.testing.expectEqual(@as(u64, 1), hooks.record_releases);
 }

@@ -1690,6 +1690,23 @@ pub fn Engine(comptime Ctx: type) type {
         dirty_signal_generation: u64 = 0,
         scratch: EngineScratch = .{},
 
+        const ActiveSignalGraphLifecycle = struct {
+            engine: *Self,
+            ctx: Ctx.Handle,
+
+            pub fn ensureInterval(self: *@This(), source_token: HostSignalToken, period_ms: u64) void {
+                self.engine.ensureActiveInterval(self.ctx, source_token, period_ms);
+            }
+
+            pub fn removeInterval(self: *@This(), source_token: HostSignalToken) void {
+                self.engine.removeActiveIntervalBySourceToken(self.ctx, source_token);
+            }
+
+            pub fn releaseRecord(self: *@This(), record: *HostSignalRecord) void {
+                record.release(Ctx.allocator(self.ctx), self.ctx, self.engine.roc_host.?, &self.engine.pending_roc_metrics);
+            }
+        };
+
         pub fn init() Self {
             return .{};
         }
@@ -3603,20 +3620,13 @@ pub fn Engine(comptime Ctx: type) type {
 
         pub fn clearActiveSignalGraph(self: *Self, ctx: Ctx.Handle) void {
             const allocator = Ctx.allocator(ctx);
-            const roc_host = self.roc_host orelse {
+            if (self.roc_host == null) {
                 if (self.active_signal_graph.items.len != 0) @panic("active signal graph cannot release records without a Roc host");
                 self.active_signal_graph.items.len = 0;
                 return;
-            };
-            for (self.active_signal_graph.items, 0..) |node, index| {
-                allocator.free(node.dependents);
-                const active_graph_id = node.record.active_graph_id orelse @panic("active signal graph record was missing its dense id");
-                if (active_graph_id != index) @panic("active signal graph record dense id did not match its slot");
-                node.record.active_graph_id = null;
-                node.record.active_use_count = 0;
-                node.record.release(allocator, ctx, roc_host, &self.pending_roc_metrics);
             }
-            self.active_signal_graph.items.len = 0;
+            var lifecycle = ActiveSignalGraphLifecycle{ .engine = self, .ctx = ctx };
+            active_graph.clear(HostSignalRecord, allocator, &self.active_signal_graph, &lifecycle);
         }
 
         pub fn clearActiveIntervals(self: *Self, ctx: Ctx.Handle) void {
@@ -3769,63 +3779,17 @@ pub fn Engine(comptime Ctx: type) type {
         }
 
         pub fn retainActiveSignalRecord(self: *Self, ctx: Ctx.Handle, record: *HostSignalRecord) void {
-            if (record.active_use_count != 0) {
-                record.active_use_count += 1;
-                return;
-            }
-
-            record.active_use_count = 1;
-            var rank: u64 = 0;
-
-            switch (record.payload) {
-                .ref, .const_value, .task_source, .interval_source => {},
-                .map => |payload| {
-                    self.retainActiveSignalRecord(ctx, payload.input);
-                    const input_id = self.requireActiveSignalRecordId(payload.input);
-                    rank = self.active_signal_graph.items[@intCast(input_id)].rank + 1;
-                },
-                .map2 => |payload| {
-                    self.retainActiveSignalRecord(ctx, payload.left);
-                    if (payload.right != payload.left) {
-                        self.retainActiveSignalRecord(ctx, payload.right);
-                    }
-                    const left_id = self.requireActiveSignalRecordId(payload.left);
-                    const right_id = self.requireActiveSignalRecordId(payload.right);
-                    rank = @max(
-                        self.active_signal_graph.items[@intCast(left_id)].rank,
-                        self.active_signal_graph.items[@intCast(right_id)].rank,
-                    ) + 1;
-                },
-                .combine => |payload| {
-                    for (payload.children, 0..) |child, index| {
-                        if (recordSliceContains(payload.children[0..index], child)) continue;
-                        self.retainActiveSignalRecord(ctx, child);
-                        const child_id = self.requireActiveSignalRecordId(child);
-                        rank = @max(rank, self.active_signal_graph.items[@intCast(child_id)].rank + 1);
-                    }
-                },
-            }
-
-            const record_id = self.appendActiveSignalGraphNode(ctx, record, rank);
-
-            switch (record.payload) {
-                .ref => |source_node_id| self.appendActiveSourceSignalRoute(ctx, source_node_id, record_id),
-                .const_value, .task_source => {},
-                .interval_source => |payload| self.ensureActiveInterval(ctx, payload.token, payload.period_ms),
-                .map => |payload| self.appendActiveSignalDependentId(ctx, self.requireActiveSignalRecordId(payload.input), record_id),
-                .map2 => |payload| {
-                    self.appendActiveSignalDependentId(ctx, self.requireActiveSignalRecordId(payload.left), record_id);
-                    if (payload.right != payload.left) {
-                        self.appendActiveSignalDependentId(ctx, self.requireActiveSignalRecordId(payload.right), record_id);
-                    }
-                },
-                .combine => |payload| {
-                    for (payload.children, 0..) |child, index| {
-                        if (recordSliceContains(payload.children[0..index], child)) continue;
-                        self.appendActiveSignalDependentId(ctx, self.requireActiveSignalRecordId(child), record_id);
-                    }
-                },
-            }
+            var lifecycle = ActiveSignalGraphLifecycle{ .engine = self, .ctx = ctx };
+            const records_rebuilt = active_graph.retainRecord(
+                HostSignalRecord,
+                Ctx.allocator(ctx),
+                &self.active_signal_graph,
+                &self.active_source_signal_routes,
+                self.node_identities.items.len,
+                record,
+                &lifecycle,
+            );
+            self.pending_roc_metrics.bump(.active_graph_records_rebuilt, records_rebuilt);
         }
 
         pub fn ensureActiveSourceSignalRoute(self: *Self, ctx: Ctx.Handle, source_node_id: u64) *std.ArrayListUnmanaged(u64) {
@@ -3846,18 +3810,6 @@ pub fn Engine(comptime Ctx: type) type {
 
         pub fn ensureActiveStructuralSignalRoute(self: *Self, ctx: Ctx.Handle, record_id: u64) *std.ArrayListUnmanaged(HostActiveStructuralSignal) {
             return active_graph.ensureStructuralRoute(Ctx.allocator(ctx), &self.active_structural_signal_routes, self.active_signal_graph.items.len, record_id);
-        }
-
-        fn removeActiveSinkRoutesForRecordId(self: *Self, ctx: Ctx.Handle, record_index: usize, last_index: usize) void {
-            active_graph.removeSinkRoutesForRecordId(
-                Ctx.allocator(ctx),
-                &self.active_text_signal_routes,
-                &self.active_bool_signal_routes,
-                &self.active_change_signal_routes,
-                &self.active_structural_signal_routes,
-                record_index,
-                last_index,
-            );
         }
 
         fn appendActiveTextSignalRoute(self: *Self, ctx: Ctx.Handle, record_id: u64, route: HostActiveTextSignalSink) void {
@@ -3996,96 +3948,20 @@ pub fn Engine(comptime Ctx: type) type {
             self.syncActiveIntervalsFromGraph(ctx);
         }
 
-        fn removeActiveSignalDependentId(self: *Self, ctx: Ctx.Handle, input_record_id: u64, dependent_record_id: u64) void {
-            active_graph.removeDependentId(HostSignalRecord, Ctx.allocator(ctx), self.active_signal_graph.items, input_record_id, dependent_record_id);
-        }
-
-        fn replaceActiveSignalDependentId(self: *Self, input_record_id: u64, old_dependent_id: u64, new_dependent_id: u64) void {
-            active_graph.replaceDependentId(HostSignalRecord, self.active_signal_graph.items, input_record_id, old_dependent_id, new_dependent_id);
-        }
-
-        fn removeActiveSourceSignalRoute(self: *Self, source_node_id: u64, record_id: u64) void {
-            active_graph.removeSourceRoute(&self.active_source_signal_routes, source_node_id, record_id);
-        }
-
-        fn replaceActiveSourceSignalRouteId(self: *Self, source_node_id: u64, old_record_id: u64, new_record_id: u64) void {
-            active_graph.replaceSourceRouteId(&self.active_source_signal_routes, source_node_id, old_record_id, new_record_id);
-        }
-
-        fn appendActiveSignalInputRecords(ctx: Ctx.Handle, records: *std.ArrayListUnmanaged(*HostSignalRecord), record: *HostSignalRecord) void {
-            active_graph.appendInputRecords(HostSignalRecord, Ctx.allocator(ctx), records, record);
-        }
-
-        fn updateMovedActiveSignalRecordEdges(self: *Self, moved_record: *HostSignalRecord, old_record_id: u64, new_record_id: u64) void {
-            switch (moved_record.payload) {
-                .ref => |source_node_id| self.replaceActiveSourceSignalRouteId(source_node_id, old_record_id, new_record_id),
-                .const_value, .task_source, .interval_source => {},
-                .map => |payload| self.replaceActiveSignalDependentId(self.requireActiveSignalRecordId(payload.input), old_record_id, new_record_id),
-                .map2 => |payload| {
-                    self.replaceActiveSignalDependentId(self.requireActiveSignalRecordId(payload.left), old_record_id, new_record_id);
-                    if (payload.right != payload.left) {
-                        self.replaceActiveSignalDependentId(self.requireActiveSignalRecordId(payload.right), old_record_id, new_record_id);
-                    }
-                },
-                .combine => |payload| {
-                    for (payload.children, 0..) |child, index| {
-                        if (recordSliceContains(payload.children[0..index], child)) continue;
-                        self.replaceActiveSignalDependentId(self.requireActiveSignalRecordId(child), old_record_id, new_record_id);
-                    }
-                },
-            }
-        }
-
-        fn removeActiveSignalGraphNode(self: *Self, ctx: Ctx.Handle, record_id: u64, record: *HostSignalRecord) void {
-            const allocator = Ctx.allocator(ctx);
-            const record_index: usize = @intCast(record_id);
-            if (record_index >= self.active_signal_graph.items.len) @panic("active signal graph removal referenced an unknown record");
-            if (self.active_signal_graph.items[record_index].record != record) @panic("active signal graph removal referenced the wrong record");
-            if (self.active_signal_graph.items[record_index].dependents.len != 0) @panic("active signal graph removed a record with live dependents");
-
-            allocator.free(self.active_signal_graph.items[record_index].dependents);
-            const last_index = self.active_signal_graph.items.len - 1;
-            self.removeActiveSinkRoutesForRecordId(ctx, record_index, last_index);
-            _ = self.active_signal_graph.swapRemove(record_index);
-            record.active_graph_id = null;
-            record.release(allocator, ctx, self.roc_host.?, &self.pending_roc_metrics);
-
-            if (record_index != last_index) {
-                const moved_id: u64 = @intCast(record_index);
-                const old_moved_id: u64 = @intCast(last_index);
-                const moved_record = self.active_signal_graph.items[record_index].record;
-                moved_record.active_graph_id = moved_id;
-                self.updateMovedActiveSignalRecordEdges(moved_record, old_moved_id, moved_id);
-            }
-        }
-
         pub fn releaseActiveSignalRecord(self: *Self, ctx: Ctx.Handle, record: *HostSignalRecord) void {
-            if (record.active_use_count == 0) @panic("active signal graph record use count underflow");
-            record.active_use_count -= 1;
-            if (record.active_use_count != 0) return;
-
-            const allocator = Ctx.allocator(ctx);
-            const record_id = self.requireActiveSignalRecordId(record);
-            var input_records: std.ArrayListUnmanaged(*HostSignalRecord) = .empty;
-            defer input_records.deinit(allocator);
-            appendActiveSignalInputRecords(ctx, &input_records, record);
-
-            switch (record.payload) {
-                .ref => |source_node_id| self.removeActiveSourceSignalRoute(source_node_id, record_id),
-                .const_value, .task_source => {},
-                .interval_source => |payload| self.removeActiveIntervalBySourceToken(ctx, payload.token),
-                .map, .map2, .combine => {},
-            }
-
-            for (input_records.items) |input_record| {
-                self.removeActiveSignalDependentId(ctx, self.requireActiveSignalRecordId(input_record), record_id);
-            }
-
-            self.removeActiveSignalGraphNode(ctx, record_id, record);
-
-            for (input_records.items) |input_record| {
-                self.releaseActiveSignalRecord(ctx, input_record);
-            }
+            var lifecycle = ActiveSignalGraphLifecycle{ .engine = self, .ctx = ctx };
+            active_graph.releaseRecord(
+                HostSignalRecord,
+                Ctx.allocator(ctx),
+                &self.active_signal_graph,
+                &self.active_source_signal_routes,
+                &self.active_text_signal_routes,
+                &self.active_bool_signal_routes,
+                &self.active_change_signal_routes,
+                &self.active_structural_signal_routes,
+                record,
+                &lifecycle,
+            );
         }
 
         fn deinitActiveSignalTextNodeDesc(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, desc: *HostNodeSignalTextNodeDesc) void {
