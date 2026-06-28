@@ -1870,7 +1870,62 @@ const Lowerer = struct {
         backing_layout: layout.Idx,
         next: LIR.CFStmtId,
     ) Common.LowerError!LIR.CFStmtId {
-        return try self.assignBoxBoundary(target, backing_local, backing_layout, next);
+        const target_layout = self.result.store.getLocal(target).layout_idx;
+        if (target_layout == backing_layout) return try self.assignLocal(target, backing_local, next);
+
+        const target_content = self.result.layouts.getLayout(target_layout);
+        const backing_content = self.result.layouts.getLayout(backing_layout);
+
+        if (target_content.tag == .box and self.result.layouts.getLayout(target_content.getIdx()).eql(backing_content)) {
+            return try self.assignUnaryLowLevel(target, .box_box, backing_local, next);
+        }
+        if (target_content.tag == .box_of_zst and self.result.layouts.isZeroSized(backing_content)) {
+            return try self.assignUnaryLowLevel(target, .box_box, backing_local, next);
+        }
+        if (backing_content.tag == .box and self.result.layouts.getLayout(backing_content.getIdx()).eql(target_content)) {
+            return try self.assignUnaryLowLevel(target, .box_unbox, backing_local, next);
+        }
+        if (backing_content.tag == .box_of_zst and self.result.layouts.isZeroSized(target_content)) {
+            return try self.assignUnaryLowLevel(target, .box_unbox, backing_local, next);
+        }
+
+        if (self.isZstLocal(target)) {
+            if (!self.isZstLocal(backing_local)) {
+                Common.invariant("nominal boundary tried to store non-zero-sized source into zero-sized target");
+            }
+            return try self.assignZst(target, next);
+        }
+
+        const target_is_box = target_content.tag == .box or target_content.tag == .box_of_zst;
+        const backing_is_box = backing_content.tag == .box or backing_content.tag == .box_of_zst;
+        const target_is_erased_ptr = target_content.tag == .scalar and target_content.getScalar().tag == .opaque_ptr;
+        const backing_is_erased_ptr = backing_content.tag == .scalar and backing_content.getScalar().tag == .opaque_ptr;
+        const target_is_list = target_content.tag == .list or target_content.tag == .list_of_zst;
+        const backing_is_list = backing_content.tag == .list or backing_content.tag == .list_of_zst;
+        const boxing_compatible =
+            (target_is_box == backing_is_box) or
+            (target_is_box and backing_is_erased_ptr) or
+            (backing_is_box and target_is_erased_ptr);
+        if ((target_is_box or backing_is_box or target_is_erased_ptr or backing_is_erased_ptr) and boxing_compatible and !target_is_list and !backing_is_list) {
+            return try self.result.store.addCFStmt(.{ .assign_ref = .{
+                .target = target,
+                .op = .{ .nominal = .{ .backing_ref = backing_local } },
+                .next = next,
+            } });
+        }
+
+        if (@import("builtin").mode == .Debug) {
+            std.debug.panic(
+                "postcheck invariant violated: LIR lowering expected nominal layouts to stay on one side of layout boxing, target={d} ({s}) source={d} ({s})",
+                .{
+                    @intFromEnum(target_layout),
+                    @tagName(target_content.tag),
+                    @intFromEnum(backing_layout),
+                    @tagName(backing_content.tag),
+                },
+            );
+        }
+        unreachable;
     }
 
     fn assignBoxBoundary(
@@ -3578,7 +3633,7 @@ const Lowerer = struct {
             .record => |fields| try self.lowerRecordPatternThen(pat_ty, fields, source, on_match, miss, continuation),
             .tuple => |items| try self.lowerTuplePatternThen(items, source, on_match, miss, continuation),
             .list => |list| try self.lowerListPatternThen(list, source, on_match, miss, continuation),
-            .nominal => |inner| try self.lowerPatternThen(inner, source, on_match, miss, continuation),
+            .nominal => |inner| try self.lowerNominalPatternThen(pat_ty, inner, source, on_match, miss, continuation),
             .tag => |tag| try self.lowerTagPatternThen(pat_ty, tag.name, tag.payloads, source, on_match, miss, continuation),
             .int_lit => |value| try self.lowerLiteralPatternThen(source, pat_ty, .{ .int_lit = value }, on_match, miss),
             .dec_lit => |value| try self.lowerLiteralPatternThen(source, pat_ty, .{ .dec_lit = value }, on_match, miss),
@@ -3856,9 +3911,57 @@ const Lowerer = struct {
             else
                 next) else next,
             .tag => |tag| try self.bindTagPayloadPatterns(self.tagIndex(pat_ty, tag.name), tag.payloads, source, next),
-            .nominal => |inner| try self.bindPattern(inner, source, next),
+            .nominal => |inner| try self.bindNominalPattern(pat_ty, inner, source, next),
             .int_lit, .dec_lit, .frac_f32_lit, .frac_f64_lit, .str_lit, .str_pattern => next,
         };
+    }
+
+    fn nominalPatternBackingType(
+        self: *Lowerer,
+        nominal_ty: Type.TypeId,
+        inner: Lifted.PatId,
+    ) Common.LowerError!Type.TypeId {
+        return switch (self.types.get(nominal_ty)) {
+            .named => |named| (named.backing orelse Common.invariant("nominal pattern target had no runtime backing")).ty,
+            .box => |elem| elem,
+            else => try self.lowerPatTy(inner),
+        };
+    }
+
+    fn nominalPatternBackingLocal(
+        self: *Lowerer,
+        nominal_ty: Type.TypeId,
+        inner: Lifted.PatId,
+    ) Common.LowerError!LIR.LocalId {
+        return try self.addLocalForLayout(try self.layoutOfType(try self.nominalPatternBackingType(nominal_ty, inner)));
+    }
+
+    fn bindNominalPattern(
+        self: *Lowerer,
+        nominal_ty: Type.TypeId,
+        inner: Lifted.PatId,
+        source: LIR.LocalId,
+        next: LIR.CFStmtId,
+    ) Common.LowerError!LIR.CFStmtId {
+        const source_layout = self.result.store.getLocal(source).layout_idx;
+        const backing_local = try self.nominalPatternBackingLocal(nominal_ty, inner);
+        const bound = try self.bindPattern(inner, backing_local, next);
+        return try self.assignNominalBoundary(backing_local, source, source_layout, bound);
+    }
+
+    fn lowerNominalPatternThen(
+        self: *Lowerer,
+        nominal_ty: Type.TypeId,
+        inner: Lifted.PatId,
+        source: LIR.LocalId,
+        on_match: LIR.CFStmtId,
+        miss: ?PatternMiss,
+        continuation: LIR.CFStmtId,
+    ) Common.LowerError!LIR.CFStmtId {
+        const source_layout = self.result.store.getLocal(source).layout_idx;
+        const backing_local = try self.nominalPatternBackingLocal(nominal_ty, inner);
+        const matched = try self.lowerPatternThen(inner, backing_local, on_match, miss, continuation);
+        return try self.assignNominalBoundary(backing_local, source, source_layout, matched);
     }
 
     fn lowerStrPatternThen(

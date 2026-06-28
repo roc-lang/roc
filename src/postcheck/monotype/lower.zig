@@ -10579,7 +10579,7 @@ const BodyContext = struct {
     ) Allocator.Error!Ast.ExprId {
         return switch (plan.result_mode) {
             .equality => |eq| if (eq.structural_allowed) blk: {
-                const operands = try self.lowerStructuralBinaryOperands("equality", plan, callable_mono_ty, arg_ctx, pre_lowered);
+                const operands = try self.lowerStructuralEqualityOperands(plan, arg_ctx);
                 var result = try self.lowerEqualityExpr(operands.derived_ty, operands.first, operands.second, self.view.names.methodNameText(plan.method), ret_ty);
                 if (eq.negated) {
                     result = try self.builder.lowLevelExpr(.bool_not, &.{result}, ret_ty);
@@ -10596,18 +10596,42 @@ const BodyContext = struct {
         };
     }
 
-    /// The two lowered operands of a structural binary derivation (equality /
-    /// hash) plus `derived_ty`, the type being derived on (the operands' shared
-    /// type), which the terminal lowering needs.
+    /// The two lowered operands of a structural derivation plus `derived_ty`,
+    /// the type being derived on, which the terminal lowering needs.
     const StructuralBinaryOperands = struct {
         first: Ast.ExprId,
         second: Ast.ExprId,
         derived_ty: Type.TypeId,
     };
 
-    /// Lower the two operands of a structural equality/hash dispatch, honoring a
-    /// `pre_lowered` operand at index 0 or 1. `noun` is the derivation name used
-    /// only in invariant diagnostics.
+    fn lowerStructuralEqualityOperands(
+        self: *BodyContext,
+        plan: static_dispatch.StaticDispatchCallPlan,
+        arg_ctx: *BodyContext,
+    ) Allocator.Error!StructuralBinaryOperands {
+        const plan_args = plan.argsSlice(self.view.static_dispatch_plans);
+        if (plan_args.len != 2) Common.invariant("structural equality dispatch plan must have two operands");
+        const lhs_expr = switch (plan_args[0]) {
+            .checked_expr => |expr| expr,
+            else => Common.invariant("structural equality operand was not a checked expression"),
+        };
+        const rhs_expr = switch (plan_args[1]) {
+            .checked_expr => |expr| expr,
+            else => Common.invariant("structural equality operand was not a checked expression"),
+        };
+        const operand_ty = try arg_ctx.structuralEqualityOperandType(.{ .lhs = lhs_expr, .rhs = rhs_expr });
+        const first = try arg_ctx.lowerExprAtType(lhs_expr, operand_ty);
+        const second = try arg_ctx.lowerExprAtType(rhs_expr, operand_ty);
+        return .{
+            .first = first,
+            .second = second,
+            .derived_ty = operand_ty,
+        };
+    }
+
+    /// Lower the value and hasher operands of a structural hash dispatch,
+    /// honoring a `pre_lowered` operand at index 0 or 1. `noun` is the derivation
+    /// name used only in invariant diagnostics.
     fn lowerStructuralBinaryOperands(
         self: *BodyContext,
         comptime noun: []const u8,
@@ -15181,12 +15205,17 @@ const EqDeriver = struct {
         return try self.derivationOwnedCall(EqDeriver, ty, operand, ctx);
     }
 
-    /// Decomposes structural equality on a nominal type by unwrapping both operands to
-    /// their shared backing representation and comparing those. The nominal unwrap is a
-    /// transparent alias at runtime, and recursing on the backing dispatches any owned
-    /// types nested within it (e.g. a list inside the backing tag union) instead of
-    /// leaving them for the LIR structural-equality lowering.
+    /// Decomposes structural equality on a nominal type. Record and tuple backings are
+    /// decomposed through the nominal operands so field/tuple access sees the nominal
+    /// layout; other backings are unwrapped and compared in their shared backing
+    /// representation.
     fn named(self: *BodyContext, named_ty: Type.TypeId, backing_ty: Type.TypeId, operand: Operand, ctx: BodyContext.DerivationCtx) Allocator.Error!Ast.ExprId {
+        switch (self.builder.program.types.get(backing_ty)) {
+            .record => |fields| return try self.derivationRecord(EqDeriver, self.builder.program.types.fieldSpan(fields), operand, ctx),
+            .tuple => |items| return try self.derivationTuple(EqDeriver, self.builder.program.types.span(items), operand, ctx),
+            else => {},
+        }
+
         const lhs_inner = try self.builder.program.addLocal(self.builder.symbols.fresh(), backing_ty);
         const rhs_inner = try self.builder.program.addLocal(self.builder.symbols.fresh(), backing_ty);
 
@@ -15400,6 +15429,12 @@ const HashDeriver = struct {
     }
 
     fn named(self: *BodyContext, named_ty: Type.TypeId, backing_ty: Type.TypeId, operand: Operand, ctx: BodyContext.DerivationCtx) Allocator.Error!Ast.ExprId {
+        switch (self.builder.program.types.get(backing_ty)) {
+            .record => |fields| return try self.derivationRecord(HashDeriver, self.builder.program.types.fieldSpan(fields), operand, ctx),
+            .tuple => |items| return try self.derivationTuple(HashDeriver, self.builder.program.types.span(items), operand, ctx),
+            else => {},
+        }
+
         const inner = try self.builder.program.addLocal(self.builder.symbols.fresh(), backing_ty);
         const hashed = try self.lowerDerivation(HashDeriver, backing_ty, .{
             .value = try self.builder.localExpr(inner, backing_ty),
