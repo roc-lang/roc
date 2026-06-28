@@ -1743,6 +1743,17 @@ values it reads. The loop demand is complete only when reachable body
 observations and reachable `continue` edges stop changing loop-parameter
 demand.
 
+Loop-carried demand is recursive data. An iterator state demand can say "read
+the `step` callable"; the result demand for that callable can say "when the
+step returns `One`, carry the `rest` payload as the next value for this same
+loop parameter." That is not a finite tree without either losing information or
+growing forever. The optimized lowering context must therefore represent
+loop-parameter demand as explicit graph nodes owned by the loop fixed point.
+Nested demands may refer back to a loop-parameter demand node instead of
+copying the current demand tree. Equality, merge, and worklist scheduling must
+operate on those graph identities and their monotonic contents, not on
+structural expansion of an infinite `rest.step.result.rest...` tree.
+
 The fixed point is over compiler-owned loop-carried private state, not over all
 program variables in scope. A loop may read or write ordinary source variables,
 call effectful stream steps, return, break, or evaluate diagnostics exactly as
