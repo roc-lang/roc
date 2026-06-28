@@ -2900,6 +2900,91 @@ test "check type - expect" {
     );
 }
 
+test "check type - top-level expect suppresses constant match warning" {
+    const source =
+        \\Color : [Blue, Red]
+        \\
+        \\get_favorite_color : Str -> Color
+        \\get_favorite_color = |name| {
+        \\    if name == "Bob" {
+        \\        Blue
+        \\    } else {
+        \\        Red
+        \\    }
+        \\}
+        \\
+        \\expect match get_favorite_color("Bob") {
+        \\    Blue => True
+        \\    _ => False
+        \\}
+    ;
+
+    try checkTypesModule(
+        source,
+        .{ .pass = .{ .def = "get_favorite_color" } },
+        "Str -> Color",
+    );
+}
+
+test "check type - inline expect suppresses constant match warning" {
+    const source =
+        \\Color : [Blue, Red]
+        \\
+        \\get_favorite_color : Str -> Color
+        \\get_favorite_color = |name| {
+        \\    if name == "Bob" {
+        \\        Blue
+        \\    } else {
+        \\        Red
+        \\    }
+        \\}
+        \\
+        \\main = {
+        \\    expect match get_favorite_color("Bob") {
+        \\        Blue => True
+        \\        _ => False
+        \\    }
+        \\    {}
+        \\}
+    ;
+
+    try checkTypesModule(
+        source,
+        .{ .pass = .{ .def = "main" } },
+        "{}",
+    );
+}
+
+test "check type - expect suppression survives annotated local binding" {
+    const source =
+        \\Color : [Blue, Red]
+        \\
+        \\get_favorite_color : Str -> Color
+        \\get_favorite_color = |name| {
+        \\    if name == "Bob" {
+        \\        Blue
+        \\    } else {
+        \\        Red
+        \\    }
+        \\}
+        \\
+        \\expect {
+        \\    is_blue : Bool
+        \\    is_blue = match get_favorite_color("Bob") {
+        \\        Blue => True
+        \\        _ => False
+        \\    }
+        \\    is_blue
+        \\}
+    ;
+
+    try checkTypesModule(
+        source,
+        .{ .pass = .{ .def = "get_favorite_color" } },
+        "Str -> Color",
+    );
+}
+
 test "check type - expect not bool" {
     const source =
         \\main = {

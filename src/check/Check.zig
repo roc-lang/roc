@@ -1426,7 +1426,10 @@ fn warnIfComptimeConditionalExpr(
     self: *Self,
     expr: CIR.Expr.Idx,
     kind: @FieldType(problem.ComptimeCondition, "kind"),
+    expected: Expected,
 ) Allocator.Error!void {
+    if (!expected.emitsComptimeConditionWarnings()) return;
+
     const completed = self.last_hoist_result orelse return;
     if (completed.expr != expr or !completed.top_level_equivalent) return;
 
@@ -6705,7 +6708,7 @@ fn checkExpectBody(
     self.current_expect_region = expect_region;
     defer self.current_expect_region = saved_expect_region;
 
-    return try self.checkExpr(body, env, expected);
+    return try self.checkExpr(body, env, expected.suppressComptimeConditionWarnings());
 }
 
 fn varIsFunctionType(self: *Self, var_: Var) bool {
@@ -8736,13 +8739,23 @@ const Expected = struct {
     annotation: ?CIR.Annotation.Idx = null,
     branch_result: ?Var = null,
     return_result: ?Var = null,
+    comptime_condition_warnings: enum { emit, suppress } = .emit,
 
     fn none() Expected {
         return .{};
     }
 
     fn fromAnnotation(annotation_idx: CIR.Annotation.Idx) Expected {
-        return .{ .annotation = annotation_idx };
+        return Expected.none().withAnnotation(annotation_idx);
+    }
+
+    fn withAnnotation(self: Expected, annotation_idx: CIR.Annotation.Idx) Expected {
+        return .{
+            .annotation = annotation_idx,
+            .branch_result = self.branch_result,
+            .return_result = self.return_result,
+            .comptime_condition_warnings = self.comptime_condition_warnings,
+        };
     }
 
     fn withBranchResult(self: Expected, branch_result: Var) Expected {
@@ -8750,6 +8763,7 @@ const Expected = struct {
             .annotation = self.annotation,
             .branch_result = branch_result,
             .return_result = self.return_result orelse branch_result,
+            .comptime_condition_warnings = self.comptime_condition_warnings,
         };
     }
 
@@ -8758,6 +8772,7 @@ const Expected = struct {
             .annotation = self.annotation,
             .branch_result = self.branch_result,
             .return_result = return_result,
+            .comptime_condition_warnings = self.comptime_condition_warnings,
         };
     }
 
@@ -8765,12 +8780,14 @@ const Expected = struct {
         return .{
             .branch_result = self.branch_result,
             .return_result = self.return_result,
+            .comptime_condition_warnings = self.comptime_condition_warnings,
         };
     }
 
     fn forStatement(self: Expected) Expected {
         return .{
             .return_result = self.return_result,
+            .comptime_condition_warnings = self.comptime_condition_warnings,
         };
     }
 
@@ -8779,7 +8796,21 @@ const Expected = struct {
         return .{
             .branch_result = expected_return,
             .return_result = expected_return,
+            .comptime_condition_warnings = self.comptime_condition_warnings,
         };
+    }
+
+    fn suppressComptimeConditionWarnings(self: Expected) Expected {
+        return .{
+            .annotation = self.annotation,
+            .branch_result = self.branch_result,
+            .return_result = self.return_result,
+            .comptime_condition_warnings = .suppress,
+        };
+    }
+
+    fn emitsComptimeConditionWarnings(self: Expected) bool {
+        return self.comptime_condition_warnings == .emit;
     }
 
     fn returnResult(self: Expected) ?Var {
@@ -12225,7 +12256,7 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                 // Check the annotation, if it exists
                 const expectation = blk: {
                     if (decl_stmt.anno) |annotation_idx| {
-                        break :blk Expected.fromAnnotation(annotation_idx).withReturnResult(statement_expected.return_result);
+                        break :blk statement_expected.withAnnotation(annotation_idx);
                     } else {
                         break :blk statement_expected;
                     }
@@ -12298,7 +12329,7 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                             _ = try self.problems.appendProblem(self.gpa, .{ .polymorphic_var_annotation = .{ .region = self.cir.store.getAnnotationRegion(annotation_idx) } });
                             break :blk statement_expected;
                         }
-                        break :blk Expected.fromAnnotation(annotation_idx).withReturnResult(statement_expected.return_result);
+                        break :blk statement_expected.withAnnotation(annotation_idx);
                     } else {
                         break :blk statement_expected;
                     }
@@ -12817,7 +12848,7 @@ fn checkIfElseExpr(
     const bool_var = try self.freshBool(env, expr_region);
     const first_cond_result = try self.unifyInContext(bool_var, first_cond_var, env, .if_condition);
     if (if_.warn_unused_branches and first_cond_result.isOk()) {
-        try self.warnIfComptimeConditionalExpr(first_branch.cond, .if_condition);
+        try self.warnIfComptimeConditionalExpr(first_branch.cond, .if_condition, expected);
     }
 
     // Then we check the 1st branch's body
@@ -12850,7 +12881,7 @@ fn checkIfElseExpr(
         const branch_bool_var = try self.freshBool(env, expr_region);
         const cond_result = try self.unifyInContext(branch_bool_var, cond_var, env, .if_condition);
         if (if_.warn_unused_branches and cond_result.isOk()) {
-            try self.warnIfComptimeConditionalExpr(branch.cond, .if_condition);
+            try self.warnIfComptimeConditionalExpr(branch.cond, .if_condition, expected);
         }
 
         // Check the branch body
@@ -12887,7 +12918,7 @@ fn checkIfElseExpr(
                     const fresh_bool = try self.freshBool(env, expr_region);
                     const remaining_cond_result = try self.unifyInContext(fresh_bool, remaining_cond_var, env, .if_condition);
                     if (if_.warn_unused_branches and remaining_cond_result.isOk()) {
-                        try self.warnIfComptimeConditionalExpr(remaining_branch.cond, .if_condition);
+                        try self.warnIfComptimeConditionalExpr(remaining_branch.cond, .if_condition, expected);
                     }
 
                     does_fx = try self.checkExprWithHoistSelectionSuppressed(remaining_branch.body, env, expected.forBranchBody()) or does_fx;
@@ -13006,7 +13037,7 @@ fn checkMatchExpr(
         }
     }
     if (!match.is_try_suffix and !match.skip_exhaustiveness) {
-        try self.warnIfComptimeConditionalExpr(match.cond, .match_scrutinee);
+        try self.warnIfComptimeConditionalExpr(match.cond, .match_scrutinee, expected);
     }
 
     // Manually check the 1st branch
@@ -13058,7 +13089,7 @@ fn checkMatchExpr(
             const guard_bool_var = try self.freshBool(env, expr_region);
             const guard_result = try self.unifyInContext(guard_bool_var, guard_var, env, .if_condition);
             if (!match.skip_exhaustiveness and guard_result.isOk()) {
-                try self.warnIfComptimeConditionalExpr(guard_idx, .if_guard);
+                try self.warnIfComptimeConditionalExpr(guard_idx, .if_guard, expected);
             }
         }
 
@@ -13116,7 +13147,7 @@ fn checkMatchExpr(
             const branch_guard_bool_var = try self.freshBool(env, expr_region);
             const guard_result = try self.unifyInContext(branch_guard_bool_var, guard_var, env, .if_condition);
             if (!match.skip_exhaustiveness and guard_result.isOk()) {
-                try self.warnIfComptimeConditionalExpr(guard_idx, .if_guard);
+                try self.warnIfComptimeConditionalExpr(guard_idx, .if_guard, expected);
             }
         }
 
