@@ -1334,7 +1334,7 @@ The method registry is an exact table keyed by `(MethodOwner, MethodNameId)`.
 It is not an owner-discovery mechanism. Post-check code may use it only after a
 concrete monomorphic dispatcher type has already determined the owner.
 
-### Optimized Callable-State Specialization
+### Optimized Callable-State And Control-Boundary Specialization
 
 `Iter` and `Stream` are public Roc builtins whose methods remain ordinary Roc
 functions. Their public representation is the same family:
@@ -1373,7 +1373,7 @@ the single public callable type. Optimized post-check lowering consumes those
 ordinary facts and defunctionalizes reachable callable/capture graphs into
 private state machines when the surrounding code only demands private state.
 This is not an iterator source-meaning rule; `Iter` and `Stream` are important
-clients of a general callable-state optimization.
+clients of a general callable-state and control-boundary optimization.
 
 The optimizer must use actual Roc lambdas and the existing lambda-set model. It
 must not add an iterator-specific lambda-set variation, a second callable type
@@ -1413,9 +1413,9 @@ design, not a post-pass improvement.
 
 There is no iterator-plan value, adapter-chain IR, or separate elimination pass.
 The only representation before LIR is ordinary Monotype/Lambda Mono data plus
-optimized lowering's local demand, known-value, private-state, and worker tables.
-Those tables are consumed while the optimized body is cloned and lowered. The
-output is ordinary LIR control flow and ordinary LIR values.
+optimized lowering's local demand, known-value, private-state, and worker
+tables. Those tables are consumed while the optimized body is cloned and
+lowered. The output is ordinary LIR control flow and ordinary LIR values.
 
 This is not a source-level loop-to-recursive-function transform. Optimized
 lowering may emit demand-specific private workers and state-machine joins, but
@@ -1426,6 +1426,25 @@ effects, `dbg`, `expect`, `crash`, `break`, and `return` keep their checked
 evaluation order and control behavior. The optimizer may update only
 compiler-created private cursor state; it must not turn a public Roc value or a
 source mutable variable into hidden mutable iterator state.
+
+Control-boundary specialization means optimized lowering may clone a producer
+through the continuation that immediately consumes it. A branch expression
+clones each branch result under the continuation's result demand. A match
+clones the scrutinee under explicit tag and payload demand, then clones branch
+results under the outer demand. A loop solves loop-parameter demand as a fixed
+point over body observations and reachable `continue` edges. A direct call may
+create an optimized worker keyed by callee identity, argument facts, and result
+demand. These are all the same optimization family: defunctionalization and
+specialization under exact demand. They are not separate rules for `for`, `if`,
+`match`, or iterator builtins.
+
+This design follows the same broad precedent as closure conversion,
+defunctionalization, partial evaluation, and iterator or coroutine
+state-machine lowering in optimizing compilers. The important Roc-specific
+constraint is that the specialized state machine is never the public source
+type. Public Roc values remain ordinary immutable values; compiler-created
+private state exists only inside optimized lowering and disappears into ordinary
+LIR before ARC and backend code generation.
 
 The optimizer does not introduce a new global pass over finished code. It works
 where the producer and consumer meet: a consumer creates exact demand, the
