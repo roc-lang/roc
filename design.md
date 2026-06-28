@@ -1411,6 +1411,14 @@ Conversely, optimized lowering must not first build public iterator/callable
 wrappers and then try to remove them later; avoided materialization is the
 design, not a post-pass improvement.
 
+The entrypoint gate is also the compile-time-cost gate. Result demand,
+demanded-value arenas, private-state graphs, worker queues, and loop fixed-point
+work are constructed only after the post-check driver has selected the optimized
+entrypoint. `--opt=size` and `--opt=speed` use the same optimizer and differ
+only in later optimization preferences. Dev, check, interpreter, and
+compile-time-finalization paths do not build these structures and do not rely on
+them for correctness.
+
 There is no iterator-plan value, adapter-chain IR, or separate elimination pass.
 The only representation before LIR is ordinary Monotype/Lambda Mono data plus
 optimized lowering's local demand, known-value, private-state, and worker
@@ -1557,6 +1565,21 @@ needed by the public layout. They cannot represent "capture 2 is present and
 capture 0 is absent" or "the tag choice is present and payloads are absent"
 without inventing fake children. Sparse private state may be converted to an
 ordinary public value only at an explicit materialization boundary.
+
+Every private state value is closed over the state boundary where it is used. A
+state body may read only its state parameters, globals/constants, and locals
+bound inside that state body. If a demanded value depends on a local introduced
+by a branch, match payload, guard, pending let, or nested control region, the
+optimizer must either keep the binding control inside the state body that uses
+the local or turn the local's value into an explicit runtime leaf carried across
+the state transition. It must never create a specialized state whose body refers
+to a local that was bound only in a different branch or predecessor state.
+
+This is a lowering invariant, not an ARC or backend repair opportunity. LIR
+joins and blocks receive explicit parameters. ARC certifies ownership of those
+parameters and locally bound values; it must not infer missing state parameters
+from out-of-scope references. A scope-closure failure in optimized lowering is a
+compiler bug that must be caught before ARC insertion.
 
 Callable-state specialization is defunctionalization driven by result demand.
 When a demanded callable has finite known targets, each target plus its demanded
