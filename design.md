@@ -1419,6 +1419,16 @@ only in later optimization preferences. Dev, check, interpreter, and
 compile-time-finalization paths do not build these structures and do not rely on
 them for correctness.
 
+This gate is an ownership boundary in the implementation, not just a conditional
+inside the optimizer. Ordinary public-value lowering must not import, allocate,
+initialize, or retain dormant optimized-demand state. The post-check driver
+passes an explicit mode decision into lowering construction, and the optimized
+entrypoint is the only place that may create demand tables, private-state
+arenas, state-machine work queues, or demand-keyed optimized workers. If a
+future build mode wants this generated-code optimization, it must be added to
+the explicit allowlist; no consumer may infer it from target, backend, source
+constructs, package metadata, or output format.
+
 There is no iterator-plan value, adapter-chain IR, or separate elimination pass.
 The only representation before LIR is ordinary Monotype/Lambda Mono data plus
 optimized lowering's local demand, known-value, private-state, and worker
@@ -1460,6 +1470,15 @@ producer is cloned under that demand, and any private worker or private state
 loop is emitted from that same cloning context. Later stages should never need
 to infer that an iterator wrapper, callable wrapper, or public record was
 accidentally materialized and should have been avoided.
+
+Current implementation work must therefore converge by replacing dense
+public-wrapper paths with this producer-under-demand lowering. A partial
+implementation that creates public wrappers, lowers them, and then removes them
+later is not this design. A partial implementation that recognizes `Iter`,
+`for`, `if`, `match`, wasm, Rocci Bird, or generated symbol names is also not
+this design. The transition is complete only when the same demand machinery
+explains optimized direct calls, branch results, match results, loop-carried
+state, finite callable alternatives, and public materialization boundaries.
 
 This boundary is about compiler cost and generated code quality, not
 correctness. Checking, static-dispatch finalization, compile-time root
