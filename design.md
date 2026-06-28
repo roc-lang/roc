@@ -1375,6 +1375,24 @@ private state machines when the surrounding code only demands private state.
 This is not an iterator source-meaning rule; `Iter` and `Stream` are important
 clients of a general callable-state and control-boundary optimization.
 
+The essential implementation contract is producer-under-demand lowering. When a
+consumer demands only a field, tag, payload, callable call, or loop transition,
+optimized lowering asks the producer for exactly that result. It does not first
+construct the public record, public callable, public tag, or public iterator
+wrapper and then erase it. For an iterator-consuming loop, demand reaches the
+`step` callable, the callable demand reaches the finite lambda-set targets and
+the captures those targets actually read, and each returned `One`, `Skip`, or
+`Done` value is cloned under the loop continuation's demand. The public
+`Iter(item)` record exists only when source code observes it as a public value.
+
+This is the Roc analogue of Rust's optimized iterator lowering, but the private
+state comes from Roc lambda-set facts instead of from public type erasure. Rust
+puts adapter identity in the static type. Roc keeps adapter identity out of the
+public type and keeps it in ordinary checked callable facts until optimized
+lowering consumes those facts. The optimized state machine is therefore an
+implementation artifact of `--opt=size` and `--opt=speed` lowering, not a new
+source-level iterator representation.
+
 The optimizer must use actual Roc lambdas and the existing lambda-set model. It
 must not add an iterator-specific lambda-set variation, a second callable type
 system, or a public type-level encoding of adapter chains. If a callable crosses
@@ -1443,6 +1461,20 @@ entrypoint. If a helper needs access to optimized state, its caller must already
 be in the optimized lowering context; ordinary lowering must be unable to
 construct a dormant optimized context by accident.
 
+The optimized context owns all temporary specialization state:
+
+- result demand and demanded known values
+- sparse private-state keys and runtime leaves
+- finite callable-state alternatives
+- loop-parameter demand fixed points
+- demand-keyed direct-call workers
+
+None of those structures are checked output, LIR, ARC input, backend metadata,
+or interpreter metadata. They are local implementation data for the optimized
+entrypoint and must be consumed before LIR emission. The ordinary lowering
+context must not have nullable copies of these fields, debug-disabled versions
+of these fields, or lazy constructors for these fields.
+
 This gate is an ownership boundary in the implementation, not just a conditional
 inside the optimizer. Ordinary public-value lowering must not import, allocate,
 initialize, or retain dormant optimized-demand state. The post-check driver
@@ -1507,6 +1539,19 @@ state, state-machine fixed points, or demand-keyed worker creation, that helper
 belongs to the optimized lowering context. If ordinary public-value lowering
 needs the same source program to compile, it must do so through the ordinary
 materializing path without constructing dormant optimized state.
+
+The optimized entrypoint may contain internal helper phases, but those phases
+are ordered by data dependency, not by source syntax:
+
+1. establish the consumer's result demand
+2. clone the producer under that demand
+3. refine finite callable/tag/direct-call facts exposed by that clone
+4. solve any loop-carried demand fixed point created by reachable transitions
+5. emit ordinary LIR from the resulting private state or materialized value
+
+No phase may recover missing demand from names, lowered symbols, backend
+output, wasm bytes, disassembly, or completed LIR. If a later helper needs a
+fact, the earlier clone-under-demand step must produce it explicitly.
 
 Current implementation work must therefore converge by replacing dense
 public-wrapper paths with this producer-under-demand lowering. A partial
