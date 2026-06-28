@@ -1655,6 +1655,38 @@ code do not know iterator rules, stream rules, public step-callable layouts, or
 reference-count policy for iterator wrappers. ARC remains the only owner of
 reference-count insertion.
 
+The implementation must move directly to this design. There is no intermediate
+iterator-specific design to preserve, and no short-term fallback path to keep
+around after the generic mechanism exists. The optimized lowering pipeline is
+responsible for these pieces as one coherent system:
+
+- an explicit `--opt=size`/`--opt=speed` entrypoint gate
+- result demand as first-class optimizer data
+- sparse demanded private state for records, tuples, tags, nominals, callables,
+  and primitive leaves
+- demand-aware cloning through calls, branches, matches, and loops
+- finite callable-state defunctionalization from ordinary lambda-set facts
+- loop-parameter demand fixed points over observations and reachable
+  `continue` edges
+- demand-keyed optimized direct-call workers
+- explicit public materialization boundaries
+
+If an optimized path needs information that is not available, the fix is to make
+an earlier stage produce that information explicitly. It is not acceptable to
+recover the fact from source syntax, builtin names, generated symbol names,
+completed LIR, backend output, wasm bytes, object bytes, or disassembly. If an
+ordinary public value must be observed, optimized lowering materializes it at
+that point. If it does not need to be observed, optimized lowering avoids
+constructing it in the first place.
+
+The success condition is backend-neutral. A Rocci Bird `--opt=size` wasm build is
+an important integration proof, but the invariant is stronger: focused compiler
+tests must show that `.iter()` and direct-list source forms have equivalent
+optimized hot-path state, no public iterator wrapper allocation, no
+unobserved `len_if_known` work, and no iterator-specific rules in LIR, ARC, or
+backends. Rust's iterator output is the performance reference shape, not the
+source-language model Roc should copy.
+
 ### Structural Serialization Methods
 
 Parsing and encoding are ordinary static-dispatch methods. Roc does not expose a
