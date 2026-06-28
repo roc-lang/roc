@@ -229,13 +229,16 @@ const Lowerer = struct {
                 .roc => |body_id| self.program.exprRegion(body_id),
                 .hosted => base.Region.zero(),
             };
+            const args_span = try self.result.store.addLocalSpan(arg_locals);
+            const ret_layout = try self.layoutOfType(fn_.ret);
             const proc_id = try self.result.store.addProcSpec(.{
                 .name = lirSymbol(fn_.symbol),
-                .args = try self.result.store.addLocalSpan(arg_locals),
+                .args = args_span,
                 .body = null,
-                .ret_layout = try self.layoutOfType(fn_.ret),
+                .ret_layout = ret_layout,
                 .abi = if (self.usesErasedCallableAbi(fn_)) .erased_callable else .roc,
                 .hosted = try self.hostedProcForFn(fn_),
+                .stack_probe = self.stackProbeForProc(args_span, LIR.LocalSpan.empty(), ret_layout),
             });
             if (self.program.procDebugName(fn_.symbol)) |name| {
                 try self.result.store.setProcDebugName(proc_id, self.program.names.exportNameText(name));
@@ -307,6 +310,13 @@ const Lowerer = struct {
         return try self.result.store.addLocalSpan(sorted);
     }
 
+    fn stackProbeForProc(self: *Lowerer, args: LIR.LocalSpan, frame_locals: LIR.LocalSpan, ret_layout: layout.Idx) LIR.StackProbe {
+        if (self.result.store.localSpanNeedsStackProbe(&self.result.layouts, args)) return .required;
+        if (self.result.store.localSpanNeedsStackProbe(&self.result.layouts, frame_locals)) return .required;
+        if (LIR.layoutNeedsStackProbe(&self.result.layouts, ret_layout)) return .required;
+        return .default;
+    }
+
     fn localIdLessThan(_: void, a: LIR.LocalId, b: LIR.LocalId) bool {
         return @intFromEnum(a) < @intFromEnum(b);
     }
@@ -338,6 +348,7 @@ const Lowerer = struct {
                     const proc = self.result.store.getProcSpecPtr(proc_id);
                     proc.body = body;
                     proc.frame_locals = frame_locals;
+                    proc.stack_probe = self.stackProbeForProc(proc.args, proc.frame_locals, proc.ret_layout);
                 },
                 .hosted => {
                     if (self.result.store.getProcSpec(proc_id).hosted == null) {

@@ -388,6 +388,25 @@ pub const TailTransform = enum(u8) {
     tce,
 };
 
+/// Whether native backends must probe this proc's stack frame page-by-page
+/// before any frame-local access. This is a LIR contract, not a backend
+/// policy decision: lowering sets it when a proc's logical locals/params/return can
+/// force dangerous native-stack aggregate storage.
+pub const StackProbe = enum(u8) {
+    default,
+    required,
+};
+
+/// Page-size threshold used when deciding whether a layout needs native stack probing.
+pub const stack_probe_page_size: u32 = 4096;
+
+/// Reports whether values of this layout are large enough to require stack probing.
+pub fn layoutNeedsStackProbe(layouts: *const layout.Store, layout_idx: layout.Idx) bool {
+    const layout_data = layouts.getLayout(layout_idx);
+    const size = layouts.layoutSizeAlign(layout_data).size;
+    return size >= stack_probe_page_size;
+}
+
 /// Single statement/control-flow language for all lowered code.
 pub const CFStmt = union(enum) {
     init_uninitialized: struct {
@@ -620,6 +639,8 @@ pub const LirProcSpec = struct {
     hosted: ?HostedProc = null,
     /// Tail-recursion rewrite applied by the TRMC pass, if any.
     tail_transform: TailTransform = .none,
+    /// Explicit native-stack probing requirement for this proc.
+    stack_probe: StackProbe = .default,
 };
 
 /// Identifier of a stored LirPattern.
