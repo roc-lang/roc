@@ -1417,6 +1417,16 @@ optimized lowering's local demand, known-value, private-state, and worker tables
 Those tables are consumed while the optimized body is cloned and lowered. The
 output is ordinary LIR control flow and ordinary LIR values.
 
+This is not a source-level loop-to-recursive-function transform. Optimized
+lowering may emit demand-specific private workers and state-machine joins, but
+those are implementation details created while lowering already checked control
+flow. A source loop remains source loop semantics: outer mutable variables,
+branch conditions, guards, scrutinees, appended item expressions, stream
+effects, `dbg`, `expect`, `crash`, `break`, and `return` keep their checked
+evaluation order and control behavior. The optimizer may update only
+compiler-created private cursor state; it must not turn a public Roc value or a
+source mutable variable into hidden mutable iterator state.
+
 The optimizer does not introduce a new global pass over finished code. It works
 where the producer and consumer meet: a consumer creates exact demand, the
 producer is cloned under that demand, and any private worker or private state
@@ -1467,6 +1477,15 @@ the ordinary public `.iter` and `.next` meaning. Source `if` and `match` lower
 as ordinary control flow. The optimizer observes the generic demand and
 callable-state facts created by that lowered code; it never asks which source
 construct produced them.
+
+Control-flow precision comes from the checked/Lambda representation that is
+already being lowered, not from source-shape rules. Branches merge demanded
+results because the continuation demands a value from the branch expression.
+Matches demand tag choices and payloads because the continuation observes those
+facts. Loops demand parameters because body observations and reachable
+`continue` edges consume those parameters. These are ordinary producer-consumer
+relationships in the lowered program, so adding support for one control-flow
+form must not add a separate rule for a builtin or syntax form.
 
 Result demand is the optimizer's exact statement of how the current continuation
 will use a value. Required demand forms are:
@@ -1538,6 +1557,15 @@ for parameter `i`; that clone may add demand to other loop parameters through
 values it reads. The loop demand is complete only when reachable body
 observations and reachable `continue` edges stop changing loop-parameter
 demand.
+
+The fixed point is over compiler-owned loop-carried private state, not over all
+program variables in scope. A loop may read or write ordinary source variables,
+call effectful stream steps, return, break, or evaluate diagnostics exactly as
+the checked program says. Those operations remain in ordinary control flow.
+Only values that the optimized lowering itself has split into private state
+become private loop parameters. If a value must be observed through the public
+Roc representation, materialization demand ends the private-state path for that
+value.
 
 The fixed point is exact, not heuristic. There is no state-count cutoff,
 size-count cutoff, or fallback path. If the graph grows unexpectedly, the fix is
