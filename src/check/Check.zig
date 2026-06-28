@@ -3342,8 +3342,8 @@ fn builtinNominalIdent(self: *const Self, decl: BuiltinNominalDecl) Ident.Idx {
         .list => self.cir.idents.builtin_list,
         .box => self.cir.idents.builtin_box,
         .try_type => self.cir.idents.builtin_try,
-        .fields => self.cir.idents.builtin_encoding_field_names,
-        .field => self.cir.idents.builtin_encoding_field_name,
+        .fields => self.cir.idents.builtin_str_field_names,
+        .field => self.cir.idents.builtin_str_field_name,
         .numeral => self.cir.idents.builtin_numeral,
         .num => |num_kind| self.builtinNumTypeIdent(num_kind),
     };
@@ -3354,8 +3354,8 @@ fn builtinNominalLabel(decl: BuiltinNominalDecl) []const u8 {
         .list => "List",
         .box => "Box",
         .try_type => "Try",
-        .fields => "Encoding.FieldName.FieldNames",
-        .field => "Encoding.FieldName",
+        .fields => "Str.FieldName.FieldNames",
+        .field => "Str.FieldName",
         .numeral => "Num.Numeral",
         .num => |num_kind| switch (num_kind) {
             .u8 => "Num.U8",
@@ -3465,7 +3465,7 @@ fn sourceDeclForBuiltinParseSpec(self: *const Self, decl: BuiltinParseSpecDecl) 
     }
 
     const ident = switch (decl) {
-        .tag_union => self.cir.idents.builtin_encoding_parse_tag_union_spec,
+        .tag_union => self.cir.idents.builtin_parse_tag_union_spec,
         .str, .u64, .record_field => {
             if (builtin.mode == .Debug) {
                 std.debug.panic("type checker invariant violated: this parse method does not have a builtin parse spec declaration", .{});
@@ -3682,8 +3682,8 @@ fn builtinNominalDeclForIdentInEnv(source_env: *const ModuleEnv, type_ident: Ide
     if (type_ident.eql(common.list) or type_ident.eql(common.builtin_list)) return .list;
     if (type_ident.eql(common.box) or type_ident.eql(common.builtin_box)) return .box;
     if (type_ident.eql(common.@"try") or type_ident.eql(common.builtin_try)) return .try_type;
-    if (type_ident.eql(common.builtin_encoding_field_names)) return .fields;
-    if (type_ident.eql(common.builtin_encoding_field_name)) return .field;
+    if (type_ident.eql(common.builtin_str_field_names)) return .fields;
+    if (type_ident.eql(common.builtin_str_field_name)) return .field;
     if (type_ident.eql(common.builtin_numeral)) return .numeral;
     if (type_ident.eql(common.u8) or type_ident.eql(common.u8_type)) return .{ .num = .u8 };
     if (type_ident.eql(common.i8) or type_ident.eql(common.i8_type)) return .{ .num = .i8 };
@@ -4200,7 +4200,7 @@ fn mkParseSpecVar(
     region: Region,
 ) Allocator.Error!Var {
     const ident_idx = switch (decl) {
-        .tag_union => self.cir.idents.builtin_encoding_parse_tag_union_spec,
+        .tag_union => self.cir.idents.builtin_parse_tag_union_spec,
         .str, .u64, .record_field => {
             if (builtin.mode == .Debug) {
                 std.debug.panic("type checker invariant violated: this parse method does not have a builtin parse spec declaration", .{});

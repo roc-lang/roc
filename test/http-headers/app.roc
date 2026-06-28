@@ -1,5 +1,7 @@
 app [main!] { pf: platform "./platform/main.roc" }
 
+import pf.Headers
+
 Shape : {
 	cache_control : Str,
 	content_length : U64,
@@ -11,23 +13,28 @@ Shape : {
 	x_auth_token : Try(Str, [Missing]),
 }
 
-parse_headers : Str -> Try(
+parse_headers : Headers -> Try(
 	{
-		cache_control : Str,
-		content_length : U64,
-		explicit_optional : Try(Str, [Missing]),
-		foo : Str,
-		question_optional : Try(Str, [Missing]),
-		request_count : U64,
-		wildcard_optional : Try(Str, [Missing]),
-		x_auth_token : Try(Str, [Missing]),
+		value : {
+			cache_control : Str,
+			content_length : U64,
+			explicit_optional : Try(Str, [Missing]),
+			foo : Str,
+			question_optional : Try(Str, [Missing]),
+			request_count : U64,
+			wildcard_optional : Try(Str, [Missing]),
+			x_auth_token : Try(Str, [Missing]),
+		},
+		rest : Headers,
 	},
-	Encoding.HttpHeader,
+	Headers.DecodeErr,
 )
-parse_headers = Encoding.HttpHeader.parser_for()
+parse_headers = Headers.parser_for()
 
 main! : Str => U64
 main! = |headers| {
+	state = Headers.{ raw: headers }
+
 	decoded_result : Try(
 		{
 			cache_control : Str,
@@ -39,9 +46,12 @@ main! = |headers| {
 			wildcard_optional : Try(Str, _),
 			x_auth_token : Try(Str, [Missing]),
 		},
-		Encoding.HttpHeader,
+		Headers.DecodeErr,
 	)
-	decoded_result = parse_headers(headers)
+	decoded_result = match parse_headers(state) {
+		Ok(parsed) => Ok(parsed.value)
+		Err(err) => Err(err)
+	}
 
 	match decoded_result {
 		Ok(decoded) => {
@@ -75,8 +85,7 @@ main! = |headers| {
 				+ question_optional_length
 				+ x_auth_token_length
 		}
-		Err(Encoding.HttpHeader.MissingRequired) => 999999
-		Err(Encoding.HttpHeader.BadHeader) => 999999
+		Err(_) => 999999
 	}
 }
 

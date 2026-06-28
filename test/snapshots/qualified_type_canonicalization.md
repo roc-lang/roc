@@ -72,7 +72,9 @@ MISSING NESTED TYPE - qualified_type_canonicalization.md:39:13:39:20
 MODULE NOT FOUND - qualified_type_canonicalization.md:39:26:39:30
 MODULE NOT FOUND - qualified_type_canonicalization.md:39:38:39:44
 MODULE NOT FOUND - qualified_type_canonicalization.md:39:64:39:70
+UNDECLARED TYPE - qualified_type_canonicalization.md:42:9:42:12
 DOES NOT EXIST - qualified_type_canonicalization.md:42:24:42:39
+UNDECLARED TYPE - qualified_type_canonicalization.md:43:9:43:12
 DOES NOT EXIST - qualified_type_canonicalization.md:43:25:43:38
 UNUSED VARIABLE - qualified_type_canonicalization.md:43:17:43:20
 EXPOSED BUT NOT DEFINED - qualified_type_canonicalization.md:3:5:3:26
@@ -306,6 +308,16 @@ EXPOSED BUT NOT DEFINED - qualified_type_canonicalization.md:4:5:4:8
 
 
 
+┌─────────────────┐
+│ UNDECLARED TYPE ├─ The type `Try` is not declared in this scope. ───────────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  Try.Ok(rgb) => TypeC.fromColor(rgb)                                       │
+ │  ‾‾‾                                                                       │
+ └─────────────────────────────────── qualified_type_canonicalization.md:42:9 ┘
+
+
+
 ┌────────────────┐
 │ DOES NOT EXIST ├─ `TypeC.fromColor` does not exist. ────────────────────────┐
 └┬───────────────┘                                                            │
@@ -313,6 +325,16 @@ EXPOSED BUT NOT DEFINED - qualified_type_canonicalization.md:4:5:4:8
  │  Try.Ok(rgb) => TypeC.fromColor(rgb)                                       │
  │                 ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                            │
  └────────────────────────────────── qualified_type_canonicalization.md:42:24 ┘
+
+
+
+┌─────────────────┐
+│ UNDECLARED TYPE ├─ The type `Try` is not declared in this scope. ───────────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  Try.Err(err) => TypeC.default                                             │
+ │  ‾‾‾                                                                       │
+ └─────────────────────────────────── qualified_type_canonicalization.md:43:9 ┘
 
 
 
@@ -598,32 +620,33 @@ transform = |result|
 				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "transform"))
-		(e-lambda
-			(args
-				(p-assign (ident "result")))
-			(e-match
-				(match
-					(cond
-						(e-lookup-local
-							(p-assign (ident "result"))))
-					(branches
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-nominal-external (builtin)
-										(p-applied-tag))))
-							(value
-								(e-call
-									(e-runtime-error (tag "qualified_ident_does_not_exist"))
-									(e-lookup-local
-										(p-assign (ident "rgb"))))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-nominal-external (builtin)
-										(p-applied-tag))))
-							(value
-								(e-runtime-error (tag "qualified_ident_does_not_exist"))))))))
+		(e-closure
+			(captures
+				(capture (ident "rgb")))
+			(e-lambda
+				(args
+					(p-assign (ident "result")))
+				(e-match
+					(match
+						(cond
+							(e-lookup-local
+								(p-assign (ident "result"))))
+						(branches
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-runtime-error (tag "undeclared_type"))))
+								(value
+									(e-call
+										(e-runtime-error (tag "qualified_ident_does_not_exist"))
+										(e-lookup-local
+											(p-assign (ident "rgb"))))))
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-runtime-error (tag "undeclared_type"))))
+								(value
+									(e-runtime-error (tag "qualified_ident_does_not_exist")))))))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-malformed)
