@@ -1706,8 +1706,11 @@ MyEncoding :: [Out(Str)].{
 ### Compile-Time Literal Conversions
 
 A numeric literal whose target type is a non-builtin nominal type converts
-through that type's `from_numeral` method, and a string literal converts
-through `from_quote` (receiving the literal's post-escape contents as `Str`).
+through that type's **own declared** `from_numeral` method, and a string literal
+converts through its declared `from_quote` (receiving the literal's post-escape
+contents as `Str`). The conversion is not inherited through the backing chain: a
+transparent newtype that declares no `from_` does not accept a bare literal —
+that is a type error; use explicit `Nominal.(value)` construction instead.
 Every such conversion with a concrete target type is a
 compile-time root (`numeral_conversion` / `quote_conversion`), no matter
 where the literal sits in the AST: checking finalization evaluates the raw
