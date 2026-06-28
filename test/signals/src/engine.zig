@@ -26,6 +26,7 @@ const engine_contract = @import("engine_contract.zig");
 const render_cache_mod = @import("render_cache.zig");
 const descriptor_stream = @import("descriptor_stream.zig");
 const retained_values = @import("retained_values.zig");
+const signal_records = @import("signal_records.zig");
 
 const enable_runtime_metrics = engine_metrics.enable_runtime_metrics;
 
@@ -86,6 +87,19 @@ const retainHostEventReducer = retained_values.retainHostEventReducer;
 const releaseHostEventReducer = retained_values.releaseHostEventReducer;
 const retainHostEachOps = retained_values.retainHostEachOps;
 const releaseHostEachOps = retained_values.releaseHostEachOps;
+pub const HostSignalCacheSlot = signal_records.CacheSlot;
+pub const HostSignalEvalResult = signal_records.EvalResult;
+pub const HostSignalConstRecord = signal_records.ConstRecord;
+pub const HostSignalMapRecord = signal_records.MapRecord;
+pub const HostSignalMap2Record = signal_records.Map2Record;
+pub const HostSignalCombineRecord = signal_records.CombineRecord;
+pub const HostSignalTaskSourceRecord = signal_records.TaskSourceRecord;
+pub const HostSignalIntervalSourceRecord = signal_records.IntervalSourceRecord;
+pub const HostSignalRecordPayload = signal_records.Payload;
+pub const HostSignalRecord = signal_records.Record;
+pub const HostSignalBinding = signal_records.Binding;
+pub const validateExistingSignalRecord = signal_records.validateExistingSignalRecord;
+pub const appendSignalRecordSourceNodeIds = signal_records.appendSignalRecordSourceNodeIds;
 
 const render_event_kinds = [_]RenderEventKind{ .click, .input, .check, .pointer_down, .pointer_up, .pointer_enter, .pointer_leave };
 
@@ -174,239 +188,6 @@ const HostEachRowSite = struct {
         self.hash_heads.deinit(allocator);
         self.hash_links.deinit(allocator);
         self.* = undefined;
-    }
-};
-
-/// Memoized output of a signal record: absent until first evaluated, then a
-/// retained cell holding the last computed value plus its capability.
-pub const HostSignalCacheSlot = union(enum) {
-    absent,
-    present: HostValueCell,
-
-    pub fn deinit(self: *HostSignalCacheSlot, ctx: anytype, roc_host: *abi.RocHost, metrics: anytype) void {
-        switch (self.*) {
-            .absent => {},
-            .present => |*cached| cached.deinit(ctx, roc_host, metrics),
-        }
-        self.* = .absent;
-    }
-
-    pub fn replace(self: *HostSignalCacheSlot, ctx: anytype, roc_host: *abi.RocHost, metrics: anytype, value: HostValue, cap: HostValueCapability) void {
-        self.deinit(ctx, roc_host, metrics);
-        self.* = .{ .present = HostValueCell.initRetained(value, cap, metrics) };
-    }
-
-    pub fn replaceValue(self: *HostSignalCacheSlot, ctx: anytype, roc_host: *abi.RocHost, value: HostValue) void {
-        switch (self.*) {
-            .absent => @panic("dirty signal expression was evaluated before its initial value was cached"),
-            .present => |*cached| cached.replaceValue(ctx, roc_host, value),
-        }
-    }
-
-    pub fn cloneRetained(self: HostSignalCacheSlot, ctx: anytype, metrics: anytype) HostSignalCacheSlot {
-        return switch (self) {
-            .absent => .absent,
-            .present => |cached| .{ .present = cached.cloneRetained(ctx, metrics) },
-        };
-    }
-};
-
-pub const HostSignalEvalResult = struct {
-    value: HostValue,
-    changed: bool,
-};
-
-pub const HostSignalConstRecord = struct {
-    token: HostSignalToken,
-    init: abi.RocErasedCallable,
-    cap: HostValueCapability,
-    cached_value: HostSignalCacheSlot = .absent,
-};
-
-pub const HostSignalMapRecord = struct {
-    token: HostSignalToken,
-    input: *HostSignalRecord,
-    transform: abi.RocErasedCallable,
-    cap: HostValueCapability,
-    cached_value: HostSignalCacheSlot = .absent,
-};
-
-pub const HostSignalMap2Record = struct {
-    token: HostSignalToken,
-    left: *HostSignalRecord,
-    right: *HostSignalRecord,
-    transform: abi.RocErasedCallable,
-    cap: HostValueCapability,
-    cached_value: HostSignalCacheSlot = .absent,
-};
-
-pub const HostSignalCombineRecord = struct {
-    token: HostSignalToken,
-    children: []*HostSignalRecord,
-    transform: abi.RocErasedCallable,
-    cap: HostValueCapability,
-    cached_value: HostSignalCacheSlot = .absent,
-};
-
-pub const HostSignalTaskSourceRecord = struct {
-    token: HostSignalToken,
-    name: []const u8,
-    payload_cap: HostValueCapability,
-    initial: abi.RocErasedCallable,
-    done: abi.RocErasedCallable,
-    failed: abi.RocErasedCallable,
-    cap: HostValueCapability,
-    reset_on_start: bool,
-    cached_value: HostSignalCacheSlot = .absent,
-};
-
-pub const HostSignalIntervalSourceRecord = struct {
-    token: HostSignalToken,
-    period_ms: u64,
-    initial: abi.RocErasedCallable,
-    tick: abi.RocErasedCallable,
-    cap: HostValueCapability,
-    cached_value: HostSignalCacheSlot = .absent,
-};
-
-pub const HostSignalRecordPayload = union(enum) {
-    ref: u64,
-    const_value: HostSignalConstRecord,
-    map: HostSignalMapRecord,
-    map2: HostSignalMap2Record,
-    combine: HostSignalCombineRecord,
-    task_source: HostSignalTaskSourceRecord,
-    interval_source: HostSignalIntervalSourceRecord,
-};
-
-/// A refcounted, shareable node in the signal graph. Owns its transform/eq/drop
-/// thunks plus a memoized cached value; the active graph holds one reference
-/// while a record is mounted.
-pub const HostSignalRecord = struct {
-    ref_count: usize,
-    payload: HostSignalRecordPayload,
-    active_graph_id: ?u64 = null,
-    active_use_count: usize = 0,
-    last_dirty_generation: u64 = 0,
-    last_dirty_changed: bool = false,
-
-    pub fn init(allocator: std.mem.Allocator, payload: HostSignalRecordPayload) *HostSignalRecord {
-        const record = allocator.create(HostSignalRecord) catch @panic("out of memory");
-        record.* = .{
-            .ref_count = 1,
-            .payload = payload,
-        };
-        return record;
-    }
-
-    pub fn token(self: *const HostSignalRecord) ?HostSignalToken {
-        return switch (self.payload) {
-            .ref => null,
-            .const_value => |payload| payload.token,
-            .map => |payload| payload.token,
-            .map2 => |payload| payload.token,
-            .combine => |payload| payload.token,
-            .task_source => |payload| payload.token,
-            .interval_source => |payload| payload.token,
-        };
-    }
-
-    pub fn retain(self: *HostSignalRecord) *HostSignalRecord {
-        self.ref_count += 1;
-        return self;
-    }
-
-    pub fn release(self: *HostSignalRecord, allocator: std.mem.Allocator, ctx: anytype, roc_host: *abi.RocHost, metrics: anytype) void {
-        if (self.ref_count == 0) @panic("host signal record release underflow");
-        if (self.ref_count == 1 and self.active_graph_id != null) @panic("active signal graph held the last signal record reference");
-        self.ref_count -= 1;
-        if (self.ref_count != 0) return;
-
-        switch (self.payload) {
-            .ref => {},
-            .const_value => |payload| {
-                var cached_value = payload.cached_value;
-                cached_value.deinit(ctx, roc_host, metrics);
-                releaseHostSignalToken(payload.token, roc_host);
-                abi.decrefErasedCallable(payload.init, roc_host);
-                releaseHostValueCapability(payload.cap, roc_host, metrics);
-                metrics.bump(.closure_releases, 1);
-            },
-            .map => |payload| {
-                payload.input.release(allocator, ctx, roc_host, metrics);
-                var cached_value = payload.cached_value;
-                cached_value.deinit(ctx, roc_host, metrics);
-                releaseHostSignalToken(payload.token, roc_host);
-                abi.decrefErasedCallable(payload.transform, roc_host);
-                releaseHostValueCapability(payload.cap, roc_host, metrics);
-                metrics.bump(.closure_releases, 1);
-            },
-            .map2 => |payload| {
-                payload.left.release(allocator, ctx, roc_host, metrics);
-                payload.right.release(allocator, ctx, roc_host, metrics);
-                var cached_value = payload.cached_value;
-                cached_value.deinit(ctx, roc_host, metrics);
-                releaseHostSignalToken(payload.token, roc_host);
-                abi.decrefErasedCallable(payload.transform, roc_host);
-                releaseHostValueCapability(payload.cap, roc_host, metrics);
-                metrics.bump(.closure_releases, 1);
-            },
-            .combine => |payload| {
-                for (payload.children) |child| {
-                    child.release(allocator, ctx, roc_host, metrics);
-                }
-                allocator.free(payload.children);
-                var cached_value = payload.cached_value;
-                cached_value.deinit(ctx, roc_host, metrics);
-                releaseHostSignalToken(payload.token, roc_host);
-                abi.decrefErasedCallable(payload.transform, roc_host);
-                releaseHostValueCapability(payload.cap, roc_host, metrics);
-                metrics.bump(.closure_releases, 1);
-            },
-            .task_source => |payload| {
-                var cached_value = payload.cached_value;
-                cached_value.deinit(ctx, roc_host, metrics);
-                releaseHostSignalToken(payload.token, roc_host);
-                allocator.free(payload.name);
-                releaseHostValueCapability(payload.payload_cap, roc_host, metrics);
-                abi.decrefErasedCallable(payload.initial, roc_host);
-                abi.decrefErasedCallable(payload.done, roc_host);
-                abi.decrefErasedCallable(payload.failed, roc_host);
-                releaseHostValueCapability(payload.cap, roc_host, metrics);
-                metrics.bump(.closure_releases, 3);
-            },
-            .interval_source => |payload| {
-                var cached_value = payload.cached_value;
-                cached_value.deinit(ctx, roc_host, metrics);
-                releaseHostSignalToken(payload.token, roc_host);
-                abi.decrefErasedCallable(payload.initial, roc_host);
-                abi.decrefErasedCallable(payload.tick, roc_host);
-                releaseHostValueCapability(payload.cap, roc_host, metrics);
-                metrics.bump(.closure_releases, 2);
-            },
-        }
-
-        allocator.destroy(self);
-    }
-};
-
-/// A reference to a shared signal record plus the source state-node ids that
-/// feed it; the unit a descriptor edge owns.
-pub const HostSignalBinding = struct {
-    record: *HostSignalRecord,
-    source_node_ids: []u64,
-
-    pub fn cloneRetained(self: HostSignalBinding, allocator: std.mem.Allocator, metrics: anytype) HostSignalBinding {
-        _ = metrics;
-        return .{
-            .record = self.record.retain(),
-            .source_node_ids = allocator.dupe(u64, self.source_node_ids) catch @panic("out of memory"),
-        };
-    }
-
-    pub fn deinit(self: *HostSignalBinding, allocator: std.mem.Allocator, ctx: anytype, roc_host: *abi.RocHost, metrics: anytype) void {
-        self.record.release(allocator, ctx, roc_host, metrics);
-        allocator.free(self.source_node_ids);
     }
 };
 
@@ -1854,34 +1635,6 @@ pub fn eventPayloadAccessorFromAbi(payload_accessor: u64) EventPayloadAccessor {
         @intFromEnum(EventPayloadAccessor.record_key_shift) => .record_key_shift,
         else => @panic("Roc event descriptor used an unknown payload accessor"),
     };
-}
-
-pub fn validateExistingSignalRecord(record: *HostSignalRecord, expected_tag: std.meta.Tag(HostSignalRecordPayload)) void {
-    if (std.meta.activeTag(record.payload) != expected_tag) {
-        @panic("signal token was reused for a different signal expression kind");
-    }
-}
-
-pub fn appendSignalRecordSourceNodeIds(allocator: std.mem.Allocator, source_node_ids: *std.ArrayListUnmanaged(u64), record: *HostSignalRecord) void {
-    switch (record.payload) {
-        .ref => |node_id| {
-            if (!u64SliceContains(source_node_ids.items, node_id)) {
-                source_node_ids.append(allocator, node_id) catch @panic("out of memory");
-            }
-        },
-        .const_value => {},
-        .map => |payload| appendSignalRecordSourceNodeIds(allocator, source_node_ids, payload.input),
-        .map2 => |payload| {
-            appendSignalRecordSourceNodeIds(allocator, source_node_ids, payload.left);
-            appendSignalRecordSourceNodeIds(allocator, source_node_ids, payload.right);
-        },
-        .combine => |payload| {
-            for (payload.children) |child| {
-                appendSignalRecordSourceNodeIds(allocator, source_node_ids, child);
-            }
-        },
-        .task_source, .interval_source => {},
-    }
 }
 
 pub fn Engine(comptime Ctx: type) type {
