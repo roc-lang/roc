@@ -1419,6 +1419,15 @@ only in later optimization preferences. Dev, check, interpreter, and
 compile-time-finalization paths do not build these structures and do not rely on
 them for correctness.
 
+The gate must be represented in the implementation as data ownership, not as a
+boolean checked deep inside lowering. Ordinary public-value lowering owns no
+result-demand arena, no demanded-value arena, no private-state graph, no
+optimized worker queue, and no state-machine fixed-point storage. Optimized
+lowering owns those structures and receives them only from the optimized
+entrypoint. If a helper needs access to optimized state, its caller must already
+be in the optimized lowering context; ordinary lowering must be unable to
+construct a dormant optimized context by accident.
+
 This gate is an ownership boundary in the implementation, not just a conditional
 inside the optimizer. Ordinary public-value lowering must not import, allocate,
 initialize, or retain dormant optimized-demand state. The post-check driver
