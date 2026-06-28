@@ -508,6 +508,103 @@ pub fn clear(comptime Record: type, allocator: std.mem.Allocator, nodes: *std.Ar
     nodes.items.len = 0;
 }
 
+pub fn retainStreamRecords(
+    comptime Record: type,
+    allocator: std.mem.Allocator,
+    nodes: *std.ArrayListUnmanaged(Node(Record)),
+    source_routes: *RouteTable(u64),
+    source_node_count: usize,
+    stream: anytype,
+    hooks: anytype,
+) u64 {
+    var records_rebuilt: u64 = 0;
+
+    for (stream.signal_text_nodes.items) |*desc| {
+        records_rebuilt += retainRecord(Record, allocator, nodes, source_routes, source_node_count, desc.signal.record, hooks);
+    }
+    for (stream.signal_text_attrs.items) |*desc| {
+        records_rebuilt += retainRecord(Record, allocator, nodes, source_routes, source_node_count, desc.signal.record, hooks);
+    }
+    for (stream.signal_custom_text_attrs.items) |*desc| {
+        records_rebuilt += retainRecord(Record, allocator, nodes, source_routes, source_node_count, desc.signal.record, hooks);
+    }
+    for (stream.signal_bool_attrs.items) |*desc| {
+        records_rebuilt += retainRecord(Record, allocator, nodes, source_routes, source_node_count, desc.signal.record, hooks);
+    }
+    for (stream.on_changes.items) |*desc| {
+        records_rebuilt += retainRecord(Record, allocator, nodes, source_routes, source_node_count, desc.signal.record, hooks);
+    }
+    for (stream.whens.items) |*desc| {
+        records_rebuilt += retainRecord(Record, allocator, nodes, source_routes, source_node_count, desc.condition.record, hooks);
+    }
+    for (stream.eaches.items) |*desc| {
+        records_rebuilt += retainRecord(Record, allocator, nodes, source_routes, source_node_count, desc.items.record, hooks);
+    }
+
+    return records_rebuilt;
+}
+
+pub fn rebuildSinkRoutesFromStream(
+    comptime Record: type,
+    allocator: std.mem.Allocator,
+    nodes: []const Node(Record),
+    text_routes: *RouteTable(TextSink),
+    bool_routes: *RouteTable(BoolSink),
+    change_routes: *RouteTable(ChangeSink),
+    structural_routes: *RouteTable(StructuralSink),
+    stream: anytype,
+) void {
+    clearSinkRoutes(allocator, text_routes, bool_routes, change_routes, structural_routes);
+
+    for (stream.signal_text_nodes.items, 0..) |desc, index| {
+        const id = requireRecordId(Record, nodes, desc.signal.record);
+        appendTextRoute(allocator, text_routes, nodes.len, id, .{
+            .kind = .text_node,
+            .index = index,
+        });
+    }
+    for (stream.signal_text_attrs.items, 0..) |desc, index| {
+        const id = requireRecordId(Record, nodes, desc.signal.record);
+        appendTextRoute(allocator, text_routes, nodes.len, id, .{
+            .kind = .text_attr,
+            .index = index,
+        });
+    }
+    for (stream.signal_custom_text_attrs.items, 0..) |desc, index| {
+        const id = requireRecordId(Record, nodes, desc.signal.record);
+        appendTextRoute(allocator, text_routes, nodes.len, id, .{
+            .kind = .custom_text_attr,
+            .index = index,
+        });
+    }
+    for (stream.signal_bool_attrs.items, 0..) |desc, index| {
+        const id = requireRecordId(Record, nodes, desc.signal.record);
+        appendBoolRoute(allocator, bool_routes, nodes.len, id, .{
+            .index = index,
+        });
+    }
+    for (stream.on_changes.items, 0..) |desc, index| {
+        const id = requireRecordId(Record, nodes, desc.signal.record);
+        appendChangeRoute(allocator, change_routes, nodes.len, id, .{
+            .index = index,
+        });
+    }
+    for (stream.whens.items, 0..) |desc, index| {
+        const id = requireRecordId(Record, nodes, desc.condition.record);
+        appendStructuralRoute(allocator, structural_routes, nodes.len, id, .{
+            .kind = .when,
+            .index = index,
+        });
+    }
+    for (stream.eaches.items, 0..) |desc, index| {
+        const id = requireRecordId(Record, nodes, desc.items.record);
+        appendStructuralRoute(allocator, structural_routes, nodes.len, id, .{
+            .kind = .each,
+            .index = index,
+        });
+    }
+}
+
 fn appendUniqueInputRecord(comptime Record: type, allocator: std.mem.Allocator, records: *std.ArrayListUnmanaged(*Record), record: *Record) void {
     if (!recordSliceContains(Record, records.items, record)) {
         records.append(allocator, record) catch @panic("out of memory");
@@ -682,6 +779,42 @@ const LifecycleTestHooks = struct {
         if (record.ref_count == 0) @panic("test record release underflow");
         record.ref_count -= 1;
         self.record_releases += 1;
+    }
+};
+
+const LifecycleSignalBinding = struct {
+    record: *LifecycleTestRecord,
+};
+
+const LifecycleSignalDesc = struct {
+    signal: LifecycleSignalBinding,
+};
+
+const LifecycleWhenDesc = struct {
+    condition: LifecycleSignalBinding,
+};
+
+const LifecycleEachDesc = struct {
+    items: LifecycleSignalBinding,
+};
+
+const LifecycleStream = struct {
+    signal_text_nodes: std.ArrayListUnmanaged(LifecycleSignalDesc) = .empty,
+    signal_text_attrs: std.ArrayListUnmanaged(LifecycleSignalDesc) = .empty,
+    signal_custom_text_attrs: std.ArrayListUnmanaged(LifecycleSignalDesc) = .empty,
+    signal_bool_attrs: std.ArrayListUnmanaged(LifecycleSignalDesc) = .empty,
+    on_changes: std.ArrayListUnmanaged(LifecycleSignalDesc) = .empty,
+    whens: std.ArrayListUnmanaged(LifecycleWhenDesc) = .empty,
+    eaches: std.ArrayListUnmanaged(LifecycleEachDesc) = .empty,
+
+    fn deinit(self: *LifecycleStream, allocator: std.mem.Allocator) void {
+        self.signal_text_nodes.deinit(allocator);
+        self.signal_text_attrs.deinit(allocator);
+        self.signal_custom_text_attrs.deinit(allocator);
+        self.signal_bool_attrs.deinit(allocator);
+        self.on_changes.deinit(allocator);
+        self.whens.deinit(allocator);
+        self.eaches.deinit(allocator);
     }
 };
 
@@ -930,4 +1063,63 @@ test "active graph interval records use explicit lifecycle hooks" {
     try std.testing.expectEqual(@as(usize, 0), nodes.items.len);
     try std.testing.expectEqual(@as(u64, 1), hooks.interval_removes);
     try std.testing.expectEqual(@as(u64, 1), hooks.record_releases);
+}
+
+test "active graph stream rebuild retains records and rebuilds sink routes" {
+    var source = LifecycleTestRecord{ .id = 0, .payload = .{ .ref = 1 } };
+    var mapped = LifecycleTestRecord{ .id = 1, .payload = .{ .map = .{ .input = &source } } };
+
+    var stream: LifecycleStream = .{};
+    defer stream.deinit(std.testing.allocator);
+    stream.signal_text_nodes.append(std.testing.allocator, .{ .signal = .{ .record = &mapped } }) catch @panic("out of memory");
+    stream.signal_text_attrs.append(std.testing.allocator, .{ .signal = .{ .record = &mapped } }) catch @panic("out of memory");
+    stream.signal_custom_text_attrs.append(std.testing.allocator, .{ .signal = .{ .record = &source } }) catch @panic("out of memory");
+    stream.signal_bool_attrs.append(std.testing.allocator, .{ .signal = .{ .record = &source } }) catch @panic("out of memory");
+    stream.on_changes.append(std.testing.allocator, .{ .signal = .{ .record = &mapped } }) catch @panic("out of memory");
+    stream.whens.append(std.testing.allocator, .{ .condition = .{ .record = &source } }) catch @panic("out of memory");
+    stream.eaches.append(std.testing.allocator, .{ .items = .{ .record = &mapped } }) catch @panic("out of memory");
+
+    var nodes: std.ArrayListUnmanaged(Node(LifecycleTestRecord)) = .empty;
+    defer nodes.deinit(std.testing.allocator);
+
+    var source_routes: RouteTable(u64) = .empty;
+    var text_routes: RouteTable(TextSink) = .empty;
+    var bool_routes: RouteTable(BoolSink) = .empty;
+    var change_routes: RouteTable(ChangeSink) = .empty;
+    var structural_routes: RouteTable(StructuralSink) = .empty;
+    defer source_routes.deinit(std.testing.allocator);
+    defer text_routes.deinit(std.testing.allocator);
+    defer bool_routes.deinit(std.testing.allocator);
+    defer change_routes.deinit(std.testing.allocator);
+    defer structural_routes.deinit(std.testing.allocator);
+    defer clearRoutes(std.testing.allocator, &source_routes, &text_routes, &bool_routes, &change_routes, &structural_routes);
+
+    var hooks = LifecycleTestHooks{};
+    const records_rebuilt = retainStreamRecords(LifecycleTestRecord, std.testing.allocator, &nodes, &source_routes, 2, &stream, &hooks);
+    try std.testing.expectEqual(@as(u64, 2), records_rebuilt);
+    try std.testing.expectEqual(@as(usize, 2), nodes.items.len);
+    try std.testing.expectEqual(@as(?u64, 0), source.active_graph_id);
+    try std.testing.expectEqual(@as(?u64, 1), mapped.active_graph_id);
+
+    rebuildSinkRoutesFromStream(
+        LifecycleTestRecord,
+        std.testing.allocator,
+        nodes.items,
+        &text_routes,
+        &bool_routes,
+        &change_routes,
+        &structural_routes,
+        &stream,
+    );
+
+    try std.testing.expectEqualSlices(TextSink, &.{.{ .kind = .custom_text_attr, .index = 0 }}, text_routes.items[0].items);
+    try std.testing.expectEqualSlices(TextSink, &.{ .{ .kind = .text_node, .index = 0 }, .{ .kind = .text_attr, .index = 0 } }, text_routes.items[1].items);
+    try std.testing.expectEqualSlices(BoolSink, &.{.{ .index = 0 }}, bool_routes.items[0].items);
+    try std.testing.expectEqualSlices(ChangeSink, &.{.{ .index = 0 }}, change_routes.items[1].items);
+    try std.testing.expectEqualSlices(StructuralSink, &.{.{ .kind = .when, .index = 0 }}, structural_routes.items[0].items);
+    try std.testing.expectEqualSlices(StructuralSink, &.{.{ .kind = .each, .index = 0 }}, structural_routes.items[1].items);
+
+    clear(LifecycleTestRecord, std.testing.allocator, &nodes, &hooks);
+    try std.testing.expectEqual(@as(?u64, null), source.active_graph_id);
+    try std.testing.expectEqual(@as(?u64, null), mapped.active_graph_id);
 }

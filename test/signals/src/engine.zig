@@ -3861,88 +3861,33 @@ pub fn Engine(comptime Ctx: type) type {
         }
 
         pub fn rebuildActiveSinkSignalRoutesFromStream(self: *Self, ctx: Ctx.Handle, stream: *const HostNodeDescriptorStream) void {
-            self.clearActiveSinkSignalRoutes(ctx);
-
-            for (stream.signal_text_nodes.items, 0..) |desc, index| {
-                const record_id = self.requireActiveSignalRecordId(desc.signal.record);
-                self.appendActiveTextSignalRoute(ctx, record_id, .{
-                    .kind = .text_node,
-                    .index = index,
-                });
-            }
-
-            for (stream.signal_text_attrs.items, 0..) |desc, index| {
-                const record_id = self.requireActiveSignalRecordId(desc.signal.record);
-                self.appendActiveTextSignalRoute(ctx, record_id, .{
-                    .kind = .text_attr,
-                    .index = index,
-                });
-            }
-
-            for (stream.signal_custom_text_attrs.items, 0..) |desc, index| {
-                const record_id = self.requireActiveSignalRecordId(desc.signal.record);
-                self.appendActiveTextSignalRoute(ctx, record_id, .{
-                    .kind = .custom_text_attr,
-                    .index = index,
-                });
-            }
-
-            for (stream.signal_bool_attrs.items, 0..) |desc, index| {
-                const record_id = self.requireActiveSignalRecordId(desc.signal.record);
-                self.appendActiveBoolSignalRoute(ctx, record_id, .{
-                    .index = index,
-                });
-            }
-
-            for (stream.on_changes.items, 0..) |desc, index| {
-                const record_id = self.requireActiveSignalRecordId(desc.signal.record);
-                self.appendActiveChangeSignalRoute(ctx, record_id, .{
-                    .index = index,
-                });
-            }
-
-            for (stream.whens.items, 0..) |desc, index| {
-                const record_id = self.requireActiveSignalRecordId(desc.condition.record);
-                self.appendActiveStructuralSignalRoute(ctx, record_id, .{
-                    .kind = .when,
-                    .index = index,
-                });
-            }
-
-            for (stream.eaches.items, 0..) |desc, index| {
-                const record_id = self.requireActiveSignalRecordId(desc.items.record);
-                self.appendActiveStructuralSignalRoute(ctx, record_id, .{
-                    .kind = .each,
-                    .index = index,
-                });
-            }
+            active_graph.rebuildSinkRoutesFromStream(
+                HostSignalRecord,
+                Ctx.allocator(ctx),
+                self.active_signal_graph.items,
+                &self.active_text_signal_routes,
+                &self.active_bool_signal_routes,
+                &self.active_change_signal_routes,
+                &self.active_structural_signal_routes,
+                stream,
+            );
         }
 
         pub fn rebuildActiveSignalGraphFromStream(self: *Self, ctx: Ctx.Handle, stream: *const HostNodeDescriptorStream) void {
             self.clearActiveSignalRoutes(ctx);
             self.clearActiveSignalGraph(ctx);
 
-            for (stream.signal_text_nodes.items) |*desc| {
-                self.retainActiveSignalRecord(ctx, desc.signal.record);
-            }
-            for (stream.signal_text_attrs.items) |*desc| {
-                self.retainActiveSignalRecord(ctx, desc.signal.record);
-            }
-            for (stream.signal_custom_text_attrs.items) |*desc| {
-                self.retainActiveSignalRecord(ctx, desc.signal.record);
-            }
-            for (stream.signal_bool_attrs.items) |*desc| {
-                self.retainActiveSignalRecord(ctx, desc.signal.record);
-            }
-            for (stream.on_changes.items) |*desc| {
-                self.retainActiveSignalRecord(ctx, desc.signal.record);
-            }
-            for (stream.whens.items) |*desc| {
-                self.retainActiveSignalRecord(ctx, desc.condition.record);
-            }
-            for (stream.eaches.items) |*desc| {
-                self.retainActiveSignalRecord(ctx, desc.items.record);
-            }
+            var lifecycle = ActiveSignalGraphLifecycle{ .engine = self, .ctx = ctx };
+            const records_rebuilt = active_graph.retainStreamRecords(
+                HostSignalRecord,
+                Ctx.allocator(ctx),
+                &self.active_signal_graph,
+                &self.active_source_signal_routes,
+                self.node_identities.items.len,
+                stream,
+                &lifecycle,
+            );
+            self.pending_roc_metrics.bump(.active_graph_records_rebuilt, records_rebuilt);
 
             self.rebuildActiveSinkSignalRoutesFromStream(ctx, stream);
             self.syncActiveIntervalsFromGraph(ctx);
