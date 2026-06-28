@@ -43,6 +43,12 @@ const ProblemStore = @import("problem.zig").Store;
 
 const Self = @This();
 
+/// Interim guard: until all unbounded-depth kinds are migrated, native recursion
+/// through checkExprRecursive is bounded here so a pathological input yields a
+/// clean error instead of a native stack overflow. Generous; only pathological
+/// inputs approach it.
+const MAX_CHECK_RECURSION_DEPTH: u32 = 8192;
+
 const InterpolationConstraintId = enum(u32) { _ };
 
 const InterpolationConstraintMetadata = struct {
@@ -412,6 +418,15 @@ probe_var_pool_lens: std.ArrayListUnmanaged(usize),
 /// `clearRetainingCapacity` and repopulate `probe_var_pool_lens`, corrupting the
 /// outer probe's saved per-rank lengths; this asserts that never happens.
 commit_probe_active: bool = false,
+/// Work stack for the iterative checkExpr driver. Allocated once at init,
+/// reused across calls via a saved base high-water-mark.
+check_frame_stack: std.ArrayList(CheckFrame),
+/// When true, checkExprIter escape-hatches every kind to checkExprRecursive
+/// (i.e. exact pre-migration behavior). Used by the differential harness.
+force_recursive: bool,
+/// Native recursion depth through checkExprRecursive; converts a would-be
+/// stack overflow into a clean diagnostic during migration.
+check_recursion_depth: u32,
 /// A def + processing data
 const DefProcessed = struct {
     def_idx: CIR.Def.Idx,
@@ -1213,6 +1228,9 @@ fn initAssumePrepared(
         .known_empty_payload_vars_match = .empty,
         .checked_lambda_params = .empty,
         .probe_var_pool_lens = .empty,
+        .check_frame_stack = try std.ArrayList(CheckFrame).initCapacity(gpa, 256),
+        .force_recursive = false,
+        .check_recursion_depth = 0,
     };
 
     return self;
@@ -1357,6 +1375,7 @@ pub fn deinit(self: *Self) void {
     self.known_empty_payload_vars_match.deinit(self.gpa);
     self.checked_lambda_params.deinit(self.gpa);
     self.probe_var_pool_lens.deinit(self.gpa);
+    self.check_frame_stack.deinit(self.gpa);
 }
 
 /// Returns the hoisted roots selected while checking this module.
@@ -9684,7 +9703,51 @@ fn unifyMatchAltPatternBindings(
 
 // expr //
 
-fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected) std.mem.Allocator.Error!bool {
+/// Where in a frame's lifecycle the driver is. More variants are added as
+/// node kinds are migrated (block adds its resume steps in a later task).
+const CheckStep = enum {
+    enter,
+    exit,
+};
+
+/// Per-node-kind loop/scratch state for interleaving nodes. `none` for the
+/// fixed-arity kinds migrated in this phase except where noted.
+const CheckKindState = union(enum) {
+    none,
+    // block_loop is added in the e_block task.
+};
+
+/// A reified `checkExpr` stack frame. Must be cheap to memcpy (lives in an
+/// ArrayList that may realloc): scalars + small structs only.
+const CheckFrame = struct {
+    expr_idx: CIR.Expr.Idx,
+    env: *Env,
+    expected: Expected,
+    step: CheckStep,
+
+    // Captured by the shared prologue (.enter), reused by the shared epilogue (.exit):
+    expr_var: Var,
+    expr_var_raw: Var,
+    mb_anno_vars: ?AnnoVars,
+    should_generalize: bool,
+    hoist_guard: HoistFrameGuard,
+    prev_instantiation_source: ?CIR.Expr.Idx,
+    prev_discarded_binding_rhs_expr: ?CIR.Expr.Idx,
+    is_binding_rhs: bool,
+    binding_rhs_pattern: ?CIR.Pattern.Idx,
+    child_expected: Expected,
+
+    // Accumulated across children:
+    does_fx: bool,
+
+    kind_state: CheckKindState = .none,
+};
+
+fn checkExprRecursive(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected) std.mem.Allocator.Error!bool {
+    self.check_recursion_depth += 1;
+    defer self.check_recursion_depth -= 1;
+    if (self.check_recursion_depth > MAX_CHECK_RECURSION_DEPTH) return error.OutOfMemory;
+
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -11598,6 +11661,76 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
 
     try hoist_frame.finish(does_fx);
     return does_fx;
+}
+
+fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected) std.mem.Allocator.Error!bool {
+    return self.checkExprIter(expr_idx, env, expected);
+}
+
+fn checkExprIter(self: *Self, root_idx: CIR.Expr.Idx, root_env: *Env, root_expected: Expected) std.mem.Allocator.Error!bool {
+    if (self.force_recursive) return self.checkExprRecursive(root_idx, root_env, root_expected);
+
+    const frame_base = self.check_frame_stack.items.len;
+    var root_does_fx = false;
+
+    try self.check_frame_stack.append(self.gpa, .{
+        .expr_idx = root_idx,
+        .env = root_env,
+        .expected = root_expected,
+        .step = .enter,
+        .expr_var = undefined,
+        .expr_var_raw = undefined,
+        .mb_anno_vars = null,
+        .should_generalize = undefined,
+        .hoist_guard = undefined,
+        .prev_instantiation_source = undefined,
+        .prev_discarded_binding_rhs_expr = undefined,
+        .is_binding_rhs = undefined,
+        .binding_rhs_pattern = undefined,
+        .child_expected = undefined,
+        .does_fx = false,
+    });
+
+    while (self.check_frame_stack.items.len > frame_base) {
+        const top = self.check_frame_stack.items.len - 1;
+        const expr_idx = self.check_frame_stack.items[top].expr_idx;
+
+        // Escape hatch BEFORE the iterative prologue: unmigrated kinds run the
+        // whole node natively, then the frame is finished as a unit.
+        if (self.check_frame_stack.items[top].step == .enter and !isMigratedKind(self.cir.store.getExpr(expr_idx))) {
+            const f = self.check_frame_stack.items[top];
+            const fx = try self.checkExprRecursive(f.expr_idx, f.env, f.expected);
+            self.finishFrameAndPropagate(top, frame_base, fx, &root_does_fx);
+            continue;
+        }
+
+        // Migrated kinds: dispatched by step. No kinds are migrated yet, so this
+        // is unreachable until the warm-up task adds the first one.
+        unreachable;
+    }
+
+    return root_does_fx;
+}
+
+/// Pop the frame at `top` and OR its `does_fx` into the new top frame (or into
+/// `root_does_fx` if the stack is back at `base`). The single place frames are
+/// popped + their effect propagated, used by every kind's completion path.
+fn finishFrameAndPropagate(self: *Self, top: usize, frame_base: usize, fx: bool, root_does_fx: *bool) void {
+    self.check_frame_stack.items.len = top; // pop
+    if (self.check_frame_stack.items.len > frame_base) {
+        const parent = &self.check_frame_stack.items[self.check_frame_stack.items.len - 1];
+        parent.does_fx = parent.does_fx or fx;
+    } else {
+        root_does_fx.* = fx;
+    }
+}
+
+/// True for expr kinds handled by the iterative driver. Grows as kinds migrate.
+/// Empty in this task → every kind passes through to checkExprRecursive.
+fn isMigratedKind(expr: CIR.Expr) bool {
+    return switch (expr) {
+        else => false,
+    };
 }
 
 fn getExprPatternIdent(self: *const Self, expr_idx: CIR.Expr.Idx) ?Ident.Idx {
