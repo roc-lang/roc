@@ -16,9 +16,23 @@ main = {
 }
 ~~~
 # EXPECTED
-NIL
+DUPLICATE DEFINITION - can_import_exposing_conflicts.md:1:1:1:34
 # PROBLEMS
-NIL
+
+┌──────────────────────┐
+│ DUPLICATE DEFINITION ├─ The name `Json` is being redeclared here. ──────────┐
+└┬─────────────────────┘                                                      │
+ │                                                                            │
+ │  import json.Json exposing [parse]                                         │
+ │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                         │
+ └────────────────────────────────────── can_import_exposing_conflicts.md:1:1 ┘
+
+    In this scope, `Json` was already defined here:
+      ┌───────────────────────────────────────────────────────────────────────┐
+    1 │  import json.Json exposing [parse]                                    │
+      │  ‾                                                                    │
+      └───────────────────────────────── can_import_exposing_conflicts.md:1:1 ┘
+
 # TOKENS
 ~~~zig
 KwImport,LowerIdent,NoSpaceDotUpperIdent,KwExposing,OpenSquare,LowerIdent,CloseSquare,

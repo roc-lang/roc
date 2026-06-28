@@ -4519,16 +4519,41 @@ const BodyContext = struct {
         if (raw >= self.view.resolved_refs.records.len) {
             Common.invariant("checked direct call target is outside resolved value table");
         }
-        const proc = switch (self.view.resolved_refs.records[raw].ref) {
-            .imported_proc => |proc| proc,
+        const record = self.view.resolved_refs.records[raw];
+        switch (record.ref) {
+            .imported_proc => |proc| {
+                const imported = switch (proc.binding) {
+                    .imported => |imported| imported,
+                    else => return null,
+                };
+                const view = self.builder.moduleForId(checked.importedProcedureModuleId(imported));
+                return self.parseIntrinsicForBuiltinDef(view, imported.def);
+            },
+            .top_level_proc,
+            .promoted_top_level_proc,
+            => |proc| return self.parseIntrinsicForBuiltinProcedureUse(proc),
+            else => return null,
+        }
+    }
+
+    fn parseIntrinsicForBuiltinProcedureUse(self: *BodyContext, proc: checked.ProcedureUseTemplate) ?ParseIntrinsic {
+        const top_level = switch (proc.binding) {
+            .top_level => |top_level| top_level,
             else => return null,
         };
-        const imported = switch (proc.binding) {
-            .imported => |imported| imported,
-            else => return null,
+        const view = self.builder.moduleForId(checked.topLevelProcedureModuleId(top_level));
+        if (view.module_env.module_role != .builtin) return null;
+        const binding = view.top_level_procedure_bindings.get(top_level.binding);
+        const template = switch (binding.body) {
+            .direct_template => |direct| switch (direct.template) {
+                .checked => |template| template,
+                .lifted, .synthetic => return null,
+            },
+            .callable_eval_template => return null,
         };
-        const view = self.builder.moduleForId(checked.importedProcedureModuleId(imported));
-        return self.parseIntrinsicForBuiltinDef(view, imported.def);
+        const proc_base = view.names.procBase(template.proc_base);
+        const export_name = proc_base.export_name orelse return null;
+        return parseIntrinsicForBuiltinText(view.names.exportNameText(export_name));
     }
 
     fn parseIntrinsicForBuiltinDef(_: *BodyContext, view: ModuleView, def_idx: can.CIR.Def.Idx) ?ParseIntrinsic {
@@ -4540,14 +4565,17 @@ const BodyContext = struct {
             .assign => |assign| assign.ident,
             else => return null,
         };
-        const text = view.module_env.getIdentText(ident);
-        if (Ident.textEql(text, "Builtin.Str.ParseTagUnionSpec.parse")) return .tag_union_parse;
-        if (Ident.textEql(text, "Builtin.Str.FieldName.FieldNames.rename_fields")) return .fields_rename_fields;
-        if (Ident.textEql(text, "Builtin.Str.FieldName.FieldNames.shortest_name")) return .fields_shortest_name;
-        if (Ident.textEql(text, "Builtin.Str.FieldName.FieldNames.longest_name")) return .fields_longest_name;
-        if (Ident.textEql(text, "Builtin.Str.FieldName.FieldNames.iter")) return .fields_iter;
-        if (Ident.textEql(text, "Builtin.Str.FieldName.FieldNames.for_size")) return .fields_for_size;
-        if (Ident.textEql(text, "Builtin.Str.FieldName.name")) return .field_name;
+        return parseIntrinsicForBuiltinText(view.module_env.getIdentText(ident));
+    }
+
+    fn parseIntrinsicForBuiltinText(text: []const u8) ?ParseIntrinsic {
+        if (Ident.textEql(text, "Builtin.Encoding.ParseTagUnionSpec.parse")) return .tag_union_parse;
+        if (Ident.textEql(text, "Builtin.Encoding.FieldName.FieldNames.rename_fields")) return .fields_rename_fields;
+        if (Ident.textEql(text, "Builtin.Encoding.FieldName.FieldNames.shortest_name")) return .fields_shortest_name;
+        if (Ident.textEql(text, "Builtin.Encoding.FieldName.FieldNames.longest_name")) return .fields_longest_name;
+        if (Ident.textEql(text, "Builtin.Encoding.FieldName.FieldNames.iter")) return .fields_iter;
+        if (Ident.textEql(text, "Builtin.Encoding.FieldName.FieldNames.for_size")) return .fields_for_size;
+        if (Ident.textEql(text, "Builtin.Encoding.FieldName.name")) return .field_name;
         return null;
     }
 
