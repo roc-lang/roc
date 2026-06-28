@@ -27,6 +27,7 @@ const descriptor_stream = @import("descriptor_stream.zig");
 const retained_values = @import("retained_values.zig");
 const signal_records = @import("signal_records.zig");
 const active_graph = @import("active_signal_graph.zig");
+const scope_runtime = @import("scope_runtime.zig");
 
 const enable_runtime_metrics = engine_metrics.enable_runtime_metrics;
 
@@ -122,29 +123,10 @@ fn renderNodeSliceContainsElem(items: []const HostRenderNode, elem_id: u64) bool
     return false;
 }
 
-/// Per-row payload carried in an `Ui.each` scope: the row's key and item cells,
-/// keyed by the construction-site ordinal.
-pub const HostEachRowScopeStep = struct {
-    site_ordinal: u64,
-    key_hash: u64,
-    key: HostValueCell,
-    item: HostValueCell,
-};
-
-pub const HostScopeStep = scope_tree.Step(HostEachRowScopeStep);
-pub const HostScope = scope_tree.Scope(HostEachRowScopeStep);
-
-/// Drop the retained cells owned by an each-row scope step (no-op for the
-/// structural scope kinds, which carry no Roc values).
-pub fn deinitHostScopeStep(step: *HostScopeStep, ctx: anytype, roc_host: *abi.RocHost, metrics: anytype) void {
-    switch (step.*) {
-        .each_row => |*row| {
-            row.key.deinit(ctx, roc_host, metrics);
-            row.item.deinit(ctx, roc_host, metrics);
-        },
-        .root, .component, .when_branch => {},
-    }
-}
+pub const HostEachRowScopeStep = scope_runtime.EachRowScopeStep;
+pub const HostScopeStep = scope_runtime.ScopeStep;
+pub const HostScope = scope_runtime.Scope;
+pub const deinitHostScopeStep = scope_runtime.deinitScopeStep;
 
 fn hashEachKeyText(bytes: []const u8) u64 {
     return std.hash.Wyhash.hash(0, bytes);
@@ -277,10 +259,7 @@ pub const HostActiveStructuralSignalKind = active_graph.StructuralKind;
 pub const HostActiveStructuralSignal = active_graph.StructuralSink;
 pub const HostDirtyStructuralSignal = active_graph.DirtyStructuralSignal;
 
-pub const HostEachSite = struct {
-    parent_scope_id: u64,
-    site_ordinal: u64,
-};
+pub const HostEachSite = scope_runtime.EachSite;
 
 pub const HostStructuralReplacementTarget = union(enum) {
     scope: u64,
