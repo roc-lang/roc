@@ -1,7 +1,6 @@
 //! Checked modules to Monotype IR.
 
 const std = @import("std");
-const zig_builtin = @import("builtin");
 const check = @import("check");
 const can = @import("can");
 const builtins = @import("builtins");
@@ -608,32 +607,26 @@ const Builder = struct {
     }
 
     fn count(self: *Builder, comptime field: []const u8) void {
-        if (comptime zig_builtin.mode == .Debug) {
-            if (self.counters) |counters| {
-                @field(counters, field) += 1;
-            }
+        if (self.counters) |counters| {
+            @field(counters, field) += 1;
         }
     }
 
     fn countBy(self: *Builder, comptime field: []const u8, amount: usize) void {
-        if (comptime zig_builtin.mode == .Debug) {
-            if (self.counters) |counters| {
-                @field(counters, field) += @intCast(amount);
-            }
+        if (self.counters) |counters| {
+            @field(counters, field) += @intCast(amount);
         }
     }
 
     fn specializationTypeDigest(self: *Builder, ty: Type.TypeId) names.TypeDigest {
-        if (comptime zig_builtin.mode == .Debug) {
-            if (self.counters != null) {
-                self.count("specialization_type_digest_requests");
-                var stats: Type.Store.DigestStats = .{};
-                const digest = self.program.types.specializationDigestCached(&self.program.names, ty, &stats);
-                self.countBy("specialization_type_digest_cache_hits", @intCast(stats.cache_hits));
-                self.countBy("specialization_type_digest_cache_misses", @intCast(stats.cache_misses));
-                self.countBy("specialization_type_digest_nodes_visited", @intCast(stats.nodes_visited));
-                return digest;
-            }
+        if (self.counters != null) {
+            self.count("specialization_type_digest_requests");
+            var stats: Type.Store.DigestStats = .{};
+            const digest = self.program.types.specializationDigestCached(&self.program.names, ty, &stats);
+            self.countBy("specialization_type_digest_cache_hits", @intCast(stats.cache_hits));
+            self.countBy("specialization_type_digest_cache_misses", @intCast(stats.cache_misses));
+            self.countBy("specialization_type_digest_nodes_visited", @intCast(stats.nodes_visited));
+            return digest;
         }
 
         return self.program.types.specializationDigestCached(&self.program.names, ty, null);
