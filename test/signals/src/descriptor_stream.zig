@@ -1,4 +1,5 @@
 const std = @import("std");
+const abi = @import("roc_platform_abi.zig");
 const render = @import("render_commands.zig");
 
 pub const TextField = render.TextField;
@@ -21,6 +22,49 @@ pub const RenderNodeKind = enum {
 pub const RenderNode = struct {
     elem_id: u64,
     kind: RenderNodeKind,
+};
+
+pub const ElementDesc = struct {
+    elem_id: u64,
+    parent_elem_id: u64,
+    scope_id: u64,
+    tag: []const u8,
+};
+
+pub const TextNodeDesc = struct {
+    elem_id: u64,
+    parent_elem_id: u64,
+    scope_id: u64,
+    value: []const u8,
+};
+
+pub const StaticTextAttrDesc = struct {
+    elem_id: u64,
+    field: TextField,
+    value: []const u8,
+};
+
+pub const StaticCustomTextAttrDesc = struct {
+    elem_id: u64,
+    name: []const u8,
+    value: []const u8,
+};
+
+pub const StaticBoolAttrDesc = struct {
+    elem_id: u64,
+    field: BoolField,
+    value: bool,
+};
+
+pub const MountDesc = struct {
+    scope_id: u64,
+    to_cmd: abi.RocErasedCallable,
+    run_on_mount: bool,
+};
+
+pub const CleanupDesc = struct {
+    scope_id: u64,
+    name: []const u8,
 };
 
 pub const TextFieldDescriptorIndexes = struct {
@@ -409,9 +453,9 @@ const TestStream = struct {
     pub const SignalTextNodeDesc = TestTextNodeDesc;
 
     render_nodes: std.ArrayListUnmanaged(TestRenderNode) = .empty,
-    elements: std.ArrayListUnmanaged(ElementDesc) = .empty,
-    text_nodes: std.ArrayListUnmanaged(TextNodeDesc) = .empty,
-    signal_text_nodes: std.ArrayListUnmanaged(SignalTextNodeDesc) = .empty,
+    elements: std.ArrayListUnmanaged(TestElementDesc) = .empty,
+    text_nodes: std.ArrayListUnmanaged(TestTextNodeDesc) = .empty,
+    signal_text_nodes: std.ArrayListUnmanaged(TestTextNodeDesc) = .empty,
     static_text_attrs: std.ArrayListUnmanaged(TestStaticTextAttrDesc) = .empty,
     signal_text_attrs: std.ArrayListUnmanaged(TestStaticTextAttrDesc) = .empty,
     static_custom_text_attrs: std.ArrayListUnmanaged(TestCustomTextAttrDesc) = .empty,

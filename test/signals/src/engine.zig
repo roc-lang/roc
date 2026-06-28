@@ -56,6 +56,13 @@ pub const HostScopeSiteDescriptorIndexes = descriptor_stream.ScopeSiteDescriptor
 pub const HostNodeDescriptorIndex = descriptor_stream.NodeDescriptorIndex;
 pub const HostRenderNodeKind = descriptor_stream.RenderNodeKind;
 pub const HostRenderNode = descriptor_stream.RenderNode;
+pub const HostElementDesc = descriptor_stream.ElementDesc;
+pub const HostNodeTextNodeDesc = descriptor_stream.TextNodeDesc;
+pub const HostNodeStaticTextAttrDesc = descriptor_stream.StaticTextAttrDesc;
+pub const HostNodeStaticCustomTextAttrDesc = descriptor_stream.StaticCustomTextAttrDesc;
+pub const HostNodeStaticBoolAttrDesc = descriptor_stream.StaticBoolAttrDesc;
+pub const HostNodeMountDesc = descriptor_stream.MountDesc;
+pub const HostNodeCleanupDesc = descriptor_stream.CleanupDesc;
 
 const render_event_kinds = [_]RenderEventKind{ .click, .input, .check, .pointer_down, .pointer_up, .pointer_enter, .pointer_leave };
 
@@ -832,20 +839,6 @@ pub const HostNodeScopeSiteDesc = struct {
     binder_bindings: []HostBinderBinding,
 };
 
-pub const HostElementDesc = struct {
-    elem_id: u64,
-    parent_elem_id: u64,
-    scope_id: u64,
-    tag: []const u8,
-};
-
-pub const HostNodeTextNodeDesc = struct {
-    elem_id: u64,
-    parent_elem_id: u64,
-    scope_id: u64,
-    value: []const u8,
-};
-
 pub const HostNodeSignalTextNodeDesc = struct {
     elem_id: u64,
     parent_elem_id: u64,
@@ -853,12 +846,6 @@ pub const HostNodeSignalTextNodeDesc = struct {
     signal: HostSignalBinding,
     read: HostTextRead,
     cached_value: HostSignalCacheSlot = .absent,
-};
-
-pub const HostNodeStaticTextAttrDesc = struct {
-    elem_id: u64,
-    field: RenderTextField,
-    value: []const u8,
 };
 
 pub const HostNodeSignalTextAttrDesc = struct {
@@ -869,24 +856,12 @@ pub const HostNodeSignalTextAttrDesc = struct {
     cached_value: HostSignalCacheSlot = .absent,
 };
 
-pub const HostNodeStaticCustomTextAttrDesc = struct {
-    elem_id: u64,
-    name: []const u8,
-    value: []const u8,
-};
-
 pub const HostNodeSignalCustomTextAttrDesc = struct {
     elem_id: u64,
     name: []const u8,
     signal: HostSignalBinding,
     read: HostTextRead,
     cached_value: HostSignalCacheSlot = .absent,
-};
-
-pub const HostNodeStaticBoolAttrDesc = struct {
-    elem_id: u64,
-    field: RenderBoolField,
-    value: bool,
 };
 
 pub const HostNodeSignalBoolAttrDesc = struct {
@@ -902,17 +877,6 @@ pub const HostNodeOnChangeDesc = struct {
     signal: HostSignalBinding,
     to_cmd: abi.RocErasedCallable,
     cached_value: HostSignalCacheSlot = .absent,
-};
-
-pub const HostNodeMountDesc = struct {
-    scope_id: u64,
-    to_cmd: abi.RocErasedCallable,
-    run_on_mount: bool,
-};
-
-pub const HostNodeCleanupDesc = struct {
-    scope_id: u64,
-    name: []const u8,
 };
 
 pub const HostNodeEventDesc = struct {
