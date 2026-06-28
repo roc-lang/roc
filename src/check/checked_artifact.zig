@@ -3236,6 +3236,17 @@ pub const CheckedTypeStore = struct {
                     .root = root,
                 });
             }
+
+            const aliases = module_env.for_clause_aliases.sliceRange(required_type.type_aliases);
+            for (aliases) |alias| {
+                const alias_statement = module_env.store.getStatement(alias.alias_stmt_idx);
+                const alias_anno = switch (alias_statement) {
+                    .s_alias_decl => |decl| decl.anno,
+                    else => checkedArtifactInvariant("platform for-clause alias metadata referenced a non-alias statement", .{}),
+                };
+                _ = try appendCheckedTypeRoot(allocator, module, names, import_views, &store, &active, ModuleEnv.varFrom(alias.alias_stmt_idx));
+                _ = try appendCheckedTypeRoot(allocator, module, names, import_views, &store, &active, ModuleEnv.varFrom(alias_anno));
+            }
         }
 
         try appendStaticDispatchTypeRoots(allocator, module, names, import_views, source_nodes, &store, &active);
@@ -14839,20 +14850,56 @@ fn applyPlatformForClauseSubstitutions(
     var actuals = std.ArrayList(CheckedTypeId).empty;
     defer actuals.deinit(allocator);
 
+    var projected_aliases = std.ArrayList(PlatformForClauseProjectedAlias).empty;
+    defer projected_aliases.deinit(allocator);
+
     for (module.requiresTypes()) |required_type| {
         const aliases = module_env.for_clause_aliases.sliceRange(required_type.type_aliases);
         for (aliases) |alias| {
-            const formal = checked_types.rootForSourceVar(module, ModuleEnv.varFrom(alias.alias_stmt_idx)) orelse {
+            const alias_statement = module_env.store.getStatement(alias.alias_stmt_idx);
+            const alias_anno = switch (alias_statement) {
+                .s_alias_decl => |decl| decl.anno,
+                else => checkedArtifactInvariant("platform for-clause substitution referenced a non-alias statement", .{}),
+            };
+
+            const formal_alias = checked_types.rootForSourceVar(module, ModuleEnv.varFrom(alias.alias_stmt_idx)) orelse {
                 checkedArtifactInvariant("platform for-clause substitution missing platform alias checked root", .{});
+            };
+            const formal_rigid = checked_types.rootForSourceVar(module, ModuleEnv.varFrom(alias_anno)) orelse {
+                checkedArtifactInvariant("platform for-clause substitution missing platform rigid checked root", .{});
             };
             const alias_name = module_env.getIdent(alias.alias_name);
             const app_type = (try appTypeDeclCheckedRootForName(allocator, app_view, alias_name)) orelse {
                 checkedArtifactInvariant("platform for-clause substitution missing matching app type declaration", .{});
             };
             const actual = try projector.project(app_type);
-            try appendUniquePlatformForClauseSubstitution(&formals, &actuals, allocator, formal, actual);
+
+            const formal_alias_payload = switch (checked_types.store.payload(formal_alias)) {
+                .alias => |payload| payload,
+                else => checkedArtifactInvariant("platform for-clause substitution platform alias root was not an alias", .{}),
+            };
+            try projected_aliases.append(allocator, .{
+                .name = formal_alias_payload.name,
+                .origin_module = formal_alias_payload.origin_module,
+                .source_decl = formal_alias_payload.source_decl orelse {
+                    checkedArtifactInvariant("platform for-clause substitution platform alias had no source declaration", .{});
+                },
+                .app_decl_root = actual,
+            });
+
+            try appendUniquePlatformForClauseSubstitution(&formals, &actuals, allocator, formal_alias, actual);
+            try appendUniquePlatformForClauseSubstitution(&formals, &actuals, allocator, formal_rigid, actual);
         }
     }
+
+    try appendPlatformForClauseAliasApplicationSubstitutions(
+        allocator,
+        names,
+        &checked_types.store,
+        projected_aliases.items,
+        &formals,
+        &actuals,
+    );
 
     if (formals.items.len == 0) return;
 
@@ -14870,6 +14917,116 @@ fn applyPlatformForClauseSubstitutions(
             &active,
         );
     }
+}
+
+const PlatformForClauseProjectedAlias = struct {
+    name: canonical.TypeNameId,
+    origin_module: canonical.ModuleNameId,
+    source_decl: u32,
+    app_decl_root: CheckedTypeId,
+};
+
+fn appendPlatformForClauseAliasApplicationSubstitutions(
+    allocator: Allocator,
+    names: *const canonical.CanonicalNameStore,
+    store: *CheckedTypeStore,
+    projected_aliases: []const PlatformForClauseProjectedAlias,
+    formals: *std.ArrayList(CheckedTypeId),
+    actuals: *std.ArrayList(CheckedTypeId),
+) Allocator.Error!void {
+    if (projected_aliases.len == 0) return;
+
+    const payload_count = store.payloads.items.len;
+    var active = std.AutoHashMap(CheckedTypeId, CheckedTypeId).init(allocator);
+    defer active.deinit();
+
+    var root_index: usize = 0;
+    while (root_index < payload_count) : (root_index += 1) {
+        const platform_root: CheckedTypeId = @enumFromInt(@as(u32, @intCast(root_index)));
+        const platform_alias = switch (store.payload(platform_root)) {
+            .alias => |alias| alias,
+            else => continue,
+        };
+        const projected = projectedForClauseAlias(projected_aliases, platform_alias) orelse continue;
+        if (platform_alias.args.len == 0) continue;
+
+        const actual = try applyProjectedForClauseAlias(
+            allocator,
+            names,
+            store,
+            projected.app_decl_root,
+            platform_alias.args,
+            formals.items,
+            actuals.items,
+            &active,
+        );
+        try appendUniquePlatformForClauseSubstitution(formals, actuals, allocator, platform_root, actual);
+    }
+}
+
+fn projectedForClauseAlias(
+    projected_aliases: []const PlatformForClauseProjectedAlias,
+    alias: CheckedAliasType,
+) ?PlatformForClauseProjectedAlias {
+    const source_decl = alias.source_decl orelse return null;
+    for (projected_aliases) |projected| {
+        if (projected.source_decl != source_decl) continue;
+        if (projected.name != alias.name) continue;
+        if (projected.origin_module != alias.origin_module) continue;
+        return projected;
+    }
+    return null;
+}
+
+fn applyProjectedForClauseAlias(
+    allocator: Allocator,
+    names: *const canonical.CanonicalNameStore,
+    store: *CheckedTypeStore,
+    app_decl_root: CheckedTypeId,
+    platform_args_view: []const CheckedTypeId,
+    base_formals: []const CheckedTypeId,
+    base_actuals: []const CheckedTypeId,
+    active: *std.AutoHashMap(CheckedTypeId, CheckedTypeId),
+) Allocator.Error!CheckedTypeId {
+    const platform_args = try allocator.dupe(CheckedTypeId, platform_args_view);
+    defer allocator.free(platform_args);
+
+    const applied_args = try allocator.alloc(CheckedTypeId, platform_args.len);
+    defer allocator.free(applied_args);
+
+    for (platform_args, 0..) |platform_arg, i| {
+        active.clearRetainingCapacity();
+        applied_args[i] = try store.cloneCheckedTypeRootSubstituting(
+            allocator,
+            names,
+            platform_arg,
+            base_formals,
+            base_actuals,
+            active,
+        );
+    }
+
+    const app_formals_view = switch (store.payload(app_decl_root)) {
+        .alias => |alias| alias.args,
+        .nominal => |nominal| nominal.args,
+        else => checkedArtifactInvariant("platform for-clause substitution app type root was not a type declaration", .{}),
+    };
+    if (app_formals_view.len != applied_args.len) {
+        checkedArtifactInvariant("platform for-clause substitution app type arity did not match platform alias application", .{});
+    }
+
+    const app_formals = try allocator.dupe(CheckedTypeId, app_formals_view);
+    defer allocator.free(app_formals);
+
+    active.clearRetainingCapacity();
+    return try store.cloneCheckedTypeRootSubstituting(
+        allocator,
+        names,
+        app_decl_root,
+        app_formals,
+        applied_args,
+        active,
+    );
 }
 
 fn appendUniquePlatformForClauseSubstitution(

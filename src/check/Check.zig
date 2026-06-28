@@ -7107,12 +7107,21 @@ fn processRequiresTypes(self: *Self, env: *Env) std.mem.Allocator.Error!void {
                 .rigid = Rigid.init(type_alias.rigid_name),
             }, env);
 
-            // IMPORTANT!
-            // We *do not* create a real alias here. Instead, we unify the alias
-            // stmt directly with the backing variable not the alias wrapper,
-            // so that it can be substituted with the app's concrete type during
-            // checked artifact co-finalization.
-            _ = try self.unify(stmt_var, alias_rhs_var, env);
+            const stmt_content = self.types.resolveVar(stmt_var).desc.content;
+            if (stmt_content != .alias) {
+                try self.unifyWithTargetRank(
+                    stmt_var,
+                    try self.types.mkAliasWithSourceDeclAndBuiltinOrigin(
+                        .{ .ident_idx = alias_lhs.relative_name },
+                        alias_rhs_var,
+                        &.{},
+                        self.aliasOriginModule(),
+                        @intFromEnum(type_alias.alias_stmt_idx),
+                        self.cir.module_role == .builtin,
+                    ),
+                    env,
+                );
+            }
         }
 
         // Then, generate the type for the actual required type
@@ -7136,6 +7145,41 @@ fn isForClauseAliasStatement(self: *Self, stmt_idx: CIR.Statement.Idx) bool {
         }
     }
     return false;
+}
+
+fn generateForClauseAliasApplication(
+    self: *Self,
+    anno_var: Var,
+    decl_var: Var,
+    anno_arg_vars: []const Var,
+    env: *Env,
+) std.mem.Allocator.Error!void {
+    const decl_resolved = self.types.resolveVar(decl_var).desc.content;
+    const decl_alias = switch (decl_resolved) {
+        .alias => |alias| alias,
+        .err => {
+            try self.unifyWith(anno_var, .err, env);
+            return;
+        },
+        else => {
+            std.debug.assert(false);
+            try self.unifyWith(anno_var, .err, env);
+            return;
+        },
+    };
+
+    try self.unifyWith(
+        anno_var,
+        try self.types.mkAliasWithSourceDeclAndBuiltinOrigin(
+            decl_alias.ident,
+            self.types.getAliasBackingVar(decl_alias),
+            anno_arg_vars,
+            decl_alias.origin_module,
+            decl_alias.source_decl.toOptional(),
+            decl_alias.source_decl.originIsBuiltin(),
+        ),
+        env,
+    );
 }
 
 // repl //
@@ -7985,6 +8029,12 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                     try self.setBuiltinTypeContent(anno_var, a.name, builtin_type, anno_arg_vars, anno_region, env);
                 },
                 .local => |local| {
+                    const decl_var = ModuleEnv.varFrom(local.decl_idx);
+                    if (self.isForClauseAliasStatement(local.decl_idx)) {
+                        try self.generateForClauseAliasApplication(anno_var, decl_var, anno_arg_vars, env);
+                        return;
+                    }
+
                     // Check if we're in a declaration or an annotation
                     switch (ctx) {
                         .type_decl => |this_decl| {
@@ -8040,7 +8090,6 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                     }
 
                     // Resolve the referenced type
-                    const decl_var = ModuleEnv.varFrom(local.decl_idx);
                     const decl_resolved = self.types.resolveVar(decl_var).desc.content;
                     const decl_is_alias = decl_resolved == .alias;
 
