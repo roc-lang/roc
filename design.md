@@ -1447,6 +1447,17 @@ backend optimization preferences, not to the callable-state optimizer.
 Focused regressions for optimizer-owned facts must therefore run in both
 optimized modes with the same expected private-state shape.
 
+The implementation boundary should be visible at construction time. The
+post-check driver first classifies the requested build as ordinary lowering or
+optimized lowering, then constructs exactly one matching context. Ordinary
+lowering has no nullable optimized context, no lazy demand-state constructor,
+and no helpers that accept "maybe optimized" state. Optimized lowering receives
+an optimized context whose type owns demand frames, sparse private-state tables,
+loop fixed-point work, and demand-keyed workers. Any helper that needs one of
+those structures must require that optimized context directly, so calling it
+from ordinary lowering is an API error rather than a mode check buried inside
+the helper.
+
 The optimized path is a different post-check lowering entrypoint, not a cleanup
 pass after ordinary lowering. It may create extra private workers, private
 state loops, and demand-specific direct calls while cloning optimized code. The
@@ -1599,6 +1610,13 @@ optimizer-owned facts, such as sparse demand shape, finite callable alternatives
 loop-demand fixed points, and public materialization boundaries, must be checked
 in both optimized modes unless the assertion is explicitly about a later
 backend size-vs-speed preference.
+
+The first accepted implementation checkpoint for this optimizer is therefore
+the gate itself. Before testing iterator-specific generated code, the compiler
+must prove that non-optimized paths cannot allocate optimized state and that the
+two optimized modes share the same producer-under-demand machinery. Later
+specialization tests may assume that boundary only after the gate has focused
+coverage.
 
 The optimized entrypoint may contain internal helper phases, but those phases
 are ordered by data dependency, not by source syntax:
