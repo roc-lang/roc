@@ -31,7 +31,8 @@ pub const Constants = struct {
     /// 6: merge with typed node/static-dispatch payload layout changes.
     /// 7: field-order layout metadata moved from nominal-only to general field-order.
     /// 8: ModuleEnv stores source-relative file-import dependency metadata.
-    pub const CACHE_VERSION = 8;
+    /// 9: Builtin indices and common identifiers changed for Encoding.Json and Encoding.HttpHeader.
+    pub const CACHE_VERSION = 9;
 };
 
 /// Configuration for the Roc cache system.

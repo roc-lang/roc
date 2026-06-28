@@ -762,7 +762,10 @@ fn getOrCreateAutoImportedTypeImport(
     }
 
     const import_ident = if (info.is_package_qualified)
-        source_module_ident
+        if (self.scopeLookupModule(source_module_ident)) |module_info|
+            module_info.module_name
+        else
+            source_module_ident
     else
         try self.env.insertIdent(base.Ident.for_text(info.env.module_name));
 
@@ -7019,7 +7022,10 @@ fn canonicalizeModuleQualifiedIdent(
             if (qualifier_tokens.len == 1) {
                 break :name_blk field_text;
             }
-            const qualified_text = self.env.getIdent(info.qualified_type_ident);
+            const qualified_text = if (compiler_builtin_auto_import)
+                self.env.getIdent(info.qualified_type_ident)
+            else
+                module_env.module_name;
             break :name_blk try self.scratchQualifiedText(qualified_text, nested_path);
         };
 
@@ -18710,7 +18716,11 @@ fn lookupNestedAutoImportedTypeNode(
 
     const scratch_top = self.scratchBytesTop();
     defer self.clearScratchBytesFrom(scratch_top);
-    const builtin_nested_path = try self.scratchQualifiedText(qualified_type_text, nested_suffix);
+    const lookup_prefix = if (autoImportedTypeUsesCompilerBuiltinImport(imported_type))
+        qualified_type_text
+    else
+        imported_type.env.module_name;
+    const builtin_nested_path = try self.scratchQualifiedText(lookup_prefix, nested_suffix);
 
     return (try self.lookupImportedExposedTypeNode(imported_type.env, builtin_nested_path)) orelse
         (try self.lookupImportedTypeDeclNode(imported_type.env, builtin_nested_path));

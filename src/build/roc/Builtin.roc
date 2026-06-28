@@ -8642,7 +8642,7 @@ Builtin :: [].{
 
 			## Convert a numeric literal into a [U64]. This is the hook the
 			## compiler uses when a literal is given type [U64]; most code should
-			## parse user text with [u64_from_str] instead.
+			## parse user text with [U64.from_str] instead.
 			from_numeral : Numeral -> Try(U64, [InvalidNumeral(Str)])
 			from_numeral = |numeral| from_numeral_with(numeral, |str| u64_from_str(str))
 
@@ -8650,9 +8650,9 @@ Builtin :: [].{
 			## not a valid non-negative integer, or if the parsed value does not fit
 			## in a [U64] (`0` to `18446744073709551615`).
 			## ```roc
-			## expect u64_from_str("42") == Ok(42)
+			## expect U64.from_str("42") == Ok(42)
 			##
-			## expect u64_from_str("-1") == Err(BadNumStr)
+			## expect U64.from_str("-1") == Err(BadNumStr)
 			## ```
 			from_str : Str -> Try(U64, [BadNumStr, ..])
 
