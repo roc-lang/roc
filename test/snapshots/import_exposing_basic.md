@@ -15,9 +15,25 @@ main = {
 }
 ~~~
 # EXPECTED
+DUPLICATE DEFINITION - import_exposing_basic.md:1:1:1:43
 UNDEFINED VARIABLE - import_exposing_basic.md:5:15:5:21
 UNDEFINED VARIABLE - import_exposing_basic.md:6:15:6:21
 # PROBLEMS
+
+┌──────────────────────┐
+│ DUPLICATE DEFINITION ├─ The name `Json` is being redeclared here. ──────────┐
+└┬─────────────────────┘                                                      │
+ │                                                                            │
+ │  import json.Json exposing [decode, encode]                                │
+ │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                │
+ └────────────────────────────────────────────── import_exposing_basic.md:1:1 ┘
+
+    In this scope, `Json` was already defined here:
+      ┌───────────────────────────────────────────────────────────────────────┐
+    1 │  import json.Json exposing [decode, encode]                           │
+      │  ‾                                                                    │
+      └───────────────────────────────────────── import_exposing_basic.md:1:1 ┘
+
 
 ┌────────────────────┐
 │ UNDEFINED VARIABLE ├─ Nothing is named `encode` in this scope. ─────────────┐

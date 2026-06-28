@@ -44,6 +44,7 @@ combineTrys = |result1, result2|
     }
 ~~~
 # EXPECTED
+DUPLICATE DEFINITION - can_import_type_annotations.md:2:1:2:17
 UNDECLARED TYPE - can_import_type_annotations.md:5:18:5:25
 UNDECLARED TYPE - can_import_type_annotations.md:5:29:5:37
 UNDEFINED VARIABLE - can_import_type_annotations.md:6:24:6:44
@@ -62,6 +63,21 @@ MODULE NOT FOUND - can_import_type_annotations.md:24:53:24:59
 MODULE NOT FOUND - can_import_type_annotations.md:24:72:24:78
 UNDEFINED VARIABLE - can_import_type_annotations.md:25:40:25:61
 # PROBLEMS
+
+┌──────────────────────┐
+│ DUPLICATE DEFINITION ├─ The name `Json` is being redeclared here. ──────────┐
+└┬─────────────────────┘                                                      │
+ │                                                                            │
+ │  import json.Json                                                          │
+ │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                          │
+ └──────────────────────────────────────── can_import_type_annotations.md:2:1 ┘
+
+    In this scope, `Json` was already defined here:
+      ┌───────────────────────────────────────────────────────────────────────┐
+    1 │  import http.Client as Http exposing [Request, Response]              │
+      │  ‾                                                                    │
+      └─────────────────────────────────── can_import_type_annotations.md:1:1 ┘
+
 
 ┌─────────────────┐
 │ UNDECLARED TYPE ├─ The type `Request` is not declared in this scope. ───────┐

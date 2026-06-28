@@ -79,7 +79,9 @@ Builtin :: [].{
 					}
 				}
 
-			parse_record_field : JsonEncoding, FieldName.FieldNames(_shape), JsonState -> Try(
+			parse_record_field : JsonEncoding,
+			FieldName.FieldNames(_shape),
+			JsonState -> Try(
 				[
 					Field({ field : FieldName(_shape), rest : JsonState }),
 					TryField({ name : Str, rest : JsonState }),
@@ -132,7 +134,9 @@ Builtin :: [].{
 				}
 			}
 
-			parse_record_field : HttpHeaderEncoding, FieldName.FieldNames(_shape), HttpHeaderState -> Try(
+			parse_record_field : HttpHeaderEncoding,
+			FieldName.FieldNames(_shape),
+			HttpHeaderState -> Try(
 				[
 					Field({ field : FieldName(_shape), rest : HttpHeaderState }),
 					TryField({ name : Str, rest : HttpHeaderState }),
@@ -182,7 +186,7 @@ Builtin :: [].{
 							Err(Json.invalid_json)
 						}
 					}
-				}
+			}
 
 			parse_trailing_commas : Str -> Try(a, Json)
 				where [
@@ -200,7 +204,7 @@ Builtin :: [].{
 						} else {
 							Err(Json.invalid_json)
 						}
-				}
+					}
 			}
 
 			parser_camel : () -> (Str -> Try(a, Json))
@@ -228,7 +232,8 @@ Builtin :: [].{
 			invalid_json : Json
 			invalid_json = Json.InvalidJson
 
-			parse_record_field_from_object : JsonEncoding, Str -> Try(
+			parse_record_field_from_object : JsonEncoding,
+			Str -> Try(
 				[
 					Field({ field : FieldName(_shape), rest : JsonState }),
 					TryField({ name : Str, rest : JsonState }),
@@ -496,12 +501,15 @@ Builtin :: [].{
 							return Err(Json.invalid_json)
 						}
 
-						parsed = ParseTagUnionSpec.parse(spec, {
-							tag: tag_name,
-							encoding,
-							state: JsonState.Input(payload),
-							missing: Json.MissingRequired,
-						})?
+						parsed = ParseTagUnionSpec.parse(
+							spec,
+							{
+								tag: tag_name,
+								encoding,
+								state: JsonState.Input(payload),
+								missing: Json.MissingRequired,
+							},
+						)?
 
 						match parsed.rest {
 							Input(after_payload) => Json.finish_tag_payload(encoding, parsed.value, after_payload)
@@ -879,113 +887,118 @@ Builtin :: [].{
 				}
 			}
 
-				}
+		}
 
-			HttpHeader := [MissingRequired, BadHeader].{
-				parser_for : () -> (Str -> Try(output, HttpHeader))
-					where [
-						output.parser_for : HttpHeaderEncoding -> (HttpHeaderState -> Try({ value : output, rest : HttpHeaderState }, HttpHeader)),
-					]
-				parser_for = || {
-					Output : output
+		HttpHeader := [MissingRequired, BadHeader].{
+			parser_for : () -> (Str -> Try(output, HttpHeader))
+				where [
+					output.parser_for : HttpHeaderEncoding -> (HttpHeaderState -> Try({ value : output, rest : HttpHeaderState }, HttpHeader)),
+				]
+			parser_for = || {
+				Output : output
 
-					parse_output : HttpHeaderState -> Try({ value : output, rest : HttpHeaderState }, HttpHeader)
-					parse_output = Output.parser_for(HttpHeaderEncoding.Caseless)
+				parse_output : HttpHeaderState -> Try({ value : output, rest : HttpHeaderState }, HttpHeader)
+				parse_output = Output.parser_for(HttpHeaderEncoding.Caseless)
 
-					|raw| {
-						parsed = parse_output(HttpHeaderState.{ raw })?
-						Ok(parsed.value)
-					}
-				}
-
-				parse : Str -> Try(output, HttpHeader)
-					where [
-						output.parser_for : HttpHeaderEncoding -> (HttpHeaderState -> Try({ value : output, rest : HttpHeaderState }, HttpHeader)),
-					]
-				parse = |raw| {
-					Output : output
-
-					parse_output = Output.parser_for(HttpHeaderEncoding.Caseless)
+				|raw| {
 					parsed = parse_output(HttpHeaderState.{ raw })?
-
 					Ok(parsed.value)
 				}
+			}
 
-				parse_str : HttpHeaderEncoding, HttpHeaderState -> Try({ value : Str, rest : HttpHeaderState }, HttpHeader)
-				parse_str = |encoding, state| HttpHeaderEncoding.parse_str(encoding, state)
+			parse : Str -> Try(output, HttpHeader)
+				where [
+					output.parser_for : HttpHeaderEncoding -> (HttpHeaderState -> Try({ value : output, rest : HttpHeaderState }, HttpHeader)),
+				]
+			parse = |raw| {
+				Output : output
 
-				parse_u64 : HttpHeaderEncoding, HttpHeaderState -> Try({ value : U64, rest : HttpHeaderState }, HttpHeader)
-				parse_u64 = |encoding, state| HttpHeaderEncoding.parse_u64(encoding, state)
+				parse_output = Output.parser_for(HttpHeaderEncoding.Caseless)
+				parsed = parse_output(HttpHeaderState.{ raw })?
 
-				parse_record_field_from_headers : FieldName.FieldNames(_shape), Str -> Try(
-					[
-						Field({ field : FieldName(_shape), rest : HttpHeaderState }),
-						TryField({ name : Str, rest : HttpHeaderState }),
-						TryFieldCaseless({ name : Str, rest : HttpHeaderState }),
-						Continue({ rest : HttpHeaderState }),
-						Done({ rest : HttpHeaderState }),
-					],
-					HttpHeader,
-				)
-				parse_record_field_from_headers = |fields, headers|
-					if Str.is_empty(headers) {
-						Ok(Done({ rest: HttpHeaderState.{ raw: "" } }))
+				Ok(parsed.value)
+			}
+
+			parse_str : HttpHeaderEncoding, HttpHeaderState -> Try({ value : Str, rest : HttpHeaderState }, HttpHeader)
+			parse_str = |encoding, state| HttpHeaderEncoding.parse_str(encoding, state)
+
+			parse_u64 : HttpHeaderEncoding, HttpHeaderState -> Try({ value : U64, rest : HttpHeaderState }, HttpHeader)
+			parse_u64 = |encoding, state| HttpHeaderEncoding.parse_u64(encoding, state)
+
+			parse_record_field_from_headers : FieldName.FieldNames(_shape),
+			Str -> Try(
+				[
+					Field({ field : FieldName(_shape), rest : HttpHeaderState }),
+					TryField({ name : Str, rest : HttpHeaderState }),
+					TryFieldCaseless({ name : Str, rest : HttpHeaderState }),
+					Continue({ rest : HttpHeaderState }),
+					Done({ rest : HttpHeaderState }),
+				],
+				HttpHeader,
+			)
+			parse_record_field_from_headers = |fields, headers|
+				if Str.is_empty(headers) {
+					Ok(Done({ rest: HttpHeaderState.{ raw: "" } }))
+				} else {
+					line_parts = match Str.find_first(headers, "\r\n") {
+						Ok(parts) => parts
+						Err(NotFound) => { before: headers, after: "" }
+					}
+
+					if Str.is_empty(line_parts.before) {
+						Ok(Done({ rest: HttpHeaderState.{ raw: line_parts.after } }))
 					} else {
-						line_parts = match Str.find_first(headers, "\r\n") {
-							Ok(parts) => parts
-							Err(NotFound) => { before: headers, after: "" }
-						}
+						match Str.find_first(headers, ":") {
+							Ok({ before: name, after: value_start }) => {
+								name_len = Str.count_utf8_bytes(name)
+								line_len = Str.count_utf8_bytes(line_parts.before)
 
-						if Str.is_empty(line_parts.before) {
-							Ok(Done({ rest: HttpHeaderState.{ raw: line_parts.after } }))
-						} else {
-							match Str.find_first(headers, ":") {
-								Ok({ before: name, after: value_start }) => {
-									name_len = Str.count_utf8_bytes(name)
-									line_len = Str.count_utf8_bytes(line_parts.before)
-
-									if name_len >= line_len {
-										Err(HttpHeader.BadHeader)
+								if name_len >= line_len {
+									Err(HttpHeader.BadHeader)
+								} else {
+									if name_len < FieldName.FieldNames.shortest_name(fields) {
+										Ok(Continue({ rest: HttpHeaderState.{ raw: line_parts.after } }))
 									} else {
-										if name_len < FieldName.FieldNames.shortest_name(fields) {
+										if name_len > FieldName.FieldNames.longest_name(fields) {
 											Ok(Continue({ rest: HttpHeaderState.{ raw: line_parts.after } }))
 										} else {
-											if name_len > FieldName.FieldNames.longest_name(fields) {
-												Ok(Continue({ rest: HttpHeaderState.{ raw: line_parts.after } }))
-											} else {
-												Ok(TryFieldCaseless({
-													name,
-													rest: HttpHeaderState.{ raw: value_start },
-												}))
-											}
+											Ok(
+												TryFieldCaseless(
+													{
+														name,
+														rest: HttpHeaderState.{ raw: value_start },
+													},
+												),
+											)
 										}
 									}
 								}
-
-								Err(NotFound) => Err(HttpHeader.BadHeader)
 							}
+
+							Err(NotFound) => Err(HttpHeader.BadHeader)
 						}
 					}
+				}
 
-				take_header_value : Str -> Try({ value : Str, after : Str }, HttpHeader)
-				take_header_value = |raw|
-					match Str.find_first(raw, "\r\n") {
-						Ok({ before, after }) => Ok({ value: Str.trim(before), after })
-						Err(NotFound) => Ok({ value: Str.trim(raw), after: "" })
-					}
+			take_header_value : Str -> Try({ value : Str, after : Str }, HttpHeader)
+			take_header_value = |raw|
+				match Str.find_first(raw, "\r\n") {
+					Ok({ before, after }) => Ok({ value: Str.trim(before), after })
+					Err(NotFound) => Ok({ value: Str.trim(raw), after: "" })
+				}
 
-				underscores_to_dashes : Str -> Str
-				underscores_to_dashes = |text|
-					match Str.find_first(text, "_") {
-						Ok({ before, after }) =>
-							Str.concat(Str.concat(before, "-"), HttpHeader.underscores_to_dashes(after))
+			underscores_to_dashes : Str -> Str
+			underscores_to_dashes = |text|
+				match Str.find_first(text, "_") {
+					Ok({ before, after }) =>
+						Str.concat(Str.concat(before, "-"), HttpHeader.underscores_to_dashes(after))
 
-						Err(NotFound) => text
-					}
-			}
+					Err(NotFound) => text
+				}
 		}
+	}
 
-		Str :: [ProvidedByCompiler].{
+	Str :: [ProvidedByCompiler].{
 		Utf8Problem := [
 			InvalidStartByte,
 			UnexpectedEndOfSequence,
