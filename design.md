@@ -1546,6 +1546,23 @@ demand. These are all the same optimization family: defunctionalization and
 specialization under exact demand. They are not separate rules for `for`, `if`,
 `match`, or iterator builtins.
 
+The shared abstraction is a demand frame over a checked producer-consumer
+boundary. A demand frame contains the result demand, the checked control scope
+that owns any locals produced while satisfying that demand, and the optimized
+context that owns private state and worker queues. When a producer crosses a
+control boundary, optimized lowering does not ask which source construct it
+came from. It pushes the same demand into each reachable predecessor value,
+keeps branch-local and match-payload locals inside the cloned region that owns
+them, and re-joins only scope-closed private state or ordinary materialized
+values. This is the mechanism that makes branches, matches, loop transitions,
+and direct-call workers one design instead of several source-form rules.
+
+Demand frames are an implementation structure of the optimized entrypoint, not
+a persistent IR stage. They may be represented as builder-owned work items,
+state-machine nodes, or demand-keyed worker requests, but they must be consumed
+before LIR emission. The output of the optimized entrypoint is still ordinary
+LIR; neither LIR nor ARC receives a "demand frame" concept.
+
 This design follows the same broad precedent as closure conversion,
 defunctionalization, partial evaluation, and iterator or coroutine
 state-machine lowering in optimizing compilers. The important Roc-specific
@@ -1762,6 +1779,14 @@ Nested demands may refer back to a loop-parameter demand node instead of
 copying the current demand tree. Equality, merge, and worklist scheduling must
 operate on those graph identities and their monotonic contents, not on
 structural expansion of an infinite `rest.step.result.rest...` tree.
+
+Loop-demand graph references are allowed only inside the optimized loop fixed
+point that owns them. A nested demand may point at a loop-parameter node, but a
+producer may inspect that reference only by resolving it through the current
+fixed-point contents. If resolving a reference would require public
+materialization, the surrounding demand must explicitly be materialization.
+Using public wrapper construction merely to break a recursive demand graph is a
+compiler bug.
 
 The fixed point is over compiler-owned loop-carried private state, not over all
 program variables in scope. A loop may read or write ordinary source variables,
