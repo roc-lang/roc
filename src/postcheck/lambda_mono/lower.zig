@@ -11,15 +11,15 @@ const Type = @import("type.zig");
 
 const Allocator = std.mem.Allocator;
 
-/// Whether inline debug effects should materialize during lowering.
-pub const DebugEffectMode = enum {
+/// Whether inline expects should materialize during lowering.
+pub const InlineExpectMode = enum {
     run,
-    erase,
+    omit,
 };
 
 /// Options used by Lambda Mono lowering.
 pub const Options = struct {
-    debug_effects: DebugEffectMode = .run,
+    inline_expects: InlineExpectMode = .run,
 };
 
 /// Lower Lambda Solved IR into Lambda Mono IR.
@@ -146,7 +146,7 @@ const Lowerer = struct {
     symbols: Common.SymbolGen,
     erased_capture_ptr_ty: ?Type.TypeId = null,
     unit_ty: ?Type.TypeId = null,
-    debug_effects: DebugEffectMode,
+    inline_expects: InlineExpectMode,
     /// Replays the match resolutions direct LIR lowering recorded, so the
     /// debug verifier sees the same set of demanded functions. Keyed by the
     /// match's scrutinee expression.
@@ -195,7 +195,7 @@ const Lowerer = struct {
             .capture_types = CaptureTypeMap.initContext(allocator, .{}),
             .captures = std.AutoHashMap(Lifted.LocalId, CaptureBinding).init(allocator),
             .symbols = .{ .next = solved.lifted.next_symbol },
-            .debug_effects = options.debug_effects,
+            .inline_expects = options.inline_expects,
         };
     }
 
@@ -595,15 +595,12 @@ const Lowerer = struct {
                 .body = try self.lowerExpr(taken.body),
             } },
             .comptime_exhaustiveness_failed => |site| .{ .comptime_exhaustiveness_failed = try self.lowerComptimeSite(site) },
-            .dbg => |child| if (self.debug_effects == .erase)
-                .unit
-            else
-                .{ .dbg = try self.lowerExpr(child) },
+            .dbg => |child| .{ .dbg = try self.lowerExpr(child) },
             .expect_err => |expect_err| .{ .expect_err = .{
                 .msg = try self.lowerExpr(expect_err.msg),
                 .region = expect_err.region,
             } },
-            .expect => |child| if (self.debug_effects == .erase)
+            .expect => |child| if (self.inline_expects == .omit)
                 .unit
             else
                 .{ .expect = try self.lowerExpr(child) },
@@ -866,14 +863,11 @@ const Lowerer = struct {
                 .comptime_site = if (let_.comptime_site) |site| try self.lowerComptimeSite(site) else null,
             } },
             .expr => |expr| .{ .expr = try self.lowerExpr(expr) },
-            .expect => |expr| if (self.debug_effects == .erase)
+            .expect => |expr| if (self.inline_expects == .omit)
                 .{ .expr = try self.unitExpr() }
             else
                 .{ .expect = try self.lowerExpr(expr) },
-            .dbg => |expr| if (self.debug_effects == .erase)
-                .{ .expr = try self.unitExpr() }
-            else
-                .{ .dbg = try self.lowerExpr(expr) },
+            .dbg => |expr| .{ .dbg = try self.lowerExpr(expr) },
             .return_ => |ret| .{ .return_ = try self.lowerExpr(ret.value) },
             .crash => |msg| .{ .crash = msg },
         };

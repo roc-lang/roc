@@ -366,7 +366,7 @@ pub fn createValidationReport(
         .missing_cross_compile_host => |info| {
             const headline = try std.fmt.allocPrint(allocator, "Cannot cross-compile for {s}: the platform doesn't provide a pre-built host library for this target.", .{@tagName(info.target)});
             defer allocator.free(headline);
-            var report = try Report.init(allocator, "Missing Host Library For Cross-Compilation", headline, .runtime_error);
+            var report = try Report.init(allocator, "Missing Host Library For Cross Compilation", headline, .runtime_error);
 
             try report.document.addText("Expected host library at:");
             try report.document.addLineBreak();
@@ -392,7 +392,7 @@ pub fn createValidationReport(
         .unsupported_glibc_cross => |info| {
             const headline = try std.fmt.allocPrint(allocator, "Cross-compilation to glibc targets ({s}) is not supported on {s}.", .{ @tagName(info.target), info.host_os });
             defer allocator.free(headline);
-            var report = try Report.init(allocator, "GLIBC Cross-Compilation Not Supported", headline, .runtime_error);
+            var report = try Report.init(allocator, "GLIBC Cross Compilation Not Supported", headline, .runtime_error);
 
             try report.document.addText("glibc targets require dynamic linking with libc symbols that");
             try report.document.addLineBreak();

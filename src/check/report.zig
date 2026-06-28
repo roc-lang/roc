@@ -3558,7 +3558,7 @@ pub const ReportBuilder = struct {
     }
 
     fn buildEffectfulTopLevelReport(self: *Self, data: EffectfulTopLevel) Allocator.Error!Report {
-        var report = try Report.init(self.gpa, "Effectful Top-level Value", "This top-level definition performs an effect while initializing.", .runtime_error);
+        var report = try Report.init(self.gpa, "Effectful Top Level Value", "This top-level definition performs an effect while initializing.", .runtime_error);
         errdefer report.deinit();
 
         try self.addSourceHighlightRegion(&report, data.region);
@@ -3679,7 +3679,7 @@ pub const ReportBuilder = struct {
     }
 
     fn buildComptimeCrashReport(self: *Self, data: ComptimeCrash) Allocator.Error!Report {
-        var report = try Report.init(self.gpa, "Compile-Time Crash", "This definition crashed during compile-time evaluation.", .runtime_error);
+        var report = try Report.init(self.gpa, "Compile Time Crash", "This definition crashed during compile-time evaluation.", .runtime_error);
         errdefer report.deinit();
 
         const owned_message = try report.addOwnedString(
@@ -3711,7 +3711,7 @@ pub const ReportBuilder = struct {
 
     /// Build a report for compile-time expect failure
     fn buildComptimeExpectFailedReport(self: *Self, data: ComptimeExpectFailed) Allocator.Error!Report {
-        var report = try Report.init(self.gpa, "Compile-Time Expect Failed", "This expect failed during compile-time evaluation.", .runtime_error);
+        var report = try Report.init(self.gpa, "Compile Time Expect Failed", "This expect failed during compile-time evaluation.", .runtime_error);
         errdefer report.deinit();
         const owned_message = try report.addOwnedString(
             self.problems.getExtraString(data.message),
@@ -3742,7 +3742,7 @@ pub const ReportBuilder = struct {
 
     /// Build a report for compile-time evaluation error
     fn buildComptimeEvalErrorReport(self: *Self, data: ComptimeEvalError) Allocator.Error!Report {
-        var report = try Report.init(self.gpa, "Compile-Time Eval Error", "This definition could not be evaluated at compile time.", .runtime_error);
+        var report = try Report.init(self.gpa, "Compile Time Eval Error", "This definition could not be evaluated at compile time.", .runtime_error);
         errdefer report.deinit();
 
         const owned_error_name = try report.addOwnedString(
@@ -3771,7 +3771,7 @@ pub const ReportBuilder = struct {
     }
 
     fn buildNonExhaustiveMatchReport(self: *Self, data: NonExhaustiveMatch) Allocator.Error!Report {
-        var report = try Report.init(self.gpa, "Non-exhaustive Match", "This match expression doesn't cover all possible cases.", .runtime_error);
+        var report = try Report.init(self.gpa, "Non Exhaustive Match", "This match expression doesn't cover all possible cases.", .runtime_error);
         errdefer report.deinit();
 
         // Add source region highlighting
@@ -3829,7 +3829,7 @@ pub const ReportBuilder = struct {
     }
 
     fn buildNonExhaustiveDestructureReport(self: *Self, data: NonExhaustiveDestructure) Allocator.Error!Report {
-        var report = try Report.init(self.gpa, "Non-exhaustive Destructure", "This destructuring pattern doesn't cover all possible cases.", .runtime_error);
+        var report = try Report.init(self.gpa, "Non Exhaustive Destructure", "This destructuring pattern doesn't cover all possible cases.", .runtime_error);
         errdefer report.deinit();
 
         try self.addSourceHighlight(&report, regionIdxFrom(data.pattern));

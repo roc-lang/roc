@@ -306,6 +306,10 @@ const PlatformCase = struct {
     roc_file: []const u8,
     /// Platform name (for display grouping)
     platform: []const u8,
+    /// Stderr substrings expected during optimized build steps. A build that
+    /// exits 2 because of expected warning diagnostics still produces an
+    /// executable.
+    expected_build_stderr_contains: []const []const u8 = &.{},
     /// What kind of test to run
     test_kind: TestKind,
 
@@ -559,6 +563,7 @@ fn appendPlatformSpecs(
                     .body = .{ .platform = .{
                         .roc_file = spec.roc_file,
                         .platform = platform.name,
+                        .expected_build_stderr_contains = spec.expected_build_stderr_contains,
                         .test_kind = .{ .io_spec = spec.io_spec },
                     } },
                 };
@@ -743,7 +748,7 @@ const plus_type_error_needles = [_]OutputNeedle{
 };
 
 const non_exhaustive_destructure_needles = [_]OutputNeedle{
-    .{ .stream = .stderr, .text = "NON-EXHAUSTIVE DESTRUCTURE" },
+    .{ .stream = .stderr, .text = "NON EXHAUSTIVE DESTRUCTURE" },
     .{ .stream = .stderr, .text = "Missing patterns:" },
     .{ .stream = .stderr, .text = "[]" },
 };
@@ -950,8 +955,8 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "roc check warns for adjacent string pattern captures", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/fx/string_pattern_adjacent_capture_warning.roc", .exit = .{ .code = 2 }, .contains = &.{ .{ .stream = .stderr, .text = "UNREACHABLE PATTERN CAPTURE" }, .{ .stream = .stderr, .text = "0 error" } }, .contains_any = &.{.{ .needles = &warning_needles }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc check returns exit code 0 for no warnings or errors", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/simple_success.roc" } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc check returns exit code 1 for errors", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/has_type_error_annotation.roc", .exit = .{ .code = 1 } } } },
-    .{ .id = 0, .suite = .subcommands, .name = "roc check reports comptime division by zero without panicking", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/comptime_div_zero.roc", .exit = .failure, .contains = &.{ .{ .stream = .stderr, .text = "COMPILE-TIME CRASH" }, .{ .stream = .stderr, .text = "I64 division by zero" } }, .not_contains = &.{.{ .stream = .stderr, .text = "panic:" }} } } },
-    .{ .id = 0, .suite = .subcommands, .name = "roc check reports comptime modulo by zero without panicking", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/comptime_mod_zero.roc", .exit = .failure, .contains = &.{ .{ .stream = .stderr, .text = "COMPILE-TIME CRASH" }, .{ .stream = .stderr, .text = "I64 division by zero" } }, .not_contains = &.{.{ .stream = .stderr, .text = "panic:" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc check reports comptime division by zero without panicking", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/comptime_div_zero.roc", .exit = .failure, .contains = &.{ .{ .stream = .stderr, .text = "COMPILE TIME CRASH" }, .{ .stream = .stderr, .text = "I64 division by zero" } }, .not_contains = &.{.{ .stream = .stderr, .text = "panic:" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc check reports comptime modulo by zero without panicking", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/comptime_mod_zero.roc", .exit = .failure, .contains = &.{ .{ .stream = .stderr, .text = "COMPILE TIME CRASH" }, .{ .stream = .stderr, .text = "I64 division by zero" } }, .not_contains = &.{.{ .stream = .stderr, .text = "panic:" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc check reports large default Dec scientific literal without panicking", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/large_scientific_default_dec.roc", .exit = .failure, .contains = &.{ .{ .stream = .stderr, .text = "INVALID NUMBER" }, .{ .stream = .stderr, .text = "Dec" }, .{ .stream = .stderr, .text = "large_scientific_default_dec.roc:1:" } }, .not_contains = &.{ .{ .stream = .stderr, .text = "panic:" }, .{ .stream = .stderr, .text = ".zig-cache/tmp" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc check accepts huge integral scientific literal without slow conversion", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/huge_scientific_default_dec.roc", .contains_any = &.{.{ .needles = &no_errors_needles }}, .not_contains = &.{.{ .stream = .stderr, .text = "panic:" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc check preserves numeric literal constraints before reporting large default Dec scientific literal", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/large_scientific_list_default_dec.roc", .exit = .failure, .contains = &.{ .{ .stream = .stderr, .text = "INVALID NUMBER" }, .{ .stream = .stderr, .text = "Dec" } }, .not_contains = &.{.{ .stream = .stderr, .text = "panic:" }} } } },
@@ -1032,6 +1037,8 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "failed inline expect exits with code 1 and continues program (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{"--opt=interpreter"}, .roc_file = "test/cli/failed_inline_expect.roc", .exit = .{ .code = 1 }, .contains = &.{ .{ .stream = .stdout, .text = "Hello, World!" }, .{ .stream = .stderr, .text = "Expect failed" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "failed inline expect is omitted from roc --opt=size", .body = .{ .command = .{ .args = &.{ "--opt=size", "--no-cache" }, .roc_file = "test/cli/failed_inline_expect.roc", .contains = &.{.{ .stream = .stdout, .text = "Hello, World!" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "expect failed" }, .{ .stream = .stderr, .text = "Expect failed" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "failed inline expect is omitted from roc --opt=speed", .body = .{ .command = .{ .args = &.{ "--opt=speed", "--no-cache" }, .roc_file = "test/cli/failed_inline_expect.roc", .contains = &.{.{ .stream = .stdout, .text = "Hello, World!" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "expect failed" }, .{ .stream = .stderr, .text = "Expect failed" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "inline expect condition is not run when omitted from roc --opt=size", .body = .{ .command = .{ .args = &.{ "--opt=size", "--no-cache" }, .roc_file = "test/cli/issue_7348_inline_expect_condition_omitted.roc", .contains = &.{.{ .stream = .stdout, .text = "Hello, World!" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "inline expect condition was evaluated" }, .{ .stream = .stderr, .text = "inline expect final expression was evaluated" }, .{ .stream = .stderr, .text = "omitted dbg output" }, .{ .stream = .stderr, .text = "omitted final-expression dbg output" }, .{ .stream = .stderr, .text = "`DBG` IN OPTIMIZED BUILD" }, .{ .stream = .stderr, .text = "reached code after checked control transfer" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "dbg runs with a warning from roc --opt=size", .body = .{ .command = .{ .args = &.{ "--opt=size", "--no-cache" }, .roc_file = "test/cli/optimized_dbg_warning.roc", .exit = .{ .code = 2 }, .contains = &.{ .{ .stream = .stdout, .text = "Done" }, .{ .stream = .stderr, .text = "`DBG` IN OPTIMIZED BUILD" }, .{ .stream = .stderr, .text = "optimized_dbg_warning.roc:3:5" }, .{ .stream = .stderr, .text = "runtime dbg output" } }, .not_contains = &.{.{ .stream = .stderr, .text = "/tmp/roc" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test ? on Ok inside top-level expect passes (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "test", "--opt=interpreter", "--no-cache" }, .roc_file = "test/cli/QuestionInExpect.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "passed" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test ? on Ok inside top-level expect passes (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "test", "--opt=dev", "--no-cache" }, .roc_file = "test/cli/QuestionInExpect.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "passed" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test ? on Err inside top-level expect fails with snippet and value (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "test", "--opt=interpreter", "--no-cache" }, .roc_file = "test/cli/QuestionInExpectFail.roc", .exit = .{ .code = 1 }, .contains = &.{ .{ .stream = .stderr, .text = "evaluated an `Err` inside an" }, .{ .stream = .stderr, .text = "The value was: Err(IsNegative)" }, .{ .stream = .stderr, .text = "result = to_positive(-3)?" } }, .not_contains = &.{.{ .stream = .stderr, .text = "crash" }} } } },
@@ -1394,8 +1401,25 @@ fn runCompiledTest(
         return .{ .status = .infra_error, .phase = .build, .duration_ns = timer.read(), .build_ns = build_timer.read(), .message = msg };
     };
     const build_ns = build_timer.read();
-    if (!processSucceeded(build_result.term)) {
+    const expected_build_stderr = expectedBuildStderrForBackend(backend, platform.expected_build_stderr_contains);
+    if (processTimedOut(build_result.stderr) or hasMemoryErrors(build_result.stderr) != null) {
         return resultFromProcess(build_result, timer, .build, build_ns, 0, "build failed");
+    }
+    if (!buildSucceededOrExpectedDiagnostics(build_result, expected_build_stderr)) {
+        return resultFromProcess(build_result, timer, .build, build_ns, 0, "build failed");
+    }
+    if (missingExpectedStderr(build_result.stderr, expected_build_stderr)) |needle| {
+        const msg = std.fmt.allocPrint(allocator, "missing expected build stderr: {s}", .{needle}) catch "missing expected build stderr";
+        return .{
+            .status = .build_failed,
+            .phase = .build,
+            .duration_ns = timer.read(),
+            .build_ns = build_ns,
+            .exit_code = exitCode(build_result.term),
+            .stderr_capture = build_result.stderr,
+            .stdout_capture = build_result.stdout,
+            .message = msg,
+        };
     }
 
     if (!builtOutputExists(io, allocator, output_name)) {
@@ -1529,6 +1553,31 @@ fn processSucceeded(term: std.process.Child.Term) bool {
         .exited => |code| code == 0,
         else => false,
     };
+}
+
+fn expectedBuildStderrForBackend(backend: OptMode, expected_stderr_contains: []const []const u8) []const []const u8 {
+    return switch (backend) {
+        .size, .speed => expected_stderr_contains,
+        .interpreter, .dev => &.{},
+    };
+}
+
+fn buildSucceededOrExpectedDiagnostics(result: std.process.RunResult, expected_stderr_contains: []const []const u8) bool {
+    if (processSucceeded(result.term)) return true;
+    if (expected_stderr_contains.len == 0) return false;
+
+    return switch (result.term) {
+        .exited => |code| code == 2,
+        else => false,
+    };
+}
+
+fn missingExpectedStderr(stderr: []const u8, expected_stderr_contains: []const []const u8) ?[]const u8 {
+    for (expected_stderr_contains) |needle| {
+        if (std.mem.find(u8, stderr, needle) == null) return needle;
+    }
+
+    return null;
 }
 
 fn processTimedOut(stderr: []const u8) bool {

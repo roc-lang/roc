@@ -44,7 +44,7 @@ pub const TargetConfig = struct {
     target_usize: base.target.TargetUsize = base.target.TargetUsize.native,
     checked_module_state: CheckedModuleState = .complete,
     inline_mode: InlineMode = .none,
-    debug_effects: DebugEffectMode = .run,
+    inline_expects: InlineExpectMode = .run,
     /// Allow `List.map` to reuse a unique input list's allocation when the
     /// input and output element layouts are interchangeable. Optimized builds
     /// enable this; dev builds and compile-time evaluation leave it off so
@@ -69,7 +69,7 @@ pub const RuntimeRecordSchema = postcheck.SolvedLirLower.RuntimeRecordSchema;
 pub const RuntimeTagSchema = postcheck.SolvedLirLower.RuntimeTagSchema;
 pub const RuntimeTagUnionSchema = postcheck.SolvedLirLower.RuntimeTagUnionSchema;
 pub const InlineMode = postcheck.SolvedInline.Mode;
-pub const DebugEffectMode = postcheck.SolvedLirLower.DebugEffectMode;
+pub const InlineExpectMode = postcheck.SolvedLirLower.InlineExpectMode;
 
 /// Runtime record and tag-union schemas needed by dev tooling.
 pub const RuntimeValueSchemaStore = struct {
@@ -208,7 +208,13 @@ pub fn lowerCheckedModulesToLir(
         allocator,
         checkedModules(modules),
         rootRequests(roots, layout_requests, static_data_requests),
-        .{ .proc_debug_names = target.proc_debug_names },
+        .{
+            .proc_debug_names = target.proc_debug_names,
+            .inline_expects = switch (target.inline_expects) {
+                .run => .run,
+                .omit => .omit,
+            },
+        },
     );
     var mono_owned = true;
     errdefer if (mono_owned) mono.deinit();
@@ -234,7 +240,7 @@ pub fn lowerCheckedModulesToLir(
 
     var lowered = try postcheck.SolvedLirLower.run(allocator, target.target_usize, solved, .{
         .inline_plan = inline_plan.view(),
-        .debug_effects = target.debug_effects,
+        .inline_expects = target.inline_expects,
         .list_in_place_map = target.list_in_place_map,
         .proc_debug_names = target.proc_debug_names,
     });

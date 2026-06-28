@@ -28,10 +28,19 @@ const static_dispatch = check.StaticDispatchRegistry;
 const Ident = base.Ident;
 
 /// Options used while lowering checked modules into Monotype IR.
+pub const InlineExpectMode = enum {
+    run,
+    omit,
+};
+
+/// Configuration for lowering checked modules into Monotype IR.
 pub const Options = struct {
     /// Preserve source-level procedure names for consumers that present runtime
     /// diagnostics from lowered code.
     proc_debug_names: bool = false,
+    /// Whether inline expects should be lowered at all. Optimized runtime builds
+    /// omit them before their conditions can affect control-flow decisions.
+    inline_expects: InlineExpectMode = .run,
 };
 
 /// Lower checked modules and explicit roots into Monotype IR.
@@ -345,6 +354,7 @@ const Builder = struct {
     root_view: checked.ImportedModuleView,
     program: *Ast.Program,
     proc_debug_names: bool,
+    inline_expects: InlineExpectMode,
     symbols: Common.SymbolGen = .{},
     type_cache: std.AutoHashMap(CheckedTypeAddress, Type.TypeId),
     /// Monotypes owned by the builder-global type cache. They are lowered
@@ -376,6 +386,7 @@ const Builder = struct {
             .root_view = checked.importedView(modules.root.module),
             .program = program,
             .proc_debug_names = options.proc_debug_names,
+            .inline_expects = options.inline_expects,
             .type_cache = std.AutoHashMap(CheckedTypeAddress, Type.TypeId).init(allocator),
             .unsolved_monos = std.AutoHashMap(Type.TypeId, void).init(allocator),
             .lowered_templates = std.AutoHashMap(TemplateFamily, std.ArrayList(LoweredTemplate)).init(allocator),
@@ -4233,7 +4244,10 @@ const BodyContext = struct {
                 .msg = try self.lowerExpectErrMessage(expect_err.expr, expect_err.snippet),
                 .region = expr.source_region,
             } },
-            .expect => |child| .{ .expect = try self.lowerExpr(child) },
+            .expect => |child| if (self.builder.inline_expects == .omit)
+                .unit
+            else
+                .{ .expect = try self.lowerExpr(child) },
             .break_ => try self.breakCurrentLoopExprData(),
             .return_ => |ret| .{ .return_ = try self.lowerReturn(ret) },
             .for_ => |for_| try self.lowerIteratorFor(for_, ty, &.{}),
@@ -8272,11 +8286,11 @@ const BodyContext = struct {
         call: anytype,
         expected_ret_ty: ?Type.TypeId,
     ) Allocator.Error!?LoweredCall {
-        if (self.checkedExprDiverges(call.func)) {
+        if (self.checkedExprDivergesInLoweredRuntime(call.func)) {
             return try self.lowerDivergentCallOperand(checked_ret_ty, call.func, expected_ret_ty);
         }
         for (call.args) |arg| {
-            if (self.checkedExprDiverges(arg)) {
+            if (self.checkedExprDivergesInLoweredRuntime(arg)) {
                 return try self.lowerDivergentCallOperand(checked_ret_ty, arg, expected_ret_ty);
             }
         }
@@ -11987,7 +12001,7 @@ const BodyContext = struct {
         body: checked.CheckedExprId,
         result_ty: Type.TypeId,
     ) Allocator.Error!Ast.ExprId {
-        if (self.checkedExprDiverges(body)) {
+        if (self.checkedExprDivergesInLoweredRuntime(body)) {
             return try self.lowerDivergentExprAtType(body, result_ty);
         }
         return try self.lowerExprAtType(body, result_ty);
@@ -13177,7 +13191,7 @@ const BodyContext = struct {
         state_ty: Type.TypeId,
         merge_binders: []const MergeBinder,
     ) Allocator.Error!Ast.ExprId {
-        if (self.checkedExprDiverges(body)) return try self.lowerDivergentExprAtType(body, state_ty);
+        if (self.checkedExprDivergesInLoweredRuntime(body)) return try self.lowerDivergentExprAtType(body, state_ty);
 
         const checked_body = self.view.bodies.expr(body);
         switch (checked_body.data) {
@@ -13186,7 +13200,7 @@ const BodyContext = struct {
                 defer self.allocator.free(statements.items);
                 const value = if (statements.diverges)
                     try self.unreachableAfterDivergentStatementExpr(result_ty)
-                else if (self.checkedExprDiverges(block.final_expr))
+                else if (self.checkedExprDivergesInLoweredRuntime(block.final_expr))
                     try self.lowerDivergentExprAtType(block.final_expr, result_ty)
                 else
                     try self.lowerExprAtType(block.final_expr, result_ty);
@@ -13208,7 +13222,7 @@ const BodyContext = struct {
         state_ty: Type.TypeId,
         merge_binders: []const MergeBinder,
     ) Allocator.Error!Ast.ExprId {
-        if (self.checkedExprDiverges(body)) return try self.lowerDivergentExprAtType(body, state_ty);
+        if (self.checkedExprDivergesInLoweredRuntime(body)) return try self.lowerDivergentExprAtType(body, state_ty);
 
         const checked_body = self.view.bodies.expr(body);
         switch (checked_body.data) {
@@ -13216,7 +13230,7 @@ const BodyContext = struct {
                 var statements = try self.lowerBlockStatements(block.statements);
                 defer self.allocator.free(statements.items);
                 if (!statements.diverges) {
-                    const final_stmt = try self.builder.program.addStmt(.{ .expr = if (self.checkedExprDiverges(block.final_expr))
+                    const final_stmt = try self.builder.program.addStmt(.{ .expr = if (self.checkedExprDivergesInLoweredRuntime(block.final_expr))
                         try self.lowerDivergentExprAtType(block.final_expr, try self.lowerType(checked_body.ty))
                     else
                         try self.lowerExpr(block.final_expr) });
@@ -13325,7 +13339,7 @@ const BodyContext = struct {
             .statements = try self.builder.program.addStmtSpan(stmts.items[0..stmts.len]),
             .final_expr = if (stmts.diverges)
                 try self.unreachableAfterDivergentStatementExpr(ty)
-            else if (self.checkedExprDiverges(block.final_expr))
+            else if (self.checkedExprDivergesInLoweredRuntime(block.final_expr))
                 try self.lowerDivergentExprAtType(block.final_expr, ty)
             else
                 try self.lowerExprAtType(block.final_expr, ty),
@@ -13359,7 +13373,7 @@ const BodyContext = struct {
             if (!try self.appendExpandedPatternStatement(statement, &lowered)) {
                 try lowered.append(self.allocator, try self.lowerStatement(statement));
             }
-            if (self.checkedStatementDiverges(statement)) lowered.diverges = true;
+            if (self.checkedStatementDivergesInLoweredRuntime(statement)) lowered.diverges = true;
         }
         return lowered;
     }
@@ -13463,7 +13477,6 @@ const BodyContext = struct {
             .crash,
             .dbg,
             .expr,
-            .expect,
             .for_,
             .while_,
             .infinite_loop,
@@ -13471,6 +13484,7 @@ const BodyContext = struct {
             .break_,
             .return_,
             => true,
+            .expect => self.builder.inline_expects == .run,
             .import_,
             .alias_decl,
             .nominal_decl,
@@ -13552,6 +13566,148 @@ const BodyContext = struct {
             Common.invariant("checked divergence referenced a missing statement");
         }
         return self.view.bodies.statementDiverges(statement_id);
+    }
+
+    /// Checked divergence is computed before this lowering pass can omit inline
+    /// expects, so optimized builds need a divergence view of the lowered code.
+    fn checkedStatementDivergesInLoweredRuntime(self: *BodyContext, statement_id: checked.CheckedStatementId) bool {
+        if (!self.checkedStatementDiverges(statement_id)) return false;
+        if (self.builder.inline_expects == .run) return true;
+
+        return switch (self.view.bodies.statement(statement_id).data) {
+            .crash,
+            .break_,
+            .return_,
+            => true,
+            .decl => |decl| self.checkedExprDivergesInLoweredRuntime(decl.expr),
+            .var_ => |var_| self.checkedExprDivergesInLoweredRuntime(var_.expr),
+            .var_uninitialized => false,
+            .reassign => |reassign| self.checkedExprDivergesInLoweredRuntime(reassign.expr),
+            .dbg,
+            .expr,
+            => |expr| self.checkedExprDivergesInLoweredRuntime(expr),
+            .expect => false,
+            .for_ => |for_| self.checkedExprDivergesInLoweredRuntime(for_.expr),
+            .while_ => |while_| self.checkedExprDivergesInLoweredRuntime(while_.cond),
+            .infinite_loop => true,
+            .breakable_loop => |loop| self.checkedExprDivergesInLoweredRuntime(loop.cond),
+            .pending,
+            .import_,
+            .alias_decl,
+            .nominal_decl,
+            .type_anno,
+            .type_var_alias,
+            .runtime_error,
+            => false,
+        };
+    }
+
+    fn checkedAnyExprDivergesInLoweredRuntime(self: *BodyContext, items: []const checked.CheckedExprId) bool {
+        for (items) |item| {
+            if (self.checkedExprDivergesInLoweredRuntime(item)) return true;
+        }
+        return false;
+    }
+
+    fn checkedExprDivergesInLoweredRuntime(self: *BodyContext, expr_id: checked.CheckedExprId) bool {
+        if (!self.checkedExprDiverges(expr_id)) return false;
+        if (self.builder.inline_expects == .run) return true;
+
+        return switch (self.view.bodies.expr(expr_id).data) {
+            .crash,
+            .ellipsis,
+            .break_,
+            .return_,
+            => true,
+            .str => |items| self.checkedAnyExprDivergesInLoweredRuntime(items),
+            .list => |items| self.checkedAnyExprDivergesInLoweredRuntime(items),
+            .tuple => |items| self.checkedAnyExprDivergesInLoweredRuntime(items),
+            .match_ => |match| blk: {
+                if (self.checkedExprDivergesInLoweredRuntime(match.cond)) break :blk true;
+                if (match.branches.len == 0) break :blk false;
+                for (match.branches) |branch| {
+                    if (branch.guard != null) break :blk false;
+                    if (!self.checkedExprDivergesInLoweredRuntime(branch.value)) break :blk false;
+                }
+                break :blk true;
+            },
+            .if_ => |if_| blk: {
+                if (if_.branches.len > 0 and self.checkedExprDivergesInLoweredRuntime(if_.branches[0].cond)) {
+                    break :blk true;
+                }
+                for (if_.branches) |branch| {
+                    if (!self.checkedExprDivergesInLoweredRuntime(branch.body)) break :blk false;
+                }
+                break :blk self.checkedExprDivergesInLoweredRuntime(if_.final_else);
+            },
+            .call => |call| blk: {
+                if (self.checkedExprDivergesInLoweredRuntime(call.func)) break :blk true;
+                break :blk self.checkedAnyExprDivergesInLoweredRuntime(call.args);
+            },
+            .record => |record| blk: {
+                if (record.ext) |ext| {
+                    if (self.checkedExprDivergesInLoweredRuntime(ext)) break :blk true;
+                }
+                for (record.fields) |field| {
+                    if (self.checkedExprDivergesInLoweredRuntime(field.value)) break :blk true;
+                }
+                break :blk false;
+            },
+            .block => |block| blk: {
+                for (block.statements) |statement| {
+                    if (self.checkedStatementDivergesInLoweredRuntime(statement)) break :blk true;
+                }
+                break :blk self.checkedExprDivergesInLoweredRuntime(block.final_expr);
+            },
+            .tag => |tag| self.checkedAnyExprDivergesInLoweredRuntime(tag.args),
+            .nominal => |nominal| self.checkedExprDivergesInLoweredRuntime(nominal.backing_expr),
+            .closure,
+            .lambda,
+            => false,
+            .binop => |binop| self.checkedExprDivergesInLoweredRuntime(binop.lhs) or
+                self.checkedExprDivergesInLoweredRuntime(binop.rhs),
+            .unary_minus,
+            .unary_not,
+            .dbg,
+            => |child| self.checkedExprDivergesInLoweredRuntime(child),
+            .expect => false,
+            .expect_err => true,
+            .field_access => |field| self.checkedExprDivergesInLoweredRuntime(field.receiver),
+            .structural_eq => |eq| self.checkedExprDivergesInLoweredRuntime(eq.lhs) or
+                self.checkedExprDivergesInLoweredRuntime(eq.rhs),
+            .structural_hash => |hash| self.checkedExprDivergesInLoweredRuntime(hash.value) or
+                self.checkedExprDivergesInLoweredRuntime(hash.hasher),
+            .tuple_access => |access| self.checkedExprDivergesInLoweredRuntime(access.tuple),
+            .for_ => |for_| self.checkedExprDivergesInLoweredRuntime(for_.expr),
+            .run_low_level => |low_level| self.checkedAnyExprDivergesInLoweredRuntime(low_level.args),
+            .pending,
+            .num,
+            .frac_f32,
+            .frac_f64,
+            .dec,
+            .dec_small,
+            .num_from_numeral,
+            .typed_int,
+            .typed_frac,
+            .typed_num_from_numeral,
+            .str_from_quote,
+            .str_segment,
+            .bytes_literal,
+            .lookup_local,
+            .lookup_external,
+            .lookup_required,
+            .empty_list,
+            .empty_record,
+            .zero_argument_tag,
+            .dispatch_call,
+            .interpolation,
+            .method_eq,
+            .type_dispatch_call,
+            .runtime_error,
+            .anno_only,
+            .hosted_lambda,
+            => false,
+        };
     }
 
     const LoopCarry = struct {
@@ -13878,7 +14034,7 @@ const BodyContext = struct {
             .block => |block| {
                 var statement_diverges = false;
                 for (block.statements) |statement| {
-                    if (self.checkedStatementDiverges(statement)) statement_diverges = true;
+                    if (self.checkedStatementDivergesInLoweredRuntime(statement)) statement_diverges = true;
                 }
                 const extra: usize = if (statement_diverges) 0 else 1;
                 const lowered_statements = try self.allocator.alloc(Ast.StmtId, block.statements.len + extra);
@@ -13887,7 +14043,7 @@ const BodyContext = struct {
                     lowered_statements[i] = try self.lowerStatement(statement);
                 }
                 if (!statement_diverges) {
-                    lowered_statements[block.statements.len] = try self.builder.program.addStmt(.{ .expr = if (self.checkedExprDiverges(block.final_expr))
+                    lowered_statements[block.statements.len] = try self.builder.program.addStmt(.{ .expr = if (self.checkedExprDivergesInLoweredRuntime(block.final_expr))
                         try self.lowerDivergentExprAtType(block.final_expr, result_ty)
                     else
                         try self.lowerExpr(block.final_expr) });
@@ -13919,7 +14075,7 @@ const BodyContext = struct {
             .block => |block| {
                 var statement_diverges = false;
                 for (block.statements) |statement| {
-                    if (self.checkedStatementDiverges(statement)) statement_diverges = true;
+                    if (self.checkedStatementDivergesInLoweredRuntime(statement)) statement_diverges = true;
                 }
                 const extra: usize = if (statement_diverges) 0 else 1;
                 const lowered_statements = try self.allocator.alloc(Ast.StmtId, block.statements.len + extra);
@@ -13928,7 +14084,7 @@ const BodyContext = struct {
                     lowered_statements[i] = try self.lowerStatement(statement);
                 }
                 if (!statement_diverges) {
-                    lowered_statements[block.statements.len] = try self.builder.program.addStmt(.{ .expr = if (self.checkedExprDiverges(block.final_expr))
+                    lowered_statements[block.statements.len] = try self.builder.program.addStmt(.{ .expr = if (self.checkedExprDivergesInLoweredRuntime(block.final_expr))
                         try self.lowerDivergentExprAtType(block.final_expr, result_ty)
                     else
                         try self.lowerExpr(block.final_expr) });
@@ -14195,8 +14351,10 @@ const BodyContext = struct {
             .unary_minus,
             .unary_not,
             .dbg,
-            .expect,
             => |child| try self.collectReassignedBindersInExpr(child, out),
+            .expect => |child| if (self.builder.inline_expects == .run) {
+                try self.collectReassignedBindersInExpr(child, out);
+            },
             .expect_err => |expect_err| try self.collectReassignedBindersInExpr(expect_err.expr, out),
             .field_access => |field| try self.collectReassignedBindersInExpr(field.receiver, out),
             .structural_eq => |eq| {
@@ -14265,8 +14423,10 @@ const BodyContext = struct {
             },
             .dbg,
             .expr,
-            .expect,
             => |expr| try self.collectReassignedBindersInExpr(expr, out),
+            .expect => |expr| if (self.builder.inline_expects == .run) {
+                try self.collectReassignedBindersInExpr(expr, out);
+            },
             .for_ => |for_| {
                 try self.collectReassignedBindersInExpr(for_.expr, out);
                 try self.collectReassignedBindersInExpr(for_.body, out);
@@ -14428,7 +14588,10 @@ const BodyContext = struct {
             .crash => |msg| .{ .crash = try self.lowerStringLiteral(msg) },
             .dbg => |child| .{ .dbg = try self.lowerDbgMessage(child) },
             .expr => |child| try self.lowerExprStatement(child),
-            .expect => |child| .{ .expect = try self.lowerExpr(child) },
+            .expect => |child| if (self.builder.inline_expects == .omit) blk: {
+                const unit_ty = try self.unitType();
+                break :blk .{ .expr = try self.builder.program.addExpr(.{ .ty = unit_ty, .data = .unit }) };
+            } else .{ .expect = try self.lowerExpr(child) },
             .for_ => |for_| blk: {
                 var reassigned = std.ArrayList(checked.PatternBinderId).empty;
                 defer reassigned.deinit(self.allocator);

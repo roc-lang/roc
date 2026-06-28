@@ -442,8 +442,8 @@ SKIPPED_BASELINE_FILES=()
 SKIPPED_EXIT_CODE_DIFF_FILES=()
 SKIPPED_OUTPUT_DIFF_FILES=()
 
-# Files for which we additionally benchmark `roc check` and `roc build`.
-CHECK_BUILD_FILES=(
+# Files for which we additionally benchmark `roc check`.
+CHECK_FILES=(
     test/fx/issue8826_full.roc
     test/fx/aoc_day2.roc
     test/fx/host_boxed_fn_boundary.roc
@@ -454,6 +454,19 @@ CHECK_BUILD_FILES=(
     test/fx/repeating_pattern_segfault.roc
     test/fx/primitive_encode.roc
     test/fx/dbg_corrupts_recursive_tag_union.roc
+)
+
+# Files for which we additionally benchmark `roc build`.
+BUILD_FILES=(
+    test/fx/issue8826_full.roc
+    test/fx/aoc_day2.roc
+    test/fx/host_boxed_fn_boundary.roc
+    test/fx/record_builder_cli_parser.roc
+    test/fx/zst_nested_singleton_shapes.roc
+    test/fx/index_oob_instantiate.roc
+    test/fx/wildcard_match_open_union_bug.roc
+    test/fx/repeating_pattern_segfault.roc
+    test/fx/primitive_encode.roc
 )
 
 # Pick hyperfine failure-handling args for a check/build benchmark on a given
@@ -584,14 +597,14 @@ done
 
 echo ""
 echo "=== Running roc check benchmarks ==="
-for fx_file in "${CHECK_BUILD_FILES[@]}"; do
+for fx_file in "${CHECK_FILES[@]}"; do
     extra_args=$(check_build_extra_args_for "$(basename "$fx_file")")
     benchmark_file "$fx_file" "check" "$extra_args" ""
 done
 
 echo ""
 echo "=== Running roc build benchmarks ==="
-for fx_file in "${CHECK_BUILD_FILES[@]}"; do
+for fx_file in "${BUILD_FILES[@]}"; do
     extra_args=$(check_build_extra_args_for "$(basename "$fx_file")")
     benchmark_file "$fx_file" "build" "$extra_args" ""
 done

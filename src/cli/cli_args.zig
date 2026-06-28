@@ -165,6 +165,9 @@ pub const BuildArgs = struct {
     resolve_limits: ResolveLimitArgs = .{}, // package download size limits
     synthetic_default_platform: bool = false, // internal: build rewrote a headerless app to the default platform
     source_dir_override: ?[]const u8 = null, // internal: resolve root sibling imports from this directory
+    synthetic_root_original_path: ?[]const u8 = null, // internal: original path for a synthetic default-app root
+    synthetic_root_original_source: ?[]const u8 = null, // internal: normalized original source for synthetic-root diagnostics
+    synthetic_root_header_len: usize = 0, // internal: byte length of the header prepended to synthetic_root_original_source
 };
 
 /// Arguments for `roc test`
