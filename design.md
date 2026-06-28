@@ -1400,6 +1400,14 @@ an erased or public boundary, ordinary public callable materialization is
 selected by explicit materialization demand. That boundary is part of the source
 program's public value behavior, not a deoptimization fallback.
 
+The optimized callable-state path is an optimized-code-generation facility, not
+a correctness mechanism. It is allowed to spend extra time specializing calls,
+control-flow boundaries, and loop-carried private state only when the user has
+asked for optimized generated code. Non-optimized lowering must remain the
+straight public-value path; it must not construct optimized-demand data,
+attempt the optimized path speculatively, or depend on optimized state to
+preserve observable Roc behavior.
+
 The optimization is enabled only for optimized code generation:
 
 - on for `--opt=size`
@@ -1437,6 +1445,14 @@ ordinary public-value path never constructs those optimized-only artifacts.
 Conversely, optimized lowering must not first build public iterator/callable
 wrappers and then try to remove them later; avoided materialization is the
 design, not a post-pass improvement.
+
+There is also no "try optimized, then fall back to public lowering" path inside
+the optimized entrypoint. If optimized lowering needs a fact, that fact must be
+explicit optimized input produced by checking, lambda-set solving, known-value
+construction, result-demand propagation, or loop fixed-point solving. Missing
+required optimized data is a compiler bug to fix at the producer; it is not a
+reason to guess from source syntax, recognize a builtin name, inspect lowered
+symbols, scan finished LIR, or silently materialize a public wrapper.
 
 This is also not a new whole-program pass between Lambda Mono and LIR. The
 optimized entrypoint may use local work queues, demand fixed points, and worker
@@ -1606,6 +1622,14 @@ record wrapping a primitive does not get a more powerful rule than the primitive
 itself. The optimizer specializes callable state because the checked program
 contains finite callable facts, not because a value has a particular builtin
 name.
+
+The intended implementation therefore has two explicit post-check lowering
+contexts. Ordinary lowering owns public-value construction and has no demand
+arena, demanded-known-value table, sparse private-state table, worker queue, or
+loop-state fixed-point storage. Optimized lowering owns those structures and is
+constructible only from the `--opt=size`/`--opt=speed` entrypoint. Helpers that
+create or consume optimized-only facts must take the optimized context
+directly; ordinary lowering should be unable to call them by accident.
 
 The pass must not recognize source `for`, source `if`, source `match`,
 `Iter.append`, `Stream.next!`, wasm targets, Rocci Bird, public builtin names,
