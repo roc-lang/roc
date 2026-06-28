@@ -1411,6 +1411,15 @@ Conversely, optimized lowering must not first build public iterator/callable
 wrappers and then try to remove them later; avoided materialization is the
 design, not a post-pass improvement.
 
+This is also not a new whole-program pass between Lambda Mono and LIR. The
+optimized entrypoint may use local work queues, demand fixed points, and worker
+queues as implementation structure, but those structures are owned by the
+single optimized lowering operation. They are created only after the build mode
+has selected `--opt=size` or `--opt=speed`, and they are consumed before LIR is
+emitted. Ordinary lowering emits public values directly; optimized lowering
+emits ordinary LIR after deciding, under demand, which public values never need
+to be materialized.
+
 The entrypoint gate is also the compile-time-cost gate. Result demand,
 demanded-value arenas, private-state graphs, worker queues, and loop fixed-point
 work are constructed only after the post-check driver has selected the optimized
@@ -1491,6 +1500,13 @@ phases are internal to the optimized entrypoint and operate on explicit demand
 and known-value data as the body is cloned. They are not a second semantic IR, a
 whole-program cleanup pass, or an analysis that ordinary lowering has to run and
 then ignore.
+
+The optimized entrypoint is the only place that may run the extra demand work.
+If a helper would need result demand, demanded known values, sparse private
+state, state-machine fixed points, or demand-keyed worker creation, that helper
+belongs to the optimized lowering context. If ordinary public-value lowering
+needs the same source program to compile, it must do so through the ordinary
+materializing path without constructing dormant optimized state.
 
 Current implementation work must therefore converge by replacing dense
 public-wrapper paths with this producer-under-demand lowering. A partial
