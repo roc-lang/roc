@@ -1419,6 +1419,12 @@ only in later optimization preferences. Dev, check, interpreter, and
 compile-time-finalization paths do not build these structures and do not rely on
 them for correctness.
 
+Every correctness and generated-code invariant of this optimizer applies to
+both optimized modes. A specialized shape proved only for `--opt=size` is not
+landed; the same focused property must also be proved for `--opt=speed` unless
+the test is explicitly about a later size-vs-speed backend preference. The
+callable-state optimizer itself has no size-only or speed-only semantics.
+
 The gate must be represented in the implementation as data ownership, not as a
 boolean checked deep inside lowering. Ordinary public-value lowering owns no
 result-demand arena, no demanded-value arena, no private-state graph, no
@@ -1479,6 +1485,12 @@ producer is cloned under that demand, and any private worker or private state
 loop is emitted from that same cloning context. Later stages should never need
 to infer that an iterator wrapper, callable wrapper, or public record was
 accidentally materialized and should have been avoided.
+
+The implementation may organize optimized lowering into helper phases, but those
+phases are internal to the optimized entrypoint and operate on explicit demand
+and known-value data as the body is cloned. They are not a second semantic IR, a
+whole-program cleanup pass, or an analysis that ordinary lowering has to run and
+then ignore.
 
 Current implementation work must therefore converge by replacing dense
 public-wrapper paths with this producer-under-demand lowering. A partial
