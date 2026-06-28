@@ -24,6 +24,7 @@ const hv = @import("host_values.zig");
 const engine_metrics = @import("engine_metrics.zig");
 const engine_contract = @import("engine_contract.zig");
 const render_cache_mod = @import("render_cache.zig");
+const descriptor_stream = @import("descriptor_stream.zig");
 
 const enable_runtime_metrics = engine_metrics.enable_runtime_metrics;
 
@@ -45,6 +46,14 @@ pub const verifyRegistryOps = engine_contract.verifyRegistryOps;
 pub const verifySink = engine_contract.verifySink;
 pub const verifyMetrics = engine_contract.verifyMetrics;
 pub const verifyCtx = engine_contract.verifyCtx;
+pub const HostNodeScopeSiteKind = descriptor_stream.ScopeSiteKind;
+pub const HostTextFieldDescriptorIndexes = descriptor_stream.TextFieldDescriptorIndexes;
+pub const HostBoolFieldDescriptorIndexes = descriptor_stream.BoolFieldDescriptorIndexes;
+pub const HostEventDescriptorIndexes = descriptor_stream.EventDescriptorIndexes;
+pub const HostRenderElemIndex = descriptor_stream.RenderElemIndex;
+pub const HostElemDescriptorIndex = descriptor_stream.ElemDescriptorIndex;
+pub const HostScopeSiteDescriptorIndexes = descriptor_stream.ScopeSiteDescriptorIndexes;
+pub const HostNodeDescriptorIndex = descriptor_stream.NodeDescriptorIndex;
 
 const render_event_kinds = [_]RenderEventKind{ .click, .input, .check, .pointer_down, .pointer_up, .pointer_enter, .pointer_leave };
 
@@ -811,13 +820,6 @@ const EngineScratch = struct {
     }
 };
 
-pub const HostNodeScopeSiteKind = enum {
-    component,
-    state,
-    when,
-    each,
-};
-
 pub const HostRenderNodeKind = enum {
     element,
     text,
@@ -973,144 +975,6 @@ pub const HostNodeEachDesc = struct {
 // The retained stream of node descriptors plus the per-elem index that makes
 // descriptor lookup O(1). Its append* methods ingest the Roc Elem tree; the
 // host drives ingestion and consumes the stream to render.
-
-pub const HostTextFieldDescriptorIndexes = struct {
-    text: ?usize = null,
-    role: ?usize = null,
-    label: ?usize = null,
-    test_id: ?usize = null,
-    value: ?usize = null,
-    class: ?usize = null,
-
-    pub fn get(self: HostTextFieldDescriptorIndexes, field: RenderTextField) ?usize {
-        return switch (field) {
-            .text => self.text,
-            .role => self.role,
-            .label => self.label,
-            .test_id => self.test_id,
-            .value => self.value,
-            .class => self.class,
-        };
-    }
-
-    pub fn slot(self: *HostTextFieldDescriptorIndexes, field: RenderTextField) *?usize {
-        return switch (field) {
-            .text => &self.text,
-            .role => &self.role,
-            .label => &self.label,
-            .test_id => &self.test_id,
-            .value => &self.value,
-            .class => &self.class,
-        };
-    }
-};
-
-pub const HostBoolFieldDescriptorIndexes = struct {
-    checked: ?usize = null,
-    disabled: ?usize = null,
-
-    pub fn get(self: HostBoolFieldDescriptorIndexes, field: RenderBoolField) ?usize {
-        return switch (field) {
-            .checked => self.checked,
-            .disabled => self.disabled,
-        };
-    }
-
-    pub fn slot(self: *HostBoolFieldDescriptorIndexes, field: RenderBoolField) *?usize {
-        return switch (field) {
-            .checked => &self.checked,
-            .disabled => &self.disabled,
-        };
-    }
-};
-
-pub const HostEventDescriptorIndexes = struct {
-    click: ?usize = null,
-    input: ?usize = null,
-    check: ?usize = null,
-    pointer_down: ?usize = null,
-    pointer_up: ?usize = null,
-    pointer_enter: ?usize = null,
-    pointer_leave: ?usize = null,
-
-    pub fn get(self: HostEventDescriptorIndexes, kind: RenderEventKind) ?usize {
-        return switch (kind) {
-            .click => self.click,
-            .input => self.input,
-            .check => self.check,
-            .pointer_down => self.pointer_down,
-            .pointer_up => self.pointer_up,
-            .pointer_enter => self.pointer_enter,
-            .pointer_leave => self.pointer_leave,
-        };
-    }
-
-    pub fn slot(self: *HostEventDescriptorIndexes, kind: RenderEventKind) *?usize {
-        return switch (kind) {
-            .click => &self.click,
-            .input => &self.input,
-            .check => &self.check,
-            .pointer_down => &self.pointer_down,
-            .pointer_up => &self.pointer_up,
-            .pointer_enter => &self.pointer_enter,
-            .pointer_leave => &self.pointer_leave,
-        };
-    }
-};
-
-pub const HostRenderElemIndex = struct {
-    render_node: ?usize = null,
-    first_child: ?u64 = null,
-    last_child: ?u64 = null,
-    next_sibling: ?u64 = null,
-
-    pub fn empty(self: HostRenderElemIndex) bool {
-        return self.render_node == null and self.first_child == null and self.last_child == null and self.next_sibling == null;
-    }
-};
-
-pub const HostElemDescriptorIndex = struct {
-    element: ?usize = null,
-    text_node: ?usize = null,
-    signal_text_node: ?usize = null,
-    static_text_attrs: HostTextFieldDescriptorIndexes = .{},
-    signal_text_attrs: HostTextFieldDescriptorIndexes = .{},
-    static_bool_attrs: HostBoolFieldDescriptorIndexes = .{},
-    signal_bool_attrs: HostBoolFieldDescriptorIndexes = .{},
-    events: HostEventDescriptorIndexes = .{},
-};
-
-pub const HostScopeSiteDescriptorIndexes = struct {
-    component: ?usize = null,
-    state: ?usize = null,
-    when: ?usize = null,
-    each: ?usize = null,
-
-    pub fn get(self: HostScopeSiteDescriptorIndexes, kind: HostNodeScopeSiteKind) ?usize {
-        return switch (kind) {
-            .component => self.component,
-            .state => self.state,
-            .when => self.when,
-            .each => self.each,
-        };
-    }
-
-    pub fn slot(self: *HostScopeSiteDescriptorIndexes, kind: HostNodeScopeSiteKind) *?usize {
-        return switch (kind) {
-            .component => &self.component,
-            .state => &self.state,
-            .when => &self.when,
-            .each => &self.each,
-        };
-    }
-};
-
-pub const HostNodeDescriptorIndex = struct {
-    scope_sites: HostScopeSiteDescriptorIndexes = .{},
-    state: ?usize = null,
-    when: ?usize = null,
-    each: ?usize = null,
-};
 
 pub const HostNodeDescriptorStream = struct {
     render_nodes: std.ArrayListUnmanaged(HostRenderNode) = .empty,
@@ -1437,164 +1301,148 @@ pub const HostNodeDescriptorStream = struct {
         self.refreshRenderIndexesFrom(allocator, render_start, metrics);
     }
 
-    pub fn setFreshIndex(slot: *?usize, value: usize) void {
-        if (slot.* != null) @panic("descriptor stream recorded duplicate descriptor index");
-        slot.* = value;
-    }
-
-    pub fn updateIndex(slot: *?usize, value: usize) void {
-        if (slot.* == null) @panic("descriptor stream updated a missing descriptor index");
-        slot.* = value;
-    }
-
-    pub fn clearIndex(slot: *?usize, expected: usize) void {
-        const existing = slot.* orelse @panic("descriptor stream cleared a missing descriptor index");
-        if (existing != expected) @panic("descriptor stream cleared the wrong descriptor index");
-        slot.* = null;
-    }
-
     pub fn recordElementIndex(self: *HostNodeDescriptorStream, allocator: std.mem.Allocator, elem_id: u64, index: usize) void {
-        HostNodeDescriptorStream.setFreshIndex(&self.ensureElemDescriptorIndex(allocator, elem_id).element, index);
+        descriptor_stream.setFreshIndex(&self.ensureElemDescriptorIndex(allocator, elem_id).element, index);
     }
 
     pub fn updateElementIndex(self: *HostNodeDescriptorStream, elem_id: u64, index: usize) void {
-        HostNodeDescriptorStream.updateIndex(&self.descriptor_indexes_by_elem_id.items[@intCast(elem_id)].element, index);
+        descriptor_stream.updateIndex(&self.descriptor_indexes_by_elem_id.items[@intCast(elem_id)].element, index);
     }
 
     pub fn clearElementIndex(self: *HostNodeDescriptorStream, elem_id: u64, expected: usize) void {
-        HostNodeDescriptorStream.clearIndex(&self.descriptor_indexes_by_elem_id.items[@intCast(elem_id)].element, expected);
+        descriptor_stream.clearIndex(&self.descriptor_indexes_by_elem_id.items[@intCast(elem_id)].element, expected);
     }
 
     pub fn recordTextNodeIndex(self: *HostNodeDescriptorStream, allocator: std.mem.Allocator, elem_id: u64, index: usize) void {
-        HostNodeDescriptorStream.setFreshIndex(&self.ensureElemDescriptorIndex(allocator, elem_id).text_node, index);
+        descriptor_stream.setFreshIndex(&self.ensureElemDescriptorIndex(allocator, elem_id).text_node, index);
     }
 
     pub fn updateTextNodeIndex(self: *HostNodeDescriptorStream, elem_id: u64, index: usize) void {
-        HostNodeDescriptorStream.updateIndex(&self.descriptor_indexes_by_elem_id.items[@intCast(elem_id)].text_node, index);
+        descriptor_stream.updateIndex(&self.descriptor_indexes_by_elem_id.items[@intCast(elem_id)].text_node, index);
     }
 
     pub fn clearTextNodeIndex(self: *HostNodeDescriptorStream, elem_id: u64, expected: usize) void {
-        HostNodeDescriptorStream.clearIndex(&self.descriptor_indexes_by_elem_id.items[@intCast(elem_id)].text_node, expected);
+        descriptor_stream.clearIndex(&self.descriptor_indexes_by_elem_id.items[@intCast(elem_id)].text_node, expected);
     }
 
     pub fn recordSignalTextNodeIndex(self: *HostNodeDescriptorStream, allocator: std.mem.Allocator, elem_id: u64, index: usize) void {
-        HostNodeDescriptorStream.setFreshIndex(&self.ensureElemDescriptorIndex(allocator, elem_id).signal_text_node, index);
+        descriptor_stream.setFreshIndex(&self.ensureElemDescriptorIndex(allocator, elem_id).signal_text_node, index);
     }
 
     pub fn updateSignalTextNodeIndex(self: *HostNodeDescriptorStream, elem_id: u64, index: usize) void {
-        HostNodeDescriptorStream.updateIndex(&self.descriptor_indexes_by_elem_id.items[@intCast(elem_id)].signal_text_node, index);
+        descriptor_stream.updateIndex(&self.descriptor_indexes_by_elem_id.items[@intCast(elem_id)].signal_text_node, index);
     }
 
     pub fn clearSignalTextNodeIndex(self: *HostNodeDescriptorStream, elem_id: u64, expected: usize) void {
-        HostNodeDescriptorStream.clearIndex(&self.descriptor_indexes_by_elem_id.items[@intCast(elem_id)].signal_text_node, expected);
+        descriptor_stream.clearIndex(&self.descriptor_indexes_by_elem_id.items[@intCast(elem_id)].signal_text_node, expected);
     }
 
     pub fn recordStaticTextAttrIndex(self: *HostNodeDescriptorStream, allocator: std.mem.Allocator, elem_id: u64, field: RenderTextField, index: usize) void {
-        HostNodeDescriptorStream.setFreshIndex(self.ensureElemDescriptorIndex(allocator, elem_id).static_text_attrs.slot(field), index);
+        descriptor_stream.setFreshIndex(self.ensureElemDescriptorIndex(allocator, elem_id).static_text_attrs.slot(field), index);
     }
 
     pub fn updateStaticTextAttrIndex(self: *HostNodeDescriptorStream, elem_id: u64, field: RenderTextField, index: usize) void {
-        HostNodeDescriptorStream.updateIndex(self.descriptor_indexes_by_elem_id.items[@intCast(elem_id)].static_text_attrs.slot(field), index);
+        descriptor_stream.updateIndex(self.descriptor_indexes_by_elem_id.items[@intCast(elem_id)].static_text_attrs.slot(field), index);
     }
 
     pub fn clearStaticTextAttrIndex(self: *HostNodeDescriptorStream, elem_id: u64, field: RenderTextField, expected: usize) void {
-        HostNodeDescriptorStream.clearIndex(self.descriptor_indexes_by_elem_id.items[@intCast(elem_id)].static_text_attrs.slot(field), expected);
+        descriptor_stream.clearIndex(self.descriptor_indexes_by_elem_id.items[@intCast(elem_id)].static_text_attrs.slot(field), expected);
     }
 
     pub fn recordSignalTextAttrIndex(self: *HostNodeDescriptorStream, allocator: std.mem.Allocator, elem_id: u64, field: RenderTextField, index: usize) void {
-        HostNodeDescriptorStream.setFreshIndex(self.ensureElemDescriptorIndex(allocator, elem_id).signal_text_attrs.slot(field), index);
+        descriptor_stream.setFreshIndex(self.ensureElemDescriptorIndex(allocator, elem_id).signal_text_attrs.slot(field), index);
     }
 
     pub fn updateSignalTextAttrIndex(self: *HostNodeDescriptorStream, elem_id: u64, field: RenderTextField, index: usize) void {
-        HostNodeDescriptorStream.updateIndex(self.descriptor_indexes_by_elem_id.items[@intCast(elem_id)].signal_text_attrs.slot(field), index);
+        descriptor_stream.updateIndex(self.descriptor_indexes_by_elem_id.items[@intCast(elem_id)].signal_text_attrs.slot(field), index);
     }
 
     pub fn clearSignalTextAttrIndex(self: *HostNodeDescriptorStream, elem_id: u64, field: RenderTextField, expected: usize) void {
-        HostNodeDescriptorStream.clearIndex(self.descriptor_indexes_by_elem_id.items[@intCast(elem_id)].signal_text_attrs.slot(field), expected);
+        descriptor_stream.clearIndex(self.descriptor_indexes_by_elem_id.items[@intCast(elem_id)].signal_text_attrs.slot(field), expected);
     }
 
     pub fn recordStaticBoolAttrIndex(self: *HostNodeDescriptorStream, allocator: std.mem.Allocator, elem_id: u64, field: RenderBoolField, index: usize) void {
-        HostNodeDescriptorStream.setFreshIndex(self.ensureElemDescriptorIndex(allocator, elem_id).static_bool_attrs.slot(field), index);
+        descriptor_stream.setFreshIndex(self.ensureElemDescriptorIndex(allocator, elem_id).static_bool_attrs.slot(field), index);
     }
 
     pub fn updateStaticBoolAttrIndex(self: *HostNodeDescriptorStream, elem_id: u64, field: RenderBoolField, index: usize) void {
-        HostNodeDescriptorStream.updateIndex(self.descriptor_indexes_by_elem_id.items[@intCast(elem_id)].static_bool_attrs.slot(field), index);
+        descriptor_stream.updateIndex(self.descriptor_indexes_by_elem_id.items[@intCast(elem_id)].static_bool_attrs.slot(field), index);
     }
 
     pub fn clearStaticBoolAttrIndex(self: *HostNodeDescriptorStream, elem_id: u64, field: RenderBoolField, expected: usize) void {
-        HostNodeDescriptorStream.clearIndex(self.descriptor_indexes_by_elem_id.items[@intCast(elem_id)].static_bool_attrs.slot(field), expected);
+        descriptor_stream.clearIndex(self.descriptor_indexes_by_elem_id.items[@intCast(elem_id)].static_bool_attrs.slot(field), expected);
     }
 
     pub fn recordSignalBoolAttrIndex(self: *HostNodeDescriptorStream, allocator: std.mem.Allocator, elem_id: u64, field: RenderBoolField, index: usize) void {
-        HostNodeDescriptorStream.setFreshIndex(self.ensureElemDescriptorIndex(allocator, elem_id).signal_bool_attrs.slot(field), index);
+        descriptor_stream.setFreshIndex(self.ensureElemDescriptorIndex(allocator, elem_id).signal_bool_attrs.slot(field), index);
     }
 
     pub fn updateSignalBoolAttrIndex(self: *HostNodeDescriptorStream, elem_id: u64, field: RenderBoolField, index: usize) void {
-        HostNodeDescriptorStream.updateIndex(self.descriptor_indexes_by_elem_id.items[@intCast(elem_id)].signal_bool_attrs.slot(field), index);
+        descriptor_stream.updateIndex(self.descriptor_indexes_by_elem_id.items[@intCast(elem_id)].signal_bool_attrs.slot(field), index);
     }
 
     pub fn clearSignalBoolAttrIndex(self: *HostNodeDescriptorStream, elem_id: u64, field: RenderBoolField, expected: usize) void {
-        HostNodeDescriptorStream.clearIndex(self.descriptor_indexes_by_elem_id.items[@intCast(elem_id)].signal_bool_attrs.slot(field), expected);
+        descriptor_stream.clearIndex(self.descriptor_indexes_by_elem_id.items[@intCast(elem_id)].signal_bool_attrs.slot(field), expected);
     }
 
     pub fn recordEventIndex(self: *HostNodeDescriptorStream, allocator: std.mem.Allocator, elem_id: u64, kind: RenderEventKind, index: usize) void {
-        HostNodeDescriptorStream.setFreshIndex(self.ensureElemDescriptorIndex(allocator, elem_id).events.slot(kind), index);
+        descriptor_stream.setFreshIndex(self.ensureElemDescriptorIndex(allocator, elem_id).events.slot(kind), index);
     }
 
     pub fn updateEventIndex(self: *HostNodeDescriptorStream, elem_id: u64, kind: RenderEventKind, index: usize) void {
-        HostNodeDescriptorStream.updateIndex(self.descriptor_indexes_by_elem_id.items[@intCast(elem_id)].events.slot(kind), index);
+        descriptor_stream.updateIndex(self.descriptor_indexes_by_elem_id.items[@intCast(elem_id)].events.slot(kind), index);
     }
 
     pub fn clearEventIndex(self: *HostNodeDescriptorStream, elem_id: u64, kind: RenderEventKind, expected: usize) void {
-        HostNodeDescriptorStream.clearIndex(self.descriptor_indexes_by_elem_id.items[@intCast(elem_id)].events.slot(kind), expected);
+        descriptor_stream.clearIndex(self.descriptor_indexes_by_elem_id.items[@intCast(elem_id)].events.slot(kind), expected);
     }
 
     pub fn recordScopeSiteIndex(self: *HostNodeDescriptorStream, allocator: std.mem.Allocator, node_id: u64, kind: HostNodeScopeSiteKind, index: usize) void {
-        HostNodeDescriptorStream.setFreshIndex(self.ensureNodeDescriptorIndex(allocator, node_id).scope_sites.slot(kind), index);
+        descriptor_stream.setFreshIndex(self.ensureNodeDescriptorIndex(allocator, node_id).scope_sites.slot(kind), index);
     }
 
     pub fn updateScopeSiteIndex(self: *HostNodeDescriptorStream, node_id: u64, kind: HostNodeScopeSiteKind, index: usize) void {
-        HostNodeDescriptorStream.updateIndex(self.descriptor_indexes_by_node_id.items[@intCast(node_id)].scope_sites.slot(kind), index);
+        descriptor_stream.updateIndex(self.descriptor_indexes_by_node_id.items[@intCast(node_id)].scope_sites.slot(kind), index);
     }
 
     pub fn clearScopeSiteIndex(self: *HostNodeDescriptorStream, node_id: u64, kind: HostNodeScopeSiteKind, expected: usize) void {
-        HostNodeDescriptorStream.clearIndex(self.descriptor_indexes_by_node_id.items[@intCast(node_id)].scope_sites.slot(kind), expected);
+        descriptor_stream.clearIndex(self.descriptor_indexes_by_node_id.items[@intCast(node_id)].scope_sites.slot(kind), expected);
     }
 
     pub fn recordStateIndex(self: *HostNodeDescriptorStream, allocator: std.mem.Allocator, node_id: u64, index: usize) void {
-        HostNodeDescriptorStream.setFreshIndex(&self.ensureNodeDescriptorIndex(allocator, node_id).state, index);
+        descriptor_stream.setFreshIndex(&self.ensureNodeDescriptorIndex(allocator, node_id).state, index);
     }
 
     pub fn updateStateIndex(self: *HostNodeDescriptorStream, node_id: u64, index: usize) void {
-        HostNodeDescriptorStream.updateIndex(&self.descriptor_indexes_by_node_id.items[@intCast(node_id)].state, index);
+        descriptor_stream.updateIndex(&self.descriptor_indexes_by_node_id.items[@intCast(node_id)].state, index);
     }
 
     pub fn clearStateIndex(self: *HostNodeDescriptorStream, node_id: u64, expected: usize) void {
-        HostNodeDescriptorStream.clearIndex(&self.descriptor_indexes_by_node_id.items[@intCast(node_id)].state, expected);
+        descriptor_stream.clearIndex(&self.descriptor_indexes_by_node_id.items[@intCast(node_id)].state, expected);
     }
 
     pub fn recordWhenIndex(self: *HostNodeDescriptorStream, allocator: std.mem.Allocator, node_id: u64, index: usize) void {
-        HostNodeDescriptorStream.setFreshIndex(&self.ensureNodeDescriptorIndex(allocator, node_id).when, index);
+        descriptor_stream.setFreshIndex(&self.ensureNodeDescriptorIndex(allocator, node_id).when, index);
     }
 
     pub fn updateWhenIndex(self: *HostNodeDescriptorStream, node_id: u64, index: usize) void {
-        HostNodeDescriptorStream.updateIndex(&self.descriptor_indexes_by_node_id.items[@intCast(node_id)].when, index);
+        descriptor_stream.updateIndex(&self.descriptor_indexes_by_node_id.items[@intCast(node_id)].when, index);
     }
 
     pub fn clearWhenIndex(self: *HostNodeDescriptorStream, node_id: u64, expected: usize) void {
-        HostNodeDescriptorStream.clearIndex(&self.descriptor_indexes_by_node_id.items[@intCast(node_id)].when, expected);
+        descriptor_stream.clearIndex(&self.descriptor_indexes_by_node_id.items[@intCast(node_id)].when, expected);
     }
 
     pub fn recordEachIndex(self: *HostNodeDescriptorStream, allocator: std.mem.Allocator, node_id: u64, index: usize) void {
-        HostNodeDescriptorStream.setFreshIndex(&self.ensureNodeDescriptorIndex(allocator, node_id).each, index);
+        descriptor_stream.setFreshIndex(&self.ensureNodeDescriptorIndex(allocator, node_id).each, index);
     }
 
     pub fn updateEachIndex(self: *HostNodeDescriptorStream, node_id: u64, index: usize) void {
-        HostNodeDescriptorStream.updateIndex(&self.descriptor_indexes_by_node_id.items[@intCast(node_id)].each, index);
+        descriptor_stream.updateIndex(&self.descriptor_indexes_by_node_id.items[@intCast(node_id)].each, index);
     }
 
     pub fn clearEachIndex(self: *HostNodeDescriptorStream, node_id: u64, expected: usize) void {
-        HostNodeDescriptorStream.clearIndex(&self.descriptor_indexes_by_node_id.items[@intCast(node_id)].each, expected);
+        descriptor_stream.clearIndex(&self.descriptor_indexes_by_node_id.items[@intCast(node_id)].each, expected);
     }
 
     pub fn deinit(self: *HostNodeDescriptorStream, allocator: std.mem.Allocator, ctx: anytype, roc_host: *abi.RocHost, metrics: anytype) void {
