@@ -1884,6 +1884,32 @@ code do not know iterator rules, stream rules, public step-callable layouts, or
 reference-count policy for iterator wrappers. ARC remains the only owner of
 reference-count insertion.
 
+The opt-mode gate is part of the correctness boundary for the implementation,
+not a tuning knob inside the optimizer. The compiler has two construction
+paths after checking:
+
+- ordinary public-value lowering, which constructs no result-demand arena,
+  private-state graph, loop fixed point, or demand-keyed worker queue
+- optimized callable-state lowering, which exists only for `--opt=size` and
+  `--opt=speed` and owns all of those structures
+
+The ordinary path must remain able to lower every checked program by
+materializing ordinary Roc values. The optimized path may spend extra compiler
+time to avoid materialization under explicit demand, but it must produce the
+same observable Roc behavior. This separation is why the optimizer is not run
+from `roc check`, compile-time evaluation, dev builds, interpreter paths, or
+non-optimized builds. Those paths need correctness and diagnostics, not
+Rust-like generated-code specialization.
+
+The implementation order follows from that boundary. First the post-check
+driver must select one lowering context from explicit build-mode input. Then
+optimized lowering can introduce result demand, sparse private state, loop
+demand graph nodes, finite callable-state alternatives, and demand-keyed
+workers as data owned by that context. Later stages must see only ordinary LIR.
+If a private-state shape is discovered only by scanning completed LIR, generated
+symbols, wasm bytes, object bytes, or disassembly, the implementation has missed
+the producer-consumer boundary where that fact should have been produced.
+
 The implementation must move directly to this design. There is no intermediate
 iterator-specific design to preserve, and no short-term fallback path to keep
 around after the generic mechanism exists. The optimized lowering pipeline is
