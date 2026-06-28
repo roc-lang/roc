@@ -11,6 +11,73 @@ import Signal exposing [Signal]
 ## referenced by their scoped token, so the same helper composes correctly
 ## wherever it is mounted.
 Ui := [].{
+	KeyPayload : { key : Str, shift_key : Bool }
+
+	read_byte : List(U8) -> { byte : U8, rest : List(U8) }
+	read_byte = |bytes|
+		match List.first(bytes) {
+			Ok(byte) => { byte, rest: List.drop_first(bytes, 1) }
+			Err(_) => {
+				crash "malformed key event payload: missing byte"
+			}
+		}
+
+	read_u32_le : List(U8) -> { value : U64, rest : List(U8) }
+	read_u32_le = |bytes| {
+		b0 = read_byte(bytes)
+		b1 = read_byte(b0.rest)
+		b2 = read_byte(b1.rest)
+		b3 = read_byte(b2.rest)
+		value =
+			U8.to_u64(b0.byte)
+				+ U8.to_u64(b1.byte) * 256
+				+ U8.to_u64(b2.byte) * 65536
+				+ U8.to_u64(b3.byte) * 16777216
+		{ value, rest: b3.rest }
+	}
+
+	take_bytes : List(U8), U64 -> { value : List(U8), rest : List(U8) }
+	take_bytes = |bytes, count| {
+		var $remaining = bytes
+		var $value = []
+		var $left = count
+
+		while $left > 0 {
+			next = read_byte($remaining)
+			$value = List.append($value, next.byte)
+			$remaining = next.rest
+			$left = $left - 1
+		}
+
+		{ value: $value, rest: $remaining }
+	}
+
+	decode_key_payload : List(U8) -> KeyPayload
+	decode_key_payload = |bytes| {
+		key_len = read_u32_le(bytes)
+		key_bytes = take_bytes(key_len.rest, key_len.value)
+		shift = read_byte(key_bytes.rest)
+
+		if !List.is_empty(shift.rest) {
+			crash "malformed key event payload: trailing bytes"
+		}
+
+		key =
+			match Str.from_utf8(key_bytes.value) {
+				Ok(text) => text
+				Err(_) => {
+					crash "malformed key event payload: key was not UTF-8"
+				}
+			}
+
+		if shift.byte == 0 {
+			{ key, shift_key: False }
+		} else if shift.byte == 1 {
+			{ key, shift_key: True }
+		} else {
+			crash "malformed key event payload: invalid shift flag"
+		}
+	}
 
 	## A handle to a state binder, given to the `Ui.state` body. `signal` reads the
 	## current value; `send` builds a `Node.Msg` that, when its event fires, applies
@@ -81,6 +148,28 @@ Ui := [].{
 					binder: st.ref,
 					payload_kind: Node.bool_payload_kind,
 					payload_accessor: Node.payload_accessor_target_checked,
+					payload_reducer: { capability: Capability.handle(payload_cap), transform: Box.box(wrapped) },
+				}
+			}
+
+		on_key : State(a), (a, KeyPayload -> a) -> Node.Msg
+		on_key = |st, f| {
+				current_cap = st.cap
+				payload_cap = Capability.new({})
+				wrapped : HostValue, HostValue -> HostValue
+				wrapped = |current_hv, payload_hv| {
+					current : a
+				current = Box.unbox(Capability.get(current_hv, current_cap))
+				payload_bytes : List(U8)
+				payload_bytes = Box.unbox(Capability.get(payload_hv, payload_cap))
+				next : a
+					next = f(current, decode_key_payload(payload_bytes))
+					Capability.store(Box.box(next), current_cap)
+				}
+				{
+					binder: st.ref,
+					payload_kind: Node.bytes_payload_kind,
+					payload_accessor: Node.payload_accessor_record_key_shift,
 					payload_reducer: { capability: Capability.handle(payload_cap), transform: Box.box(wrapped) },
 				}
 			}

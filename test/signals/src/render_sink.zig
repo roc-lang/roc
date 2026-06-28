@@ -11,6 +11,7 @@ const render = @import("render_commands.zig");
 pub const TextField = render.TextField;
 pub const BoolField = render.BoolField;
 pub const EventKind = render.EventKind;
+pub const EventPayloadKind = render.EventPayloadKind;
 pub const EventPayloadAccessor = render.EventPayloadAccessor;
 pub const Counts = render.Counts;
 
@@ -72,6 +73,14 @@ pub fn DomSink(comptime Host: type) type {
 
         pub fn clearEvent(self: @This(), elem_id: u64, kind: EventKind) void {
             self.host.sinkClearEvent(elem_id, kind);
+        }
+
+        pub fn bindEventName(self: @This(), elem_id: u64, name: []const u8, event_id: u64, options: u32, payload_kind: EventPayloadKind, payload_accessor: EventPayloadAccessor) void {
+            self.host.sinkBindEventName(elem_id, name, event_id, options, payload_kind, payload_accessor);
+        }
+
+        pub fn clearEventName(self: @This(), elem_id: u64, name: []const u8) void {
+            self.host.sinkClearEventName(elem_id, name);
         }
 
         pub fn startInterval(self: @This(), token: u64, period_ms: u64) void {
@@ -167,6 +176,15 @@ test "DomSink forwards every render seam method to the host" {
             self.mark(11);
         }
 
+        pub fn sinkBindEventName(self: *@This(), _: u64, _: []const u8, _: u64, _: u32, _: EventPayloadKind, payload_accessor: EventPayloadAccessor) void {
+            self.mark(19);
+            self.last_event_accessor = payload_accessor;
+        }
+
+        pub fn sinkClearEventName(self: *@This(), _: u64, _: []const u8) void {
+            self.mark(20);
+        }
+
         pub fn sinkStartInterval(self: *@This(), _: u64, _: u64) void {
             self.mark(12);
         }
@@ -209,16 +227,18 @@ test "DomSink forwards every render seam method to the host" {
     sink.clearBoolField(1, .checked);
     sink.bindEventKind(1, .input, 7, .target_value);
     sink.clearEvent(1, .input);
+    sink.bindEventName(1, "keydown", 8, 0, .bytes, .record_key_shift);
+    sink.clearEventName(1, "keydown");
     sink.startInterval(8, 1000);
     sink.cancelInterval(8);
     sink.startTask(9, "lookup", "roc");
     sink.cancelTask(9);
     sink.debugAssertNode(1, true, "div", 0, &children, 7, null, null, null, null, null, null);
 
-    try std.testing.expectEqual((@as(u32, 1) << 19) - 1, host.seen);
+    try std.testing.expectEqual((@as(u32, 1) << 21) - 1, host.seen);
     try std.testing.expectEqual(@as(usize, 2), host.last_children_len);
     try std.testing.expectEqual(@as(usize, 2), host.last_debug_children_len);
-    try std.testing.expectEqual(EventPayloadAccessor.target_value, host.last_event_accessor);
+    try std.testing.expectEqual(EventPayloadAccessor.record_key_shift, host.last_event_accessor);
     try std.testing.expectEqualStrings("lookup", host.last_task_name);
     try std.testing.expectEqualStrings("roc", host.last_task_request);
 }

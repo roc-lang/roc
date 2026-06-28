@@ -10,6 +10,7 @@ const abi = @import("roc_platform_abi.zig");
 
 pub const HostValue = u64;
 pub const HostValueCapabilityHandle = abi.HostValueCapabilityHandle;
+pub const U8List = abi.RocListWith(u8, false);
 
 pub const ActiveCapabilityStack = struct {
     const max_frames = 64;
@@ -58,7 +59,7 @@ pub const ActiveCapabilityStack = struct {
 
 /// Carrier-type category recorded for a freshly boxed value. The native host
 /// uses it for debug type assertions; the browser host ignores it.
-pub const ValueKind = enum { unit, str, bool, i64 };
+pub const ValueKind = enum { unit, str, bool, i64, u8_list };
 
 /// Signals represents signal tokens and binder tokens as boxed `U64` payloads
 /// in Roc. On wasm32 their payload alignment is 8 while pointer width is 4, so
@@ -222,5 +223,21 @@ pub fn makeI64WithCapability(ctx: anytype, roc_host: *abi.RocHost, n: i64, cap: 
     payload.* = n;
     const value = ctx.storeWithCapability(@ptrCast(payload), cap);
     ctx.recordKind(value, .i64);
+    return value;
+}
+
+pub fn makeU8List(ctx: anytype, roc_host: *abi.RocHost, bytes: []const u8) HostValue {
+    const payload: *U8List = @ptrCast(@alignCast(abi.allocateBox(@sizeOf(U8List), @alignOf(U8List), true, roc_host)));
+    payload.* = U8List.fromSlice(bytes, roc_host);
+    const value = ctx.store(@ptrCast(payload));
+    ctx.recordKind(value, .u8_list);
+    return value;
+}
+
+pub fn makeU8ListWithCapability(ctx: anytype, roc_host: *abi.RocHost, bytes: []const u8, cap: HostValueCapabilityHandle) HostValue {
+    const payload: *U8List = @ptrCast(@alignCast(abi.allocateBox(@sizeOf(U8List), @alignOf(U8List), true, roc_host)));
+    payload.* = U8List.fromSlice(bytes, roc_host);
+    const value = ctx.storeWithCapability(@ptrCast(payload), cap);
+    ctx.recordKind(value, .u8_list);
     return value;
 }

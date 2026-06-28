@@ -141,6 +141,9 @@ import HostValue exposing [HostValue]
 	bool_payload_kind : U64
 	bool_payload_kind = 3
 
+	bytes_payload_kind : U64
+	bytes_payload_kind = 4
+
 	payload_accessor_none : U64
 	payload_accessor_none = 1
 
@@ -150,6 +153,24 @@ import HostValue exposing [HostValue]
 	payload_accessor_target_checked : U64
 	payload_accessor_target_checked = 3
 
+	payload_accessor_record_key_shift : U64
+	payload_accessor_record_key_shift = 4
+
+	listener_prevent_default : U64
+	listener_prevent_default = 1
+
+	listener_stop_propagation : U64
+	listener_stop_propagation = 2
+
+	listener_capture : U64
+	listener_capture = 4
+
+	listener_passive : U64
+	listener_passive = 8
+
+	listener_once : U64
+	listener_once = 16
+
 	## Static attribute on a markup element. Dynamic (signal-backed) attrs carry a
 	## `SignalExpr`; event handlers carry a `Msg`.
 	Attr := [
@@ -158,5 +179,6 @@ import HostValue exposing [HostValue]
 		StaticBool({ field : U64, value : Bool }),
 		SignalBool({ field : U64, signal : Box(SignalExpr), read : HostValue.BoolReadHandle }),
 		OnEvent({ kind : U64, msg : Msg }),
+		OnNamedEvent({ name : Str, options : U64, msg : Msg }),
 	]
 }

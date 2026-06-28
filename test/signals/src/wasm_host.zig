@@ -157,6 +157,14 @@ const WasmSink = struct {
         appendCommand(.clear_event, toU32(elem_id), toU32(@intFromEnum(kind)), 0, 0, 0);
     }
 
+    pub fn bindEventName(_: WasmSink, elem_id: u64, name: []const u8, event_id: u64, options: u32, payload_kind: EventPayloadKind, payload_accessor: engine.EventPayloadAccessor) void {
+        appendDynamicBindEvent(toU32(elem_id), name, toU32(event_id), options, @intCast(@intFromEnum(payload_kind)), payloadSpecForAccessor(payload_accessor));
+    }
+
+    pub fn clearEventName(_: WasmSink, elem_id: u64, name: []const u8) void {
+        appendDynamicClearEvent(toU32(elem_id), name);
+    }
+
     pub fn startInterval(_: WasmSink, token: u64, period_ms: u64) void {
         appendCommand(.start_interval, toU32(token), toU32(period_ms), 0, 0, 0);
     }
@@ -303,6 +311,25 @@ fn appendDynamicRemoveAttr(elem_id: u32, name: []const u8) void {
     appendCommand(.extended, slice.offset, slice.len, 0, 0, 0);
 }
 
+fn payloadSpecForAccessor(payload_accessor: engine.EventPayloadAccessor) []const u8 {
+    return switch (payload_accessor) {
+        .none => &render.PayloadSpec.unit_spec,
+        .target_value => &render.PayloadSpec.target_value,
+        .target_checked => &render.PayloadSpec.target_checked,
+        .record_key_shift => &render.PayloadSpec.key_shift,
+    };
+}
+
+fn appendDynamicBindEvent(elem_id: u32, name: []const u8, event_id: u32, options: u32, payload_kind: u32, payload_spec: []const u8) void {
+    const slice = dynamic_command_buffer.appendBindEvent(allocator(), elem_id, event_id, name, options, payload_kind, payload_spec) catch failHost();
+    appendCommand(.extended, slice.offset, slice.len, 0, 0, 0);
+}
+
+fn appendDynamicClearEvent(elem_id: u32, name: []const u8) void {
+    const slice = dynamic_command_buffer.appendClearEvent(allocator(), elem_id, name) catch failHost();
+    appendCommand(.extended, slice.offset, slice.len, 0, 0, 0);
+}
+
 fn appendBoolFieldCommand(field: RenderBoolField, elem_id: u32, value: bool) void {
     appendCommand(field.setOp(), elem_id, @intFromBool(value), 0, 0, 0);
 }
@@ -407,6 +434,10 @@ fn hostValueStr(bytes: []const u8) HostValue {
 
 fn hostValueBool(value: bool) HostValue {
     return hv.makeBool(HostValueOpsCtx{}, &roc_host, value);
+}
+
+fn hostValueU8List(bytes: []const u8) HostValue {
+    return hv.makeU8List(HostValueOpsCtx{}, &roc_host, bytes);
 }
 
 // --- State access (routed through the engine's state table) ---
@@ -931,12 +962,14 @@ export fn roc_ui_event(event_id: u32, payload_kind_id: u32, payload_ptr: usize, 
         @intFromEnum(EventPayloadKind.unit) => .unit,
         @intFromEnum(EventPayloadKind.str) => .str,
         @intFromEnum(EventPayloadKind.bool) => .bool,
+        @intFromEnum(EventPayloadKind.bytes) => .bytes,
         else => failHost(),
     };
     const payload = switch (payload_kind) {
         .unit => hostValueUnit(),
         .str => hostValueStr((@as([*]const u8, @ptrFromInt(payload_ptr)))[0..payload_len]),
         .bool => hostValueBool(bool_value != 0),
+        .bytes => hostValueU8List((@as([*]const u8, @ptrFromInt(payload_ptr)))[0..payload_len]),
     };
     dispatchEvent(event_id, payload_kind, payload);
 }

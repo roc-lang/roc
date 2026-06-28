@@ -202,7 +202,7 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
         for (hosted_indices) |index| gpa.free(index.sort_key);
         gpa.free(hosted_indices);
     }
-    var hosted_symbols = collectHostedSymbols(gpa, modules) catch {
+    var hosted_symbols = collectHostedSymbols(gpa, modules, platform_info.hosted_entries) catch {
         return error.OutOfMemory;
     };
     defer deinitHostedSymbols(gpa, &hosted_symbols);
@@ -262,18 +262,21 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
         }
         provides_entries.deinit(gpa);
     }
+    for (platform_info.provides_entries) |entry| {
+        const name = try gpa.dupe(u8, entry.name);
+        errdefer gpa.free(name);
+        const ffi_symbol = try gpa.dupe(u8, entry.ffi_symbol);
+        errdefer gpa.free(ffi_symbol);
+        try provides_entries.append(gpa, .{
+            .name = name,
+            .ffi_symbol = ffi_symbol,
+        });
+    }
 
     for (modules) |mod| {
         if (!mod.is_platform_main) continue;
         const artifact = mod.semantic.checked_artifact orelse return error.ModuleRetrieval;
         type_table.clearVarMap();
-
-        for (artifact.provides_requires.provides) |provides_entry| {
-            try provides_entries.append(gpa, .{
-                .name = try gpa.dupe(u8, artifact.canonical_names.exportNameText(provides_entry.source_name)),
-                .ffi_symbol = try gpa.dupe(u8, artifact.canonical_names.externalSymbolNameText(provides_entry.ffi_symbol)),
-            });
-        }
 
         for (artifact.platform_required_declarations.declarations) |declaration| {
             const name = artifact.canonical_names.exportNameText(declaration.platform_name);
@@ -655,12 +658,27 @@ fn deinitHostedSymbols(allocator: Allocator, hosted_symbols: *std.StringHashMap(
 fn collectHostedSymbols(
     allocator: Allocator,
     modules: []const BuildEnv.CompiledModuleInfo,
+    header_hosted_entries: []const PlatformHeaderInfo.ProvidesEntry,
 ) Allocator.Error!std.StringHashMap([]const u8) {
     var hosted_symbols = std.StringHashMap([]const u8).init(allocator);
     errdefer deinitHostedSymbols(allocator, &hosted_symbols);
 
+    for (header_hosted_entries) |entry| {
+        const key = try allocator.dupe(u8, entry.name);
+        errdefer allocator.free(key);
+        const symbol = try allocator.dupe(u8, entry.ffi_symbol);
+        errdefer allocator.free(symbol);
+        const gop = try hosted_symbols.getOrPut(key);
+        if (gop.found_existing) {
+            allocator.free(key);
+            allocator.free(symbol);
+        } else {
+            gop.value_ptr.* = symbol;
+        }
+    }
+
     for (modules) |mod| {
-        if (!mod.is_platform_main) continue;
+        if (!(mod.is_platform_sibling or mod.is_platform_main)) continue;
         const artifact = mod.semantic.checked_artifact orelse continue;
         const env = artifact.moduleEnvConst();
 
@@ -784,6 +802,8 @@ fn argLayoutsForProc(
 pub const PlatformHeaderInfo = struct {
     requires_entries: []RequiresEntry,
     type_aliases: [][]const u8,
+    provides_entries: []ProvidesEntry,
+    hosted_entries: []ProvidesEntry,
 
     pub const RequiresEntry = struct {
         name: []const u8,
@@ -807,8 +827,66 @@ pub const PlatformHeaderInfo = struct {
             gpa.free(alias_name);
         }
         gpa.free(self.type_aliases);
+        deinitHeaderSymbolEntries(gpa, self.provides_entries);
+        deinitHeaderSymbolEntries(gpa, self.hosted_entries);
     }
 };
+
+fn deinitHeaderSymbolEntries(gpa: std.mem.Allocator, entries: []const PlatformHeaderInfo.ProvidesEntry) void {
+    for (entries) |entry| {
+        gpa.free(entry.name);
+        gpa.free(entry.ffi_symbol);
+    }
+    gpa.free(entries);
+}
+
+fn stripLeadingDot(text: []const u8) []const u8 {
+    if (std.mem.startsWith(u8, text, ".")) return text[1..];
+    return text;
+}
+
+fn headerFunctionText(parse_ast: *const parse.AST, entry: parse.AST.SymbolMapEntry) []const u8 {
+    const raw = if (entry.module) |module_tok| blk: {
+        if (entry.func == module_tok + 1) break :blk parse_ast.resolve(entry.func);
+        const first = parse_ast.tokens.resolve(module_tok + 1);
+        const last = parse_ast.tokens.resolve(entry.func);
+        break :blk parse_ast.env.source[first.start.offset + 1 .. last.end.offset];
+    } else parse_ast.resolve(entry.func);
+    return stripTrailingBang(stripLeadingDot(raw));
+}
+
+fn headerSymbolName(gpa: Allocator, parse_ast: *const parse.AST, entry: parse.AST.SymbolMapEntry) Allocator.Error![]const u8 {
+    const function_name = headerFunctionText(parse_ast, entry);
+    if (entry.module) |module_tok| {
+        return try std.fmt.allocPrint(gpa, "{s}.{s}", .{ parse_ast.resolve(module_tok), function_name });
+    }
+    return try gpa.dupe(u8, function_name);
+}
+
+fn parseHeaderSymbolEntries(gpa: Allocator, parse_ast: *const parse.AST, span: parse.AST.SymbolMapEntry.Span) Allocator.Error![]PlatformHeaderInfo.ProvidesEntry {
+    var entries = std.ArrayList(PlatformHeaderInfo.ProvidesEntry).empty;
+    errdefer {
+        for (entries.items) |entry| {
+            gpa.free(entry.name);
+            gpa.free(entry.ffi_symbol);
+        }
+        entries.deinit(gpa);
+    }
+
+    for (parse_ast.store.symbolMapEntrySlice(span)) |entry_idx| {
+        const entry = parse_ast.store.getSymbolMapEntry(entry_idx);
+        const name = try headerSymbolName(gpa, parse_ast, entry);
+        errdefer gpa.free(name);
+        const ffi_symbol = try gpa.dupe(u8, parse_ast.resolve(entry.symbol));
+        errdefer gpa.free(ffi_symbol);
+        try entries.append(gpa, .{
+            .name = name,
+            .ffi_symbol = ffi_symbol,
+        });
+    }
+
+    return try entries.toOwnedSlice(gpa);
+}
 
 /// Parse a platform header to extract requires entries and validate it's a platform file.
 fn parsePlatformHeader(gpa: Allocator, platform_path: []const u8, std_io: std.Io) (Allocator.Error || error{ FileNotFound, ParseFailed, NotPlatformFile })!PlatformHeaderInfo {
@@ -911,10 +989,24 @@ fn parsePlatformHeader(gpa: Allocator, platform_path: []const u8, std_io: std.Io
             while (alias_iter.next()) |key| {
                 try type_aliases.append(gpa, key.*);
             }
+            const owned_type_aliases = try type_aliases.toOwnedSlice(gpa);
+            errdefer {
+                for (owned_type_aliases) |alias_name| {
+                    gpa.free(alias_name);
+                }
+                gpa.free(owned_type_aliases);
+            }
+
+            const provides_entries = try parseHeaderSymbolEntries(gpa, parse_ast, platform_header.provides);
+            errdefer deinitHeaderSymbolEntries(gpa, provides_entries);
+            const hosted_entries = try parseHeaderSymbolEntries(gpa, parse_ast, platform_header.hosted);
+            errdefer deinitHeaderSymbolEntries(gpa, hosted_entries);
 
             return PlatformHeaderInfo{
                 .requires_entries = try requires_entries.toOwnedSlice(gpa),
-                .type_aliases = try type_aliases.toOwnedSlice(gpa),
+                .type_aliases = owned_type_aliases,
+                .provides_entries = provides_entries,
+                .hosted_entries = hosted_entries,
             };
         },
         else => return error.NotPlatformFile,

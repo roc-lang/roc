@@ -189,7 +189,8 @@ The patch command set:
 - `SetText`, `SetValue`, `SetChecked`, and `SetDisabled`
 - `SetRole`, `SetLabel`, `SetTestId`, `SetClass`, and dynamic text attributes
   from `Html.attr` / `Html.attr_s`
-- `BindClick`, `BindInput`, `BindCheck`, pointer-event binds, and `ClearEvent`
+- `BindClick`, `BindInput`, `BindCheck`, pointer-event binds, dynamic named
+  event binds from `Html.on_event`, and `ClearEvent`
 - Timer and task commands for intervals, async starts, and cancellation
 
 The simulated host applies these against an in-memory element tree; a browser
@@ -199,10 +200,29 @@ In the browser host those patches travel over a versioned command-buffer wire.
 Hot operations are fixed six-word records in WASM memory. Text payloads use a
 separate UTF-8 string buffer. Variable-shape attribute operations use an
 `Extended` record whose operands point into a dynamic byte buffer; version 1
-defines `SetAttrText` and `RemoveAttr`. The JS runtime checks the protocol
-version/feature bits and validates each dynamic record before applying it.
+defines `SetAttrText`, `RemoveAttr`, `BindEvent`, and `ClearEvent`. The JS
+runtime checks the protocol version/feature bits and validates each dynamic
+record before applying it.
 Native specs can assert app-authored custom attrs with
 `expect_attr <locator> <name> "value"`.
+
+Dynamic named events carry explicit payload descriptors. JS reads only the
+leaves in the descriptor and sends layout-independent bytes to the host; it does
+not decode Roc values. The current app-facing helpers cover:
+
+```roc
+Html.on_key_down(model.on_key(|state, payload|
+    { ..state, last_key: payload.key, shift_key: payload.shift_key }
+))
+
+Html.on_submit_prevent_default(model.on_unit(|state|
+    { ..state, submits: state.submits + 1 }
+))
+```
+
+`payload` has type `{ key : Str, shift_key : Bool }`. Submit uses a unit payload
+and a static prevent-default listener option; JS applies that policy from the
+descriptor, not by inspecting the DOM.
 
 ## One Call Into Roc at Startup, Direct Calls After
 
@@ -488,7 +508,10 @@ choosing a decoder or comparing erased bytes. Built-in types such as `Str`,
   fields, role/label/test-id/class helpers for common metadata, and
   `Html.attr` / `Html.attr_s` for app-authored text attributes such as
   `data-*` and `aria-*`. `Html.on_click`, `Html.on_input`, and
-  `Html.on_check` attach handlers.
+  `Html.on_check` attach fixed hot handlers. `Html.on_key_down` attaches a
+  keyboard handler with `{ key, shift_key }`, and
+  `Html.on_submit_prevent_default` attaches a submit handler with static
+  prevent-default.
 - Use `Ui.when` for conditional regions and `Ui.each` for lists. Use
   `Ui.component` to introduce a named scope when a reusable piece of UI needs its
   own local state.
@@ -704,6 +727,9 @@ The maintained examples in `apps/` show larger versions of these patterns:
   keyed alert rows, and input state.
 - `checkout_wizard.roc` shows conditional wizard steps, form state, disabled
   actions, list replacement, and per-row local state.
+- `event_payload_boundary.roc` shows app-authored attrs (`href`, `aria-label`,
+  `data-*`, `id`, `placeholder`), signal-backed custom attrs, keyboard payloads,
+  and submit prevent-default.
 - `kanban_board.roc` shows list reorder, archive/reset flows, filtering through
   `Signal.map2`, and per-card local state.
 - `identity_stress.roc` is the Phase 2 identity harness for

@@ -936,8 +936,8 @@ crossing — this is the reason the boundary is cheap.
 
 The browser wire is versioned. JS reads `roc_ui_protocol_version()` and
 `roc_ui_protocol_features()` before mounting and requires version `1` with the
-`dynamic_attrs` feature bit. A version or feature mismatch is a boundary error,
-not a compatibility shim.
+`dynamic_attrs` and `dynamic_events` feature bits. A version or feature mismatch
+is a boundary error, not a compatibility shim.
 
 The host appends fixed-width records to `roc_ui_command_buffer_*`: six little
 endian `u32` words (`op`, then five integer operands). Hot operations fit
@@ -965,7 +965,7 @@ payload bytes
 zero padding to 4-byte alignment
 ```
 
-Version 1 defines two dynamic attribute ops:
+Version 1 defines two dynamic attribute ops and two dynamic event ops:
 
 ```text
 SetAttrText:
@@ -979,6 +979,21 @@ RemoveAttr:
   u32 elem_id
   u32 name_len
   name bytes
+
+BindEvent:
+  u32 elem_id
+  u32 event_id
+  u32 event_name_len
+  event_name bytes
+  u32 listener_options
+  u32 payload_kind
+  u32 payload_descriptor_len
+  payload_descriptor bytes
+
+ClearEvent:
+  u32 elem_id
+  u32 event_name_len
+  event_name bytes
 ```
 
 Strings in dynamic records are UTF-8 byte slices. The runtime validates the
@@ -992,7 +1007,28 @@ Current wasm-host emission uses dynamic records for metadata text attributes
 text attributes from `Html.attr` / `Html.attr_s`. The Roc descriptor makes the
 custom path explicit with `Node.field_custom` plus a `name` field on text attrs;
 fixed text fields must carry an empty name. `SetText`, `SetValue`, bool fields,
-event binds, timers, and tasks remain fixed records.
+fixed click/input/check/pointer event binds, timers, and tasks remain fixed
+records. General named events use `BindEvent`/`ClearEvent`, carrying the event
+name, static listener option bits, payload kind, and payload descriptor emitted
+by the host from Roc descriptors.
+
+Dynamic event payload descriptors are independent of Roc value layout. They are
+small byte descriptors that name only event/target/currentTarget leaves JS may
+read. Version 1 supports unit payloads, scalar text/bool payloads, and explicit
+records. The current record descriptor used by `Html.on_key_down` asks JS to
+read `event.key` and `event.shiftKey`; JS encodes `{ key, shift_key }` as:
+
+```text
+u32 key_utf8_len
+key UTF-8 bytes
+u8 shift_key   # 0 or 1
+```
+
+The host receives those bytes as a `List(U8)` `HostValue`, and the app-facing
+`Ui.State.on_key` decoder constructs the typed Roc record. JS never decodes Roc
+records, tag unions, list headers, or string layouts. Unsupported payload kind /
+accessor pairs, malformed descriptors, duplicate record fields, trailing bytes,
+and invalid listener option bits are host/runtime contract errors.
 
 ### Marshalling and memory discipline
 
@@ -1106,6 +1142,9 @@ otherwise-unproven capability,"** never size or visual richness. The suite:
   input state.
 - `checkout_wizard` — keyed wizard steps, form/checkbox state, disabled actions,
   list replacement, per-row state.
+- `event_payload_boundary` — app-authored `href`/`aria-*`/`data-*`/`id`/
+  `placeholder` attrs, signal-backed custom attrs, keyboard payload bytes, and
+  submit with static prevent-default policy.
 - `kanban_board` — keyed reorder/archive/reset, per-card state, `map2` filtering.
 - `identity_stress` — `when -> each -> when` row-local state through
   reorder/insert/filter/disposal.
@@ -1158,9 +1197,6 @@ ABI, layout rules, or browser constraints.
 - **Animation / high-frequency continuous values.** A push graph driven by
   discrete updates may need a dedicated `interval`-driven path for smooth
   animation; whether a rAF-coalescing layer buys anything is a measurement.
-- **Event payload accessor format.** Generalizing from the typed click/input/check
-  payloads to an explicit accessor descriptor carried in the descriptor tree, so
-  JS serializes only the requested leaves and never reconstructs the payload.
 - **Multiple instances per page.** Host state is module-global; two mounts on one
   page need either two WASM instances or an explicit per-mount handle.
 - **Recompute granularity.** Whether any future batching of in-host recompute

@@ -51,11 +51,11 @@ runner from the same Roc source.
       `clearInterval` driven by host-emitted cancel commands on scope dispose.
 - [x] `serve.py` builds and serves **any** app in the suite (parameterised app
       selection + both backends), not just the counter/demo. With no app
-      argument it builds the maintained six-app suite and serves the suite index;
+      argument it builds the maintained app suite and serves the suite index;
       pass one app path for targeted QA.
-- [ ] Run each of the six apps in the browser as manual QA, and confirm each runs
+- [ ] Run each maintained app in the browser as manual QA, and confirm each runs
       green under the native spec runner. The native spec runner and JS runtime
-      smoke are green for all six; the suite index now makes the human browser
+      smoke are green for the maintained app set; the suite index now makes the human browser
       pass available from one URL.
 
 We do **not** add an automated real-browser harness. The native spec runner
@@ -63,6 +63,39 @@ already asserts semantics and work budgets — the things the browser cannot sho
 us — and the JS runtime is a thin wrapper whose only meaningful contract is the
 cmd/patch codec. A headless-browser harness would re-test DOM behaviour we do not
 own and engine semantics already covered natively, for no added signal.
+
+### Attribute/event/payload boundary slice evaluation
+
+- **Status:** implemented. Custom text attrs remain on the existing
+  `SetAttrText` / `RemoveAttr` dynamic record path. General named events now use
+  explicit `BindEvent` / `ClearEvent` dynamic records with event name, static
+  listener option bits, payload kind, and payload descriptor. `keydown` requests
+  only `{ event.key, event.shiftKey }`; JS encodes layout-independent bytes and
+  the Roc app-facing `Ui.State.on_key` decoder constructs `{ key, shift_key }`.
+  Submit uses a unit descriptor plus the static prevent-default option.
+- **Alternatives rejected:** JSON payloads, JS decoding Roc record/list/string
+  layouts, DOM-state inference, global interning of payload values, and
+  generalizing fixed hot click/input/check/pointer ops before measurement.
+- **Coverage added:** `event_payload_boundary.roc` / `.txt` covers `href`,
+  `aria-label`, `data-*`, `id`, `placeholder`, static and signal-backed custom
+  attrs, keyboard payload updates, and submit prevent-default. Native host spec
+  actions now include `key_down` and `submit`. JS contract tests cover dynamic
+  event extraction, listener options, malformed descriptors/records, and memory
+  view refresh after payload allocation.
+- **Measured result:** `zig build run-signals-bench` includes
+  `signals-event-payload-boundary` at 20 iterations / 80 actions:
+  `commands=1100`, `bind_event=80`, `allocs_this_event=7120`,
+  `deallocs_this_event=5620`, `retained_alloc_delta=1460`,
+  `host_alloc_bytes_this_event=1451800`,
+  `host_dealloc_bytes_this_event=698040`, `host_retained_bytes_delta=751360`.
+  Existing command-count and allocation metrics were sufficient; no new metric
+  counter was needed for this slice.
+- **Remaining risks / next slice:** general boolean custom attrs such as
+  `required` are still next because the demo and host specs only needed text
+  attrs plus existing checked/disabled bool fields. Broader event descriptors
+  should add more explicit leaf constants only when an app needs them. Native and
+  wasm still have two render-surface sinks behind the same command enum; command
+  wire parity remains an open design question.
 
 ### JS test surface cleanup (part of Phase 1)
 
@@ -850,7 +883,7 @@ Current priority after the Phase 4 review:
 
 ### Benchmark-gate breadth
 
-- **Hypothesis:** extending the benchmark/spec surface beyond the six
+- **Hypothesis:** extending the benchmark/spec surface beyond the maintained
   representative apps (specifically to the generated large-N app) is what turns
   the scaling claim from "true on small fixtures" into "true across N".
 - **Why we suspect it:** scaling regressions are invisible to the current
@@ -885,6 +918,7 @@ locks it in.
   `test/signals/serve.py --no-server --app-opt dev`
   `test/signals/serve.py --no-server --app-opt size`
 - JS↔WASM contract guards (codec/boundary only):
+  `node --test test/signals/browser/runtime_contract.test.mjs`
   `node --test test/signals/browser/wasm_memory_views.test.mjs`
   `node --test test/signals/browser/controlled_input_policy.test.mjs`
 

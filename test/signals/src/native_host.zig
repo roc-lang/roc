@@ -28,6 +28,7 @@ const HostBoolRead = engine.HostBoolRead;
 const HostEachOps = engine.HostEachOps;
 const HostValueList = abi.RocListWith(HostValue, false);
 const I64List = abi.RocListWith(i64, false);
+const U8List = hv.U8List;
 const RenderTextField = render.TextField;
 const RenderBoolField = render.BoolField;
 const RenderEventKind = render.EventKind;
@@ -267,6 +268,7 @@ const DomElement = struct {
     checked_update_count: u64,
     disabled_update_count: u64,
     attrs: std.ArrayListUnmanaged(DomTextAttr),
+    named_events: std.ArrayListUnmanaged(DomNamedEvent),
 
     fn init(id: u64, tag: []const u8) DomElement {
         return .{
@@ -295,6 +297,7 @@ const DomElement = struct {
             .checked_update_count = 0,
             .disabled_update_count = 0,
             .attrs = .empty,
+            .named_events = .empty,
         };
     }
 
@@ -310,12 +313,23 @@ const DomElement = struct {
             attr.deinit(allocator);
         }
         self.attrs.deinit(allocator);
+        for (self.named_events.items) |event| {
+            event.deinit(allocator);
+        }
+        self.named_events.deinit(allocator);
         self.children.deinit(allocator);
     }
 
     fn textAttrIndex(self: *const DomElement, name: []const u8) ?usize {
         for (self.attrs.items, 0..) |attr, index| {
             if (std.mem.eql(u8, attr.name, name)) return index;
+        }
+        return null;
+    }
+
+    fn namedEventIndex(self: *const DomElement, name: []const u8) ?usize {
+        for (self.named_events.items, 0..) |event, index| {
+            if (std.mem.eql(u8, event.name, name)) return index;
         }
         return null;
     }
@@ -331,12 +345,26 @@ const DomTextAttr = struct {
     }
 };
 
+const DomNamedEvent = struct {
+    name: []const u8,
+    event_id: u64,
+    options: u32,
+    payload_kind: EventPayloadKind,
+    payload_accessor: EventPayloadAccessor,
+
+    fn deinit(self: DomNamedEvent, allocator: std.mem.Allocator) void {
+        allocator.free(self.name);
+    }
+};
+
 const SpecCommandType = enum {
     click,
     pointer_down,
     pointer_up,
     pointer_enter,
     pointer_leave,
+    key_down,
+    submit,
     fill,
     check,
     uncheck,
@@ -571,6 +599,14 @@ fn parseTestSpec(allocator: std.mem.Allocator, content: []const u8) ParseError![
             try appendSpecCommand(&commands, allocator, .pointer_enter, try parseLocator(allocator, trimmed["pointer_enter ".len..]), null, null, null, line_num);
         } else if (std.mem.startsWith(u8, trimmed, "pointer_leave ")) {
             try appendSpecCommand(&commands, allocator, .pointer_leave, try parseLocator(allocator, trimmed["pointer_leave ".len..]), null, null, null, line_num);
+        } else if (std.mem.startsWith(u8, trimmed, "key_down ")) {
+            const shift_split = try splitTrailingToken(trimmed["key_down ".len..]);
+            const key_split = try splitTrailingQuoted(shift_split.head);
+            const key_copy = allocator.dupe(u8, key_split.quoted) catch return ParseError.OutOfMemory;
+            errdefer allocator.free(key_copy);
+            try appendSpecCommand(&commands, allocator, .key_down, try parseLocator(allocator, key_split.head), key_copy, null, try parseBoolToken(shift_split.token), line_num);
+        } else if (std.mem.startsWith(u8, trimmed, "submit ")) {
+            try appendSpecCommand(&commands, allocator, .submit, try parseLocator(allocator, trimmed["submit ".len..]), null, null, null, line_num);
         } else if (std.mem.eql(u8, trimmed, "mark_metrics")) {
             try appendSpecCommand(&commands, allocator, .mark_metrics, emptyLocator(), null, null, null, line_num);
         } else if (std.mem.startsWith(u8, trimmed, "fill ")) {
@@ -762,6 +798,7 @@ const TestHostValueKind = enum {
     bool,
     str,
     i64_list,
+    u8_list,
 };
 
 const HostAllocator = struct {
@@ -946,6 +983,14 @@ const HostEnv = struct {
         clearNodeEventKind(self, elem_id, kind);
     }
 
+    pub fn sinkBindEventName(self: *HostEnv, elem_id: u64, name: []const u8, event_id: u64, options: u32, payload_kind: EventPayloadKind, payload_accessor: EventPayloadAccessor) void {
+        bindNodeEventName(self, elem_id, name, event_id, options, payload_kind, payload_accessor);
+    }
+
+    pub fn sinkClearEventName(self: *HostEnv, elem_id: u64, name: []const u8) void {
+        clearNodeEventName(self, elem_id, name);
+    }
+
     pub fn sinkStartInterval(_: *HostEnv, _: u64, _: u64) void {}
 
     pub fn sinkCancelInterval(_: *HostEnv, _: u64) void {}
@@ -1017,6 +1062,7 @@ const HostEnv = struct {
             .str => .str,
             .bool => .bool,
             .i64 => .i64,
+            .u8_list => .u8_list,
         });
     }
 
@@ -2368,6 +2414,43 @@ fn clearNodeEventKind(host: *HostEnv, elem_id: u64, kind: RenderEventKind) void 
     }
 }
 
+fn bindNodeEventName(host: *HostEnv, elem_id: u64, name: []const u8, event_id: u64, options: u32, payload_kind: EventPayloadKind, payload_accessor: EventPayloadAccessor) void {
+    const allocator = host.hostAllocator();
+    const elem = domElementById(host, elem_id);
+    if (elem.namedEventIndex(name)) |index| {
+        const event = &elem.named_events.items[index];
+        event.event_id = event_id;
+        event.options = options;
+        event.payload_kind = payload_kind;
+        event.payload_accessor = payload_accessor;
+        return;
+    }
+
+    const name_copy = allocator.dupe(u8, name) catch std.process.exit(1);
+    elem.named_events.append(allocator, .{
+        .name = name_copy,
+        .event_id = event_id,
+        .options = options,
+        .payload_kind = payload_kind,
+        .payload_accessor = payload_accessor,
+    }) catch {
+        allocator.free(name_copy);
+        std.process.exit(1);
+    };
+}
+
+fn clearNodeEventName(host: *HostEnv, elem_id: u64, name: []const u8) void {
+    const elem = domElementById(host, elem_id);
+    const index = elem.namedEventIndex(name) orelse return;
+    const removed = elem.named_events.orderedRemove(index);
+    removed.deinit(host.hostAllocator());
+}
+
+fn nodeEventName(elem: *const DomElement, name: []const u8) ?DomNamedEvent {
+    const index = elem.namedEventIndex(name) orelse return null;
+    return elem.named_events.items[index];
+}
+
 fn replaceDomChildrenForStructuralParentMoves(host: *HostEnv, parent_elem_id: u64, next_child_ids: []const u64) void {
     replaceDomChildrenForStructuralParent(host, parent_elem_id, next_child_ids);
 }
@@ -2401,6 +2484,10 @@ fn removeDomNode(host: *HostEnv, elem_id: u64) void {
     elem.bound_pointer_up_event = null;
     elem.bound_pointer_enter_event = null;
     elem.bound_pointer_leave_event = null;
+    for (elem.named_events.items) |event| {
+        event.deinit(allocator);
+    }
+    elem.named_events.clearRetainingCapacity();
     elem.children.deinit(allocator);
     elem.children = .empty;
 }
@@ -2459,6 +2546,10 @@ fn hostValueBool(host: *HostEnv, roc_host: *abi.RocHost, value: bool) HostValue 
 
 fn hostValueI64(host: *HostEnv, roc_host: *abi.RocHost, value: i64) HostValue {
     return hv.makeI64(host, roc_host, value);
+}
+
+fn hostValueU8List(host: *HostEnv, roc_host: *abi.RocHost, bytes: []const u8) HostValue {
+    return hv.makeU8List(host, roc_host, bytes);
 }
 
 const ErasedHostValueUnaryArgs = erased_calls.ErasedHostValueUnaryArgs;
@@ -2654,6 +2745,39 @@ fn dispatchRocEvent(host: *HostEnv, roc_host: *abi.RocHost, event_id: u64, paylo
     dispatchRocEventMeasured(host, roc_host, event_id, payload_kind, payload, null);
 }
 
+fn encodeKeyShiftPayload(allocator: std.mem.Allocator, key: []const u8, shift_key: bool) []u8 {
+    const bytes = allocator.alloc(u8, @sizeOf(u32) + key.len + 1) catch std.process.exit(1);
+    std.mem.writeInt(u32, bytes[0..@sizeOf(u32)], @intCast(key.len), .little);
+    @memcpy(bytes[@sizeOf(u32)..][0..key.len], key);
+    bytes[@sizeOf(u32) + key.len] = if (shift_key) 1 else 0;
+    return bytes;
+}
+
+fn requireNamedEvent(elem: *const DomElement, name: []const u8, message: []const u8) DomNamedEvent {
+    return nodeEventName(elem, name) orelse failHost(message);
+}
+
+fn dispatchKeyDownMeasured(host: *HostEnv, roc_host: *abi.RocHost, elem: *const DomElement, key: []const u8, shift_key: bool, stats: ?*BenchmarkStats) void {
+    const event = requireNamedEvent(elem, "keydown", "keydown target has no named keydown binding");
+    if (event.payload_kind != .bytes or event.payload_accessor != .record_key_shift) {
+        failHost("keydown binding does not request the key/shift payload descriptor");
+    }
+    const payload_bytes = encodeKeyShiftPayload(host.hostAllocator(), key, shift_key);
+    defer host.hostAllocator().free(payload_bytes);
+    dispatchRocEventMeasured(host, roc_host, event.event_id, .bytes, hostValueU8List(host, roc_host, payload_bytes), stats);
+}
+
+fn dispatchSubmitMeasured(host: *HostEnv, roc_host: *abi.RocHost, elem: *const DomElement, stats: ?*BenchmarkStats) void {
+    const event = requireNamedEvent(elem, "submit", "submit target has no named submit binding");
+    if (event.payload_kind != .unit or event.payload_accessor != .none) {
+        failHost("submit binding does not use a unit payload descriptor");
+    }
+    if ((event.options & render.listener_option_prevent_default) == 0) {
+        failHost("submit binding is missing the static prevent-default listener policy");
+    }
+    dispatchRocEventMeasured(host, roc_host, event.event_id, .unit, hostValueUnit(host, roc_host), stats);
+}
+
 fn makeSignalsRocHost(host: *HostEnv) abi.RocHost {
     if (builtin.is_test) current_host = host;
     return .{
@@ -2679,7 +2803,7 @@ fn pointerEventIdForCommand(elem: *const DomElement, cmd_type: SpecCommandType) 
 
 fn commandIsAction(cmd: SpecCommand) bool {
     return switch (cmd.cmd_type) {
-        .click, .pointer_down, .pointer_up, .pointer_enter, .pointer_leave, .fill, .check, .uncheck, .resolve_task, .reject_task, .tick_interval => true,
+        .click, .pointer_down, .pointer_up, .pointer_enter, .pointer_leave, .key_down, .submit, .fill, .check, .uncheck, .resolve_task, .reject_task, .tick_interval => true,
         else => false,
     };
 }
@@ -2698,6 +2822,18 @@ fn runActionCommandMeasured(host: *HostEnv, roc_host: *abi.RocHost, cmd: SpecCom
             if (elem.disabled) failHost("benchmark pointer target is disabled");
             const event_id = pointerEventIdForCommand(elem, cmd.cmd_type) orelse failHost("benchmark pointer target has no binding");
             dispatchRocEventMeasured(host, roc_host, event_id, .unit, hostValueUnit(host, roc_host), stats);
+        },
+
+        .key_down => {
+            const elem = host.findElementByLocator(cmd.locator, cmd.line_num) orelse failHost("benchmark key_down locator did not resolve");
+            if (elem.disabled) failHost("benchmark key_down target is disabled");
+            dispatchKeyDownMeasured(host, roc_host, elem, cmd.expected_text orelse failHost("benchmark key_down command is missing key text"), cmd.expected_bool orelse failHost("benchmark key_down command is missing shift flag"), stats);
+        },
+
+        .submit => {
+            const elem = host.findElementByLocator(cmd.locator, cmd.line_num) orelse failHost("benchmark submit locator did not resolve");
+            if (elem.disabled) failHost("benchmark submit target is disabled");
+            dispatchSubmitMeasured(host, roc_host, elem, stats);
         },
 
         .fill => {
@@ -3085,6 +3221,60 @@ fn platform_main(spec_file: []const u8, verbose: bool) error{}!c_int {
                     return 1;
                 };
                 dispatchRocEvent(&host_env, &roc_host, event_id, .unit, hostValueUnit(&host_env, &roc_host));
+            },
+
+            .key_down => {
+                const elem = host_env.findElementByLocator(cmd.locator, cmd.line_num) orelse {
+                    writeLocatorFailure(cmd.line_num, "locator did not resolve to one element");
+                    return 1;
+                };
+                if (elem.disabled) {
+                    writeLocatorFailure(cmd.line_num, "target is disabled");
+                    return 1;
+                }
+                const event = nodeEventName(elem, "keydown") orelse {
+                    writeLocatorFailure(cmd.line_num, "target has no keydown binding");
+                    return 1;
+                };
+                if (event.payload_kind != .bytes or event.payload_accessor != .record_key_shift) {
+                    writeLocatorFailure(cmd.line_num, "keydown binding does not request the key/shift payload descriptor");
+                    return 1;
+                }
+                const key = cmd.expected_text orelse {
+                    writeLocatorFailure(cmd.line_num, "key_down command is missing key text");
+                    return 1;
+                };
+                const shift_key = cmd.expected_bool orelse {
+                    writeLocatorFailure(cmd.line_num, "key_down command is missing shift flag");
+                    return 1;
+                };
+                const payload_bytes = encodeKeyShiftPayload(host_env.hostAllocator(), key, shift_key);
+                defer host_env.hostAllocator().free(payload_bytes);
+                dispatchRocEvent(&host_env, &roc_host, event.event_id, .bytes, hostValueU8List(&host_env, &roc_host, payload_bytes));
+            },
+
+            .submit => {
+                const elem = host_env.findElementByLocator(cmd.locator, cmd.line_num) orelse {
+                    writeLocatorFailure(cmd.line_num, "locator did not resolve to one element");
+                    return 1;
+                };
+                if (elem.disabled) {
+                    writeLocatorFailure(cmd.line_num, "target is disabled");
+                    return 1;
+                }
+                const event = nodeEventName(elem, "submit") orelse {
+                    writeLocatorFailure(cmd.line_num, "target has no submit binding");
+                    return 1;
+                };
+                if (event.payload_kind != .unit or event.payload_accessor != .none) {
+                    writeLocatorFailure(cmd.line_num, "submit binding does not use a unit payload descriptor");
+                    return 1;
+                }
+                if ((event.options & render.listener_option_prevent_default) == 0) {
+                    writeLocatorFailure(cmd.line_num, "submit binding is missing the static prevent-default listener policy");
+                    return 1;
+                }
+                dispatchRocEvent(&host_env, &roc_host, event.event_id, .unit, hostValueUnit(&host_env, &roc_host));
             },
 
             .fill => {
@@ -3820,6 +4010,15 @@ fn testReadHostValueI64List(roc_host: *abi.RocHost, value: HostValue) I64List {
     return payload.*;
 }
 
+fn testReadHostValueU8List(roc_host: *abi.RocHost, value: HostValue) U8List {
+    const host = hostFromRocHost(roc_host);
+    if (host.testHostValueKind(value) != .u8_list) @panic("test HostValue expected List(U8)");
+    const box = host.getHostValue(value);
+    defer abi.decrefBox(box, roc_host);
+    const payload: *const U8List = @ptrCast(@alignCast(box orelse unreachable));
+    return payload.*;
+}
+
 fn testDropRocStrBoxPayload(data_ptr: ?*anyopaque, roc_host: *abi.RocHost) callconv(.c) void {
     const payload: *RocStr = @ptrCast(@alignCast(data_ptr orelse return));
     payload.*.decref(roc_host);
@@ -3827,6 +4026,11 @@ fn testDropRocStrBoxPayload(data_ptr: ?*anyopaque, roc_host: *abi.RocHost) callc
 
 fn testDropI64ListBoxPayload(data_ptr: ?*anyopaque, roc_host: *abi.RocHost) callconv(.c) void {
     const payload: *I64List = @ptrCast(@alignCast(data_ptr orelse return));
+    payload.*.decref(roc_host);
+}
+
+fn testDropU8ListBoxPayload(data_ptr: ?*anyopaque, roc_host: *abi.RocHost) callconv(.c) void {
+    const payload: *U8List = @ptrCast(@alignCast(data_ptr orelse return));
     payload.*.decref(roc_host);
 }
 
@@ -3838,6 +4042,7 @@ fn testDropHostValue(roc_host: *abi.RocHost, value: HostValue) void {
         .unit, .i64, .bool => abi.decrefBox(box, roc_host),
         .str => abi.decrefBoxWith(box, @alignOf(RocStr), true, &testDropRocStrBoxPayload, roc_host),
         .i64_list => abi.decrefBoxWith(box, @alignOf(I64List), true, &testDropI64ListBoxPayload, roc_host),
+        .u8_list => abi.decrefBoxWith(box, @alignOf(U8List), true, &testDropU8ListBoxPayload, roc_host),
     }
 }
 
@@ -4065,6 +4270,11 @@ fn testHostValueEqErasedCallable(roc_host: *abi.RocHost, ret: ?[*]u8, args: ?[*]
             const left = testReadHostValueI64List(roc_host, call_args.arg0);
             const right = testReadHostValueI64List(roc_host, call_args.arg1);
             break :blk std.mem.eql(i64, left.items(), right.items());
+        },
+        .u8_list => blk: {
+            const left = testReadHostValueU8List(roc_host, call_args.arg0);
+            const right = testReadHostValueU8List(roc_host, call_args.arg1);
+            break :blk std.mem.eql(u8, left.items(), right.items());
         },
     };
     writeTestErasedResult(bool, ret, is_equal);
@@ -5838,6 +6048,7 @@ fn testPayloadAccessorForKind(payload_kind: EventPayloadKind) EventPayloadAccess
         .unit => .none,
         .str => .target_value,
         .bool => .target_checked,
+        .bytes => .record_key_shift,
     };
 }
 

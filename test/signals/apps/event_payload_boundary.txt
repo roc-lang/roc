@@ -1,0 +1,29 @@
+# Event payload boundary scenario
+
+expect_visible role:heading name:"Signals event boundary"
+expect_attr role:region name:"Event payload boundary" data-boundary "events"
+expect_attr role:link name:"Boundary guide" href "/signals/boundary"
+expect_attr role:link name:"Boundary guide" aria-label "Boundary guide"
+expect_attr role:link name:"Boundary guide" data-link "guide"
+
+expect_value label:"Boundary input" ""
+expect_attr label:"Boundary input" id "boundary-input"
+expect_attr label:"Boundary input" placeholder "Type a key"
+expect_attr label:"Boundary input" data-static "ready"
+expect_attr label:"Boundary input" data-query ""
+expect_text text:"Last key: none (plain)" "Last key: none (plain)"
+
+fill label:"Boundary input" "draft"
+expect_value label:"Boundary input" "draft"
+expect_attr label:"Boundary input" data-query "draft"
+
+key_down label:"Boundary input" "K" true
+expect_text text:"Last key: K (shift)" "Last key: K (shift)"
+key_down label:"Boundary input" "Enter" false
+expect_text text:"Last key: Enter (plain)" "Last key: Enter (plain)"
+
+expect_attr role:form name:"Boundary form" id "boundary-form"
+expect_attr role:form name:"Boundary form" data-form "event-payload"
+expect_text text:"Submits: 0" "Submits: 0"
+submit role:form name:"Boundary form"
+expect_text text:"Submits: 1" "Submits: 1"

@@ -36,13 +36,17 @@ export const Protocol = Object.freeze({
 
 export const ProtocolFeature = Object.freeze({
   dynamicAttrs: 1 << 0,
+  dynamicEvents: 1 << 1,
 });
 
-const requiredProtocolFeatures = ProtocolFeature.dynamicAttrs;
+const requiredProtocolFeatures =
+  ProtocolFeature.dynamicAttrs | ProtocolFeature.dynamicEvents;
 
 export const DynamicOp = Object.freeze({
   setAttrText: 1,
   removeAttr: 2,
+  bindEvent: 3,
+  clearEvent: 4,
 });
 
 // RenderEventKind enum (render_commands.zig) -> DOM event name. The host emits
@@ -100,30 +104,71 @@ const opNames = Object.freeze({
 const dynamicOpNames = Object.freeze({
   [DynamicOp.setAttrText]: "set_attr_text",
   [DynamicOp.removeAttr]: "remove_attr",
+  [DynamicOp.bindEvent]: "bind_event",
+  [DynamicOp.clearEvent]: "clear_event",
 });
 
 export const PayloadKind = Object.freeze({
   unit: 1,
   str: 2,
   bool: 3,
+  bytes: 4,
 });
 
 export const PayloadAccessor = Object.freeze({
   none: 1,
   targetValue: 2,
   targetChecked: 3,
+  recordKeyShift: 4,
 });
 
 const payloadKindNames = Object.freeze({
   [PayloadKind.unit]: "unit",
   [PayloadKind.str]: "str",
   [PayloadKind.bool]: "bool",
+  [PayloadKind.bytes]: "bytes",
 });
 
 const payloadAccessorNames = Object.freeze({
   [PayloadAccessor.none]: "none",
   [PayloadAccessor.targetValue]: "target_value",
   [PayloadAccessor.targetChecked]: "target_checked",
+  [PayloadAccessor.recordKeyShift]: "record_key_shift",
+});
+
+export const ListenerOptions = Object.freeze({
+  preventDefault: 1 << 0,
+  stopPropagation: 1 << 1,
+  capture: 1 << 2,
+  passive: 1 << 3,
+  once: 1 << 4,
+});
+
+const knownListenerOptionMask =
+  ListenerOptions.preventDefault |
+  ListenerOptions.stopPropagation |
+  ListenerOptions.capture |
+  ListenerOptions.passive |
+  ListenerOptions.once;
+
+const PayloadSpecTag = Object.freeze({
+  unit: 1,
+  text: 2,
+  bool: 3,
+  record: 4,
+});
+
+const PayloadSpecSource = Object.freeze({
+  event: 1,
+  target: 2,
+  currentTarget: 3,
+});
+
+const PayloadSpecLeaf = Object.freeze({
+  key: 1,
+  value: 2,
+  checked: 3,
+  shiftKey: 4,
 });
 
 const pointerProbeEvents = Object.freeze([
@@ -278,6 +323,13 @@ export class SignalsRuntime {
     const ptr = this.views.callHost(this.exports.roc_alloc, bytes.length, 1).result;
     this.views.u8.set(bytes, ptr);
     this.dispatch(eventId, PayloadKind.str, ptr, bytes.length, 0);
+    this.views.callHost(this.exports.roc_dealloc, ptr, 1);
+  }
+
+  dispatchBytes(eventId, bytes) {
+    const ptr = this.views.callHost(this.exports.roc_alloc, bytes.length, 1).result;
+    this.views.u8.set(bytes, ptr);
+    this.dispatch(eventId, PayloadKind.bytes, ptr, bytes.length, 0);
     this.views.callHost(this.exports.roc_dealloc, ptr, 1);
   }
 
@@ -570,6 +622,21 @@ export class SignalsRuntime {
         removeDynamicAttribute(this.node(command.elemId), command.name);
         return;
 
+      case DynamicOp.bindEvent:
+        this.bindNamedEvent(
+          command.elemId,
+          command.eventName,
+          command.eventId,
+          command.options,
+          command.payloadKind,
+          command.payloadSpec,
+        );
+        return;
+
+      case DynamicOp.clearEvent:
+        this.clearEvent(command.elemId, command.eventName);
+        return;
+
       default:
         throw new Error(`unknown dynamic render op ${command.op}`);
     }
@@ -623,6 +690,37 @@ export class SignalsRuntime {
         return { op, elemId, name };
       }
 
+      case DynamicOp.bindEvent: {
+        const elemId = readDynamicU32(view, cursor, "elem_id");
+        const eventId = readDynamicU32(view, cursor, "event_id");
+        const eventName = readDynamicString(view, cursor, "event_name");
+        const options = readDynamicU32(view, cursor, "options");
+        const payloadKind = readDynamicU32(view, cursor, "payload_kind");
+        const payloadSpecBytes = readDynamicByteArray(view, cursor, "payload_spec");
+        assertDynamicPayloadConsumed(cursor);
+        validateListenerOptions(options, cursor);
+        validatePayloadKind(payloadKind, cursor);
+        const payloadSpec = parseEventPayloadDescriptor(
+          payloadSpecBytes,
+          cursor.recordOffset,
+          cursor.opName,
+        );
+        const descriptorKind = payloadKindForDescriptor(payloadSpec);
+        if (descriptorKind !== payloadKind) {
+          throw new Error(
+            `malformed event payload descriptor at byte ${cursor.recordOffset}: ${cursor.opName} payload_kind ${payloadKindName(payloadKind)} did not match descriptor ${payloadKindName(descriptorKind)}`,
+          );
+        }
+        return { op, elemId, eventId, eventName, options, payloadKind, payloadSpec };
+      }
+
+      case DynamicOp.clearEvent: {
+        const elemId = readDynamicU32(view, cursor, "elem_id");
+        const eventName = readDynamicString(view, cursor, "event_name");
+        assertDynamicPayloadConsumed(cursor);
+        return { op, elemId, eventName };
+      }
+
       default:
         throw new Error(`unknown dynamic render op ${op} at byte ${offset}`);
     }
@@ -666,6 +764,43 @@ export class SignalsRuntime {
     });
   }
 
+  bindNamedEvent(elemId, domEvent, eventId, options, payloadKind, payloadSpec) {
+    const key = `${elemId}:${domEvent}`;
+    this.eventCleanups.get(key)?.();
+    const elem = this.node(elemId);
+    const listenerOptions = listenerOptionsForAddEventListener(options);
+    const listener = (event) => {
+      const policy = applyStaticListenerPolicy(options, event);
+      this.emitTelemetry("dom_event", {
+        domEvent,
+        eventId,
+        listenerOptions: describeListenerOptions(options),
+        payloadKind: payloadKindName(payloadKind),
+        payloadDescriptor: describePayloadDescriptor(payloadSpec),
+        preventedDefault: policy.preventedDefault,
+        stoppedPropagation: policy.stoppedPropagation,
+        currentTarget: describeDomNode(event.currentTarget, elemId),
+        target: describeDomNode(event.target),
+        pointer: describePointerEvent(event),
+      });
+      this.dispatchNamedEventPayload(eventId, payloadKind, payloadSpec, event);
+    };
+    elem.addEventListener(domEvent, listener, listenerOptions);
+    this.eventCleanups.set(key, () =>
+      elem.removeEventListener(domEvent, listener, listenerOptions),
+    );
+    elem.dataset.rocEventId = String(eventId);
+    this.emitTelemetry("bind_event", {
+      elemId,
+      domEvent,
+      eventId,
+      listenerOptions: describeListenerOptions(options),
+      payloadKind: payloadKindName(payloadKind),
+      payloadDescriptor: describePayloadDescriptor(payloadSpec),
+      elem: describeDomNode(elem, elemId),
+    });
+  }
+
   dispatchEventPayload(eventId, payloadAccessor, event) {
     switch (payloadAccessor) {
       case PayloadAccessor.none:
@@ -699,6 +834,65 @@ export class SignalsRuntime {
 
       default:
         throw new Error(`unknown event payload accessor ${payloadAccessor}`);
+    }
+  }
+
+  dispatchNamedEventPayload(eventId, payloadKind, payloadSpec, event) {
+    switch (payloadKind) {
+      case PayloadKind.unit:
+        extractPayloadValue(payloadSpec, event);
+        this.emitTelemetry("event_payload", {
+          eventId,
+          payloadKind: "unit",
+          payloadDescriptor: describePayloadDescriptor(payloadSpec),
+        });
+        this.dispatchUnit(eventId);
+        return;
+
+      case PayloadKind.str: {
+        const value = extractPayloadValue(payloadSpec, event);
+        if (typeof value !== "string") {
+          throw new Error("event payload descriptor produced a non-text value for str payload");
+        }
+        this.emitTelemetry("event_payload", {
+          eventId,
+          payloadKind: "str",
+          payloadDescriptor: describePayloadDescriptor(payloadSpec),
+          value,
+        });
+        this.dispatchString(eventId, value);
+        return;
+      }
+
+      case PayloadKind.bool: {
+        const value = extractPayloadValue(payloadSpec, event);
+        if (typeof value !== "boolean") {
+          throw new Error("event payload descriptor produced a non-bool value for bool payload");
+        }
+        this.emitTelemetry("event_payload", {
+          eventId,
+          payloadKind: "bool",
+          payloadDescriptor: describePayloadDescriptor(payloadSpec),
+          value,
+        });
+        this.dispatchBool(eventId, value);
+        return;
+      }
+
+      case PayloadKind.bytes: {
+        const bytes = encodePayloadBytes(payloadSpec, event);
+        this.emitTelemetry("event_payload", {
+          eventId,
+          payloadKind: "bytes",
+          payloadDescriptor: describePayloadDescriptor(payloadSpec),
+          byteLength: bytes.length,
+        });
+        this.dispatchBytes(eventId, bytes);
+        return;
+      }
+
+      default:
+        throw new Error(`unknown event payload kind ${payloadKind}`);
     }
   }
 
@@ -993,6 +1187,24 @@ export class SignalsRuntime {
           name: command.name,
         };
 
+      case DynamicOp.bindEvent:
+        return {
+          op: dynamicOpName(command.op),
+          elemId: command.elemId,
+          domEvent: command.eventName,
+          eventId: command.eventId,
+          options: describeListenerOptions(command.options),
+          payloadKind: payloadKindName(command.payloadKind),
+          payloadDescriptor: describePayloadDescriptor(command.payloadSpec),
+        };
+
+      case DynamicOp.clearEvent:
+        return {
+          op: dynamicOpName(command.op),
+          elemId: command.elemId,
+          domEvent: command.eventName,
+        };
+
       default:
         return { op: dynamicOpName(command.op), offset, length };
     }
@@ -1071,6 +1283,314 @@ function payloadKindName(kind) {
 
 function payloadAccessorName(accessor) {
   return payloadAccessorNames[accessor] ?? `unknown:${accessor}`;
+}
+
+function validatePayloadKind(payloadKind, cursor) {
+  if (payloadKindNames[payloadKind] !== undefined) {
+    return;
+  }
+  throw new Error(
+    `malformed dynamic render record at byte ${cursor.recordOffset}: ${cursor.opName} used unknown payload_kind ${payloadKind}`,
+  );
+}
+
+function validateListenerOptions(options, cursor) {
+  const unknown = options & ~knownListenerOptionMask;
+  if (unknown === 0) {
+    return;
+  }
+  throw new Error(
+    `malformed dynamic render record at byte ${cursor.recordOffset}: ${cursor.opName} used unsupported listener option bits 0x${unknown.toString(16)}`,
+  );
+}
+
+function listenerOptionsForAddEventListener(options) {
+  return {
+    capture: (options & ListenerOptions.capture) !== 0,
+    passive: (options & ListenerOptions.passive) !== 0,
+    once: (options & ListenerOptions.once) !== 0,
+  };
+}
+
+function applyStaticListenerPolicy(options, event) {
+  let preventedDefault = false;
+  let stoppedPropagation = false;
+  if ((options & ListenerOptions.preventDefault) !== 0) {
+    if (typeof event?.preventDefault !== "function") {
+      throw new Error("event listener requested preventDefault but event has no preventDefault method");
+    }
+    event.preventDefault();
+    preventedDefault = true;
+  }
+  if ((options & ListenerOptions.stopPropagation) !== 0) {
+    if (typeof event?.stopPropagation !== "function") {
+      throw new Error("event listener requested stopPropagation but event has no stopPropagation method");
+    }
+    event.stopPropagation();
+    stoppedPropagation = true;
+  }
+  return { preventedDefault, stoppedPropagation };
+}
+
+function describeListenerOptions(options) {
+  return compactObject({
+    preventDefault: (options & ListenerOptions.preventDefault) !== 0,
+    stopPropagation: (options & ListenerOptions.stopPropagation) !== 0,
+    capture: (options & ListenerOptions.capture) !== 0,
+    passive: (options & ListenerOptions.passive) !== 0,
+    once: (options & ListenerOptions.once) !== 0,
+  });
+}
+
+function parseEventPayloadDescriptor(bytes, recordOffset, opName) {
+  const cursor = { offset: 0, limit: bytes.length, recordOffset, opName };
+  const spec = parsePayloadSpecNode(bytes, cursor);
+  if (cursor.offset !== cursor.limit) {
+    throw malformedPayloadDescriptor(
+      cursor,
+      `left ${cursor.limit - cursor.offset} trailing descriptor bytes`,
+    );
+  }
+  return spec;
+}
+
+function parsePayloadSpecNode(bytes, cursor) {
+  const tag = readPayloadSpecU8(bytes, cursor, "tag");
+  switch (tag) {
+    case PayloadSpecTag.unit:
+      return { kind: "unit" };
+
+    case PayloadSpecTag.text:
+      return parseScalarPayloadSpec(bytes, cursor, "text");
+
+    case PayloadSpecTag.bool:
+      return parseScalarPayloadSpec(bytes, cursor, "bool");
+
+    case PayloadSpecTag.record: {
+      const fieldCount = readPayloadSpecU8(bytes, cursor, "record_field_count");
+      const fields = [];
+      const names = new Set();
+      for (let i = 0; i < fieldCount; i += 1) {
+        const nameLen = readPayloadSpecU8(bytes, cursor, "record_field_name_len");
+        if (nameLen === 0) {
+          throw malformedPayloadDescriptor(cursor, "record field name was empty");
+        }
+        ensurePayloadSpecAvailable(cursor, nameLen, "record_field_name");
+        const nameBytes = bytes.subarray(cursor.offset, cursor.offset + nameLen);
+        cursor.offset += nameLen;
+        let name;
+        try {
+          name = dynamicTextDecoder.decode(nameBytes);
+        } catch (err) {
+          throw malformedPayloadDescriptor(cursor, "record field name was not valid UTF-8", err);
+        }
+        if (names.has(name)) {
+          throw malformedPayloadDescriptor(cursor, `record field "${name}" was duplicated`);
+        }
+        names.add(name);
+        fields.push({ name, spec: parsePayloadSpecNode(bytes, cursor) });
+      }
+      return { kind: "record", fields };
+    }
+
+    default:
+      throw malformedPayloadDescriptor(cursor, `unknown descriptor tag ${tag}`);
+  }
+}
+
+function parseScalarPayloadSpec(bytes, cursor, kind) {
+  const source = readPayloadSpecU8(bytes, cursor, `${kind}_source`);
+  const leaf = readPayloadSpecU8(bytes, cursor, `${kind}_leaf`);
+  validatePayloadSource(source, cursor);
+  validatePayloadLeaf(kind, leaf, cursor);
+  return { kind, source, leaf };
+}
+
+function ensurePayloadSpecAvailable(cursor, byteCount, field) {
+  if (cursor.offset + byteCount <= cursor.limit) {
+    return;
+  }
+  throw malformedPayloadDescriptor(cursor, `${field} extends beyond descriptor length`);
+}
+
+function readPayloadSpecU8(bytes, cursor, field) {
+  ensurePayloadSpecAvailable(cursor, 1, field);
+  const value = bytes[cursor.offset];
+  cursor.offset += 1;
+  return value;
+}
+
+function validatePayloadSource(source, cursor) {
+  if (
+    source === PayloadSpecSource.event ||
+    source === PayloadSpecSource.target ||
+    source === PayloadSpecSource.currentTarget
+  ) {
+    return;
+  }
+  throw malformedPayloadDescriptor(cursor, `unknown source tag ${source}`);
+}
+
+function validatePayloadLeaf(kind, leaf, cursor) {
+  if (kind === "text" && (leaf === PayloadSpecLeaf.key || leaf === PayloadSpecLeaf.value)) {
+    return;
+  }
+  if (kind === "bool" && (leaf === PayloadSpecLeaf.checked || leaf === PayloadSpecLeaf.shiftKey)) {
+    return;
+  }
+  throw malformedPayloadDescriptor(cursor, `${kind} descriptor used incompatible leaf tag ${leaf}`);
+}
+
+function malformedPayloadDescriptor(cursor, message, cause = undefined) {
+  return new Error(
+    `malformed event payload descriptor at byte ${cursor.recordOffset}: ${cursor.opName} ${message}`,
+    cause === undefined ? undefined : { cause },
+  );
+}
+
+function payloadKindForDescriptor(spec) {
+  switch (spec.kind) {
+    case "unit":
+      return PayloadKind.unit;
+    case "text":
+      return PayloadKind.str;
+    case "bool":
+      return PayloadKind.bool;
+    case "record":
+      return PayloadKind.bytes;
+    default:
+      throw new Error(`unknown event payload descriptor kind ${spec.kind}`);
+  }
+}
+
+function extractPayloadValue(spec, event) {
+  switch (spec.kind) {
+    case "unit":
+      return undefined;
+    case "text": {
+      const value = readPayloadLeaf(spec, event);
+      if (typeof value !== "string") {
+        throw new Error("event payload descriptor text leaf did not yield a string");
+      }
+      return value;
+    }
+    case "bool": {
+      const value = readPayloadLeaf(spec, event);
+      if (typeof value !== "boolean") {
+        throw new Error("event payload descriptor bool leaf did not yield a boolean");
+      }
+      return value;
+    }
+    case "record":
+      return spec.fields.map((field) => [field.name, extractPayloadValue(field.spec, event)]);
+    default:
+      throw new Error(`unknown event payload descriptor kind ${spec.kind}`);
+  }
+}
+
+function encodePayloadBytes(spec, event) {
+  const chunks = [];
+  let totalLen = 0;
+  const push = (bytes) => {
+    chunks.push(bytes);
+    totalLen += bytes.length;
+  };
+  writePayloadBytes(spec, event, push);
+  const out = new Uint8Array(totalLen);
+  let offset = 0;
+  for (const chunk of chunks) {
+    out.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return out;
+}
+
+function writePayloadBytes(spec, event, push) {
+  switch (spec.kind) {
+    case "unit":
+      return;
+    case "text": {
+      const bytes = textEncoder.encode(extractPayloadValue(spec, event));
+      const len = new Uint8Array(4);
+      new DataView(len.buffer).setUint32(0, bytes.length, true);
+      push(len);
+      push(bytes);
+      return;
+    }
+    case "bool":
+      push(new Uint8Array([extractPayloadValue(spec, event) ? 1 : 0]));
+      return;
+    case "record":
+      for (const field of spec.fields) {
+        writePayloadBytes(field.spec, event, push);
+      }
+      return;
+    default:
+      throw new Error(`unknown event payload descriptor kind ${spec.kind}`);
+  }
+}
+
+function readPayloadLeaf(spec, event) {
+  const source = payloadSourceObject(spec.source, event);
+  const property = payloadLeafProperty(spec.leaf);
+  return source?.[property];
+}
+
+function payloadSourceObject(source, event) {
+  switch (source) {
+    case PayloadSpecSource.event:
+      return event;
+    case PayloadSpecSource.target:
+      return event.target;
+    case PayloadSpecSource.currentTarget:
+      return event.currentTarget;
+    default:
+      throw new Error(`unknown event payload source ${source}`);
+  }
+}
+
+function payloadLeafProperty(leaf) {
+  switch (leaf) {
+    case PayloadSpecLeaf.key:
+      return "key";
+    case PayloadSpecLeaf.value:
+      return "value";
+    case PayloadSpecLeaf.checked:
+      return "checked";
+    case PayloadSpecLeaf.shiftKey:
+      return "shiftKey";
+    default:
+      throw new Error(`unknown event payload leaf ${leaf}`);
+  }
+}
+
+function describePayloadDescriptor(spec) {
+  switch (spec.kind) {
+    case "unit":
+      return "unit";
+    case "text":
+    case "bool":
+      return `${spec.kind}:${payloadSourceName(spec.source)}.${payloadLeafProperty(spec.leaf)}`;
+    case "record":
+      return `{ ${spec.fields
+        .map((field) => `${field.name}: ${describePayloadDescriptor(field.spec)}`)
+        .join(", ")} }`;
+    default:
+      return `unknown:${spec.kind}`;
+  }
+}
+
+function payloadSourceName(source) {
+  switch (source) {
+    case PayloadSpecSource.event:
+      return "event";
+    case PayloadSpecSource.target:
+      return "target";
+    case PayloadSpecSource.currentTarget:
+      return "currentTarget";
+    default:
+      return `unknown:${source}`;
+  }
 }
 
 function preventDefaultForRocEvent(domEvent, event) {
@@ -1200,6 +1720,14 @@ function readDynamicString(view, cursor, field) {
       { cause: err },
     );
   }
+}
+
+function readDynamicByteArray(view, cursor, field) {
+  const length = readDynamicU32(view, cursor, `${field}_len`);
+  ensureDynamicAvailable(cursor, length, field);
+  const bytes = new Uint8Array(view.buffer, view.byteOffset + cursor.offset, length);
+  cursor.offset += length;
+  return new Uint8Array(bytes);
 }
 
 function assertDynamicPayloadConsumed(cursor) {

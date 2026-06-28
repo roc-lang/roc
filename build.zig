@@ -2781,6 +2781,12 @@ pub fn build(b: *std.Build) void {
             .bench = true,
         },
         .{
+            .exe_name = "signals-event-payload-boundary",
+            .source = "test/signals/apps/event_payload_boundary.roc",
+            .spec = "test/signals/apps/event_payload_boundary.txt",
+            .bench = true,
+        },
+        .{
             .exe_name = "signals-kanban-board",
             .source = "test/signals/apps/kanban_board.roc",
             .spec = "test/signals/apps/kanban_board.txt",

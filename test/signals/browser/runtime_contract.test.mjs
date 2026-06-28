@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 
 import {
   DynamicOp,
+  ListenerOptions,
   Op,
   PayloadAccessor,
   PayloadKind,
@@ -32,11 +33,41 @@ const RECORD_WORDS = 6;
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
+const PayloadSpecTag = Object.freeze({
+  unit: 1,
+  text: 2,
+  bool: 3,
+  record: 4,
+});
+
+const PayloadSpecSource = Object.freeze({
+  event: 1,
+  target: 2,
+  currentTarget: 3,
+});
+
+const PayloadSpecLeaf = Object.freeze({
+  key: 1,
+  value: 2,
+  checked: 3,
+  shiftKey: 4,
+});
+
+const unitPayloadSpec = new Uint8Array([PayloadSpecTag.unit]);
+const keyShiftPayloadSpec = concatBytes([
+  new Uint8Array([PayloadSpecTag.record, 2]),
+  fieldSpec("key", new Uint8Array([PayloadSpecTag.text, PayloadSpecSource.event, PayloadSpecLeaf.key])),
+  fieldSpec(
+    "shift_key",
+    new Uint8Array([PayloadSpecTag.bool, PayloadSpecSource.event, PayloadSpecLeaf.shiftKey]),
+  ),
+]);
+
 class MockHost {
   constructor({
     allocBase = DEFAULT_ALLOC_BASE,
     protocolVersion = Protocol.version,
-    protocolFeatures = ProtocolFeature.dynamicAttrs,
+    protocolFeatures = ProtocolFeature.dynamicAttrs | ProtocolFeature.dynamicEvents,
   } = {}) {
     this.memory = new WebAssembly.Memory({ initial: 1 });
     this.cmdLen = 0;
@@ -99,6 +130,8 @@ class MockHost {
           dispatch.payload = decoder.decode(new Uint8Array(this.memory.buffer, ptr, len));
         } else if (kind === PayloadKind.bool) {
           dispatch.payload = boolValue !== 0;
+        } else if (kind === PayloadKind.bytes) {
+          dispatch.payloadBytes = [...new Uint8Array(this.memory.buffer, ptr, len)];
         }
         this.dispatches.push(dispatch);
         const respond = this.eventResponses.get(eventId);
@@ -197,6 +230,19 @@ function encodeDynamicPayload(spec) {
     case DynamicOp.removeAttr:
       return concatBytes([u32Bytes(spec.elemId), stringBytes(spec.name)]);
 
+    case DynamicOp.bindEvent:
+      return concatBytes([
+        u32Bytes(spec.elemId),
+        u32Bytes(spec.eventId),
+        stringBytes(spec.eventName),
+        u32Bytes(spec.options ?? 0),
+        u32Bytes(spec.payloadKind),
+        bytesField(spec.payloadSpec),
+      ]);
+
+    case DynamicOp.clearEvent:
+      return concatBytes([u32Bytes(spec.elemId), stringBytes(spec.eventName)]);
+
     default:
       return new Uint8Array(0);
   }
@@ -205,6 +251,21 @@ function encodeDynamicPayload(spec) {
 function stringBytes(value) {
   const bytes = encoder.encode(value);
   return concatBytes([u32Bytes(bytes.length), bytes]);
+}
+
+function bytesField(value) {
+  const bytes = toUint8Array(value);
+  return concatBytes([u32Bytes(bytes.length), bytes]);
+}
+
+function fieldSpec(name, spec) {
+  const nameBytes = encoder.encode(name);
+  return concatBytes([new Uint8Array([nameBytes.length]), nameBytes, spec]);
+}
+
+function keyShiftBytes(key, shiftKey) {
+  const keyBytes = encoder.encode(key);
+  return [...concatBytes([u32Bytes(keyBytes.length), keyBytes, new Uint8Array([shiftKey ? 1 : 0])])];
 }
 
 function u32Bytes(value) {
@@ -490,6 +551,163 @@ test("event payloads round-trip through the wasm memory boundary", () => {
     { eventId: 15, kind: PayloadKind.unit },
     { eventId: 16, kind: PayloadKind.unit },
   ]);
+});
+
+test("dynamic keydown events dispatch explicit key shift byte payloads", () => {
+  const { host, root } = mountWith([
+    { op: Op.resetDom },
+    { op: Op.createElement, a: 1, s: "input" },
+    {
+      dynamic: {
+        op: DynamicOp.bindEvent,
+        elemId: 1,
+        eventName: "keydown",
+        eventId: 21,
+        options: 0,
+        payloadKind: PayloadKind.bytes,
+        payloadSpec: keyShiftPayloadSpec,
+      },
+    },
+    { op: Op.appendChild, a: 0, b: 1 },
+  ]);
+
+  const input = findNode(root, (node) => node.tagName === "INPUT");
+  fireEvent(input, "keydown", { key: "K", shiftKey: true });
+
+  assert.deepEqual(host.dispatches, [
+    { eventId: 21, kind: PayloadKind.bytes, payloadBytes: keyShiftBytes("K", true) },
+  ]);
+});
+
+test("dynamic submit events apply static prevent-default policy", () => {
+  const { host, root, runtime } = mountWith([
+    { op: Op.resetDom },
+    { op: Op.createElement, a: 1, s: "form" },
+    {
+      dynamic: {
+        op: DynamicOp.bindEvent,
+        elemId: 1,
+        eventName: "submit",
+        eventId: 22,
+        options: ListenerOptions.preventDefault,
+        payloadKind: PayloadKind.unit,
+        payloadSpec: unitPayloadSpec,
+      },
+    },
+    { op: Op.appendChild, a: 0, b: 1 },
+  ]);
+
+  const form = findNode(root, (node) => node.tagName === "FORM");
+  const event = fireEvent(form, "submit");
+  assert.equal(event.defaultPrevented, true);
+  assert.deepEqual(host.dispatches, [{ eventId: 22, kind: PayloadKind.unit }]);
+
+  host.writeCommands([
+    {
+      dynamic: {
+        op: DynamicOp.clearEvent,
+        elemId: 1,
+        eventName: "submit",
+      },
+    },
+  ]);
+  runtime.applyPendingCommands("clear-submit");
+  fireEvent(form, "submit");
+  assert.deepEqual(host.dispatches, [{ eventId: 22, kind: PayloadKind.unit }]);
+});
+
+test("malformed dynamic event payload descriptors fail closed", () => {
+  const { host, runtime } = mountWith([
+    { op: Op.resetDom },
+    { op: Op.createElement, a: 1, s: "input" },
+    { op: Op.appendChild, a: 0, b: 1 },
+  ]);
+
+  const bind = (payloadSpec, overrides = {}) => ({
+    dynamic: {
+      op: DynamicOp.bindEvent,
+      elemId: 1,
+      eventName: "keydown",
+      eventId: 31,
+      options: overrides.options ?? 0,
+      payloadKind: overrides.payloadKind ?? PayloadKind.bytes,
+      payloadSpec,
+    },
+  });
+
+  const duplicateFields = concatBytes([
+    new Uint8Array([PayloadSpecTag.record, 2]),
+    fieldSpec("key", new Uint8Array([PayloadSpecTag.text, PayloadSpecSource.event, PayloadSpecLeaf.key])),
+    fieldSpec("key", new Uint8Array([PayloadSpecTag.text, PayloadSpecSource.event, PayloadSpecLeaf.key])),
+  ]);
+
+  const cases = [
+    [bind(new Uint8Array([99])), /malformed event payload descriptor.*unknown descriptor tag 99/],
+    [
+      bind(new Uint8Array([PayloadSpecTag.record, 1, 3, 0x6b])),
+      /malformed event payload descriptor.*record_field_name extends beyond descriptor length/,
+    ],
+    [bind(duplicateFields), /malformed event payload descriptor.*duplicated/],
+    [
+      bind(keyShiftPayloadSpec, { payloadKind: PayloadKind.unit }),
+      /malformed event payload descriptor.*payload_kind unit did not match descriptor bytes/,
+    ],
+    [
+      bind(keyShiftPayloadSpec, { options: 1 << 12 }),
+      /unsupported listener option bits/,
+    ],
+  ];
+
+  for (const [entry, pattern] of cases) {
+    host.writeCommands([entry]);
+    assert.throws(() => runtime.applyPendingCommands("bad-bind-event"), pattern);
+  }
+});
+
+test("memory growth during byte payload allocation keeps response commands readable", () => {
+  const { host, root } = mountWith(
+    [
+      { op: Op.resetDom },
+      { op: Op.createElement, a: 1, s: "input" },
+      {
+        dynamic: {
+          op: DynamicOp.bindEvent,
+          elemId: 1,
+          eventName: "keydown",
+          eventId: 41,
+          options: 0,
+          payloadKind: PayloadKind.bytes,
+          payloadSpec: keyShiftPayloadSpec,
+        },
+      },
+      { op: Op.appendChild, a: 0, b: 1 },
+      { op: Op.createText, a: 2, s: "start" },
+      { op: Op.appendChild, a: 0, b: 2 },
+    ],
+    { allocBase: PAGE - 1 },
+  );
+  host.eventResponses.set(41, () => [
+    { op: Op.setText, a: 2, s: "keyed" },
+    {
+      dynamic: {
+        op: DynamicOp.setAttrText,
+        elemId: 1,
+        name: "data-last-key",
+        value: "Enter",
+      },
+    },
+  ]);
+
+  const input = findNode(root, (node) => node.tagName === "INPUT");
+  const before = host.memory.buffer.byteLength;
+  fireEvent(input, "keydown", { key: "Enter", shiftKey: false });
+
+  assert.ok(host.memory.buffer.byteLength > before);
+  assert.deepEqual(host.dispatches, [
+    { eventId: 41, kind: PayloadKind.bytes, payloadBytes: keyShiftBytes("Enter", false) },
+  ]);
+  assert.ok(findTextNode(root, "keyed"));
+  assert.equal(input.getAttribute("data-last-key"), "Enter");
 });
 
 test("clear_event and remove_node release DOM listeners", () => {

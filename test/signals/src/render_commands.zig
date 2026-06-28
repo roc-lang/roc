@@ -2,7 +2,14 @@ const std = @import("std");
 
 pub const protocol_version: u32 = 1;
 pub const protocol_feature_dynamic_attrs: u32 = 1 << 0;
-pub const protocol_features: u32 = protocol_feature_dynamic_attrs;
+pub const protocol_feature_dynamic_events: u32 = 1 << 1;
+pub const protocol_features: u32 = protocol_feature_dynamic_attrs | protocol_feature_dynamic_events;
+
+pub const listener_option_prevent_default: u32 = 1 << 0;
+pub const listener_option_stop_propagation: u32 = 1 << 1;
+pub const listener_option_capture: u32 = 1 << 2;
+pub const listener_option_passive: u32 = 1 << 3;
+pub const listener_option_once: u32 = 1 << 4;
 
 pub const Op = enum(u32) {
     reset_dom = 1,
@@ -37,6 +44,8 @@ pub const Op = enum(u32) {
 pub const DynamicOp = enum(u16) {
     set_attr_text = 1,
     remove_attr = 2,
+    bind_event = 3,
+    clear_event = 4,
 };
 
 pub const Record = extern struct {
@@ -132,6 +141,40 @@ pub const DynamicBuffer = struct {
         writeU32(self.bytes.items, &cursor, elem_id);
         writeU32(self.bytes.items, &cursor, @intCast(name.len));
         writeBytes(self.bytes.items, &cursor, name);
+        return record.slice;
+    }
+
+    pub fn appendBindEvent(
+        self: *DynamicBuffer,
+        allocator: std.mem.Allocator,
+        elem_id: u32,
+        event_id: u32,
+        event_name: []const u8,
+        options: u32,
+        payload_kind: u32,
+        payload_spec: []const u8,
+    ) std.mem.Allocator.Error!DynamicSlice {
+        const payload_len = @sizeOf(u32) + @sizeOf(u32) + @sizeOf(u32) + event_name.len + @sizeOf(u32) + @sizeOf(u32) + @sizeOf(u32) + payload_spec.len;
+        const record = try self.appendRecord(allocator, .bind_event, payload_len);
+        var cursor = record.payload_start;
+        writeU32(self.bytes.items, &cursor, elem_id);
+        writeU32(self.bytes.items, &cursor, event_id);
+        writeU32(self.bytes.items, &cursor, @intCast(event_name.len));
+        writeBytes(self.bytes.items, &cursor, event_name);
+        writeU32(self.bytes.items, &cursor, options);
+        writeU32(self.bytes.items, &cursor, payload_kind);
+        writeU32(self.bytes.items, &cursor, @intCast(payload_spec.len));
+        writeBytes(self.bytes.items, &cursor, payload_spec);
+        return record.slice;
+    }
+
+    pub fn appendClearEvent(self: *DynamicBuffer, allocator: std.mem.Allocator, elem_id: u32, event_name: []const u8) std.mem.Allocator.Error!DynamicSlice {
+        const payload_len = @sizeOf(u32) + @sizeOf(u32) + event_name.len;
+        const record = try self.appendRecord(allocator, .clear_event, payload_len);
+        var cursor = record.payload_start;
+        writeU32(self.bytes.items, &cursor, elem_id);
+        writeU32(self.bytes.items, &cursor, @intCast(event_name.len));
+        writeBytes(self.bytes.items, &cursor, event_name);
         return record.slice;
     }
 
@@ -238,6 +281,69 @@ pub const EventPayloadAccessor = enum(u64) {
     none = 1,
     target_value = 2,
     target_checked = 3,
+    record_key_shift = 4,
+};
+
+pub const EventPayloadKind = enum(u64) {
+    unit = 1,
+    str = 2,
+    bool = 3,
+    bytes = 4,
+};
+
+pub const PayloadSpec = struct {
+    pub const unit: u8 = 1;
+    pub const text: u8 = 2;
+    pub const bool_: u8 = 3;
+    pub const record: u8 = 4;
+
+    pub const source_event: u8 = 1;
+    pub const source_target: u8 = 2;
+    pub const source_current_target: u8 = 3;
+
+    pub const leaf_key: u8 = 1;
+    pub const leaf_value: u8 = 2;
+    pub const leaf_checked: u8 = 3;
+    pub const leaf_shift_key: u8 = 4;
+
+    pub const unit_spec = [_]u8{unit};
+
+    pub const target_value = [_]u8{
+        text,
+        source_current_target,
+        leaf_value,
+    };
+
+    pub const target_checked = [_]u8{
+        bool_,
+        source_current_target,
+        leaf_checked,
+    };
+
+    pub const key_shift = [_]u8{
+        record,
+        2,
+        3,
+        'k',
+        'e',
+        'y',
+        text,
+        source_event,
+        leaf_key,
+        9,
+        's',
+        'h',
+        'i',
+        'f',
+        't',
+        '_',
+        'k',
+        'e',
+        'y',
+        bool_,
+        source_event,
+        leaf_shift_key,
+    };
 };
 
 pub const Counts = struct {

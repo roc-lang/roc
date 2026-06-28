@@ -43,8 +43,39 @@ Html := [].{
 	on_pointer_leave : Node.Msg -> Node.Attr
 	on_pointer_leave = |msg| Node.Attr.OnEvent({ kind: Node.event_kind_pointer_leave, msg })
 
+	on_event : Str, U64, Node.Msg -> Node.Attr
+	on_event = |name, options, msg| Node.Attr.OnNamedEvent({ name, options, msg })
+
+	on_key_down : Node.Msg -> Node.Attr
+	on_key_down = |msg| on_event("keydown", 0, msg)
+
+	on_submit_prevent_default : Node.Msg -> Node.Attr
+	on_submit_prevent_default = |msg| on_event("submit", Node.listener_prevent_default, msg)
+
 	div : List(Node.Attr), List(Elem) -> Elem
 	div = |attrs, children| Elem.Element({ tag: "div", attrs, children })
+
+	form : List(Node.Attr), List(Elem) -> Elem
+	form = |attrs, children| Elem.Element({ tag: "form", attrs, children })
+
+	form_label : Str, List(Node.Attr), List(Elem) -> Elem
+	form_label = |label, attrs, children| {
+		base = [
+			Node.Attr.StaticText({ field: Node.field_role, name: "", value: "form" }),
+			Node.Attr.StaticText({ field: Node.field_label, name: "", value: label }),
+		]
+		form(List.concat(base, attrs), children)
+	}
+
+	link : Str, List(Node.Attr) -> Elem
+	link = |label, attrs| {
+		base = [
+			Node.Attr.StaticText({ field: Node.field_role, name: "", value: "link" }),
+			Node.Attr.StaticText({ field: Node.field_label, name: "", value: label }),
+			Node.Attr.StaticText({ field: Node.field_text, name: "", value: label }),
+		]
+		Elem.Element({ tag: "a", attrs: List.concat(base, attrs), children: [] })
+	}
 
 	div_c : Str, List(Elem) -> Elem
 	div_c = |classes, children| div([class_attr(classes)], children)

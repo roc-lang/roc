@@ -28,6 +28,7 @@ const enable_runtime_metrics = builtin.is_test or build_options.metrics;
 pub const RenderTextField = render.TextField;
 pub const RenderBoolField = render.BoolField;
 pub const RenderEventKind = render.EventKind;
+pub const EventPayloadKind = render.EventPayloadKind;
 pub const EventPayloadAccessor = render.EventPayloadAccessor;
 pub const NodeFieldCustom: u64 = 7;
 const node_field_custom: u64 = NodeFieldCustom;
@@ -44,6 +45,18 @@ const RenderCustomTextAttrCache = struct {
     fn deinit(self: RenderCustomTextAttrCache, allocator: std.mem.Allocator) void {
         allocator.free(self.name);
         allocator.free(self.value);
+    }
+};
+
+const RenderNamedEventCache = struct {
+    name: []const u8,
+    event_id: u64,
+    options: u32,
+    payload_kind: EventPayloadKind,
+    payload_accessor: EventPayloadAccessor,
+
+    fn deinit(self: RenderNamedEventCache, allocator: std.mem.Allocator) void {
+        allocator.free(self.name);
     }
 };
 
@@ -73,6 +86,7 @@ const RenderScalarNodeCache = struct {
     value: ?[]const u8 = null,
     class: ?[]const u8 = null,
     custom_text_attrs: std.ArrayListUnmanaged(RenderCustomTextAttrCache) = .empty,
+    named_events: std.ArrayListUnmanaged(RenderNamedEventCache) = .empty,
     checked: ?bool = null,
     disabled: ?bool = null,
 
@@ -88,6 +102,10 @@ const RenderScalarNodeCache = struct {
             attr.deinit(allocator);
         }
         self.custom_text_attrs.deinit(allocator);
+        for (self.named_events.items) |event| {
+            event.deinit(allocator);
+        }
+        self.named_events.deinit(allocator);
         self.children.deinit(allocator);
         self.* = .{};
     }
@@ -120,6 +138,13 @@ const RenderScalarNodeCache = struct {
     fn customTextAttrIndex(self: *const RenderScalarNodeCache, name: []const u8) ?usize {
         for (self.custom_text_attrs.items, 0..) |attr, index| {
             if (std.mem.eql(u8, attr.name, name)) return index;
+        }
+        return null;
+    }
+
+    fn namedEventIndex(self: *const RenderScalarNodeCache, name: []const u8) ?usize {
+        for (self.named_events.items, 0..) |event, index| {
+            if (std.mem.eql(u8, event.name, name)) return index;
         }
         return null;
     }
@@ -349,6 +374,8 @@ pub fn verifySink(comptime Sink: type) void {
     verifyDeclFn("engine Sink", Sink, "clearBoolField", .{ Sink, u64, RenderBoolField }, void);
     verifyDeclFn("engine Sink", Sink, "bindEventKind", .{ Sink, u64, RenderEventKind, u64, EventPayloadAccessor }, void);
     verifyDeclFn("engine Sink", Sink, "clearEvent", .{ Sink, u64, RenderEventKind }, void);
+    verifyDeclFn("engine Sink", Sink, "bindEventName", .{ Sink, u64, []const u8, u64, u32, EventPayloadKind, EventPayloadAccessor }, void);
+    verifyDeclFn("engine Sink", Sink, "clearEventName", .{ Sink, u64, []const u8 }, void);
     verifyDeclFn("engine Sink", Sink, "startInterval", .{ Sink, u64, u64 }, void);
     verifyDeclFn("engine Sink", Sink, "cancelInterval", .{ Sink, u64 }, void);
     verifyDeclFn("engine Sink", Sink, "startTask", .{ Sink, u64, []const u8, []const u8 }, void);
@@ -897,13 +924,6 @@ pub const HostSignalBinding = struct {
 // Markup carries no identity of its own; dynamic descriptors reference shared
 // signal records and event reducers by retained thunk.
 
-/// Typed payload a reducer reads off a real DOM event.
-pub const EventPayloadKind = enum(u64) {
-    unit = 1,
-    str = 2,
-    bool = 3,
-};
-
 pub const SignalKind = enum(u64) {
     source = 1,
     map = 2,
@@ -1094,6 +1114,13 @@ pub const HostRequiredEventBinding = struct {
     payload_accessor: EventPayloadAccessor,
 };
 
+pub const HostRequiredNamedEventBinding = struct {
+    event_id: u64,
+    options: u32,
+    payload_kind: EventPayloadKind,
+    payload_accessor: EventPayloadAccessor,
+};
+
 pub const HostRequiredEventBindings = struct {
     click: ?HostRequiredEventBinding = null,
     input: ?HostRequiredEventBinding = null,
@@ -1146,6 +1173,7 @@ const EngineScratch = struct {
     remove_static_bool_attr_indexes: std.ArrayListUnmanaged(usize) = .empty,
     remove_signal_bool_attr_indexes: std.ArrayListUnmanaged(usize) = .empty,
     remove_event_indexes: std.ArrayListUnmanaged(usize) = .empty,
+    remove_named_event_indexes: std.ArrayListUnmanaged(usize) = .empty,
 
     fn deinit(self: *EngineScratch, allocator: std.mem.Allocator) void {
         self.move_child_indexes.deinit(allocator);
@@ -1168,6 +1196,7 @@ const EngineScratch = struct {
         self.remove_static_bool_attr_indexes.deinit(allocator);
         self.remove_signal_bool_attr_indexes.deinit(allocator);
         self.remove_event_indexes.deinit(allocator);
+        self.remove_named_event_indexes.deinit(allocator);
         self.* = .{};
     }
 };
@@ -1287,6 +1316,18 @@ pub const HostNodeCleanupDesc = struct {
 pub const HostNodeEventDesc = struct {
     elem_id: u64,
     kind: RenderEventKind,
+    binder_token: HostBinderToken,
+    target_node_id: u64,
+    payload_kind: EventPayloadKind,
+    payload_accessor: EventPayloadAccessor,
+    payload_reducer: HostEventReducer,
+    owns_payload_reducer: bool = true,
+};
+
+pub const HostNodeNamedEventDesc = struct {
+    elem_id: u64,
+    name: []const u8,
+    options: u32,
     binder_token: HostBinderToken,
     target_node_id: u64,
     payload_kind: EventPayloadKind,
@@ -1476,6 +1517,7 @@ pub const HostNodeDescriptorStream = struct {
     mounts: std.ArrayListUnmanaged(HostNodeMountDesc) = .empty,
     cleanups: std.ArrayListUnmanaged(HostNodeCleanupDesc) = .empty,
     events: std.ArrayListUnmanaged(HostNodeEventDesc) = .empty,
+    named_events: std.ArrayListUnmanaged(HostNodeNamedEventDesc) = .empty,
     scope_sites: std.ArrayListUnmanaged(HostNodeScopeSiteDesc) = .empty,
     states: std.ArrayListUnmanaged(HostNodeStateDesc) = .empty,
     whens: std.ArrayListUnmanaged(HostNodeWhenDesc) = .empty,
@@ -2024,6 +2066,12 @@ pub const HostNodeDescriptorStream = struct {
         }
         self.events.deinit(allocator);
 
+        for (self.named_events.items) |desc| {
+            allocator.free(desc.name);
+            if (desc.owns_payload_reducer) releaseHostEventReducer(desc.payload_reducer, roc_host, metrics);
+        }
+        self.named_events.deinit(allocator);
+
         for (self.scope_sites.items) |desc| {
             allocator.free(desc.binder_bindings);
         }
@@ -2387,6 +2435,38 @@ pub const HostNodeDescriptorStream = struct {
         self.recordEventIndex(allocator, elem_id, kind, event_index);
     }
 
+    pub fn namedEventDescriptorExists(self: *const HostNodeDescriptorStream, elem_id: u64, name: []const u8) bool {
+        for (self.named_events.items) |desc| {
+            if (desc.elem_id == elem_id and std.mem.eql(u8, desc.name, name)) return true;
+        }
+        return false;
+    }
+
+    pub fn appendNamedEvent(self: *HostNodeDescriptorStream, allocator: std.mem.Allocator, roc_host: *abi.RocHost, metrics: anytype, elem_id: u64, name: []const u8, options: u64, binder_token: HostBinderToken, target_node_id: u64, payload_kind: EventPayloadKind, payload_accessor: EventPayloadAccessor, payload_reducer: HostEventReducer) void {
+        if (name.len == 0) @panic("named event descriptor used an empty event name");
+        if (self.namedEventDescriptorExists(elem_id, name)) @panic("element has duplicate named event descriptors");
+
+        const retained_reducer = retainHostEventReducer(payload_reducer, metrics);
+        const name_copy = allocator.dupe(u8, name) catch {
+            releaseHostEventReducer(retained_reducer, roc_host, metrics);
+            @panic("out of memory");
+        };
+        self.named_events.append(allocator, .{
+            .elem_id = elem_id,
+            .name = name_copy,
+            .options = std.math.cast(u32, options) orelse @panic("named event listener options exceeded u32 range"),
+            .binder_token = binder_token,
+            .target_node_id = target_node_id,
+            .payload_kind = payload_kind,
+            .payload_accessor = payload_accessor,
+            .payload_reducer = retained_reducer,
+        }) catch {
+            allocator.free(name_copy);
+            releaseHostEventReducer(retained_reducer, roc_host, metrics);
+            @panic("out of memory");
+        };
+    }
+
     pub fn appendScopeSite(self: *HostNodeDescriptorStream, allocator: std.mem.Allocator, node_id: u64, scope_id: u64, ordinal: u64, parent_elem_id: u64, kind: HostNodeScopeSiteKind, binder_bindings: []const HostBinderBinding) void {
         self.appendScopeSiteAt(allocator, node_id, scope_id, ordinal, parent_elem_id, self.render_nodes.items.len, kind, binder_bindings);
     }
@@ -2726,6 +2806,7 @@ pub fn eventPayloadKindFromAbi(payload_kind: u64) EventPayloadKind {
         @intFromEnum(EventPayloadKind.unit) => .unit,
         @intFromEnum(EventPayloadKind.str) => .str,
         @intFromEnum(EventPayloadKind.bool) => .bool,
+        @intFromEnum(EventPayloadKind.bytes) => .bytes,
         else => @panic("Roc event descriptor used an unknown payload kind"),
     };
 }
@@ -2735,6 +2816,7 @@ pub fn eventPayloadAccessorFromAbi(payload_accessor: u64) EventPayloadAccessor {
         @intFromEnum(EventPayloadAccessor.none) => .none,
         @intFromEnum(EventPayloadAccessor.target_value) => .target_value,
         @intFromEnum(EventPayloadAccessor.target_checked) => .target_checked,
+        @intFromEnum(EventPayloadAccessor.record_key_shift) => .record_key_shift,
         else => @panic("Roc event descriptor used an unknown payload accessor"),
     };
 }
@@ -3180,6 +3262,52 @@ pub fn Engine(comptime Ctx: type) type {
             } else {
                 Ctx.sink(ctx).clearEvent(elem_id, kind);
             }
+            counts.addEventBinding();
+        }
+
+        pub fn applyRenderNamedEventBinding(self: *Self, ctx: Ctx.Handle, elem_id: u64, name: []const u8, binding: ?HostRequiredNamedEventBinding, counts: *render.Counts) void {
+            const allocator = Ctx.allocator(ctx);
+            const node = self.activeRenderScalarNode(elem_id);
+            const existing_index = node.namedEventIndex(name);
+
+            if (binding) |next| {
+                if (existing_index) |index| {
+                    const existing = &node.named_events.items[index];
+                    if (existing.event_id == next.event_id and
+                        existing.options == next.options and
+                        existing.payload_kind == next.payload_kind and
+                        existing.payload_accessor == next.payload_accessor)
+                    {
+                        return;
+                    }
+
+                    existing.event_id = next.event_id;
+                    existing.options = next.options;
+                    existing.payload_kind = next.payload_kind;
+                    existing.payload_accessor = next.payload_accessor;
+                } else {
+                    const name_copy = allocator.dupe(u8, name) catch @panic("out of memory");
+                    node.named_events.append(allocator, .{
+                        .name = name_copy,
+                        .event_id = next.event_id,
+                        .options = next.options,
+                        .payload_kind = next.payload_kind,
+                        .payload_accessor = next.payload_accessor,
+                    }) catch {
+                        allocator.free(name_copy);
+                        @panic("out of memory");
+                    };
+                }
+
+                Ctx.sink(ctx).bindEventName(elem_id, name, next.event_id, next.options, next.payload_kind, next.payload_accessor);
+                counts.addEventBinding();
+                return;
+            }
+
+            const index = existing_index orelse return;
+            const removed = node.named_events.orderedRemove(index);
+            Ctx.sink(ctx).clearEventName(elem_id, removed.name);
+            removed.deinit(allocator);
             counts.addEventBinding();
         }
 
@@ -4334,6 +4462,12 @@ pub fn Engine(comptime Ctx: type) type {
                 const payload_reducer = if (desc.owns_payload_reducer) desc.payload_reducer else self.activeEventReducerByIndex(event_index) catch @panic("active event table is missing a retained payload reducer");
                 stream.appendEvent(allocator, roc_host, &self.pending_roc_metrics, desc.elem_id, desc.kind, desc.binder_token, desc.target_node_id, desc.payload_kind, desc.payload_accessor, payload_reducer);
             }
+            for (previous.named_events.items, 0..) |desc, named_event_index| {
+                if (!u64SliceContains(copied_elem_ids.items, desc.elem_id)) continue;
+                const active_event_index = previous.events.items.len + named_event_index;
+                const payload_reducer = if (desc.owns_payload_reducer) desc.payload_reducer else self.activeEventReducerByIndex(active_event_index) catch @panic("active named event table is missing a retained payload reducer");
+                stream.appendNamedEvent(allocator, roc_host, &self.pending_roc_metrics, desc.elem_id, desc.name, desc.options, desc.binder_token, desc.target_node_id, desc.payload_kind, desc.payload_accessor, payload_reducer);
+            }
 
             for (previous.scope_sites.items) |desc| {
                 if (!(self.scopeIsDescendantOrSelf(desc.scope_id, root_scope_id) catch @panic("scope descriptor referenced an unknown parent scope"))) continue;
@@ -4741,6 +4875,14 @@ pub fn Engine(comptime Ctx: type) type {
                     const payload_accessor = eventPayloadAccessorFromAbi(msg.payload_accessor);
                     const target_node_id = resolveNodeBinderRef(binder_stack, msg.binder);
                     stream.appendEvent(allocator, roc_host, &self.pending_roc_metrics, elem_id, kind, msg.binder, target_node_id, payload_kind, payload_accessor, msg.payload_reducer);
+                },
+                .OnNamedEvent => {
+                    const payload = attr.payload_on_named_event();
+                    const msg = payload.msg;
+                    const payload_kind = eventPayloadKindFromAbi(msg.payload_kind);
+                    const payload_accessor = eventPayloadAccessorFromAbi(msg.payload_accessor);
+                    const target_node_id = resolveNodeBinderRef(binder_stack, msg.binder);
+                    stream.appendNamedEvent(allocator, roc_host, &self.pending_roc_metrics, elem_id, payload.name.asSlice(), payload.options, msg.binder, target_node_id, payload_kind, payload_accessor, msg.payload_reducer);
                 },
             }
         }
@@ -5830,6 +5972,15 @@ pub fn Engine(comptime Ctx: type) type {
             appendRemovalIndex(ctx, indexes, events.pointer_leave);
         }
 
+        fn appendNamedEventRemovalIndexes(self: *Self, ctx: Ctx.Handle, indexes: *std.ArrayListUnmanaged(usize), elem_id: u64) void {
+            self.recordStreamNodesScannedBy(.stream_nodes_scanned_remove_target, self.active_stream.named_events.items.len);
+            for (self.active_stream.named_events.items, 0..) |desc, index| {
+                if (desc.elem_id == elem_id) {
+                    indexes.append(Ctx.allocator(ctx), index) catch @panic("out of memory");
+                }
+            }
+        }
+
         fn clearElemOwnedRemovalScratch(self: *Self) void {
             self.scratch.remove_element_indexes.clearRetainingCapacity();
             self.scratch.remove_text_node_indexes.clearRetainingCapacity();
@@ -5839,6 +5990,7 @@ pub fn Engine(comptime Ctx: type) type {
             self.scratch.remove_static_bool_attr_indexes.clearRetainingCapacity();
             self.scratch.remove_signal_bool_attr_indexes.clearRetainingCapacity();
             self.scratch.remove_event_indexes.clearRetainingCapacity();
+            self.scratch.remove_named_event_indexes.clearRetainingCapacity();
         }
 
         fn removeActiveElementDescriptorAt(self: *Self, ctx: Ctx.Handle, index: usize) void {
@@ -6055,12 +6207,14 @@ pub fn Engine(comptime Ctx: type) type {
         }
 
         fn removeActiveEventDescriptorAt(self: *Self, roc_host: *abi.RocHost, index: usize) void {
-            if (self.active_events.items.len != self.active_stream.events.items.len) {
-                if (self.active_stream.events.items.len != 0) @panic("active event descriptor table is out of sync with active events");
+            const fixed_event_count = self.active_stream.events.items.len;
+            const total_event_count = fixed_event_count + self.active_stream.named_events.items.len;
+            if (self.active_events.items.len != total_event_count) {
+                if (total_event_count != 0) @panic("active event descriptor table is out of sync with active events");
             }
-            if (index >= self.active_stream.events.items.len) @panic("event removal index exceeded descriptor table");
+            if (index >= fixed_event_count) @panic("event removal index exceeded descriptor table");
 
-            const last_index = self.active_stream.events.items.len - 1;
+            const last_fixed_index = fixed_event_count - 1;
             const removed = self.active_stream.events.items[index];
             if (removed.owns_payload_reducer) {
                 @panic("active event descriptor retained ownership outside the active event table");
@@ -6070,16 +6224,54 @@ pub fn Engine(comptime Ctx: type) type {
                 self.deinitActiveEventDesc(roc_host, self.active_events.items[index]);
             }
 
-            if (index != last_index) {
-                const moved = self.active_stream.events.items[last_index];
+            if (index != last_fixed_index) {
+                const moved = self.active_stream.events.items[last_fixed_index];
                 self.active_stream.events.items[index] = moved;
                 self.active_stream.updateEventIndex(moved.elem_id, moved.kind, index);
                 if (self.active_events.items.len != 0) {
-                    self.active_events.items[index] = self.active_events.items[last_index];
+                    self.active_events.items[index] = self.active_events.items[last_fixed_index];
                 }
             }
-            self.active_stream.events.items.len = last_index;
-            if (self.active_events.items.len != 0) self.active_events.items.len = last_index;
+            self.active_stream.events.items.len = last_fixed_index;
+            if (self.active_events.items.len != 0) {
+                var move_index = last_fixed_index;
+                while (move_index + 1 < self.active_events.items.len) : (move_index += 1) {
+                    self.active_events.items[move_index] = self.active_events.items[move_index + 1];
+                }
+                self.active_events.items.len -= 1;
+            }
+        }
+
+        fn removeActiveNamedEventDescriptorAt(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, index: usize) void {
+            const fixed_event_count = self.active_stream.events.items.len;
+            const named_event_count = self.active_stream.named_events.items.len;
+            const total_event_count = fixed_event_count + named_event_count;
+            if (self.active_events.items.len != total_event_count) {
+                if (total_event_count != 0) @panic("active named event descriptor table is out of sync with active events");
+            }
+            if (index >= named_event_count) @panic("named event removal index exceeded descriptor table");
+
+            const allocator = Ctx.allocator(ctx);
+            const active_index = fixed_event_count + index;
+            const last_named_index = named_event_count - 1;
+            const last_active_index = fixed_event_count + last_named_index;
+            const removed = self.active_stream.named_events.items[index];
+            if (removed.owns_payload_reducer) {
+                @panic("active named event descriptor retained ownership outside the active event table");
+            }
+            allocator.free(removed.name);
+            if (self.active_events.items.len != 0) {
+                self.deinitActiveEventDesc(roc_host, self.active_events.items[active_index]);
+            }
+
+            if (index != last_named_index) {
+                self.active_stream.named_events.items[index] = self.active_stream.named_events.items[last_named_index];
+                if (self.active_events.items.len != 0) {
+                    self.active_events.items[active_index] = self.active_events.items[last_active_index];
+                }
+            }
+            self.active_stream.named_events.items.len = last_named_index;
+            if (self.active_events.items.len != 0) self.active_events.items.len = last_active_index;
         }
 
         fn collectElemOwnedRemovalIndexes(self: *Self, ctx: Ctx.Handle, removed_elem_ids: []const u64) void {
@@ -6090,7 +6282,8 @@ pub fn Engine(comptime Ctx: type) type {
                 self.scratch.remove_signal_text_attr_indexes.items.len != 0 or
                 self.scratch.remove_static_bool_attr_indexes.items.len != 0 or
                 self.scratch.remove_signal_bool_attr_indexes.items.len != 0 or
-                self.scratch.remove_event_indexes.items.len != 0)
+                self.scratch.remove_event_indexes.items.len != 0 or
+                self.scratch.remove_named_event_indexes.items.len != 0)
             {
                 @panic("elem-owned removal scratch was already active");
             }
@@ -6108,6 +6301,7 @@ pub fn Engine(comptime Ctx: type) type {
                 appendBoolFieldRemovalIndexes(ctx, &self.scratch.remove_static_bool_attr_indexes, descriptor_index.static_bool_attrs);
                 appendBoolFieldRemovalIndexes(ctx, &self.scratch.remove_signal_bool_attr_indexes, descriptor_index.signal_bool_attrs);
                 appendEventRemovalIndexes(ctx, &self.scratch.remove_event_indexes, descriptor_index.events);
+                self.appendNamedEventRemovalIndexes(ctx, &self.scratch.remove_named_event_indexes, elem_id);
             }
 
             sortRemovalIndexesDescending(self.scratch.remove_element_indexes.items);
@@ -6118,6 +6312,7 @@ pub fn Engine(comptime Ctx: type) type {
             sortRemovalIndexesDescending(self.scratch.remove_static_bool_attr_indexes.items);
             sortRemovalIndexesDescending(self.scratch.remove_signal_bool_attr_indexes.items);
             sortRemovalIndexesDescending(self.scratch.remove_event_indexes.items);
+            sortRemovalIndexesDescending(self.scratch.remove_named_event_indexes.items);
         }
 
         fn removeActiveElemOwnedDescriptorsForRemovedElems(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, removed_elem_ids: []const u64) void {
@@ -6138,6 +6333,9 @@ pub fn Engine(comptime Ctx: type) type {
             }
             for (self.scratch.remove_event_indexes.items) |index| {
                 self.removeActiveEventDescriptorAt(roc_host, index);
+            }
+            for (self.scratch.remove_named_event_indexes.items) |index| {
+                self.removeActiveNamedEventDescriptorAt(ctx, roc_host, index);
             }
             for (self.scratch.remove_element_indexes.items) |index| {
                 self.removeActiveElementDescriptorAt(ctx, index);
@@ -6258,8 +6456,9 @@ pub fn Engine(comptime Ctx: type) type {
 
         fn appendReplacementEventsMoved(self: *Self, ctx: Ctx.Handle, replacement: *HostNodeDescriptorStream) void {
             const allocator = Ctx.allocator(ctx);
-            if (self.active_events.items.len != self.active_stream.events.items.len) {
-                if (self.active_stream.events.items.len != 0) @panic("active event descriptor table is out of sync before replacement event splice");
+            const existing_total_event_count = self.active_stream.events.items.len + self.active_stream.named_events.items.len;
+            if (self.active_events.items.len != existing_total_event_count) {
+                if (existing_total_event_count != 0) @panic("active event descriptor table is out of sync before replacement event splice");
             }
 
             const event_base = self.active_stream.events.items.len;
@@ -6268,7 +6467,7 @@ pub fn Engine(comptime Ctx: type) type {
                     @panic("replacement event descriptor did not own its retained payload");
                 }
                 self.active_stream.recordEventIndex(allocator, desc.elem_id, desc.kind, event_base + offset);
-                self.active_events.append(allocator, .{
+                self.active_events.insert(allocator, event_base + offset, .{
                     .target_node_id = desc.target_node_id,
                     .payload_kind = desc.payload_kind,
                     .payload_accessor = desc.payload_accessor,
@@ -6279,6 +6478,22 @@ pub fn Engine(comptime Ctx: type) type {
 
             self.active_stream.events.appendSlice(allocator, replacement.events.items) catch @panic("out of memory");
             replacement.events.items.len = 0;
+
+            for (replacement.named_events.items) |*desc| {
+                if (!desc.owns_payload_reducer) {
+                    @panic("replacement named event descriptor did not own its retained payload");
+                }
+                self.active_events.append(allocator, .{
+                    .target_node_id = desc.target_node_id,
+                    .payload_kind = desc.payload_kind,
+                    .payload_accessor = desc.payload_accessor,
+                    .payload_reducer = desc.payload_reducer,
+                }) catch @panic("out of memory");
+                desc.owns_payload_reducer = false;
+            }
+
+            self.active_stream.named_events.appendSlice(allocator, replacement.named_events.items) catch @panic("out of memory");
+            replacement.named_events.items.len = 0;
         }
 
         fn appendReplacementNonRenderDescriptorsMoved(self: *Self, ctx: Ctx.Handle, replacement: *HostNodeDescriptorStream, render_insert_offset: usize) void {
@@ -7389,7 +7604,7 @@ pub fn Engine(comptime Ctx: type) type {
             desc.run_on_mount = false;
 
             const cmd = erased_calls.callUnitToStartTaskCmd(roc_host, desc.to_cmd);
-            defer abi.decref__AnonStruct84(cmd, roc_host);
+            defer abi.decref__AnonStruct85(cmd, roc_host);
             return self.startTaskCommand(ctx, roc_host, desc.scope_id, cmd);
         }
 
@@ -7428,6 +7643,12 @@ pub fn Engine(comptime Ctx: type) type {
                 if (slot.* != null) @panic("element has duplicate event descriptors for one event kind");
                 slot.* = .{ .event_id = event_id, .payload_accessor = desc.payload_accessor };
             }
+            self.recordStreamNodesScannedBy(.stream_nodes_scanned_events, stream.named_events.items.len);
+            for (stream.named_events.items) |desc| {
+                if (desc.elem_id >= seen.len or !seen[@intCast(desc.elem_id)]) {
+                    @panic("named event descriptor referenced an element outside the structural render stream");
+                }
+            }
 
             for (seen, 0..) |is_seen, index| {
                 if (index == 0 or !is_seen) continue;
@@ -7436,6 +7657,7 @@ pub fn Engine(comptime Ctx: type) type {
                     const next_binding = requiredEventBindingSlot(&required[index], kind).*;
                     self.applyRenderEventBinding(ctx, @intCast(index), kind, next_binding, counts);
                 }
+                self.applyStructuralNamedEventBindingsForElem(ctx, stream, @intCast(index), counts);
             }
         }
 
@@ -7461,6 +7683,47 @@ pub fn Engine(comptime Ctx: type) type {
                     const next_binding = requiredEventBindingSlot(&required[index], kind).*;
                     self.applyRenderEventBinding(ctx, @intCast(index), kind, next_binding, counts);
                 }
+                self.applyStructuralNamedEventBindingsForElem(ctx, stream, @intCast(index), counts);
+            }
+        }
+
+        pub fn namedEventBindingForElemName(stream: *const HostNodeDescriptorStream, elem_id: u64, name: []const u8) ?HostRequiredNamedEventBinding {
+            const fixed_event_count = stream.events.items.len;
+            for (stream.named_events.items, 0..) |desc, index| {
+                if (desc.elem_id == elem_id and std.mem.eql(u8, desc.name, name)) {
+                    return .{
+                        .event_id = @intCast(fixed_event_count + index + 1),
+                        .options = desc.options,
+                        .payload_kind = desc.payload_kind,
+                        .payload_accessor = desc.payload_accessor,
+                    };
+                }
+            }
+            return null;
+        }
+
+        pub fn applyStructuralNamedEventBindingsForElem(self: *Self, ctx: Ctx.Handle, stream: *const HostNodeDescriptorStream, elem_id: u64, counts: *render.Counts) void {
+            const node = self.activeRenderScalarNode(elem_id);
+            var cache_index: usize = 0;
+            while (cache_index < node.named_events.items.len) {
+                const cached = node.named_events.items[cache_index];
+                if (namedEventBindingForElemName(stream, elem_id, cached.name) == null) {
+                    self.applyRenderNamedEventBinding(ctx, elem_id, cached.name, null, counts);
+                    continue;
+                }
+                cache_index += 1;
+            }
+
+            self.recordStreamNodesScannedBy(.stream_nodes_scanned_events, stream.named_events.items.len);
+            for (stream.named_events.items, 0..) |desc, index| {
+                if (desc.elem_id != elem_id) continue;
+                const event_id: u64 = @intCast(stream.events.items.len + index + 1);
+                self.applyRenderNamedEventBinding(ctx, elem_id, desc.name, .{
+                    .event_id = event_id,
+                    .options = desc.options,
+                    .payload_kind = desc.payload_kind,
+                    .payload_accessor = desc.payload_accessor,
+                }, counts);
             }
         }
 
@@ -7478,6 +7741,7 @@ pub fn Engine(comptime Ctx: type) type {
                 const next_binding = self.activeEventBindingForElemKind(elem_id, kind);
                 self.applyRenderEventBinding(ctx, elem_id, kind, next_binding, counts);
             }
+            self.applyStructuralNamedEventBindingsForElem(ctx, &self.active_stream, elem_id, counts);
         }
 
         pub fn applyActiveStreamEventBindings(self: *Self, ctx: Ctx.Handle, counts: *render.Counts) void {
@@ -7799,6 +8063,14 @@ pub fn Engine(comptime Ctx: type) type {
             }
             for (stream.events.items, 0..) |desc, index| {
                 self.applyRenderEventBinding(ctx, desc.elem_id, desc.kind, .{ .event_id = @intCast(index + 1), .payload_accessor = desc.payload_accessor }, &counts);
+            }
+            for (stream.named_events.items, 0..) |desc, index| {
+                self.applyRenderNamedEventBinding(ctx, desc.elem_id, desc.name, .{
+                    .event_id = @intCast(stream.events.items.len + index + 1),
+                    .options = desc.options,
+                    .payload_kind = desc.payload_kind,
+                    .payload_accessor = desc.payload_accessor,
+                }, &counts);
             }
 
             self.debugAssertRenderCacheMatchesStream(ctx, stream);
@@ -8199,6 +8471,16 @@ pub fn Engine(comptime Ctx: type) type {
                 }) catch @panic("out of memory");
                 desc.owns_payload_reducer = false;
             }
+            for (stream.named_events.items) |*desc| {
+                if (!desc.owns_payload_reducer) @panic("named event descriptor payload reducer ownership was already transferred");
+                self.active_events.append(allocator, .{
+                    .target_node_id = desc.target_node_id,
+                    .payload_kind = desc.payload_kind,
+                    .payload_accessor = desc.payload_accessor,
+                    .payload_reducer = desc.payload_reducer,
+                }) catch @panic("out of memory");
+                desc.owns_payload_reducer = false;
+            }
         }
 
         pub fn updateEffectSourceCacheSlot(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, cache_slot: *HostSignalCacheSlot, value: HostValue, cap: HostValueCapability) bool {
@@ -8333,7 +8615,7 @@ pub fn Engine(comptime Ctx: type) type {
             if (!self.updateDirtySignalCache(ctx, roc_host, &desc.cached_value, result.value, cap)) return .{};
 
             const cmd = callHostValueToStartTaskCmdWithCapability(ctx, roc_host, cap, desc.to_cmd, result.value);
-            defer abi.decref__AnonStruct84(cmd, roc_host);
+            defer abi.decref__AnonStruct85(cmd, roc_host);
             return self.startTaskCommand(ctx, roc_host, desc.scope_id, cmd);
         }
 
@@ -8407,6 +8689,8 @@ const VerifySink = struct {
     pub fn clearBoolField(_: VerifySink, _: u64, _: RenderBoolField) void {}
     pub fn bindEventKind(_: VerifySink, _: u64, _: RenderEventKind, _: u64, _: EventPayloadAccessor) void {}
     pub fn clearEvent(_: VerifySink, _: u64, _: RenderEventKind) void {}
+    pub fn bindEventName(_: VerifySink, _: u64, _: []const u8, _: u64, _: u32, _: EventPayloadKind, _: EventPayloadAccessor) void {}
+    pub fn clearEventName(_: VerifySink, _: u64, _: []const u8) void {}
     pub fn startInterval(_: VerifySink, _: u64, _: u64) void {}
     pub fn cancelInterval(_: VerifySink, _: u64) void {}
     pub fn startTask(_: VerifySink, _: u64, _: []const u8, _: []const u8) void {}
