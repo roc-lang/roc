@@ -2009,6 +2009,9 @@ const PatternTagArgsState = struct {
     final_token: Token.Idx,
     qualifiers: Token.Span,
     scratch_top: u32,
+    /// True when parsing `Type.(pattern)` nominal-value destructuring args,
+    /// false for ordinary `Tag(args)` application args.
+    backing_value: bool = false,
 };
 
 const PatternListState = struct {
@@ -5657,6 +5660,21 @@ fn runExprStatementKernel(
                         };
                         continue :expr_kernel .pattern_tag_args_next;
                     }
+                    if (self.peek() == .Dot and self.peekN(1) == .NoSpaceOpenRound) {
+                        // `Type.(pattern)` — nominal-value destructure, the inverse
+                        // of `Type.(value)` construction. Parse the backing
+                        // pattern(s) just like tag args, flagged as backing_value.
+                        self.advance(); // `.`
+                        self.advance(); // `(`
+                        pattern_tag_args_state = .{
+                            .start = start,
+                            .final_token = qual_result.final_token,
+                            .qualifiers = qual_result.qualifiers,
+                            .scratch_top = self.store.scratchPatternTop(),
+                            .backing_value = true,
+                        };
+                        continue :expr_kernel .pattern_tag_args_next;
+                    }
                     last_pattern = try self.store.addPattern(.{ .tag = .{
                         .region = .{ .start = start, .end = self.pos },
                         .args = .{ .span = .{ .start = 0, .len = 0 } },
@@ -5974,6 +5992,7 @@ fn runExprStatementKernel(
                     .args = args,
                     .tag_tok = pattern_tag_args_state.final_token,
                     .qualifiers = pattern_tag_args_state.qualifiers,
+                    .backing_value = pattern_tag_args_state.backing_value,
                 } });
                 continue :expr_kernel .pattern_complete;
             },

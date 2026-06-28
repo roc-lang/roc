@@ -1350,6 +1350,11 @@ pub const Pattern = union(enum) {
         tag_tok: Token.Idx,
         args: Pattern.Span,
         qualifiers: Token.Span,
+        /// True when written as `Type.(pattern)` — a nominal-value destructure
+        /// (the inverse of `Type.(value)` construction), where `tag_tok` is the
+        /// nominal type and `args` is the backing pattern. False for ordinary
+        /// tag patterns like `Tag(args)` / `Module.Tag`.
+        backing_value: bool = false,
         region: TokenizedRegion,
     },
     int: struct {

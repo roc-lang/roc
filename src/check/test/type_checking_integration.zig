@@ -4996,6 +4996,32 @@ test "check type - opaque nominal construction in defining module" {
     try checkTypesModule(source, .{ .pass = .last_def }, "Secret");
 }
 
+test "check type - nominal destructure pattern in match binds the backing value" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\Distance := U64
+        \\
+        \\unwrap : Distance -> U64
+        \\unwrap = |d| match d {
+        \\    Distance.(n) => n
+        \\}
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Distance -> U64");
+}
+
+test "check type - nominal destructure pattern in lambda arg binds the backing value" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\Distance := U64
+        \\
+        \\unwrap : Distance -> U64
+        \\unwrap = |Distance.(n)| n
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Distance -> U64");
+}
+
 // LITERAL COERCION + STRUCTURAL LIFTING INTO NOMINALS (executable spec)
 //
 // Two DIFFERENT operations, deliberately kept separate:
