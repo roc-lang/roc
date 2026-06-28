@@ -17,7 +17,6 @@ const abi = @import("roc_platform_abi.zig");
 const scope_tree = @import("scope_tree.zig");
 const erased_calls = @import("erased_calls.zig");
 const render = @import("render_commands.zig");
-const signal_graph = @import("signal_graph.zig");
 const identity_table = @import("identity_table.zig");
 const host_value_registry = @import("host_value_registry.zig");
 const hv = @import("host_values.zig");
@@ -27,6 +26,7 @@ const render_cache_mod = @import("render_cache.zig");
 const descriptor_stream = @import("descriptor_stream.zig");
 const retained_values = @import("retained_values.zig");
 const signal_records = @import("signal_records.zig");
+const active_graph = @import("active_signal_graph.zig");
 
 const enable_runtime_metrics = engine_metrics.enable_runtime_metrics;
 
@@ -264,45 +264,18 @@ pub const HostSignalDependentsRoute = struct {
     signal_ids: []u64,
 };
 
-pub const HostActiveSignalGraphNode = signal_graph.Node(HostSignalRecord);
+pub const HostActiveSignalGraphNode = active_graph.Node(HostSignalRecord);
 pub const HostNodeIdentity = identity_table.NodeIdentity;
 pub const HostDomIdentity = identity_table.DomIdentity;
 pub const HostScopeBranch = scope_tree.Branch;
 
-pub const HostActiveTextSignalSinkKind = enum {
-    text_node,
-    text_attr,
-    custom_text_attr,
-};
-
-pub const HostActiveTextSignalSink = struct {
-    kind: HostActiveTextSignalSinkKind,
-    index: usize,
-};
-
-pub const HostActiveBoolSignalSink = struct {
-    index: usize,
-};
-
-pub const HostActiveChangeSignalSink = struct {
-    index: usize,
-};
-
-pub const HostActiveStructuralSignalKind = enum {
-    when,
-    each,
-};
-
-pub const HostActiveStructuralSignal = struct {
-    kind: HostActiveStructuralSignalKind,
-    index: usize,
-};
-
-pub const HostDirtyStructuralSignal = struct {
-    kind: HostActiveStructuralSignalKind,
-    node_id: u64,
-    branch: ?HostScopeBranch = null,
-};
+pub const HostActiveTextSignalSinkKind = active_graph.TextSinkKind;
+pub const HostActiveTextSignalSink = active_graph.TextSink;
+pub const HostActiveBoolSignalSink = active_graph.BoolSink;
+pub const HostActiveChangeSignalSink = active_graph.ChangeSink;
+pub const HostActiveStructuralSignalKind = active_graph.StructuralKind;
+pub const HostActiveStructuralSignal = active_graph.StructuralSink;
+pub const HostDirtyStructuralSignal = active_graph.DirtyStructuralSignal;
 
 pub const HostEachSite = struct {
     parent_scope_id: u64,
@@ -1692,11 +1665,11 @@ pub fn Engine(comptime Ctx: type) type {
         dom_identities: std.ArrayListUnmanaged(HostDomIdentity) = .empty,
         active_stream: HostNodeDescriptorStream = .{},
         active_signal_graph: std.ArrayListUnmanaged(HostActiveSignalGraphNode) = .empty,
-        active_source_signal_routes: std.ArrayListUnmanaged(std.ArrayListUnmanaged(u64)) = .empty,
-        active_text_signal_routes: std.ArrayListUnmanaged(std.ArrayListUnmanaged(HostActiveTextSignalSink)) = .empty,
-        active_bool_signal_routes: std.ArrayListUnmanaged(std.ArrayListUnmanaged(HostActiveBoolSignalSink)) = .empty,
-        active_change_signal_routes: std.ArrayListUnmanaged(std.ArrayListUnmanaged(HostActiveChangeSignalSink)) = .empty,
-        active_structural_signal_routes: std.ArrayListUnmanaged(std.ArrayListUnmanaged(HostActiveStructuralSignal)) = .empty,
+        active_source_signal_routes: active_graph.RouteTable(u64) = .empty,
+        active_text_signal_routes: active_graph.RouteTable(HostActiveTextSignalSink) = .empty,
+        active_bool_signal_routes: active_graph.RouteTable(HostActiveBoolSignalSink) = .empty,
+        active_change_signal_routes: active_graph.RouteTable(HostActiveChangeSignalSink) = .empty,
+        active_structural_signal_routes: active_graph.RouteTable(HostActiveStructuralSignal) = .empty,
         render_cache: render_cache_mod.Cache(Ctx) = .{},
         pending_tasks: std.ArrayListUnmanaged(HostPendingTask) = .empty,
         active_intervals: std.ArrayListUnmanaged(HostActiveInterval) = .empty,
@@ -2519,56 +2492,33 @@ pub fn Engine(comptime Ctx: type) type {
         }
 
         pub fn activeSignalRank(self: *Self, record_id: u64) u64 {
-            return signal_graph.rank(HostSignalRecord, self.active_signal_graph.items, record_id) catch @panic("active signal record id has no graph node");
+            return active_graph.rank(HostSignalRecord, self.active_signal_graph.items, record_id);
         }
 
         pub fn dependentActiveSignalRecordIds(self: *Self, record_id: u64) []const u64 {
-            return signal_graph.dependentIds(HostSignalRecord, self.active_signal_graph.items, record_id) catch @panic("active signal record id has no dependent table");
+            return active_graph.dependentIds(HostSignalRecord, self.active_signal_graph.items, record_id);
         }
 
         pub fn appendActiveSignalAndDependents(self: *Self, allocator: std.mem.Allocator, record_ids: *std.ArrayListUnmanaged(u64), record_id: u64) void {
-            signal_graph.appendReachableDependents(HostSignalRecord, allocator, self.active_signal_graph.items, record_ids, record_id) catch |err| switch (err) {
-                error.OutOfMemory => @panic("out of memory"),
-                else => @panic("active signal dependent traversal referenced an unknown record"),
-            };
+            active_graph.appendAndDependents(HostSignalRecord, allocator, self.active_signal_graph.items, record_ids, record_id);
         }
 
         pub fn sortActiveSignalRecordIdsByRank(self: *Self, record_ids: []u64) void {
-            signal_graph.sortIdsByRank(HostSignalRecord, self.active_signal_graph.items, record_ids) catch {
-                @panic("active signal rank sort referenced an unknown record");
-            };
+            active_graph.sortRecordIdsByRank(HostSignalRecord, self.active_signal_graph.items, record_ids);
         }
 
         pub fn dirtyActiveSignalRecordIdsForSources(self: *Self, allocator: std.mem.Allocator, dirty_source_node_ids: []const u64) []u64 {
-            var dirty_record_ids: std.ArrayListUnmanaged(u64) = .empty;
-            errdefer dirty_record_ids.deinit(allocator);
-
-            for (dirty_source_node_ids) |source_node_id| {
-                const route_index: usize = @intCast(source_node_id);
-                if (route_index >= self.active_source_signal_routes.items.len) continue;
-
-                for (self.active_source_signal_routes.items[route_index].items) |record_id| {
-                    self.appendActiveSignalAndDependents(allocator, &dirty_record_ids, record_id);
-                }
-            }
-
-            const record_ids = dirty_record_ids.toOwnedSlice(allocator) catch @panic("out of memory");
-            self.sortActiveSignalRecordIdsByRank(record_ids);
-            return record_ids;
+            return active_graph.dirtyRecordIdsForSources(
+                HostSignalRecord,
+                allocator,
+                self.active_signal_graph.items,
+                self.active_source_signal_routes.items,
+                dirty_source_node_ids,
+            );
         }
 
         pub fn dirtyActiveSignalRecordIdsForRoots(self: *Self, allocator: std.mem.Allocator, root_record_ids: []const u64) []u64 {
-            var dirty_record_ids: std.ArrayListUnmanaged(u64) = .empty;
-            errdefer dirty_record_ids.deinit(allocator);
-
-            for (root_record_ids) |record_id| {
-                if (record_id >= self.active_signal_graph.items.len) @panic("dirty active signal root referenced an unknown record");
-                self.appendActiveSignalAndDependents(allocator, &dirty_record_ids, record_id);
-            }
-
-            const record_ids = dirty_record_ids.toOwnedSlice(allocator) catch @panic("out of memory");
-            self.sortActiveSignalRecordIdsByRank(record_ids);
-            return record_ids;
+            return active_graph.dirtyRecordIdsForRoots(HostSignalRecord, allocator, self.active_signal_graph.items, root_record_ids);
         }
 
         pub fn recordDerivedCall(self: *Self) void {
@@ -3776,94 +3726,46 @@ pub fn Engine(comptime Ctx: type) type {
         }
 
         pub fn clearActiveSignalRoutes(self: *Self, ctx: Ctx.Handle) void {
-            const allocator = Ctx.allocator(ctx);
-            for (self.active_source_signal_routes.items) |*route| {
-                route.deinit(allocator);
-            }
-            self.active_source_signal_routes.items.len = 0;
-
-            for (self.active_text_signal_routes.items) |*route| {
-                route.deinit(allocator);
-            }
-            self.active_text_signal_routes.items.len = 0;
-
-            for (self.active_bool_signal_routes.items) |*route| {
-                route.deinit(allocator);
-            }
-            self.active_bool_signal_routes.items.len = 0;
-
-            for (self.active_change_signal_routes.items) |*route| {
-                route.deinit(allocator);
-            }
-            self.active_change_signal_routes.items.len = 0;
-
-            for (self.active_structural_signal_routes.items) |*route| {
-                route.deinit(allocator);
-            }
-            self.active_structural_signal_routes.items.len = 0;
+            active_graph.clearRoutes(
+                Ctx.allocator(ctx),
+                &self.active_source_signal_routes,
+                &self.active_text_signal_routes,
+                &self.active_bool_signal_routes,
+                &self.active_change_signal_routes,
+                &self.active_structural_signal_routes,
+            );
         }
 
         pub fn clearActiveSinkSignalRoutes(self: *Self, ctx: Ctx.Handle) void {
-            const allocator = Ctx.allocator(ctx);
-            for (self.active_text_signal_routes.items) |*route| {
-                route.deinit(allocator);
-            }
-            self.active_text_signal_routes.items.len = 0;
-
-            for (self.active_bool_signal_routes.items) |*route| {
-                route.deinit(allocator);
-            }
-            self.active_bool_signal_routes.items.len = 0;
-
-            for (self.active_change_signal_routes.items) |*route| {
-                route.deinit(allocator);
-            }
-            self.active_change_signal_routes.items.len = 0;
-
-            for (self.active_structural_signal_routes.items) |*route| {
-                route.deinit(allocator);
-            }
-            self.active_structural_signal_routes.items.len = 0;
+            active_graph.clearSinkRoutes(
+                Ctx.allocator(ctx),
+                &self.active_text_signal_routes,
+                &self.active_bool_signal_routes,
+                &self.active_change_signal_routes,
+                &self.active_structural_signal_routes,
+            );
         }
 
         pub fn activeSignalRecordId(self: *Self, record: *const HostSignalRecord) ?u64 {
-            const record_id = record.active_graph_id orelse return null;
-            if (record_id >= self.active_signal_graph.items.len) @panic("active signal record dense id exceeded the graph table");
-            if (self.active_signal_graph.items[@intCast(record_id)].record != record) {
-                @panic("active signal record dense id pointed at a different record");
-            }
-            return record_id;
+            return active_graph.recordId(HostSignalRecord, self.active_signal_graph.items, record);
         }
 
         pub fn requireActiveSignalRecordId(self: *Self, record: *const HostSignalRecord) u64 {
-            return self.activeSignalRecordId(record) orelse @panic("active signal graph referenced a record that was not registered");
+            return active_graph.requireRecordId(HostSignalRecord, self.active_signal_graph.items, record);
         }
 
         pub fn appendActiveSignalGraphNode(self: *Self, ctx: Ctx.Handle, record: *HostSignalRecord, rank: u64) u64 {
-            const allocator = Ctx.allocator(ctx);
-            const record_id: u64 = @intCast(self.active_signal_graph.items.len);
-            self.active_signal_graph.append(allocator, .{
-                .record = record.retain(),
-                .rank = rank,
-            }) catch @panic("out of memory");
-            record.active_graph_id = record_id;
+            const record_id = active_graph.appendNode(HostSignalRecord, Ctx.allocator(ctx), &self.active_signal_graph, record, rank);
             self.pending_roc_metrics.bump(.active_graph_records_rebuilt, 1);
             return record_id;
         }
 
         pub fn appendActiveSignalDependentId(self: *Self, ctx: Ctx.Handle, input_record_id: u64, dependent_record_id: u64) void {
-            signal_graph.appendDependent(HostSignalRecord, Ctx.allocator(ctx), self.active_signal_graph.items, input_record_id, dependent_record_id) catch |err| switch (err) {
-                error.OutOfMemory => @panic("out of memory"),
-                error.UnknownNode => @panic("active signal dependent referenced an unknown input record"),
-                else => @panic("active signal dependent insertion missed its edge"),
-            };
+            active_graph.appendDependentId(HostSignalRecord, Ctx.allocator(ctx), self.active_signal_graph.items, input_record_id, dependent_record_id);
         }
 
         pub fn appendActiveSourceSignalRoute(self: *Self, ctx: Ctx.Handle, source_node_id: u64, record_id: u64) void {
-            const route = self.ensureActiveSourceSignalRoute(ctx, source_node_id);
-            if (!u64SliceContains(route.items, record_id)) {
-                route.append(Ctx.allocator(ctx), record_id) catch @panic("out of memory");
-            }
+            active_graph.appendSourceRoute(Ctx.allocator(ctx), &self.active_source_signal_routes, self.node_identities.items.len, source_node_id, record_id);
         }
 
         pub fn retainActiveSignalRecord(self: *Self, ctx: Ctx.Handle, record: *HostSignalRecord) void {
@@ -3927,235 +3829,83 @@ pub fn Engine(comptime Ctx: type) type {
         }
 
         pub fn ensureActiveSourceSignalRoute(self: *Self, ctx: Ctx.Handle, source_node_id: u64) *std.ArrayListUnmanaged(u64) {
-            if (source_node_id >= self.node_identities.items.len) @panic("active source signal route referenced an unknown source node");
-            const allocator = Ctx.allocator(ctx);
-            const route_index: usize = @intCast(source_node_id);
-            while (self.active_source_signal_routes.items.len <= route_index) {
-                self.active_source_signal_routes.append(allocator, .empty) catch @panic("out of memory");
-            }
-            return &self.active_source_signal_routes.items[route_index];
+            return active_graph.ensureSourceRoute(Ctx.allocator(ctx), &self.active_source_signal_routes, self.node_identities.items.len, source_node_id);
         }
 
         pub fn ensureActiveTextSignalRoute(self: *Self, ctx: Ctx.Handle, record_id: u64) *std.ArrayListUnmanaged(HostActiveTextSignalSink) {
-            if (record_id >= self.active_signal_graph.items.len) @panic("active text signal route referenced an unknown signal record");
-            const allocator = Ctx.allocator(ctx);
-            const route_index: usize = @intCast(record_id);
-            while (self.active_text_signal_routes.items.len <= route_index) {
-                self.active_text_signal_routes.append(allocator, .empty) catch @panic("out of memory");
-            }
-            return &self.active_text_signal_routes.items[route_index];
+            return active_graph.ensureTextRoute(Ctx.allocator(ctx), &self.active_text_signal_routes, self.active_signal_graph.items.len, record_id);
         }
 
         pub fn ensureActiveBoolSignalRoute(self: *Self, ctx: Ctx.Handle, record_id: u64) *std.ArrayListUnmanaged(HostActiveBoolSignalSink) {
-            if (record_id >= self.active_signal_graph.items.len) @panic("active bool signal route referenced an unknown signal record");
-            const allocator = Ctx.allocator(ctx);
-            const route_index: usize = @intCast(record_id);
-            while (self.active_bool_signal_routes.items.len <= route_index) {
-                self.active_bool_signal_routes.append(allocator, .empty) catch @panic("out of memory");
-            }
-            return &self.active_bool_signal_routes.items[route_index];
+            return active_graph.ensureBoolRoute(Ctx.allocator(ctx), &self.active_bool_signal_routes, self.active_signal_graph.items.len, record_id);
         }
 
         pub fn ensureActiveChangeSignalRoute(self: *Self, ctx: Ctx.Handle, record_id: u64) *std.ArrayListUnmanaged(HostActiveChangeSignalSink) {
-            if (record_id >= self.active_signal_graph.items.len) @panic("active change signal route referenced an unknown signal record");
-            const allocator = Ctx.allocator(ctx);
-            const route_index: usize = @intCast(record_id);
-            while (self.active_change_signal_routes.items.len <= route_index) {
-                self.active_change_signal_routes.append(allocator, .empty) catch @panic("out of memory");
-            }
-            return &self.active_change_signal_routes.items[route_index];
+            return active_graph.ensureChangeRoute(Ctx.allocator(ctx), &self.active_change_signal_routes, self.active_signal_graph.items.len, record_id);
         }
 
         pub fn ensureActiveStructuralSignalRoute(self: *Self, ctx: Ctx.Handle, record_id: u64) *std.ArrayListUnmanaged(HostActiveStructuralSignal) {
-            if (record_id >= self.active_signal_graph.items.len) @panic("active structural signal route referenced an unknown signal record");
-            const allocator = Ctx.allocator(ctx);
-            const route_index: usize = @intCast(record_id);
-            while (self.active_structural_signal_routes.items.len <= route_index) {
-                self.active_structural_signal_routes.append(allocator, .empty) catch @panic("out of memory");
-            }
-            return &self.active_structural_signal_routes.items[route_index];
-        }
-
-        fn removeActiveRouteTableRecordId(
-            comptime Route: type,
-            allocator: std.mem.Allocator,
-            routes: *std.ArrayListUnmanaged(std.ArrayListUnmanaged(Route)),
-            record_index: usize,
-            last_index: usize,
-            comptime live_route_message: []const u8,
-        ) void {
-            if (routes.items.len > last_index + 1) @panic("active sink route table exceeded active signal graph length");
-            if (record_index >= routes.items.len) return;
-
-            if (routes.items[record_index].items.len != 0) @panic(live_route_message);
-            routes.items[record_index].deinit(allocator);
-
-            if (record_index != last_index and last_index < routes.items.len) {
-                routes.items[record_index] = routes.items[last_index];
-                routes.items[last_index] = .empty;
-            } else {
-                routes.items[record_index] = .empty;
-            }
-
-            if (routes.items.len == last_index + 1) {
-                routes.items.len = last_index;
-            }
+            return active_graph.ensureStructuralRoute(Ctx.allocator(ctx), &self.active_structural_signal_routes, self.active_signal_graph.items.len, record_id);
         }
 
         fn removeActiveSinkRoutesForRecordId(self: *Self, ctx: Ctx.Handle, record_index: usize, last_index: usize) void {
-            const allocator = Ctx.allocator(ctx);
-            removeActiveRouteTableRecordId(
-                HostActiveTextSignalSink,
-                allocator,
+            active_graph.removeSinkRoutesForRecordId(
+                Ctx.allocator(ctx),
                 &self.active_text_signal_routes,
-                record_index,
-                last_index,
-                "active signal graph removed a record with live text sinks",
-            );
-            removeActiveRouteTableRecordId(
-                HostActiveBoolSignalSink,
-                allocator,
                 &self.active_bool_signal_routes,
-                record_index,
-                last_index,
-                "active signal graph removed a record with live bool sinks",
-            );
-            removeActiveRouteTableRecordId(
-                HostActiveChangeSignalSink,
-                allocator,
                 &self.active_change_signal_routes,
-                record_index,
-                last_index,
-                "active signal graph removed a record with live change sinks",
-            );
-            removeActiveRouteTableRecordId(
-                HostActiveStructuralSignal,
-                allocator,
                 &self.active_structural_signal_routes,
                 record_index,
                 last_index,
-                "active signal graph removed a record with live structural sinks",
             );
         }
 
         fn appendActiveTextSignalRoute(self: *Self, ctx: Ctx.Handle, record_id: u64, route: HostActiveTextSignalSink) void {
-            self.ensureActiveTextSignalRoute(ctx, record_id).append(Ctx.allocator(ctx), route) catch @panic("out of memory");
+            active_graph.appendTextRoute(Ctx.allocator(ctx), &self.active_text_signal_routes, self.active_signal_graph.items.len, record_id, route);
         }
 
         fn removeActiveTextSignalRoute(self: *Self, record_id: u64, kind: HostActiveTextSignalSinkKind, index: usize) void {
-            const route_index: usize = @intCast(record_id);
-            if (route_index >= self.active_text_signal_routes.items.len) @panic("active text signal route removal referenced an unknown signal record");
-            var route = &self.active_text_signal_routes.items[route_index];
-            for (route.items, 0..) |sink, sink_index| {
-                if (sink.kind == kind and sink.index == index) {
-                    _ = route.swapRemove(sink_index);
-                    return;
-                }
-            }
-            @panic("active text signal route removal missed its sink");
+            active_graph.removeTextRoute(&self.active_text_signal_routes, record_id, kind, index);
         }
 
         fn updateActiveTextSignalRouteIndex(self: *Self, record_id: u64, kind: HostActiveTextSignalSinkKind, old_index: usize, new_index: usize) void {
-            if (old_index == new_index) return;
-            const route_index: usize = @intCast(record_id);
-            if (route_index >= self.active_text_signal_routes.items.len) @panic("active text signal route update referenced an unknown signal record");
-            for (self.active_text_signal_routes.items[route_index].items) |*sink| {
-                if (sink.kind == kind and sink.index == old_index) {
-                    sink.index = new_index;
-                    return;
-                }
-            }
-            @panic("active text signal route update missed its sink");
+            active_graph.updateTextRouteIndex(&self.active_text_signal_routes, record_id, kind, old_index, new_index);
         }
 
         fn appendActiveBoolSignalRoute(self: *Self, ctx: Ctx.Handle, record_id: u64, route: HostActiveBoolSignalSink) void {
-            self.ensureActiveBoolSignalRoute(ctx, record_id).append(Ctx.allocator(ctx), route) catch @panic("out of memory");
+            active_graph.appendBoolRoute(Ctx.allocator(ctx), &self.active_bool_signal_routes, self.active_signal_graph.items.len, record_id, route);
         }
 
         fn removeActiveBoolSignalRoute(self: *Self, record_id: u64, index: usize) void {
-            const route_index: usize = @intCast(record_id);
-            if (route_index >= self.active_bool_signal_routes.items.len) @panic("active bool signal route removal referenced an unknown signal record");
-            var route = &self.active_bool_signal_routes.items[route_index];
-            for (route.items, 0..) |sink, sink_index| {
-                if (sink.index == index) {
-                    _ = route.swapRemove(sink_index);
-                    return;
-                }
-            }
-            @panic("active bool signal route removal missed its sink");
+            active_graph.removeBoolRoute(&self.active_bool_signal_routes, record_id, index);
         }
 
         fn updateActiveBoolSignalRouteIndex(self: *Self, record_id: u64, old_index: usize, new_index: usize) void {
-            if (old_index == new_index) return;
-            const route_index: usize = @intCast(record_id);
-            if (route_index >= self.active_bool_signal_routes.items.len) @panic("active bool signal route update referenced an unknown signal record");
-            for (self.active_bool_signal_routes.items[route_index].items) |*sink| {
-                if (sink.index == old_index) {
-                    sink.index = new_index;
-                    return;
-                }
-            }
-            @panic("active bool signal route update missed its sink");
+            active_graph.updateBoolRouteIndex(&self.active_bool_signal_routes, record_id, old_index, new_index);
         }
 
         fn appendActiveChangeSignalRoute(self: *Self, ctx: Ctx.Handle, record_id: u64, route: HostActiveChangeSignalSink) void {
-            self.ensureActiveChangeSignalRoute(ctx, record_id).append(Ctx.allocator(ctx), route) catch @panic("out of memory");
+            active_graph.appendChangeRoute(Ctx.allocator(ctx), &self.active_change_signal_routes, self.active_signal_graph.items.len, record_id, route);
         }
 
         fn removeActiveChangeSignalRoute(self: *Self, record_id: u64, index: usize) void {
-            const route_index: usize = @intCast(record_id);
-            if (route_index >= self.active_change_signal_routes.items.len) @panic("active change signal route removal referenced an unknown signal record");
-            var route = &self.active_change_signal_routes.items[route_index];
-            for (route.items, 0..) |sink, sink_index| {
-                if (sink.index == index) {
-                    _ = route.swapRemove(sink_index);
-                    return;
-                }
-            }
-            @panic("active change signal route removal missed its sink");
+            active_graph.removeChangeRoute(&self.active_change_signal_routes, record_id, index);
         }
 
         fn updateActiveChangeSignalRouteIndex(self: *Self, record_id: u64, old_index: usize, new_index: usize) void {
-            if (old_index == new_index) return;
-            const route_index: usize = @intCast(record_id);
-            if (route_index >= self.active_change_signal_routes.items.len) @panic("active change signal route update referenced an unknown signal record");
-            for (self.active_change_signal_routes.items[route_index].items) |*sink| {
-                if (sink.index == old_index) {
-                    sink.index = new_index;
-                    return;
-                }
-            }
-            @panic("active change signal route update missed its sink");
+            active_graph.updateChangeRouteIndex(&self.active_change_signal_routes, record_id, old_index, new_index);
         }
 
         fn appendActiveStructuralSignalRoute(self: *Self, ctx: Ctx.Handle, record_id: u64, route: HostActiveStructuralSignal) void {
-            self.ensureActiveStructuralSignalRoute(ctx, record_id).append(Ctx.allocator(ctx), route) catch @panic("out of memory");
+            active_graph.appendStructuralRoute(Ctx.allocator(ctx), &self.active_structural_signal_routes, self.active_signal_graph.items.len, record_id, route);
         }
 
         fn removeActiveStructuralSignalRoute(self: *Self, record_id: u64, kind: HostActiveStructuralSignalKind, index: usize) void {
-            const route_index: usize = @intCast(record_id);
-            if (route_index >= self.active_structural_signal_routes.items.len) @panic("active structural signal route removal referenced an unknown signal record");
-            var route = &self.active_structural_signal_routes.items[route_index];
-            for (route.items, 0..) |sink, sink_index| {
-                if (sink.kind == kind and sink.index == index) {
-                    _ = route.swapRemove(sink_index);
-                    return;
-                }
-            }
-            @panic("active structural signal route removal missed its sink");
+            active_graph.removeStructuralRoute(&self.active_structural_signal_routes, record_id, kind, index);
         }
 
         fn updateActiveStructuralSignalRouteIndex(self: *Self, record_id: u64, kind: HostActiveStructuralSignalKind, old_index: usize, new_index: usize) void {
-            if (old_index == new_index) return;
-            const route_index: usize = @intCast(record_id);
-            if (route_index >= self.active_structural_signal_routes.items.len) @panic("active structural signal route update referenced an unknown signal record");
-            for (self.active_structural_signal_routes.items[route_index].items) |*sink| {
-                if (sink.kind == kind and sink.index == old_index) {
-                    sink.index = new_index;
-                    return;
-                }
-            }
-            @panic("active structural signal route update missed its sink");
+            active_graph.updateStructuralRouteIndex(&self.active_structural_signal_routes, record_id, kind, old_index, new_index);
         }
 
         pub fn rebuildActiveSinkSignalRoutesFromStream(self: *Self, ctx: Ctx.Handle, stream: *const HostNodeDescriptorStream) void {
@@ -4247,62 +3997,23 @@ pub fn Engine(comptime Ctx: type) type {
         }
 
         fn removeActiveSignalDependentId(self: *Self, ctx: Ctx.Handle, input_record_id: u64, dependent_record_id: u64) void {
-            signal_graph.removeDependent(HostSignalRecord, Ctx.allocator(ctx), self.active_signal_graph.items, input_record_id, dependent_record_id) catch |err| switch (err) {
-                error.OutOfMemory => @panic("out of memory"),
-                error.UnknownNode => @panic("active signal dependent removal referenced an unknown input record"),
-                else => @panic("active signal dependent removal missed its edge"),
-            };
+            active_graph.removeDependentId(HostSignalRecord, Ctx.allocator(ctx), self.active_signal_graph.items, input_record_id, dependent_record_id);
         }
 
         fn replaceActiveSignalDependentId(self: *Self, input_record_id: u64, old_dependent_id: u64, new_dependent_id: u64) void {
-            signal_graph.replaceDependent(HostSignalRecord, self.active_signal_graph.items, input_record_id, old_dependent_id, new_dependent_id) catch |err| switch (err) {
-                error.UnknownNode => @panic("active signal dependent rewrite referenced an unknown input record"),
-                else => @panic("active signal dependent rewrite missed its edge"),
-            };
+            active_graph.replaceDependentId(HostSignalRecord, self.active_signal_graph.items, input_record_id, old_dependent_id, new_dependent_id);
         }
 
         fn removeActiveSourceSignalRoute(self: *Self, source_node_id: u64, record_id: u64) void {
-            if (source_node_id >= self.active_source_signal_routes.items.len) @panic("active source signal route removal referenced an unknown source node");
-            var route = &self.active_source_signal_routes.items[@intCast(source_node_id)];
-            for (route.items, 0..) |existing_id, index| {
-                if (existing_id != record_id) continue;
-                _ = route.swapRemove(index);
-                return;
-            }
-            @panic("active source signal route removal missed its record");
+            active_graph.removeSourceRoute(&self.active_source_signal_routes, source_node_id, record_id);
         }
 
         fn replaceActiveSourceSignalRouteId(self: *Self, source_node_id: u64, old_record_id: u64, new_record_id: u64) void {
-            if (source_node_id >= self.active_source_signal_routes.items.len) @panic("active source signal route rewrite referenced an unknown source node");
-            const route = self.active_source_signal_routes.items[@intCast(source_node_id)].items;
-            for (route) |*existing_id| {
-                if (existing_id.* != old_record_id) continue;
-                existing_id.* = new_record_id;
-                return;
-            }
-            @panic("active source signal route rewrite missed its record");
-        }
-
-        fn appendUniqueActiveInputRecord(ctx: Ctx.Handle, records: *std.ArrayListUnmanaged(*HostSignalRecord), record: *HostSignalRecord) void {
-            if (!recordSliceContains(records.items, record)) {
-                records.append(Ctx.allocator(ctx), record) catch @panic("out of memory");
-            }
+            active_graph.replaceSourceRouteId(&self.active_source_signal_routes, source_node_id, old_record_id, new_record_id);
         }
 
         fn appendActiveSignalInputRecords(ctx: Ctx.Handle, records: *std.ArrayListUnmanaged(*HostSignalRecord), record: *HostSignalRecord) void {
-            switch (record.payload) {
-                .ref, .const_value, .task_source, .interval_source => {},
-                .map => |payload| appendUniqueActiveInputRecord(ctx, records, payload.input),
-                .map2 => |payload| {
-                    appendUniqueActiveInputRecord(ctx, records, payload.left);
-                    appendUniqueActiveInputRecord(ctx, records, payload.right);
-                },
-                .combine => |payload| {
-                    for (payload.children) |child| {
-                        appendUniqueActiveInputRecord(ctx, records, child);
-                    }
-                },
-            }
+            active_graph.appendInputRecords(HostSignalRecord, Ctx.allocator(ctx), records, record);
         }
 
         fn updateMovedActiveSignalRecordEdges(self: *Self, moved_record: *HostSignalRecord, old_record_id: u64, new_record_id: u64) void {
@@ -5708,10 +5419,7 @@ pub fn Engine(comptime Ctx: type) type {
         }
 
         pub fn recordSliceContains(records: []const *HostSignalRecord, record: *HostSignalRecord) bool {
-            for (records) |existing| {
-                if (existing == record) return true;
-            }
-            return false;
+            return active_graph.recordSliceContains(HostSignalRecord, records, record);
         }
 
         pub fn activeWhenBranchScopeId(self: *Self, parent_scope_id: u64, site_ordinal: u64, branch: HostScopeBranch) scope_tree.Error!?u64 {
