@@ -3259,6 +3259,11 @@ the checked string literal bytes copied into the LIR string store. The target
 local for the surrounding expression is not initialized on that path because the
 path does not continue.
 
+Checked `runtime_error` expressions and statements lower directly to terminal
+LIR `runtime_error`. This form is already a checked artifact marker for an
+impossible or intentionally error-recovered path; boxy lowering does not invent
+a message or reinterpret it as a user crash.
+
 Checked `return` expressions and statements lower to terminal LIR `ret`
 statements. The lowerer validates that the checked return target lambda is the
 current boxy worker lambda, lowers the returned expression into a fresh local
