@@ -2307,7 +2307,7 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
                 null,
                 args.max_threads,
                 inlineExpectModeForOpt(args.opt),
-                currentRuntimeSpecializationStrategy(args.specialization_strategy),
+                currentRuntimeSpecializationStrategy(args.opt, args.specialization_strategy),
                 resolutionConfigFromLimits(args.resolve_limits),
                 &cache_manager,
                 &reporter,
@@ -2327,7 +2327,7 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
                 null,
                 args.max_threads,
                 inlineExpectModeForOpt(args.opt),
-                currentRuntimeSpecializationStrategy(args.specialization_strategy),
+                currentRuntimeSpecializationStrategy(args.opt, args.specialization_strategy),
                 resolutionConfigFromLimits(args.resolve_limits),
                 &cache_manager,
                 &reporter,
@@ -2964,7 +2964,7 @@ fn rocRunDefaultApp(ctx: *CliCtx, args: cli_args.RunArgs, original_source: []con
         original_source_dir,
         args.max_threads,
         inlineExpectModeForOpt(args.opt),
-        currentRuntimeSpecializationStrategy(args.specialization_strategy),
+        currentRuntimeSpecializationStrategy(args.opt, args.specialization_strategy),
         resolutionConfigFromLimits(args.resolve_limits),
         &cache_manager,
         &reporter,
@@ -3086,7 +3086,7 @@ fn rocRunDefaultAppSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, origin
         original_source_dir,
         args.max_threads,
         inlineExpectModeForOpt(args.opt),
-        currentRuntimeSpecializationStrategy(args.specialization_strategy),
+        currentRuntimeSpecializationStrategy(args.opt, args.specialization_strategy),
         resolutionConfigFromLimits(args.resolve_limits),
         &cache_manager,
         &reporter,
@@ -8233,7 +8233,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
     const build_roots = try lir.CheckedPipeline.selectPlatformExportRoots(ctx.gpa, root_artifact.root_requests.runtime_requests);
     defer ctx.gpa.free(build_roots);
 
-    const specialization_strategy = currentRuntimeSpecializationStrategy(args.specialization_strategy);
+    const specialization_strategy = currentRuntimeSpecializationStrategy(args.opt, args.specialization_strategy);
     reporter.begin(loweringProgressLabel(specialization_strategy));
     var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
         ctx.gpa,
@@ -8572,7 +8572,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
     const build_roots = try lir.CheckedPipeline.selectPlatformExportRoots(ctx.gpa, root_artifact.root_requests.runtime_requests);
     defer ctx.gpa.free(build_roots);
 
-    const specialization_strategy = currentRuntimeSpecializationStrategy(args.specialization_strategy);
+    const specialization_strategy = currentRuntimeSpecializationStrategy(args.opt, args.specialization_strategy);
     reporter.begin(loweringProgressLabel(specialization_strategy));
     var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
         ctx.gpa,
@@ -8913,7 +8913,7 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
     const lir_roots = try lir.CheckedPipeline.selectPlatformEntrypointRoots(ctx.gpa, root_artifact.root_requests.runtime_requests);
     defer ctx.gpa.free(lir_roots);
 
-    const specialization_strategy = currentRuntimeSpecializationStrategy(args.specialization_strategy);
+    const specialization_strategy = currentRuntimeSpecializationStrategy(args.opt, args.specialization_strategy);
     reporter.begin(loweringProgressLabel(specialization_strategy));
     const lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
         shm_allocator,
@@ -9562,8 +9562,11 @@ fn cliTestExecutionMode(opt: cli_args.OptLevel) CliTestExecutionMode {
     };
 }
 
-fn currentRuntimeSpecializationStrategy(explicit: ?base.SpecializationStrategy) base.SpecializationStrategy {
-    return explicit orelse .lss;
+fn currentRuntimeSpecializationStrategy(
+    opt: cli_args.OptLevel,
+    explicit: ?base.SpecializationStrategy,
+) base.SpecializationStrategy {
+    return opt.effectiveSpecializationStrategy(explicit);
 }
 
 fn loweringProgressLabel(strategy: base.SpecializationStrategy) []const u8 {
@@ -9574,9 +9577,12 @@ fn loweringProgressLabel(strategy: base.SpecializationStrategy) []const u8 {
 }
 
 test "runtime specialization strategy helpers" {
-    try std.testing.expectEqual(base.SpecializationStrategy.lss, currentRuntimeSpecializationStrategy(null));
-    try std.testing.expectEqual(base.SpecializationStrategy.lss, currentRuntimeSpecializationStrategy(.lss));
-    try std.testing.expectEqual(base.SpecializationStrategy.boxy, currentRuntimeSpecializationStrategy(.boxy));
+    try std.testing.expectEqual(base.SpecializationStrategy.boxy, currentRuntimeSpecializationStrategy(.dev, null));
+    try std.testing.expectEqual(base.SpecializationStrategy.boxy, currentRuntimeSpecializationStrategy(.interpreter, null));
+    try std.testing.expectEqual(base.SpecializationStrategy.lss, currentRuntimeSpecializationStrategy(.size, null));
+    try std.testing.expectEqual(base.SpecializationStrategy.lss, currentRuntimeSpecializationStrategy(.speed, null));
+    try std.testing.expectEqual(base.SpecializationStrategy.lss, currentRuntimeSpecializationStrategy(.dev, .lss));
+    try std.testing.expectEqual(base.SpecializationStrategy.boxy, currentRuntimeSpecializationStrategy(.speed, .boxy));
     try std.testing.expectEqualStrings("Specializing", loweringProgressLabel(.lss));
     try std.testing.expectEqualStrings("Lowering", loweringProgressLabel(.boxy));
 }
@@ -11115,7 +11121,7 @@ fn rocTest(ctx: *CliCtx, args: cli_args.TestArgs, arg0: []const u8) RocTestError
     }
 
     var total = CliTestRunSummary{};
-    const specialization_strategy = currentRuntimeSpecializationStrategy(args.specialization_strategy);
+    const specialization_strategy = currentRuntimeSpecializationStrategy(args.opt, args.specialization_strategy);
     for (modules) |module| {
         const summary = try runCheckedArtifactTests(
             ctx,
