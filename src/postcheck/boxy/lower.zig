@@ -60,6 +60,7 @@ pub fn run(
 
     var procedure_builder = ProcedureBuilder.init(allocator, modules, plan, &layout_plan, &resolved_workers, &result, options);
     defer procedure_builder.deinit();
+    try procedure_builder.initHostedCatalog();
     try procedure_builder.emitRoots();
 
     try appendRequestedLayouts(allocator, modules, roots, plan, &layout_plan, &result);
@@ -78,6 +79,8 @@ const ProcedureModuleView = struct {
     resolved_value_refs: *const checked.ResolvedValueRefTable,
     compile_time_roots: *const checked.CompileTimeRootTable,
     entry_wrappers: *const checked.EntryWrapperTable,
+    intrinsic_wrappers: *const checked.IntrinsicWrapperTable,
+    hosted_procs: *const checked.HostedProcTable,
     static_dispatch_plans: *const static_dispatch.StaticDispatchPlanTable,
     checked_procedure_templates: *const checked.CheckedProcedureTemplateTable,
     nested_proc_sites: *const checked.NestedProcSiteTable,
@@ -94,8 +97,16 @@ const ResolvedWorker = struct {
     module: ProcedureModuleView,
     template_ref: names.ProcedureTemplateRef,
     template: checked.CheckedProcedureTemplate,
-    body_id: ?checked.CheckedBodyId,
-    root_expr: checked.CheckedExprId,
+    body: ResolvedWorkerBody,
+};
+
+const ResolvedWorkerBody = union(enum) {
+    checked_expr: struct {
+        body_id: ?checked.CheckedBodyId,
+        root_expr: checked.CheckedExprId,
+    },
+    intrinsic: checked.IntrinsicId,
+    hosted: checked.HostedProc,
 };
 
 const ResolvedWorkers = struct {
@@ -163,7 +174,7 @@ fn resolveProcedureUse(
             procedureModuleByKey(modules, imported.artifact),
             imported,
         ),
-        .hosted => boxyLowerInvariant("hosted procedure use reached boxy worker resolution before hosted wrapper lowering is implemented"),
+        .hosted => |hosted| resolveHostedProcedure(modules, worker, hosted),
     };
 }
 
@@ -225,15 +236,18 @@ fn resolveProcedureTemplate(
 ) ResolvedWorker {
     const module = procedureModuleByArtifactRef(modules, template_ref.artifact);
     const template = module.checked_procedure_templates.get(template_ref.template);
-    const body_id: ?checked.CheckedBodyId = switch (template.body) {
-        .checked_body => |body| body,
-        .intrinsic_wrapper => boxyLowerInvariant("intrinsic wrapper reached boxy checked-body worker resolution"),
-        .entry_wrapper => null,
-    };
-    const root_expr = switch (template.body) {
-        .checked_body => |body| module.checked_bodies.body(body).root_expr,
-        .intrinsic_wrapper => boxyLowerInvariant("intrinsic wrapper reached boxy checked-body worker resolution"),
-        .entry_wrapper => |wrapper_id| module.entry_wrappers.get(wrapper_id).body_expr,
+    const body: ResolvedWorkerBody = if (template.target == .hosted)
+        .{ .hosted = hostedProcForTemplate(module, template_ref) }
+    else switch (template.body) {
+        .checked_body => |body_id| .{ .checked_expr = .{
+            .body_id = body_id,
+            .root_expr = module.checked_bodies.body(body_id).root_expr,
+        } },
+        .intrinsic_wrapper => |wrapper_id| .{ .intrinsic = module.intrinsic_wrappers.get(wrapper_id).intrinsic },
+        .entry_wrapper => |wrapper_id| .{ .checked_expr = .{
+            .body_id = null,
+            .root_expr = module.entry_wrappers.get(wrapper_id).body_expr,
+        } },
     };
 
     return .{
@@ -242,8 +256,27 @@ fn resolveProcedureTemplate(
         .module = module,
         .template_ref = template_ref,
         .template = template,
-        .body_id = body_id,
-        .root_expr = root_expr,
+        .body = body,
+    };
+}
+
+fn resolveHostedProcedure(
+    modules: Common.CheckedModules,
+    worker: Plan.WorkerPlanId,
+    hosted_ref: checked.HostedProcRef,
+) ResolvedWorker {
+    const module = procedureModuleByKey(modules, checked.hostedProcedureTemplateModuleId(hosted_ref));
+    const template = module.checked_procedure_templates.get(hosted_ref.template.template);
+    if (template.target != .hosted) {
+        boxyLowerInvariant("hosted procedure ref pointed at a non-hosted checked template");
+    }
+    return .{
+        .worker = worker,
+        .module_key = module.key,
+        .module = module,
+        .template_ref = hosted_ref.template,
+        .template = template,
+        .body = .{ .hosted = hostedProcForTemplate(module, hosted_ref.template) },
     };
 }
 
@@ -290,7 +323,7 @@ fn resolveConstFnValue(
         .nested => |nested| resolveNestedConstFn(modules, worker, nested),
         .local_hosted,
         .imported_hosted,
-        => boxyLowerInvariant("hosted stored function reached runtime boxy worker resolution before hosted wrapper lowering is implemented"),
+        => |template| resolveProcedureTemplate(modules, worker, template),
         .parser_runtime,
         .encode_to_runtime,
         => boxyLowerInvariant("generated parser/encoder stored function reached runtime boxy worker resolution before generated runtime support"),
@@ -311,8 +344,10 @@ fn resolveNestedConstFn(
         .module = module,
         .template_ref = nested.owner,
         .template = template,
-        .body_id = null,
-        .root_expr = expr_id,
+        .body = .{ .checked_expr = .{
+            .body_id = null,
+            .root_expr = expr_id,
+        } },
     };
 }
 
@@ -335,6 +370,15 @@ fn checkedLambdaExprForNestedFn(
     boxyLowerInvariant("stored nested function referenced a missing checked nested site");
 }
 
+fn hostedProcForTemplate(module: ProcedureModuleView, template_ref: names.ProcedureTemplateRef) checked.HostedProc {
+    for (module.hosted_procs.procs) |hosted| {
+        if (names.procedureTemplateRefEql(hosted.template, template_ref)) {
+            return hosted;
+        }
+    }
+    boxyLowerInvariant("hosted procedure template was missing from the checked hosted proc table");
+}
+
 fn rootProcedureModule(modules: Common.CheckedModules) ProcedureModuleView {
     const artifact = modules.root.module;
     return .{
@@ -345,6 +389,8 @@ fn rootProcedureModule(modules: Common.CheckedModules) ProcedureModuleView {
         .resolved_value_refs = &artifact.resolved_value_refs,
         .compile_time_roots = &artifact.compile_time_roots,
         .entry_wrappers = &artifact.entry_wrappers,
+        .intrinsic_wrappers = &artifact.intrinsic_wrappers,
+        .hosted_procs = &artifact.hosted_procs,
         .static_dispatch_plans = &artifact.static_dispatch_plans,
         .checked_procedure_templates = &artifact.checked_procedure_templates,
         .nested_proc_sites = &artifact.nested_proc_sites,
@@ -365,6 +411,8 @@ fn procedureModuleFromImport(import: checked.ImportedModuleView) ProcedureModule
         .resolved_value_refs = import.resolved_value_refs,
         .compile_time_roots = import.compile_time_roots,
         .entry_wrappers = import.entry_wrappers,
+        .intrinsic_wrappers = import.intrinsic_wrappers,
+        .hosted_procs = import.hosted_procs,
         .static_dispatch_plans = import.static_dispatch_plans,
         .checked_procedure_templates = import.checked_procedure_templates,
         .nested_proc_sites = import.nested_proc_sites,
@@ -395,6 +443,25 @@ fn artifactKeyEqual(a: checked.CheckedModuleArtifactKey, b: checked.CheckedModul
     return std.mem.eql(u8, a.bytes[0..], b.bytes[0..]);
 }
 
+const HostedCatalogEntry = struct {
+    template: names.ProcedureTemplateRef,
+    symbol_text: []const u8,
+    dispatch_index: u32,
+    order: []const u8,
+    def_idx: u32,
+};
+
+const HostedSectionMap = struct {
+    keys: []const []const u8,
+    symbols: []const []const u8,
+
+    fn deinit(self: HostedSectionMap, allocator: Allocator) void {
+        for (self.keys) |key| allocator.free(key);
+        allocator.free(self.keys);
+        allocator.free(self.symbols);
+    }
+};
+
 const ProcedureBuilder = struct {
     allocator: Allocator,
     modules: Common.CheckedModules,
@@ -404,6 +471,7 @@ const ProcedureBuilder = struct {
     result: *LirProgram.Result,
     options: Options,
     worker_procs: []?LIR.LirProcSpecId,
+    hosted_catalog: []HostedCatalogEntry = &.{},
     symbols: Common.SymbolGen = .{},
 
     fn init(
@@ -428,8 +496,157 @@ const ProcedureBuilder = struct {
     }
 
     fn deinit(self: *ProcedureBuilder) void {
+        self.allocator.free(self.hosted_catalog);
         self.allocator.free(self.worker_procs);
         self.* = undefined;
+    }
+
+    fn initHostedCatalog(self: *ProcedureBuilder) Allocator.Error!void {
+        if (self.resolved_workers.items.len == 0) return;
+
+        var entries = std.ArrayList(HostedCatalogEntry).empty;
+        errdefer entries.deinit(self.allocator);
+
+        try self.appendHostedCatalogFromModule(&entries, rootProcedureModule(self.modules));
+        for (self.modules.imports, 0..) |imported, index| {
+            if (self.importModuleAlreadyScanned(imported.key, index)) continue;
+            try self.appendHostedCatalogFromModule(&entries, procedureModuleFromImport(imported));
+        }
+        for (self.modules.root.relation_modules, 0..) |relation, index| {
+            if (self.relationModuleAlreadyScanned(relation.key, index)) continue;
+            try self.appendHostedCatalogFromModule(&entries, procedureModuleFromImport(relation));
+        }
+
+        const SortContext = struct {
+            pub fn lessThan(_: void, a: HostedCatalogEntry, b: HostedCatalogEntry) bool {
+                return switch (std.mem.order(u8, a.order, b.order)) {
+                    .lt => true,
+                    .gt => false,
+                    .eq => a.def_idx < b.def_idx,
+                };
+            }
+        };
+        std.mem.sort(HostedCatalogEntry, entries.items, {}, SortContext.lessThan);
+
+        for (entries.items, 0..) |*entry, index| {
+            entry.dispatch_index = @intCast(index);
+        }
+
+        if (entries.items.len != 0) {
+            if (try self.buildHostedSectionMap()) |map| {
+                defer map.deinit(self.allocator);
+
+                if (entries.items.len != map.keys.len) {
+                    boxyLowerInvariant("platform hosted section disagrees with the hosted catalog size");
+                }
+                for (entries.items) |*entry| {
+                    const pos = blk: {
+                        for (map.keys, 0..) |key, key_index| {
+                            if (std.mem.eql(u8, key, entry.order)) break :blk key_index;
+                        }
+                        boxyLowerInvariant("hosted function is missing from the platform hosted section");
+                    };
+                    entry.dispatch_index = @intCast(pos);
+                    entry.symbol_text = map.symbols[pos];
+                }
+
+                const DispatchSort = struct {
+                    pub fn lessThan(_: void, a: HostedCatalogEntry, b: HostedCatalogEntry) bool {
+                        return a.dispatch_index < b.dispatch_index;
+                    }
+                };
+                std.mem.sort(HostedCatalogEntry, entries.items, {}, DispatchSort.lessThan);
+            }
+        }
+
+        self.hosted_catalog = try entries.toOwnedSlice(self.allocator);
+    }
+
+    fn appendHostedCatalogFromModule(
+        self: *ProcedureBuilder,
+        entries: *std.ArrayList(HostedCatalogEntry),
+        module: ProcedureModuleView,
+    ) Allocator.Error!void {
+        for (module.hosted_procs.procs) |hosted| {
+            try entries.append(self.allocator, .{
+                .template = hosted.template,
+                .symbol_text = module.canonical_names.externalSymbolNameText(hosted.external_symbol_name),
+                .dispatch_index = 0,
+                .order = hosted.orderKey(module.hosted_procs),
+                .def_idx = @intFromEnum(hosted.def_idx),
+            });
+        }
+    }
+
+    fn buildHostedSectionMap(self: *ProcedureBuilder) Allocator.Error!?HostedSectionMap {
+        const platform_env = blk: {
+            const root_env = self.modules.root.module.moduleEnvConst();
+            if (root_env.hosted_entries.items.items.len != 0) break :blk root_env;
+            for (self.modules.imports) |imported| {
+                const env = imported.module_env;
+                if (env.hosted_entries.items.items.len != 0) break :blk env;
+            }
+            for (self.modules.root.relation_modules) |relation| {
+                const env = relation.module_env;
+                if (env.hosted_entries.items.items.len != 0) break :blk env;
+            }
+            return null;
+        };
+
+        const section = platform_env.hosted_entries.items.items;
+        var keys = try self.allocator.alloc([]const u8, section.len);
+        var key_count: usize = 0;
+        errdefer {
+            for (keys[0..key_count]) |key| self.allocator.free(key);
+            self.allocator.free(keys);
+        }
+        const symbols = try self.allocator.alloc([]const u8, section.len);
+        errdefer self.allocator.free(symbols);
+
+        for (section, 0..) |entry, index| {
+            var func_text = platform_env.getIdentText(entry.func_ident);
+            if (func_text.len > 0 and func_text[func_text.len - 1] == '!') {
+                func_text = func_text[0 .. func_text.len - 1];
+            }
+            keys[index] = if (entry.module_ident) |module_ident|
+                try std.fmt.allocPrint(self.allocator, "{s}.{s}", .{ platform_env.getIdentText(module_ident), func_text })
+            else
+                try self.allocator.dupe(u8, func_text);
+            key_count = index + 1;
+            symbols[index] = platform_env.getString(entry.symbol);
+        }
+
+        return .{ .keys = keys, .symbols = symbols };
+    }
+
+    fn importModuleAlreadyScanned(self: *ProcedureBuilder, module_key: checked.CheckedModuleArtifactKey, import_index: usize) bool {
+        if (artifactKeyEqual(module_key, self.modules.root.module.key)) return true;
+        for (self.modules.imports[0..import_index]) |imported| {
+            if (artifactKeyEqual(module_key, imported.key)) return true;
+        }
+        return false;
+    }
+
+    fn relationModuleAlreadyScanned(self: *ProcedureBuilder, module_key: checked.CheckedModuleArtifactKey, relation_index: usize) bool {
+        if (artifactKeyEqual(module_key, self.modules.root.module.key)) return true;
+        for (self.modules.imports) |imported| {
+            if (artifactKeyEqual(module_key, imported.key)) return true;
+        }
+        for (self.modules.root.relation_modules[0..relation_index]) |relation| {
+            if (artifactKeyEqual(module_key, relation.key)) return true;
+        }
+        return false;
+    }
+
+    fn lirHostedProcForTemplate(self: *ProcedureBuilder, template_ref: names.ProcedureTemplateRef) Allocator.Error!LIR.HostedProc {
+        for (self.hosted_catalog) |entry| {
+            if (!names.procedureTemplateRefEql(entry.template, template_ref)) continue;
+            return .{
+                .symbol = try self.result.store.insertString(entry.symbol_text),
+                .dispatch_index = entry.dispatch_index,
+            };
+        }
+        boxyLowerInvariant("hosted procedure template was not output in the hosted catalog");
     }
 
     fn emitRoots(self: *ProcedureBuilder) Allocator.Error!void {
@@ -462,11 +679,17 @@ const ProcedureBuilder = struct {
         if (self.worker_procs[index]) |existing| return existing;
 
         const resolved = self.resolved_workers.items[index];
+        switch (resolved.body) {
+            .hosted => return try self.emitHostedWorker(worker_id, resolved),
+            .checked_expr,
+            .intrinsic,
+            => {},
+        }
 
         var proc = ProcBodyBuilder.init(self, resolved.module, self.layout_plan.workerLayoutFor(worker_id));
         defer proc.deinit();
 
-        const body_expr = try self.bodyExprForWorker(resolved, &proc);
+        const body_source = try self.bodySourceForWorker(resolved, &proc);
         const ret_layout = proc.workerReturnLayout();
         const ret_local = try proc.addFrameLocal(ret_layout);
         const args_span = try self.result.store.addLocalSpan(proc.arg_locals.items);
@@ -481,12 +704,54 @@ const ProcedureBuilder = struct {
         try self.setProcDebugName(proc_id, resolved);
 
         const ret_stmt = try self.result.store.addCFStmt(.{ .ret = .{ .value = ret_local } });
-        const body_stmt = try proc.lowerExprInto(ret_local, body_expr, ret_stmt);
+        const body_stmt = try self.lowerWorkerBodyInto(resolved, &proc, body_source, ret_local, ret_stmt);
         const frame_span = try self.result.store.addLocalSpan(proc.frame_locals.items);
         const proc_spec = self.result.store.getProcSpecPtr(proc_id);
         proc_spec.frame_locals = frame_span;
         proc_spec.body = body_stmt;
         proc_spec.stack_probe = self.stackProbeForProc(args_span, frame_span, ret_layout);
+        return proc_id;
+    }
+
+    fn emitHostedWorker(
+        self: *ProcedureBuilder,
+        worker_id: Plan.WorkerPlanId,
+        resolved: ResolvedWorker,
+    ) Allocator.Error!LIR.LirProcSpecId {
+        const index = @intFromEnum(worker_id);
+        if (index >= self.worker_procs.len) boxyLowerInvariant("boxy hosted worker referenced a missing worker proc");
+
+        var proc = ProcBodyBuilder.init(self, resolved.module, self.layout_plan.workerLayoutFor(worker_id));
+        defer proc.deinit();
+
+        const function = checkedFunctionPayload(resolved.module, resolved.template.checked_fn_root);
+        const worker_args = self.layout_plan.workerLayoutSlice(proc.worker_layout.args);
+        if (function.args.len != worker_args.len) {
+            boxyLowerInvariant("hosted procedure worker arity disagreed with worker root layout");
+        }
+        for (function.args, worker_args) |arg_ty, arg_layout| {
+            if (proc.workerRuntimeLayoutForType(arg_ty).layoutIdx() != arg_layout.layoutIdx()) {
+                boxyLowerInvariant("hosted procedure argument layout disagreed with checked type");
+            }
+            _ = try proc.addArgLocal(arg_layout.layoutIdx());
+        }
+
+        const ret_layout = proc.workerReturnLayout();
+        if (proc.workerRuntimeLayoutForType(function.ret).layoutIdx() != ret_layout) {
+            boxyLowerInvariant("hosted procedure return layout disagreed with checked type");
+        }
+
+        const args_span = try self.result.store.addLocalSpan(proc.arg_locals.items);
+        const proc_id = try self.result.store.addProcSpec(.{
+            .name = lirSymbol(self.symbols.fresh()),
+            .args = args_span,
+            .body = null,
+            .ret_layout = ret_layout,
+            .hosted = try self.lirHostedProcForTemplate(resolved.template_ref),
+            .stack_probe = self.stackProbeForProc(args_span, LIR.LocalSpan.empty(), ret_layout),
+        });
+        self.worker_procs[index] = proc_id;
+        try self.setProcDebugName(proc_id, resolved);
         return proc_id;
     }
 
@@ -501,23 +766,84 @@ const ProcedureBuilder = struct {
         try self.result.store.setProcDebugName(proc_id, resolved.module.canonical_names.exportNameText(export_name));
     }
 
-    fn bodyExprForWorker(
+    const WorkerBodySource = union(enum) {
+        checked_expr: checked.CheckedExprId,
+        str_inspect: struct {
+            arg: LIR.LocalId,
+            arg_ty: checked.CheckedTypeId,
+        },
+    };
+
+    fn bodySourceForWorker(
         self: *ProcedureBuilder,
         resolved: ResolvedWorker,
         proc: *ProcBodyBuilder,
-    ) Allocator.Error!checked.CheckedExprId {
-        const root_expr = resolved.module.checked_bodies.expr(resolved.root_expr);
-        return switch (root_expr.data) {
-            .lambda => |lambda| blk: {
-                const worker_args = self.layout_plan.workerLayoutSlice(proc.worker_layout.args);
-                if (lambda.args.len != worker_args.len) {
-                    boxyLowerInvariant("boxy worker lambda arity disagreed with worker root layout");
-                }
-                proc.current_lambda = resolved.root_expr;
-                try proc.bindLambdaArgs(lambda.args);
-                break :blk lambda.body;
+    ) Allocator.Error!WorkerBodySource {
+        return switch (resolved.body) {
+            .checked_expr => |body| blk: {
+                const root_expr = resolved.module.checked_bodies.expr(body.root_expr);
+                break :blk switch (root_expr.data) {
+                    .lambda => |lambda| lambda_blk: {
+                        const worker_args = self.layout_plan.workerLayoutSlice(proc.worker_layout.args);
+                        if (lambda.args.len != worker_args.len) {
+                            boxyLowerInvariant("boxy worker lambda arity disagreed with worker root layout");
+                        }
+                        proc.current_lambda = body.root_expr;
+                        try proc.bindLambdaArgs(lambda.args);
+                        break :lambda_blk .{ .checked_expr = lambda.body };
+                    },
+                    else => .{ .checked_expr = body.root_expr },
+                };
             },
-            else => resolved.root_expr,
+            .intrinsic => |intrinsic| try self.bodySourceForIntrinsic(resolved, proc, intrinsic),
+            .hosted => boxyLowerInvariant("hosted procedure worker reached body lowering after hosted LIR proc emission"),
+        };
+    }
+
+    fn bodySourceForIntrinsic(
+        self: *ProcedureBuilder,
+        resolved: ResolvedWorker,
+        proc: *ProcBodyBuilder,
+        intrinsic: checked.IntrinsicId,
+    ) Allocator.Error!WorkerBodySource {
+        const function = checkedFunctionPayload(resolved.module, resolved.template.checked_fn_root);
+        return switch (intrinsic) {
+            .str_inspect => {
+                if (function.args.len != 1) {
+                    boxyLowerInvariant("Str.inspect intrinsic wrapper had an unexpected arity");
+                }
+                const worker_args = self.layout_plan.workerLayoutSlice(proc.worker_layout.args);
+                if (worker_args.len != 1) {
+                    boxyLowerInvariant("Str.inspect intrinsic worker layout had an unexpected arity");
+                }
+                if (proc.workerRuntimeLayoutForType(function.args[0]).layoutIdx() != worker_args[0].layoutIdx()) {
+                    boxyLowerInvariant("Str.inspect intrinsic argument layout disagreed with checked type");
+                }
+                if (proc.workerRuntimeLayoutForType(function.ret).layoutIdx() != proc.workerReturnLayout()) {
+                    boxyLowerInvariant("Str.inspect intrinsic return layout disagreed with checked type");
+                }
+                return .{ .str_inspect = .{
+                    .arg = try proc.addArgLocal(worker_args[0].layoutIdx()),
+                    .arg_ty = function.args[0],
+                } };
+            },
+            .structural_eq => boxyLowerInvariant("structural equality intrinsic wrapper must lower through checked dispatch plans"),
+        };
+    }
+
+    fn lowerWorkerBodyInto(
+        self: *ProcedureBuilder,
+        resolved: ResolvedWorker,
+        proc: *ProcBodyBuilder,
+        body_source: WorkerBodySource,
+        ret_local: LIR.LocalId,
+        ret_stmt: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        _ = self;
+        _ = resolved;
+        return switch (body_source) {
+            .checked_expr => |body_expr| try proc.lowerExprInto(ret_local, body_expr, ret_stmt),
+            .str_inspect => |inspect| try proc.lowerInspectLocalInto(ret_local, inspect.arg, inspect.arg_ty, ret_stmt),
         };
     }
 
@@ -5689,6 +6015,13 @@ fn constBoxPayloadType(module: ProcedureModuleView, checked_ty: checked.CheckedT
     return nominal.args[0];
 }
 
+fn checkedFunctionPayload(module: ProcedureModuleView, checked_ty: checked.CheckedTypeId) checked.CheckedFunctionType {
+    return switch (resolvedTypePayload(module, checked_ty)) {
+        .function => |function| function,
+        else => boxyLowerInvariant("checked intrinsic wrapper did not have a function type"),
+    };
+}
+
 fn checkedTypeUsesBuiltinStructuralEquality(module: ProcedureModuleView, checked_ty: checked.CheckedTypeId) bool {
     return switch (resolvedTypePayload(module, checked_ty)) {
         .nominal => |nominal| nominal.builtin != null,
@@ -6077,6 +6410,19 @@ test "boxy lowerer returns an empty LIR program for an empty plan" {
     try std.testing.expectEqual(@as(usize, 0), out.lir_result.root_procs.items.len);
 }
 
+fn expectResolvedWorkerCheckedExpr(
+    worker: ResolvedWorker,
+    expected_body: ?checked.CheckedBodyId,
+    expected_root: checked.CheckedExprId,
+) !void {
+    const body = switch (worker.body) {
+        .checked_expr => |checked_body| checked_body,
+        else => return error.TestUnexpectedResult,
+    };
+    try std.testing.expectEqual(expected_body, body.body_id);
+    try std.testing.expectEqual(expected_root, body.root_expr);
+}
+
 test "boxy lowerer resolves procedure-template workers to checked bodies" {
     const gpa = std.testing.allocator;
 
@@ -6112,8 +6458,7 @@ test "boxy lowerer resolves procedure-template workers to checked bodies" {
     try std.testing.expectEqual(@as(usize, 1), resolved.items.len);
     try std.testing.expectEqual(@as(Plan.WorkerPlanId, @enumFromInt(0)), resolved.items[0].worker);
     try std.testing.expect(names.procedureTemplateRefEql(template_ref, resolved.items[0].template_ref));
-    try std.testing.expectEqual(@as(?checked.CheckedBodyId, @enumFromInt(0)), resolved.items[0].body_id);
-    try std.testing.expectEqual(@as(checked.CheckedExprId, @enumFromInt(3)), resolved.items[0].root_expr);
+    try expectResolvedWorkerCheckedExpr(resolved.items[0], @enumFromInt(0), @enumFromInt(3));
 }
 
 test "boxy lowerer resolves top-level direct bindings to checked bodies" {
@@ -6161,8 +6506,7 @@ test "boxy lowerer resolves top-level direct bindings to checked bodies" {
 
     try std.testing.expectEqual(@as(usize, 1), resolved.items.len);
     try std.testing.expect(names.procedureTemplateRefEql(template_ref, resolved.items[0].template_ref));
-    try std.testing.expectEqual(@as(?checked.CheckedBodyId, @enumFromInt(0)), resolved.items[0].body_id);
-    try std.testing.expectEqual(@as(checked.CheckedExprId, @enumFromInt(5)), resolved.items[0].root_expr);
+    try expectResolvedWorkerCheckedExpr(resolved.items[0], @enumFromInt(0), @enumFromInt(5));
 }
 
 test "boxy lowerer resolves callable eval bindings to finalized const function expressions" {
@@ -6268,8 +6612,7 @@ test "boxy lowerer resolves callable eval bindings to finalized const function e
 
     try std.testing.expectEqual(@as(usize, 1), resolved.items.len);
     try std.testing.expect(names.procedureTemplateRefEql(template_ref, resolved.items[0].template_ref));
-    try std.testing.expectEqual(@as(?checked.CheckedBodyId, null), resolved.items[0].body_id);
-    try std.testing.expectEqual(@as(checked.CheckedExprId, @enumFromInt(0)), resolved.items[0].root_expr);
+    try expectResolvedWorkerCheckedExpr(resolved.items[0], null, @enumFromInt(0));
 }
 
 test "boxy lowerer emits private worker proc for zero-arg numeric lambda root" {
@@ -6993,7 +7336,7 @@ test "boxy lowerer emits direct calls to planned imported workers" {
             .resolved_value_refs = &import_artifact.resolved_value_refs,
             .nested_proc_sites = undefined,
             .static_dispatch_plans = undefined,
-            .hosted_procs = undefined,
+            .hosted_procs = &import_artifact.hosted_procs,
             .exported_procedure_templates = .{},
             .exported_procedure_bindings = import_artifact.exported_procedure_bindings.view(),
             .exported_const_templates = .{},
@@ -14833,7 +15176,7 @@ fn minimalCheckedArtifact(allocator: Allocator) checked.CheckedModuleArtifact {
         .checked_procedure_templates = undefined,
         .top_level_procedure_bindings = undefined,
         .root_requests = undefined,
-        .hosted_procs = undefined,
+        .hosted_procs = .{},
         .platform_required_declarations = undefined,
         .platform_required_bindings = undefined,
         .interface_capabilities = .{},

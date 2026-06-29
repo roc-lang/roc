@@ -2158,11 +2158,15 @@ private worker is an ordinary private LIR proc. Native entrypoint wrappers,
 interpreter shims, glue, static data export, and ABI cache digests therefore see
 the same host layouts under `.lss` and `.boxy`.
 
-Hosted calls use the same rule in the opposite direction. The LIR hosted proc
-retains its exact checked hosted ABI. A boxy call site adapts internal boxy
-arguments into that ABI, calls the hosted proc, and adapts the result back to
-the internal boxy representation when needed. It must not change the hosted
-symbol signature and must not ask the host to provide hidden descriptors.
+Hosted calls use the same rule in the opposite direction. A checked hosted
+template is resolved through the checked hosted-procedure table and lowers to a
+bodyless LIR hosted proc spec with the exact hosted symbol and dispatch index.
+The boxy lowerer never lowers the checked `hosted_lambda` body as ordinary Roc
+code. The LIR hosted proc retains its exact checked hosted ABI. A boxy call
+site adapts internal boxy arguments into that ABI, calls the hosted proc, and
+adapts the result back to the internal boxy representation when needed. It must
+not change the hosted symbol signature and must not ask the host to provide
+hidden descriptors.
 
 `RocBox(RocUnknown)` at the host boundary is opaque unless Roc already has
 explicit descriptor data on the Roc side. The host ABI passes only the Roc box

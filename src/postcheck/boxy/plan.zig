@@ -25,6 +25,8 @@ const empty_top_level_procedure_bindings = checked.TopLevelProcedureBindingTable
 const empty_compile_time_roots = checked.CompileTimeRootTable{};
 const empty_nested_proc_sites = checked.NestedProcSiteTable{};
 const empty_entry_wrappers = checked.EntryWrapperTable{};
+const empty_intrinsic_wrappers = checked.IntrinsicWrapperTable{};
+const empty_hosted_procs = checked.HostedProcTable{};
 const empty_static_dispatch_plans = static_dispatch.StaticDispatchPlanTable{};
 
 pub const TypeRepId = enum(u32) { _ };
@@ -288,6 +290,8 @@ pub const ModuleView = struct {
     checked_bodies: checked.CheckedBodyStoreView = .{},
     compile_time_roots: *const checked.CompileTimeRootTable = &empty_compile_time_roots,
     entry_wrappers: *const checked.EntryWrapperTable = &empty_entry_wrappers,
+    intrinsic_wrappers: *const checked.IntrinsicWrapperTable = &empty_intrinsic_wrappers,
+    hosted_procs: *const checked.HostedProcTable = &empty_hosted_procs,
     resolved_value_refs: *const checked.ResolvedValueRefTable = &empty_resolved_value_refs,
     static_dispatch_plans: *const static_dispatch.StaticDispatchPlanTable = &empty_static_dispatch_plans,
     checked_procedure_templates: *const checked.CheckedProcedureTemplateTable = &empty_checked_procedure_templates,
@@ -925,6 +929,10 @@ const Builder = struct {
         source_type: TypeRef,
         tag_union: checked.CheckedTagUnionType,
     ) Allocator.Error!TypeRepresentation {
+        if (!try self.tagUnionExtensionIsExplicitlyClosed(view, tag_union.ext)) {
+            return try self.dynamicRepresentation(source_type, &.{}, .flex);
+        }
+
         var children = std.ArrayList(RepChild).empty;
         defer children.deinit(self.allocator);
         for (tag_union.tags) |tag| {
@@ -950,6 +958,33 @@ const Builder = struct {
             .kind = .tag_union,
             .children = child_span,
             .tag_variants = .{ .start = variant_start, .len = @intCast(tag_union.tags.len) },
+        };
+    }
+
+    fn tagUnionExtensionIsExplicitlyClosed(
+        self: *Builder,
+        view: ModuleView,
+        ext_ty: checked.CheckedTypeId,
+    ) Allocator.Error!bool {
+        var seen = std.AutoHashMap(TypeRef, void).init(self.allocator);
+        defer seen.deinit();
+        return try self.tagUnionExtensionIsExplicitlyClosedInner(view, ext_ty, &seen);
+    }
+
+    fn tagUnionExtensionIsExplicitlyClosedInner(
+        self: *Builder,
+        view: ModuleView,
+        ext_ty: checked.CheckedTypeId,
+        seen: *std.AutoHashMap(TypeRef, void),
+    ) Allocator.Error!bool {
+        const source = typeRef(view, ext_ty);
+        const entry = try seen.getOrPut(source);
+        if (entry.found_existing) return false;
+
+        return switch (view.checked_types.payload(ext_ty)) {
+            .empty_tag_union => true,
+            .alias => |alias| try self.tagUnionExtensionIsExplicitlyClosedInner(view, alias.backing, seen),
+            else => false,
         };
     }
 
@@ -1044,12 +1079,26 @@ const Builder = struct {
 
     fn analyzeWorkerBodyTypes(self: *Builder, source: WorkerSource) Allocator.Error!void {
         const body = self.rootWorkerBody(source);
-        try self.analyzeExprTypes(body.view, body.root_expr);
+        switch (body) {
+            .checked_expr => |checked_body| try self.analyzeExprTypes(checked_body.view, checked_body.root_expr),
+            .intrinsic_wrapper => |intrinsic| try self.analyzeIntrinsicWrapperTypes(intrinsic.view, intrinsic.wrapper),
+            .hosted_proc => |hosted| try self.analyzeHostedProcTypes(hosted.view, hosted.proc),
+        }
     }
 
-    const WorkerBody = struct {
-        view: ModuleView,
-        root_expr: checked.CheckedExprId,
+    const WorkerBody = union(enum) {
+        checked_expr: struct {
+            view: ModuleView,
+            root_expr: checked.CheckedExprId,
+        },
+        intrinsic_wrapper: struct {
+            view: ModuleView,
+            wrapper: checked.IntrinsicWrapper,
+        },
+        hosted_proc: struct {
+            view: ModuleView,
+            proc: checked.HostedProc,
+        },
     };
 
     fn rootWorkerBody(self: *Builder, source: WorkerSource) WorkerBody {
@@ -1066,7 +1115,7 @@ const Builder = struct {
                     break :blk self.rootProcedureBindingBody(view, required.procedure_binding);
                 },
                 .imported => |imported| self.importedProcedureBindingBody(imported),
-                .hosted => boxyPlanInvariant("hosted procedure use reached boxy body type planning before hosted wrapper planning is implemented"),
+                .hosted => |hosted| self.hostedProcedureBody(hosted),
             },
         };
     }
@@ -1098,6 +1147,14 @@ const Builder = struct {
         };
     }
 
+    fn hostedProcedureBody(self: *Builder, hosted_ref: checked.HostedProcRef) WorkerBody {
+        const view = self.moduleForId(checked.hostedProcedureTemplateModuleId(hosted_ref));
+        return .{ .hosted_proc = .{
+            .view = view,
+            .proc = hostedProcForTemplate(view, hosted_ref.template),
+        } };
+    }
+
     fn importedProcedureBinding(
         _: *Builder,
         view: ModuleView,
@@ -1117,14 +1174,25 @@ const Builder = struct {
     fn rootProcedureTemplateBody(self: *Builder, template_ref: canonical.ProcedureTemplateRef) WorkerBody {
         const view = self.moduleForArtifactRef(template_ref.artifact);
         const template = view.checked_procedure_templates.get(template_ref.template);
-        const root_expr = switch (template.body) {
-            .checked_body => |body| view.checked_bodies.body(body).root_expr,
-            .intrinsic_wrapper => boxyPlanInvariant("intrinsic wrapper reached boxy body type planning"),
-            .entry_wrapper => |wrapper_id| view.entry_wrappers.get(wrapper_id).body_expr,
-        };
-        return .{
-            .view = view,
-            .root_expr = root_expr,
+        if (template.target == .hosted) {
+            return .{ .hosted_proc = .{
+                .view = view,
+                .proc = hostedProcForTemplate(view, template_ref),
+            } };
+        }
+        return switch (template.body) {
+            .checked_body => |body| .{ .checked_expr = .{
+                .view = view,
+                .root_expr = view.checked_bodies.body(body).root_expr,
+            } },
+            .intrinsic_wrapper => |wrapper_id| .{ .intrinsic_wrapper = .{
+                .view = view,
+                .wrapper = view.intrinsic_wrappers.get(wrapper_id),
+            } },
+            .entry_wrapper => |wrapper_id| .{ .checked_expr = .{
+                .view = view,
+                .root_expr = view.entry_wrappers.get(wrapper_id).body_expr,
+            } },
         };
     }
 
@@ -1177,10 +1245,41 @@ const Builder = struct {
     fn nestedConstFnBody(self: *Builder, nested: anytype) WorkerBody {
         const view = self.moduleForId(.{ .bytes = canonical.procTemplateModuleDigest(nested.owner).bytes });
         const expr_id = self.checkedLambdaExprForNestedFn(view, nested);
-        return .{
+        return .{ .checked_expr = .{
             .view = view,
             .root_expr = expr_id,
+        } };
+    }
+
+    fn analyzeIntrinsicWrapperTypes(
+        self: *Builder,
+        view: ModuleView,
+        wrapper: checked.IntrinsicWrapper,
+    ) Allocator.Error!void {
+        const function = checkedFunctionPayload(view, wrapper.checked_fn_root);
+        return switch (wrapper.intrinsic) {
+            .str_inspect => {
+                if (function.args.len != 1) {
+                    boxyPlanInvariant("Str.inspect intrinsic wrapper had an unexpected arity");
+                }
+                _ = try self.analyzeType(view, function.args[0]);
+                _ = try self.analyzeType(view, function.ret);
+            },
+            .structural_eq => boxyPlanInvariant("structural equality intrinsic wrapper must lower through checked dispatch plans"),
         };
+    }
+
+    fn analyzeHostedProcTypes(
+        self: *Builder,
+        view: ModuleView,
+        hosted: checked.HostedProc,
+    ) Allocator.Error!void {
+        const template = view.checked_procedure_templates.get(hosted.template.template);
+        const function = checkedFunctionPayload(view, template.checked_fn_root);
+        for (function.args) |arg| {
+            _ = try self.analyzeType(view, arg);
+        }
+        _ = try self.analyzeType(view, function.ret);
     }
 
     fn checkedLambdaExprForNestedFn(
@@ -1494,7 +1593,7 @@ const Builder = struct {
             .platform_required_proc => |required| self.workerSourceForProcedureUse(required.procedure),
             .local_proc => boxyPlanInvariant("local procedure direct call reached boxy planning before nested procedure worker planning"),
             .imported_proc => |procedure| self.workerSourceForProcedureUse(procedure),
-            .hosted_proc => boxyPlanInvariant("hosted direct call reached boxy planning before hosted wrapper planning"),
+            .hosted_proc => |procedure| self.workerSourceForProcedureUse(procedure),
             .local_param,
             .local_value,
             .local_mutable_version,
@@ -1580,7 +1679,7 @@ const Builder = struct {
                 } };
             },
             .imported => .{ .procedure_use = procedure },
-            .hosted => boxyPlanInvariant("hosted procedure use reached boxy planning before hosted wrapper planning"),
+            .hosted => .{ .procedure_use = procedure },
         };
     }
 
@@ -1608,6 +1707,34 @@ fn workerSourceEql(a: WorkerSource, b: WorkerSource) bool {
     return std.meta.eql(a, b);
 }
 
+fn checkedFunctionPayload(view: ModuleView, checked_ty: checked.CheckedTypeId) checked.CheckedFunctionType {
+    var current = checked_ty;
+    var depth: u16 = 0;
+    while (true) {
+        if (depth == 1024) boxyPlanInvariant("checked function alias chain exceeded boxy planner limit");
+        depth += 1;
+
+        switch (view.checked_types.payload(current)) {
+            .pending => boxyPlanInvariant("pending checked function type reached boxy planning"),
+            .alias => |alias| {
+                current = alias.backing;
+                continue;
+            },
+            .function => |function| return function,
+            else => boxyPlanInvariant("checked intrinsic wrapper did not have a function type"),
+        }
+    }
+}
+
+fn hostedProcForTemplate(view: ModuleView, template_ref: canonical.ProcedureTemplateRef) checked.HostedProc {
+    for (view.hosted_procs.procs) |hosted| {
+        if (canonical.procedureTemplateRefEql(hosted.template, template_ref)) {
+            return hosted;
+        }
+    }
+    boxyPlanInvariant("hosted procedure template was missing from the checked hosted proc table");
+}
+
 fn moduleViewFromImported(imported: checked.ImportedModuleView) ModuleView {
     return .{
         .key = imported.key,
@@ -1616,6 +1743,8 @@ fn moduleViewFromImported(imported: checked.ImportedModuleView) ModuleView {
         .checked_bodies = imported.checked_bodies,
         .compile_time_roots = imported.compile_time_roots,
         .entry_wrappers = imported.entry_wrappers,
+        .intrinsic_wrappers = imported.intrinsic_wrappers,
+        .hosted_procs = imported.hosted_procs,
         .resolved_value_refs = imported.resolved_value_refs,
         .static_dispatch_plans = imported.static_dispatch_plans,
         .checked_procedure_templates = imported.checked_procedure_templates,
@@ -1636,6 +1765,8 @@ fn moduleViewFromArtifact(artifact: *const checked.CheckedModuleArtifact) Module
         .checked_bodies = artifact.checked_bodies.view(),
         .compile_time_roots = &artifact.compile_time_roots,
         .entry_wrappers = &artifact.entry_wrappers,
+        .intrinsic_wrappers = &artifact.intrinsic_wrappers,
+        .hosted_procs = &artifact.hosted_procs,
         .resolved_value_refs = &artifact.resolved_value_refs,
         .static_dispatch_plans = &artifact.static_dispatch_plans,
         .checked_procedure_templates = &artifact.checked_procedure_templates,
@@ -1935,6 +2066,23 @@ test "boxy planner represents open record rows dynamically" {
 
     const payloads = [_]checked.StoredCheckedTypePayload{
         .{ .record = .{ .fields = .{}, .ext = @enumFromInt(0) } },
+    };
+    const view = checked.CheckedTypeStoreView{ .stored_payloads = &payloads };
+
+    var plan = try analyzeCheckedTypes(gpa, view, &.{@as(checked.CheckedTypeId, @enumFromInt(0))}, .{});
+    defer plan.deinit();
+
+    const rep = plan.representations.items[@intFromEnum(plan.root_reps.items[0])];
+    try std.testing.expectEqual(RepresentationKind{ .dynamic = .flex }, rep.kind);
+    try std.testing.expect(rep.contains_dynamic);
+    try std.testing.expect(rep.descriptor != null);
+}
+
+test "boxy planner represents open tag-union rows dynamically" {
+    const gpa = std.testing.allocator;
+
+    const payloads = [_]checked.StoredCheckedTypePayload{
+        .{ .tag_union = .{ .tags = .{}, .ext = @enumFromInt(0) } },
     };
     const view = checked.CheckedTypeStoreView{ .stored_payloads = &payloads };
 
