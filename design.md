@@ -994,6 +994,18 @@ The method registry is an exact table keyed by `(MethodOwner, MethodNameId)`.
 It is not an owner-discovery mechanism. Post-check code may use it only after a
 concrete monomorphic dispatcher type has already determined the owner.
 
+Some method registry targets are generated structural targets rather than
+procedure bodies. A nominal or opaque type can opt in to a compiler-derived
+structural codec with an annotation-only associated method such as
+`parser_for : _` or `encode_to : _`. Canonicalization may represent this marker
+as `e_anno_only` or, for hosted/type-module processing, as a zero-argument
+`e_hosted_lambda`; `CheckedModule.method_registry` records it explicitly as a
+generated parser or generated encoder target. Post-check lowering must consume
+that explicit target kind and lower the structural parser/encoder from the
+dispatch plan's concrete callable type. It must not treat the marker as a
+procedure body, synthesize a fake source function, or infer generated behavior
+from a missing procedure template.
+
 ### Structural Serialization Methods
 
 Parsing and encoding are ordinary static-dispatch methods. Roc does not expose a
@@ -1389,21 +1401,39 @@ JSON value according to JSON syntax and returns
 `Continue({ rest: after_value })`. The matched field's parser consumes the JSON
 value from `value_start`.
 
-JSON tag unions use the externally tagged object representation:
+JSON tag unions use the externally tagged representation:
 
 ```json
 { "Admin": { "name": "Sam" } }
 ```
 
-This representation avoids collisions between tag names and ordinary record
-field names. Other JSON conventions are represented by different JSON format
-values with different methods; the compiler does not know any JSON-specific
-syntax, null value, missing-field rule, or tag-union convention.
+Zero-payload tags encode as the tag string, one-payload tags encode as
+`{"Tag":payload}`, and multi-payload tags encode as `{"Tag":[...]}`. This
+representation avoids collisions between tag names and ordinary record field
+names. Other JSON conventions are represented by different JSON format values
+with different methods. The compiler receives the null, missing-field, and
+tag-union rules through explicit format methods rather than through hard-coded
+JSON syntax recovery.
 
 Parsing a Roc `Str` from JSON succeeds only for JSON string values. JSON `null`
 and missing object fields are separate format conditions. They are surfaced only
 through field or value types that request them, such as `Try(Str, [Null])` or
 `Try(Str, [Missing])`; the plain `Str` method does not accept either condition.
+`Try(a, [Null])` is the nullable JSON value shape. A format's
+`missing_optional_field` method chooses the record-field absence tag for
+optional fields; JSON uses `Missing`, but another format may choose `Absent` or
+any other tag. `Try(a, [Missing])` and `Try(a, [Missing, Null])` are JSON's
+record-field-only shapes: missing fields parse as `Err(Missing)`, explicit
+`null` parses as `Err(Null)` only when `Null` is in the row, and encoding
+`Err(Missing)` omits the field. Missing fields and `Null` are never conflated.
+
+JSON arrays are used for lists, tuples, and sets. Tuples parse with exact arity.
+Sets preserve `Set` insertion order and parse by inserting the array elements.
+JSON dictionaries use object representation only when the key type has a
+lossless object-key codec: strings, bools, numeric types, and zero-payload tags.
+Composite dictionary keys are rejected by static dispatch validation; there is
+no automatic pair-array fallback. Dictionary and set encoders do not sort,
+because Roc does not require keys or elements to be sortable.
 
 Concrete HTTP header parser code has this shape inside `Builtin.Encoding`:
 
@@ -1680,6 +1710,13 @@ The public structural encode method has this exact shape:
 ```roc
 value.encode_to : value, encoding -> (state -> Try(state, err))
 ```
+
+Generated encoders compose child error rows. JSON helpers that cannot fail use a
+named `_never_fails` row variable so they can sequence with encoders that can
+fail. JSON `F32` and `F64` encoders are the deliberate failing scalar case:
+finite values encode as JSON numbers, while `NaN`, positive infinity, and
+negative infinity return `Err(NaN)`, `Err(Infinity)`, or
+`Err(NegativeInfinity)`. They must not encode non-finite values as JSON `null`.
 
 For a concrete record, the compiler can derive:
 

@@ -2241,7 +2241,10 @@ pub const Coordinator = struct {
             }
             unreachable;
         };
-        try self.appendPlatformRequiredUnresolvedDispatchReports(app_root.mod, app_artifact, &validation_snapshot);
+        const app_imported_artifacts = try self.buildTypecheckImportedArtifacts(app_root.pkg, app_root.mod, self.gpa);
+        defer self.gpa.free(app_imported_artifacts);
+
+        try self.appendPlatformRequiredUnresolvedDispatchReports(app_root.mod, app_artifact, app_imported_artifacts, &validation_snapshot);
         try self.appendPlatformRequiredInvalidNumericPatternReports(app_root.mod, app_artifact, &validation_snapshot);
         if (self.hasUserErrors() and !allow_user_errors) return;
 
@@ -2318,7 +2321,10 @@ pub const Coordinator = struct {
             }
             unreachable;
         };
-        try self.appendPlatformRequiredUnresolvedDispatchReports(app_root.mod, app_artifact, &validation_snapshot);
+        const app_imported_artifacts = try self.buildTypecheckImportedArtifacts(app_root.pkg, app_root.mod, self.gpa);
+        defer self.gpa.free(app_imported_artifacts);
+
+        try self.appendPlatformRequiredUnresolvedDispatchReports(app_root.mod, app_artifact, app_imported_artifacts, &validation_snapshot);
         try self.appendPlatformRequiredInvalidNumericPatternReports(app_root.mod, app_artifact, &validation_snapshot);
         if (self.hasUserErrors()) return;
 
@@ -2397,6 +2403,7 @@ pub const Coordinator = struct {
         self: *Coordinator,
         app_mod: *ModuleState,
         app_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+        app_imported_artifacts: []const check.CheckedArtifact.PublishImportArtifact,
         validation_snapshot: *const PlatformRequiredValidationSnapshot,
     ) Allocator.Error!void {
         for (app_artifact.static_dispatch_plans.plans, 0..) |plan, plan_index| {
@@ -2413,6 +2420,12 @@ pub const Coordinator = struct {
             switch (plan.resolution) {
                 .resolved_target => |target| {
                     if (!plan_changed) continue;
+                    switch (target.kind) {
+                        .generated_structural_parser,
+                        .generated_structural_encoder,
+                        => continue,
+                        .procedure, .local_proc => {},
+                    }
 
                     const target_artifact = switch (target.kind) {
                         .procedure => |procedure| blk: {
@@ -2425,6 +2438,9 @@ pub const Coordinator = struct {
                             };
                         },
                         .local_proc => app_artifact,
+                        .generated_structural_parser,
+                        .generated_structural_encoder,
+                        => unreachable,
                     };
                     if (!try check.CheckedArtifact.checkedTypesCompatible(
                         self.gpa,
@@ -2447,7 +2463,7 @@ pub const Coordinator = struct {
                 .unresolved_checked_plan => {},
             }
             if (!plan_changed) continue;
-            const dispatcher = self.platformRequiredDispatchReportDispatcherType(app_artifact, plan) orelse continue;
+            const dispatcher = self.platformRequiredDispatchReportDispatcherType(app_artifact, app_imported_artifacts, plan) orelse continue;
             try self.appendPlatformRequiredUnresolvedDispatchReport(
                 app_mod,
                 app_artifact,
@@ -2458,7 +2474,7 @@ pub const Coordinator = struct {
         }
         for (app_artifact.static_dispatch_plans.iterator_for_plans, 0..) |plan, plan_index| {
             if (!validation_snapshot.iteratorPlanChanged(app_artifact, plan_index, plan)) continue;
-            const dispatcher = self.platformRequiredIteratorReportDispatcherType(app_artifact, plan.iter) orelse continue;
+            const dispatcher = self.platformRequiredIteratorReportDispatcherType(app_artifact, app_imported_artifacts, plan.iter) orelse continue;
 
             try self.appendPlatformRequiredUnresolvedDispatchReport(
                 app_mod,
@@ -2478,25 +2494,27 @@ pub const Coordinator = struct {
     fn platformRequiredDispatchReportDispatcherType(
         self: *Coordinator,
         app_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+        app_imported_artifacts: []const check.CheckedArtifact.PublishImportArtifact,
         plan: check.StaticDispatchRegistry.StaticDispatchCallPlan,
     ) ?PlatformRequiredDispatchReportType {
         if (!check.CheckedArtifact.checkedTypeRootIsIdentity(app_artifact, plan.dispatcher_ty)) {
             return .{ .artifact = app_artifact, .ty = plan.dispatcher_ty };
         }
         const dispatcher_expr = staticDispatchPlanDispatcherExpr(app_artifact, plan) orelse return null;
-        return self.platformRequiredConcreteExprType(app_artifact, dispatcher_expr);
+        return self.platformRequiredConcreteExprType(app_artifact, app_imported_artifacts, dispatcher_expr);
     }
 
     fn platformRequiredIteratorReportDispatcherType(
         self: *Coordinator,
         app_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+        app_imported_artifacts: []const check.CheckedArtifact.PublishImportArtifact,
         plan: check.StaticDispatchRegistry.IteratorDispatchCall,
     ) ?PlatformRequiredDispatchReportType {
         if (!check.CheckedArtifact.checkedTypeRootIsIdentity(app_artifact, plan.dispatcher_ty)) {
             return .{ .artifact = app_artifact, .ty = plan.dispatcher_ty };
         }
         const dispatcher_expr = iteratorDispatchPlanDispatcherExpr(app_artifact, plan) orelse return null;
-        return self.platformRequiredConcreteExprType(app_artifact, dispatcher_expr);
+        return self.platformRequiredConcreteExprType(app_artifact, app_imported_artifacts, dispatcher_expr);
     }
 
     fn staticDispatchPlanDispatcherExpr(
@@ -2533,6 +2551,7 @@ pub const Coordinator = struct {
     fn platformRequiredConcreteExprType(
         self: *Coordinator,
         app_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+        app_imported_artifacts: []const check.CheckedArtifact.PublishImportArtifact,
         expr_id: check.CheckedArtifact.CheckedExprId,
     ) ?PlatformRequiredDispatchReportType {
         const expr = app_artifact.checked_bodies.expr(expr_id);
@@ -2540,12 +2559,12 @@ pub const Coordinator = struct {
             return .{ .artifact = app_artifact, .ty = expr.ty };
         }
         return switch (expr.data) {
-            .dispatch_call => |plan_id| self.platformRequiredResolvedDispatchReturnType(app_artifact, plan_id orelse return null),
-            .method_eq => |plan_id| self.platformRequiredResolvedDispatchReturnType(app_artifact, plan_id orelse return null),
+            .dispatch_call => |plan_id| self.platformRequiredResolvedDispatchReturnType(app_artifact, app_imported_artifacts, plan_id orelse return null),
+            .method_eq => |plan_id| self.platformRequiredResolvedDispatchReturnType(app_artifact, app_imported_artifacts, plan_id orelse return null),
             .num_from_numeral,
             .typed_num_from_numeral,
-            => |plan_id| self.platformRequiredResolvedDispatchReturnType(app_artifact, plan_id orelse return null),
-            .str_from_quote => |quote| self.platformRequiredResolvedDispatchReturnType(app_artifact, quote.plan orelse return null),
+            => |plan_id| self.platformRequiredResolvedDispatchReturnType(app_artifact, app_imported_artifacts, plan_id orelse return null),
+            .str_from_quote => |quote| self.platformRequiredResolvedDispatchReturnType(app_artifact, app_imported_artifacts, quote.plan orelse return null),
             else => null,
         };
     }
@@ -2553,6 +2572,7 @@ pub const Coordinator = struct {
     fn platformRequiredResolvedDispatchReturnType(
         self: *Coordinator,
         app_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+        app_imported_artifacts: []const check.CheckedArtifact.PublishImportArtifact,
         plan_id: check.StaticDispatchRegistry.StaticDispatchPlanId,
     ) ?PlatformRequiredDispatchReportType {
         const raw = @intFromEnum(plan_id);
@@ -2562,11 +2582,18 @@ pub const Coordinator = struct {
             .resolved_target => |target| target,
             .unresolved_checked_plan => return null,
         };
-        const target_artifact = self.platformRequiredDispatchTargetArtifact(app_artifact, target);
-        if (checkedFunctionReturnType(target_artifact, target.callable_ty)) |target_ret| {
-            if (!check.CheckedArtifact.checkedTypeRootIsIdentity(target_artifact, target_ret)) {
-                return .{ .artifact = target_artifact, .ty = target_ret };
-            }
+        switch (target.kind) {
+            .generated_structural_parser,
+            .generated_structural_encoder,
+            => {},
+            .procedure, .local_proc => {
+                const target_artifact = self.platformRequiredDispatchTargetArtifact(app_artifact, app_imported_artifacts, target);
+                if (checkedFunctionReturnType(target_artifact, target.callable_ty)) |target_ret| {
+                    if (!check.CheckedArtifact.checkedTypeRootIsIdentity(target_artifact, target_ret)) {
+                        return .{ .artifact = target_artifact, .ty = target_ret };
+                    }
+                }
+            },
         }
         const plan_ret = checkedFunctionReturnType(app_artifact, plan.callable_ty) orelse return null;
         if (check.CheckedArtifact.checkedTypeRootIsIdentity(app_artifact, plan_ret)) return null;
@@ -2576,10 +2603,14 @@ pub const Coordinator = struct {
     fn platformRequiredDispatchTargetArtifact(
         self: *Coordinator,
         app_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+        app_imported_artifacts: []const check.CheckedArtifact.PublishImportArtifact,
         target: check.StaticDispatchRegistry.MethodTarget,
     ) *const check.CheckedArtifact.CheckedModuleArtifact {
         return switch (target.kind) {
             .local_proc => app_artifact,
+            .generated_structural_parser,
+            .generated_structural_encoder,
+            => self.platformRequiredArtifactForModuleIndex(app_artifact, app_imported_artifacts, target.module_idx),
             .procedure => |procedure| blk: {
                 const target_key = checkedArtifactKeyFromArtifactRef(procedure.template.artifact);
                 break :blk self.checkedArtifactByKey(target_key) orelse {
@@ -2587,6 +2618,23 @@ pub const Coordinator = struct {
                 };
             },
         };
+    }
+
+    fn platformRequiredArtifactForModuleIndex(
+        self: *Coordinator,
+        app_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+        app_imported_artifacts: []const check.CheckedArtifact.PublishImportArtifact,
+        module_idx: u32,
+    ) *const check.CheckedArtifact.CheckedModuleArtifact {
+        if (module_idx == app_artifact.module_identity.module_idx) return app_artifact;
+        for (app_imported_artifacts) |imported_artifact| {
+            if (imported_artifact.module_idx == module_idx) {
+                return self.checkedArtifactByKey(imported_artifact.key) orelse {
+                    coordinatorInvariant("platform-required dispatch target artifact was not available", .{});
+                };
+            }
+        }
+        coordinatorInvariant("platform-required dispatch target module was not available to the app root", .{});
     }
 
     fn checkedFunctionReturnType(
@@ -2803,6 +2851,8 @@ pub const Coordinator = struct {
             .bool => "Builtin.Bool",
             .list => "Builtin.List",
             .box => "Builtin.Box",
+            .dict => "Builtin.Dict",
+            .set => "Builtin.Set",
             .parse_tag_union_spec => "Builtin.Encoding.ParseTagUnionSpec",
             .fields => "Builtin.Encoding.FieldName.FieldNames",
             .field => "Builtin.Encoding.FieldName",

@@ -1385,6 +1385,8 @@ fn checkedTypeIsConcreteCompileTimeRootInner(
                     .primitive,
                     .list,
                     .box,
+                    .dict,
+                    .set,
                     .parse_tag_union_spec,
                     .fields,
                     .field,
@@ -2232,6 +2234,8 @@ pub const CheckedBuiltinNominal = enum {
     dec,
     list,
     box,
+    dict,
+    set,
     parse_tag_union_spec,
     fields,
     field,
@@ -2262,6 +2266,8 @@ pub const CheckedBuiltinRuntimeEncoding = union(enum) {
     bool_tag_union,
     list,
     box,
+    dict,
+    set,
     parse_tag_union_spec,
     fields,
     field,
@@ -2287,6 +2293,8 @@ pub fn builtinRuntimeEncoding(builtin_nominal: CheckedBuiltinNominal) CheckedBui
         .dec => .{ .primitive = .dec },
         .list => .list,
         .box => .box,
+        .dict => .dict,
+        .set => .set,
         .parse_tag_union_spec => .parse_tag_union_spec,
         .fields => .fields,
         .field => .field,
@@ -6155,6 +6163,8 @@ fn checkedBuiltinNominalForIdent(module_env: *const ModuleEnv, ident: base.Ident
     if (ident.eql(common.dec) or ident.eql(common.dec_type)) return .dec;
     if (ident.eql(common.list) or ident.eql(common.builtin_list)) return .list;
     if (ident.eql(common.box) or ident.eql(common.builtin_box)) return .box;
+    if (ident.eql(common.dict) or ident.eql(common.builtin_dict)) return .dict;
+    if (ident.eql(common.set) or ident.eql(common.builtin_set)) return .set;
     if (ident.eql(common.builtin_encoding_parse_tag_union_spec)) return .parse_tag_union_spec;
     if (ident.eql(common.builtin_encoding_field_names)) return .fields;
     if (ident.eql(common.builtin_encoding_field_name)) return .field;
@@ -10741,6 +10751,8 @@ pub fn builtinNominalAcceptsNumeralLiteral(builtin_nominal: CheckedBuiltinNomina
         .str,
         .list,
         .box,
+        .dict,
+        .set,
         .parse_tag_union_spec,
         .fields,
         .field,
@@ -19502,6 +19514,15 @@ fn checkedTypeHasNoReachableCallableSlotsInner(
                         if (nominal.args.len != 1) checkedArtifactInvariant("builtin container nominal had non-unary args", .{});
                         break :blk try checkedTypeHasNoReachableCallableSlotsInner(checked_types, nominal.args[0], active);
                     },
+                    .set => {
+                        if (nominal.args.len != 1) checkedArtifactInvariant("builtin Set nominal had non-unary args", .{});
+                        break :blk try checkedTypeHasNoReachableCallableSlotsInner(checked_types, nominal.args[0], active);
+                    },
+                    .dict => {
+                        if (nominal.args.len != 2) checkedArtifactInvariant("builtin Dict nominal had non-binary args", .{});
+                        if (!try checkedTypeHasNoReachableCallableSlotsInner(checked_types, nominal.args[0], active)) break :blk false;
+                        break :blk try checkedTypeHasNoReachableCallableSlotsInner(checked_types, nominal.args[1], active);
+                    },
                 }
             }
             break :blk try checkedTypeHasNoReachableCallableSlotsInner(checked_types, nominal.backing, active);
@@ -24217,7 +24238,7 @@ pub const CheckedModuleArtifact = struct {
     /// Manual discriminant for `SERIALIZED_VERSION_HASH`: bump to force a cache /
     /// baked-blob invalidation for a layout change the structural fingerprint below
     /// cannot observe (e.g. a semantic change to how a field is interpreted).
-    const serialized_layout_version: u32 = 3;
+    const serialized_layout_version: u32 = 4;
 
     /// Comptime fingerprint of `Serialized`'s layout, mirroring
     /// `cache_module.MODULE_ENV_VERSION_HASH`. It is appended to the baked builtin
@@ -28008,8 +28029,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, bump `serialized_layout_version` and replace the golden bytes below with
     // the ones this assertion prints.
     const golden: [32]u8 = .{
-        0xDC, 0xEE, 0xC1, 0xAC, 0xB4, 0xCE, 0x7E, 0xFD, 0x41, 0xFC, 0xDC, 0x67, 0x7A, 0x26, 0x0B, 0x8B,
-        0x41, 0xF6, 0x4C, 0x0A, 0x48, 0xEA, 0x2C, 0x23, 0x50, 0x9E, 0x28, 0xE3, 0x12, 0xFA, 0x16, 0xA0,
+        0xF9, 0x79, 0x2C, 0xDD, 0xB3, 0x0A, 0x26, 0x6E, 0xFB, 0x2B, 0x75, 0x1B, 0x30, 0x66, 0x9E, 0x6F,
+        0x52, 0xDB, 0x49, 0x10, 0x01, 0x6D, 0x33, 0xD7, 0xCD, 0x1D, 0xD3, 0x46, 0xEC, 0xDB, 0x55, 0x7E,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

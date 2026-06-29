@@ -132,6 +132,8 @@ pub const CommonIdents = extern struct {
     list: Ident.Idx,
     iter: Ident.Idx,
     box: Ident.Idx,
+    dict: Ident.Idx,
+    set: Ident.Idx,
 
     // Unqualified builtin type names (for checking if a type name shadows a builtin)
     num: Ident.Idx,
@@ -157,6 +159,8 @@ pub const CommonIdents = extern struct {
     builtin_str: Ident.Idx,
     builtin_list: Ident.Idx,
     builtin_box: Ident.Idx,
+    builtin_dict: Ident.Idx,
+    builtin_set: Ident.Idx,
     builtin_encoding_parse_tag_union_spec: Ident.Idx,
     builtin_encoding_field_names: Ident.Idx,
     builtin_encoding_field_name: Ident.Idx,
@@ -243,6 +247,8 @@ pub const CommonIdents = extern struct {
             .list = try common.insertIdent(gpa, Ident.for_text("List")),
             .iter = try common.insertIdent(gpa, Ident.for_text("Iter")),
             .box = try common.insertIdent(gpa, Ident.for_text("Box")),
+            .dict = try common.insertIdent(gpa, Ident.for_text("Dict")),
+            .set = try common.insertIdent(gpa, Ident.for_text("Set")),
             // Unqualified builtin type names
             .num = try common.insertIdent(gpa, Ident.for_text("Num")),
             .bool = try common.insertIdent(gpa, Ident.for_text("Bool")),
@@ -265,6 +271,8 @@ pub const CommonIdents = extern struct {
             .builtin_str = try common.insertIdent(gpa, Ident.for_text("Builtin.Str")),
             .builtin_list = try common.insertIdent(gpa, Ident.for_text("Builtin.List")),
             .builtin_box = try common.insertIdent(gpa, Ident.for_text("Builtin.Box")),
+            .builtin_dict = try common.insertIdent(gpa, Ident.for_text("Builtin.Dict")),
+            .builtin_set = try common.insertIdent(gpa, Ident.for_text("Builtin.Set")),
             .builtin_encoding_parse_tag_union_spec = try common.insertIdent(gpa, Ident.for_text("Builtin.Encoding.ParseTagUnionSpec")),
             .builtin_encoding_field_names = try common.insertIdent(gpa, Ident.for_text("Builtin.Encoding.FieldName.FieldNames")),
             .builtin_encoding_field_name = try common.insertIdent(gpa, Ident.for_text("Builtin.Encoding.FieldName")),
@@ -352,6 +360,8 @@ pub const CommonIdents = extern struct {
             .list = common.findIdent("List") orelse unreachable,
             .iter = common.findIdent("Iter") orelse unreachable,
             .box = common.findIdent("Box") orelse unreachable,
+            .dict = common.findIdent("Dict") orelse unreachable,
+            .set = common.findIdent("Set") orelse unreachable,
             // Unqualified builtin type names
             .num = common.findIdent("Num") orelse unreachable,
             .bool = common.findIdent("Bool") orelse unreachable,
@@ -374,6 +384,8 @@ pub const CommonIdents = extern struct {
             .builtin_str = common.findIdent("Builtin.Str") orelse unreachable,
             .builtin_list = common.findIdent("Builtin.List") orelse unreachable,
             .builtin_box = common.findIdent("Builtin.Box") orelse unreachable,
+            .builtin_dict = common.findIdent("Builtin.Dict") orelse unreachable,
+            .builtin_set = common.findIdent("Builtin.Set") orelse unreachable,
             .builtin_encoding_parse_tag_union_spec = common.findIdent("Builtin.Encoding.ParseTagUnionSpec") orelse unreachable,
             .builtin_encoding_field_names = common.findIdent("Builtin.Encoding.FieldName.FieldNames") orelse unreachable,
             .builtin_encoding_field_name = common.findIdent("Builtin.Encoding.FieldName") orelse unreachable,

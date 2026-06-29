@@ -73,6 +73,8 @@ pub const MethodOwner = union(enum) {
 pub const BuiltinOwner = enum {
     list,
     box,
+    dict,
+    set,
     fields,
     field,
     bool,
@@ -115,6 +117,8 @@ pub const LocalProcedureMethodTarget = struct {
 pub const MethodTargetKind = union(enum) {
     procedure: ProcedureMethodTarget,
     local_proc: LocalProcedureMethodTarget,
+    generated_structural_parser,
+    generated_structural_encoder,
 };
 
 /// Public `MethodTarget` declaration.
@@ -195,7 +199,9 @@ pub const MethodRegistry = struct {
                 unreachable;
             };
             const def_idx = entry.value.def_idx;
-            const target_kind: MethodTargetKind = if (local_templates.templateForDef(def_idx)) |template| blk: {
+            const target_kind: MethodTargetKind = if (generatedStructuralTargetForMethodBinding(module, entry.value, entry.key.methodIdent())) |generated|
+                generated
+            else if (local_templates.templateForDef(def_idx)) |template| blk: {
                 const export_name = try names.internExportIdent(idents, method_ident);
                 const proc_base = try names.internProcBase(.{
                     .module_name = module_name,
@@ -246,6 +252,9 @@ fn methodTargetCallableVar(
 ) Var {
     return switch (target_kind) {
         .procedure => module.defType(def_idx),
+        .generated_structural_parser,
+        .generated_structural_encoder,
+        => ModuleEnv.varFrom(binding.type_node_idx),
         .local_proc => blk: {
             const raw_node = @intFromEnum(binding.type_node_idx);
             const statement: CIR.Statement.Idx = @enumFromInt(raw_node);
@@ -255,6 +264,85 @@ fn methodTargetCallableVar(
             };
             break :blk module.exprType(decl.expr);
         },
+    };
+}
+
+fn generatedStructuralTargetForMethodBinding(
+    module: TypedCIR.Module,
+    binding: ModuleEnv.MethodBinding,
+    method_ident: Ident.Idx,
+) ?MethodTargetKind {
+    const expr_idx = methodBindingExpr(module, binding) orelse return null;
+    switch (module.expr(expr_idx).data) {
+        .e_anno_only,
+        .e_hosted_lambda,
+        => {},
+        else => return null,
+    }
+    const annotation_idx = methodBindingAnnotation(module, binding) orelse return null;
+    if (module.moduleEnvConst().store.getTypeAnno(module.moduleEnvConst().store.getAnnotation(annotation_idx).anno) != .underscore) return null;
+
+    const common = module.commonIdents();
+    if (method_ident.eql(common.parser_for)) return .generated_structural_parser;
+    if (method_ident.eql(common.encode_to)) return .generated_structural_encoder;
+    return null;
+}
+
+fn methodBindingAnnotation(
+    module: TypedCIR.Module,
+    binding: ModuleEnv.MethodBinding,
+) ?CIR.Annotation.Idx {
+    const raw_node = @intFromEnum(binding.type_node_idx);
+    if (raw_node >= module.nodeCount()) {
+        if (@import("builtin").mode == .Debug) {
+            std.debug.panic(
+                "checked static dispatch registry invariant violated: method binding node {d} is outside the module node store",
+                .{raw_node},
+            );
+        }
+        unreachable;
+    }
+
+    return switch (module.nodeTag(binding.type_node_idx)) {
+        .def => module.moduleEnvConst().store.getDef(binding.def_idx).annotation,
+        .statement_decl => blk: {
+            const statement: CIR.Statement.Idx = @enumFromInt(raw_node);
+            const decl = switch (module.getStatement(statement)) {
+                .s_decl => |decl| decl,
+                else => return null,
+            };
+            break :blk decl.anno;
+        },
+        else => null,
+    };
+}
+
+fn methodBindingExpr(
+    module: TypedCIR.Module,
+    binding: ModuleEnv.MethodBinding,
+) ?CIR.Expr.Idx {
+    const raw_node = @intFromEnum(binding.type_node_idx);
+    if (raw_node >= module.nodeCount()) {
+        if (@import("builtin").mode == .Debug) {
+            std.debug.panic(
+                "checked static dispatch registry invariant violated: method binding node {d} is outside the module node store",
+                .{raw_node},
+            );
+        }
+        unreachable;
+    }
+
+    return switch (module.nodeTag(binding.type_node_idx)) {
+        .def => module.moduleEnvConst().store.getDef(binding.def_idx).expr,
+        .statement_decl => blk: {
+            const statement: CIR.Statement.Idx = @enumFromInt(raw_node);
+            const decl = switch (module.getStatement(statement)) {
+                .s_decl => |decl| decl,
+                else => return null,
+            };
+            break :blk decl.expr;
+        },
+        else => null,
     };
 }
 
@@ -351,6 +439,8 @@ fn builtinOwnerForRegistryEntry(
 
     if (type_ident.eql(common.list) or type_ident.eql(common.builtin_list)) return .list;
     if (type_ident.eql(common.box) or type_ident.eql(common.builtin_box)) return .box;
+    if (type_ident.eql(common.dict) or type_ident.eql(common.builtin_dict)) return .dict;
+    if (type_ident.eql(common.set) or type_ident.eql(common.builtin_set)) return .set;
     if (type_ident.eql(common.builtin_encoding_field_names)) return .fields;
     if (type_ident.eql(common.builtin_encoding_field_name)) return .field;
     if (type_ident.eql(common.builtin_encoding_parse_tag_union_spec)) return .parse_tag_union_spec;
@@ -1241,6 +1331,8 @@ fn builtinOwnerForCheckedBuiltin(builtin: anytype) BuiltinOwner {
         .dec => .dec,
         .list => .list,
         .box => .box,
+        .dict => .dict,
+        .set => .set,
         .fields => .fields,
         .field => .field,
         .parse_tag_union_spec => .parse_tag_union_spec,
@@ -1263,6 +1355,9 @@ fn lookupCheckedMethodTarget(
         if (imported.method_registry.lookup(.{ .owner = imported_owner, .method = imported_method })) |target| {
             switch (target.kind) {
                 .procedure => return target,
+                .generated_structural_parser,
+                .generated_structural_encoder,
+                => return target,
                 .local_proc => continue,
             }
         }

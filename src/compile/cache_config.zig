@@ -32,7 +32,8 @@ pub const Constants = struct {
     /// 7: field-order layout metadata moved from nominal-only to general field-order.
     /// 8: ModuleEnv stores source-relative file-import dependency metadata.
     /// 9: Builtin indices and common identifiers changed for Encoding.Json and Encoding.HttpHeader.
-    pub const CACHE_VERSION = 9;
+    /// 10: Builtin.Json.Encoding structural encode/parse support changed common identifiers.
+    pub const CACHE_VERSION = 10;
 };
 
 /// Configuration for the Roc cache system.
