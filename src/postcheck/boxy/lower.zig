@@ -5,6 +5,7 @@
 
 const std = @import("std");
 const base = @import("base");
+const can = @import("can");
 const check = @import("check");
 const lir_core = @import("lir_core");
 
@@ -16,7 +17,9 @@ const solved_lir_lower = @import("../solved_lir_lower.zig");
 const Allocator = std.mem.Allocator;
 const checked = check.CheckedModule;
 const names = check.CheckedNames;
+const LIR = lir_core.LIR;
 const LirProgram = lir_core.Program;
+const RootMetadata = lir_core.RootMetadata.RootMetadata;
 
 pub const RuntimeSchemaStore = solved_lir_lower.RuntimeSchemaStore;
 
@@ -50,9 +53,10 @@ pub fn run(
     var resolved_workers = try ResolvedWorkers.init(allocator, modules, plan);
     defer resolved_workers.deinit();
 
-    if (plan.roots.items.len != 0) {
-        boxyLowerInvariant("boxy checked-to-LIR lowerer does not yet implement checked procedure lowering");
-    }
+    var procedure_builder = ProcedureBuilder.init(allocator, modules, plan, &layout_plan, &resolved_workers, &result);
+    defer procedure_builder.deinit();
+    try procedure_builder.emitRoots();
+
     try appendRequestedLayouts(allocator, modules, roots, plan, &layout_plan, &result);
 
     return .{
@@ -63,6 +67,7 @@ pub fn run(
 
 const ProcedureModuleView = struct {
     key: checked.CheckedModuleArtifactKey,
+    checked_types: checked.CheckedTypeStoreView,
     checked_bodies: checked.CheckedBodyStoreView,
     checked_procedure_templates: *const checked.CheckedProcedureTemplateTable,
     top_level_procedure_bindings: *const checked.TopLevelProcedureBindingTable,
@@ -71,6 +76,7 @@ const ProcedureModuleView = struct {
 const ResolvedWorker = struct {
     worker: Plan.WorkerPlanId,
     module_key: checked.CheckedModuleArtifactKey,
+    module: ProcedureModuleView,
     template_ref: names.ProcedureTemplateRef,
     template: checked.CheckedProcedureTemplate,
     body: checked.CheckedBody,
@@ -169,6 +175,7 @@ fn resolveProcedureTemplate(
     return .{
         .worker = worker,
         .module_key = module.key,
+        .module = module,
         .template_ref = template_ref,
         .template = template,
         .body = module.checked_bodies.body(body_id),
@@ -179,6 +186,7 @@ fn rootProcedureModule(modules: Common.CheckedModules) ProcedureModuleView {
     const artifact = modules.root.module;
     return .{
         .key = artifact.key,
+        .checked_types = artifact.checked_types.view(),
         .checked_bodies = artifact.checked_bodies.view(),
         .checked_procedure_templates = &artifact.checked_procedure_templates,
         .top_level_procedure_bindings = &artifact.top_level_procedure_bindings,
@@ -188,6 +196,7 @@ fn rootProcedureModule(modules: Common.CheckedModules) ProcedureModuleView {
 fn procedureModuleFromImport(import: checked.ImportedModuleView) ProcedureModuleView {
     return .{
         .key = import.key,
+        .checked_types = import.checked_types,
         .checked_bodies = import.checked_bodies,
         .checked_procedure_templates = import.checked_procedure_templates,
         .top_level_procedure_bindings = import.top_level_procedure_bindings,
@@ -212,6 +221,324 @@ fn procedureModuleByKey(modules: Common.CheckedModules, key: checked.CheckedModu
 fn artifactKeyEqual(a: checked.CheckedModuleArtifactKey, b: checked.CheckedModuleArtifactKey) bool {
     return std.mem.eql(u8, a.bytes[0..], b.bytes[0..]);
 }
+
+const ProcedureBuilder = struct {
+    allocator: Allocator,
+    modules: Common.CheckedModules,
+    plan: *const Plan.ProgramPlan,
+    layout_plan: *const Layouts.LayoutPlan,
+    resolved_workers: *const ResolvedWorkers,
+    result: *LirProgram.Result,
+    worker_procs: []?LIR.LirProcSpecId,
+    symbols: Common.SymbolGen = .{},
+
+    fn init(
+        allocator: Allocator,
+        modules: Common.CheckedModules,
+        plan: *const Plan.ProgramPlan,
+        layout_plan: *const Layouts.LayoutPlan,
+        resolved_workers: *const ResolvedWorkers,
+        result: *LirProgram.Result,
+    ) ProcedureBuilder {
+        return .{
+            .allocator = allocator,
+            .modules = modules,
+            .plan = plan,
+            .layout_plan = layout_plan,
+            .resolved_workers = resolved_workers,
+            .result = result,
+            .worker_procs = &.{},
+        };
+    }
+
+    fn deinit(self: *ProcedureBuilder) void {
+        self.allocator.free(self.worker_procs);
+        self.* = undefined;
+    }
+
+    fn emitRoots(self: *ProcedureBuilder) Allocator.Error!void {
+        self.worker_procs = try self.allocator.alloc(?LIR.LirProcSpecId, self.resolved_workers.items.len);
+        @memset(self.worker_procs, null);
+
+        for (self.plan.roots.items, self.layout_plan.roots.items) |root, root_layout| {
+            if (root.id != root_layout.root) boxyLowerInvariant("boxy root layout table disagreed with root plan order");
+            const worker_proc = try self.emitWorker(root.worker, root_layout);
+            const root_proc = switch (root.wrapper_kind) {
+                .private_worker_only => worker_proc,
+                .host_shaped_wrapper => try self.emitHostWrapper(root_layout, worker_proc),
+            };
+            try self.result.root_procs.append(self.allocator, root_proc);
+            try self.result.root_metadata.append(self.allocator, RootMetadata.fromCheckedRoot(root.request));
+        }
+    }
+
+    fn emitWorker(
+        self: *ProcedureBuilder,
+        worker_id: Plan.WorkerPlanId,
+        root_layout: Layouts.RootLayouts,
+    ) Allocator.Error!LIR.LirProcSpecId {
+        const index = @intFromEnum(worker_id);
+        if (index >= self.worker_procs.len) boxyLowerInvariant("boxy root referenced a missing worker proc");
+        if (self.worker_procs[index]) |existing| return existing;
+
+        const resolved = self.resolved_workers.items[index];
+        if (!artifactKeyEqual(resolved.module_key, self.modules.root.module.key)) {
+            boxyLowerInvariant("non-root checked body reached boxy body lowering before imported body lowering is implemented");
+        }
+
+        var proc = ProcBodyBuilder.init(self, resolved.module, root_layout);
+        defer proc.deinit();
+
+        const body_expr = try self.bodyExprForWorker(resolved, &proc);
+        const ret_layout = proc.workerReturnLayout();
+        const ret_local = try proc.addFrameLocal(ret_layout);
+        const ret_stmt = try self.result.store.addCFStmt(.{ .ret = .{ .value = ret_local } });
+        const body_stmt = try proc.lowerExprInto(ret_local, body_expr, ret_stmt);
+        const args_span = try self.result.store.addLocalSpan(proc.arg_locals.items);
+        const frame_span = try self.result.store.addLocalSpan(proc.frame_locals.items);
+        const proc_id = try self.result.store.addProcSpec(.{
+            .name = lirSymbol(self.symbols.fresh()),
+            .args = args_span,
+            .frame_locals = frame_span,
+            .body = body_stmt,
+            .ret_layout = ret_layout,
+            .stack_probe = self.stackProbeForProc(args_span, frame_span, ret_layout),
+        });
+        self.worker_procs[index] = proc_id;
+        return proc_id;
+    }
+
+    fn bodyExprForWorker(
+        self: *ProcedureBuilder,
+        resolved: ResolvedWorker,
+        proc: *ProcBodyBuilder,
+    ) Allocator.Error!checked.CheckedExprId {
+        const root_expr = resolved.module.checked_bodies.expr(resolved.body.root_expr);
+        return switch (root_expr.data) {
+            .lambda => |lambda| blk: {
+                const worker_args = self.layout_plan.rootLayoutSlice(proc.root_layout.worker_args);
+                if (lambda.args.len != worker_args.len) {
+                    boxyLowerInvariant("boxy worker lambda arity disagreed with worker root layout");
+                }
+                try proc.bindLambdaArgs(lambda.args);
+                break :blk lambda.body;
+            },
+            else => resolved.body.root_expr,
+        };
+    }
+
+    fn emitHostWrapper(
+        self: *ProcedureBuilder,
+        root_layout: Layouts.RootLayouts,
+        worker_proc: LIR.LirProcSpecId,
+    ) Allocator.Error!LIR.LirProcSpecId {
+        const host_args = self.layout_plan.rootLayoutSlice(root_layout.host_args);
+        const worker_args = self.layout_plan.rootLayoutSlice(root_layout.worker_args);
+        if (host_args.len != worker_args.len) {
+            boxyLowerInvariant("boxy host wrapper needed argument adaptation before adapters were emitted");
+        }
+
+        const arg_locals = try self.allocator.alloc(LIR.LocalId, host_args.len);
+        defer self.allocator.free(arg_locals);
+        for (host_args, worker_args, arg_locals) |host_arg, worker_arg, *local| {
+            if (host_arg.layoutIdx() != worker_arg.layoutIdx()) {
+                boxyLowerInvariant("boxy host wrapper needed argument layout adaptation before adapters were emitted");
+            }
+            local.* = try self.addLocal(host_arg.layoutIdx());
+        }
+
+        const host_ret = root_layout.host_ret orelse root_layout.host_value orelse
+            boxyLowerInvariant("boxy host wrapper had no host return layout");
+        const worker_ret = root_layout.worker_ret orelse root_layout.worker_value;
+        if (host_ret.layoutIdx() != worker_ret.layoutIdx()) {
+            boxyLowerInvariant("boxy host wrapper needed return layout adaptation before adapters were emitted");
+        }
+
+        const ret_local = try self.addLocal(host_ret.layoutIdx());
+        const ret_stmt = try self.result.store.addCFStmt(.{ .ret = .{ .value = ret_local } });
+        const call_stmt = try self.result.store.addCFStmt(.{ .assign_call = .{
+            .target = ret_local,
+            .proc = worker_proc,
+            .args = try self.result.store.addLocalSpan(arg_locals),
+            .next = ret_stmt,
+        } });
+        const args_span = try self.result.store.addLocalSpan(arg_locals);
+        const frame_span = try self.result.store.addLocalSpan(&.{ret_local});
+        return try self.result.store.addProcSpec(.{
+            .name = lirSymbol(self.symbols.fresh()),
+            .args = args_span,
+            .frame_locals = frame_span,
+            .body = call_stmt,
+            .ret_layout = host_ret.layoutIdx(),
+            .stack_probe = self.stackProbeForProc(args_span, frame_span, host_ret.layoutIdx()),
+        });
+    }
+
+    fn addLocal(self: *ProcedureBuilder, layout_idx: @import("layout").Idx) Allocator.Error!LIR.LocalId {
+        return try self.result.store.addLocal(.{ .layout_idx = layout_idx });
+    }
+
+    fn stackProbeForProc(
+        self: *ProcedureBuilder,
+        args: LIR.LocalSpan,
+        frame_locals: LIR.LocalSpan,
+        ret_layout: @import("layout").Idx,
+    ) LIR.StackProbe {
+        if (self.result.store.localSpanNeedsStackProbe(&self.result.layouts, args)) return .required;
+        if (self.result.store.localSpanNeedsStackProbe(&self.result.layouts, frame_locals)) return .required;
+        if (LIR.layoutNeedsStackProbe(&self.result.layouts, ret_layout)) return .required;
+        return .default;
+    }
+};
+
+const ProcBodyBuilder = struct {
+    parent: *ProcedureBuilder,
+    module: ProcedureModuleView,
+    root_layout: Layouts.RootLayouts,
+    arg_locals: std.ArrayList(LIR.LocalId),
+    frame_locals: std.ArrayList(LIR.LocalId),
+    binder_locals: []?LIR.LocalId,
+
+    fn init(parent: *ProcedureBuilder, module: ProcedureModuleView, root_layout: Layouts.RootLayouts) ProcBodyBuilder {
+        return .{
+            .parent = parent,
+            .module = module,
+            .root_layout = root_layout,
+            .arg_locals = .empty,
+            .frame_locals = .empty,
+            .binder_locals = &.{},
+        };
+    }
+
+    fn deinit(self: *ProcBodyBuilder) void {
+        self.parent.allocator.free(self.binder_locals);
+        self.frame_locals.deinit(self.parent.allocator);
+        self.arg_locals.deinit(self.parent.allocator);
+        self.* = undefined;
+    }
+
+    fn bindLambdaArgs(self: *ProcBodyBuilder, args: []const checked.CheckedPatternId) Allocator.Error!void {
+        if (self.binder_locals.len == 0) {
+            self.binder_locals = try self.parent.allocator.alloc(?LIR.LocalId, self.module.checked_bodies.patternBinderCount());
+            @memset(self.binder_locals, null);
+        }
+
+        const worker_args = self.parent.layout_plan.rootLayoutSlice(self.root_layout.worker_args);
+        for (args, worker_args) |pattern_id, arg_layout| {
+            const local = try self.addArgLocal(arg_layout.layoutIdx());
+            const pattern = self.module.checked_bodies.pattern(pattern_id);
+            switch (pattern.data) {
+                .assign => |binder| self.bindLocal(binder, local),
+                else => boxyLowerInvariant("boxy worker lambda argument pattern required pattern lowering before it was emitted"),
+            }
+        }
+    }
+
+    fn lowerExprInto(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        expr_id: checked.CheckedExprId,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const expr = self.module.checked_bodies.expr(expr_id);
+        const saved_region = self.parent.result.store.current_region;
+        defer self.parent.result.store.current_region = saved_region;
+        self.parent.result.store.current_region = expr.source_region;
+
+        return switch (expr.data) {
+            .num => |num| try self.assignIntLiteral(target, num.value.toI128(), next),
+            .typed_int => |int| try self.assignIntLiteral(target, int.value.toI128(), next),
+            .frac_f32 => |frac| try self.parent.result.store.addCFStmt(.{ .assign_literal = .{
+                .target = target,
+                .value = .{ .f32_literal = frac.value },
+                .next = next,
+            } }),
+            .frac_f64 => |frac| try self.parent.result.store.addCFStmt(.{ .assign_literal = .{
+                .target = target,
+                .value = .{ .f64_literal = frac.value },
+                .next = next,
+            } }),
+            .dec => |dec| try self.parent.result.store.addCFStmt(.{ .assign_literal = .{
+                .target = target,
+                .value = .{ .dec_literal = dec.value.num },
+                .next = next,
+            } }),
+            .empty_record => try self.assignZst(target, next),
+            .lookup_local => |lookup| try self.assignLocal(target, self.localForPattern(lookup.pattern), next),
+            .lambda => boxyLowerInvariant("nested lambda reached boxy expression lowering before erased callable lowering was emitted"),
+            else => boxyLowerInvariant("checked expression form reached boxy body lowering before its LIR lowering was implemented"),
+        };
+    }
+
+    fn assignIntLiteral(self: *ProcBodyBuilder, target: LIR.LocalId, value: i128, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
+        return try self.parent.result.store.addCFStmt(.{ .assign_literal = .{
+            .target = target,
+            .value = .{ .i128_literal = .{
+                .value = value,
+                .layout_idx = self.parent.result.store.getLocal(target).layout_idx,
+            } },
+            .next = next,
+        } });
+    }
+
+    fn assignZst(self: *ProcBodyBuilder, target: LIR.LocalId, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
+        return try self.parent.result.store.addCFStmt(.{ .assign_struct = .{
+            .target = target,
+            .fields = LIR.LocalSpan.empty(),
+            .next = next,
+        } });
+    }
+
+    fn assignLocal(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        source: LIR.LocalId,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        return try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
+            .target = target,
+            .op = .{ .local = source },
+            .next = next,
+        } });
+    }
+
+    fn addArgLocal(self: *ProcBodyBuilder, layout_idx: @import("layout").Idx) Allocator.Error!LIR.LocalId {
+        const local = try self.parent.addLocal(layout_idx);
+        try self.arg_locals.append(self.parent.allocator, local);
+        return local;
+    }
+
+    fn addFrameLocal(self: *ProcBodyBuilder, layout_idx: @import("layout").Idx) Allocator.Error!LIR.LocalId {
+        const local = try self.parent.addLocal(layout_idx);
+        try self.frame_locals.append(self.parent.allocator, local);
+        return local;
+    }
+
+    fn bindLocal(self: *ProcBodyBuilder, binder: checked.PatternBinderId, local: LIR.LocalId) void {
+        const index = @intFromEnum(binder);
+        if (index >= self.binder_locals.len) boxyLowerInvariant("boxy lambda arg referenced a missing pattern binder");
+        if (self.binder_locals[index] != null) boxyLowerInvariant("boxy lambda arg bound the same pattern binder more than once");
+        self.binder_locals[index] = local;
+    }
+
+    fn localForPattern(self: *ProcBodyBuilder, pattern: checked.CheckedPatternId) LIR.LocalId {
+        const pattern_index = @intFromEnum(pattern);
+        if (pattern_index >= self.module.checked_bodies.pattern_binder_by_pattern.len) {
+            boxyLowerInvariant("boxy local lookup referenced a pattern without binder metadata");
+        }
+        const binder = self.module.checked_bodies.pattern_binder_by_pattern[pattern_index] orelse
+            boxyLowerInvariant("boxy local lookup referenced a non-binding pattern");
+        const binder_index = @intFromEnum(binder);
+        if (binder_index >= self.binder_locals.len) boxyLowerInvariant("boxy local lookup referenced a missing binder local");
+        return self.binder_locals[binder_index] orelse
+            boxyLowerInvariant("boxy local lookup referenced a binder before it was bound");
+    }
+
+    fn workerReturnLayout(self: *const ProcBodyBuilder) @import("layout").Idx {
+        if (self.root_layout.worker_ret) |ret| return ret.layoutIdx();
+        return self.root_layout.worker_value.layoutIdx();
+    }
+};
 
 fn appendRequestedLayouts(
     allocator: Allocator,
@@ -459,6 +786,10 @@ fn moduleDigestFromId(key: checked.ModuleId) names.CheckedModuleDigest {
     return .{ .bytes = key.bytes };
 }
 
+fn lirSymbol(symbol: Common.Symbol) LIR.Symbol {
+    return LIR.Symbol.fromRaw(@intCast(@intFromEnum(symbol)));
+}
+
 fn boxyLowerInvariant(comptime message: []const u8) noreturn {
     if (@import("builtin").mode == .Debug) {
         std.debug.panic("boxy lower invariant violated: {s}", .{message});
@@ -565,6 +896,92 @@ test "boxy lowerer resolves top-level direct bindings to checked bodies" {
     try std.testing.expect(names.procedureTemplateRefEql(template_ref, resolved.items[0].template_ref));
     try std.testing.expectEqual(@as(checked.CheckedBodyId, @enumFromInt(0)), resolved.items[0].body.id);
     try std.testing.expectEqual(@as(checked.CheckedExprId, @enumFromInt(5)), resolved.items[0].body.root_expr);
+}
+
+test "boxy lowerer emits private worker proc for zero-arg numeric lambda root" {
+    const gpa = std.testing.allocator;
+
+    var artifact = minimalCheckedArtifact(gpa);
+    defer artifact.canonical_names.deinit();
+    defer artifact.checked_types.deinit(gpa);
+    defer artifact.checked_bodies.deinit(gpa);
+
+    try artifact.checked_types.payloads.append(gpa, .{
+        .nominal = builtinNominal(.u64, @enumFromInt(0), .{}),
+    });
+    try artifact.checked_types.payloads.append(gpa, .{
+        .function = .{
+            .kind = .pure,
+            .args = .{},
+            .ret = @enumFromInt(0),
+            .needs_instantiation = false,
+        },
+    });
+
+    const template_ref = procedureTemplateRef(artifact.key, 0);
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(0),
+        .ty = @enumFromInt(1),
+        .source_region = base.Region.zero(),
+        .data = .{ .lambda = .{ .args = .{}, .body = @enumFromInt(1) } },
+    });
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(1),
+        .ty = @enumFromInt(0),
+        .source_region = base.Region.zero(),
+        .data = .{ .num = .{ .value = intValue(42), .kind = .u64 } },
+    });
+    try artifact.checked_bodies.bodies.append(gpa, .{
+        .id = @enumFromInt(0),
+        .root_expr = @enumFromInt(0),
+        .owner_template = template_ref,
+    });
+    var templates = [_]checked.CheckedProcedureTemplate{
+        checkedTemplate(template_ref, @enumFromInt(1), @enumFromInt(0)),
+    };
+    artifact.checked_procedure_templates = .{ .templates = &templates };
+
+    const root = checked.RootRequest{
+        .order = 0,
+        .module_idx = 0,
+        .kind = .runtime_entrypoint,
+        .source = .{ .def = @enumFromInt(0) },
+        .checked_type = @enumFromInt(1),
+        .abi = .roc,
+        .exposure = .private,
+        .procedure_template = template_ref,
+    };
+    var plan = try Plan.analyzeProgram(gpa, .{
+        .checked_types = artifact.checked_types.view(),
+        .roots = &.{root},
+    }, .{});
+    defer plan.deinit();
+
+    var out = try run(
+        gpa,
+        .{ .root = .{ .module = &artifact, .roots = undefined } },
+        .{},
+        &plan,
+        .{},
+    );
+    defer out.deinit();
+
+    try std.testing.expectEqual(@as(usize, 1), out.lir_result.root_procs.items.len);
+    try std.testing.expectEqual(@as(usize, 1), out.lir_result.root_metadata.items.len);
+    const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
+    try std.testing.expect(proc.args.isEmpty());
+    try std.testing.expectEqual(@as(LIR.LocalSpan, .{ .start = 0, .len = 1 }), proc.frame_locals);
+    try std.testing.expectEqual(@as(@TypeOf(proc.ret_layout), .u64), proc.ret_layout);
+
+    const assign = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_literal;
+    switch (assign.value) {
+        .i128_literal => |literal| {
+            try std.testing.expectEqual(@as(i128, 42), literal.value);
+            try std.testing.expectEqual(@as(@TypeOf(literal.layout_idx), .u64), literal.layout_idx);
+        },
+        else => return error.TestUnexpectedResult,
+    }
+    try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = assign.target } }, out.lir_result.store.getCFStmt(assign.next));
 }
 
 test "boxy lowerer emits requested layout metadata for layout-only plans" {
@@ -720,6 +1137,13 @@ fn typeSchemeKey(byte: u8) names.CanonicalTypeSchemeKey {
     var key = names.CanonicalTypeSchemeKey{};
     key.bytes[0] = byte;
     return key;
+}
+
+fn intValue(value: i128) can.CIR.IntValue {
+    return .{
+        .bytes = @bitCast(value),
+        .kind = .i128,
+    };
 }
 
 fn procedureTemplateRef(key: checked.CheckedModuleArtifactKey, raw_template_id: u32) names.ProcedureTemplateRef {

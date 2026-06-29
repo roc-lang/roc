@@ -3204,6 +3204,13 @@ must resolve to a checked body; lifted, synthetic, callable-eval, intrinsic, and
 compile-time entry-wrapper templates are not compatibility fallbacks for this
 path.
 
+The worker body builder consumes checked expression and pattern ids directly and
+emits statement LIR. Lambda worker arguments become LIR proc arguments, binder
+patterns map to those argument locals, and expression lowering writes into an
+explicit target local before continuing to the next statement. Literal workers
+use the ordinary `assign_literal` statements with layouts selected from the
+boxy layout plan; zst values use ordinary empty-struct assignment.
+
 For every checked function value expression, the boxy lowerer emits an
 `assign_packed_erased_fn`-style LIR statement that creates an erased callable
 payload. The payload stores the function entry and capture bytes. Capture bytes
