@@ -1943,6 +1943,14 @@ operations use dictionaries/vtables. Compile time is lower because no lambda
 sets, callable-flow specialization queue, or Monotype/Lambda Mono syntax
 pipeline is constructed for runtime roots.
 
+The boxy representation plan records every checked type it analyzes in an
+explicit checked-type-to-representation table. Later boxy stages use that table
+to select worker layouts for expression results, pattern bindings, local
+storage, adapters, descriptors, dictionaries, and layout-only requests. They do
+not recover the representation for a checked expression by scanning body shapes,
+matching source names, recomputing type structure, or relying on incidental
+representation list order.
+
 `.boxy` represents an unknown type-variable value as one ordinary Roc box
 payload pointer. This is the same runtime shape as `Box(T)`: a nullable or
 non-null pointer-sized Roc value whose allocation stores the payload bytes and
@@ -3210,6 +3218,15 @@ patterns map to those argument locals, and expression lowering writes into an
 explicit target local before continuing to the next statement. Literal workers
 use the ordinary `assign_literal` statements with layouts selected from the
 boxy layout plan; zst values use ordinary empty-struct assignment.
+
+Checked block lowering is continuation-based. Before the final expression is
+lowered, the body builder allocates and binds every checked declaration local
+from the block's explicit checked statement list, using the checked pattern type
+and the representation table to select the worker layout. It then lowers the
+final expression and walks statements backward, emitting the initialization
+statements in front of the continuation. This lets `lookup_local` consume the
+same checked binder ids that checking produced; the lowerer never reconstructs
+lexical scope from source syntax or declaration names.
 
 For every checked function value expression, the boxy lowerer emits an
 `assign_packed_erased_fn`-style LIR statement that creates an erased callable

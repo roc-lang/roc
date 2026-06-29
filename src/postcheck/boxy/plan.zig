@@ -101,6 +101,11 @@ pub const DeclaredField = struct {
     is_padding: bool = false,
 };
 
+pub const TypeRepBinding = struct {
+    source_type: checked.CheckedTypeId,
+    rep: TypeRepId,
+};
+
 pub const TypeRepresentation = struct {
     source_type: checked.CheckedTypeId,
     kind: RepresentationKind,
@@ -169,6 +174,7 @@ pub const ProgramPlan = struct {
     roots: std.ArrayList(RootPlan),
     workers: std.ArrayList(WorkerPlan),
     root_reps: std.ArrayList(TypeRepId),
+    type_reps: std.ArrayList(TypeRepBinding),
     representations: std.ArrayList(TypeRepresentation),
     children: std.ArrayList(RepChild),
     tag_variants: std.ArrayList(TagVariant),
@@ -182,6 +188,7 @@ pub const ProgramPlan = struct {
             .roots = .empty,
             .workers = .empty,
             .root_reps = .empty,
+            .type_reps = .empty,
             .representations = .empty,
             .children = .empty,
             .tag_variants = .empty,
@@ -198,6 +205,7 @@ pub const ProgramPlan = struct {
         self.tag_variants.deinit(self.allocator);
         self.children.deinit(self.allocator);
         self.representations.deinit(self.allocator);
+        self.type_reps.deinit(self.allocator);
         self.root_reps.deinit(self.allocator);
         self.workers.deinit(self.allocator);
         self.roots.deinit(self.allocator);
@@ -218,6 +226,13 @@ pub const ProgramPlan = struct {
 
     pub fn dictionarySlice(self: *const ProgramPlan, span: Span) []const DictionaryRequirement {
         return self.dictionaries.items[span.start .. span.start + span.len];
+    }
+
+    pub fn repForSourceType(self: *const ProgramPlan, source_type: checked.CheckedTypeId) ?TypeRepId {
+        for (self.type_reps.items) |binding| {
+            if (binding.source_type == source_type) return binding.rep;
+        }
+        return null;
     }
 };
 
@@ -367,6 +382,10 @@ const Builder = struct {
         try self.plan.representations.append(self.allocator, .{
             .source_type = ty,
             .kind = .in_progress,
+        });
+        try self.plan.type_reps.append(self.allocator, .{
+            .source_type = ty,
+            .rep = rep_id,
         });
 
         const rep = try self.buildRepresentation(ty);
@@ -945,6 +964,35 @@ test "boxy planner records root wrapper plans from checked root metadata" {
     try std.testing.expectEqual(@as(u32, 3), plan.roots.items[0].request.order);
     try std.testing.expectEqual(plan.roots.items[0].host_rep, plan.roots.items[0].worker_rep);
     try std.testing.expectEqual(@as(usize, 1), plan.root_reps.items.len);
+}
+
+test "boxy planner records explicit source type representation bindings" {
+    const gpa = std.testing.allocator;
+
+    const payloads = [_]checked.StoredCheckedTypePayload{
+        .{ .nominal = builtinNominal(.u64, @enumFromInt(0), .{}) },
+        .{ .nominal = builtinNominal(.u8, @enumFromInt(1), .{}) },
+        .{ .function = .{
+            .kind = .pure,
+            .args = .{ .start = 0, .len = 1 },
+            .ret = @enumFromInt(1),
+            .needs_instantiation = false,
+        } },
+    };
+    const type_pool = [_]checked.CheckedTypeId{@enumFromInt(0)};
+    const view = checked.CheckedTypeStoreView{
+        .stored_payloads = &payloads,
+        .type_id_pool = &type_pool,
+    };
+
+    var plan = try analyzeCheckedTypes(gpa, view, &.{@as(checked.CheckedTypeId, @enumFromInt(2))}, .{});
+    defer plan.deinit();
+
+    try std.testing.expectEqual(@as(usize, 3), plan.type_reps.items.len);
+    try std.testing.expectEqual(plan.root_reps.items[0], plan.repForSourceType(@enumFromInt(2)).?);
+    try std.testing.expect(plan.repForSourceType(@enumFromInt(0)) != null);
+    try std.testing.expect(plan.repForSourceType(@enumFromInt(1)) != null);
+    try std.testing.expect(plan.repForSourceType(@enumFromInt(99)) == null);
 }
 
 test "boxy planner classifies constrained variables as dynamic with descriptor and dictionary requirements" {
