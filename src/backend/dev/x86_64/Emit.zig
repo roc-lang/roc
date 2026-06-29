@@ -1079,6 +1079,51 @@ pub fn Emit(comptime target: RocTarget) type {
             try self.buf.append(self.allocator, modRM(0b11, dst.enc(), src.enc()));
         }
 
+        /// PCMPEQD xmm, xmm (compare packed dwords for equality)
+        pub fn pcmpeqdRegReg(self: *Self, dst: FloatReg, src: FloatReg) Allocator.Error!void {
+            try self.buf.append(self.allocator, 0x66);
+            try self.emitFloatRex(dst, src);
+            try self.buf.append(self.allocator, 0x0F);
+            try self.buf.append(self.allocator, 0x76);
+            try self.buf.append(self.allocator, modRM(0b11, dst.enc(), src.enc()));
+        }
+
+        /// PSLLD xmm, imm8 (shift packed dwords left)
+        pub fn pslldRegImm8(self: *Self, dst: FloatReg, imm: u8) Allocator.Error!void {
+            try self.buf.append(self.allocator, 0x66);
+            if (dst.rexB() == 1) {
+                try self.buf.append(self.allocator, rex(0, 0, 0, 1));
+            }
+            try self.buf.append(self.allocator, 0x0F);
+            try self.buf.append(self.allocator, 0x72);
+            try self.buf.append(self.allocator, modRM(0b11, 0b110, dst.enc()));
+            try self.buf.append(self.allocator, imm);
+        }
+
+        /// PSLLQ xmm, imm8 (shift packed qwords left)
+        pub fn psllqRegImm8(self: *Self, dst: FloatReg, imm: u8) Allocator.Error!void {
+            try self.buf.append(self.allocator, 0x66);
+            if (dst.rexB() == 1) {
+                try self.buf.append(self.allocator, rex(0, 0, 0, 1));
+            }
+            try self.buf.append(self.allocator, 0x0F);
+            try self.buf.append(self.allocator, 0x73);
+            try self.buf.append(self.allocator, modRM(0b11, 0b110, dst.enc()));
+            try self.buf.append(self.allocator, imm);
+        }
+
+        /// PSRLQ xmm, imm8 (shift packed qwords right)
+        pub fn psrlqRegImm8(self: *Self, dst: FloatReg, imm: u8) Allocator.Error!void {
+            try self.buf.append(self.allocator, 0x66);
+            if (dst.rexB() == 1) {
+                try self.buf.append(self.allocator, rex(0, 0, 0, 1));
+            }
+            try self.buf.append(self.allocator, 0x0F);
+            try self.buf.append(self.allocator, 0x73);
+            try self.buf.append(self.allocator, modRM(0b11, 0b010, dst.enc()));
+            try self.buf.append(self.allocator, imm);
+        }
+
         /// XORPD xmm, xmm (XOR packed double - used for zeroing)
         pub fn xorpdRegReg(self: *Self, dst: FloatReg, src: FloatReg) Allocator.Error!void {
             try self.buf.append(self.allocator, 0x66);
@@ -1572,6 +1617,26 @@ test "xorpd zeroing" {
 
     try emit.xorpdRegReg(.XMM0, .XMM0);
     try std.testing.expectEqualSlices(u8, &[_]u8{ 0x66, 0x0F, 0x57, 0xC0 }, emit.buf.items);
+}
+
+test "sse2 packed mask ops" {
+    var emit = LinuxEmit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    try emit.pcmpeqdRegReg(.XMM0, .XMM0);
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0x66, 0x0F, 0x76, 0xC0 }, emit.buf.items);
+
+    emit.buf.clearRetainingCapacity();
+    try emit.psllqRegImm8(.XMM0, 63);
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0x66, 0x0F, 0x73, 0xF0, 63 }, emit.buf.items);
+
+    emit.buf.clearRetainingCapacity();
+    try emit.psrlqRegImm8(.XMM0, 1);
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0x66, 0x0F, 0x73, 0xD0, 1 }, emit.buf.items);
+
+    emit.buf.clearRetainingCapacity();
+    try emit.pslldRegImm8(.XMM0, 31);
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0x66, 0x0F, 0x72, 0xF0, 31 }, emit.buf.items);
 }
 
 test "function prologue sequence" {
