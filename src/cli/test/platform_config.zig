@@ -77,6 +77,14 @@ const fx_open_tests = [_]SimpleTestSpec{
         .roc_file = "test/fx-open/method_on_platform_args.roc",
         .description = "Method call on platform-typed args (dispatch resolved via platform requirements)",
     },
+    .{
+        .roc_file = "test/fx-open/issue_9826_single_variant_try_main_return.roc",
+        .description = "Regression test: hosted Try with a single-variant error consumed by platform main return",
+    },
+    .{
+        .roc_file = "test/fx-open/issue_9826_single_variant_try_direct_return.roc",
+        .description = "Regression test: hosted Try with a single-variant error returned directly from platform main",
+    },
 };
 
 /// Str platform test apps - test cross-module function calls
