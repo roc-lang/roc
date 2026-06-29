@@ -8767,15 +8767,6 @@ const Expected = struct {
         };
     }
 
-    fn withReturnResult(self: Expected, return_result: ?Var) Expected {
-        return .{
-            .annotation = self.annotation,
-            .branch_result = self.branch_result,
-            .return_result = return_result,
-            .comptime_condition_warnings = self.comptime_condition_warnings,
-        };
-    }
-
     fn forBranchBody(self: Expected) Expected {
         return .{
             .branch_result = self.branch_result,
