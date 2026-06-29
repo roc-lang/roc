@@ -238,3 +238,77 @@ test "differential: nominal type construction matches" {
         \\main! = |_args| Color.Red
     );
 }
+
+test "differential: list literal (variable-arity) matches" {
+    // Exercises e_list: a non-empty list whose elements are unified pairwise
+    // against the first element's var (the deferred interleaved-unify path).
+    try expectIterMatchesRecursive(
+        \\main! = |_args| {
+        \\    xs = [1, 2, 3, 4]
+        \\    ys = ["a", "b"]
+        \\    (xs, ys)
+        \\}
+    );
+}
+
+test "differential: list with element type mismatch matches" {
+    // Exercises e_list's error path (unifyInContext fails on a later element),
+    // confirming the deferred unify loop produces the same break-on-error
+    // behavior and the same diagnostic count.
+    try expectIterMatchesRecursive(
+        \\main! = |_args| [1, "two", 3]
+    );
+}
+
+test "differential: tuple (variable-arity, mixed element types) matches" {
+    // Exercises e_tuple with heterogeneous element types.
+    try expectIterMatchesRecursive(
+        \\main! = |_args| {
+        \\    t = (1, "two", 3.0, [4, 5])
+        \\    t
+        \\}
+    );
+}
+
+test "differential: tag application (variable-arity args) matches" {
+    // Exercises e_tag with one and multiple arguments.
+    try expectIterMatchesRecursive(
+        \\main! = |_args| {
+        \\    a = Some(1)
+        \\    b = Pair(1, "two")
+        \\    (a, b)
+        \\}
+    );
+}
+
+test "differential: method call / dispatch call matches" {
+    // Exercises e_method_call (which the checker rewrites to e_dispatch_call)
+    // via receiver.method(arg) syntax, including the call-arg flag per argument.
+    try expectIterMatchesRecursive(
+        \\func = |x, y| {
+        \\    add_x = |a| a.plus(x)
+        \\    add_y = |b| b.plus(y)
+        \\    add_x(5).plus(add_y(5))
+        \\}
+        \\
+        \\main! = |_args| func(10, 20)
+    );
+}
+
+test "differential: for-loop over range (type dispatch) matches" {
+    // Exercises the type-dispatch call path (e_type_method_call /
+    // e_type_dispatch_call) used to drive an inclusive-range `for` iterator,
+    // plus e_run_low_level lowering reached through the builtin range protocol.
+    try expectIterMatchesRecursive(
+        \\total : U64
+        \\total = {
+        \\    var sum_ = 0
+        \\    for i in 1..=5 {
+        \\        sum_ = sum_ + i
+        \\    }
+        \\    sum_
+        \\}
+        \\
+        \\main! = |_args| total
+    );
+}

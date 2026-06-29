@@ -11450,64 +11450,10 @@ fn checkExprRecursive(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: 
             }
         },
         .e_method_call => |method_call| {
-            does_fx = try self.checkExpr(method_call.receiver, env, child_expected) or does_fx;
-            const receiver_var = ModuleEnv.varFrom(method_call.receiver);
-            var did_err = self.types.resolveVar(receiver_var).desc.content == .err;
-
-            const arg_expr_idxs = self.cir.store.sliceExpr(method_call.args);
-            var arg_vars_sfa = std.heap.stackFallback(16 * @sizeOf(Var), self.gpa);
-            const arg_vars_alloc = arg_vars_sfa.get();
-            const arg_vars = try arg_vars_alloc.alloc(Var, arg_expr_idxs.len);
-            defer arg_vars_alloc.free(arg_vars);
-
-            for (arg_expr_idxs, 0..) |arg_expr_idx, i| {
-                self.checking_call_arg = true;
-                does_fx = try self.checkExpr(arg_expr_idx, env, child_expected) or does_fx;
-                const arg_var = ModuleEnv.varFrom(arg_expr_idx);
-                arg_vars[i] = arg_var;
-                did_err = did_err or (self.types.resolveVar(arg_var).desc.content == .err);
-            }
-
-            if (did_err) {
-                try self.unifyWith(expr_var, .err, env);
-            } else {
-                const constraint_fn_var = try self.mkMethodCallConstraint(
-                    receiver_var,
-                    arg_vars,
-                    expr_var,
-                    method_call.method_name,
-                    env,
-                    method_call.method_name_region,
-                    expr_idx,
-                );
-                try self.cir.store.replaceExprWithDispatchCall(
-                    expr_idx,
-                    method_call.receiver,
-                    method_call.method_name,
-                    method_call.method_name_region,
-                    method_call.args,
-                    constraint_fn_var,
-                    .method_call,
-                );
-            }
+            does_fx = try self.checkMethodCallExpr(expr_idx, env, expr_var, child_expected, method_call) or does_fx;
         },
         .e_dispatch_call => |method_call| {
-            does_fx = try self.checkExpr(method_call.receiver, env, child_expected) or does_fx;
-            var did_err = self.types.resolveVar(ModuleEnv.varFrom(method_call.receiver)).desc.content == .err;
-
-            for (self.cir.store.sliceExpr(method_call.args)) |arg_expr_idx| {
-                self.checking_call_arg = true;
-                does_fx = try self.checkExpr(arg_expr_idx, env, child_expected) or does_fx;
-                did_err = did_err or (self.types.resolveVar(ModuleEnv.varFrom(arg_expr_idx)).desc.content == .err);
-            }
-
-            if (did_err) {
-                try self.unifyWith(expr_var, .err, env);
-            }
-            if (self.varIsEffectfulFunction(method_call.constraint_fn_var)) {
-                self.markCurrentHoistObservableEffect();
-                does_fx = true;
-            }
+            does_fx = try self.checkDispatchCallExpr(env, expr_var, child_expected, method_call) or does_fx;
         },
         .e_structural_eq => |eq| {
             does_fx = try self.checkExpr(eq.lhs, env, child_expected) or does_fx;
@@ -11564,59 +11510,10 @@ fn checkExprRecursive(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: 
             }
         },
         .e_type_method_call => |method_call| {
-            const arg_expr_idxs = self.cir.store.sliceExpr(method_call.args);
-            var arg_vars_sfa = std.heap.stackFallback(16 * @sizeOf(Var), self.gpa);
-            const arg_vars_alloc = arg_vars_sfa.get();
-            const arg_vars = try arg_vars_alloc.alloc(Var, arg_expr_idxs.len);
-            defer arg_vars_alloc.free(arg_vars);
-
-            var did_err = false;
-            for (arg_expr_idxs, 0..) |arg_expr_idx, i| {
-                self.checking_call_arg = true;
-                does_fx = try self.checkExpr(arg_expr_idx, env, child_expected) or does_fx;
-                const arg_var = ModuleEnv.varFrom(arg_expr_idx);
-                arg_vars[i] = arg_var;
-                did_err = did_err or (self.types.resolveVar(arg_var).desc.content == .err);
-            }
-
-            if (did_err) {
-                try self.unifyWith(expr_var, .err, env);
-            } else {
-                const dispatcher_var = self.typeDispatchOwnerVar(method_call.type_dispatch_stmt);
-                const constraint_fn_var = try self.mkTypeMethodCallConstraint(
-                    dispatcher_var,
-                    arg_vars,
-                    expr_var,
-                    method_call.method_name,
-                    env,
-                    method_call.method_name_region,
-                    expr_idx,
-                );
-                try self.cir.store.replaceExprWithTypeDispatchCall(
-                    expr_idx,
-                    method_call.type_dispatch_stmt,
-                    method_call.method_name,
-                    method_call.method_name_region,
-                    method_call.args,
-                    constraint_fn_var,
-                );
-            }
+            does_fx = try self.checkTypeMethodCallExpr(expr_idx, env, expr_var, child_expected, method_call) or does_fx;
         },
         .e_type_dispatch_call => |method_call| {
-            var did_err = false;
-            for (self.cir.store.sliceExpr(method_call.args)) |arg_expr_idx| {
-                self.checking_call_arg = true;
-                does_fx = try self.checkExpr(arg_expr_idx, env, child_expected) or does_fx;
-                did_err = did_err or (self.types.resolveVar(ModuleEnv.varFrom(arg_expr_idx)).desc.content == .err);
-            }
-
-            if (did_err) {
-                try self.unifyWith(expr_var, .err, env);
-            }
-            if (self.varIsEffectfulFunction(method_call.constraint_fn_var)) {
-                self.markCurrentHoistObservableEffect();
-                does_fx = true;
-            }
+            does_fx = try self.checkTypeDispatchCallExpr(env, expr_var, child_expected, method_call) or does_fx;
         },
         .e_crash => {
             try self.unifyWith(expr_var, .{ .flex = Flex.init() }, env);
@@ -11752,12 +11649,7 @@ fn checkExprRecursive(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: 
             }
         },
         .e_run_low_level => |run_ll| {
-            self.markCurrentHoistObservableEffect();
-            // Check each argument expression in the run_low_level node
-            for (self.cir.store.exprSlice(run_ll.args)) |arg_idx| {
-                self.checking_call_arg = true;
-                does_fx = try self.checkExpr(arg_idx, env, child_expected) or does_fx;
-            }
+            does_fx = try self.checkRunLowLevelExpr(env, child_expected, run_ll) or does_fx;
         },
         .e_runtime_error => {
             try self.unifyWith(expr_var, .err, env);
@@ -11853,6 +11745,45 @@ fn checkExprIter(self: *Self, root_idx: CIR.Expr.Idx, root_env: *Env, root_expec
                         // `expected` (not the statement-expected used above).
                         try self.check_frame_stack.append(self.gpa, makeEnterFrame(block.final_expr, child_env, block_expected));
                     },
+                    // Variable-arity multi-child kinds: schedule every child as
+                    // a frame (pushed in REVERSE so the first child runs first),
+                    // then run the post-child body in `.exit`. Each child is
+                    // checked against `child_expected`; their `does_fx` is OR'd
+                    // into this frame on pop. (`append` may realloc and
+                    // invalidate `frame`, so read all values off `frame` first.)
+                    .e_list => |list| {
+                        frame.step = .exit;
+                        const child_env = frame.env;
+                        const child_expected = frame.prologue.child_expected;
+                        const elems = self.cir.store.exprSlice(list.elems);
+                        var i = elems.len;
+                        while (i > 0) {
+                            i -= 1;
+                            try self.check_frame_stack.append(self.gpa, makeEnterFrame(elems[i], child_env, child_expected));
+                        }
+                    },
+                    .e_tuple => |tuple| {
+                        frame.step = .exit;
+                        const child_env = frame.env;
+                        const child_expected = frame.prologue.child_expected;
+                        const elems = self.cir.store.exprSlice(tuple.elems);
+                        var i = elems.len;
+                        while (i > 0) {
+                            i -= 1;
+                            try self.check_frame_stack.append(self.gpa, makeEnterFrame(elems[i], child_env, child_expected));
+                        }
+                    },
+                    .e_tag => |e| {
+                        frame.step = .exit;
+                        const child_env = frame.env;
+                        const child_expected = frame.prologue.child_expected;
+                        const args = self.cir.store.sliceExpr(e.args);
+                        var i = args.len;
+                        while (i > 0) {
+                            i -= 1;
+                            try self.check_frame_stack.append(self.gpa, makeEnterFrame(args[i], child_env, child_expected));
+                        }
+                    },
                     // Direct-single-child kinds: schedule the one child, then
                     // run the post-child body in `.exit`.
                     .e_nominal => |nominal| {
@@ -11943,6 +11874,14 @@ fn checkExprIter(self: *Self, root_idx: CIR.Expr.Idx, root_env: *Env, root_expec
                     .e_unary_not,
                     .e_expect,
                     .e_method_eq,
+                    // Call-family kinds: run the recursive body verbatim in
+                    // `.exit` (re-entering `checkExpr` per child), because each
+                    // arg sets `checking_call_arg` immediately before its check.
+                    .e_dispatch_call,
+                    .e_method_call,
+                    .e_run_low_level,
+                    .e_type_dispatch_call,
+                    .e_type_method_call,
                     // Leaf kinds: no children to schedule. Just advance to
                     // `.exit`, where the recursive arm's body runs verbatim and
                     // the shared epilogue+finish tail completes the frame. The
@@ -12078,6 +12017,85 @@ fn checkExprIter(self: *Self, root_idx: CIR.Expr.Idx, root_env: *Env, root_expec
                         }
 
                         self.endHoistLexicalScope(bl.hoist_scope);
+                    },
+                    // ---- Variable-arity multi-child kinds (post-child body) ----
+                    // Every child was checked via its own scheduled frame; their
+                    // `does_fx` was OR'd into `f.does_fx` on pop. None of the
+                    // calls below append to `check_frame_stack`, so `f` stays
+                    // valid. (`e_list`'s interleaved unify is deferred to here:
+                    // each child is checked against `child_expected`, never
+                    // against the list's element var, so checking order is
+                    // independent of the unify order — running all the unifies
+                    // after every child is checked yields identical results.)
+                    .e_list => |list| {
+                        const env = f.env;
+                        const expr_var = f.prologue.expr_var;
+                        const expr_region = f.prologue.expr_region;
+                        const elems = self.cir.store.exprSlice(list.elems);
+
+                        if (elems.len == 0) {
+                            // Create a nominal List with a fresh unbound element type
+                            const elem_var = try self.fresh(env, expr_region);
+                            const list_content = try self.mkListContent(elem_var, env);
+                            try self.unifyWith(expr_var, list_content, env);
+                        } else {
+                            // Here, we use the list's 1st element as the element var to
+                            // constrain the rest of the list
+                            const elem_var = ModuleEnv.varFrom(elems[0]);
+                            var last_elem_expr_idx = elems[0];
+                            for (elems[1..], 1..) |elem_expr_idx, i| {
+                                const cur_elem_var = ModuleEnv.varFrom(elem_expr_idx);
+
+                                // Unify each element's var with the list's elem var
+                                const result = try self.unifyInContext(elem_var, cur_elem_var, env, .{ .list_entry = .{
+                                    .elem_index = @intCast(i),
+                                    .list_length = @intCast(elems.len),
+                                    .last_elem_idx = ModuleEnv.nodeIdxFrom(last_elem_expr_idx),
+                                } });
+
+                                // If we errored, stop comparing the rest to the
+                                // elem_var to avoid cascading errors. (The rest
+                                // are already checked — their individual errors
+                                // were caught when their frames ran.)
+                                if (!result.isOk()) {
+                                    break;
+                                }
+
+                                last_elem_expr_idx = elem_expr_idx;
+                            }
+
+                            // Create a nominal List type with the inferred element type
+                            const list_content = try self.mkListContent(elem_var, env);
+                            try self.unifyWith(expr_var, list_content, env);
+                        }
+                    },
+                    .e_tuple => |tuple| {
+                        const env = f.env;
+                        const expr_var = f.prologue.expr_var;
+                        const elems_slice = self.cir.store.exprSlice(tuple.elems);
+
+                        // Cast the elems idxs to vars (this works because Anno Idx are 1-1 with type Vars)
+                        const elem_vars_slice = try self.types.appendVars(@ptrCast(elems_slice));
+
+                        // Set the type in the store
+                        try self.unifyWith(expr_var, .{ .structure = .{
+                            .tuple = .{ .elems = elem_vars_slice },
+                        } }, env);
+                    },
+                    .e_tag => |e| {
+                        const env = f.env;
+                        const expr_var = f.prologue.expr_var;
+                        const expr_region = f.prologue.expr_region;
+                        const arg_expr_idx_slice = self.cir.store.sliceExpr(e.args);
+
+                        // Create the type
+                        const ext_var = try self.fresh(env, expr_region);
+
+                        const tag = try self.types.mkTag(e.name, @ptrCast(arg_expr_idx_slice));
+                        const tag_union_content = try self.types.mkTagUnion(&[_]types_mod.Tag{tag}, ext_var);
+
+                        // Update the expr to point to the new type
+                        try self.unifyWith(expr_var, tag_union_content, env);
                     },
                     // ---- Leaf kinds ----
                     // Each arm runs the recursive arm's body VERBATIM. Locals
@@ -12895,6 +12913,50 @@ fn checkExprIter(self: *Self, root_idx: CIR.Expr.Idx, root_env: *Env, root_expec
                         }
                         self.check_frame_stack.items[top].does_fx = fx_lhs or fx_rhs;
                     },
+                    // ---- Call-family kinds ----
+                    // Delegate to the shared helper (also called by the recursive
+                    // arm), which re-enters `checkExpr` per child. That re-entry
+                    // may realloc `check_frame_stack`, so read all values off `f`
+                    // first and write `does_fx` back via `items[top]` (never reuse
+                    // `f` afterward). The helper — not this frame — carries the
+                    // arg `stackFallback` buffer, keeping `checkExprIter`'s frame
+                    // small for the deep statement-nesting recursion spine.
+                    .e_method_call => |method_call| {
+                        const expr_idx_l = f.expr_idx;
+                        const env = f.env;
+                        const expr_var = f.prologue.expr_var;
+                        const child_expected = f.prologue.child_expected;
+                        const fx = try self.checkMethodCallExpr(expr_idx_l, env, expr_var, child_expected, method_call);
+                        self.check_frame_stack.items[top].does_fx = fx;
+                    },
+                    .e_dispatch_call => |method_call| {
+                        const env = f.env;
+                        const expr_var = f.prologue.expr_var;
+                        const child_expected = f.prologue.child_expected;
+                        const fx = try self.checkDispatchCallExpr(env, expr_var, child_expected, method_call);
+                        self.check_frame_stack.items[top].does_fx = fx;
+                    },
+                    .e_type_method_call => |method_call| {
+                        const expr_idx_l = f.expr_idx;
+                        const env = f.env;
+                        const expr_var = f.prologue.expr_var;
+                        const child_expected = f.prologue.child_expected;
+                        const fx = try self.checkTypeMethodCallExpr(expr_idx_l, env, expr_var, child_expected, method_call);
+                        self.check_frame_stack.items[top].does_fx = fx;
+                    },
+                    .e_type_dispatch_call => |method_call| {
+                        const env = f.env;
+                        const expr_var = f.prologue.expr_var;
+                        const child_expected = f.prologue.child_expected;
+                        const fx = try self.checkTypeDispatchCallExpr(env, expr_var, child_expected, method_call);
+                        self.check_frame_stack.items[top].does_fx = fx;
+                    },
+                    .e_run_low_level => |run_ll| {
+                        const env = f.env;
+                        const child_expected = f.prologue.child_expected;
+                        const fx = try self.checkRunLowLevelExpr(env, child_expected, run_ll);
+                        self.check_frame_stack.items[top].does_fx = fx;
+                    },
                     else => unreachable, // gated by isMigratedKind
                 }
                 const does_fx = try self.checkExitEpilogue(
@@ -12949,6 +13011,22 @@ fn isMigratedKind(expr: CIR.Expr) bool {
         .e_structural_hash,
         .e_unary_minus,
         .e_unary_not,
+        // Call-family kinds (this batch). Like the helper-delegating kinds
+        // above, they run their recursive body verbatim under the driver,
+        // re-entering for each child (receiver/args) — each its own
+        // `frame_base` — because each arg sets the transient `checking_call_arg`
+        // flag immediately before its `checkExpr`, which scheduling separate
+        // child frames cannot reproduce per-arg.
+        .e_dispatch_call,
+        .e_method_call,
+        .e_run_low_level,
+        .e_type_dispatch_call,
+        .e_type_method_call,
+        // Variable-arity multi-child kinds (this batch): schedule every child
+        // as a frame in `.enter`, run the post-child body in `.exit`.
+        .e_list,
+        .e_tag,
+        .e_tuple,
         => true,
         // Leaf kinds: no child checkExpr scheduled; body runs verbatim in
         // `.exit`. `e_lookup_local` re-enters the driver via `checkDef`, but
@@ -15208,6 +15286,187 @@ fn checkBinopExpr(
         },
     }
 
+    return does_fx;
+}
+
+/// Body of the `e_method_call` arm, shared by `checkExprRecursive` and the
+/// iterative driver's `.exit`. Extracted so neither caller carries this arm's
+/// `stackFallback` arg buffer in its own frame (keeps the per-level native
+/// stack frame of the block/statement recursion spine small).
+fn checkMethodCallExpr(
+    self: *Self,
+    expr_idx: CIR.Expr.Idx,
+    env: *Env,
+    expr_var: Var,
+    child_expected: Expected,
+    method_call: @FieldType(CIR.Expr, "e_method_call"),
+) Allocator.Error!bool {
+    var does_fx = false;
+    does_fx = try self.checkExpr(method_call.receiver, env, child_expected) or does_fx;
+    const receiver_var = ModuleEnv.varFrom(method_call.receiver);
+    var did_err = self.types.resolveVar(receiver_var).desc.content == .err;
+
+    const arg_expr_idxs = self.cir.store.sliceExpr(method_call.args);
+    var arg_vars_sfa = std.heap.stackFallback(16 * @sizeOf(Var), self.gpa);
+    const arg_vars_alloc = arg_vars_sfa.get();
+    const arg_vars = try arg_vars_alloc.alloc(Var, arg_expr_idxs.len);
+    defer arg_vars_alloc.free(arg_vars);
+
+    for (arg_expr_idxs, 0..) |arg_expr_idx, i| {
+        self.checking_call_arg = true;
+        does_fx = try self.checkExpr(arg_expr_idx, env, child_expected) or does_fx;
+        const arg_var = ModuleEnv.varFrom(arg_expr_idx);
+        arg_vars[i] = arg_var;
+        did_err = did_err or (self.types.resolveVar(arg_var).desc.content == .err);
+    }
+
+    if (did_err) {
+        try self.unifyWith(expr_var, .err, env);
+    } else {
+        const constraint_fn_var = try self.mkMethodCallConstraint(
+            receiver_var,
+            arg_vars,
+            expr_var,
+            method_call.method_name,
+            env,
+            method_call.method_name_region,
+            expr_idx,
+        );
+        try self.cir.store.replaceExprWithDispatchCall(
+            expr_idx,
+            method_call.receiver,
+            method_call.method_name,
+            method_call.method_name_region,
+            method_call.args,
+            constraint_fn_var,
+            .method_call,
+        );
+    }
+    return does_fx;
+}
+
+/// Body of the `e_dispatch_call` arm, shared by `checkExprRecursive` and the
+/// iterative driver's `.exit`.
+fn checkDispatchCallExpr(
+    self: *Self,
+    env: *Env,
+    expr_var: Var,
+    child_expected: Expected,
+    method_call: @FieldType(CIR.Expr, "e_dispatch_call"),
+) Allocator.Error!bool {
+    var does_fx = false;
+    does_fx = try self.checkExpr(method_call.receiver, env, child_expected) or does_fx;
+    var did_err = self.types.resolveVar(ModuleEnv.varFrom(method_call.receiver)).desc.content == .err;
+
+    for (self.cir.store.sliceExpr(method_call.args)) |arg_expr_idx| {
+        self.checking_call_arg = true;
+        does_fx = try self.checkExpr(arg_expr_idx, env, child_expected) or does_fx;
+        did_err = did_err or (self.types.resolveVar(ModuleEnv.varFrom(arg_expr_idx)).desc.content == .err);
+    }
+
+    if (did_err) {
+        try self.unifyWith(expr_var, .err, env);
+    }
+    if (self.varIsEffectfulFunction(method_call.constraint_fn_var)) {
+        self.markCurrentHoistObservableEffect();
+        does_fx = true;
+    }
+    return does_fx;
+}
+
+/// Body of the `e_type_method_call` arm, shared by `checkExprRecursive` and the
+/// iterative driver's `.exit`.
+fn checkTypeMethodCallExpr(
+    self: *Self,
+    expr_idx: CIR.Expr.Idx,
+    env: *Env,
+    expr_var: Var,
+    child_expected: Expected,
+    method_call: @FieldType(CIR.Expr, "e_type_method_call"),
+) Allocator.Error!bool {
+    var does_fx = false;
+    const arg_expr_idxs = self.cir.store.sliceExpr(method_call.args);
+    var arg_vars_sfa = std.heap.stackFallback(16 * @sizeOf(Var), self.gpa);
+    const arg_vars_alloc = arg_vars_sfa.get();
+    const arg_vars = try arg_vars_alloc.alloc(Var, arg_expr_idxs.len);
+    defer arg_vars_alloc.free(arg_vars);
+
+    var did_err = false;
+    for (arg_expr_idxs, 0..) |arg_expr_idx, i| {
+        self.checking_call_arg = true;
+        does_fx = try self.checkExpr(arg_expr_idx, env, child_expected) or does_fx;
+        const arg_var = ModuleEnv.varFrom(arg_expr_idx);
+        arg_vars[i] = arg_var;
+        did_err = did_err or (self.types.resolveVar(arg_var).desc.content == .err);
+    }
+
+    if (did_err) {
+        try self.unifyWith(expr_var, .err, env);
+    } else {
+        const dispatcher_var = self.typeDispatchOwnerVar(method_call.type_dispatch_stmt);
+        const constraint_fn_var = try self.mkTypeMethodCallConstraint(
+            dispatcher_var,
+            arg_vars,
+            expr_var,
+            method_call.method_name,
+            env,
+            method_call.method_name_region,
+            expr_idx,
+        );
+        try self.cir.store.replaceExprWithTypeDispatchCall(
+            expr_idx,
+            method_call.type_dispatch_stmt,
+            method_call.method_name,
+            method_call.method_name_region,
+            method_call.args,
+            constraint_fn_var,
+        );
+    }
+    return does_fx;
+}
+
+/// Body of the `e_type_dispatch_call` arm, shared by `checkExprRecursive` and
+/// the iterative driver's `.exit`.
+fn checkTypeDispatchCallExpr(
+    self: *Self,
+    env: *Env,
+    expr_var: Var,
+    child_expected: Expected,
+    method_call: @FieldType(CIR.Expr, "e_type_dispatch_call"),
+) Allocator.Error!bool {
+    var does_fx = false;
+    var did_err = false;
+    for (self.cir.store.sliceExpr(method_call.args)) |arg_expr_idx| {
+        self.checking_call_arg = true;
+        does_fx = try self.checkExpr(arg_expr_idx, env, child_expected) or does_fx;
+        did_err = did_err or (self.types.resolveVar(ModuleEnv.varFrom(arg_expr_idx)).desc.content == .err);
+    }
+
+    if (did_err) {
+        try self.unifyWith(expr_var, .err, env);
+    }
+    if (self.varIsEffectfulFunction(method_call.constraint_fn_var)) {
+        self.markCurrentHoistObservableEffect();
+        does_fx = true;
+    }
+    return does_fx;
+}
+
+/// Body of the `e_run_low_level` arm, shared by `checkExprRecursive` and the
+/// iterative driver's `.exit`.
+fn checkRunLowLevelExpr(
+    self: *Self,
+    env: *Env,
+    child_expected: Expected,
+    run_ll: @FieldType(CIR.Expr, "e_run_low_level"),
+) Allocator.Error!bool {
+    var does_fx = false;
+    self.markCurrentHoistObservableEffect();
+    // Check each argument expression in the run_low_level node
+    for (self.cir.store.exprSlice(run_ll.args)) |arg_idx| {
+        self.checking_call_arg = true;
+        does_fx = try self.checkExpr(arg_idx, env, child_expected) or does_fx;
+    }
     return does_fx;
 }
 
