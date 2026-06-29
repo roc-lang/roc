@@ -3713,6 +3713,19 @@ the one-line source snippet for the root, truncated with `…` if needed, plus t
 module, line, column, and elapsed seconds. If the root belongs to a binding, the
 snippet should include enough of that binding line to identify the binding.
 
+Progress reporting must not add a fixed latency penalty to fast compile-time
+evaluation. A reporting worker may be started when stderr/std_io reporting is
+configured, but every wait in that worker must be interruptible by the
+finalizer. The worker waits for the earliest running root's slow-report
+deadline, normally `root_start + 3s`, or for a stop signal, whichever comes
+first. When a root starts, the worker is signaled so it can recompute the next
+deadline without polling. When finalization finishes, it signals the worker and
+joins it immediately; it must never wait for a plain sleep interval to expire.
+Roots that finish before the slow threshold therefore pay only monitor setup and
+signaling overhead, not the reporting period. Roots that exceed the threshold
+are reported, then the worker waits interruptibly until the next per-root report
+deadline or finalization stop.
+
 `ConstStore` uses node ids so stored constants can preserve sharing without
 duplicating large values. Multiple fields may reference the same `ConstNodeId`.
 Stored constants are acyclic. Roc source cannot define recursive non-function
