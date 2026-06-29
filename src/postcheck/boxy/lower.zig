@@ -5367,6 +5367,142 @@ test "boxy lowerer emits checked numeric literal match patterns as equality test
     }
 }
 
+test "boxy lowerer emits checked string literal match patterns as string equality tests" {
+    const gpa = std.testing.allocator;
+
+    var artifact = minimalCheckedArtifact(gpa);
+    defer artifact.canonical_names.deinit();
+    defer artifact.checked_types.deinit(gpa);
+    defer artifact.checked_bodies.deinit(gpa);
+
+    try artifact.checked_bodies.string_bytes.appendSlice(gpa, "ok");
+    try artifact.checked_bodies.string_ranges.append(gpa, .{ .start = 0, .len = 2 });
+
+    try artifact.checked_types.payloads.append(gpa, .{
+        .nominal = builtinNominal(.str, @enumFromInt(0), .{}),
+    });
+    try artifact.checked_types.payloads.append(gpa, .{
+        .nominal = builtinNominal(.u64, @enumFromInt(1), .{}),
+    });
+    try artifact.checked_types.payloads.append(gpa, .{
+        .function = .{
+            .kind = .pure,
+            .args = .{},
+            .ret = @enumFromInt(1),
+            .needs_instantiation = false,
+        },
+    });
+
+    try artifact.checked_bodies.pattern_binder_by_pattern.appendSlice(gpa, &.{ null, null });
+    try artifact.checked_bodies.stored_patterns.append(gpa, .{
+        .id = @enumFromInt(0),
+        .ty = @enumFromInt(0),
+        .source_region = base.Region.zero(),
+        .data = .{ .str_literal = .{
+            .literal = @enumFromInt(0),
+            .conversion = null,
+        } },
+    });
+    try artifact.checked_bodies.stored_patterns.append(gpa, .{
+        .id = @enumFromInt(1),
+        .ty = @enumFromInt(0),
+        .source_region = base.Region.zero(),
+        .data = .underscore,
+    });
+    try artifact.checked_bodies.match_branch_pattern_pool.appendSlice(gpa, &.{
+        .{ .pattern = @enumFromInt(0), .degenerate = false },
+        .{ .pattern = @enumFromInt(1), .degenerate = false },
+    });
+    try artifact.checked_bodies.match_branch_pool.appendSlice(gpa, &.{
+        .{ .pt_start = 0, .pt_len = 1, .value = @enumFromInt(3), .guard = null },
+        .{ .pt_start = 1, .pt_len = 1, .value = @enumFromInt(4), .guard = null },
+    });
+
+    const template_ref = procedureTemplateRef(artifact.key, 0);
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(0),
+        .ty = @enumFromInt(2),
+        .source_region = base.Region.zero(),
+        .data = .{ .lambda = .{ .args = .{}, .body = @enumFromInt(1) } },
+    });
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(1),
+        .ty = @enumFromInt(1),
+        .source_region = base.Region.zero(),
+        .data = .{ .match_ = .{
+            .cond = @enumFromInt(2),
+            .branches = .{ .start = 0, .len = 2 },
+            .is_try_suffix = false,
+            .skip_exhaustiveness = false,
+            .comptime_site_kind = .match,
+        } },
+    });
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(2),
+        .ty = @enumFromInt(0),
+        .source_region = base.Region.zero(),
+        .data = .{ .str_segment = @enumFromInt(0) },
+    });
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(3),
+        .ty = @enumFromInt(1),
+        .source_region = base.Region.zero(),
+        .data = .{ .num = .{ .value = intValue(11), .kind = .u64 } },
+    });
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(4),
+        .ty = @enumFromInt(1),
+        .source_region = base.Region.zero(),
+        .data = .{ .num = .{ .value = intValue(22), .kind = .u64 } },
+    });
+    try artifact.checked_bodies.bodies.append(gpa, .{
+        .id = @enumFromInt(0),
+        .root_expr = @enumFromInt(0),
+        .owner_template = template_ref,
+    });
+    var templates = [_]checked.CheckedProcedureTemplate{
+        checkedTemplate(template_ref, @enumFromInt(2), @enumFromInt(0)),
+    };
+    artifact.checked_procedure_templates = .{ .templates = &templates };
+
+    const root = checked.RootRequest{
+        .order = 0,
+        .module_idx = 0,
+        .kind = .runtime_entrypoint,
+        .source = .{ .def = @enumFromInt(0) },
+        .checked_type = @enumFromInt(2),
+        .abi = .roc,
+        .exposure = .private,
+        .procedure_template = template_ref,
+    };
+    var plan = try Plan.analyzeProgram(gpa, .{
+        .root_module = .{ .module = &artifact, .roots = undefined },
+        .roots = &.{root},
+    }, .{});
+    defer plan.deinit();
+
+    var out = try run(
+        gpa,
+        .{ .root = .{ .module = &artifact, .roots = undefined } },
+        .{},
+        &plan,
+        .{},
+    );
+    defer out.deinit();
+
+    const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
+    const outer_join = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).join;
+    const cond_literal = out.lir_result.store.getCFStmt(outer_join.remainder).assign_literal;
+    const first_join = out.lir_result.store.getCFStmt(cond_literal.next).join;
+    const pattern_literal = out.lir_result.store.getCFStmt(first_join.remainder).assign_literal;
+    const compare = out.lir_result.store.getCFStmt(pattern_literal.next).assign_low_level;
+    try std.testing.expectEqual(LIR.LowLevel.str_is_eq, compare.op);
+    const args = out.lir_result.store.getLocalSpan(compare.args);
+    try std.testing.expectEqual(@as(usize, 2), args.len);
+    try std.testing.expectEqual(cond_literal.target, args[0]);
+    try std.testing.expectEqual(pattern_literal.target, args[1]);
+}
+
 test "boxy lowerer emits checked unary not as bool low-level call" {
     const gpa = std.testing.allocator;
 
