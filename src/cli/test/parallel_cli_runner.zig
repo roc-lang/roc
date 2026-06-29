@@ -217,6 +217,20 @@ const GlueTarget = enum(u8) {
             .aarch64_windows => "aarch64-windows",
         };
     }
+
+    fn rustTargetArg(self: GlueTarget) ?[]const u8 {
+        return switch (self) {
+            .native => null,
+            .wasm32 => "wasm32-unknown-unknown",
+            .x86_64_linux_musl,
+            .aarch64_linux_musl,
+            .x86_64_macos,
+            .aarch64_macos,
+            .x86_64_windows,
+            .aarch64_windows,
+            => null,
+        };
+    }
 };
 
 const GlueRunnerOptions = struct {
@@ -237,7 +251,7 @@ const glue_platform_shape_fixtures = [_]GluePlatformShapeFixture{
 
 const default_zig_glue_targets = [_]GlueTarget{ .native, .wasm32 };
 const default_c_glue_targets = [_]GlueTarget{ .native, .wasm32 };
-const default_rust_glue_targets = [_]GlueTarget{.native};
+const default_rust_glue_targets = [_]GlueTarget{ .native, .wasm32 };
 
 const full_zig_glue_targets = [_]GlueTarget{
     .native,
@@ -4633,23 +4647,36 @@ fn compileGeneratedRustGlue(
     output_dir: []const u8,
     generated_path: []const u8,
 ) ?TestResult {
-    if (matrix.target != .native) {
+    const rust_target_arg = matrix.target.rustTargetArg();
+    if (matrix.target != .native and rust_target_arg == null) {
         return customInfraFailure(allocator, timer, "Rust glue matrix target {s} is not configured; install-aware cross-target checks should add it explicitly", .{matrix.target.displayName()});
     }
 
     const test_rlib_path = std.fs.path.join(allocator, &.{ output_dir, "roc_platform_abi.rlib" }) catch |err|
         return customInfraFailure(allocator, timer, "failed to allocate Rust matrix rlib path: {}", .{err});
-    if (runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{
+
+    var argv: std.ArrayListUnmanaged([]const u8) = .empty;
+    defer argv.deinit(allocator);
+    argv.appendSlice(allocator, &.{
         "rustc",
         "--edition=2021",
         "-D",
         "warnings",
         "--crate-type",
         "lib",
-        generated_path,
-        "-o",
-        test_rlib_path,
-    }, project_root_path, .{ .args = &.{} })) |failure| return failure;
+    }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate Rust matrix compile args: {}", .{err});
+    if (rust_target_arg) |target_arg| {
+        argv.appendSlice(allocator, &.{ "--target", target_arg }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate Rust matrix compile args: {}", .{err});
+    }
+    argv.appendSlice(allocator, &.{ generated_path, "-o", test_rlib_path }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate Rust matrix compile args: {}", .{err});
+
+    const owned_argv = argv.toOwnedSlice(allocator) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate Rust matrix compile args: {}", .{err});
+    defer allocator.free(owned_argv);
+    if (runRawAndCheck(io, allocator, env, timer, timeout_ms, owned_argv, project_root_path, .{ .args = &.{} })) |failure| return failure;
     return null;
 }
 
@@ -4902,7 +4929,7 @@ fn customGlueRustDuplicateTagUnions(io: std.Io, allocator: Allocator, env: *cons
         "pub struct AIOErr",
         "pub struct DNestedResult",
         "impl AUnitResult",
-        "pub fn decref(self, roc_host: &RocHost)",
+        "pub unsafe fn decref(self, roc_host: &RocHost)",
         "pub fn roc_a_nested",
         "pub fn roc_d_nested",
     }) |needle| {
@@ -5152,13 +5179,13 @@ fn customGlueRust(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: 
         "pub struct RocStr",
         "pub struct RocHost",
         "pub type RocBox = *mut c_void;",
-        "pub fn incref_box",
-        "pub fn decref_box",
-        "pub fn decref_box_with",
-        "pub fn allocate_box",
-        "pub fn decref_erased_callable",
+        "pub unsafe fn incref_box",
+        "pub unsafe fn decref_box",
+        "pub unsafe fn decref_box_with",
+        "pub unsafe fn allocate_box",
+        "pub unsafe fn decref_erased_callable",
         "impl HostTree",
-        "pub fn decref(self, roc_host: &RocHost)",
+        "pub unsafe fn decref(self, roc_host: &RocHost)",
         "extern \"C\" fn decref_box_payload_type",
         "pub fn roc_alloc(length: usize, alignment: usize) -> *mut c_void;",
         "pub struct BuilderPrintValueArgs",

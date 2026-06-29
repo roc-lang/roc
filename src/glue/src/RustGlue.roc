@@ -95,6 +95,14 @@ rust_record_field_decl = |type_table, duplicate_names, preferred_names, field| {
 	"    pub ${field_name}: ${rust_type},\n"
 }
 
+rust_record_fields_decl = |type_table, duplicate_names, preferred_names, fields| {
+	var $field_strs = ""
+	for field in fields {
+		$field_strs = Str.concat($field_strs, rust_record_field_decl(type_table, duplicate_names, preferred_names, field))
+	}
+	$field_strs
+}
+
 ## Convert a TypeRepr to its Rust type string
 type_repr_to_rust = |type_table, duplicate_names, preferred_names, type_id, type_repr| {
 	match type_repr {
@@ -167,6 +175,308 @@ is_type_refcounted = |type_table, type_id| TypeTable.is_refcounted(TypeTable.fro
 
 is_repr_refcounted : List(TypeRepr), TypeRepr -> Bool
 is_repr_refcounted = |type_table, type_repr| TypeTable.repr_is_refcounted(TypeTable.from_list(type_table), type_repr)
+
+align_forward_u64 : U64, U64 -> U64
+align_forward_u64 = |offset, alignment| {
+	if alignment == 0 {
+		offset
+	} else {
+		remainder = U64.rem_by(offset, alignment)
+		if remainder == 0 {
+			offset
+		} else {
+			offset + alignment - remainder
+		}
+	}
+}
+
+type_layout_64 : List(TypeRepr), U64 -> { size : U64, alignment : U64 }
+type_layout_64 = |type_table, type_id| {
+	type_repr = TypeTable.get(TypeTable.from_list(type_table), type_id)
+	repr_layout_64(type_table, type_repr)
+}
+
+repr_layout_64 : List(TypeRepr), TypeRepr -> { size : U64, alignment : U64 }
+repr_layout_64 = |type_table, type_repr| {
+	match type_repr {
+		RocBool => { size: 1, alignment: 1 }
+		RocBox(_) => { size: 8, alignment: 8 }
+		RocDec => { size: 8, alignment: 8 }
+		RocF32 => { size: 4, alignment: 4 }
+		RocF64 => { size: 8, alignment: 8 }
+		RocFunction(_) => { size: 8, alignment: 8 }
+		RocI128 => { size: 16, alignment: 16 }
+		RocI16 => { size: 2, alignment: 2 }
+		RocI32 => { size: 4, alignment: 4 }
+		RocI64 => { size: 8, alignment: 8 }
+		RocI8 => { size: 1, alignment: 1 }
+		RocList(_) => { size: 24, alignment: 8 }
+		RocRecord(rec) => record_layout_from_fields(type_table, rec.fields)
+		RocStr => { size: 24, alignment: 8 }
+		RocTagUnion(tu) =>
+			match TypeTable.single_variant_payload(tu) {
+				SinglePayload(payload_id) => type_layout_64(type_table, payload_id)
+				SingleNoPayload => { size: 0, alignment: 1 }
+				NotSingleVariant => { size: tu.size, alignment: tu.alignment }
+			}
+		RocU128 => { size: 16, alignment: 16 }
+		RocU16 => { size: 2, alignment: 2 }
+		RocU32 => { size: 4, alignment: 4 }
+		RocU64 => { size: 8, alignment: 8 }
+		RocU8 => { size: 1, alignment: 1 }
+		RocUnit => { size: 0, alignment: 1 }
+		RocUnknown(_) => { size: 8, alignment: 8 }
+	}
+}
+
+type_layout_32 : List(TypeRepr), U64 -> { size : U64, alignment : U64 }
+type_layout_32 = |type_table, type_id| {
+	type_repr = TypeTable.get(TypeTable.from_list(type_table), type_id)
+	repr_layout_32(type_table, type_repr)
+}
+
+repr_layout_32 : List(TypeRepr), TypeRepr -> { size : U64, alignment : U64 }
+repr_layout_32 = |type_table, type_repr| {
+	match type_repr {
+		RocBool => { size: 1, alignment: 1 }
+		RocBox(_) => { size: 4, alignment: 4 }
+		RocDec => { size: 8, alignment: 8 }
+		RocF32 => { size: 4, alignment: 4 }
+		RocF64 => { size: 8, alignment: 8 }
+		RocFunction(_) => { size: 4, alignment: 4 }
+		RocI128 => { size: 16, alignment: 16 }
+		RocI16 => { size: 2, alignment: 2 }
+		RocI32 => { size: 4, alignment: 4 }
+		RocI64 => { size: 8, alignment: 8 }
+		RocI8 => { size: 1, alignment: 1 }
+		RocList(_) => { size: 12, alignment: 4 }
+		RocRecord(rec) =>
+			record_layout_from_fields_32(
+				type_table,
+				if rec.anonymous {
+					record_fields_for_wasm32(type_table, rec.fields)
+				} else {
+					rec.fields
+				},
+			)
+		RocStr => { size: 12, alignment: 4 }
+		RocTagUnion(tu) => {
+			layout = tag_union_layout_32(type_table, tu)
+			{ size: layout.size, alignment: layout.alignment }
+		}
+		RocU128 => { size: 16, alignment: 16 }
+		RocU16 => { size: 2, alignment: 2 }
+		RocU32 => { size: 4, alignment: 4 }
+		RocU64 => { size: 8, alignment: 8 }
+		RocU8 => { size: 1, alignment: 1 }
+		RocUnit => { size: 0, alignment: 1 }
+		RocUnknown(_) => { size: 4, alignment: 4 }
+	}
+}
+
+record_layout_from_fields : List(TypeRepr), List(RecordField) -> { size : U64, alignment : U64 }
+record_layout_from_fields = |type_table, fields| {
+	var $offset = 0
+	var $alignment = 1
+
+	for field in fields {
+		field_layout = record_field_layout_64(type_table, field)
+		if field_layout.alignment > $alignment {
+			$alignment = field_layout.alignment
+		}
+		$offset = align_forward_u64($offset, field_layout.alignment)
+		$offset = $offset + field_layout.size
+	}
+
+	{ size: align_forward_u64($offset, $alignment), alignment: $alignment }
+}
+
+record_field_layout_64 : List(TypeRepr), RecordField -> { size : U64, alignment : U64 }
+record_field_layout_64 = |type_table, field| {
+	if field.is_padding {
+		{ size: field.size, alignment: 1 }
+	} else {
+		type_layout_64(type_table, field.type_id)
+	}
+}
+
+record_layout_from_fields_32 : List(TypeRepr), List(RecordField) -> { size : U64, alignment : U64 }
+record_layout_from_fields_32 = |type_table, fields| {
+	var $offset = 0
+	var $alignment = 1
+
+	for field in fields {
+		field_layout = record_field_layout_32(type_table, field)
+		if field_layout.alignment > $alignment {
+			$alignment = field_layout.alignment
+		}
+		$offset = align_forward_u64($offset, field_layout.alignment)
+		$offset = $offset + field_layout.size
+	}
+
+	{ size: align_forward_u64($offset, $alignment), alignment: $alignment }
+}
+
+record_field_layout_32 : List(TypeRepr), RecordField -> { size : U64, alignment : U64 }
+record_field_layout_32 = |type_table, field| {
+	if field.is_padding {
+		{ size: field.size, alignment: 1 }
+	} else {
+		type_layout_32(type_table, field.type_id)
+	}
+}
+
+tag_union_layout_32 : List(TypeRepr), TagUnionRepr -> { alignment : U64, discriminant_offset : U64, size : U64 }
+tag_union_layout_32 = |type_table, tu| {
+	match TypeTable.single_variant_payload(tu) {
+		SinglePayload(payload_id) => {
+			payload_layout = type_layout_32(type_table, payload_id)
+			{ size: payload_layout.size, alignment: payload_layout.alignment, discriminant_offset: payload_layout.size }
+		}
+		SingleNoPayload => { size: 0, alignment: 1, discriminant_offset: 0 }
+		NotSingleVariant => {
+			var $max_payload_size = 0
+			var $max_payload_alignment = 1
+
+			for tag in tu.tags {
+				payload_layout = if tag.payload_size == 0 {
+					{ size: 0, alignment: 1 }
+				} else {
+					tag_payload_layout_32(type_table, tag.payload)
+				}
+				if payload_layout.size > $max_payload_size {
+					$max_payload_size = payload_layout.size
+				}
+				if payload_layout.alignment > $max_payload_alignment {
+					$max_payload_alignment = payload_layout.alignment
+				}
+			}
+
+			disc = disc_layout_for_count(List.len(tu.tags))
+			disc_offset = align_forward_u64($max_payload_size, disc.alignment)
+			total_alignment = if $max_payload_alignment > disc.alignment {
+				$max_payload_alignment
+			} else {
+				disc.alignment
+			}
+			total_size = align_forward_u64(disc_offset + disc.size, total_alignment)
+			{ size: total_size, alignment: total_alignment, discriminant_offset: disc_offset }
+		}
+	}
+}
+
+tag_union_layout_64 : List(TypeRepr), TagUnionRepr -> { alignment : U64, discriminant_offset : U64, size : U64 }
+tag_union_layout_64 = |type_table, tu| {
+	match TypeTable.single_variant_payload(tu) {
+		SinglePayload(payload_id) => {
+			payload_layout = type_layout_64(type_table, payload_id)
+			{ size: payload_layout.size, alignment: payload_layout.alignment, discriminant_offset: payload_layout.size }
+		}
+		SingleNoPayload => { size: 0, alignment: 1, discriminant_offset: 0 }
+		NotSingleVariant => {
+			var $max_payload_size = 0
+			var $max_payload_alignment = 1
+
+			for tag in tu.tags {
+				payload_layout = if tag.payload_size == 0 {
+					{ size: 0, alignment: 1 }
+				} else {
+					{ size: tag.payload_size, alignment: tag.payload_alignment }
+				}
+				if payload_layout.size > $max_payload_size {
+					$max_payload_size = payload_layout.size
+				}
+				if payload_layout.alignment > $max_payload_alignment {
+					$max_payload_alignment = payload_layout.alignment
+				}
+			}
+
+			disc = disc_layout_for_count(List.len(tu.tags))
+			disc_offset = align_forward_u64($max_payload_size, disc.alignment)
+			total_alignment = if $max_payload_alignment > disc.alignment {
+				$max_payload_alignment
+			} else {
+				disc.alignment
+			}
+			total_size = align_forward_u64(disc_offset + disc.size, total_alignment)
+			{ size: total_size, alignment: total_alignment, discriminant_offset: disc_offset }
+		}
+	}
+}
+
+tag_payload_layout_32 : List(TypeRepr), List(U64) -> { size : U64, alignment : U64 }
+tag_payload_layout_32 = |type_table, payload| {
+	var $offset = 0
+	var $alignment = 1
+
+	for payload_id in payload {
+		payload_layout = type_layout_32(type_table, payload_id)
+		if payload_layout.alignment > $alignment {
+			$alignment = payload_layout.alignment
+		}
+		$offset = align_forward_u64($offset, payload_layout.alignment)
+		$offset = $offset + payload_layout.size
+	}
+
+	{ size: align_forward_u64($offset, $alignment), alignment: $alignment }
+}
+
+disc_layout_for_count = |count| {
+	if count <= 1 {
+		{ size: 0, alignment: 1 }
+	} else if count <= 256 {
+		{ size: 1, alignment: 1 }
+	} else if count <= 65536 {
+		{ size: 2, alignment: 2 }
+	} else {
+		{ size: 4, alignment: 4 }
+	}
+}
+
+compare_utf8_lists : List(U8), List(U8) -> [LT, EQ, GT]
+compare_utf8_lists = |left, right| {
+	match List.first(left) {
+		Ok(left_byte) =>
+			match List.first(right) {
+				Ok(right_byte) =>
+					if left_byte < right_byte {
+						LT
+					} else if left_byte > right_byte {
+						GT
+					} else {
+						compare_utf8_lists(List.drop_first(left, 1), List.drop_first(right, 1))
+					}
+				Err(_) => GT
+			}
+		Err(_) =>
+			if List.is_empty(right) {
+				EQ
+			} else {
+				LT
+			}
+	}
+}
+
+compare_str_bytes : Str, Str -> [LT, EQ, GT]
+compare_str_bytes = |left, right| compare_utf8_lists(Str.to_utf8(left), Str.to_utf8(right))
+
+record_fields_for_wasm32 : List(TypeRepr), List(RecordField) -> List(RecordField)
+record_fields_for_wasm32 = |type_table, fields| {
+	List.sort_with(
+		fields,
+		|left, right| {
+			left_layout = record_field_layout_32(type_table, left)
+			right_layout = record_field_layout_32(type_table, right)
+			if left_layout.alignment > right_layout.alignment {
+				LT
+			} else if left_layout.alignment < right_layout.alignment {
+				GT
+			} else {
+				compare_str_bytes(left.name, right.name)
+			}
+		},
+	)
+}
 
 # =============================================================================
 # String Utilities
@@ -727,9 +1037,46 @@ disc_type_for_count = |count| {
 ## Follows single-variant tag unions (unwrapping to their payload).
 lookup_record_in_type_table = |type_table, type_id| {
 	match TypeTable.record_layout(TypeTable.from_list(type_table), type_id) {
-		RecordFound(layout) => { found: Bool.True, fields: layout.fields, size: layout.size, alignment: layout.alignment }
-		NotRecord => { found: Bool.False, fields: [], size: 0, alignment: 0 }
+		RecordFound(layout) => { found: Bool.True, fields: layout.fields, size: layout.size, alignment: layout.alignment, anonymous: TypeTable.is_anonymous_record(TypeTable.from_list(type_table), type_id) }
+		NotRecord => { found: Bool.False, fields: [], size: 0, alignment: 0, anonymous: Bool.False }
 	}
+}
+
+rust_layout_assertions = |type_name, native_layout, wasm32_layout| {
+	if native_layout.size > 0 or wasm32_layout.size > 0 {
+		"#[cfg(target_pointer_width = \"64\")]\nconst _: () = assert!(core::mem::size_of::<${type_name}>() == ${U64.to_str(native_layout.size)}, \"${type_name} size mismatch\");\n#[cfg(target_pointer_width = \"64\")]\nconst _: () = assert!(core::mem::align_of::<${type_name}>() == ${U64.to_str(native_layout.alignment)}, \"${type_name} alignment mismatch\");\n#[cfg(target_pointer_width = \"32\")]\nconst _: () = assert!(core::mem::size_of::<${type_name}>() == ${U64.to_str(wasm32_layout.size)}, \"${type_name} size mismatch\");\n#[cfg(target_pointer_width = \"32\")]\nconst _: () = assert!(core::mem::align_of::<${type_name}>() == ${U64.to_str(wasm32_layout.alignment)}, \"${type_name} alignment mismatch\");\n\n"
+	} else {
+		""
+	}
+}
+
+rust_tag_union_layout_assertions = |type_name, native_layout, wasm32_layout| {
+	if native_layout.size > 0 or wasm32_layout.size > 0 {
+		"#[cfg(target_pointer_width = \"64\")]\nconst _: () = assert!(core::mem::size_of::<${type_name}>() == ${U64.to_str(native_layout.size)}, \"${type_name} size mismatch\");\n#[cfg(target_pointer_width = \"64\")]\nconst _: () = assert!(core::mem::align_of::<${type_name}>() == ${U64.to_str(native_layout.alignment)}, \"${type_name} alignment mismatch\");\n#[cfg(target_pointer_width = \"64\")]\nconst _: () = assert!(core::mem::offset_of!(${type_name}, tag) == ${U64.to_str(native_layout.discriminant_offset)}, \"${type_name} tag offset mismatch\");\n#[cfg(target_pointer_width = \"32\")]\nconst _: () = assert!(core::mem::size_of::<${type_name}>() == ${U64.to_str(wasm32_layout.size)}, \"${type_name} size mismatch\");\n#[cfg(target_pointer_width = \"32\")]\nconst _: () = assert!(core::mem::align_of::<${type_name}>() == ${U64.to_str(wasm32_layout.alignment)}, \"${type_name} alignment mismatch\");\n#[cfg(target_pointer_width = \"32\")]\nconst _: () = assert!(core::mem::offset_of!(${type_name}, tag) == ${U64.to_str(wasm32_layout.discriminant_offset)}, \"${type_name} tag offset mismatch\");\n\n"
+	} else {
+		""
+	}
+}
+
+generate_record_struct_decl_rust = |doc, struct_name, type_table, duplicate_names, preferred_names, fields, anonymous| {
+	native_field_strs = rust_record_fields_decl(type_table, duplicate_names, preferred_names, fields)
+	wasm32_fields = if anonymous {
+		record_fields_for_wasm32(type_table, fields)
+	} else {
+		fields
+	}
+	wasm32_field_strs = rust_record_fields_decl(type_table, duplicate_names, preferred_names, wasm32_fields)
+	native_layout = record_layout_from_fields(type_table, fields)
+	wasm32_layout = record_layout_from_fields_32(type_table, wasm32_fields)
+	assertions = rust_layout_assertions(struct_name, native_layout, wasm32_layout)
+
+	struct_decl = if anonymous {
+		"${doc}#[cfg(target_pointer_width = \"32\")]\n#[repr(C)]\n#[derive(Clone, Copy)]\npub struct ${struct_name} {\n${wasm32_field_strs}}\n\n${doc}#[cfg(not(target_pointer_width = \"32\"))]\n#[repr(C)]\n#[derive(Clone, Copy)]\npub struct ${struct_name} {\n${native_field_strs}}\n\n"
+	} else {
+		"${doc}#[repr(C)]\n#[derive(Clone, Copy)]\npub struct ${struct_name} {\n${native_field_strs}}\n\n"
+	}
+
+	"${struct_decl}${assertions}"
 }
 
 # =============================================================================
@@ -793,7 +1140,7 @@ generate_rust_file_header =
 generate_rust_imports : Str
 generate_rust_imports =
 	\\use core::ffi::c_void;
-	\\use core::sync::atomic::{AtomicIsize, Ordering};
+	\\use core::sync::atomic::{fence, AtomicIsize, Ordering};
 	\\use std::alloc::Layout;
 	\\
 
@@ -858,6 +1205,21 @@ generate_host_abi_types_rust =
 	\\    }
 	\\}
 	\\
+	\\#[inline]
+	\\fn checked_add_usize(left: usize, right: usize, context: &str) -> usize {
+	\\    left.checked_add(right).expect(context)
+	\\}
+	\\
+	\\#[inline]
+	\\fn checked_mul_usize(left: usize, right: usize, context: &str) -> usize {
+	\\    left.checked_mul(right).expect(context)
+	\\}
+	\\
+	\\#[inline]
+	\\fn shifted_capacity(capacity: usize) -> usize {
+	\\    capacity.checked_shl(1).expect("Roc capacity does not fit shifted representation")
+	\\}
+	\\
 	\\/// Uniform ABI function pointer stored in `RocErasedCallablePayload`.
 	\\pub type RocErasedCallableFn = extern "C" fn(*mut RocHost, *mut u8, *const u8, *mut u8);
 	\\
@@ -881,8 +1243,12 @@ generate_host_abi_types_rust =
 	\\    (core::mem::size_of::<RocErasedCallablePayload>() + 15) & !15;
 	\\
 	\\#[inline]
-	\\pub const fn roc_erased_callable_payload_size(capture_size: usize) -> usize {
-	\\    ROC_ERASED_CALLABLE_CAPTURE_OFFSET + capture_size
+	\\pub fn roc_erased_callable_payload_size(capture_size: usize) -> usize {
+	\\    checked_add_usize(
+	\\        ROC_ERASED_CALLABLE_CAPTURE_OFFSET,
+	\\        capture_size,
+	\\        "Roc erased-callable payload size overflow",
+	\\    )
 	\\}
 	\\
 	\\#[inline]
@@ -914,7 +1280,12 @@ generate_host_abi_types_rust =
 	\\    let ptr_width = core::mem::size_of::<usize>();
 	\\    let alignment = core::cmp::max(ptr_width, ROC_ERASED_CALLABLE_PAYLOAD_ALIGNMENT);
 	\\    let extra_bytes = core::cmp::max(ptr_width, ROC_ERASED_CALLABLE_PAYLOAD_ALIGNMENT);
-	\\    let base = roc_host.alloc(alignment, extra_bytes + roc_erased_callable_payload_size(capture_size)) as *mut u8;
+	\\    let total = checked_add_usize(
+	\\        extra_bytes,
+	\\        roc_erased_callable_payload_size(capture_size),
+	\\        "Roc erased-callable allocation size overflow",
+	\\    );
+	\\    let base = roc_host.alloc(alignment, total) as *mut u8;
 	\\    let data = base.add(extra_bytes);
 	\\    let rc = data.sub(core::mem::size_of::<isize>()) as *mut isize;
 	\\    *rc = 1;
@@ -935,33 +1306,42 @@ generate_roc_box_helpers_rust =
 	\\pub type RocBoxPayloadDecref = extern "C" fn(*mut c_void, *mut RocHost);
 	\\
 	\\/// Increment the refcount of a boxed payload data pointer.
-	\\pub fn incref_box(data_ptr: RocBox, amount: isize) {
+	\\///
+	\\/// # Safety
+	\\/// `data_ptr` must be a valid Roc box payload pointer. The caller must ensure
+	\\/// that the extra retained references are balanced by later decrefs.
+	\\pub unsafe fn incref_box(data_ptr: RocBox, amount: isize) {
 	\\    let data = match box_data_ptr(data_ptr) {
 	\\        Some(ptr) => ptr,
 	\\        None => return,
 	\\    };
 	\\    let rc = box_refcount_ptr(data);
+	\\    if unsafe { (*rc).load(Ordering::Relaxed) } == 0 {
+	\\        return; // REFCOUNT_STATIC_DATA
+	\\    }
 	\\    unsafe {
-	\\        if (*rc).load(Ordering::Relaxed) == 0 {
-	\\            return; // REFCOUNT_STATIC_DATA
-	\\        }
 	\\        (*rc).fetch_add(amount, Ordering::Relaxed);
 	\\    }
 	\\}
 	\\
 	\\/// Allocate a Roc box and return a pointer to its payload data.
-	\\pub fn allocate_box(
+	\\///
+	\\/// # Safety
+	\\/// The returned payload memory is uninitialized. The caller must initialize it
+	\\/// according to the Roc type before exposing it to safe APIs or Roc code.
+	\\pub unsafe fn allocate_box(
 	\\    payload_size: usize,
 	\\    payload_alignment: usize,
 	\\    payload_contains_refcounted: bool,
 	\\    roc_host: &RocHost,
 	\\) -> RocBox {
 	\\    let ptr_width = core::mem::size_of::<usize>();
-	\\    let required_space = if payload_contains_refcounted { 2 * ptr_width } else { ptr_width };
+	\\    let required_space = if payload_contains_refcounted { checked_mul_usize(2, ptr_width, "Roc box header size overflow") } else { ptr_width };
 	\\    let header_bytes = required_space.max(payload_alignment);
 	\\    let alloc_alignment = ptr_width.max(payload_alignment);
-	\\    let base = unsafe { roc_host.alloc(alloc_alignment, header_bytes + payload_size) } as *mut u8;
-	\\    let data = unsafe { base.add(header_bytes) };
+	\\    let total = checked_add_usize(header_bytes, payload_size, "Roc box allocation size overflow");
+	\\    let base = roc_host.alloc(alloc_alignment, total) as *mut u8;
+	\\    let data = base.add(header_bytes);
 	\\    unsafe {
 	\\        let rc = data.sub(core::mem::size_of::<isize>()) as *mut isize;
 	\\        *rc = 1;
@@ -970,24 +1350,39 @@ generate_roc_box_helpers_rust =
 	\\}
 	\\
 	\\/// Decrement a pointer-aligned boxed payload with no Roc refcounted values.
-	\\pub fn decref_box(data_ptr: RocBox, roc_host: &RocHost) {
-	\\    decref_box_with(data_ptr, core::mem::align_of::<usize>(), false, None, roc_host);
+	\\///
+	\\/// # Safety
+	\\/// `data_ptr` must be a valid Roc box payload pointer owned by this reference.
+	\\pub unsafe fn decref_box(data_ptr: RocBox, roc_host: &RocHost) {
+	\\    unsafe {
+	\\        decref_box_with(data_ptr, core::mem::align_of::<usize>(), false, None, roc_host);
+	\\    }
 	\\}
 	\\
 	\\/// Increment a boxed function closure.
-	\\pub fn incref_erased_callable(callable: RocErasedCallable, amount: isize) {
-	\\    incref_box(callable as RocBox, amount);
+	\\///
+	\\/// # Safety
+	\\/// `callable` must be a valid Roc erased-callable payload pointer.
+	\\pub unsafe fn incref_erased_callable(callable: RocErasedCallable, amount: isize) {
+	\\    unsafe {
+	\\        incref_box(callable as RocBox, amount);
+	\\    }
 	\\}
 	\\
 	\\/// Decrement a boxed function closure and run its capture drop callback on final release.
-	\\pub fn decref_erased_callable(callable: RocErasedCallable, roc_host: &RocHost) {
-	\\    decref_box_with(
-	\\        callable as RocBox,
-	\\        ROC_ERASED_CALLABLE_PAYLOAD_ALIGNMENT,
-	\\        false,
-	\\        Some(drop_erased_callable_payload),
-	\\        roc_host,
-	\\    );
+	\\///
+	\\/// # Safety
+	\\/// `callable` must be a valid Roc erased-callable payload pointer owned by this reference.
+	\\pub unsafe fn decref_erased_callable(callable: RocErasedCallable, roc_host: &RocHost) {
+	\\    unsafe {
+	\\        decref_box_with(
+	\\            callable as RocBox,
+	\\            ROC_ERASED_CALLABLE_PAYLOAD_ALIGNMENT,
+	\\            false,
+	\\            Some(drop_erased_callable_payload),
+	\\            roc_host,
+	\\        );
+	\\    }
 	\\}
 	\\
 	\\extern "C" fn drop_erased_callable_payload(data_ptr: *mut c_void, roc_host: *mut RocHost) {
@@ -1010,7 +1405,11 @@ generate_roc_box_helpers_rust =
 	\\/// `payload_decref` teardown callback is supplied. A host resource handle such
 	\\/// as `Box(U64)` holding a raw pointer has `payload_contains_refcounted: false`
 	\\/// even when it provides a teardown callback to free the underlying resource.
-	\\pub fn decref_box_with(
+	\\///
+	\\/// # Safety
+	\\/// `data_ptr` must be a valid Roc box payload pointer owned by this reference,
+	\\/// and `payload_alignment`/`payload_contains_refcounted` must match allocation.
+	\\pub unsafe fn decref_box_with(
 	\\    data_ptr: RocBox,
 	\\    payload_alignment: usize,
 	\\    payload_contains_refcounted: bool,
@@ -1022,24 +1421,26 @@ generate_roc_box_helpers_rust =
 	\\        None => return,
 	\\    };
 	\\    let rc = box_refcount_ptr(data);
-	\\    unsafe {
-	\\        if (*rc).load(Ordering::Relaxed) == 0 {
-	\\            return; // REFCOUNT_STATIC_DATA
+	\\    if unsafe { (*rc).load(Ordering::Relaxed) } == 0 {
+	\\        return; // REFCOUNT_STATIC_DATA
+	\\    }
+	\\    let prev = unsafe { (*rc).fetch_sub(1, Ordering::Release) };
+	\\    if prev == 1 {
+	\\        fence(Ordering::Acquire);
+	\\        if let Some(callback) = payload_decref {
+	\\            callback(data_ptr, roc_host as *const RocHost as *mut RocHost);
 	\\        }
-	\\        let prev = (*rc).fetch_sub(1, Ordering::Relaxed);
-	\\        if prev == 1 {
-	\\            if let Some(callback) = payload_decref {
-	\\                callback(data_ptr, roc_host as *const RocHost as *mut RocHost);
-	\\            }
-	\\            free_box_allocation(data, payload_alignment, payload_contains_refcounted, roc_host);
-	\\        }
+	\\        free_box_allocation(data, payload_alignment, payload_contains_refcounted, roc_host);
 	\\    }
 	\\}
 	\\
 	\\/// Free a boxed payload allocation immediately after running payload teardown.
 	\\///
 	\\/// See `decref_box_with` for the meaning of `payload_contains_refcounted`.
-	\\pub fn free_box_with(
+	\\///
+	\\/// # Safety
+	\\/// `data_ptr` must be a valid Roc box payload pointer that will not be used after this call.
+	\\pub unsafe fn free_box_with(
 	\\    data_ptr: RocBox,
 	\\    payload_alignment: usize,
 	\\    payload_contains_refcounted: bool,
@@ -1063,7 +1464,7 @@ generate_roc_box_helpers_rust =
 	\\        None => return true,
 	\\    };
 	\\    let rc = box_refcount_ptr(data);
-	\\    unsafe { (*rc).load(Ordering::Relaxed) == 1 }
+	\\    unsafe { (*rc).load(Ordering::Acquire) == 1 }
 	\\}
 	\\
 	\\fn box_data_ptr(data_ptr: RocBox) -> Option<*mut u8> {
@@ -1085,7 +1486,7 @@ generate_roc_box_helpers_rust =
 	\\    roc_host: &RocHost,
 	\\) {
 	\\    let ptr_width = core::mem::size_of::<usize>();
-	\\    let required_space = if payload_contains_refcounted { 2 * ptr_width } else { ptr_width };
+	\\    let required_space = if payload_contains_refcounted { checked_mul_usize(2, ptr_width, "Roc box header size overflow") } else { ptr_width };
 	\\    let header_bytes = required_space.max(payload_alignment);
 	\\    let alloc_alignment = ptr_width.max(payload_alignment);
 	\\    let base = unsafe { data.sub(header_bytes) } as *mut c_void;
@@ -1178,14 +1579,14 @@ generate_rust_roc_str =
 	\\        }
 	\\    }
 	\\
-	\\    /// Return the string contents as a `&str`, assuming valid UTF-8.
+	\\    /// Return the string contents as a `&str`.
 	\\    pub fn as_str(&self) -> &str {
-	\\        // SAFETY: Roc guarantees all strings are valid UTF-8.
-	\\        unsafe { core::str::from_utf8_unchecked(self.as_slice()) }
+	\\        core::str::from_utf8(self.as_slice()).expect("RocStr contained invalid UTF-8")
 	\\    }
 	\\
-	\\    /// Create a RocStr from a byte slice, using `roc_host` for heap allocation if needed.
+	\\    /// Create a RocStr from a UTF-8 byte slice, using `roc_host` for heap allocation if needed.
 	\\    pub fn from_slice(slice: &[u8], roc_host: &RocHost) -> Self {
+	\\        core::str::from_utf8(slice).expect("RocStr::from_slice requires valid UTF-8");
 	\\        if slice.len() < ROC_STR_SIZE {
 	\\            let mut result = Self::empty();
 	\\            let ptr = &mut result as *mut Self as *mut u8;
@@ -1196,7 +1597,7 @@ generate_rust_roc_str =
 	\\            result
 	\\        } else {
 	\\            let ptr_width = core::mem::size_of::<usize>();
-	\\            let total = ptr_width + slice.len();
+	\\            let total = checked_add_usize(ptr_width, slice.len(), "RocStr allocation size overflow");
 	\\            let base = unsafe { roc_host.alloc(core::mem::align_of::<usize>(), total) };
 	\\            let data_ptr = unsafe { (base as *mut u8).add(ptr_width) };
 	\\            // Write refcount = 1
@@ -1207,7 +1608,7 @@ generate_rust_roc_str =
 	\\            }
 	\\            Self {
 	\\                bytes: data_ptr,
-	\\                capacity_or_alloc_ptr: slice.len() << 1,
+	\\                capacity_or_alloc_ptr: shifted_capacity(slice.len()),
 	\\                length: slice.len(),
 	\\            }
 	\\        }
@@ -1219,7 +1620,11 @@ generate_rust_roc_str =
 	\\    }
 	\\
 	\\    /// Decrement the reference count; frees the allocation when it reaches zero.
-	\\    pub fn decref(&self, roc_host: &RocHost) {
+	\\    ///
+	\\    /// # Safety
+	\\    /// `self` must own one live Roc reference. Calling this more than once for the
+	\\    /// same ownership reference may double-free.
+	\\    pub unsafe fn decref(self, roc_host: &RocHost) {
 	\\        if self.is_small_str() {
 	\\            return;
 	\\        }
@@ -1227,22 +1632,27 @@ generate_rust_roc_str =
 	\\        if alloc_ptr.is_null() {
 	\\            return;
 	\\        }
-	\\        unsafe {
-	\\            let rc = (alloc_ptr as *mut AtomicIsize).sub(1);
-	\\            if (*rc).load(Ordering::Relaxed) == 0 {
-	\\                return; // REFCOUNT_STATIC_DATA — bytes are in read-only memory
-	\\            }
-	\\            let prev = (*rc).fetch_sub(1, Ordering::Relaxed);
-	\\            if prev == 1 {
-	\\                let ptr_width = core::mem::size_of::<usize>();
-	\\                let base = alloc_ptr.sub(ptr_width) as *mut c_void;
+	\\        let rc = unsafe { (alloc_ptr as *mut AtomicIsize).sub(1) };
+	\\        if unsafe { (*rc).load(Ordering::Relaxed) } == 0 {
+	\\            return; // REFCOUNT_STATIC_DATA — bytes are in read-only memory
+	\\        }
+	\\        let prev = unsafe { (*rc).fetch_sub(1, Ordering::Release) };
+	\\        if prev == 1 {
+	\\            fence(Ordering::Acquire);
+	\\            let ptr_width = core::mem::size_of::<usize>();
+	\\            let base = unsafe { alloc_ptr.sub(ptr_width) } as *mut c_void;
+	\\            unsafe {
 	\\                roc_host.dealloc(base, core::mem::align_of::<usize>());
 	\\            }
 	\\        }
 	\\    }
 	\\
 	\\    /// Increment the reference count by `amount`.
-	\\    pub fn incref(&self, amount: isize) {
+	\\    ///
+	\\    /// # Safety
+	\\    /// `self` must point at a live Roc allocation. The retained references must
+	\\    /// be balanced by later decrefs.
+	\\    pub unsafe fn incref(self, amount: isize) {
 	\\        if self.is_small_str() {
 	\\            return;
 	\\        }
@@ -1250,11 +1660,11 @@ generate_rust_roc_str =
 	\\        if alloc_ptr.is_null() {
 	\\            return;
 	\\        }
+	\\        let rc = unsafe { (alloc_ptr as *mut AtomicIsize).sub(1) };
+	\\        if unsafe { (*rc).load(Ordering::Relaxed) } == 0 {
+	\\            return; // REFCOUNT_STATIC_DATA
+	\\        }
 	\\        unsafe {
-	\\            let rc = (alloc_ptr as *mut AtomicIsize).sub(1);
-	\\            if (*rc).load(Ordering::Relaxed) == 0 {
-	\\                return; // REFCOUNT_STATIC_DATA
-	\\            }
 	\\            (*rc).fetch_add(amount, Ordering::Relaxed);
 	\\        }
 	\\    }
@@ -1270,7 +1680,7 @@ generate_rust_roc_str =
 	\\        }
 	\\        unsafe {
 	\\            let rc = (alloc_ptr as *const AtomicIsize).sub(1);
-	\\            let count = (*rc).load(Ordering::Relaxed);
+	\\            let count = (*rc).load(Ordering::Acquire);
 	\\            count == 0 || count == 1
 	\\        }
 	\\    }
@@ -1287,7 +1697,6 @@ generate_rust_roc_str =
 	\\impl core::fmt::Debug for RocStr {
 	\\    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
 	\\        f.debug_struct("RocStr")
-	\\            .field("value", &self.as_str())
 	\\            .field("len", &self.len())
 	\\            .field("is_small", &self.is_small_str())
 	\\            .finish()
@@ -1318,7 +1727,7 @@ generate_rust_roc_list =
 	\\    #[inline]
 	\\    fn header_bytes() -> usize {
 	\\        let ptr_width = core::mem::size_of::<usize>();
-	\\        let required_space = if ELEMENTS_REFCOUNTED { 2 * ptr_width } else { ptr_width };
+	\\        let required_space = if ELEMENTS_REFCOUNTED { checked_mul_usize(2, ptr_width, "RocList header size overflow") } else { ptr_width };
 	\\        required_space.max(core::mem::align_of::<T>())
 	\\    }
 	\\
@@ -1396,34 +1805,47 @@ generate_rust_roc_list =
 	\\    }
 	\\
 	\\    /// Allocate a new list with space for `length` elements.
-	\\    pub fn allocate(length: usize, roc_host: &RocHost) -> Self {
+	\\    ///
+	\\    /// # Safety
+	\\    /// The returned element memory is uninitialized while `length` is already
+	\\    /// set. The caller must initialize every element before exposing the list
+	\\    /// to safe APIs, Roc code, or generated refcount helpers.
+	\\    pub unsafe fn allocate(length: usize, roc_host: &RocHost) -> Self {
 	\\        if length == 0 {
 	\\            return Self::empty();
 	\\        }
 	\\        let align = core::mem::align_of::<T>().max(core::mem::align_of::<usize>());
 	\\        let header_bytes = Self::header_bytes();
-	\\        let data_bytes = length * core::mem::size_of::<T>();
-	\\        let total = data_bytes + header_bytes;
-	\\        let base = unsafe { roc_host.alloc(align, total) };
-	\\        let data_ptr = unsafe { (base as *mut u8).add(header_bytes) };
-	\\        // Write refcount = 1
+	\\        let data_bytes = checked_mul_usize(length, core::mem::size_of::<T>(), "RocList allocation element bytes overflow");
+	\\        let total = checked_add_usize(data_bytes, header_bytes, "RocList allocation size overflow");
+	\\        let base = roc_host.alloc(align, total);
+	\\        let data_ptr = (base as *mut u8).add(header_bytes);
 	\\        unsafe {
 	\\            let rc = (data_ptr as *mut isize).sub(1);
 	\\            *rc = 1;
+	\\            if ELEMENTS_REFCOUNTED {
+	\\                let count = (data_ptr as *mut usize).sub(2);
+	\\                *count = length;
+	\\            }
 	\\        }
 	\\        Self {
 	\\            elements: data_ptr as *mut T,
 	\\            length,
-	\\            capacity_or_alloc_ptr: length << 1,
+	\\            capacity_or_alloc_ptr: shifted_capacity(length),
 	\\        }
 	\\    }
 	\\
 	\\    /// Create a RocList from a slice, copying elements into a new allocation.
-	\\    pub fn from_slice(slice: &[T], roc_host: &RocHost) -> Self where T: Copy {
+	\\    ///
+	\\    /// # Safety
+	\\    /// This is a shallow copy. For element types that own Roc references, the
+	\\    /// caller must ensure each copied element is already retained for the new
+	\\    /// list or will not be decref'd through another owner.
+	\\    pub unsafe fn from_slice(slice: &[T], roc_host: &RocHost) -> Self where T: Copy {
 	\\        if slice.is_empty() {
 	\\            return Self::empty();
 	\\        }
-	\\        let list = Self::allocate(slice.len(), roc_host);
+	\\        let list = unsafe { Self::allocate(slice.len(), roc_host) };
 	\\        unsafe {
 	\\            core::ptr::copy_nonoverlapping(
 	\\                slice.as_ptr(),
@@ -1435,7 +1857,11 @@ generate_rust_roc_list =
 	\\    }
 	\\
 	\\    /// Decrement the reference count; frees the allocation when it reaches zero.
-	\\    pub fn decref(&self, roc_host: &RocHost) {
+	\\    ///
+	\\    /// # Safety
+	\\    /// `self` must own one live Roc list reference. Calling this more than once
+	\\    /// for the same ownership reference may double-free.
+	\\    pub unsafe fn decref(self, roc_host: &RocHost) {
 	\\        if self.elements.is_null() {
 	\\            return;
 	\\        }
@@ -1445,21 +1871,26 @@ generate_rust_roc_list =
 	\\        }
 	\\        let align = core::mem::align_of::<T>().max(core::mem::align_of::<usize>());
 	\\        let header_bytes = Self::header_bytes();
-	\\        unsafe {
-	\\            let rc = (alloc_ptr as *mut AtomicIsize).sub(1);
-	\\            if (*rc).load(Ordering::Relaxed) == 0 {
-	\\                return; // REFCOUNT_STATIC_DATA — elements are in read-only memory
-	\\            }
-	\\            let prev = (*rc).fetch_sub(1, Ordering::Relaxed);
-	\\            if prev == 1 {
-	\\                let base = alloc_ptr.sub(header_bytes) as *mut c_void;
+	\\        let rc = unsafe { (alloc_ptr as *mut AtomicIsize).sub(1) };
+	\\        if unsafe { (*rc).load(Ordering::Relaxed) } == 0 {
+	\\            return; // REFCOUNT_STATIC_DATA — elements are in read-only memory
+	\\        }
+	\\        let prev = unsafe { (*rc).fetch_sub(1, Ordering::Release) };
+	\\        if prev == 1 {
+	\\            fence(Ordering::Acquire);
+	\\            let base = unsafe { alloc_ptr.sub(header_bytes) } as *mut c_void;
+	\\            unsafe {
 	\\                roc_host.dealloc(base, align);
 	\\            }
 	\\        }
 	\\    }
 	\\
 	\\    /// Increment the reference count by `amount`.
-	\\    pub fn incref(&self, amount: isize) {
+	\\    ///
+	\\    /// # Safety
+	\\    /// `self` must point at a live Roc list allocation. The retained references
+	\\    /// must be balanced by later decrefs.
+	\\    pub unsafe fn incref(self, amount: isize) {
 	\\        if self.elements.is_null() {
 	\\            return;
 	\\        }
@@ -1467,11 +1898,11 @@ generate_rust_roc_list =
 	\\        if alloc_ptr.is_null() {
 	\\            return;
 	\\        }
+	\\        let rc = unsafe { (alloc_ptr as *mut AtomicIsize).sub(1) };
+	\\        if unsafe { (*rc).load(Ordering::Relaxed) } == 0 {
+	\\            return; // REFCOUNT_STATIC_DATA
+	\\        }
 	\\        unsafe {
-	\\            let rc = (alloc_ptr as *mut AtomicIsize).sub(1);
-	\\            if (*rc).load(Ordering::Relaxed) == 0 {
-	\\                return; // REFCOUNT_STATIC_DATA
-	\\            }
 	\\            (*rc).fetch_add(amount, Ordering::Relaxed);
 	\\        }
 	\\    }
@@ -1484,7 +1915,7 @@ generate_rust_roc_list =
 	\\        }
 	\\        unsafe {
 	\\            let rc = (alloc_ptr as *const AtomicIsize).sub(1);
-	\\            let count = (*rc).load(Ordering::Relaxed);
+	\\            let count = (*rc).load(Ordering::Acquire);
 	\\            count == 0 || count == 1
 	\\        }
 	\\    }
@@ -1497,7 +1928,7 @@ generate_rust_roc_list =
 	\\        }
 	\\        unsafe {
 	\\            let rc = (alloc_ptr as *const AtomicIsize).sub(1);
-	\\            (*rc).load(Ordering::Relaxed) == 1
+	\\            (*rc).load(Ordering::Acquire) == 1
 	\\        }
 	\\    }
 	\\}
@@ -1536,22 +1967,10 @@ generate_element_type_structs_rust = |type_table, duplicate_names, preferred_nam
 					struct_name = name_to_struct_name(rec.name)
 					if !(List.contains($seen_names, struct_name)) {
 						$seen_names = $seen_names.append(struct_name)
-
-						var $field_strs = ""
-						for field in rec.fields {
-							$field_strs = Str.concat($field_strs, rust_record_field_decl(type_table, duplicate_names, preferred_names, field))
-						}
-
-						# Size/alignment assertions (guarded by pointer width)
-						assertions = if rec.size > 0 {
-							"const _: () = assert!(core::mem::size_of::<${struct_name}>() == ${U64.to_str(rec.size)}, \"${struct_name} size mismatch\");\nconst _: () = assert!(core::mem::align_of::<${struct_name}>() == ${U64.to_str(rec.alignment)}, \"${struct_name} alignment mismatch\");\n\n"
-						} else {
-							""
-						}
-
+						doc = "/// Element type for ${rec.name}\n"
 						$structs = Str.concat(
 							$structs,
-							"/// Element type for ${rec.name}\n#[repr(C)]\n#[derive(Clone, Copy)]\npub struct ${struct_name} {\n${$field_strs}}\n\n${assertions}",
+							generate_record_struct_decl_rust(doc, struct_name, type_table, duplicate_names, preferred_names, rec.fields, rec.anonymous),
 						)
 					}
 				}
@@ -1633,6 +2052,7 @@ generate_single_tag_union_rust = |type_table, duplicate_names, preferred_names, 
 
 		# Payload union - Rust requires ManuallyDrop for non-Copy fields in unions
 		var $union_fields = ""
+		var $payload_accessors = ""
 		for union_tag in tu.tags {
 			snake = to_lower_snake_case(union_tag.name)
 			if List.is_empty(union_tag.payload) {
@@ -1645,20 +2065,27 @@ generate_single_tag_union_rust = |type_table, duplicate_names, preferred_names, 
 				}
 				# Wrap in ManuallyDrop since union fields must be Copy or ManuallyDrop
 				$union_fields = Str.concat($union_fields, "    pub ${snake}: core::mem::ManuallyDrop<${rust_type}>,\n")
+				$payload_accessors = Str.concat(
+					$payload_accessors,
+					"    #[cfg(target_pointer_width = \"32\")]\n    pub fn payload_${snake}(&self) -> ${rust_type} {\n        unsafe { core::ptr::read(self.payload.as_ptr() as *const ${rust_type}) }\n    }\n\n    #[cfg(not(target_pointer_width = \"32\"))]\n    pub fn payload_${snake}(&self) -> ${rust_type} {\n        unsafe { core::mem::ManuallyDrop::into_inner(self.payload.${snake}) }\n    }\n\n",
+				)
 			} else {
 				tuple_name = "${struct_name}${capitalize_first(union_tag.name)}Payload"
 				$union_fields = Str.concat($union_fields, "    pub ${snake}: core::mem::ManuallyDrop<${tuple_name}>,\n")
+				$payload_accessors = Str.concat(
+					$payload_accessors,
+					"    #[cfg(target_pointer_width = \"32\")]\n    pub fn payload_${snake}(&self) -> ${tuple_name} {\n        unsafe { core::ptr::read(self.payload.as_ptr() as *const ${tuple_name}) }\n    }\n\n    #[cfg(not(target_pointer_width = \"32\"))]\n    pub fn payload_${snake}(&self) -> ${tuple_name} {\n        unsafe { core::mem::ManuallyDrop::into_inner(self.payload.${snake}) }\n    }\n\n",
+				)
 			}
 		}
 
 		# Size/alignment assertions
-		assertions = if tu.size > 0 {
-			"const _: () = assert!(core::mem::size_of::<${struct_name}>() == ${U64.to_str(tu.size)}, \"${struct_name} size mismatch\");\nconst _: () = assert!(core::mem::align_of::<${struct_name}>() == ${U64.to_str(tu.alignment)}, \"${struct_name} alignment mismatch\");\n\n"
-		} else {
-			""
-		}
+		native_layout = tag_union_layout_64(type_table, tu)
+		wasm32_layout = tag_union_layout_32(type_table, tu)
+		assertions = rust_tag_union_layout_assertions(struct_name, native_layout, wasm32_layout)
+		alignment_marker = "${struct_name}PayloadAlignment"
 
-		"${$tuple_structs}/// Tag discriminant for ${tu.name}.\n#[repr(${disc_type})]\n#[derive(Debug, Clone, Copy, PartialEq, Eq)]\npub enum ${struct_name}Tag {\n${$enum_variants}}\n\n/// Tag union: ${tu.name}\n#[repr(C)]\n#[derive(Clone, Copy)]\npub struct ${struct_name} {\n    pub payload: ${struct_name}Payload,\n    pub tag: ${struct_name}Tag,\n}\n\n#[repr(C)]\n#[derive(Clone, Copy)]\npub union ${struct_name}Payload {\n${$union_fields}}\n\n${assertions}"
+		"${$tuple_structs}/// Tag discriminant for ${tu.name}.\n#[repr(${disc_type})]\n#[derive(Debug, Clone, Copy, PartialEq, Eq)]\npub enum ${struct_name}Tag {\n${$enum_variants}}\n\n#[repr(C)]\n#[derive(Clone, Copy)]\npub union ${struct_name}Payload {\n${$union_fields}}\n\n#[cfg(target_pointer_width = \"32\")]\n#[repr(align(${U64.to_str(wasm32_layout.alignment)}))]\n#[derive(Clone, Copy)]\npub struct ${alignment_marker};\n\n/// Tag union: ${tu.name}\n#[cfg(target_pointer_width = \"32\")]\n#[repr(C)]\n#[derive(Clone, Copy)]\npub struct ${struct_name} {\n    pub _payload_alignment: [${alignment_marker}; 0],\n    pub payload: [u8; ${U64.to_str(wasm32_layout.discriminant_offset)}],\n    pub tag: ${struct_name}Tag,\n}\n\n/// Tag union: ${tu.name}\n#[cfg(not(target_pointer_width = \"32\"))]\n#[repr(C)]\n#[derive(Clone, Copy)]\npub struct ${struct_name} {\n    pub payload: ${struct_name}Payload,\n    pub tag: ${struct_name}Tag,\n}\n\nimpl ${struct_name} {\n${$payload_accessors}}\n\n${assertions}"
 	}
 }
 
@@ -1670,22 +2097,10 @@ generate_all_record_structs_rust = |hosted_functions, type_table, duplicate_name
 
 		if type_table_result.found {
 			struct_name = name_to_struct_name(func.name)
-
-			var $fields = ""
-			for field in type_table_result.fields {
-				$fields = Str.concat($fields, rust_record_field_decl(type_table, duplicate_names, preferred_names, field))
-			}
-
-			assertions = if type_table_result.size > 0 {
-				"const _: () = assert!(core::mem::size_of::<${struct_name}RetRecord>() == ${U64.to_str(type_table_result.size)}, \"${struct_name}RetRecord size mismatch\");\nconst _: () = assert!(core::mem::align_of::<${struct_name}RetRecord>() == ${U64.to_str(type_table_result.alignment)}, \"${struct_name}RetRecord alignment mismatch\");\n\n"
-			} else {
-				""
-			}
-
 			doc = "/// Return type record for ${func.name}\n/// Fields ordered by alignment descending (Roc ABI)\n"
 			$structs = Str.concat(
 				$structs,
-				"${doc}#[repr(C)]\n#[derive(Clone, Copy)]\npub struct ${struct_name}RetRecord {\n${$fields}}\n\n${assertions}",
+				generate_record_struct_decl_rust(doc, "${struct_name}RetRecord", type_table, duplicate_names, preferred_names, type_table_result.fields, type_table_result.anonymous),
 			)
 		}
 	}
@@ -1713,26 +2128,15 @@ generate_args_struct_rust = |func, type_table, duplicate_names, preferred_names|
 	type_table_result = if List.len(func.arg_type_ids) == 1 {
 		match List.first(func.arg_type_ids) {
 			Ok(arg_id) => lookup_record_in_type_table(type_table, arg_id)
-			Err(_) => { found: Bool.False, fields: [], size: 0, alignment: 0 }
+			Err(_) => { found: Bool.False, fields: [], size: 0, alignment: 0, anonymous: Bool.False }
 		}
 	} else {
-		{ found: Bool.False, fields: [], size: 0, alignment: 0 }
+		{ found: Bool.False, fields: [], size: 0, alignment: 0, anonymous: Bool.False }
 	}
 
 	if type_table_result.found {
-		var $fields = ""
-		for field in type_table_result.fields {
-			$fields = Str.concat($fields, rust_record_field_decl(type_table, duplicate_names, preferred_names, field))
-		}
-
-		assertions = if type_table_result.size > 0 {
-			"const _: () = assert!(core::mem::size_of::<${struct_name}Args>() == ${U64.to_str(type_table_result.size)}, \"${struct_name}Args size mismatch\");\nconst _: () = assert!(core::mem::align_of::<${struct_name}Args>() == ${U64.to_str(type_table_result.alignment)}, \"${struct_name}Args alignment mismatch\");\n\n"
-		} else {
-			""
-		}
-
 		doc = "/// Arguments for ${func.name}\n/// Roc signature: ${func.type_str}\n/// Refcounted fields are owned by the hosted function.\n"
-		return "${doc}#[repr(C)]\n#[derive(Clone, Copy)]\npub struct ${struct_name}Args {\n${$fields}}\n\n${assertions}"
+		return generate_record_struct_decl_rust(doc, "${struct_name}Args", type_table, duplicate_names, preferred_names, type_table_result.fields, type_table_result.anonymous)
 	}
 
 	# Multi-arg or primitive args: use positional fields from type table
@@ -1794,30 +2198,30 @@ decref_stmt_for_type_id_rust = |type_table, duplicate_names, preferred_names, ty
 
 decref_stmt_for_repr_rust = |type_table, duplicate_names, preferred_names, _type_id, type_repr, expr| {
 	match type_repr {
-		RocStr => "    ${expr}.decref(roc_host);\n"
+		RocStr => "    unsafe { ${expr}.decref(roc_host); }\n"
 		RocList(elem_id) => {
 			if is_type_refcounted(type_table, elem_id) {
 				elem_stmt = decref_stmt_for_type_id_rust(type_table, duplicate_names, preferred_names, elem_id, "item")
 				if elem_stmt == "" {
 					"    compile_error!(\"missing decref helper for refcounted list element type id ${U64.to_str(elem_id)}\");\n"
 				} else {
-					"    {\n        let list = ${expr};\n        if list.has_one_ref() {\n            for item_ref in list.allocation_items() {\n                let item = *item_ref;\n${indent_lines(elem_stmt, "                ")}            }\n        }\n        list.decref(roc_host);\n    }\n"
+					"    {\n        let list = ${expr};\n        if list.has_one_ref() {\n            for item_ref in list.allocation_items() {\n                let item = *item_ref;\n${indent_lines(elem_stmt, "                ")}            }\n        }\n        unsafe { list.decref(roc_host); }\n    }\n"
 				}
 			} else {
-				"    ${expr}.decref(roc_host);\n"
+				"    unsafe { ${expr}.decref(roc_host); }\n"
 			}
 		}
 		RocBox(inner_id) =>
 			match TypeTable.get(TypeTable.from_list(type_table), inner_id) {
-				RocFunction(_) => "    decref_erased_callable(${expr}, roc_host);\n"
+				RocFunction(_) => "    unsafe { decref_erased_callable(${expr}, roc_host); }\n"
 				_ => {
 					inner_rust = type_id_to_rust(type_table, duplicate_names, preferred_names, inner_id)
 					if inner_rust == "RocBox" or inner_rust == "*mut c_void" {
-						"    decref_box(${expr} as RocBox, roc_host);\n"
+						"    unsafe { decref_box(${expr} as RocBox, roc_host); }\n"
 					} else if is_type_refcounted(type_table, inner_id) {
-						"    decref_box_with(${expr} as RocBox, core::mem::align_of::<${inner_rust}>(), true, Some(${box_payload_decref_name_rust(inner_id)}), roc_host);\n"
+						"    unsafe { decref_box_with(${expr} as RocBox, core::mem::align_of::<${inner_rust}>(), true, Some(${box_payload_decref_name_rust(inner_id)}), roc_host); }\n"
 					} else {
-						"    decref_box_with(${expr} as RocBox, core::mem::align_of::<${inner_rust}>(), false, None, roc_host);\n"
+						"    unsafe { decref_box_with(${expr} as RocBox, core::mem::align_of::<${inner_rust}>(), false, None, roc_host); }\n"
 					}
 				}
 			}
@@ -1825,7 +2229,7 @@ decref_stmt_for_repr_rust = |type_table, duplicate_names, preferred_names, _type
 			if rec.name == "" {
 				""
 			} else {
-				"    ${expr}.decref(roc_host);\n"
+				"    unsafe { ${expr}.decref(roc_host); }\n"
 			}
 		RocTagUnion(tu) =>
 			if List.len(tu.tags) == 1 {
@@ -1839,7 +2243,7 @@ decref_stmt_for_repr_rust = |type_table, duplicate_names, preferred_names, _type
 				}
 			} else {
 				if tu.name != "" {
-					"    ${expr}.decref(roc_host);\n"
+					"    unsafe { ${expr}.decref(roc_host); }\n"
 				} else {
 					""
 				}
@@ -1855,18 +2259,18 @@ incref_stmt_for_type_id_rust = |type_table, duplicate_names, preferred_names, ty
 
 incref_stmt_for_repr_rust = |type_table, duplicate_names, preferred_names, _type_id, type_repr, expr| {
 	match type_repr {
-		RocStr => "    ${expr}.incref(amount);\n"
-		RocList(_) => "    ${expr}.incref(amount);\n"
+		RocStr => "    unsafe { ${expr}.incref(amount); }\n"
+		RocList(_) => "    unsafe { ${expr}.incref(amount); }\n"
 		RocBox(inner_id) =>
 			match TypeTable.get(TypeTable.from_list(type_table), inner_id) {
-				RocFunction(_) => "    incref_erased_callable(${expr}, amount);\n"
-				_ => "    incref_box(${expr} as RocBox, amount);\n"
+				RocFunction(_) => "    unsafe { incref_erased_callable(${expr}, amount); }\n"
+				_ => "    unsafe { incref_box(${expr} as RocBox, amount); }\n"
 			}
 		RocRecord(rec) =>
 			if rec.name == "" {
 				""
 			} else {
-				"    ${expr}.incref(amount);\n"
+				"    unsafe { ${expr}.incref(amount); }\n"
 			}
 		RocTagUnion(tu) =>
 			if List.len(tu.tags) == 1 {
@@ -1880,7 +2284,7 @@ incref_stmt_for_repr_rust = |type_table, duplicate_names, preferred_names, _type
 				}
 			} else {
 				if tu.name != "" {
-					"    ${expr}.incref(amount);\n"
+					"    unsafe { ${expr}.incref(amount); }\n"
 				} else {
 					""
 				}
@@ -1913,7 +2317,7 @@ generate_record_refcount_helpers_rust = |type_table, duplicate_names, preferred_
 		$incref_body = indent_lines($incref_body, "    ")
 	}
 
-	"impl ${struct_name} {\n    /// Recursively decrement Roc-owned fields.\n    pub fn decref(self, roc_host: &RocHost) {\n        let value = self;\n${$decref_body}    }\n\n    /// Increment Roc-owned fields.\n    pub fn incref(self, amount: isize) {\n        let value = self;\n${$incref_body}    }\n}\n\n"
+	"impl ${struct_name} {\n    /// Recursively decrement Roc-owned fields.\n    ///\n    /// # Safety\n    /// `self` must own one live Roc reference for each refcounted field.\n    pub unsafe fn decref(self, roc_host: &RocHost) {\n        let value = self;\n${$decref_body}    }\n\n    /// Increment Roc-owned fields.\n    ///\n    /// # Safety\n    /// `self` must point at live Roc allocations. The retained references must\n    /// be balanced by later decrefs.\n    pub unsafe fn incref(self, amount: isize) {\n        let value = self;\n${$incref_body}    }\n}\n\n"
 }
 
 generate_tag_payload_refcount_branch_rust = |type_table, duplicate_names, preferred_names, struct_name, tag, mode| {
@@ -1940,10 +2344,10 @@ generate_tag_payload_refcount_branch_rust = |type_table, duplicate_names, prefer
 		if body == "" {
 			"        ${struct_name}Tag::${variant} => {},\n"
 		} else {
-			"        ${struct_name}Tag::${variant} => unsafe {\n            let payload = core::mem::ManuallyDrop::into_inner(value.payload.${snake});\n${indent_lines(body, "        ")}        },\n"
+			"        ${struct_name}Tag::${variant} => {\n            let payload = value.payload_${snake}();\n${indent_lines(body, "        ")}        },\n"
 		}
 	} else {
-		var $body = "            let payload = core::mem::ManuallyDrop::into_inner(value.payload.${snake});\n"
+		var $body = "            let payload = value.payload_${snake}();\n"
 		var $idx = 0
 		for payload_id in tag.payload {
 			field_expr = "payload._${U64.to_str($idx)}"
@@ -1956,7 +2360,7 @@ generate_tag_payload_refcount_branch_rust = |type_table, duplicate_names, prefer
 			$idx = $idx + 1
 		}
 
-		"        ${struct_name}Tag::${variant} => unsafe {\n${$body}        },\n"
+		"        ${struct_name}Tag::${variant} => {\n${$body}        },\n"
 	}
 }
 
@@ -1965,7 +2369,7 @@ generate_tag_union_refcount_helpers_rust = |type_table, duplicate_names, preferr
 	is_pure_enum = List.all(tu.tags, |tag| List.is_empty(tag.payload))
 
 	if is_pure_enum {
-		return "impl ${struct_name} {\n    /// Recursively decrement Roc-owned payloads.\n    pub fn decref(self, roc_host: &RocHost) {\n        let _ = self;\n        let _ = roc_host;\n    }\n\n    /// Increment Roc-owned payloads.\n    pub fn incref(self, amount: isize) {\n        let _ = self;\n        let _ = amount;\n    }\n}\n\n"
+		return "impl ${struct_name} {\n    /// Recursively decrement Roc-owned payloads.\n    ///\n    /// # Safety\n    /// `self` must own one live Roc reference for each refcounted payload.\n    pub unsafe fn decref(self, roc_host: &RocHost) {\n        let _ = self;\n        let _ = roc_host;\n    }\n\n    /// Increment Roc-owned payloads.\n    ///\n    /// # Safety\n    /// `self` must point at live Roc allocations. The retained references must\n    /// be balanced by later decrefs.\n    pub unsafe fn incref(self, amount: isize) {\n        let _ = self;\n        let _ = amount;\n    }\n}\n\n"
 	}
 
 	var $decref_branches = ""
@@ -1975,7 +2379,7 @@ generate_tag_union_refcount_helpers_rust = |type_table, duplicate_names, preferr
 		$incref_branches = Str.concat($incref_branches, generate_tag_payload_refcount_branch_rust(type_table, duplicate_names, preferred_names, struct_name, tag, "incref"))
 	}
 
-	"impl ${struct_name} {\n    /// Recursively decrement Roc-owned payloads.\n    pub fn decref(self, roc_host: &RocHost) {\n        let value = self;\n        let _ = roc_host;\n        match value.tag {\n${indent_lines($decref_branches, "    ")}        }\n    }\n\n    /// Increment Roc-owned payloads.\n    pub fn incref(self, amount: isize) {\n        let value = self;\n        let _ = amount;\n        match value.tag {\n${indent_lines($incref_branches, "    ")}        }\n    }\n}\n\n"
+	"impl ${struct_name} {\n    /// Recursively decrement Roc-owned payloads.\n    ///\n    /// # Safety\n    /// `self` must own one live Roc reference for each refcounted payload.\n    pub unsafe fn decref(self, roc_host: &RocHost) {\n        let value = self;\n        let _ = roc_host;\n        match value.tag {\n${indent_lines($decref_branches, "    ")}        }\n    }\n\n    /// Increment Roc-owned payloads.\n    ///\n    /// # Safety\n    /// `self` must point at live Roc allocations. The retained references must\n    /// be balanced by later decrefs.\n    pub unsafe fn incref(self, amount: isize) {\n        let value = self;\n        let _ = amount;\n        match value.tag {\n${indent_lines($incref_branches, "    ")}        }\n    }\n}\n\n"
 }
 
 generate_box_payload_decref_helpers_rust = |type_table, duplicate_names, preferred_names| {
@@ -2214,7 +2618,7 @@ generate_default_allocators_direct_rust =
 	\\        unsafe {
 	\\            let min_alignment = alignment.max(core::mem::align_of::<usize>());
 	\\            let size_storage_bytes = min_alignment;
-	\\            let total_size = length + size_storage_bytes;
+	\\            let total_size = checked_add_usize(length, size_storage_bytes, "roc_alloc allocation size overflow");
 	\\
 	\\            debug_assert!(min_alignment.is_power_of_two(), "alignment must be a power of two");
 	\\            let layout = Layout::from_size_align_unchecked(total_size, min_alignment);
@@ -2257,7 +2661,7 @@ generate_default_allocators_direct_rust =
 	\\            let old_total_size = *old_size_ptr;
 	\\            let old_base_ptr = (ptr as *mut u8).sub(size_storage_bytes);
 	\\
-	\\            let new_total_size = new_length + size_storage_bytes;
+	\\            let new_total_size = checked_add_usize(new_length, size_storage_bytes, "roc_realloc allocation size overflow");
 	\\            debug_assert!(min_alignment.is_power_of_two(), "alignment must be a power of two");
 	\\            let old_layout = Layout::from_size_align_unchecked(old_total_size, min_alignment);
 	\\            let new_base_ptr = std::alloc::realloc(old_base_ptr, old_layout, new_total_size);
