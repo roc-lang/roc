@@ -3240,6 +3240,13 @@ by `assign_literal.str_literal`. The checked type remains `List(U8)` and layout
 selection comes from the checked type's boxy representation; the lowerer does
 not synthesize a list element-by-element from the bytes.
 
+Checked builtin string interpolation that has already been represented as a
+checked `str` segment list lowers by evaluating each segment expression in
+source order and emitting explicit `assign_low_level.str_concat` statements in
+left-associative order. Segment locals use layouts selected from their checked
+types; if a segment requires non-string adaptation, that is handled by the
+checked dispatch/interpolation path rather than guessed during concat lowering.
+
 Checked block lowering is continuation-based. Before the final expression is
 lowered, the body builder allocates and binds every checked declaration local
 from the block's explicit checked statement list, using the checked pattern type

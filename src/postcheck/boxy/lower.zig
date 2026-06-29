@@ -470,6 +470,7 @@ const ProcBodyBuilder = struct {
             } }),
             .str_segment => |literal| try self.assignStringLiteral(target, literal, next),
             .bytes_literal => |literal| try self.assignStringLiteral(target, literal, next),
+            .str => |segments| try self.lowerStrInto(target, segments, next),
             .str_from_quote => |quote| blk: {
                 if (quote.plan != null) {
                     boxyLowerInvariant("from_quote conversion reached boxy string literal lowering before static-dispatch call lowering");
@@ -771,6 +772,57 @@ const ProcBodyBuilder = struct {
             .next = next,
         } });
         return try self.lowerExprInto(tuple_local, tuple_id, read);
+    }
+
+    fn lowerStrInto(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        segments: []const checked.CheckedExprId,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        if (segments.len == 0) return try self.assignStringBytesLiteral(target, "", next);
+        if (segments.len == 1) return try self.lowerExprInto(target, segments[0], next);
+
+        const str_layout = self.parent.result.store.getLocal(target).layout_idx;
+
+        const segment_locals = try self.parent.allocator.alloc(LIR.LocalId, segments.len);
+        defer self.parent.allocator.free(segment_locals);
+        for (segments, segment_locals) |segment, *local| {
+            const expr = self.module.checked_bodies.expr(segment);
+            const layout_idx = self.workerRuntimeLayoutForType(expr.ty).layoutIdx();
+            if (layout_idx != str_layout) {
+                boxyLowerInvariant("checked string segment required explicit box/adapt lowering before string concatenation");
+            }
+            local.* = try self.addFrameLocal(layout_idx);
+        }
+
+        const concat_results = try self.parent.allocator.alloc(LIR.LocalId, segments.len - 1);
+        defer self.parent.allocator.free(concat_results);
+        for (concat_results[0 .. concat_results.len - 1]) |*local| {
+            local.* = try self.addFrameLocal(str_layout);
+        }
+        concat_results[concat_results.len - 1] = target;
+
+        var continuation = next;
+        var concat_index = concat_results.len;
+        while (concat_index > 0) {
+            concat_index -= 1;
+            const lhs = if (concat_index == 0) segment_locals[0] else concat_results[concat_index - 1];
+            const rhs = segment_locals[concat_index + 1];
+            const args = [_]LIR.LocalId{ lhs, rhs };
+            continuation = try self.parent.result.store.addCFStmt(.{ .assign_low_level = .{
+                .target = concat_results[concat_index],
+                .op = .str_concat,
+                .rc_effect = LIR.LowLevel.str_concat.rcEffect(),
+                .args = try self.parent.result.store.addLocalSpan(&args),
+                .next = continuation,
+            } });
+            continuation = try self.lowerExprInto(rhs, segments[concat_index + 1], continuation);
+            if (concat_index == 0) {
+                continuation = try self.lowerExprInto(lhs, segments[0], continuation);
+            }
+        }
+        return continuation;
     }
 
     fn lowerRecordInto(
@@ -1872,6 +1924,15 @@ const ProcBodyBuilder = struct {
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
         const text = self.module.checked_bodies.stringLiteral(literal_id);
+        return try self.assignStringBytesLiteral(target, text, next);
+    }
+
+    fn assignStringBytesLiteral(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        text: []const u8,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
         return try self.parent.result.store.addCFStmt(.{ .assign_literal = .{
             .target = target,
             .value = .{ .str_literal = try self.parent.result.store.insertStringView(text, 0, @intCast(text.len)) },
@@ -3605,6 +3666,139 @@ test "boxy lowerer emits checked bytes literals as byte-backed LIR literals" {
         else => return error.TestUnexpectedResult,
     }
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = assign.target } }, out.lir_result.store.getCFStmt(assign.next));
+}
+
+test "boxy lowerer emits checked string interpolation segments as concat chain" {
+    const gpa = std.testing.allocator;
+
+    var artifact = minimalCheckedArtifact(gpa);
+    defer artifact.canonical_names.deinit();
+    defer artifact.checked_types.deinit(gpa);
+    defer artifact.checked_bodies.deinit(gpa);
+
+    try artifact.checked_types.payloads.append(gpa, .{
+        .nominal = builtinNominal(.str, @enumFromInt(0), .{}),
+    });
+    try artifact.checked_types.payloads.append(gpa, .{
+        .function = .{
+            .kind = .pure,
+            .args = .{},
+            .ret = @enumFromInt(0),
+            .needs_instantiation = false,
+        },
+    });
+
+    try artifact.checked_bodies.string_bytes.appendSlice(gpa, "abc");
+    try artifact.checked_bodies.string_ranges.appendSlice(gpa, &.{
+        .{ .start = 0, .len = 1 },
+        .{ .start = 1, .len = 1 },
+        .{ .start = 2, .len = 1 },
+    });
+    try artifact.checked_bodies.expr_id_pool.appendSlice(gpa, &.{
+        @as(checked.CheckedExprId, @enumFromInt(2)),
+        @as(checked.CheckedExprId, @enumFromInt(3)),
+        @as(checked.CheckedExprId, @enumFromInt(4)),
+    });
+
+    const template_ref = procedureTemplateRef(artifact.key, 0);
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(0),
+        .ty = @enumFromInt(1),
+        .source_region = base.Region.zero(),
+        .data = .{ .lambda = .{ .args = .{}, .body = @enumFromInt(1) } },
+    });
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(1),
+        .ty = @enumFromInt(0),
+        .source_region = base.Region.zero(),
+        .data = .{ .str = .{ .start = 0, .len = 3 } },
+    });
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(2),
+        .ty = @enumFromInt(0),
+        .source_region = base.Region.zero(),
+        .data = .{ .str_segment = @enumFromInt(0) },
+    });
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(3),
+        .ty = @enumFromInt(0),
+        .source_region = base.Region.zero(),
+        .data = .{ .str_segment = @enumFromInt(1) },
+    });
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(4),
+        .ty = @enumFromInt(0),
+        .source_region = base.Region.zero(),
+        .data = .{ .str_segment = @enumFromInt(2) },
+    });
+    try artifact.checked_bodies.bodies.append(gpa, .{
+        .id = @enumFromInt(0),
+        .root_expr = @enumFromInt(0),
+        .owner_template = template_ref,
+    });
+    var templates = [_]checked.CheckedProcedureTemplate{
+        checkedTemplate(template_ref, @enumFromInt(1), @enumFromInt(0)),
+    };
+    artifact.checked_procedure_templates = .{ .templates = &templates };
+
+    const root = checked.RootRequest{
+        .order = 0,
+        .module_idx = 0,
+        .kind = .runtime_entrypoint,
+        .source = .{ .def = @enumFromInt(0) },
+        .checked_type = @enumFromInt(1),
+        .abi = .roc,
+        .exposure = .private,
+        .procedure_template = template_ref,
+    };
+    var plan = try Plan.analyzeProgram(gpa, .{
+        .root_module = .{ .module = &artifact, .roots = undefined },
+        .roots = &.{root},
+    }, .{});
+    defer plan.deinit();
+
+    var out = try run(
+        gpa,
+        .{ .root = .{ .module = &artifact, .roots = undefined } },
+        .{},
+        &plan,
+        .{},
+    );
+    defer out.deinit();
+
+    const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
+    const first = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_literal;
+    switch (first.value) {
+        .str_literal => |literal| try std.testing.expectEqualStrings("a", out.lir_result.store.getStringLiteral(literal)),
+        else => return error.TestUnexpectedResult,
+    }
+
+    const second = out.lir_result.store.getCFStmt(first.next).assign_literal;
+    switch (second.value) {
+        .str_literal => |literal| try std.testing.expectEqualStrings("b", out.lir_result.store.getStringLiteral(literal)),
+        else => return error.TestUnexpectedResult,
+    }
+
+    const first_concat = out.lir_result.store.getCFStmt(second.next).assign_low_level;
+    try std.testing.expectEqual(@as(LIR.LowLevel, .str_concat), first_concat.op);
+    const first_args = out.lir_result.store.getLocalSpan(first_concat.args);
+    try std.testing.expectEqual(@as(usize, 2), first_args.len);
+    try std.testing.expectEqual(first.target, first_args[0]);
+    try std.testing.expectEqual(second.target, first_args[1]);
+
+    const third = out.lir_result.store.getCFStmt(first_concat.next).assign_literal;
+    switch (third.value) {
+        .str_literal => |literal| try std.testing.expectEqualStrings("c", out.lir_result.store.getStringLiteral(literal)),
+        else => return error.TestUnexpectedResult,
+    }
+
+    const second_concat = out.lir_result.store.getCFStmt(third.next).assign_low_level;
+    try std.testing.expectEqual(@as(LIR.LowLevel, .str_concat), second_concat.op);
+    const second_args = out.lir_result.store.getLocalSpan(second_concat.args);
+    try std.testing.expectEqual(@as(usize, 2), second_args.len);
+    try std.testing.expectEqual(first_concat.target, second_args[0]);
+    try std.testing.expectEqual(third.target, second_args[1]);
+    try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = second_concat.target } }, out.lir_result.store.getCFStmt(second_concat.next));
 }
 
 test "boxy lowerer emits checked dbg expressions before unit result" {
