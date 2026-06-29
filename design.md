@@ -3456,6 +3456,16 @@ used only when reachable LIR statements reference them. `fn_sets` and
 slots are stored inside the corresponding function variant or erased-function
 entry.
 
+For `.boxy`, layout-only lowering may produce no procedures and still populate
+`requested_layouts`. Each requested layout uses the host-visible layout for the
+checked type, not the private worker layout, and carries a `ConstPlan` built
+from the same explicit boxy representation plan. Alias and unsupported builtin
+nominal representations share the child plan id rather than duplicating owned
+plan payloads. Dynamic values, erased callables, and opaque static-data shapes
+require the later descriptor/callable/static-data support; reaching them while
+building a requested-layout `ConstPlan` is a compiler invariant failure, not a
+fallback to an approximate plan.
+
 The output owns all of these stores and spans. Consumers borrow the fields they
 need and must not add their own side stores for the same data. `LirImage`
 contains only the ARC-inserted LIR fields: `store`, `layouts`, `root_procs`,
