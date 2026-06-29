@@ -155,8 +155,6 @@ test "parseSingleModule - simple expression" {
 test "parseSingleModule - simple file" {
     const allocator = std.testing.allocator;
     const source =
-        \\module [main]
-        \\
         \\main = "Hello"
     ;
 

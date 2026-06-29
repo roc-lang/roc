@@ -423,10 +423,20 @@ pub const InstGraph = struct {
                     try self.setContent(right, .{ .unresolved = mergeVariables(left_var, right_var) });
                     try self.union_(right, left);
                 },
+                .named => |right_named| if (right_named.kind == .alias)
+                    try self.unifyThroughBacking(right, right_content, left, pending)
+                else
+                    try self.union_(right, left),
                 else => try self.union_(right, left),
             },
             else => switch (right_content) {
-                .unresolved => try self.union_(left, right),
+                .unresolved => switch (left_content) {
+                    .named => |left_named| if (left_named.kind == .alias)
+                        try self.unifyThroughBacking(left, left_content, right, pending)
+                    else
+                        try self.union_(left, right),
+                    else => try self.union_(left, right),
+                },
                 else => try self.unifyConcrete(left, left_content, right, right_content, pending),
             },
         }
@@ -541,6 +551,14 @@ pub const InstGraph = struct {
             },
             .named => |left_named| switch (right_content) {
                 .named => |right_named| {
+                    if (left_named.kind == .alias) {
+                        try self.unifyThroughBacking(left, left_content, right, pending);
+                        return;
+                    }
+                    if (right_named.kind == .alias) {
+                        try self.unifyThroughBacking(right, right_content, left, pending);
+                        return;
+                    }
                     if (std.meta.eql(left_named.def, right_named.def) and left_named.args.len == right_named.args.len) {
                         for (left_named.args, right_named.args) |left_arg, right_arg| {
                             try pending.append(self.allocator, .{ .left = left_arg, .right = right_arg });
@@ -553,14 +571,6 @@ pub const InstGraph = struct {
                             }
                         }
                         try self.union_(left, right);
-                        return;
-                    }
-                    if (left_named.kind == .alias) {
-                        try self.unifyThroughBacking(left, left_content, right, pending);
-                        return;
-                    }
-                    if (right_named.kind == .alias) {
-                        try self.unifyThroughBacking(right, right_content, left, pending);
                         return;
                     }
                     try self.unifyThroughBacking(left, left_content, right, pending);
@@ -1175,6 +1185,13 @@ pub const InstGraph = struct {
     /// evidence refills that id in place.
     pub fn addMonoView(self: *InstGraph, node: NodeId, ty: Type.TypeId) Allocator.Error!void {
         const root = self.find(node);
+        try self.addMonoViewRoot(root, ty);
+        try self.fillMono(root, ty);
+        try self.drainDirty();
+    }
+
+    fn addMonoViewRoot(self: *InstGraph, raw_root: NodeId, ty: Type.TypeId) Allocator.Error!void {
+        const root = self.find(raw_root);
         try self.mono_nodes.put(ty, root);
         const entry = try self.node_monos.getOrPut(root);
         if (!entry.found_existing) entry.value_ptr.* = .empty;
@@ -1203,7 +1220,131 @@ pub const InstGraph = struct {
     pub fn refreshedMonoFor(self: *InstGraph, node: NodeId) Allocator.Error!Type.TypeId {
         const ty = try self.monoFor(node);
         try self.fillMono(self.find(node), ty);
+        try self.drainDirty();
         return ty;
+    }
+
+    pub fn snapshotMonoFor(self: *InstGraph, node: NodeId) Allocator.Error!Type.TypeId {
+        var seen = std.AutoHashMap(NodeId, Type.TypeId).init(self.allocator);
+        defer seen.deinit();
+        return try self.snapshotNode(node, &seen);
+    }
+
+    fn snapshotNode(
+        self: *InstGraph,
+        raw_node: NodeId,
+        seen: *std.AutoHashMap(NodeId, Type.TypeId),
+    ) Allocator.Error!Type.TypeId {
+        const root = self.find(raw_node);
+        if (seen.get(root)) |ty| return ty;
+        const ty = try self.types.add(.zst);
+        try seen.put(root, ty);
+        const snapshot = try self.snapshotContent(root, seen);
+        self.types.types.items[@intFromEnum(ty)] = snapshot;
+        return ty;
+    }
+
+    fn snapshotContent(
+        self: *InstGraph,
+        root: NodeId,
+        seen: *std.AutoHashMap(NodeId, Type.TypeId),
+    ) Allocator.Error!Type.Content {
+        return switch (self.nodes.items[@intFromEnum(self.find(root))]) {
+            .redirect => unreachable,
+            .unresolved => |variable| blk: {
+                if (variable.numeric_default_phase) |phase| switch (phase) {
+                    .mono_specialization => break :blk .{ .primitive = .dec },
+                    .mono_specialization_str => break :blk .{ .primitive = .str },
+                    .checking_finalized => Common.invariant("checking-finalized numeric variable reached Monotype unresolved"),
+                };
+                if (variable.row_default) |row_default| switch (row_default) {
+                    .empty_record => break :blk .{ .record = Type.Span.empty() },
+                    .empty_tag_union => break :blk .{ .tag_union = Type.Span.empty() },
+                };
+                break :blk .{ .tag_union = Type.Span.empty() };
+            },
+            .primitive => |primitive| .{ .primitive = primitive },
+            .list => |elem| .{ .list = try self.snapshotNode(elem, seen) },
+            .box => |elem| .{ .box = try self.snapshotNode(elem, seen) },
+            .tuple => |items| .{ .tuple = try self.snapshotSpan(items, seen) },
+            .func => |func| .{ .func = .{
+                .args = try self.snapshotSpan(func.args, seen),
+                .ret = try self.snapshotNode(func.ret, seen),
+            } },
+            .empty_tag_union => .{ .tag_union = Type.Span.empty() },
+            .empty_record => .{ .record = Type.Span.empty() },
+            .tag_union => blk: {
+                const flat = try self.flattenTagRow(root);
+                var tags = std.ArrayList(PendingTag).empty;
+                defer tags.deinit(self.allocator);
+                try tags.ensureTotalCapacity(self.allocator, flat.tags.len);
+                for (flat.tags) |tag| {
+                    tags.appendAssumeCapacity(.{
+                        .name = tag.name,
+                        .checked_name = tag.checked_name,
+                        .payloads = try self.snapshotSlice(tag.payloads, seen),
+                    });
+                }
+                std.mem.sort(PendingTag, tags.items, self.name_store, pendingTagLessThan);
+                assertNoDuplicatePendingTags(self.name_store, tags.items, "instantiation produced a tag row with duplicate tags");
+                break :blk .{ .tag_union = try self.tagSpanWithReuse(tags.items, null) };
+            },
+            .record => blk: {
+                const flat = try self.flattenRecordRow(root);
+                var fields = std.ArrayList(Type.Field).empty;
+                defer fields.deinit(self.allocator);
+                try fields.ensureTotalCapacity(self.allocator, flat.fields.len);
+                for (flat.fields) |field| {
+                    fields.appendAssumeCapacity(.{
+                        .name = field.name,
+                        .ty = try self.snapshotNode(field.ty, seen),
+                    });
+                }
+                std.mem.sort(Type.Field, fields.items, self.name_store, recordFieldLessThan);
+                assertNoDuplicateRecordFields(self.name_store, fields.items, "instantiation produced a record row with duplicate fields");
+                break :blk .{ .record = try self.recordSpanWithReuse(fields.items, null) };
+            },
+            .named => |named| blk: {
+                const backing: ?Type.NamedBacking = if (named.backing) |raw_backing| backing: {
+                    const structural = try self.structuralBackingNode(raw_backing.node, named);
+                    break :backing .{
+                        .ty = try self.snapshotNode(structural.node, seen),
+                        .use = raw_backing.use,
+                    };
+                } else null;
+                break :blk .{ .named = .{
+                    .named_type = named.named_type,
+                    .def = named.def,
+                    .kind = named.kind,
+                    .builtin_owner = named.builtin_owner,
+                    .args = try self.snapshotSpan(named.args, seen),
+                    .backing = backing,
+                    .declared_order = named.declared_order,
+                } };
+            },
+            .erased => |digest| .{ .erased = digest },
+            .zst => .zst,
+        };
+    }
+
+    fn snapshotSlice(
+        self: *InstGraph,
+        nodes_slice: []const NodeId,
+        seen: *std.AutoHashMap(NodeId, Type.TypeId),
+    ) Allocator.Error![]Type.TypeId {
+        const out = try self.arena().alloc(Type.TypeId, nodes_slice.len);
+        for (nodes_slice, 0..) |node, index| {
+            out[index] = try self.snapshotNode(node, seen);
+        }
+        return out;
+    }
+
+    fn snapshotSpan(
+        self: *InstGraph,
+        nodes_slice: []const NodeId,
+        seen: *std.AutoHashMap(NodeId, Type.TypeId),
+    ) Allocator.Error!Type.Span {
+        return try self.types.addSpan(try self.snapshotSlice(nodes_slice, seen));
     }
 
     /// Write a node's current content into one of its Monotype views.
@@ -1226,8 +1367,14 @@ pub const InstGraph = struct {
                 break :blk .{ .tag_union = Type.Span.empty() };
             },
             .primitive => |primitive| .{ .primitive = primitive },
-            .list => |elem| .{ .list = try self.monoFor(elem) },
-            .box => |elem| .{ .box = try self.monoFor(elem) },
+            .list => |elem| .{ .list = try self.monoForWithReuse(elem, switch (previous) {
+                .list => |old| old,
+                else => null,
+            }) },
+            .box => |elem| .{ .box = try self.monoForWithReuse(elem, switch (previous) {
+                .box => |old| old,
+                else => null,
+            }) },
             .tuple => |items| .{ .tuple = try self.monoSpanWithReuse(items, switch (previous) {
                 .tuple => |span| span,
                 else => null,
@@ -1237,7 +1384,10 @@ pub const InstGraph = struct {
                     .func => |old| old.args,
                     else => null,
                 }),
-                .ret = try self.monoFor(func.ret),
+                .ret = try self.monoForWithReuse(func.ret, switch (previous) {
+                    .func => |old| old.ret,
+                    else => null,
+                }),
             } },
             .empty_tag_union => .{ .tag_union = Type.Span.empty() },
             .empty_record => .{ .record = Type.Span.empty() },
@@ -1284,7 +1434,10 @@ pub const InstGraph = struct {
                 const backing: ?Type.NamedBacking = if (named.backing) |raw_backing| backing: {
                     const structural = try self.structuralBackingNode(raw_backing.node, named);
                     break :backing .{
-                        .ty = try self.monoFor(structural.node),
+                        .ty = try self.monoForWithReuse(structural.node, switch (previous) {
+                            .named => |old| if (old.backing) |old_backing| old_backing.ty else null,
+                            else => null,
+                        }),
                         .use = raw_backing.use,
                     };
                 } else null;
@@ -1315,12 +1468,46 @@ pub const InstGraph = struct {
         return out;
     }
 
+    fn monoForWithReuse(
+        self: *InstGraph,
+        node: NodeId,
+        existing: ?Type.TypeId,
+    ) Allocator.Error!Type.TypeId {
+        const ty = existing orelse return try self.monoFor(node);
+        const root = self.find(node);
+        const previous_root = if (self.mono_nodes.get(ty)) |mapped| self.find(mapped) else null;
+        try self.addMonoViewRoot(root, ty);
+        if (previous_root == null or previous_root.? != root) {
+            try self.queueDirty(root);
+        }
+        return ty;
+    }
+
+    fn monoSliceWithReuse(
+        self: *InstGraph,
+        nodes_slice: []const NodeId,
+        existing: ?[]const Type.TypeId,
+    ) Allocator.Error![]Type.TypeId {
+        const out = try self.arena().alloc(Type.TypeId, nodes_slice.len);
+        for (nodes_slice, 0..) |node, index| {
+            out[index] = try self.monoForWithReuse(
+                node,
+                if (existing) |old| old[index] else null,
+            );
+        }
+        return out;
+    }
+
     fn monoSpanWithReuse(
         self: *InstGraph,
         nodes_slice: []const NodeId,
         existing: ?Type.Span,
     ) Allocator.Error!Type.Span {
-        const values = try self.monoSlice(nodes_slice);
+        const existing_slice: ?[]const Type.TypeId = if (existing) |span| blk: {
+            const old = self.types.span(span);
+            break :blk if (old.len == nodes_slice.len) old else null;
+        } else null;
+        const values = try self.monoSliceWithReuse(nodes_slice, existing_slice);
         if (existing) |span| {
             if (typeSpanEql(self.types.span(span), values)) return span;
         }
@@ -1602,6 +1789,43 @@ test "issue 9647: row refills do not duplicate dependencies or materialized span
         return error.TestExpectedEqual;
     try std.testing.expectEqual(@as(usize, 1), parents.items.len);
     try std.testing.expectEqual(@as(usize, 1), type_store.fields.items.len);
+}
+
+test "alias unification does not make the alias its own backing" {
+    const gpa = std.testing.allocator;
+
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+
+    var unsolved_monos = std.AutoHashMap(Type.TypeId, void).init(gpa);
+    defer unsolved_monos.deinit();
+
+    const graph = try InstGraph.create(gpa, &type_store, &name_store, &unsolved_monos);
+    defer graph.destroy();
+
+    const backing = try graph.newNode(.{ .unresolved = .{} });
+    const alias = try graph.newNode(.{ .named = .{
+        .named_type = .{ .module = .{}, .ty = testCheckedTypeId(1) },
+        .def = .{ .module_name = @enumFromInt(1), .type_name = @enumFromInt(1) },
+        .kind = .alias,
+        .builtin_owner = null,
+        .args = try graph.arena().alloc(NodeId, 0),
+        .backing = .{ .node = backing, .use = .inspectable },
+    } });
+
+    try graph.unify(alias, backing);
+    try std.testing.expect(graph.find(alias) != graph.find(backing));
+
+    const alias_ty = try graph.monoFor(alias);
+    const named = switch (type_store.get(alias_ty)) {
+        .named => |named| named,
+        else => return error.TestExpectedEqual,
+    };
+    const named_backing = named.backing orelse return error.TestExpectedEqual;
+    try std.testing.expect(named_backing.ty != alias_ty);
 }
 
 test "issue 9647: unresolved tag row extension absorbs rest without allocating a rest node" {

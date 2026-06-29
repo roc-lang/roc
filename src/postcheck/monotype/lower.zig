@@ -306,6 +306,7 @@ const MergeBinder = struct {
 const LoweredLambdaArgs = struct {
     args: Ast.Span(Ast.TypedLocal),
     body: Ast.ExprId,
+    ret: Type.TypeId,
 };
 
 const LoweredCall = struct {
@@ -1174,13 +1175,16 @@ const Builder = struct {
         }
         const live_fn_ty = try graph.monoFor(root_node);
         const lowered = try body_ctx.lowerTemplateBody(template_ref, template, live_fn_ty);
+        const solved_view_ty = try graph.refreshedMonoFor(root_node);
+        const solved_fn_ty = if (requester != null) try graph.snapshotMonoFor(root_node) else solved_view_ty;
+        const solved_fn_data = self.functionShape(solved_fn_ty, "lowered procedure template root type was not a function");
         // The definition records the body's solved view of the root type.
         // Deferred call sites embed the requested type, which digests
         // identically because digests are alias-transparent and a solved
         // requester determines every interface slot; root-class call sites
         // adopt this recorded template directly.
         var def_template = fn_template;
-        def_template.mono_fn_ty = live_fn_ty;
+        def_template.mono_fn_ty = solved_fn_ty;
         self.program.fns.items[@intFromEnum(reservation.fn_id)].source = def_template;
         // The body may have refined slots the request left unresolved (empty
         // tag unions). Flow the solved view back into the requester's Monotype
@@ -1189,7 +1193,7 @@ const Builder = struct {
         if (requester) |requester_graph| {
             try requester_graph.unify(
                 try requester_graph.importMono(fn_ty),
-                try requester_graph.importMono(live_fn_ty),
+                try requester_graph.importMono(solved_fn_ty),
             );
             try requester_graph.drainDirty();
         }
@@ -1199,9 +1203,9 @@ const Builder = struct {
             .fn_id = reservation.fn_id,
             .args = lowered.args,
             .body = .{ .roc = lowered.body },
-            .ret = lowered.ret,
+            .ret = solved_fn_data.ret,
         };
-        self.markTemplateReady(family, reservation.def, live_fn_ty);
+        self.markTemplateReady(family, reservation.def, solved_fn_ty);
         try self.drainSpecRequests(graph);
         return reservation.def;
     }
@@ -1217,6 +1221,7 @@ const Builder = struct {
         const family = TemplateFamily.from(template_ref, source_fn_key);
         const family_entry = try self.lowered_templates.getOrPut(family);
         if (!family_entry.found_existing) family_entry.value_ptr.* = .empty;
+        try requester.addMonoView(try requester.importMono(fn_ty), fn_ty);
         const fn_ty_digest = self.program.types.specializationDigest(&self.program.names, fn_ty);
         for (family_entry.value_ptr.items) |existing| {
             var matched_ty: ?Type.TypeId = null;
@@ -2223,8 +2228,10 @@ const Builder = struct {
         }
         const live_fn_ty = try request.ctx.graph.monoFor(root_node);
         const lowered = try request.ctx.lowerNestedFunction(request.expr_id, live_fn_ty);
+        const solved_fn_ty = try request.ctx.graph.refreshedMonoFor(root_node);
+        const solved_fn_data = self.functionShape(solved_fn_ty, "lowered nested function root type was not a function");
         var def_template = fn_template;
-        def_template.mono_fn_ty = live_fn_ty;
+        def_template.mono_fn_ty = solved_fn_ty;
         self.program.fns.items[@intFromEnum(fn_id)].source = def_template;
         try self.program.nested_defs.append(self.allocator, .{
             .symbol = self.symbols.fresh(),
@@ -2232,9 +2239,9 @@ const Builder = struct {
             .fn_id = fn_id,
             .args = lowered.args,
             .body = lowered.body,
-            .ret = lowered.ret,
+            .ret = solved_fn_data.ret,
         });
-        self.markNestedFnReady(family, fn_id, live_fn_ty);
+        self.markNestedFnReady(family, fn_id, solved_fn_ty);
         return fn_id;
     }
 
@@ -2254,7 +2261,17 @@ const Builder = struct {
     /// while its body lowered. Its types are final now, so every request's
     /// specialization key is stable.
     fn drainSpecRequests(self: *Builder, graph: *InstGraph) Allocator.Error!void {
-        while (graph.deferred_templates.pop()) |request| {
+        try self.drainSpecRequestsFrom(graph, 0);
+    }
+
+    /// Process only specialization requests appended after `start_len`. This is
+    /// used when a dispatcher operand's result type is immediately needed to
+    /// resolve an enclosing dispatch; those operand-local body requests produce
+    /// the explicit return evidence the enclosing dispatch consumes.
+    fn drainSpecRequestsFrom(self: *Builder, graph: *InstGraph, start_len: usize) Allocator.Error!void {
+        while (graph.deferred_templates.items.len > start_len) {
+            const request = graph.deferred_templates.pop() orelse
+                Common.invariant("deferred template queue length changed while draining");
             _ = try self.lowerTemplateWithMonoFor(
                 request.template_ref,
                 self.moduleForId(request.module),
@@ -4334,6 +4351,20 @@ const BodyContext = struct {
         if (self.builder.constrain_depth == 1) try self.graph.drainDirty();
     }
 
+    fn refreshedCheckedType(
+        self: *BodyContext,
+        checked_ty: checked.CheckedTypeId,
+    ) Allocator.Error!Type.TypeId {
+        return try self.graph.refreshedMonoFor(try self.instNode(checked_ty));
+    }
+
+    fn refreshedMonoType(
+        self: *BodyContext,
+        mono_ty: Type.TypeId,
+    ) Allocator.Error!Type.TypeId {
+        return try self.graph.refreshedMonoFor(try self.graph.importMono(mono_ty));
+    }
+
     /// Constrain two checked types from (possibly different) instantiation
     /// contexts of the same specialization to denote one type.
     fn constrainCheckedTypeRelations(
@@ -4448,10 +4479,15 @@ const BodyContext = struct {
                     .use = .inspectable,
                 },
             } }),
-            .record_unbound => |fields| try self.graph.newNode(.{ .record = .{
-                .fields = try self.instFields(fields),
-                .ext = try self.graph.newNode(.empty_record),
-            } }),
+            .record_unbound => |fields| try self.graph.newNode(.{
+                .record = .{
+                    .fields = try self.instFields(fields),
+                    // Checked record_unbound means "{ fields, ..flex }"; the
+                    // extension defaults to empty only if no specialization adds
+                    // fields.
+                    .ext = try self.graph.newNode(.{ .unresolved = .{ .row_default = .empty_record } }),
+                },
+            }),
             .record => |record| try self.graph.newNode(.{ .record = .{
                 .fields = try self.instFields(record.fields),
                 .ext = try self.instNode(record.ext),
@@ -4720,7 +4756,7 @@ const BodyContext = struct {
         return .{
             .args = lowered.args,
             .body = lowered.body,
-            .ret = fn_data.ret,
+            .ret = lowered.ret,
         };
     }
 
@@ -4793,16 +4829,24 @@ const BodyContext = struct {
         while (remaining > 0) {
             remaining -= 1;
             const arg_let = arg_lets.items[remaining];
-            body = try self.builder.program.addExpr(.{ .ty = ret_ty, .data = .{ .let_ = .{
+            const body_ty = self.builder.program.exprs.items[@intFromEnum(body)].ty;
+            body = try self.builder.program.addExpr(.{ .ty = body_ty, .data = .{ .let_ = .{
                 .bind = arg_let.pat,
                 .value = arg_let.value,
                 .rest = body,
             } } });
         }
 
+        const body_ty = self.builder.program.exprs.items[@intFromEnum(body)].ty;
+        try self.graph.unify(try self.graph.importMono(ret_ty), try self.graph.importMono(body_ty));
+        try self.graph.drainDirty();
+        const solved_ret_ty = try self.refreshedMonoType(ret_ty);
+        self.builder.program.exprs.items[@intFromEnum(body)].ty = solved_ret_ty;
+
         return .{
             .args = try self.builder.program.addTypedLocalSpan(args),
             .body = body,
+            .ret = solved_ret_ty,
         };
     }
 
@@ -10485,8 +10529,11 @@ const BodyContext = struct {
             else => {},
         }
         try self.constrainKnownType(expr.ty, ty);
-        const lowered = try self.lowerExprWithType(checked_expr, ty);
-        if (!self.sameType(ty, self.builder.program.exprs.items[@intFromEnum(lowered)].ty)) {
+        const live_ty = try self.refreshedMonoType(ty);
+        const lowered = try self.lowerExprWithType(checked_expr, live_ty);
+        const final_ty = try self.refreshedCheckedType(expr.ty);
+        self.builder.program.exprs.items[@intFromEnum(lowered)].ty = final_ty;
+        if (!self.sameType(try self.refreshedMonoType(live_ty), final_ty)) {
             Common.invariant("checked expression lowered at a type different from its call operand type");
         }
         return lowered;
@@ -10839,13 +10886,13 @@ const BodyContext = struct {
         call_ctx.owner_context_fn_key = self.owner_context_fn_key;
         call_ctx.current_fn_key = self.current_fn_key;
 
-        const callable_mono_ty = try call_ctx.instantiateDispatchPlanCallTypeFromCaller(plan.callable_ty, self, checked_ret_ty, plan_args, expected_ret_ty);
-        const plan_fn_data = self.builder.functionShape(callable_mono_ty, "checked dispatch plan had a non-function type");
+        var callable_mono_ty = try call_ctx.instantiateDispatchPlanCallTypeFromCaller(plan.callable_ty, self, checked_ret_ty, plan_args, expected_ret_ty);
+        var plan_fn_data = self.builder.functionShape(callable_mono_ty, "checked dispatch plan had a non-function type");
         const plan_arg_tys = try self.allocator.dupe(Type.TypeId, self.builder.program.types.span(plan_fn_data.args));
         defer self.allocator.free(plan_arg_tys);
-        const plan_ret_ty = plan_fn_data.ret;
+        var plan_ret_ty = plan_fn_data.ret;
 
-        const dispatcher_ty = try self.dispatcherMonoType(plan, plan_arg_tys);
+        var dispatcher_ty = try self.dispatcherMonoType(plan, plan_arg_tys);
         // A dispatcher slot fed only by another method dispatch stays
         // unresolved until that operand's target resolves. Lowering the
         // dispatcher operand first supplies the receiver's solved type; the
@@ -10855,10 +10902,26 @@ const BodyContext = struct {
         if (owner_is_null) {
             switch (plan.dispatcher) {
                 .arg => |index| {
+                    const deferred_top = self.graph.deferred_templates.items.len;
+                    const lowered = try self.lowerDispatchOperandAtType(plan_args[index], plan_arg_tys[index]);
+                    try self.builder.drainSpecRequestsFrom(self.graph, deferred_top);
+                    const raw_lowered_ty = self.builder.program.exprs.items[@intFromEnum(lowered)].ty;
+                    const lowered_ty = try self.refreshedMonoType(raw_lowered_ty);
+                    self.builder.program.exprs.items[@intFromEnum(lowered)].ty = lowered_ty;
                     pre_lowered = .{
                         .index = index,
-                        .expr = try self.lowerDispatchOperandAtType(plan_args[index], plan_arg_tys[index]),
+                        .expr = lowered,
                     };
+                    callable_mono_ty = try call_ctx.graph.refreshedMonoFor(try call_ctx.instNode(plan.callable_ty));
+                    plan_fn_data = self.builder.functionShape(callable_mono_ty, "checked dispatch plan had a non-function type");
+                    const refreshed_args = self.builder.program.types.span(plan_fn_data.args);
+                    if (refreshed_args.len != plan_arg_tys.len) {
+                        Common.invariant("checked dispatch plan arity changed after dispatcher pre-lowering");
+                    }
+                    @memcpy(plan_arg_tys, refreshed_args);
+                    plan_arg_tys[index] = lowered_ty;
+                    plan_ret_ty = plan_fn_data.ret;
+                    dispatcher_ty = lowered_ty;
                 },
                 .type_only => {},
             }
@@ -10903,14 +10966,17 @@ const BodyContext = struct {
         }
         const fn_data = self.builder.functionShape(target_mono_ty, "checked dispatch target had a non-function type");
         try self.constrainTypeToMono(checked_ret_ty, fn_data.ret);
+        const call_data = try self.lowerResolvedDispatch(plan, resolved, target_mono_ty, self, pre_lowered);
+        const ret_ty = try self.refreshedCheckedType(checked_ret_ty);
         if (expected_ret_ty) |expected| {
-            if (!self.sameType(expected, fn_data.ret)) Common.invariant("checked dispatch expression lowered at a type different from its call operand type");
+            const expected_ty = try self.refreshedMonoType(expected);
+            if (!self.sameType(expected_ty, ret_ty)) Common.invariant("checked dispatch expression lowered at a type different from its call operand type");
         }
         const call_expr = try self.builder.program.addExpr(.{
-            .ty = fn_data.ret,
-            .data = try self.lowerResolvedDispatch(plan, resolved, target_mono_ty, self, pre_lowered),
+            .ty = ret_ty,
+            .data = call_data,
         });
-        return try self.applyDispatchResultMode(plan.result_mode, call_expr, fn_data.ret);
+        return try self.applyDispatchResultMode(plan.result_mode, call_expr, ret_ty);
     }
 
     fn applyDispatchResultMode(

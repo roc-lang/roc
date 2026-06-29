@@ -301,6 +301,12 @@ pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_
 
 /// Initialize where the provided source is an entire file
 pub fn init(module_name: []const u8, source: []const u8) Allocator.Error!TestEnv {
+    return initWithExecutableRootNames(module_name, source, &.{});
+}
+
+/// Initialize a source file and mark selected top-level defs as executable
+/// zero-arg roots for checker validation.
+pub fn initWithExecutableRootNames(module_name: []const u8, source: []const u8, explicit_root_names: []const []const u8) Allocator.Error!TestEnv {
     const gpa = std.testing.allocator;
 
     const roc_ctx = CoreCtx.testing(gpa, gpa);
@@ -345,6 +351,7 @@ pub fn init(module_name: []const u8, source: []const u8) Allocator.Error!TestEnv
             .builtin_indices = builtin_indices,
         },
         .imported_modules = &module_envs,
+        .explicit_root_names = explicit_root_names,
     });
     errdefer can.deinit();
 
@@ -389,6 +396,15 @@ pub fn init(module_name: []const u8, source: []const u8) Allocator.Error!TestEnv
         module_builtin_ctx,
     );
     checker.fixupTypeWriter();
+    for (explicit_root_names) |root_name| {
+        const root_def_idx = can.explicitRootDefByName(root_name) orelse {
+            if (@import("builtin").mode == .Debug) {
+                std.debug.panic("test invariant violated: explicit executable root `{s}` was not found", .{root_name});
+            }
+            unreachable;
+        };
+        try checker.addExecutableRootDef(root_def_idx);
+    }
     errdefer checker.deinit();
 
     try checker.checkFile();

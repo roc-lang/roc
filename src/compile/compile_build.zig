@@ -3301,7 +3301,7 @@ test "BuildEnv collectWatchInputStates resolves file dependencies from module so
     try env.transferCoordinatorResults();
     try testing.expectEqualStrings(real_src_dir, sched_mod.source_dir_override.?);
 
-    const source = try allocator.dupe(u8, "module [main]\n");
+    const source = try allocator.dupe(u8, "main = 1\n");
     const module_env = try allocator.create(ModuleEnv);
     module_env.* = try ModuleEnv.init(allocator, source);
     try module_env.initCIRFields("App");
@@ -3335,7 +3335,7 @@ test "BuildEnv header watch state hashes raw CRLF source bytes" {
     const tmp_root = try tmp.dir.realPathFileAlloc(testing.io, ".", allocator);
     defer allocator.free(tmp_root);
 
-    const source = "module [main]\r\n\r\nmain = 1\r\n";
+    const source = "main = 1\r\n";
     try tmp.dir.writeFile(testing.io, .{ .sub_path = "main.roc", .data = source });
 
     const main_path = try std.fs.path.join(allocator, &.{ tmp_root, "main.roc" });

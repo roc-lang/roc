@@ -1538,7 +1538,7 @@ test "checked artifact method registry skips nominal associated values" {
 test "typed method definition entries expose finalized owner-method keys" {
     const gpa = testing.allocator;
 
-    var env = try ModuleEnv.init(gpa, "module []\n");
+    var env = try ModuleEnv.init(gpa, "");
     defer env.deinit();
     try env.initCIRFields("Test");
     try env.common.calcLineStarts(gpa);

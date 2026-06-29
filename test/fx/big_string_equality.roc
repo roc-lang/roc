@@ -1,5 +1,3 @@
-module []
-
 # Regression test: String literals of length >= 24 (big strings) must work
 # correctly with equality comparisons. This tests the single-segment string
 # fast path in str_collect.

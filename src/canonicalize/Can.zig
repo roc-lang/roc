@@ -271,6 +271,8 @@ scratch_assoc_alias_sinks: base.Scratch(AssociatedAliasSink),
 scratch_record_fields: base.Scratch(types.RecordField),
 /// Scratch ident
 scratch_seen_record_fields: base.Scratch(SeenRecordField),
+/// Scratch tag names for duplicate detection in type annotations.
+scratch_seen_tags: base.Scratch(SeenTag),
 /// Scratch expression ids for short-lived dynamic lists.
 scratch_expr_ids: base.Scratch(Expr.Idx),
 /// Scratch pattern ids for short-lived dynamic lists.
@@ -399,6 +401,8 @@ const RecordField = CIR.RecordField;
 
 /// Struct to track fields that have been seen before during canonicalization
 const SeenRecordField = struct { ident: base.Ident.Idx, region: base.Region };
+const SeenTag = struct { ident: base.Ident.Idx, region: base.Region };
+const SeenTypeParameter = struct { ident: base.Ident.Idx, region: base.Region };
 
 const RecordBuilderMap2 = union(enum) {
     local: Pattern.Idx,
@@ -619,6 +623,7 @@ pub fn deinit(
     self.scratch_assoc_alias_sinks.deinit();
     self.scratch_record_fields.deinit();
     self.scratch_seen_record_fields.deinit();
+    self.scratch_seen_tags.deinit();
     self.scratch_expr_ids.deinit();
     self.scratch_pattern_ids.deinit();
     self.import_indices.deinit(gpa);
@@ -692,6 +697,7 @@ fn initInternal(
         .scratch_assoc_alias_sinks = try base.Scratch(AssociatedAliasSink).init(gpa),
         .scratch_record_fields = try base.Scratch(types.RecordField).init(gpa),
         .scratch_seen_record_fields = try base.Scratch(SeenRecordField).init(gpa),
+        .scratch_seen_tags = try base.Scratch(SeenTag).init(gpa),
         .scratch_expr_ids = try base.Scratch(Expr.Idx).init(gpa),
         .scratch_pattern_ids = try base.Scratch(Pattern.Idx).init(gpa),
         .type_vars_scope = try base.Scratch(TypeVarScope).init(gpa),
@@ -13288,7 +13294,7 @@ fn buildMap2Call(
         .e_call = .{
             .func = func_expr_idx,
             .args = args_span,
-            .called_via = CalledVia.apply,
+            .called_via = CalledVia.record_builder,
         },
     }, region);
 }
@@ -17353,6 +17359,7 @@ const TypeAnnoKernelRecordNextWork = struct {
     field_index: usize,
     scratch_top: u32,
     scratch_record_fields_top: u32,
+    scratch_seen_record_fields_top: u32,
     /// True when this record is the top-level backing of a nominal/opaque
     /// declaration, where unnamed fields (`_` / `_name`) are permitted.
     is_nominal_backing: bool,
@@ -17363,6 +17370,7 @@ const TypeAnnoKernelRecordAfterFieldWork = struct {
     field_index: usize,
     scratch_top: u32,
     scratch_record_fields_top: u32,
+    scratch_seen_record_fields_top: u32,
     field_name: Ident.Idx,
     field_region: Region,
     is_nominal_backing: bool,
@@ -17375,6 +17383,7 @@ const TypeAnnoKernelRecordAfterNamedExtWork = struct {
     field_anno_idxs: CIR.TypeAnno.RecordField.Span,
     scratch_top: u32,
     scratch_record_fields_top: u32,
+    scratch_seen_record_fields_top: u32,
 };
 const TypeAnnoKernelTagUnionTagsNextWork = struct {
     tag_union: @TypeOf(@as(AST.TypeAnno, undefined).tag_union),
@@ -17382,6 +17391,7 @@ const TypeAnnoKernelTagUnionTagsNextWork = struct {
     ext: ?TypeAnno.Idx,
     next: usize,
     scratch_top: u32,
+    scratch_seen_tags_top: u32,
 };
 const TypeAnnoKernelTagUnionTagAfterWork = struct {
     tag_union: @TypeOf(@as(AST.TypeAnno, undefined).tag_union),
@@ -17389,6 +17399,7 @@ const TypeAnnoKernelTagUnionTagAfterWork = struct {
     ext: ?TypeAnno.Idx,
     next: usize,
     scratch_top: u32,
+    scratch_seen_tags_top: u32,
 };
 const TypeAnnoKernelTagUnionAfterNamedExtWork = struct {
     tag_union: @TypeOf(@as(AST.TypeAnno, undefined).tag_union),
@@ -17813,6 +17824,7 @@ fn runTypeAnnoKernel(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_ctx: *Ty
                         .field_index = 0,
                         .scratch_top = self.env.store.scratchAnnoRecordFieldTop(),
                         .scratch_record_fields_top = self.scratch_record_fields.top(),
+                        .scratch_seen_record_fields_top = self.scratch_seen_record_fields.top(),
                         .is_nominal_backing = is_nominal_backing,
                     });
                 },
@@ -17855,6 +17867,7 @@ fn runTypeAnnoKernel(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_ctx: *Ty
                         .ext = mb_ext_anno,
                         .next = 0,
                         .scratch_top = self.env.store.scratchTypeAnnoTop(),
+                        .scratch_seen_tags_top = self.scratch_seen_tags.top(),
                     });
                 },
                 .@"fn" => |func| {
@@ -17988,6 +18001,7 @@ fn runTypeAnnoKernel(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_ctx: *Ty
                     .closed => {
                         self.env.store.clearScratchAnnoRecordFieldsFrom(state.scratch_top);
                         self.scratch_record_fields.clearFrom(state.scratch_record_fields_top);
+                        self.scratch_seen_record_fields.clearFrom(state.scratch_seen_record_fields_top);
                         last = try self.env.addTypeAnno(.{ .record = .{
                             .fields = field_anno_idxs,
                             .ext = null,
@@ -18001,6 +18015,7 @@ fn runTypeAnnoKernel(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_ctx: *Ty
                                 } }, state.region);
                                 self.env.store.clearScratchAnnoRecordFieldsFrom(state.scratch_top);
                                 self.scratch_record_fields.clearFrom(state.scratch_record_fields_top);
+                                self.scratch_seen_record_fields.clearFrom(state.scratch_seen_record_fields_top);
                                 last = try self.env.addTypeAnno(.{ .record = .{
                                     .fields = field_anno_idxs,
                                     .ext = ext,
@@ -18009,6 +18024,7 @@ fn runTypeAnnoKernel(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_ctx: *Ty
                             .type_decl_anno, .for_clause_anno => {
                                 self.env.store.clearScratchAnnoRecordFieldsFrom(state.scratch_top);
                                 self.scratch_record_fields.clearFrom(state.scratch_record_fields_top);
+                                self.scratch_seen_record_fields.clearFrom(state.scratch_seen_record_fields_top);
                                 last = try self.env.pushMalformed(TypeAnno.Idx, Diagnostic{
                                     .open_ext_not_allowed_in_type_decl = .{
                                         .region = self.parse_ir.tokenizedRegionToRegion(.{ .start = open_tok, .end = open_tok + 1 }),
@@ -18023,6 +18039,7 @@ fn runTypeAnnoKernel(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_ctx: *Ty
                             .field_anno_idxs = field_anno_idxs,
                             .scratch_top = state.scratch_top,
                             .scratch_record_fields_top = state.scratch_record_fields_top,
+                            .scratch_seen_record_fields_top = state.scratch_seen_record_fields_top,
                         });
                         try stacks.pushParse(frame_allocator, named.anno);
                     },
@@ -18036,6 +18053,7 @@ fn runTypeAnnoKernel(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_ctx: *Ty
                             .field_index = state.field_index + 1,
                             .scratch_top = state.scratch_top,
                             .scratch_record_fields_top = state.scratch_record_fields_top,
+                            .scratch_seen_record_fields_top = state.scratch_seen_record_fields_top,
                             .is_nominal_backing = state.is_nominal_backing,
                         });
                         continue :typeannokernel_loop .dispatch;
@@ -18057,18 +18075,51 @@ fn runTypeAnnoKernel(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_ctx: *Ty
                         .field_index = state.field_index + 1,
                         .scratch_top = state.scratch_top,
                         .scratch_record_fields_top = state.scratch_record_fields_top,
+                        .scratch_seen_record_fields_top = state.scratch_seen_record_fields_top,
                         .is_nominal_backing = state.is_nominal_backing,
                     });
                     continue :typeannokernel_loop .dispatch;
                 }
 
                 const field_name = self.parse_ir.tokens.resolveIdentifier(ast_field.name) orelse try self.env.insertIdent(Ident.for_text("malformed_field"));
+                const field_name_region = self.parse_ir.tokens.resolve(ast_field.name);
+                if (!is_unnamed) {
+                    var found_duplicate = false;
+                    for (self.scratch_seen_record_fields.sliceFromStart(state.scratch_seen_record_fields_top)) |seen_field| {
+                        if (field_name.eql(seen_field.ident)) {
+                            try self.env.pushDiagnostic(Diagnostic{ .duplicate_record_field = .{
+                                .field_name = field_name,
+                                .duplicate_region = field_name_region,
+                                .original_region = seen_field.region,
+                            } });
+                            found_duplicate = true;
+                            break;
+                        }
+                    }
+                    if (found_duplicate) {
+                        try stacks.pushRecordNext(frame_allocator, .{
+                            .record = state.record,
+                            .region = state.region,
+                            .field_index = state.field_index + 1,
+                            .scratch_top = state.scratch_top,
+                            .scratch_record_fields_top = state.scratch_record_fields_top,
+                            .scratch_seen_record_fields_top = state.scratch_seen_record_fields_top,
+                            .is_nominal_backing = state.is_nominal_backing,
+                        });
+                        continue :typeannokernel_loop .dispatch;
+                    }
+                    try self.scratch_seen_record_fields.append(SeenRecordField{
+                        .ident = field_name,
+                        .region = field_name_region,
+                    });
+                }
                 try stacks.pushRecordAfterField(frame_allocator, .{
                     .record = state.record,
                     .region = state.region,
                     .field_index = state.field_index,
                     .scratch_top = state.scratch_top,
                     .scratch_record_fields_top = state.scratch_record_fields_top,
+                    .scratch_seen_record_fields_top = state.scratch_seen_record_fields_top,
                     .field_name = field_name,
                     .field_region = self.parse_ir.tokenizedRegionToRegion(ast_field.region),
                     .is_nominal_backing = state.is_nominal_backing,
@@ -18104,6 +18155,7 @@ fn runTypeAnnoKernel(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_ctx: *Ty
                 .field_index = state.field_index + 1,
                 .scratch_top = state.scratch_top,
                 .scratch_record_fields_top = state.scratch_record_fields_top,
+                .scratch_seen_record_fields_top = state.scratch_seen_record_fields_top,
                 .is_nominal_backing = state.is_nominal_backing,
             });
 
@@ -18114,6 +18166,7 @@ fn runTypeAnnoKernel(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_ctx: *Ty
             const ext = last orelse unreachable;
             self.env.store.clearScratchAnnoRecordFieldsFrom(state.scratch_top);
             self.scratch_record_fields.clearFrom(state.scratch_record_fields_top);
+            self.scratch_seen_record_fields.clearFrom(state.scratch_seen_record_fields_top);
             last = try self.env.addTypeAnno(.{ .record = .{
                 .fields = state.field_anno_idxs,
                 .ext = ext,
@@ -18130,6 +18183,7 @@ fn runTypeAnnoKernel(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_ctx: *Ty
                 .ext = ext,
                 .next = 0,
                 .scratch_top = self.env.store.scratchTypeAnnoTop(),
+                .scratch_seen_tags_top = self.scratch_seen_tags.top(),
             });
 
             continue :typeannokernel_loop .dispatch;
@@ -18140,6 +18194,7 @@ fn runTypeAnnoKernel(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_ctx: *Ty
             if (state.next >= tags.len) {
                 const tag_anno_idxs = try self.env.store.typeAnnoSpanFrom(state.scratch_top);
                 self.env.store.clearScratchTypeAnnosFrom(state.scratch_top);
+                self.scratch_seen_tags.clearFrom(state.scratch_seen_tags_top);
                 last = try self.env.addTypeAnno(.{ .tag_union = .{
                     .tags = tag_anno_idxs,
                     .ext = state.ext,
@@ -18151,6 +18206,7 @@ fn runTypeAnnoKernel(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_ctx: *Ty
                     .ext = state.ext,
                     .next = state.next,
                     .scratch_top = state.scratch_top,
+                    .scratch_seen_tags_top = state.scratch_seen_tags_top,
                 });
                 try stacks.pushTagParse(frame_allocator, tags[state.next]);
             }
@@ -18160,13 +18216,39 @@ fn runTypeAnnoKernel(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_ctx: *Ty
         .tag_union_tag_after => {
             const state = stacks.takeTagUnionTagAfter();
             const tag_idx = last orelse unreachable;
-            try self.env.store.addScratchTypeAnno(tag_idx);
+            var found_duplicate = false;
+            const tag_anno = self.env.store.getTypeAnno(tag_idx);
+            if (tag_anno == .tag) {
+                const tag = tag_anno.tag;
+                const tag_region = self.env.store.getTypeAnnoRegion(tag_idx);
+                for (self.scratch_seen_tags.sliceFromStart(state.scratch_seen_tags_top)) |seen_tag| {
+                    if (tag.name.eql(seen_tag.ident)) {
+                        try self.env.pushDiagnostic(Diagnostic{ .duplicate_tag = .{
+                            .tag_name = tag.name,
+                            .duplicate_region = tag_region,
+                            .original_region = seen_tag.region,
+                        } });
+                        found_duplicate = true;
+                        break;
+                    }
+                }
+                if (!found_duplicate) {
+                    try self.scratch_seen_tags.append(SeenTag{
+                        .ident = tag.name,
+                        .region = tag_region,
+                    });
+                }
+            }
+            if (!found_duplicate) {
+                try self.env.store.addScratchTypeAnno(tag_idx);
+            }
             try stacks.pushTagUnionTagsNext(frame_allocator, .{
                 .tag_union = state.tag_union,
                 .region = state.region,
                 .ext = state.ext,
                 .next = state.next + 1,
                 .scratch_top = state.scratch_top,
+                .scratch_seen_tags_top = state.scratch_seen_tags_top,
             });
 
             continue :typeannokernel_loop .dispatch;
@@ -18663,6 +18745,28 @@ fn resolveNestedExternalTypeAnno(
 
 ////////////////////////////////////////////////////////////////////////////////
 
+fn recordTypeHeaderParameter(
+    self: *Self,
+    seen_type_parameters: *std.ArrayList(SeenTypeParameter),
+    type_name: Ident.Idx,
+    param_ident: Ident.Idx,
+    param_region: Region,
+) std.mem.Allocator.Error!bool {
+    for (seen_type_parameters.items) |seen| {
+        if (param_ident.eql(seen.ident)) {
+            try self.env.pushDiagnostic(Diagnostic{ .type_parameter_conflict = .{
+                .name = type_name,
+                .parameter_name = param_ident,
+                .region = param_region,
+                .original_region = seen.region,
+            } });
+            return true;
+        }
+    }
+    try seen_type_parameters.append(self.env.gpa, .{ .ident = param_ident, .region = param_region });
+    return false;
+}
+
 fn canonicalizeTypeHeader(self: *Self, header_idx: AST.TypeHeader.Idx, type_kind: AST.TypeDeclKind) std.mem.Allocator.Error!CIR.TypeHeader.Idx {
     const trace = tracy.trace(@src());
     defer trace.end();
@@ -18691,6 +18795,8 @@ fn canonicalizeTypeHeader(self: *Self, header_idx: AST.TypeHeader.Idx, type_kind
     // Canonicalize type arguments - these are parameter declarations, not references
     const scratch_top = self.env.store.scratchTypeAnnoTop();
     defer self.env.store.clearScratchTypeAnnosFrom(scratch_top);
+    var seen_type_parameters = std.ArrayList(SeenTypeParameter).empty;
+    defer seen_type_parameters.deinit(self.env.gpa);
 
     for (self.parse_ir.store.typeAnnoSlice(ast_header.args)) |arg_idx| {
         const ast_arg = self.parse_ir.store.getTypeAnno(arg_idx);
@@ -18705,6 +18811,8 @@ fn canonicalizeTypeHeader(self: *Self, header_idx: AST.TypeHeader.Idx, type_kind
                     try self.env.store.addScratchTypeAnno(malformed);
                     continue;
                 };
+
+                if (try self.recordTypeHeaderParameter(&seen_type_parameters, name_ident, param_ident, param_region)) continue;
 
                 // Create type variable annotation for this parameter
                 // Check for underscore in type parameter
@@ -18732,6 +18840,8 @@ fn canonicalizeTypeHeader(self: *Self, header_idx: AST.TypeHeader.Idx, type_kind
                     try self.env.store.addScratchTypeAnno(malformed);
                     continue;
                 };
+
+                if (try self.recordTypeHeaderParameter(&seen_type_parameters, name_ident, param_ident, param_region)) continue;
 
                 // Only reject underscore-prefixed parameters for type aliases, not nominal/opaque types
                 if (type_kind == .alias) {

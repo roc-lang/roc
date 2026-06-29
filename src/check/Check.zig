@@ -286,6 +286,10 @@ hoist_selected_exprs: std.AutoHashMapUnmanaged(CIR.Expr.Idx, u32),
 /// Sparse roots selected during checking. Publication consumes this slice and
 /// turns the entries into checked compile-time roots.
 selected_hoisted_roots: std.ArrayListUnmanaged(hoist_roots.SelectedHoistedRoot),
+/// Top-level defs whose zero-arg function result will be observed as an
+/// executable/eval root. Ordinary thunks may stay polymorphic; these roots may
+/// not leave static-dispatch obligations in their immediate result.
+executable_root_defs: std.ArrayListUnmanaged(CIR.Def.Idx),
 /// Most recently completed expression's temporary hoist result. This lets
 /// statement checking record a local binding candidate without storing a result
 /// on the checked expression itself.
@@ -1135,6 +1139,7 @@ fn initAssumePrepared(
         .hoist_selected_bindings = .{},
         .hoist_selected_exprs = .{},
         .selected_hoisted_roots = .empty,
+        .executable_root_defs = .empty,
         .last_hoist_result = null,
         .hoist_suppressed_depth = 0,
         .hoist_selection_suppressed_depth = 0,
@@ -1233,6 +1238,7 @@ pub fn deinit(self: *Self) void {
         hoist_roots.deinitSelectedRoot(self.gpa, root);
     }
     self.selected_hoisted_roots.deinit(self.gpa);
+    self.executable_root_defs.deinit(self.gpa);
     self.env_pool.deinit();
     self.generalizer.deinit(self.gpa);
     self.var_map.deinit();
@@ -1278,6 +1284,13 @@ pub fn deinit(self: *Self) void {
 /// Returns the hoisted roots selected while checking this module.
 pub fn selectedHoistedRoots(self: *const Self) []const hoist_roots.SelectedHoistedRoot {
     return self.selected_hoisted_roots.items;
+}
+
+/// Record a top-level root that will be evaluated as a zero-arg executable
+/// thunk. This must be explicit producer metadata from canonicalization or the
+/// caller; the checker never recovers roots from names or source shape.
+pub fn addExecutableRootDef(self: *Self, def_idx: CIR.Def.Idx) Allocator.Error!void {
+    try self.executable_root_defs.append(self.gpa, def_idx);
 }
 
 fn beginHoistFrame(self: *Self, expr: CIR.Expr.Idx, binding_rhs: bool) Allocator.Error!HoistFrameGuard {
@@ -4689,6 +4702,8 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
     try self.reportAmbiguousStaticDispatchPerInstantiation(&self.reported_dispatch_vars, &self.pinnable_vars, &external_pinnable);
     try self.reportAmbiguousStaticDispatch(&self.reported_dispatch_vars, &self.pinnable_vars);
 
+    try self.reportPolymorphicExecutableRootResults();
+
     try self.reportNonExhaustiveLambdaParams(&env);
 
     try self.pruneSelectedHoistedRootsAfterSolving();
@@ -6678,6 +6693,20 @@ fn reportPolymorphicTopLevelValues(self: *Self) std.mem.Allocator.Error!void {
     }
 }
 
+fn reportPolymorphicExecutableRootResults(self: *Self) std.mem.Allocator.Error!void {
+    for (self.executable_root_defs.items) |def_idx| {
+        const def = self.cir.store.getDef(def_idx);
+        if (self.erroneous_value_patterns.contains(def.pattern)) continue;
+
+        const result_var = self.zeroArgFunctionReturnVar(ModuleEnv.varFrom(def_idx)) orelse continue;
+
+        self.var_set.clearRetainingCapacity();
+        if (!try self.varHasUnresolvedNonLiteralStaticDispatchConstraints(result_var, &self.var_set)) continue;
+
+        try self.reportPolymorphicValueProblem(result_var, ModuleEnv.varFrom(def.pattern), self.getPatternIdent(def.pattern));
+    }
+}
+
 fn reportPolymorphicConstrainedExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!void {
     const expr_var = ModuleEnv.varFrom(expr_idx);
     if (self.varIsFunctionType(expr_var)) return;
@@ -6730,6 +6759,24 @@ fn varIsFunctionType(self: *Self, var_: Var) bool {
                 else => false,
             },
             .err, .flex, .rigid => return false,
+        }
+    }
+}
+
+fn zeroArgFunctionReturnVar(self: *Self, var_: Var) ?Var {
+    var current = var_;
+    while (true) {
+        const resolved = self.types.resolveVar(current);
+        switch (resolved.desc.content) {
+            .alias => |alias| {
+                current = self.types.getAliasBackingVar(alias);
+                continue;
+            },
+            .structure => |flat| return switch (flat) {
+                .fn_pure, .fn_effectful, .fn_unbound => |func| if (func.args.len() == 0) func.ret else null,
+                else => null,
+            },
+            .err, .flex, .rigid => return null,
         }
     }
 }
@@ -6864,6 +6911,64 @@ fn varsHaveUnresolvedStaticDispatchConstraints(
 ) std.mem.Allocator.Error!bool {
     for (vars) |var_| {
         if (try self.varHasUnresolvedStaticDispatchConstraints(var_, visited)) return true;
+    }
+    return false;
+}
+
+fn varHasUnresolvedNonLiteralStaticDispatchConstraints(
+    self: *Self,
+    var_: Var,
+    visited: *std.AutoHashMap(Var, void),
+) std.mem.Allocator.Error!bool {
+    const resolved = self.types.resolveVar(var_);
+    if (visited.contains(resolved.var_)) return false;
+    try visited.put(resolved.var_, {});
+
+    return switch (resolved.desc.content) {
+        .flex => |flex| self.rangeHasNonLiteralConstraint(flex.constraints),
+        .rigid => |rigid| self.rangeHasNonLiteralConstraint(rigid.constraints),
+        .err => false,
+        .alias => |alias| try self.varHasUnresolvedNonLiteralStaticDispatchConstraints(self.types.getAliasBackingVar(alias), visited),
+        .structure => |flat_type| try self.flatTypeHasUnresolvedNonLiteralStaticDispatchConstraints(flat_type, visited),
+    };
+}
+
+fn flatTypeHasUnresolvedNonLiteralStaticDispatchConstraints(
+    self: *Self,
+    flat_type: FlatType,
+    visited: *std.AutoHashMap(Var, void),
+) std.mem.Allocator.Error!bool {
+    return switch (flat_type) {
+        .tuple => |tuple| try self.varsHaveUnresolvedNonLiteralStaticDispatchConstraints(self.types.sliceVars(tuple.elems), visited),
+        .nominal_type => |nominal| try self.varsHaveUnresolvedNonLiteralStaticDispatchConstraints(self.types.sliceNominalArgs(nominal), visited),
+        .fn_pure, .fn_effectful, .fn_unbound => false,
+        .record => |record| blk: {
+            const fields = self.types.getRecordFieldsSlice(record.fields);
+            if (try self.varsHaveUnresolvedNonLiteralStaticDispatchConstraints(fields.items(.var_), visited)) break :blk true;
+            break :blk try self.varHasUnresolvedNonLiteralStaticDispatchConstraints(record.ext, visited);
+        },
+        .record_unbound => |fields_range| blk: {
+            const fields = self.types.getRecordFieldsSlice(fields_range);
+            break :blk try self.varsHaveUnresolvedNonLiteralStaticDispatchConstraints(fields.items(.var_), visited);
+        },
+        .tag_union => |tag_union| blk: {
+            const tags = self.types.getTagsSlice(tag_union.tags);
+            for (tags.items(.args)) |args| {
+                if (try self.varsHaveUnresolvedNonLiteralStaticDispatchConstraints(self.types.sliceVars(args), visited)) break :blk true;
+            }
+            break :blk try self.varHasUnresolvedNonLiteralStaticDispatchConstraints(tag_union.ext, visited);
+        },
+        .empty_record, .empty_tag_union => false,
+    };
+}
+
+fn varsHaveUnresolvedNonLiteralStaticDispatchConstraints(
+    self: *Self,
+    vars: []const Var,
+    visited: *std.AutoHashMap(Var, void),
+) std.mem.Allocator.Error!bool {
+    for (vars) |var_| {
+        if (try self.varHasUnresolvedNonLiteralStaticDispatchConstraints(var_, visited)) return true;
     }
     return false;
 }

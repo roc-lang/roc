@@ -110,9 +110,6 @@ pub const TestCase = struct {
     imports: []const helpers.ModuleSource = &.{},
     expected: Expected,
     skip: Skip = .{},
-    /// Known compiler-bug repros are opt-in so ordinary `zig build run-test-eval`
-    /// stays green while still letting bug hunts use the eval pipeline directly.
-    known_bug: bool = false,
 
     pub const Expected = union(enum) {
         inspect_str: []const u8,
@@ -1700,8 +1697,7 @@ fn collectTests() []const TestCase {
 
 // CLI parsing uses harness.parseStandardArgs for consistent flag handling.
 // The eval runner accepts the standard flags: --filter, --threads, --timeout, --verbose, --help,
-// plus `--llvm` and the positional marker `known-bugs` to include opt-in
-// compiler-bug repros.
+// plus `--llvm`.
 
 fn printHelp() void {
     const help =
@@ -1729,7 +1725,6 @@ fn printHelp() void {
         \\                        LLVM uses a separate 420000ms backend budget.
         \\                        LLVM eval lock slots match the worker count.
         \\  --llvm                Include the LLVM backend. Default: skip LLVM.
-        \\  known-bugs            Include opt-in known compiler-bug repro tests.
         \\
         \\COVERAGE:
         \\  Use `zig build run-coverage-eval` to build with coverage instrumentation.
@@ -2159,13 +2154,6 @@ fn effectiveMaxChildren(cli: harness.StandardArgs, cpu_count: usize, test_count:
     return @max(1, requested);
 }
 
-fn hasPositionalArg(args: []const []const u8, target: []const u8) bool {
-    for (args) |arg| {
-        if (std.mem.eql(u8, arg, target)) return true;
-    }
-    return false;
-}
-
 /// Entry point for the parallel eval test runner.
 pub fn main(init: std.process.Init) RunnerError!void {
     const io = init.io;
@@ -2192,7 +2180,6 @@ pub fn main(init: std.process.Init) RunnerError!void {
 
     const all_tests = collectTests();
     trace_worker.stamp("collectTests");
-    const include_known_bugs = hasPositionalArg(cli.positional, "known-bugs");
 
     // Apply filters (support multiple --filter values)
     var filtered_buf: std.ArrayListUnmanaged(TestCase) = .empty;
@@ -2200,7 +2187,6 @@ pub fn main(init: std.process.Init) RunnerError!void {
 
     if (cli.filters.len > 0) {
         for (all_tests) |tc| {
-            if (tc.known_bug and !include_known_bugs) continue;
             for (cli.filters) |pattern| {
                 if (std.mem.find(u8, tc.name, pattern) != null or
                     std.mem.find(u8, tc.source, pattern) != null)
@@ -2212,7 +2198,6 @@ pub fn main(init: std.process.Init) RunnerError!void {
         }
     } else {
         for (all_tests) |tc| {
-            if (tc.known_bug and !include_known_bugs) continue;
             try filtered_buf.append(gpa, tc);
         }
     }

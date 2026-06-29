@@ -27967,7 +27967,7 @@ test "CheckedModuleArtifact.Serialized: round-trip preserves POD identity and su
 test "module source input hash uses explicit file dependency state" {
     const gpa = std.testing.allocator;
 
-    var missing_env = try ModuleEnv.init(gpa, "module []\n");
+    var missing_env = try ModuleEnv.init(gpa, "");
     defer missing_env.deinit();
     try missing_env.initCIRFields("Test");
     const missing_idx = try missing_env.recordFileDependency("data.txt");
@@ -27978,14 +27978,14 @@ test "module source input hash uses explicit file dependency state" {
     const missing_hash_after_payload_change = hashModuleSourceInputs(&missing_env);
     try std.testing.expectEqualSlices(u8, &missing_hash, &missing_hash_after_payload_change);
 
-    var unreadable_env = try ModuleEnv.init(gpa, "module []\n");
+    var unreadable_env = try ModuleEnv.init(gpa, "");
     defer unreadable_env.deinit();
     try unreadable_env.initCIRFields("Test");
     const unreadable_idx = try unreadable_env.recordFileDependency("data.txt");
     unreadable_env.setFileDependencyUnreadable(unreadable_idx);
     const unreadable_hash = hashModuleSourceInputs(&unreadable_env);
 
-    var present_env = try ModuleEnv.init(gpa, "module []\n");
+    var present_env = try ModuleEnv.init(gpa, "");
     defer present_env.deinit();
     try present_env.initCIRFields("Test");
     const present_idx = try present_env.recordFileDependency("data.txt");

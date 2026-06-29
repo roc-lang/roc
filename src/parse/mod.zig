@@ -259,8 +259,6 @@ test "double question operator parses after static dispatch" {
 
 test "where clause method function types parse stack-safely" {
     try expectFileParsesWithoutDiagnostics(
-        \\module []
-        \\
         \\A(a) : a where [a.a1 : (a, a) -> Str, a.a2 : (a, a) -> Str]
     );
 }
@@ -326,11 +324,9 @@ test "parse diagnostic report handles invalid mutable identifier spelling" {
     }
 }
 
-test "bughunt B212: parameterized type arguments accept bare function types" {
+test "regression B212: parameterized type arguments accept bare function types" {
     const gpa = std.testing.allocator;
     const source =
-        \\module []
-        \\
         \\BoxedFn : Box(Str -> Str)
         \\BoxedParenFn : Box((Str -> Str))
         \\ResultFn : Result(Str -> Str, Str -> Str)
@@ -352,8 +348,6 @@ test "bughunt B212: parameterized type arguments accept bare function types" {
 test "parser records top-level type declaration dependencies" {
     const gpa = std.testing.allocator;
     const source =
-        \\module []
-        \\
         \\A : (B, Mod.C) -> D
         \\B : {}
         \\D : {}
@@ -400,8 +394,6 @@ test "parser records top-level type declaration dependencies" {
 test "parser records nested associated owner paths" {
     const gpa = std.testing.allocator;
     const source =
-        \\module []
-        \\
         \\Parent := [P].{
         \\    Nested := [N].{
         \\        val = 1
@@ -442,8 +434,6 @@ test "parser records nested associated owner paths" {
 test "parser keeps block-local type paths lexically distinct" {
     const gpa = std.testing.allocator;
     const source =
-        \\module []
-        \\
         \\first = {
         \\    T := [First].{
         \\        Inner := [FirstInner]
@@ -503,8 +493,6 @@ test "parser keeps block-local type paths lexically distinct" {
 test "parser does not create a type path for malformed associated type headers" {
     const gpa = std.testing.allocator;
     const source =
-        \\module []
-        \\
         \\Outer := [Outer].{
         \\    Broken(a := [Broken]
         \\    ok = 1

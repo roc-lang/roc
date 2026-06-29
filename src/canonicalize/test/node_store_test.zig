@@ -932,6 +932,14 @@ test "NodeStore round trip - Diagnostics" {
     });
 
     try diagnostics.append(gpa, CIR.Diagnostic{
+        .duplicate_tag = .{
+            .tag_name = rand_ident_idx(),
+            .duplicate_region = rand_region(),
+            .original_region = rand_region(),
+        },
+    });
+
+    try diagnostics.append(gpa, CIR.Diagnostic{
         .f64_pattern_literal = .{
             .region = rand_region(),
         },

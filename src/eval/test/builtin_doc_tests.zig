@@ -817,20 +817,20 @@ fn reproduceWithBinary(
 /// Wrap the block source so that the `roc` binary can run it standalone.
 fn wrapForBinary(allocator: Allocator, block: *const Block) BuiltinDocTestError![]u8 {
     return switch (block.kind) {
-        .expects_only => try std.fmt.allocPrint(allocator, "module []\n\n{s}\n", .{block.source}),
+        .expects_only => try std.fmt.allocPrint(allocator, "{s}\n", .{block.source}),
         .module_with_def => blk: {
             const name = block.last_def_name orelse return try std.fmt.allocPrint(
                 allocator,
-                "module []\n\n{s}\n",
+                "{s}\n",
                 .{block.source},
             );
             break :blk try std.fmt.allocPrint(
                 allocator,
-                "module []\n\n{s}\n\nmain = {s}\n",
+                "{s}\n\nmain = {s}\n",
                 .{ block.source, name },
             );
         },
-        .expression_block => try std.fmt.allocPrint(allocator, "module []\n\n{s}\n", .{block.source}),
+        .expression_block => try std.fmt.allocPrint(allocator, "{s}\n", .{block.source}),
     };
 }
 
