@@ -6390,7 +6390,7 @@ fn finishRecordExpr(
 }
 
 /// Binding power of the lhs and rhs of a particular operator.
-const BinOpBp = struct { left: u8, right: u8 };
+pub const BinOpBp = struct { left: u8, right: u8 };
 
 inline fn isInBinOpTokenRange(tok: Token.Tag) bool {
     const tok_int = @intFromEnum(tok);
@@ -6440,7 +6440,7 @@ inline fn getTokenBPInRange(tok: Token.Tag) BinOpBp {
 }
 
 /// Get the binding power for a Token if it's a operator token, else return null.
-fn getTokenBP(tok: Token.Tag) ?BinOpBp {
+pub fn getTokenBP(tok: Token.Tag) ?BinOpBp {
     if (!isInBinOpTokenRange(tok)) return null;
     const bp = getTokenBPInRange(tok);
     return if (bp.left == 0) null else bp;

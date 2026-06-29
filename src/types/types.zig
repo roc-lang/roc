@@ -1016,6 +1016,28 @@ pub const StaticDispatchConstraint = struct {
         const b_text = store.getText(b.fn_name);
         return std.mem.order(u8, a_text, b_text);
     }
+
+    /// The literal kind a flex var defaults to when it carries `from_literal`
+    /// constraints, by fixed precedence: numeral > quote > interpolation. Single
+    /// source of truth for the tie-break used by the checker (`varLiteralKind`),
+    /// the canonical-key builder (`flexLiteralDefaultKind`), and the mono
+    /// default-phase scan (`numericDefaultPhaseForConstraints`) — they MUST agree,
+    /// or mirror-image programs get different keys/diagnostics.
+    pub fn dominantLiteralKind(constraints: []const StaticDispatchConstraint) ?LiteralKind {
+        var has_quote = false;
+        var has_interpolation = false;
+        for (constraints) |constraint| {
+            switch (constraint.origin) {
+                .from_literal => |lit| switch (lit) {
+                    .numeral => return .numeral,
+                    .quote => has_quote = true,
+                    .interpolation => has_interpolation = true,
+                },
+                else => {},
+            }
+        }
+        return if (has_quote) .quote else if (has_interpolation) .interpolation else null;
+    }
 };
 
 /// Two record fields
