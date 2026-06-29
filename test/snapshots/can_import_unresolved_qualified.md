@@ -32,6 +32,7 @@ client = Http.invalidMethod
 parser = Json.Parser.Advanced.NonExistent.create
 ~~~
 # EXPECTED
+DUPLICATE DEFINITION - can_import_unresolved_qualified.md:1:1:1:17
 UNDEFINED VARIABLE - can_import_unresolved_qualified.md:5:8:5:31
 MODULE NOT FOUND - can_import_unresolved_qualified.md:8:17:8:29
 UNDEFINED VARIABLE - can_import_unresolved_qualified.md:9:20:9:34
@@ -44,6 +45,21 @@ DOES NOT EXIST - can_import_unresolved_qualified.md:19:10:19:31
 UNDEFINED VARIABLE - can_import_unresolved_qualified.md:22:10:22:28
 UNDEFINED VARIABLE - can_import_unresolved_qualified.md:25:10:25:49
 # PROBLEMS
+
+┌──────────────────────┐
+│ DUPLICATE DEFINITION ├─ The name `Json` is being redeclared here. ──────────┐
+└┬─────────────────────┘                                                      │
+ │                                                                            │
+ │  import json.Json                                                          │
+ │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                          │
+ └──────────────────────────────────── can_import_unresolved_qualified.md:1:1 ┘
+
+    In this scope, `Json` was already defined here:
+      ┌───────────────────────────────────────────────────────────────────────┐
+    1 │  import json.Json                                                     │
+      │  ‾                                                                    │
+      └─────────────────────────────── can_import_unresolved_qualified.md:1:1 ┘
+
 
 ┌────────────────────┐
 │ UNDEFINED VARIABLE ├─ Nothing is named `method` in this scope. ─────────────┐

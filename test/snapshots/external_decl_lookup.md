@@ -17,9 +17,25 @@ main! = |_| {
 }
 ~~~
 # EXPECTED
+DUPLICATE DEFINITION - external_decl_lookup.md:4:1:4:17
 UNDEFINED VARIABLE - external_decl_lookup.md:8:14:8:23
 UNDEFINED VARIABLE - external_decl_lookup.md:9:5:9:17
 # PROBLEMS
+
+┌──────────────────────┐
+│ DUPLICATE DEFINITION ├─ The name `Json` is being redeclared here. ──────────┐
+└┬─────────────────────┘                                                      │
+ │                                                                            │
+ │  import json.Json                                                          │
+ │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                          │
+ └─────────────────────────────────────────────── external_decl_lookup.md:4:1 ┘
+
+    In this scope, `Json` was already defined here:
+      ┌───────────────────────────────────────────────────────────────────────┐
+    1 │  app [main!] { pf: platform "../basic-cli/platform.roc" }             │
+      │  ‾                                                                    │
+      └────────────────────────────────────────── external_decl_lookup.md:1:1 ┘
+
 
 ┌────────────────────┐
 │ UNDEFINED VARIABLE ├─ Nothing is named `utf8` in this scope. ───────────────┐

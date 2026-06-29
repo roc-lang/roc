@@ -166,7 +166,7 @@ test "import validation - mix of MODULE NOT FOUND, TYPE NOT EXPOSED, VALUE NOT E
         \\module [main]
         \\
         \\# Import from existing module with valid items
-        \\import Json exposing [decode, JsonError]
+        \\import DataJson exposing [decode, JsonError]
         \\
         \\# Import from existing module with some invalid items
         \\import Utils exposing [map, doesNotExist, Try, InvalidType]
@@ -175,7 +175,7 @@ test "import validation - mix of MODULE NOT FOUND, TYPE NOT EXPOSED, VALUE NOT E
         \\import NonExistent exposing [something, SomeType]
         \\
         \\# Valid import with all exposed items
-        \\import Json exposing [encode, DecodeProblem]
+        \\import DataJson exposing [encode, DecodeProblem]
         \\
         \\main = "test"
     ;
@@ -196,8 +196,8 @@ test "import validation - mix of MODULE NOT FOUND, TYPE NOT EXPOSED, VALUE NOT E
     // Now create module_envs using parse_env's ident store
     var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocator);
     defer module_envs.deinit();
-    const json_module_ident = try parse_env.common.idents.insert(allocator, Ident.for_text("Json"));
-    const json_qualified_ident = try json_env.common.insertIdent(json_env.gpa, Ident.for_text("Json"));
+    const json_module_ident = try parse_env.common.idents.insert(allocator, Ident.for_text("DataJson"));
+    const json_qualified_ident = try json_env.common.insertIdent(json_env.gpa, Ident.for_text("DataJson"));
     try module_envs.put(json_module_ident, .{ .env = json_env, .qualified_type_ident = json_qualified_ident });
     const utils_module_ident = try parse_env.common.idents.insert(allocator, Ident.for_text("Utils"));
     const utils_qualified_ident = try utils_env.common.insertIdent(utils_env.gpa, Ident.for_text("Utils"));
@@ -674,7 +674,7 @@ test "import validation - no module_envs provided" {
     const source =
         \\module [main]
         \\
-        \\import Json exposing [decode, JsonError]
+        \\import DataJson exposing [decode, JsonError]
         \\
         \\main = "test"
     ;

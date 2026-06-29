@@ -1,7 +1,5 @@
 app [main!] { pf: platform "./platform/main.roc" }
 
-import pf.Json
-
 parse_camel_record : Str -> Try(
 	{
 		cache_control : Str,
@@ -9,7 +7,7 @@ parse_camel_record : Str -> Try(
 		pair : [Pair({ first_value : Str, second_value : Str })],
 		user_id : Str,
 	},
-	Json.DecodeErr,
+	Json,
 )
 parse_camel_record = Json.parser_camel()
 
