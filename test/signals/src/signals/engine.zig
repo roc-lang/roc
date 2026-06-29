@@ -1990,14 +1990,6 @@ pub fn Engine(comptime Ctx: type) type {
             effects_runtime.clearActiveIntervals(Ctx, ctx, &self.active_intervals, self.roc_host);
         }
 
-        fn markActiveIntervalsInactive(self: *Self) void {
-            effects_runtime.markActiveIntervalsInactive(self.active_intervals.items);
-        }
-
-        fn activeIntervalBySourceToken(self: *Self, source_token: HostSignalToken) ?*HostActiveInterval {
-            return effects_runtime.activeIntervalBySourceToken(self.active_intervals.items, source_token);
-        }
-
         fn ensureActiveInterval(self: *Self, ctx: Ctx.Handle, source_token: HostSignalToken, period_ms: u64) void {
             effects_runtime.ensureActiveInterval(Ctx, ctx, Ctx.allocator(ctx), &self.active_intervals, &self.next_interval_token, self.roc_host.?, source_token, period_ms);
         }
@@ -2007,17 +1999,7 @@ pub fn Engine(comptime Ctx: type) type {
         }
 
         fn syncActiveIntervalsFromGraph(self: *Self, ctx: Ctx.Handle) void {
-            self.markActiveIntervalsInactive();
-            self.pending_roc_metrics.bump(.active_intervals_synced, @intCast(self.active_signal_graph.items.len));
-
-            for (self.active_signal_graph.items) |node| {
-                switch (node.record.payload) {
-                    .interval_source => |payload| self.ensureActiveInterval(ctx, payload.token, payload.period_ms),
-                    .ref, .const_value, .map, .map2, .combine, .task_source => {},
-                }
-            }
-
-            effects_runtime.finishActiveIntervalSync(Ctx, ctx, &self.active_intervals, self.roc_host);
+            effects_runtime.syncActiveIntervalsFromGraph(Ctx, ctx, Ctx.allocator(ctx), &self.active_intervals, &self.next_interval_token, self.roc_host, self.active_signal_graph.items, &self.pending_roc_metrics);
         }
 
         pub fn clearActiveSignalRoutes(self: *Self, ctx: Ctx.Handle) void {

@@ -391,8 +391,68 @@ pub fn finishActiveIntervalSync(comptime Ctx: type, ctx: Ctx.Handle, intervals: 
     intervals.items.len = write_index;
 }
 
+pub fn syncActiveIntervalsFromGraph(
+    comptime Ctx: type,
+    ctx: Ctx.Handle,
+    allocator: std.mem.Allocator,
+    intervals: *std.ArrayListUnmanaged(ActiveInterval),
+    next_interval_token: *u64,
+    roc_host: ?*abi.RocHost,
+    active_signal_graph: anytype,
+    metrics: anytype,
+) void {
+    markActiveIntervalsInactive(intervals.items);
+    metrics.bump(.active_intervals_synced, @intCast(active_signal_graph.len));
+
+    for (active_signal_graph) |node| {
+        switch (node.record.payload) {
+            .interval_source => |payload| {
+                const host = roc_host orelse @panic("active interval cannot retain token without a Roc host");
+                ensureActiveInterval(Ctx, ctx, allocator, intervals, next_interval_token, host, payload.token, payload.period_ms);
+            },
+            .ref, .const_value, .map, .map2, .combine, .task_source => {},
+        }
+    }
+
+    finishActiveIntervalSync(Ctx, ctx, intervals, roc_host);
+}
+
 const TestActiveNode = struct {
     record: *HostSignalRecord,
+};
+
+const TestMetrics = struct {
+    active_intervals_synced: u64 = 0,
+
+    pub fn bump(self: *@This(), comptime field: enum { active_intervals_synced }, n: u64) void {
+        @field(self, @tagName(field)) += n;
+    }
+};
+
+const TestIntervalHost = struct {
+    start_interval_count: u64 = 0,
+    cancel_interval_count: u64 = 0,
+};
+
+const TestIntervalSink = struct {
+    host: *TestIntervalHost,
+
+    pub fn startInterval(self: @This(), _: u64, _: u64) void {
+        self.host.start_interval_count += 1;
+    }
+
+    pub fn cancelInterval(self: @This(), _: u64) void {
+        self.host.cancel_interval_count += 1;
+    }
+};
+
+const TestIntervalCtx = struct {
+    pub const Handle = *TestIntervalHost;
+    pub const Sink = TestIntervalSink;
+
+    pub fn sink(ctx: Handle) Sink {
+        return .{ .host = ctx };
+    }
 };
 
 fn testTaskRecord(token: HostSignalToken, name: []const u8) HostSignalRecord {
@@ -548,4 +608,36 @@ test "effects runtime updates active interval table" {
     try std.testing.expectEqual(@as(u64, 10), removed.token);
     try std.testing.expectEqual(@as(usize, 1), intervals.items.len);
     try std.testing.expectEqual(@as(u64, 11), intervals.items[0].token);
+}
+
+test "effects runtime syncs existing active intervals from graph" {
+    var source_token: u64 = 0;
+    var interval_record = testIntervalRecord(&source_token, 250);
+    const active_nodes = [_]TestActiveNode{
+        .{ .record = &interval_record },
+    };
+
+    var intervals: std.ArrayListUnmanaged(ActiveInterval) = .empty;
+    defer intervals.deinit(std.testing.allocator);
+    intervals.append(std.testing.allocator, .{
+        .token = 10,
+        .source_token = &source_token,
+        .period_ms = 250,
+        .active = true,
+    }) catch @panic("out of memory");
+
+    var host = TestIntervalHost{};
+    var metrics = TestMetrics{};
+    var next_interval_token: u64 = 11;
+    var roc_host: abi.RocHost = undefined;
+
+    syncActiveIntervalsFromGraph(TestIntervalCtx, &host, std.testing.allocator, &intervals, &next_interval_token, &roc_host, active_nodes[0..], &metrics);
+
+    try std.testing.expectEqual(@as(usize, 1), intervals.items.len);
+    try std.testing.expect(intervals.items[0].active);
+    try std.testing.expectEqual(@as(u64, 10), intervals.items[0].token);
+    try std.testing.expectEqual(@as(u64, 11), next_interval_token);
+    try std.testing.expectEqual(@as(u64, 1), metrics.active_intervals_synced);
+    try std.testing.expectEqual(@as(u64, 0), host.start_interval_count);
+    try std.testing.expectEqual(@as(u64, 0), host.cancel_interval_count);
 }
