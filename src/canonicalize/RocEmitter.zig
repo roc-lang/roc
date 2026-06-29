@@ -11,6 +11,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const base = @import("base");
 const builtins = @import("builtins");
+const parse = @import("parse");
 
 const i128h = builtins.compiler_rt_128;
 
@@ -239,7 +240,7 @@ fn unaryReceiverNeedsParens(self: *Self, receiver_idx: Expr.Idx) bool {
         .e_frac_f64 => |frac| std.math.signbit(frac.value),
         .e_dec => |dec| dec.value.num < 0,
         .e_dec_small => |small| small.value.numerator < 0,
-        .e_num_from_numeral => blk: {
+        .e_num_from_numeral, .e_typed_num_from_numeral => blk: {
             const literal = self.module_env.numeralLiteralForNode(ModuleEnv.nodeIdxFrom(receiver_idx)) orelse {
                 std.debug.panic("missing recorded numeral for expression {}", .{@intFromEnum(receiver_idx)});
             };
@@ -768,31 +769,43 @@ fn emitStatementFrame(
     }
 }
 
-/// Binding power of the lhs and rhs of a binary operator (higher binds
-/// tighter). Left < right is left-associative; left >= right makes the
-/// operator bind into its own kind on the right (right-associative).
-const BinopBp = struct { left: u8, right: u8 };
-
-/// Binding powers for each binary operator. These must mirror the parser's
-/// `bin_op_bp_table` (src/parse/Parser.zig) exactly: re-emitted operator
-/// expressions only omit parentheses where the parser's binding powers
-/// reproduce the same tree.
-fn binopBp(op: Expr.Binop.Op) BinopBp {
+fn binopOpToToken(op: Expr.Binop.Op) parse.tokenize.Token.Tag {
     return switch (op) {
-        .mul => .{ .left = 30, .right = 31 },
-        .div => .{ .left = 28, .right = 29 },
-        .div_trunc => .{ .left = 26, .right = 27 },
-        .rem => .{ .left = 24, .right = 25 },
-        .add, .sub => .{ .left = 20, .right = 21 },
-        .eq => .{ .left = 15, .right = 15 },
-        .ne => .{ .left = 13, .right = 13 },
-        .lt => .{ .left = 11, .right = 11 },
-        .gt => .{ .left = 9, .right = 9 },
-        .le => .{ .left = 7, .right = 7 },
-        .ge => .{ .left = 5, .right = 5 },
-        .@"and" => .{ .left = 4, .right = 3 },
-        .@"or" => .{ .left = 2, .right = 1 },
+        .add => .OpPlus,
+        .sub => .OpBinaryMinus,
+        .mul => .OpStar,
+        .div => .OpSlash,
+        .rem => .OpPercent,
+        .lt => .OpLessThan,
+        .gt => .OpGreaterThan,
+        .le => .OpLessThanOrEq,
+        .ge => .OpGreaterThanOrEq,
+        .eq => .OpEquals,
+        .ne => .OpNotEquals,
+        .div_trunc => .OpDoubleSlash,
+        .@"and" => .OpAnd,
+        .@"or" => .OpOr,
     };
+}
+
+/// Binding powers for re-emission parenthesization come straight from the
+/// parser's single binding-power table, so a re-emitted operator expression
+/// always reparses to the same tree. (Every `Binop.Op` maps to an in-range
+/// operator token with non-zero binding power, so the lookup never returns null.)
+fn binopBp(op: Expr.Binop.Op) parse.Parser.BinOpBp {
+    return parse.Parser.getTokenBP(binopOpToToken(op)).?;
+}
+
+comptime {
+    // Enforce the invariant `binopBp`'s doc comment states: every `Binop.Op` maps
+    // to an operator token with a defined binding power, so the `.?` above can
+    // never panic. A future `binopOpToToken` mapping onto a non-operator (or
+    // zero-binding-power) token becomes a compile error here instead of a runtime
+    // crash during re-emission.
+    for (@typeInfo(Expr.Binop.Op).@"enum".fields) |field| {
+        const op: Expr.Binop.Op = @enumFromInt(field.value);
+        std.debug.assert(parse.Parser.getTokenBP(binopOpToToken(op)) != null);
+    }
 }
 
 const EmitError = std.mem.Allocator.Error || std.fmt.BufPrintError;

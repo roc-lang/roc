@@ -560,6 +560,8 @@ pub fn SliceStoreSerde(comptime Store: type, comptime Serialized: type) type {
             inline for (@typeInfo(Serialized).@"struct".fields) |field| {
                 const value = if (comptime @hasDecl(field.type, "deserializeInto"))
                     @field(self, field.name).deserializeInto(base_addr)
+                else if (comptime @hasDecl(field.type, "deserializeWithAllocator"))
+                    @field(self, field.name).deserializeWithAllocator(base_addr, allocator)
                 else
                     @field(self, field.name).deserialize(base_addr);
                 if (comptime isArrayListType(@TypeOf(@field(store, field.name)))) {

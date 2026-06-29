@@ -301,12 +301,23 @@ pub const Writer = struct {
         layout_idx: layout.Idx,
         value: Value,
     ) Allocator.Error![]const checked.ConstNodeId {
-        const nodes = try self.module.const_store.allocator.alloc(checked.ConstNodeId, plans.len);
-        errdefer self.module.const_store.allocator.free(nodes);
-        if (plans.len == 0) return nodes;
+        if (plans.len == 0) return try self.module.const_store.allocator.alloc(checked.ConstNodeId, 0);
 
         const layout_value = self.program.layouts.getLayout(layout_idx);
+        if (layout_value.tag == .box) {
+            const ptr = self.readBoxDataPointer(value) orelse writerInvariant("boxed struct value had null payload pointer");
+            return try self.storeStructChildren(plans, layout_value.getIdx(), .{ .ptr = ptr });
+        }
+
+        const nodes = try self.module.const_store.allocator.alloc(checked.ConstNodeId, plans.len);
+        errdefer self.module.const_store.allocator.free(nodes);
         if (layout_value.tag == .zst) {
+            for (nodes, 0..) |*node, index| {
+                node.* = try self.storeValue(plans[index], .zst, Value.zst);
+            }
+            return nodes;
+        }
+        if (layout_value.tag == .box_of_zst) {
             for (nodes, 0..) |*node, index| {
                 node.* = try self.storeValue(plans[index], .zst, Value.zst);
             }
@@ -427,6 +438,7 @@ pub const Writer = struct {
             for (slots, 0..) |slot, index| {
                 captures[index] = .{
                     .id = slot.id,
+                    .ty = try self.cloneCaptureType(slot.ty),
                     .value = try self.storeValue(slot.plan, .zst, Value.zst),
                 };
             }
@@ -436,18 +448,29 @@ pub const Writer = struct {
                 const offset = self.program.layouts.getStructFieldOffsetByOriginalIndex(layout_value.getStruct().idx, slot.slot);
                 captures[index] = .{
                     .id = slot.id,
+                    .ty = try self.cloneCaptureType(slot.ty),
                     .value = try self.storeValue(slot.plan, field_layout, payload_value.offset(offset)),
                 };
             }
         } else if (slots.len == 1) {
             captures[0] = .{
                 .id = slots[0].id,
+                .ty = try self.cloneCaptureType(slots[0].ty),
                 .value = try self.storeValue(slots[0].plan, payload_layout, payload_value),
             };
         } else {
             writerInvariant("multi-capture function did not use a struct capture layout");
         }
         return captures;
+    }
+
+    fn cloneCaptureType(self: *Writer, ty: const_store.ConstTypeId) Allocator.Error!const_store.ConstTypeId {
+        return self.module.const_store.type_store.cloneTypeFromTranslated(
+            &self.program.const_types,
+            &self.program.const_type_names,
+            &self.module.canonical_names,
+            ty,
+        );
     }
 
     fn collectStrBackings(
@@ -549,6 +572,15 @@ pub const Writer = struct {
         const layout_value = self.program.layouts.getLayout(layout_idx);
         if (layout_value.tag == .zst) {
             for (plans) |plan| try self.collectStrBackings(plan, .zst, Value.zst);
+            return;
+        }
+        if (layout_value.tag == .box_of_zst) {
+            for (plans) |plan| try self.collectStrBackings(plan, .zst, Value.zst);
+            return;
+        }
+        if (layout_value.tag == .box) {
+            const ptr = self.readBoxDataPointer(value) orelse writerInvariant("boxed struct value had null payload pointer");
+            try self.collectStructStrBackings(plans, layout_value.getIdx(), .{ .ptr = ptr });
             return;
         }
         if (layout_value.tag != .struct_) writerInvariant("struct const plan had non-struct layout");

@@ -563,6 +563,16 @@ pub const LowLevel = enum {
             };
         }
 
+        pub fn runtimeUniquenessMaybeSharedResult(mask: u64) RcEffect {
+            return .{
+                .may_allocate = true,
+                .may_retain_or_release = true,
+                .may_runtime_uniqueness_check_args = mask,
+                .consume_args = mask,
+                .result_aliases_consumed_args = mask,
+            };
+        }
+
         pub fn runtimeUniquenessRetainingArgs(runtime_mask: u64, retain_mask: u64) RcEffect {
             return .{
                 .may_allocate = true,
@@ -658,11 +668,13 @@ pub const LowLevel = enum {
             .list_drop_last,
             .list_take_first,
             .list_take_last,
+            .list_split_first,
+            .list_split_last,
+            => RcEffect.runtimeUniquenessMaybeSharedResult(argMask(&.{0})),
+
             .list_reverse,
             .list_reserve,
             .list_release_excess_capacity,
-            .list_split_first,
-            .list_split_last,
             => RcEffect.runtimeUniqueness(argMask(&.{0})),
 
             .list_prepend => RcEffect.runtimeUniquenessRetainingArgs(argMask(&.{0}), argMask(&.{1})),

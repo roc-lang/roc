@@ -236,34 +236,24 @@ const Builder = struct {
     /// A mixed-kind set (both numeral and quote literal-origin constraints,
     /// reachable only via a flex/flex merge the checker reports as a type
     /// error, so it never survives to key generation) deterministically picks
-    /// `numeral`. This MUST agree with the mono layer's scan in
-    /// checked_artifact.zig `numericDefaultPhaseForConstraints`, where any
-    /// numeral constraint wins (-> Dec) before quote is considered (-> Str);
-    /// if the two sites disagreed, the key would silently name a different
-    /// nominal than mono specializes the variable to.
+    /// `numeral`. The precedence is enforced by
+    /// `StaticDispatchConstraint.dominantLiteralKind`, the single source of
+    /// truth shared with `varLiteralKind` (Check.zig) and
+    /// `numericDefaultPhaseForConstraints` (checked_artifact.zig).
     fn flexLiteralDefaultKind(self: *Builder, flex: types.Flex) ?LiteralKind {
         const constraints = self.store.sliceStaticDispatchConstraints(flex.constraints);
-        var has_numeral = false;
-        var has_quote = false;
-        var has_interpolation = false;
+        const kind = types.StaticDispatchConstraint.dominantLiteralKind(constraints);
         var has_other = false;
         for (constraints) |constraint| {
             switch (constraint.origin) {
-                .from_literal => |lit| switch (lit) {
-                    .numeral => has_numeral = true,
-                    .quote => has_quote = true,
-                    .interpolation => has_interpolation = true,
-                },
+                .from_literal => {},
                 else => has_other = true,
             }
         }
-        if ((has_numeral or has_quote or has_interpolation) and has_other) {
+        if (kind != null and has_other) {
             invariantViolation("concrete canonical type key requested for an open literal with non-literal constraints (defaulting was skipped)");
         }
-        if (has_numeral) return .numeral;
-        if (has_quote) return .quote;
-        if (has_interpolation) return .interpolation;
-        return null;
+        return kind;
     }
 
     fn writeLiteralDefault(self: *Builder, kind: LiteralKind) void {

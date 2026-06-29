@@ -230,6 +230,21 @@ const HostedSectionMap = struct {
 };
 
 const BinderMap = std.AutoHashMap(checked.PatternBinderId, Ast.LocalId);
+const TypedBinder = struct {
+    binder: checked.PatternBinderId,
+    type_digest: names.TypeDigest,
+};
+const TypedBinders = std.AutoHashMap(TypedBinder, Ast.LocalId);
+const LexicalBinderEntry = struct {
+    kind: u8,
+    binder: u32,
+    local: u32,
+    type_digest: names.TypeDigest,
+};
+const LocalProcContext = struct {
+    base_key: names.TypeDigest,
+    entries: []LexicalBinderEntry,
+};
 
 const LoweredTemplateStatus = enum {
     reserved,
@@ -2312,7 +2327,7 @@ const Builder = struct {
         return switch (fn_def) {
             .local_template => |template| .{ .local_template = template },
             .imported_template => |template| .{ .imported_template = template },
-            .nested => |nested| .{ .nested = .{ .owner = nested.owner, .site = nested.site, .context_fn_key = .{} } },
+            .nested => |nested| .{ .nested = .{ .owner = nested.owner, .site = nested.site, .context_fn_key = nested.context_fn_key } },
             .local_hosted => |template| .{ .local_hosted = self.hostedFn(template) },
             .imported_hosted => |template| .{ .imported_hosted = self.hostedFn(template) },
             .checked_generated => |template| .{ .checked_generated = template },
@@ -2325,6 +2340,661 @@ const Builder = struct {
                 .expr = runtime.expr,
             } },
         };
+    }
+
+    fn restoreConstType(
+        self: *Builder,
+        store_view: ModuleView,
+        ty: check.ConstStore.ConstTypeId,
+    ) Allocator.Error!Type.TypeId {
+        var map = std.AutoHashMap(check.ConstStore.ConstTypeId, Type.TypeId).init(self.allocator);
+        defer map.deinit();
+        return try self.restoreConstTypeInner(store_view, ty, &map);
+    }
+
+    fn restoreConstTypeInner(
+        self: *Builder,
+        store_view: ModuleView,
+        ty: check.ConstStore.ConstTypeId,
+        map: *std.AutoHashMap(check.ConstStore.ConstTypeId, Type.TypeId),
+    ) Allocator.Error!Type.TypeId {
+        if (map.get(ty)) |existing| return existing;
+
+        const out = try self.program.types.add(.zst);
+        try map.put(ty, out);
+
+        const content = try self.restoreConstTypeContent(store_view, ty, map);
+        self.program.types.types.items[@intFromEnum(out)] = content;
+        return out;
+    }
+
+    fn restoreConstTypeContent(
+        self: *Builder,
+        store_view: ModuleView,
+        ty: check.ConstStore.ConstTypeId,
+        map: *std.AutoHashMap(check.ConstStore.ConstTypeId, Type.TypeId),
+    ) Allocator.Error!Type.Content {
+        const store = &store_view.const_store.type_store;
+        return switch (store.get(ty)) {
+            .primitive => |primitive| .{ .primitive = monoPrimitiveFromConst(primitive) },
+            .zst => .zst,
+            .erased => |erased| .{ .erased = erased },
+            .list => |elem| .{ .list = try self.restoreConstTypeInner(store_view, elem, map) },
+            .box => |elem| .{ .box = try self.restoreConstTypeInner(store_view, elem, map) },
+            .tuple => |items| blk: {
+                const source = store.typeSpan(items);
+                const out = try self.allocator.alloc(Type.TypeId, source.len);
+                defer self.allocator.free(out);
+                for (source, 0..) |item, i| out[i] = try self.restoreConstTypeInner(store_view, item, map);
+                break :blk .{ .tuple = try self.program.types.addSpan(out) };
+            },
+            .func => |function| blk: {
+                const args = store.typeSpan(function.args);
+                const out = try self.allocator.alloc(Type.TypeId, args.len);
+                defer self.allocator.free(out);
+                for (args, 0..) |arg, i| out[i] = try self.restoreConstTypeInner(store_view, arg, map);
+                break :blk .{ .func = .{
+                    .args = try self.program.types.addSpan(out),
+                    .ret = try self.restoreConstTypeInner(store_view, function.ret, map),
+                } };
+            },
+            .record => |fields| blk: {
+                const source = store.fieldSpan(fields);
+                const out = try self.allocator.alloc(Type.Field, source.len);
+                defer self.allocator.free(out);
+                for (source, 0..) |field, i| {
+                    out[i] = .{
+                        .name = try self.recordFieldName(store_view, field.name),
+                        .ty = try self.restoreConstTypeInner(store_view, field.ty, map),
+                    };
+                }
+                break :blk .{ .record = try self.program.types.addFields(out) };
+            },
+            .tag_union => |tags| blk: {
+                const source = store.tagSpan(tags);
+                const out = try self.allocator.alloc(Type.Tag, source.len);
+                defer self.allocator.free(out);
+                for (source, 0..) |tag, i| {
+                    const payloads = store.typeSpan(tag.payloads);
+                    const out_payloads = try self.allocator.alloc(Type.TypeId, payloads.len);
+                    defer self.allocator.free(out_payloads);
+                    for (payloads, 0..) |payload, j| out_payloads[j] = try self.restoreConstTypeInner(store_view, payload, map);
+                    out[i] = .{
+                        .name = try self.tagName(store_view, tag.name),
+                        .checked_name = try self.tagName(store_view, tag.checked_name),
+                        .payloads = try self.program.types.addSpan(out_payloads),
+                    };
+                }
+                break :blk .{ .tag_union = try self.program.types.addTags(out) };
+            },
+            .named => |named| blk: {
+                const args = store.typeSpan(named.args);
+                const out_args = try self.allocator.alloc(Type.TypeId, args.len);
+                defer self.allocator.free(out_args);
+                for (args, 0..) |arg, i| out_args[i] = try self.restoreConstTypeInner(store_view, arg, map);
+
+                const declared = store.declaredFieldSpan(named.declared_order);
+                const out_declared = try self.allocator.alloc(Type.DeclaredField, declared.len);
+                defer self.allocator.free(out_declared);
+                for (declared, 0..) |entry, i| {
+                    out_declared[i] = switch (entry) {
+                        .named => |name| .{ .named = try self.recordFieldName(store_view, name) },
+                        .padding => |padding| .{ .padding = try self.restoreConstTypeInner(store_view, padding, map) },
+                    };
+                }
+
+                break :blk .{ .named = .{
+                    .named_type = .{
+                        .module = named.named_type.module,
+                        .ty = named.named_type.ty,
+                    },
+                    .def = try self.typeDef(store_view, named.def.module_name, named.def.type_name, named.def.source_decl),
+                    .kind = monoNamedKindFromConst(named.kind),
+                    .builtin_owner = named.builtin_owner,
+                    .args = try self.program.types.addSpan(out_args),
+                    .backing = if (named.backing) |backing| .{
+                        .ty = try self.restoreConstTypeInner(store_view, backing.ty, map),
+                        .use = monoBackingUseFromConst(backing.use),
+                    } else null,
+                    .declared_order = try self.program.types.addDeclaredFields(out_declared),
+                } };
+            },
+        };
+    }
+
+    const RestoredConstSourceCapture = struct {
+        binder: checked.PatternBinderId,
+        previous: ?Ast.LocalId,
+        previous_typed: ?Ast.LocalId,
+        local: Ast.LocalId,
+        ty: Type.TypeId,
+        value: Ast.ExprId,
+    };
+
+    fn bindConstSourceCaptures(
+        self: *Builder,
+        fn_ctx: *BodyContext,
+        store_view: ModuleView,
+        fn_view: ModuleView,
+        fn_value: check.ConstStore.ConstFn,
+    ) Allocator.Error!std.ArrayList(RestoredConstSourceCapture) {
+        var capture_count: usize = 0;
+        for (fn_value.captures) |capture| {
+            switch (capture.id) {
+                .binder => capture_count += 1,
+                .generated => {},
+            }
+        }
+
+        var out = std.ArrayList(RestoredConstSourceCapture).empty;
+        errdefer self.releaseConstSourceCaptures(fn_ctx, &out);
+        try out.ensureTotalCapacity(self.allocator, capture_count);
+
+        for (fn_value.captures) |capture| {
+            const binder = switch (capture.id) {
+                .binder => |binder| binder,
+                .generated => continue,
+            };
+            const lowered_ty = try self.restoreConstType(store_view, capture.ty);
+            const local = try self.program.addLocalWithBinder(self.symbols.fresh(), lowered_ty, binder);
+            try bindLocalName(self.program, fn_view, local, binder);
+            const previous = fn_ctx.binders.get(binder);
+            try fn_ctx.binders.put(binder, local);
+            const previous_typed = try fn_ctx.putTypedBinder(binder, lowered_ty, local);
+            out.appendAssumeCapacity(.{
+                .binder = binder,
+                .previous = previous,
+                .previous_typed = previous_typed,
+                .local = local,
+                .ty = lowered_ty,
+                .value = undefined,
+            });
+        }
+
+        var out_index: usize = 0;
+        for (fn_value.captures) |capture| {
+            switch (capture.id) {
+                .binder => {},
+                .generated => continue,
+            }
+            out.items[out_index].value = try fn_ctx.restoreConstNodeAtType(store_view, fn_view, capture.value, out.items[out_index].ty);
+            out_index += 1;
+        }
+
+        return out;
+    }
+
+    fn releaseConstSourceCaptures(
+        self: *Builder,
+        fn_ctx: *BodyContext,
+        captures: *std.ArrayList(RestoredConstSourceCapture),
+    ) void {
+        var index = captures.items.len;
+        while (index > 0) {
+            index -= 1;
+            const capture = captures.items[index];
+            fn_ctx.restoreTypedBinder(capture.binder, capture.ty, capture.previous_typed);
+            if (capture.previous) |previous| {
+                fn_ctx.binders.put(capture.binder, previous) catch |err| switch (err) {
+                    error.OutOfMemory => Common.invariant("restoring a previously inserted binder cannot reallocate"),
+                };
+            } else {
+                _ = fn_ctx.binders.remove(capture.binder);
+            }
+        }
+        captures.deinit(self.allocator);
+    }
+
+    fn wrapConstSourceCaptureLets(
+        self: *Builder,
+        fn_ctx: *BodyContext,
+        captures: []const RestoredConstSourceCapture,
+        expr: Ast.ExprId,
+        ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        const order = try self.captureLetOrder(captures);
+        defer self.allocator.free(order);
+
+        var result = expr;
+        var index = order.len;
+        while (index > 0) {
+            index -= 1;
+            const capture = captures[order[index]];
+            result = try fn_ctx.wrapLet(capture.local, capture.ty, capture.value, result, ty);
+        }
+        return result;
+    }
+
+    fn captureLetOrder(self: *Builder, captures: anytype) Allocator.Error![]usize {
+        const len = captures.len;
+        const order = try self.allocator.alloc(usize, len);
+        errdefer self.allocator.free(order);
+        const visiting = try self.allocator.alloc(bool, len);
+        defer self.allocator.free(visiting);
+        const visited = try self.allocator.alloc(bool, len);
+        defer self.allocator.free(visited);
+        @memset(visiting, false);
+        @memset(visited, false);
+
+        var count: usize = 0;
+        for (0..len) |index| {
+            try self.appendCaptureLetOrder(captures, index, visiting, visited, order, &count);
+        }
+        return order;
+    }
+
+    fn appendCaptureLetOrder(
+        self: *Builder,
+        captures: anytype,
+        index: usize,
+        visiting: []bool,
+        visited: []bool,
+        order: []usize,
+        count: *usize,
+    ) Allocator.Error!void {
+        if (visited[index]) return;
+        if (visiting[index]) {
+            Common.invariant("ConstStore capture values formed a recursive value dependency");
+        }
+        visiting[index] = true;
+        for (captures, 0..) |capture, dep_index| {
+            if (dep_index == index) continue;
+            if (try self.exprDependsOnFreeLocal(captures[index].value, capture.local)) {
+                try self.appendCaptureLetOrder(captures, dep_index, visiting, visited, order, count);
+            }
+        }
+        visiting[index] = false;
+        visited[index] = true;
+        order[count.*] = index;
+        count.* += 1;
+    }
+
+    fn exprDependsOnFreeLocal(
+        self: *Builder,
+        expr: Ast.ExprId,
+        target: Ast.LocalId,
+    ) Allocator.Error!bool {
+        var bound = std.AutoHashMap(Ast.LocalId, void).init(self.allocator);
+        defer bound.deinit();
+        var active_fns = std.AutoHashMap(Ast.FnId, void).init(self.allocator);
+        defer active_fns.deinit();
+        return try self.exprDependsOnFreeLocalInner(expr, target, &bound, &active_fns);
+    }
+
+    fn exprDependsOnFreeLocalInner(
+        self: *Builder,
+        expr_id: Ast.ExprId,
+        target: Ast.LocalId,
+        bound: *std.AutoHashMap(Ast.LocalId, void),
+        active_fns: *std.AutoHashMap(Ast.FnId, void),
+    ) Allocator.Error!bool {
+        const expr = self.program.exprs.items[@intFromEnum(expr_id)];
+        switch (expr.data) {
+            .local => |local| return self.localDependsOnTarget(local, target, bound),
+            .unit,
+            .int_lit,
+            .frac_f32_lit,
+            .frac_f64_lit,
+            .dec_lit,
+            .str_lit,
+            .uninitialized,
+            .crash,
+            .comptime_exhaustiveness_failed,
+            .def_ref,
+            => return false,
+            .fn_ref => |fn_ref| {
+                for (self.program.exprSpan(fn_ref.captures)) |capture| {
+                    if (try self.exprDependsOnFreeLocalInner(capture, target, bound, active_fns)) return true;
+                }
+                return false;
+            },
+            .uninitialized_payload => |payload| return self.localDependsOnTarget(payload.condition, target, bound),
+            .list,
+            .tuple,
+            => |items| {
+                for (self.program.exprSpan(items)) |child| {
+                    if (try self.exprDependsOnFreeLocalInner(child, target, bound, active_fns)) return true;
+                }
+                return false;
+            },
+            .record => |fields| {
+                for (self.program.fieldExprSpan(fields)) |field| {
+                    if (try self.exprDependsOnFreeLocalInner(field.value, target, bound, active_fns)) return true;
+                }
+                return false;
+            },
+            .tag => |tag| {
+                for (self.program.exprSpan(tag.payloads)) |payload| {
+                    if (try self.exprDependsOnFreeLocalInner(payload, target, bound, active_fns)) return true;
+                }
+                return false;
+            },
+            .nominal,
+            .dbg,
+            .expect,
+            => |child| return try self.exprDependsOnFreeLocalInner(child, target, bound, active_fns),
+            .return_ => |ret| return try self.exprDependsOnFreeLocalInner(ret.value, target, bound, active_fns),
+            .expect_err => |expect_err| return try self.exprDependsOnFreeLocalInner(expect_err.msg, target, bound, active_fns),
+            .comptime_branch_taken => |taken| return try self.exprDependsOnFreeLocalInner(taken.body, target, bound, active_fns),
+            .let_ => |let_| {
+                if (try self.exprDependsOnFreeLocalInner(let_.value, target, bound, active_fns)) return true;
+                var added = std.ArrayList(Ast.LocalId).empty;
+                defer added.deinit(self.allocator);
+                try self.bindPatLocals(let_.bind, bound, &added);
+                defer removeBoundLocals(bound, added.items);
+                return try self.exprDependsOnFreeLocalInner(let_.rest, target, bound, active_fns);
+            },
+            .lambda => |lambda| {
+                var added = std.ArrayList(Ast.LocalId).empty;
+                defer added.deinit(self.allocator);
+                try self.bindTypedLocalLocals(lambda.args, bound, &added);
+                defer removeBoundLocals(bound, added.items);
+                return try self.exprDependsOnFreeLocalInner(lambda.body, target, bound, active_fns);
+            },
+            .fn_def => |fn_def| {
+                const captures = self.program.fnDefCaptureSpan(fn_def.captures);
+                if (captures.len == 0) return try self.fnDependsOnFreeLocal(fn_def.fn_id, target, bound, active_fns);
+                for (captures) |capture| {
+                    if (try self.exprDependsOnFreeLocalInner(capture.value, target, bound, active_fns)) return true;
+                }
+                return false;
+            },
+            .call_value => |call| {
+                if (try self.exprDependsOnFreeLocalInner(call.callee, target, bound, active_fns)) return true;
+                for (self.program.exprSpan(call.args)) |arg| {
+                    if (try self.exprDependsOnFreeLocalInner(arg, target, bound, active_fns)) return true;
+                }
+                return false;
+            },
+            .call_proc => |call| {
+                switch (call.callee) {
+                    .func => |fn_id| if (try self.fnDependsOnFreeLocal(fn_id, target, bound, active_fns)) return true,
+                    .lifted => {},
+                }
+                for (self.program.exprSpan(call.args)) |arg| {
+                    if (try self.exprDependsOnFreeLocalInner(arg, target, bound, active_fns)) return true;
+                }
+                for (self.program.exprSpan(call.captures)) |capture| {
+                    if (try self.exprDependsOnFreeLocalInner(capture, target, bound, active_fns)) return true;
+                }
+                return false;
+            },
+            .low_level => |call| {
+                for (self.program.exprSpan(call.args)) |arg| {
+                    if (try self.exprDependsOnFreeLocalInner(arg, target, bound, active_fns)) return true;
+                }
+                return false;
+            },
+            .field_access => |field| return try self.exprDependsOnFreeLocalInner(field.receiver, target, bound, active_fns),
+            .tuple_access => |access| return try self.exprDependsOnFreeLocalInner(access.tuple, target, bound, active_fns),
+            .structural_eq => |eq| {
+                if (try self.exprDependsOnFreeLocalInner(eq.lhs, target, bound, active_fns)) return true;
+                return try self.exprDependsOnFreeLocalInner(eq.rhs, target, bound, active_fns);
+            },
+            .structural_hash => |hash| {
+                if (try self.exprDependsOnFreeLocalInner(hash.value, target, bound, active_fns)) return true;
+                return try self.exprDependsOnFreeLocalInner(hash.hasher, target, bound, active_fns);
+            },
+            .match_ => |match| {
+                if (try self.exprDependsOnFreeLocalInner(match.scrutinee, target, bound, active_fns)) return true;
+                for (self.program.branchSpan(match.branches)) |branch| {
+                    var added = std.ArrayList(Ast.LocalId).empty;
+                    defer added.deinit(self.allocator);
+                    try self.bindPatLocals(branch.pat, bound, &added);
+                    defer removeBoundLocals(bound, added.items);
+                    if (branch.guard) |guard| {
+                        if (try self.exprDependsOnFreeLocalInner(guard, target, bound, active_fns)) return true;
+                    }
+                    if (try self.exprDependsOnFreeLocalInner(branch.body, target, bound, active_fns)) return true;
+                }
+                return false;
+            },
+            .if_ => |if_| {
+                for (self.program.ifBranchSpan(if_.branches)) |branch| {
+                    if (try self.exprDependsOnFreeLocalInner(branch.cond, target, bound, active_fns)) return true;
+                    if (try self.exprDependsOnFreeLocalInner(branch.body, target, bound, active_fns)) return true;
+                }
+                return try self.exprDependsOnFreeLocalInner(if_.final_else, target, bound, active_fns);
+            },
+            .if_initialized_payload => |payload| {
+                if (try self.exprDependsOnFreeLocalInner(payload.cond, target, bound, active_fns)) return true;
+                if (self.localDependsOnTarget(payload.payload, target, bound)) return true;
+                if (try self.exprDependsOnFreeLocalInner(payload.initialized, target, bound, active_fns)) return true;
+                return try self.exprDependsOnFreeLocalInner(payload.uninitialized, target, bound, active_fns);
+            },
+            .try_sequence => |sequence| {
+                if (try self.exprDependsOnFreeLocalInner(sequence.try_expr, target, bound, active_fns)) return true;
+                try bound.put(sequence.ok_local, {});
+                defer _ = bound.remove(sequence.ok_local);
+                return try self.exprDependsOnFreeLocalInner(sequence.ok_body, target, bound, active_fns);
+            },
+            .try_record_sequence => |sequence| {
+                if (try self.exprDependsOnFreeLocalInner(sequence.try_expr, target, bound, active_fns)) return true;
+                try bound.put(sequence.value_local, {});
+                try bound.put(sequence.rest_local, {});
+                defer _ = bound.remove(sequence.rest_local);
+                defer _ = bound.remove(sequence.value_local);
+                return try self.exprDependsOnFreeLocalInner(sequence.ok_body, target, bound, active_fns);
+            },
+            .block => |block| {
+                var added = std.ArrayList(Ast.LocalId).empty;
+                defer added.deinit(self.allocator);
+                defer removeBoundLocals(bound, added.items);
+                for (self.program.stmtSpan(block.statements)) |stmt| {
+                    if (try self.stmtDependsOnFreeLocal(stmt, target, bound, active_fns, &added)) return true;
+                }
+                return try self.exprDependsOnFreeLocalInner(block.final_expr, target, bound, active_fns);
+            },
+            .loop_ => |loop| {
+                for (self.program.exprSpan(loop.initial_values)) |initial| {
+                    if (try self.exprDependsOnFreeLocalInner(initial, target, bound, active_fns)) return true;
+                }
+                var added = std.ArrayList(Ast.LocalId).empty;
+                defer added.deinit(self.allocator);
+                try self.bindTypedLocalLocals(loop.params, bound, &added);
+                defer removeBoundLocals(bound, added.items);
+                return try self.exprDependsOnFreeLocalInner(loop.body, target, bound, active_fns);
+            },
+            .break_ => |maybe| if (maybe) |value|
+                return try self.exprDependsOnFreeLocalInner(value, target, bound, active_fns)
+            else
+                return false,
+            .continue_ => |continue_| {
+                for (self.program.exprSpan(continue_.values)) |value| {
+                    if (try self.exprDependsOnFreeLocalInner(value, target, bound, active_fns)) return true;
+                }
+                return false;
+            },
+        }
+    }
+
+    fn localDependsOnTarget(
+        self: *Builder,
+        local: Ast.LocalId,
+        target: Ast.LocalId,
+        bound: *std.AutoHashMap(Ast.LocalId, void),
+    ) bool {
+        if (!self.sameLocalIdentity(local, target)) return false;
+        return !self.boundContainsLocalIdentity(bound, local);
+    }
+
+    fn boundContainsLocalIdentity(
+        self: *Builder,
+        bound: *std.AutoHashMap(Ast.LocalId, void),
+        local: Ast.LocalId,
+    ) bool {
+        if (bound.contains(local)) return true;
+        const local_data = self.program.locals.items[@intFromEnum(local)];
+        const binder = local_data.binder orelse return false;
+        var iter = bound.keyIterator();
+        while (iter.next()) |active| {
+            const active_data = self.program.locals.items[@intFromEnum(active.*)];
+            if (active_data.binder == null or active_data.binder.? != binder) continue;
+            if (self.sameMonotype(active_data.ty, local_data.ty)) return true;
+        }
+        return false;
+    }
+
+    fn sameLocalIdentity(self: *Builder, lhs: Ast.LocalId, rhs: Ast.LocalId) bool {
+        if (lhs == rhs) return true;
+        const lhs_data = self.program.locals.items[@intFromEnum(lhs)];
+        const rhs_data = self.program.locals.items[@intFromEnum(rhs)];
+        if (lhs_data.binder == null or rhs_data.binder == null or lhs_data.binder.? != rhs_data.binder.?) {
+            return false;
+        }
+        return self.sameMonotype(lhs_data.ty, rhs_data.ty);
+    }
+
+    fn sameMonotype(self: *Builder, lhs: Type.TypeId, rhs: Type.TypeId) bool {
+        if (lhs == rhs) return true;
+        const lhs_digest = self.program.types.typeDigest(&self.program.names, lhs);
+        const rhs_digest = self.program.types.typeDigest(&self.program.names, rhs);
+        return std.mem.eql(u8, lhs_digest.bytes[0..], rhs_digest.bytes[0..]);
+    }
+
+    fn stmtDependsOnFreeLocal(
+        self: *Builder,
+        stmt_id: Ast.StmtId,
+        target: Ast.LocalId,
+        bound: *std.AutoHashMap(Ast.LocalId, void),
+        active_fns: *std.AutoHashMap(Ast.FnId, void),
+        added: *std.ArrayList(Ast.LocalId),
+    ) Allocator.Error!bool {
+        const stmt = self.program.stmts.items[@intFromEnum(stmt_id)];
+        switch (stmt) {
+            .uninitialized => |pat| {
+                try self.bindPatLocals(pat, bound, added);
+                return false;
+            },
+            .let_ => |let_| {
+                if (let_.recursive) {
+                    try self.bindPatLocals(let_.pat, bound, added);
+                    return try self.exprDependsOnFreeLocalInner(let_.value, target, bound, active_fns);
+                } else {
+                    if (try self.exprDependsOnFreeLocalInner(let_.value, target, bound, active_fns)) return true;
+                    try self.bindPatLocals(let_.pat, bound, added);
+                    return false;
+                }
+            },
+            .expr,
+            .expect,
+            .dbg,
+            => |expr| return try self.exprDependsOnFreeLocalInner(expr, target, bound, active_fns),
+            .return_ => |ret| return try self.exprDependsOnFreeLocalInner(ret.value, target, bound, active_fns),
+            .crash => return false,
+        }
+    }
+
+    fn fnDependsOnFreeLocal(
+        self: *Builder,
+        fn_id: Ast.FnId,
+        target: Ast.LocalId,
+        caller_bound: *std.AutoHashMap(Ast.LocalId, void),
+        active_fns: *std.AutoHashMap(Ast.FnId, void),
+    ) Allocator.Error!bool {
+        if (active_fns.contains(fn_id)) return false;
+        try active_fns.put(fn_id, {});
+        defer _ = active_fns.remove(fn_id);
+
+        for (self.program.defs.items) |def| {
+            if (def.fn_id == null or def.fn_id.? != fn_id) continue;
+            return try self.fnBodyDependsOnFreeLocal(def.args, def.body, target, caller_bound, active_fns);
+        }
+        for (self.program.nested_defs.items) |def| {
+            if (def.fn_id != fn_id) continue;
+            return try self.fnBodyDependsOnFreeLocal(def.args, .{ .roc = def.body }, target, caller_bound, active_fns);
+        }
+        return false;
+    }
+
+    fn fnBodyDependsOnFreeLocal(
+        self: *Builder,
+        args: Ast.Span(Ast.TypedLocal),
+        body: Ast.FnBody,
+        target: Ast.LocalId,
+        caller_bound: *std.AutoHashMap(Ast.LocalId, void),
+        active_fns: *std.AutoHashMap(Ast.FnId, void),
+    ) Allocator.Error!bool {
+        var bound = try caller_bound.clone();
+        defer bound.deinit();
+        var added = std.ArrayList(Ast.LocalId).empty;
+        defer added.deinit(self.allocator);
+        try self.bindTypedLocalLocals(args, &bound, &added);
+        switch (body) {
+            .roc => |expr| return try self.exprDependsOnFreeLocalInner(expr, target, &bound, active_fns),
+            .hosted => return false,
+        }
+    }
+
+    fn bindTypedLocalLocals(
+        self: *Builder,
+        span: Ast.Span(Ast.TypedLocal),
+        bound: *std.AutoHashMap(Ast.LocalId, void),
+        added: *std.ArrayList(Ast.LocalId),
+    ) Allocator.Error!void {
+        for (self.program.typedLocalSpan(span)) |local| {
+            try bound.put(local.local, {});
+            try added.append(self.allocator, local.local);
+        }
+    }
+
+    fn bindPatLocals(
+        self: *Builder,
+        pat_id: Ast.PatId,
+        bound: *std.AutoHashMap(Ast.LocalId, void),
+        added: *std.ArrayList(Ast.LocalId),
+    ) Allocator.Error!void {
+        const pat = self.program.pats.items[@intFromEnum(pat_id)];
+        switch (pat.data) {
+            .bind => |local| {
+                try bound.put(local, {});
+                try added.append(self.allocator, local);
+            },
+            .wildcard,
+            .int_lit,
+            .dec_lit,
+            .frac_f32_lit,
+            .frac_f64_lit,
+            .str_lit,
+            => {},
+            .as => |as| {
+                try self.bindPatLocals(as.pattern, bound, added);
+                try bound.put(as.local, {});
+                try added.append(self.allocator, as.local);
+            },
+            .record => |fields| {
+                for (self.program.recordDestructSpan(fields)) |field| {
+                    try self.bindPatLocals(field.pattern, bound, added);
+                }
+            },
+            .tuple => |items| {
+                for (self.program.patSpan(items)) |child| try self.bindPatLocals(child, bound, added);
+            },
+            .list => |list| {
+                for (self.program.patSpan(list.patterns)) |child| try self.bindPatLocals(child, bound, added);
+                if (list.rest) |rest| if (rest.pattern) |rest_pat| try self.bindPatLocals(rest_pat, bound, added);
+            },
+            .tag => |tag| {
+                for (self.program.patSpan(tag.payloads)) |payload| try self.bindPatLocals(payload, bound, added);
+            },
+            .nominal => |backing| try self.bindPatLocals(backing, bound, added),
+            .str_pattern => |str| {
+                for (self.program.strPatternStepSpan(str.steps)) |step| {
+                    if (step.capture) |capture| try self.bindPatLocals(capture, bound, added);
+                }
+            },
+        }
+    }
+
+    fn removeBoundLocals(
+        bound: *std.AutoHashMap(Ast.LocalId, void),
+        locals: []const Ast.LocalId,
+    ) void {
+        var index = locals.len;
+        while (index > 0) {
+            index -= 1;
+            _ = bound.remove(locals[index]);
+        }
     }
 
     fn restoreConstFnExpr(
@@ -2343,8 +3013,8 @@ const Builder = struct {
         if (fn_value.fn_def == .encode_to_runtime) {
             return try self.restoreConstEncodeToRuntimeFnExpr(store_view, fn_value, ty);
         }
-        const template = try self.restoredConstFnTemplateToMono(store_view, fn_id, fn_value, ty);
         if (fn_value.captures.len == 0) {
+            const template = try self.restoredConstFnTemplateToMono(store_view, fn_id, fn_value, ty);
             const mono_fn_id = try self.lowerRestoredConstFnTemplate(type_view, template);
             return try self.program.addExpr(.{
                 .ty = self.program.fnSource(mono_fn_id).mono_fn_ty,
@@ -2360,15 +3030,15 @@ const Builder = struct {
         defer self.active_graph = saved_graph;
         var fn_ctx = try BodyContext.init(self.allocator, self, fn_view, ownerTemplateForConstFnDef(fn_value.fn_def), graph);
         defer fn_ctx.deinit();
-        try fn_ctx.constrainTypeToMono(fn_value.source_fn_ty, ty);
-
+        fn_ctx.current_fn_key = restoredConstFnContextKey(store_view.key, fn_id, fn_value.source_fn_key);
         const lambda_expr_id = checkedLambdaExprIdForConstFn(fn_view, fn_value.fn_def);
         const lambda_expr = fn_view.bodies.expr(lambda_expr_id);
-
         const captures = try self.allocator.alloc(struct {
             binder: checked.PatternBinderId,
             local: Ast.LocalId,
             previous: ?Ast.LocalId,
+            previous_typed: ?Ast.LocalId,
+            ty: Type.TypeId,
             value: Ast.ExprId,
         }, fn_value.captures.len);
         var initialized: usize = 0;
@@ -2376,10 +3046,12 @@ const Builder = struct {
             while (initialized > 0) {
                 initialized -= 1;
                 if (captures[initialized].previous) |previous| {
+                    fn_ctx.restoreTypedBinder(captures[initialized].binder, captures[initialized].ty, captures[initialized].previous_typed);
                     fn_ctx.binders.put(captures[initialized].binder, previous) catch |err| switch (err) {
                         error.OutOfMemory => Common.invariant("restoring a previously inserted binder cannot reallocate"),
                     };
                 } else {
+                    fn_ctx.restoreTypedBinder(captures[initialized].binder, captures[initialized].ty, captures[initialized].previous_typed);
                     _ = fn_ctx.binders.remove(captures[initialized].binder);
                 }
             }
@@ -2389,25 +3061,41 @@ const Builder = struct {
 
         for (fn_value.captures, 0..) |capture, index| {
             const binder = constCaptureBinder(capture.id);
-            const capture_ty = checkedBinderType(fn_view, binder);
-            const lowered_ty = try fn_ctx.lowerType(capture_ty);
-            const value_expr = try fn_ctx.restoreConstNodeAtType(store_view, fn_view, capture.value, lowered_ty);
+            const lowered_ty = try self.restoreConstType(store_view, capture.ty);
             const local = try self.program.addLocalWithBinder(self.symbols.fresh(), lowered_ty, binder);
             try bindLocalName(self.program, fn_view, local, binder);
             const previous = fn_ctx.binders.get(binder);
             try fn_ctx.binders.put(binder, local);
+            const previous_typed = try fn_ctx.putTypedBinder(binder, lowered_ty, local);
             captures[index] = .{
                 .binder = binder,
                 .local = local,
                 .previous = previous,
-                .value = value_expr,
+                .previous_typed = previous_typed,
+                .ty = lowered_ty,
+                .value = undefined,
             };
             initialized += 1;
+        }
+        for (fn_value.captures, 0..) |capture, index| {
+            captures[index].value = try fn_ctx.restoreConstNodeAtType(store_view, fn_view, capture.value, captures[index].ty);
+        }
+        var template = try self.constFnTemplateToMono(fn_value, ty);
+        switch (template.fn_def) {
+            .nested => |nested| {
+                template.fn_def = .{ .nested = .{
+                    .owner = nested.owner,
+                    .site = nested.site,
+                    .context_fn_key = try fn_ctx.lexicalContextKey(),
+                } };
+            },
+            else => Common.invariant("capturing stored function had no nested function identity"),
         }
         defer {
             var index = initialized;
             while (index > 0) {
                 index -= 1;
+                fn_ctx.restoreTypedBinder(captures[index].binder, captures[index].ty, captures[index].previous_typed);
                 if (captures[index].previous) |previous| {
                     fn_ctx.binders.put(captures[index].binder, previous) catch |err| switch (err) {
                         error.OutOfMemory => Common.invariant("restoring a previously inserted binder cannot reallocate"),
@@ -2418,6 +3106,14 @@ const Builder = struct {
             }
         }
 
+        const restored_fn_id = switch (lambda_expr.data) {
+            .lambda => try self.lowerNestedFnFromContext(&fn_ctx, lambda_expr_id, template),
+            else => Common.invariant("stored capturing function did not reference a checked lambda"),
+        };
+        if (!fn_ctx.sameType(self.program.fnSource(restored_fn_id).mono_fn_ty, ty)) {
+            Common.invariant("stored capturing function type differed from restored function type");
+        }
+
         const capture_values = try self.allocator.alloc(Ast.FnDefCapture, captures.len);
         defer self.allocator.free(capture_values);
         for (captures, 0..) |capture, index| {
@@ -2426,13 +3122,10 @@ const Builder = struct {
 
         const expr = try self.program.addExpr(.{
             .ty = ty,
-            .data = switch (lambda_expr.data) {
-                .lambda => .{ .fn_def = .{
-                    .fn_id = try self.lowerNestedFnFromContext(&fn_ctx, lambda_expr_id, template),
-                    .captures = try self.program.addFnDefCaptureSpan(capture_values),
-                } },
-                else => Common.invariant("stored capturing function did not reference a checked lambda"),
-            },
+            .data = .{ .fn_def = .{
+                .fn_id = restored_fn_id,
+                .captures = try self.program.addFnDefCaptureSpan(capture_values),
+            } },
         });
         try self.drainSpecRequests(graph);
         return expr;
@@ -2458,6 +3151,9 @@ const Builder = struct {
         var fn_ctx = try BodyContext.init(self.allocator, self, fn_view, runtime.owner, graph);
         defer fn_ctx.deinit();
         fn_ctx.current_fn_key = fn_value.source_fn_key;
+
+        var source_captures = try self.bindConstSourceCaptures(&fn_ctx, store_view, fn_view, fn_value);
+        defer self.releaseConstSourceCaptures(&fn_ctx, &source_captures);
 
         const expr = fn_view.bodies.expr(runtime.expr);
         const plan = dispatchPlanForRuntimeExpr(fn_view, runtime.expr);
@@ -2531,6 +3227,7 @@ const Builder = struct {
         if (encoding_let) |let_| {
             parser_expr = try fn_ctx.wrapLet(let_.local, arg_tys[0], let_.value, parser_expr, ty);
         }
+        parser_expr = try self.wrapConstSourceCaptureLets(&fn_ctx, source_captures.items, parser_expr, ty);
 
         try self.drainSpecRequests(graph);
         return parser_expr;
@@ -2556,6 +3253,9 @@ const Builder = struct {
         var fn_ctx = try BodyContext.init(self.allocator, self, fn_view, runtime.owner, graph);
         defer fn_ctx.deinit();
         fn_ctx.current_fn_key = fn_value.source_fn_key;
+
+        var source_captures = try self.bindConstSourceCaptures(&fn_ctx, store_view, fn_view, fn_value);
+        defer self.releaseConstSourceCaptures(&fn_ctx, &source_captures);
 
         const expr = fn_view.bodies.expr(runtime.expr);
         const plan = dispatchPlanForRuntimeExpr(fn_view, runtime.expr);
@@ -2648,6 +3348,7 @@ const Builder = struct {
         if (value_let) |let_| {
             encoder_expr = try fn_ctx.wrapLet(let_.local, arg_tys[0], let_.value, encoder_expr, ty);
         }
+        encoder_expr = try self.wrapConstSourceCaptureLets(&fn_ctx, source_captures.items, encoder_expr, ty);
 
         try self.drainSpecRequests(graph);
         return encoder_expr;
@@ -3251,7 +3952,8 @@ const BodyContext = struct {
     current_fn_key: names.TypeDigest,
     comptime_exhaustiveness_depth: u32,
     binders: BinderMap,
-    local_proc_contexts: std.AutoHashMap(checked.PatternBinderId, names.TypeDigest),
+    typed_binders: TypedBinders,
+    local_proc_contexts: std.AutoHashMap(checked.PatternBinderId, LocalProcContext),
     /// This specialization's type solver, shared by every instantiation
     /// context created while lowering the same specialization.
     graph: *InstGraph,
@@ -3370,6 +4072,41 @@ const BodyContext = struct {
         local: Ast.LocalId,
     };
 
+    fn typedBinder(self: *BodyContext, binder: checked.PatternBinderId, ty: Type.TypeId) TypedBinder {
+        return .{
+            .binder = binder,
+            .type_digest = self.builder.program.types.typeDigest(&self.builder.program.names, ty),
+        };
+    }
+
+    fn putTypedBinder(
+        self: *BodyContext,
+        binder: checked.PatternBinderId,
+        ty: Type.TypeId,
+        local: Ast.LocalId,
+    ) Allocator.Error!?Ast.LocalId {
+        const key = self.typedBinder(binder, ty);
+        const previous = self.typed_binders.get(key);
+        try self.typed_binders.put(key, local);
+        return previous;
+    }
+
+    fn restoreTypedBinder(
+        self: *BodyContext,
+        binder: checked.PatternBinderId,
+        ty: Type.TypeId,
+        previous: ?Ast.LocalId,
+    ) void {
+        const key = self.typedBinder(binder, ty);
+        if (previous) |local| {
+            self.typed_binders.put(key, local) catch |err| switch (err) {
+                error.OutOfMemory => Common.invariant("restoring a previously inserted typed binder cannot reallocate"),
+            };
+        } else {
+            _ = self.typed_binders.remove(key);
+        }
+    }
+
     fn init(
         allocator: Allocator,
         builder: *Builder,
@@ -3389,7 +4126,8 @@ const BodyContext = struct {
             .current_fn_key = .{},
             .comptime_exhaustiveness_depth = 0,
             .binders = BinderMap.init(allocator),
-            .local_proc_contexts = std.AutoHashMap(checked.PatternBinderId, names.TypeDigest).init(allocator),
+            .typed_binders = TypedBinders.init(allocator),
+            .local_proc_contexts = std.AutoHashMap(checked.PatternBinderId, LocalProcContext).init(allocator),
             .graph = graph,
             .node_map = std.AutoHashMap(CheckedTypeAddress, NodeId).init(allocator),
             .string_literals = string_literals,
@@ -3408,7 +4146,12 @@ const BodyContext = struct {
         self.allocator.free(self.string_literals);
         self.decl_scopes.deinit(self.allocator);
         self.node_map.deinit();
+        var proc_iter = self.local_proc_contexts.valueIterator();
+        while (proc_iter.next()) |context| {
+            self.allocator.free(context.entries);
+        }
         self.local_proc_contexts.deinit();
+        self.typed_binders.deinit();
         self.binders.deinit();
     }
 
@@ -3441,9 +4184,14 @@ const BodyContext = struct {
             try child.binders.put(entry.key_ptr.*, entry.value_ptr.*);
         }
 
+        var typed_binder_iter = self.typed_binders.iterator();
+        while (typed_binder_iter.next()) |entry| {
+            try child.typed_binders.put(entry.key_ptr.*, entry.value_ptr.*);
+        }
+
         var proc_iter = self.local_proc_contexts.iterator();
         while (proc_iter.next()) |entry| {
-            try child.local_proc_contexts.put(entry.key_ptr.*, entry.value_ptr.*);
+            try child.local_proc_contexts.put(entry.key_ptr.*, try self.cloneLocalProcContext(entry.value_ptr.*));
         }
 
         if (copy_type_cells) {
@@ -3465,6 +4213,127 @@ const BodyContext = struct {
             const local_ty = self.builder.program.locals.items[@intFromEnum(local)].ty;
             try self.constrainTypeToMono(checkedBinderType(self.view, entry.key_ptr.*), local_ty);
         }
+    }
+
+    fn lexicalContextKey(self: *BodyContext) Allocator.Error!names.TypeDigest {
+        const entries = try self.captureLexicalBinderEntries();
+        defer self.allocator.free(entries);
+        return lexicalContextKeyFromEntries(self.current_fn_key, entries);
+    }
+
+    fn cloneLocalProcContext(self: *BodyContext, context: LocalProcContext) Allocator.Error!LocalProcContext {
+        return .{
+            .base_key = context.base_key,
+            .entries = try self.allocator.dupe(LexicalBinderEntry, context.entries),
+        };
+    }
+
+    fn captureLocalProcContext(self: *BodyContext) Allocator.Error!LocalProcContext {
+        return .{
+            .base_key = self.current_fn_key,
+            .entries = try self.captureLexicalBinderEntries(),
+        };
+    }
+
+    fn releaseLocalProcContext(self: *BodyContext, context: LocalProcContext) void {
+        self.allocator.free(context.entries);
+    }
+
+    fn localProcUseContextKey(self: *BodyContext, context: LocalProcContext) Allocator.Error!names.TypeDigest {
+        const entries = try self.allocator.dupe(LexicalBinderEntry, context.entries);
+        defer self.allocator.free(entries);
+
+        for (entries) |*entry| {
+            switch (entry.kind) {
+                0 => {
+                    const binder: checked.PatternBinderId = @enumFromInt(entry.binder);
+                    const local = self.binders.get(binder) orelse
+                        Common.invariant("local procedure use was missing a declaration-context binder");
+                    entry.local = @intFromEnum(local);
+                },
+                1 => {
+                    const key = TypedBinder{
+                        .binder = @enumFromInt(entry.binder),
+                        .type_digest = entry.type_digest,
+                    };
+                    const local = self.typed_binders.get(key) orelse
+                        Common.invariant("local procedure use was missing a declaration-context typed binder");
+                    entry.local = @intFromEnum(local);
+                },
+                else => Common.invariant("local procedure context had an unknown binder entry kind"),
+            }
+        }
+
+        return lexicalContextKeyFromEntries(context.base_key, entries);
+    }
+
+    fn captureLexicalBinderEntries(self: *BodyContext) Allocator.Error![]LexicalBinderEntry {
+        const count = self.binders.count() + self.typed_binders.count();
+        if (count == 0) return try self.allocator.alloc(LexicalBinderEntry, 0);
+
+        const entries = try self.allocator.alloc(LexicalBinderEntry, count);
+
+        var index: usize = 0;
+        var iter = self.binders.iterator();
+        while (iter.next()) |entry| {
+            entries[index] = .{
+                .kind = 0,
+                .binder = @intFromEnum(entry.key_ptr.*),
+                .local = @intFromEnum(entry.value_ptr.*),
+                .type_digest = .{ .bytes = [_]u8{0} ** 32 },
+            };
+            index += 1;
+        }
+        var typed_iter = self.typed_binders.iterator();
+        while (typed_iter.next()) |entry| {
+            entries[index] = .{
+                .kind = 1,
+                .binder = @intFromEnum(entry.key_ptr.binder),
+                .local = @intFromEnum(entry.value_ptr.*),
+                .type_digest = entry.key_ptr.type_digest,
+            };
+            index += 1;
+        }
+
+        sortLexicalBinderEntries(entries);
+        return entries;
+    }
+
+    fn lexicalContextKeyFromEntries(base_key: names.TypeDigest, entries: []const LexicalBinderEntry) names.TypeDigest {
+        if (entries.len == 0) return base_key;
+        var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+        hasher.update("roc.monotype.lexical_context");
+        hasher.update(&base_key.bytes);
+        for (entries) |entry| {
+            hasher.update(&.{entry.kind});
+            hashU32(&hasher, entry.binder);
+            hasher.update(&entry.type_digest.bytes);
+            hashU32(&hasher, entry.local);
+        }
+        return .{ .bytes = hasher.finalResult() };
+    }
+
+    fn sortLexicalBinderEntries(entries: []LexicalBinderEntry) void {
+        const SortContext = struct {
+            pub fn lessThan(_: void, a: LexicalBinderEntry, b: LexicalBinderEntry) bool {
+                if (a.kind != b.kind) return a.kind < b.kind;
+                if (a.binder != b.binder) return a.binder < b.binder;
+                const digest_order = std.mem.order(u8, &a.type_digest.bytes, &b.type_digest.bytes);
+                if (digest_order != .eq) return digest_order == .lt;
+                return a.local < b.local;
+            }
+        };
+        std.mem.sort(LexicalBinderEntry, entries, {}, SortContext.lessThan);
+    }
+
+    fn localProcContextEql(left: LocalProcContext, right: LocalProcContext) bool {
+        if (!std.mem.eql(u8, left.base_key.bytes[0..], right.base_key.bytes[0..])) return false;
+        if (left.entries.len != right.entries.len) return false;
+        for (left.entries, right.entries) |a, b| {
+            if (a.kind != b.kind or a.binder != b.binder or a.local != b.local) return false;
+            if (!std.mem.eql(u8, a.type_digest.bytes[0..], b.type_digest.bytes[0..])) return false;
+        }
+        return true;
     }
 
     /// Constrain a checked type to a Monotype: instantiate the checked type
@@ -3632,7 +4501,7 @@ const BodyContext = struct {
         for (tags, 0..) |tag, index| {
             out[index] = .{
                 .name = try self.builder.tagName(self.view, tag.name),
-                .checked_name = tag.name,
+                .checked_name = try self.builder.tagName(self.view, tag.name),
                 .payloads = try self.instNodeSlice(tag.argsSlice(self.view.types)),
             };
         }
@@ -4052,11 +4921,10 @@ const BodyContext = struct {
 
     fn returnTargetType(self: *BodyContext, lambda_id: checked.CheckedExprId) Allocator.Error!Type.TypeId {
         const lambda_expr = self.view.bodies.expr(lambda_id);
-        const body_id = switch (lambda_expr.data) {
-            .lambda => |lambda| lambda.body,
+        return switch (lambda_expr.data) {
+            .lambda => try self.lowerType(self.checkedFunctionType(lambda_expr.ty).ret),
             else => Common.invariant("checked return target did not reference a lambda"),
         };
-        return try self.lowerType(self.view.bodies.expr(body_id).ty);
     }
 
     fn lowerComptimeRootExprAtType(
@@ -4230,7 +5098,7 @@ const BodyContext = struct {
             .lambda => blk: {
                 break :blk try self.lowerLambdaExpr(
                     expr_id,
-                    try self.builder.fnTemplateForNestedExprWithMono(self.view, self.owner_template, expr_id, expr.ty, self.view.types.rootKey(expr.ty), ty, self.current_fn_key),
+                    try self.builder.fnTemplateForNestedExprWithMono(self.view, self.owner_template, expr_id, expr.ty, self.view.types.rootKey(expr.ty), ty, try self.lexicalContextKey()),
                 );
             },
             .call => Common.invariant("call expression reached ordinary expression lowering after call-site lowering"),
@@ -8730,8 +9598,9 @@ const BodyContext = struct {
         source_fn_key: names.TypeDigest,
         mono_fn_ty: Type.TypeId,
     ) Allocator.Error!Ast.FnId {
-        const context_fn_key = self.local_proc_contexts.get(local.binder) orelse
+        const context = self.local_proc_contexts.get(local.binder) orelse
             Common.invariant("local procedure use reached Monotype before its declaration context");
+        const context_fn_key = try self.localProcUseContextKey(context);
         const fn_template = try self.builder.fnTemplateForNestedExprWithMono(
             self.view,
             self.owner_template,
@@ -8825,6 +9694,41 @@ const BodyContext = struct {
         return if (self.currentLocalBindingForResolvedValue(ref_id)) |binding| binding.local else null;
     }
 
+    fn currentTypedLocalBindingForResolvedValue(
+        self: *BodyContext,
+        ref_id: checked.ResolvedValueId,
+        ty: Type.TypeId,
+    ) ?CurrentLocal {
+        const raw = @intFromEnum(ref_id);
+        if (raw >= self.view.resolved_refs.records.len) {
+            Common.invariant("checked lookup resolved value id was outside resolved value table");
+        }
+        const record = self.view.resolved_refs.records[raw];
+        const binder = switch (record.ref) {
+            .local_param,
+            .local_value,
+            .local_mutable_version,
+            .pattern_binder,
+            => |local| local.binder,
+            .selected_hoisted_const => |selected| selected.local.binder,
+            .local_proc,
+            .top_level_const,
+            .imported_const,
+            .top_level_proc,
+            .imported_proc,
+            .hosted_proc,
+            .platform_required_declaration,
+            .platform_required_const,
+            .platform_required_proc,
+            .promoted_top_level_proc,
+            => return null,
+        };
+        return if (self.typed_binders.get(self.typedBinder(binder, ty))) |local|
+            .{ .binder = binder, .local = local }
+        else
+            null;
+    }
+
     fn lowerLookupExprAtType(
         self: *BodyContext,
         checked_ty: checked.CheckedTypeId,
@@ -8854,7 +9758,9 @@ const BodyContext = struct {
             .promoted_top_level_proc,
             => {},
         }
-        if (self.currentLocalBindingForResolvedValue(ref_id)) |binding| {
+        const typed_binding = self.currentTypedLocalBindingForResolvedValue(ref_id, ty);
+        const fallback_binding = if (typed_binding == null) self.currentLocalBindingForResolvedValue(ref_id) else null;
+        if (typed_binding orelse fallback_binding) |binding| {
             const local_id = binding.local;
             const local_ty = self.builder.program.locals.items[@intFromEnum(local_id)].ty;
             const binder_ty = checkedBinderType(self.view, binding.binder);
@@ -9057,27 +9963,15 @@ const BodyContext = struct {
         node: checked.ConstNodeId,
         ty: Type.TypeId,
     ) Allocator.Error!Ast.ExprId {
-        const address = ConstExprAddress{
-            .store_module_bytes = store_view.key.bytes,
-            .type_module_bytes = type_view.key.bytes,
-            .node = @intFromEnum(node),
-            .mono_ty = @intFromEnum(ty),
-        };
-        if (self.builder.const_expr_cache.get(address)) |existing| return existing;
-
         const value = store_view.const_store.get(node);
         switch (value) {
             .fn_value => |fn_id| {
-                const expr = try self.restoreConstFn(store_view, type_view, fn_id, ty);
-                try self.builder.const_expr_cache.put(address, expr);
-                return expr;
+                return try self.restoreConstFn(store_view, type_view, fn_id, ty);
             },
             else => {},
         }
         const data = try self.restoreConstData(store_view, type_view, value, ty);
-        const expr = try self.builder.program.addExpr(.{ .ty = ty, .data = data });
-        try self.builder.const_expr_cache.put(address, expr);
-        return expr;
+        return try self.builder.program.addExpr(.{ .ty = ty, .data = data });
     }
 
     fn restoreConstData(
@@ -9885,7 +10779,7 @@ const BodyContext = struct {
         const lambda = self.view.bodies.expr(closure.lambda);
         return switch (lambda.data) {
             .lambda => blk: {
-                const nested = try self.builder.fnTemplateForNestedExprWithMono(self.view, self.owner_template, expr_id, lambda.ty, self.view.types.rootKey(lambda.ty), closure_ty, self.current_fn_key);
+                const nested = try self.builder.fnTemplateForNestedExprWithMono(self.view, self.owner_template, expr_id, lambda.ty, self.view.types.rootKey(lambda.ty), closure_ty, try self.lexicalContextKey());
                 switch (nested.fn_def) {
                     .nested => {},
                     else => Common.invariant("closure expression was not assigned a nested function identity"),
@@ -13319,10 +14213,10 @@ const BodyContext = struct {
                 var statements = try self.lowerBlockStatements(block.statements);
                 defer self.allocator.free(statements.items);
                 if (!statements.diverges) {
-                    const final_stmt = try self.builder.program.addStmt(.{ .expr = if (self.checkedExprDivergesInLoweredRuntime(block.final_expr))
-                        try self.lowerDivergentExprAtType(block.final_expr, try self.lowerType(checked_body.ty))
-                    else
-                        try self.lowerExpr(block.final_expr) });
+                    const final_stmt = try self.lowerDiscardedExprStatement(
+                        block.final_expr,
+                        try self.lowerType(checked_body.ty),
+                    );
                     try statements.append(self.allocator, final_stmt);
                 }
                 return try self.builder.program.addExpr(.{ .ty = state_ty, .data = .{ .block = .{
@@ -13331,14 +14225,24 @@ const BodyContext = struct {
                 } } });
             },
             else => {
-                const value = try self.lowerExpr(body);
-                const stmt = try self.builder.program.addStmt(.{ .expr = value });
+                const stmt = try self.lowerDiscardedExprStatement(body, try self.lowerType(checked_body.ty));
                 return try self.builder.program.addExpr(.{ .ty = state_ty, .data = .{ .block = .{
                     .statements = try self.builder.program.addStmtSpan(&[_]Ast.StmtId{stmt}),
                     .final_expr = try self.stateOnlyTupleExpr(state_ty, merge_binders),
                 } } });
             },
         }
+    }
+
+    fn lowerDiscardedExprStatement(
+        self: *BodyContext,
+        expr_id: checked.CheckedExprId,
+        divergent_ty: Type.TypeId,
+    ) Allocator.Error!Ast.StmtId {
+        if (self.checkedExprDivergesInLoweredRuntime(expr_id)) {
+            return try self.builder.program.addStmt(.{ .expr = try self.lowerDivergentExprAtType(expr_id, divergent_ty) });
+        }
+        return try self.builder.program.addStmt(try self.lowerExprStatement(expr_id));
     }
 
     fn stateResultTupleExpr(
@@ -14134,10 +15038,7 @@ const BodyContext = struct {
                     lowered_statements[i] = try self.lowerStatement(statement);
                 }
                 if (!statement_diverges) {
-                    lowered_statements[block.statements.len] = try self.builder.program.addStmt(.{ .expr = if (self.checkedExprDivergesInLoweredRuntime(block.final_expr))
-                        try self.lowerDivergentExprAtType(block.final_expr, result_ty)
-                    else
-                        try self.lowerExpr(block.final_expr) });
+                    lowered_statements[block.statements.len] = try self.lowerDiscardedExprStatement(block.final_expr, result_ty);
                 }
                 return try self.builder.program.addExpr(.{ .ty = result_ty, .data = .{ .block = .{
                     .statements = try self.builder.program.addStmtSpan(lowered_statements),
@@ -14145,8 +15046,7 @@ const BodyContext = struct {
                 } } });
             },
             else => {
-                const body_expr = try self.lowerExpr(body);
-                const body_stmt = try self.builder.program.addStmt(.{ .expr = body_expr });
+                const body_stmt = try self.lowerDiscardedExprStatement(body, result_ty);
                 return try self.builder.program.addExpr(.{ .ty = result_ty, .data = .{ .block = .{
                     .statements = try self.builder.program.addStmtSpan(&[_]Ast.StmtId{body_stmt}),
                     .final_expr = try self.continueWithState(result_ty, rest_expr, carries),
@@ -14175,10 +15075,7 @@ const BodyContext = struct {
                     lowered_statements[i] = try self.lowerStatement(statement);
                 }
                 if (!statement_diverges) {
-                    lowered_statements[block.statements.len] = try self.builder.program.addStmt(.{ .expr = if (self.checkedExprDivergesInLoweredRuntime(block.final_expr))
-                        try self.lowerDivergentExprAtType(block.final_expr, result_ty)
-                    else
-                        try self.lowerExpr(block.final_expr) });
+                    lowered_statements[block.statements.len] = try self.lowerDiscardedExprStatement(block.final_expr, result_ty);
                 }
                 return try self.builder.program.addExpr(.{ .ty = result_ty, .data = .{ .block = .{
                     .statements = try self.builder.program.addStmtSpan(lowered_statements),
@@ -14186,8 +15083,7 @@ const BodyContext = struct {
                 } } });
             },
             else => {
-                const body_expr = try self.lowerExpr(body);
-                const body_stmt = try self.builder.program.addStmt(.{ .expr = body_expr });
+                const body_stmt = try self.lowerDiscardedExprStatement(body, result_ty);
                 return try self.builder.program.addExpr(.{ .ty = result_ty, .data = .{ .block = .{
                     .statements = try self.builder.program.addStmtSpan(&[_]Ast.StmtId{body_stmt}),
                     .final_expr = try self.continueWithCurrentState(result_ty, carries),
@@ -14812,12 +15708,14 @@ const BodyContext = struct {
     fn registerLocalProc(self: *BodyContext, pattern_id: checked.CheckedPatternId) Allocator.Error!void {
         const binder = self.localProcBinder(pattern_id);
         if (self.local_proc_contexts.get(binder)) |existing| {
-            if (!std.mem.eql(u8, existing.bytes[0..], self.current_fn_key.bytes[0..])) {
+            const current = try self.captureLocalProcContext();
+            defer self.releaseLocalProcContext(current);
+            if (!localProcContextEql(existing, current)) {
                 Common.invariant("local procedure binder had two declaration contexts");
             }
             return;
         }
-        try self.local_proc_contexts.put(binder, self.current_fn_key);
+        try self.local_proc_contexts.put(binder, try self.captureLocalProcContext());
     }
 
     fn localProcBinder(self: *BodyContext, pattern_id: checked.CheckedPatternId) checked.PatternBinderId {
@@ -15925,6 +16823,11 @@ fn moduleDigestFromId(key: checked.ModuleId) names.CheckedModuleDigest {
     return .{ .bytes = key.bytes };
 }
 
+fn hashU32(hasher: *std.crypto.hash.sha2.Sha256, value: u32) void {
+    const little = std.mem.nativeToLittle(u32, value);
+    hasher.update(std.mem.asBytes(&little));
+}
+
 fn hostedTemplate(hosted: anytype) names.ProcTemplate {
     const Hosted = @TypeOf(hosted);
     if (Hosted == names.ProcTemplate) return hosted;
@@ -16148,6 +17051,26 @@ const NestedFnFamily = struct {
         };
     }
 };
+
+fn monoPrimitiveFromConst(primitive: check.ConstStore.Primitive) Type.Primitive {
+    return std.meta.stringToEnum(Type.Primitive, @tagName(primitive)) orelse
+        Common.invariant("ConstStore primitive had no Monotype primitive equivalent");
+}
+
+fn monoNamedKindFromConst(kind: check.ConstStore.TypeNamedKind) Type.NamedKind {
+    return switch (kind) {
+        .nominal => .nominal,
+        .@"opaque" => .@"opaque",
+        .alias => .alias,
+    };
+}
+
+fn monoBackingUseFromConst(use: check.ConstStore.TypeBackingUse) Type.BackingUse {
+    return switch (use) {
+        .inspectable => .inspectable,
+        .runtime_layout_only => .runtime_layout_only,
+    };
+}
 
 test "monotype lower declarations are referenced" {
     std.testing.refAllDecls(@This());
