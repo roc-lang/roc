@@ -403,9 +403,16 @@ const ProcBodyBuilder = struct {
     root_layout: Layouts.RootLayouts,
     arg_locals: std.ArrayList(LIR.LocalId),
     frame_locals: std.ArrayList(LIR.LocalId),
+    loop_stack: std.ArrayList(LoopContext),
     binder_locals: []?LIR.LocalId,
     next_join_point: u32,
     current_lambda: ?checked.CheckedExprId,
+
+    const LoopContext = struct {
+        join_id: LIR.JoinPointId,
+        result_target: LIR.LocalId,
+        after_loop: LIR.CFStmtId,
+    };
 
     const PatternMiss = struct {
         join_id: LIR.JoinPointId,
@@ -426,6 +433,7 @@ const ProcBodyBuilder = struct {
             .root_layout = root_layout,
             .arg_locals = .empty,
             .frame_locals = .empty,
+            .loop_stack = .empty,
             .binder_locals = &.{},
             .next_join_point = 0,
             .current_lambda = null,
@@ -434,6 +442,7 @@ const ProcBodyBuilder = struct {
 
     fn deinit(self: *ProcBodyBuilder) void {
         self.parent.allocator.free(self.binder_locals);
+        self.loop_stack.deinit(self.parent.allocator);
         self.frame_locals.deinit(self.parent.allocator);
         self.arg_locals.deinit(self.parent.allocator);
         self.* = undefined;
@@ -532,6 +541,7 @@ const ProcBodyBuilder = struct {
             .ellipsis => try self.parent.result.store.addCFStmt(.{ .crash = .{
                 .msg = try self.parent.result.store.insertString("not implemented"),
             } }),
+            .break_ => try self.lowerBreak(),
             .return_ => |ret| try self.lowerReturn(ret.expr, ret.lambda),
             .runtime_error => try self.parent.result.store.addCFStmt(.runtime_error),
             .lambda => boxyLowerInvariant("nested lambda reached boxy expression lowering before erased callable lowering was emitted"),
@@ -1761,6 +1771,10 @@ const ProcBodyBuilder = struct {
             },
             .expect => |expr_id| try self.lowerExpectStmt(expr_id, next),
             .return_ => |ret| try self.lowerReturn(ret.expr, ret.lambda),
+            .while_ => |while_| try self.lowerWhileStatement(while_.cond, while_.body, next),
+            .infinite_loop => |loop| try self.lowerWhileStatement(loop.cond, loop.body, next),
+            .breakable_loop => |loop| try self.lowerWhileStatement(loop.cond, loop.body, next),
+            .break_ => try self.lowerBreak(),
             .dbg => |expr_id| blk: {
                 const expr = self.module.checked_bodies.expr(expr_id);
                 const temp = try self.addFrameLocal(self.workerRuntimeLayoutForType(expr.ty).layoutIdx());
@@ -1782,6 +1796,58 @@ const ProcBodyBuilder = struct {
             => next,
             else => boxyLowerInvariant("checked statement form reached boxy body lowering before its LIR lowering was implemented"),
         };
+    }
+
+    fn lowerWhileStatement(
+        self: *ProcBodyBuilder,
+        cond_id: checked.CheckedExprId,
+        body_id: checked.CheckedExprId,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const cond_expr = self.module.checked_bodies.expr(cond_id);
+        const cond_local = try self.addFrameLocal(self.workerRuntimeLayoutForType(cond_expr.ty).layoutIdx());
+        if (self.parent.result.store.getLocal(cond_local).layout_idx != .bool) {
+            boxyLowerInvariant("checked while condition did not lower to Bool layout");
+        }
+
+        const body_expr = self.module.checked_bodies.expr(body_id);
+        const loop_result = try self.addFrameLocal(self.workerRuntimeLayoutForType(body_expr.ty).layoutIdx());
+        if (!self.isZstLocal(loop_result)) {
+            boxyLowerInvariant("checked while body did not lower to Unit layout");
+        }
+
+        const join_id = self.freshJoinPointId();
+        try self.loop_stack.append(self.parent.allocator, .{
+            .join_id = join_id,
+            .result_target = loop_result,
+            .after_loop = next,
+        });
+        defer _ = self.loop_stack.pop();
+
+        const continue_stmt = try self.parent.result.store.addCFStmt(.{ .jump = .{ .target = join_id } });
+        const body = try self.lowerExprInto(loop_result, body_id, continue_stmt);
+        const switch_stmt = try self.boolSwitchNoContinuation(cond_local, body, next);
+        const header = try self.lowerExprInto(cond_local, cond_id, switch_stmt);
+        const initial_jump = try self.parent.result.store.addCFStmt(.{ .jump = .{ .target = join_id } });
+
+        return try self.parent.result.store.addCFStmt(.{ .join = .{
+            .id = join_id,
+            .params = LIR.LocalSpan.empty(),
+            .body = header,
+            .remainder = initial_jump,
+        } });
+    }
+
+    fn lowerBreak(self: *ProcBodyBuilder) Allocator.Error!LIR.CFStmtId {
+        const loop = self.currentLoop();
+        return try self.assignZst(loop.result_target, loop.after_loop);
+    }
+
+    fn currentLoop(self: *ProcBodyBuilder) LoopContext {
+        if (self.loop_stack.items.len == 0) {
+            boxyLowerInvariant("checked break reached boxy lowering outside a loop");
+        }
+        return self.loop_stack.items[self.loop_stack.items.len - 1];
     }
 
     fn lowerLowLevelInto(
@@ -4620,6 +4686,268 @@ test "boxy lowerer emits checked runtime error statements as terminal runtime_er
 
     const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
     try std.testing.expectEqual(LIR.CFStmt.runtime_error, out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult));
+}
+
+test "boxy lowerer emits checked while statements as join-backed loops" {
+    const gpa = std.testing.allocator;
+
+    var artifact = minimalCheckedArtifact(gpa);
+    defer artifact.canonical_names.deinit();
+    defer artifact.checked_types.deinit(gpa);
+    defer artifact.checked_bodies.deinit(gpa);
+
+    const false_tag = try artifact.canonical_names.internTagLabel("False");
+
+    try artifact.checked_types.payloads.append(gpa, .{
+        .nominal = builtinNominal(.u64, @enumFromInt(0), .{}),
+    });
+    try artifact.checked_types.payloads.append(gpa, .empty_record);
+    try artifact.checked_types.payloads.append(gpa, .{
+        .nominal = builtinNominal(.bool, @enumFromInt(1), .{}),
+    });
+    try artifact.checked_types.payloads.append(gpa, .{
+        .function = .{
+            .kind = .pure,
+            .args = .{},
+            .ret = @enumFromInt(0),
+            .needs_instantiation = false,
+        },
+    });
+
+    try artifact.checked_bodies.statement_id_pool.append(gpa, @enumFromInt(0));
+    try artifact.checked_bodies.stored_statements.append(gpa, .{
+        .id = @enumFromInt(0),
+        .source_region = base.Region.zero(),
+        .data = .{ .while_ = .{
+            .cond = @enumFromInt(2),
+            .body = @enumFromInt(3),
+        } },
+    });
+
+    const template_ref = procedureTemplateRef(artifact.key, 0);
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(0),
+        .ty = @enumFromInt(3),
+        .source_region = base.Region.zero(),
+        .data = .{ .lambda = .{ .args = .{}, .body = @enumFromInt(1) } },
+    });
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(1),
+        .ty = @enumFromInt(0),
+        .source_region = base.Region.zero(),
+        .data = .{ .block = .{
+            .statements = .{ .start = 0, .len = 1 },
+            .final_expr = @enumFromInt(4),
+        } },
+    });
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(2),
+        .ty = @enumFromInt(2),
+        .source_region = base.Region.zero(),
+        .data = .{ .zero_argument_tag = .{
+            .closure_name = false_tag,
+            .name = false_tag,
+        } },
+    });
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(3),
+        .ty = @enumFromInt(1),
+        .source_region = base.Region.zero(),
+        .data = .empty_record,
+    });
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(4),
+        .ty = @enumFromInt(0),
+        .source_region = base.Region.zero(),
+        .data = .{ .num = .{ .value = intValue(99), .kind = .u64 } },
+    });
+    try artifact.checked_bodies.bodies.append(gpa, .{
+        .id = @enumFromInt(0),
+        .root_expr = @enumFromInt(0),
+        .owner_template = template_ref,
+    });
+    var templates = [_]checked.CheckedProcedureTemplate{
+        checkedTemplate(template_ref, @enumFromInt(3), @enumFromInt(0)),
+    };
+    artifact.checked_procedure_templates = .{ .templates = &templates };
+
+    const root = checked.RootRequest{
+        .order = 0,
+        .module_idx = 0,
+        .kind = .runtime_entrypoint,
+        .source = .{ .def = @enumFromInt(0) },
+        .checked_type = @enumFromInt(3),
+        .abi = .roc,
+        .exposure = .private,
+        .procedure_template = template_ref,
+    };
+    var plan = try Plan.analyzeProgram(gpa, .{
+        .root_module = .{ .module = &artifact, .roots = undefined },
+        .roots = &.{root},
+    }, .{});
+    defer plan.deinit();
+
+    var out = try run(
+        gpa,
+        .{ .root = .{ .module = &artifact, .roots = undefined } },
+        .{},
+        &plan,
+        .{},
+    );
+    defer out.deinit();
+
+    const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
+    const loop_join = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).join;
+    try std.testing.expect(loop_join.params.isEmpty());
+    try std.testing.expectEqual(LIR.CFStmt{ .jump = .{ .target = loop_join.id } }, out.lir_result.store.getCFStmt(loop_join.remainder));
+
+    const cond = out.lir_result.store.getCFStmt(loop_join.body).assign_tag;
+    try std.testing.expectEqual(@as(u16, 0), cond.variant_index);
+    const switch_stmt = out.lir_result.store.getCFStmt(cond.next).switch_stmt;
+    try std.testing.expectEqual(cond.target, switch_stmt.cond);
+    const branches = out.lir_result.store.getCFSwitchBranches(switch_stmt.branches);
+    try std.testing.expectEqual(@as(usize, 1), branches.len);
+    try std.testing.expectEqual(@as(u64, 1), branches[0].value);
+
+    const body_unit = out.lir_result.store.getCFStmt(branches[0].body).assign_struct;
+    try std.testing.expect(body_unit.fields.isEmpty());
+    try std.testing.expectEqual(LIR.CFStmt{ .jump = .{ .target = loop_join.id } }, out.lir_result.store.getCFStmt(body_unit.next));
+
+    const after_loop = out.lir_result.store.getCFStmt(switch_stmt.default_branch).assign_literal;
+    switch (after_loop.value) {
+        .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 99), literal.value),
+        else => return error.TestUnexpectedResult,
+    }
+    try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = after_loop.target } }, out.lir_result.store.getCFStmt(after_loop.next));
+}
+
+test "boxy lowerer emits checked break as the active loop exit" {
+    const gpa = std.testing.allocator;
+
+    var artifact = minimalCheckedArtifact(gpa);
+    defer artifact.canonical_names.deinit();
+    defer artifact.checked_types.deinit(gpa);
+    defer artifact.checked_bodies.deinit(gpa);
+
+    const true_tag = try artifact.canonical_names.internTagLabel("True");
+
+    try artifact.checked_types.payloads.append(gpa, .{
+        .nominal = builtinNominal(.u64, @enumFromInt(0), .{}),
+    });
+    try artifact.checked_types.payloads.append(gpa, .empty_record);
+    try artifact.checked_types.payloads.append(gpa, .{
+        .nominal = builtinNominal(.bool, @enumFromInt(1), .{}),
+    });
+    try artifact.checked_types.payloads.append(gpa, .{
+        .function = .{
+            .kind = .pure,
+            .args = .{},
+            .ret = @enumFromInt(0),
+            .needs_instantiation = false,
+        },
+    });
+
+    try artifact.checked_bodies.statement_id_pool.append(gpa, @enumFromInt(0));
+    try artifact.checked_bodies.stored_statements.append(gpa, .{
+        .id = @enumFromInt(0),
+        .source_region = base.Region.zero(),
+        .data = .{ .breakable_loop = .{
+            .cond = @enumFromInt(2),
+            .body = @enumFromInt(3),
+        } },
+    });
+
+    const template_ref = procedureTemplateRef(artifact.key, 0);
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(0),
+        .ty = @enumFromInt(3),
+        .source_region = base.Region.zero(),
+        .data = .{ .lambda = .{ .args = .{}, .body = @enumFromInt(1) } },
+    });
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(1),
+        .ty = @enumFromInt(0),
+        .source_region = base.Region.zero(),
+        .data = .{ .block = .{
+            .statements = .{ .start = 0, .len = 1 },
+            .final_expr = @enumFromInt(4),
+        } },
+    });
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(2),
+        .ty = @enumFromInt(2),
+        .source_region = base.Region.zero(),
+        .data = .{ .zero_argument_tag = .{
+            .closure_name = true_tag,
+            .name = true_tag,
+        } },
+    });
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(3),
+        .ty = @enumFromInt(1),
+        .source_region = base.Region.zero(),
+        .data = .break_,
+    });
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(4),
+        .ty = @enumFromInt(0),
+        .source_region = base.Region.zero(),
+        .data = .{ .num = .{ .value = intValue(41), .kind = .u64 } },
+    });
+    try artifact.checked_bodies.bodies.append(gpa, .{
+        .id = @enumFromInt(0),
+        .root_expr = @enumFromInt(0),
+        .owner_template = template_ref,
+    });
+    var templates = [_]checked.CheckedProcedureTemplate{
+        checkedTemplate(template_ref, @enumFromInt(3), @enumFromInt(0)),
+    };
+    artifact.checked_procedure_templates = .{ .templates = &templates };
+
+    const root = checked.RootRequest{
+        .order = 0,
+        .module_idx = 0,
+        .kind = .runtime_entrypoint,
+        .source = .{ .def = @enumFromInt(0) },
+        .checked_type = @enumFromInt(3),
+        .abi = .roc,
+        .exposure = .private,
+        .procedure_template = template_ref,
+    };
+    var plan = try Plan.analyzeProgram(gpa, .{
+        .root_module = .{ .module = &artifact, .roots = undefined },
+        .roots = &.{root},
+    }, .{});
+    defer plan.deinit();
+
+    var out = try run(
+        gpa,
+        .{ .root = .{ .module = &artifact, .roots = undefined } },
+        .{},
+        &plan,
+        .{},
+    );
+    defer out.deinit();
+
+    const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
+    const loop_join = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).join;
+    const cond = out.lir_result.store.getCFStmt(loop_join.body).assign_tag;
+    try std.testing.expectEqual(@as(u16, 1), cond.variant_index);
+    const switch_stmt = out.lir_result.store.getCFStmt(cond.next).switch_stmt;
+    const branches = out.lir_result.store.getCFSwitchBranches(switch_stmt.branches);
+    try std.testing.expectEqual(@as(usize, 1), branches.len);
+    try std.testing.expectEqual(@as(u64, 1), branches[0].value);
+
+    const break_unit = out.lir_result.store.getCFStmt(branches[0].body).assign_struct;
+    try std.testing.expect(break_unit.fields.isEmpty());
+    try std.testing.expectEqual(switch_stmt.default_branch, break_unit.next);
+
+    const after_loop = out.lir_result.store.getCFStmt(break_unit.next).assign_literal;
+    switch (after_loop.value) {
+        .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 41), literal.value),
+        else => return error.TestUnexpectedResult,
+    }
+    try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = after_loop.target } }, out.lir_result.store.getCFStmt(after_loop.next));
 }
 
 test "boxy lowerer emits checked if expressions with a shared continuation join" {
