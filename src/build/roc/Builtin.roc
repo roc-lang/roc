@@ -23,7 +23,7 @@ Builtin :: [].{
 		}
 
 		JsonState :: [Input(Str)]
-		JsonEncodeState :: { output : List(U8), record_commas : List(Bool) }
+		JsonEncodeState :: { output : List(U8), container_commas : List(Bool) }
 
 		JsonEncoding :: [Default, CamelCase, TrailingCommas].{
 			rename_field : JsonEncoding, Str -> Str
@@ -219,13 +219,13 @@ Builtin :: [].{
 				Ok(
 					JsonEncodeState.{
 						output: u8_append(state.output, 123),
-						record_commas: state.record_commas.append(False),
+						container_commas: state.container_commas.append(False),
 					},
 				)
 
 			encode_record_field : Str, JsonEncodeState -> Try(JsonEncodeState, _never_fails)
 			encode_record_field = |field, state| {
-				with_comma = if Json.record_needs_comma(state) {
+				with_comma = if Json.container_needs_comma(state) {
 					u8_append(state.output, 44)
 				} else {
 					state.output
@@ -235,7 +235,7 @@ Builtin :: [].{
 				Ok(
 					JsonEncodeState.{
 						output,
-						record_commas: Json.mark_record_has_field(state.record_commas),
+						container_commas: Json.mark_container_has_item(state.container_commas),
 					},
 				)
 			}
@@ -245,7 +245,7 @@ Builtin :: [].{
 				Ok(
 					JsonEncodeState.{
 						output: u8_append(state.output, 125),
-						record_commas: List.drop_last(state.record_commas, 1),
+						container_commas: List.drop_last(state.container_commas, 1),
 					},
 				)
 
@@ -254,13 +254,13 @@ Builtin :: [].{
 				Ok(
 					JsonEncodeState.{
 						output: u8_append(state.output, 91),
-						record_commas: state.record_commas.append(False),
+						container_commas: state.container_commas.append(False),
 					},
 				)
 
 			encode_array_element : JsonEncodeState -> Try(JsonEncodeState, _never_fails)
 			encode_array_element = |state| {
-				output = if Json.record_needs_comma(state) {
+				output = if Json.container_needs_comma(state) {
 					u8_append(state.output, 44)
 				} else {
 					state.output
@@ -269,7 +269,7 @@ Builtin :: [].{
 				Ok(
 					JsonEncodeState.{
 						output,
-						record_commas: Json.mark_record_has_field(state.record_commas),
+						container_commas: Json.mark_container_has_item(state.container_commas),
 					},
 				)
 			}
@@ -279,7 +279,7 @@ Builtin :: [].{
 				Ok(
 					JsonEncodeState.{
 						output: u8_append(state.output, 93),
-						record_commas: List.drop_last(state.record_commas, 1),
+						container_commas: List.drop_last(state.container_commas, 1),
 					},
 				)
 
@@ -288,7 +288,7 @@ Builtin :: [].{
 				Ok(
 					JsonEncodeState.{
 						output: Json.append_json_quoted_string(state.output, value),
-						record_commas: state.record_commas,
+						container_commas: state.container_commas,
 					},
 				)
 
@@ -297,7 +297,7 @@ Builtin :: [].{
 				Ok(
 					JsonEncodeState.{
 						output: Json.append_json_string_bytes(state.output, if value "true" else "false"),
-						record_commas: state.record_commas,
+						container_commas: state.container_commas,
 					},
 				)
 
@@ -324,7 +324,7 @@ Builtin :: [].{
 				Ok(
 					JsonEncodeState.{
 						output: Json.append_json_string_bytes(state.output, json_u64_to_str(value)),
-						record_commas: state.record_commas,
+						container_commas: state.container_commas,
 					},
 				)
 
@@ -375,7 +375,7 @@ Builtin :: [].{
 				Ok(
 					JsonEncodeState.{
 						output: Json.append_json_string_bytes(state.output, "null"),
-						record_commas: state.record_commas,
+						container_commas: state.container_commas,
 					},
 				)
 
@@ -672,7 +672,7 @@ Builtin :: [].{
 				]
 			encode = |value| {
 				encode_shape = value.encode_to(JsonEncoding.Default)
-				encoded = encode_shape(JsonEncodeState.{ output: u8_list_with_capacity(64), record_commas: [] })?
+				encoded = encode_shape(JsonEncodeState.{ output: u8_list_with_capacity(64), container_commas: [] })?
 
 				Ok(Str.from_utf8_lossy(encoded.output))
 			}
@@ -1014,22 +1014,22 @@ Builtin :: [].{
 				Ok(
 					JsonEncodeState.{
 						output: Json.append_json_string_bytes(state.output, value),
-						record_commas: state.record_commas,
+						container_commas: state.container_commas,
 					},
 				)
 
-			record_needs_comma : JsonEncodeState -> Bool
-			record_needs_comma = |state|
-				match List.last(state.record_commas) {
+			container_needs_comma : JsonEncodeState -> Bool
+			container_needs_comma = |state|
+				match List.last(state.container_commas) {
 					Ok(needs_comma) => needs_comma
 					Err(ListWasEmpty) => {
-						crash "json encoder record stack underflow"
+						crash "json encoder container stack underflow"
 					}
 				}
 
-			mark_record_has_field : List(Bool) -> List(Bool)
-			mark_record_has_field = |record_commas|
-				List.drop_last(record_commas, 1).append(True)
+			mark_container_has_item : List(Bool) -> List(Bool)
+			mark_container_has_item = |container_commas|
+				List.drop_last(container_commas, 1).append(True)
 
 			append_json_string_bytes : List(U8), Str -> List(U8)
 			append_json_string_bytes = |out, value| {
