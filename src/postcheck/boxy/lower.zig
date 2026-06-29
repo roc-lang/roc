@@ -1276,20 +1276,32 @@ const ProcBodyBuilder = struct {
         while (index > 0) {
             index -= 1;
             const destruct = destructs[index];
-            const child_pattern = switch (destruct.kind) {
+            switch (destruct.kind) {
                 .required,
                 .sub_pattern,
-                => |child| child,
-                .rest => boxyLowerInvariant("record rest pattern reached boxy match lowering before rest-value lowering"),
-            };
-            continuation = try self.lowerFieldPatternThen(
-                child_pattern,
-                source,
-                self.recordFieldLayoutIndex(record_ty, destruct.label),
-                continuation,
-                miss,
-                remaps,
-            );
+                => |child_pattern| {
+                    continuation = try self.lowerFieldPatternThen(
+                        child_pattern,
+                        source,
+                        self.recordFieldLayoutIndex(record_ty, destruct.label),
+                        continuation,
+                        miss,
+                        remaps,
+                    );
+                },
+                .rest => |child_pattern| {
+                    if (!self.patternIsIgnored(child_pattern)) {
+                        continuation = try self.lowerRecordRestPatternThen(
+                            child_pattern,
+                            source,
+                            record_ty,
+                            continuation,
+                            miss,
+                            remaps,
+                        );
+                    }
+                },
+            }
         }
         return continuation;
     }
@@ -1641,18 +1653,28 @@ const ProcBodyBuilder = struct {
         while (index > 0) {
             index -= 1;
             const destruct = destructs[index];
-            const child_pattern = switch (destruct.kind) {
+            switch (destruct.kind) {
                 .required,
                 .sub_pattern,
-                => |child| child,
-                .rest => boxyLowerInvariant("record rest pattern reached boxy declaration binding before rest-value lowering"),
-            };
-            continuation = try self.bindFieldPattern(
-                child_pattern,
-                source,
-                self.recordFieldLayoutIndex(record_ty, destruct.label),
-                continuation,
-            );
+                => |child_pattern| {
+                    continuation = try self.bindFieldPattern(
+                        child_pattern,
+                        source,
+                        self.recordFieldLayoutIndex(record_ty, destruct.label),
+                        continuation,
+                    );
+                },
+                .rest => |child_pattern| {
+                    if (!self.patternIsIgnored(child_pattern)) {
+                        continuation = try self.bindRecordRestPattern(
+                            child_pattern,
+                            source,
+                            record_ty,
+                            continuation,
+                        );
+                    }
+                },
+            }
         }
         return continuation;
     }
@@ -1670,19 +1692,141 @@ const ProcBodyBuilder = struct {
         while (index > 0) {
             index -= 1;
             const destruct = destructs[index];
-            const child_pattern = switch (destruct.kind) {
+            switch (destruct.kind) {
                 .required,
                 .sub_pattern,
-                => |child| child,
-                .rest => boxyLowerInvariant("record rest pattern reached boxy reassign binding before rest-value lowering"),
-            };
-            continuation = try self.bindReassignFieldPattern(
-                child_pattern,
-                source,
-                self.recordFieldLayoutIndex(record_ty, destruct.label),
-                reassigned_binders,
-                continuation,
-            );
+                => |child_pattern| {
+                    continuation = try self.bindReassignFieldPattern(
+                        child_pattern,
+                        source,
+                        self.recordFieldLayoutIndex(record_ty, destruct.label),
+                        reassigned_binders,
+                        continuation,
+                    );
+                },
+                .rest => |child_pattern| {
+                    if (!self.patternIsIgnored(child_pattern)) {
+                        continuation = try self.bindReassignRecordRestPattern(
+                            child_pattern,
+                            source,
+                            record_ty,
+                            reassigned_binders,
+                            continuation,
+                        );
+                    }
+                },
+            }
+        }
+        return continuation;
+    }
+
+    fn lowerRecordRestPatternThen(
+        self: *ProcBodyBuilder,
+        pattern_id: checked.CheckedPatternId,
+        source: LIR.LocalId,
+        source_record_ty: checked.CheckedTypeId,
+        on_match: LIR.CFStmtId,
+        miss: ?PatternMiss,
+        remaps: []const checked.CheckedAlternativeBinderRemap,
+    ) Allocator.Error!LIR.CFStmtId {
+        const pattern = self.module.checked_bodies.pattern(pattern_id);
+        const rest_local = try self.addFrameLocal(self.workerRuntimeLayoutForType(pattern.ty).layoutIdx());
+        const bound = try self.lowerPatternThen(pattern_id, rest_local, on_match, miss, remaps);
+        return try self.lowerRecordRestValueInto(rest_local, source, source_record_ty, pattern.ty, bound);
+    }
+
+    fn bindRecordRestPattern(
+        self: *ProcBodyBuilder,
+        pattern_id: checked.CheckedPatternId,
+        source: LIR.LocalId,
+        source_record_ty: checked.CheckedTypeId,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const pattern = self.module.checked_bodies.pattern(pattern_id);
+        const rest_local = try self.addFrameLocal(self.workerRuntimeLayoutForType(pattern.ty).layoutIdx());
+        const bound = try self.bindPatternFromLocal(pattern_id, rest_local, next);
+        return try self.lowerRecordRestValueInto(rest_local, source, source_record_ty, pattern.ty, bound);
+    }
+
+    fn bindReassignRecordRestPattern(
+        self: *ProcBodyBuilder,
+        pattern_id: checked.CheckedPatternId,
+        source: LIR.LocalId,
+        source_record_ty: checked.CheckedTypeId,
+        reassigned_binders: []const checked.PatternBinderId,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const pattern = self.module.checked_bodies.pattern(pattern_id);
+        const rest_local = try self.addFrameLocal(self.workerRuntimeLayoutForType(pattern.ty).layoutIdx());
+        const bound = try self.bindReassignPatternFromLocal(pattern_id, rest_local, reassigned_binders, next);
+        return try self.lowerRecordRestValueInto(rest_local, source, source_record_ty, pattern.ty, bound);
+    }
+
+    fn lowerRecordRestValueInto(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        source: LIR.LocalId,
+        source_record_ty: checked.CheckedTypeId,
+        rest_ty: checked.CheckedTypeId,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const rep_id = self.repForType(rest_ty);
+        const rep = self.parent.plan.representations.items[@intFromEnum(rep_id)];
+        switch (rep.kind) {
+            .empty_record => return try self.assignZst(target, next),
+            .record,
+            .record_unbound,
+            => {},
+            else => boxyLowerInvariant("record rest pattern child did not have a boxy record representation"),
+        }
+
+        const children = self.parent.plan.childSlice(rep.children);
+        var field_count: usize = 0;
+        for (children) |child| {
+            switch (child.role) {
+                .record_field => field_count += 1,
+                .record_ext => self.requireEmptyRecordExtension(child.rep),
+                else => boxyLowerInvariant("record rest representation had a non-record child role"),
+            }
+        }
+
+        const field_locals = try self.parent.allocator.alloc(LIR.LocalId, field_count);
+        defer self.parent.allocator.free(field_locals);
+        const field_indexes = try self.parent.allocator.alloc(u16, field_count);
+        defer self.parent.allocator.free(field_indexes);
+
+        var layout_index: usize = 0;
+        for (children) |child| {
+            switch (child.role) {
+                .record_field => |label| {
+                    field_locals[layout_index] = try self.addFrameLocal(self.parent.layout_plan.rep_layouts[@intFromEnum(child.rep)].worker.layoutIdx());
+                    field_indexes[layout_index] = self.recordFieldLayoutIndex(source_record_ty, label);
+                    layout_index += 1;
+                },
+                .record_ext => {},
+                else => unreachable,
+            }
+        }
+
+        var continuation = try self.parent.result.store.addCFStmt(.{ .assign_struct = .{
+            .target = target,
+            .fields = try self.parent.result.store.addLocalSpan(field_locals),
+            .next = next,
+        } });
+        var index = field_count;
+        while (index > 0) {
+            index -= 1;
+            continuation = if (self.isZstLocal(field_locals[index]))
+                try self.assignZst(field_locals[index], continuation)
+            else
+                try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
+                    .target = field_locals[index],
+                    .op = .{ .field = .{
+                        .source = source,
+                        .field_idx = field_indexes[index],
+                    } },
+                    .next = continuation,
+                } });
         }
         return continuation;
     }
@@ -3588,6 +3732,13 @@ const ProcBodyBuilder = struct {
             .runtime_error,
             .pending,
             => boxyLowerInvariant("runtime-error or pending checked pattern reached boxy match miss analysis"),
+        };
+    }
+
+    fn patternIsIgnored(self: *ProcBodyBuilder, pattern_id: checked.CheckedPatternId) bool {
+        return switch (self.module.checked_bodies.pattern(pattern_id).data) {
+            .underscore => true,
+            else => false,
         };
     }
 
@@ -8282,6 +8433,205 @@ test "boxy lowerer destructures tuple declaration patterns" {
     try std.testing.expectEqual(read_second.target, bind_second.op.local);
     try std.testing.expectEqual(bind_second.target, final_copy.op.local);
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = final_copy.target } }, out.lir_result.store.getCFStmt(final_copy.next));
+}
+
+test "boxy lowerer materializes record rest declaration patterns" {
+    const gpa = std.testing.allocator;
+
+    var artifact = minimalCheckedArtifact(gpa);
+    defer artifact.canonical_names.deinit();
+    defer artifact.checked_types.deinit(gpa);
+    defer artifact.checked_bodies.deinit(gpa);
+
+    const field_a: @TypeOf(@as(checked.CheckedRecordField, undefined).name) = @enumFromInt(1);
+    const field_b: @TypeOf(@as(checked.CheckedRecordField, undefined).name) = @enumFromInt(2);
+
+    try artifact.checked_types.payloads.append(gpa, .{
+        .nominal = builtinNominal(.u64, @enumFromInt(0), .{}),
+    });
+    try artifact.checked_types.payloads.append(gpa, .empty_record);
+    try artifact.checked_types.record_field_pool.appendSlice(gpa, &.{
+        .{ .name = field_a, .ty = @as(checked.CheckedTypeId, @enumFromInt(0)) },
+        .{ .name = field_b, .ty = @as(checked.CheckedTypeId, @enumFromInt(0)) },
+    });
+    try artifact.checked_types.payloads.append(gpa, .{
+        .record = .{ .fields = .{ .start = 0, .len = 2 }, .ext = @enumFromInt(1) },
+    });
+    try artifact.checked_types.payloads.append(gpa, .{
+        .record = .{ .fields = .{ .start = 1, .len = 1 }, .ext = @enumFromInt(1) },
+    });
+    try artifact.checked_types.payloads.append(gpa, .{
+        .function = .{
+            .kind = .pure,
+            .args = .{},
+            .ret = @enumFromInt(0),
+            .needs_instantiation = false,
+        },
+    });
+
+    try artifact.checked_bodies.pattern_binders.append(gpa, .{
+        .id = @enumFromInt(0),
+        .pattern = @enumFromInt(0),
+        .reassignable = false,
+    });
+    try artifact.checked_bodies.pattern_binder_by_pattern.appendSlice(gpa, &.{
+        @as(?checked.PatternBinderId, @enumFromInt(0)),
+        null,
+        null,
+    });
+    try artifact.checked_bodies.record_destruct_pool.appendSlice(gpa, &.{
+        .{ .label = field_a, .kind = .{ .required = @enumFromInt(1) } },
+        .{ .label = field_b, .kind = .{ .rest = @enumFromInt(0) } },
+    });
+    try artifact.checked_bodies.record_expr_field_pool.appendSlice(gpa, &.{
+        .{ .label = field_a, .value = @as(checked.CheckedExprId, @enumFromInt(3)) },
+        .{ .label = field_b, .value = @as(checked.CheckedExprId, @enumFromInt(4)) },
+    });
+    try artifact.checked_bodies.stored_patterns.append(gpa, .{
+        .id = @enumFromInt(0),
+        .ty = @enumFromInt(3),
+        .source_region = base.Region.zero(),
+        .data = .{ .assign = @enumFromInt(0) },
+    });
+    try artifact.checked_bodies.stored_patterns.append(gpa, .{
+        .id = @enumFromInt(1),
+        .ty = @enumFromInt(0),
+        .source_region = base.Region.zero(),
+        .data = .underscore,
+    });
+    try artifact.checked_bodies.stored_patterns.append(gpa, .{
+        .id = @enumFromInt(2),
+        .ty = @enumFromInt(2),
+        .source_region = base.Region.zero(),
+        .data = .{ .record_destructure = .{ .start = 0, .len = 2 } },
+    });
+
+    try artifact.checked_bodies.statement_id_pool.append(gpa, @enumFromInt(0));
+    try artifact.checked_bodies.stored_statements.append(gpa, .{
+        .id = @enumFromInt(0),
+        .source_region = base.Region.zero(),
+        .data = .{ .decl = .{
+            .pattern = @enumFromInt(2),
+            .expr = @enumFromInt(2),
+        } },
+    });
+
+    const template_ref = procedureTemplateRef(artifact.key, 0);
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(0),
+        .ty = @enumFromInt(4),
+        .source_region = base.Region.zero(),
+        .data = .{ .lambda = .{ .args = .{}, .body = @enumFromInt(1) } },
+    });
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(1),
+        .ty = @enumFromInt(0),
+        .source_region = base.Region.zero(),
+        .data = .{ .block = .{
+            .statements = .{ .start = 0, .len = 1 },
+            .final_expr = @enumFromInt(5),
+        } },
+    });
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(2),
+        .ty = @enumFromInt(2),
+        .source_region = base.Region.zero(),
+        .data = .{ .record = .{
+            .fields = .{ .start = 0, .len = 2 },
+            .ext = null,
+        } },
+    });
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(3),
+        .ty = @enumFromInt(0),
+        .source_region = base.Region.zero(),
+        .data = .{ .num = .{ .value = intValue(11), .kind = .u64 } },
+    });
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(4),
+        .ty = @enumFromInt(0),
+        .source_region = base.Region.zero(),
+        .data = .{ .num = .{ .value = intValue(22), .kind = .u64 } },
+    });
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(5),
+        .ty = @enumFromInt(0),
+        .source_region = base.Region.zero(),
+        .data = .{ .field_access = .{
+            .receiver = @enumFromInt(6),
+            .field_name = field_b,
+        } },
+    });
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(6),
+        .ty = @enumFromInt(3),
+        .source_region = base.Region.zero(),
+        .data = .{ .lookup_local = .{ .pattern = @enumFromInt(0), .resolved = null } },
+    });
+    try artifact.checked_bodies.bodies.append(gpa, .{
+        .id = @enumFromInt(0),
+        .root_expr = @enumFromInt(0),
+        .owner_template = template_ref,
+    });
+    var templates = [_]checked.CheckedProcedureTemplate{
+        checkedTemplate(template_ref, @enumFromInt(4), @enumFromInt(0)),
+    };
+    artifact.checked_procedure_templates = .{ .templates = &templates };
+
+    const root = checked.RootRequest{
+        .order = 0,
+        .module_idx = 0,
+        .kind = .runtime_entrypoint,
+        .source = .{ .def = @enumFromInt(0) },
+        .checked_type = @enumFromInt(4),
+        .abi = .roc,
+        .exposure = .private,
+        .procedure_template = template_ref,
+    };
+    var plan = try Plan.analyzeProgram(gpa, .{
+        .root_module = .{ .module = &artifact, .roots = undefined },
+        .roots = &.{root},
+    }, .{});
+    defer plan.deinit();
+
+    var out = try run(
+        gpa,
+        .{ .root = .{ .module = &artifact, .roots = undefined } },
+        .{},
+        &plan,
+        .{},
+    );
+    defer out.deinit();
+
+    const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
+    const first = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_literal;
+    const second = out.lir_result.store.getCFStmt(first.next).assign_literal;
+    const source_record = out.lir_result.store.getCFStmt(second.next).assign_struct;
+    const read_required_field = out.lir_result.store.getCFStmt(source_record.next).assign_ref;
+    const read_rest_field = out.lir_result.store.getCFStmt(read_required_field.next).assign_ref;
+    const rest_record = out.lir_result.store.getCFStmt(read_rest_field.next).assign_struct;
+    const bind_rest = out.lir_result.store.getCFStmt(rest_record.next).assign_ref;
+    const final_receiver = out.lir_result.store.getCFStmt(bind_rest.next).assign_ref;
+    const final_read = out.lir_result.store.getCFStmt(final_receiver.next).assign_ref;
+
+    switch (first.value) {
+        .i128_literal => |value| try std.testing.expectEqual(@as(i128, 11), value.value),
+        else => return error.TestUnexpectedResult,
+    }
+    switch (second.value) {
+        .i128_literal => |value| try std.testing.expectEqual(@as(i128, 22), value.value),
+        else => return error.TestUnexpectedResult,
+    }
+    try std.testing.expectEqual(source_record.target, read_required_field.op.field.source);
+    try std.testing.expectEqual(@as(u16, 0), read_required_field.op.field.field_idx);
+    try std.testing.expectEqual(source_record.target, read_rest_field.op.field.source);
+    try std.testing.expectEqual(@as(u16, 1), read_rest_field.op.field.field_idx);
+    try std.testing.expectEqual(read_rest_field.target, out.lir_result.store.getLocalSpan(rest_record.fields)[0]);
+    try std.testing.expectEqual(rest_record.target, bind_rest.op.local);
+    try std.testing.expectEqual(bind_rest.target, final_receiver.op.local);
+    try std.testing.expectEqual(final_receiver.target, final_read.op.field.source);
+    try std.testing.expectEqual(@as(u16, 0), final_read.op.field.field_idx);
+    try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = final_read.target } }, out.lir_result.store.getCFStmt(final_read.next));
 }
 
 test "boxy lowerer emits tuple construction in element order" {
