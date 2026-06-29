@@ -341,11 +341,13 @@ fn writeFailureContext(
 ) void {
     const proc = store.getProcSpec(proc_id);
     context.append("\nfailure context: proc={d}", .{@intFromEnum(proc_id)});
+    if (store.procDebugName(proc_id)) |name| context.append(" name={s}", .{name});
     if (local) |l| {
         context.append(" local={d} layout={d}", .{
             @intFromEnum(l),
             @intFromEnum(store.getLocal(l).layout_idx),
         });
+        if (store.localName(l)) |name| context.append(" local_name={s}", .{name});
     }
     context.append("\n  args:", .{});
     for (store.getLocalSpan(proc.args)) |arg| context.append(" {d}", .{@intFromEnum(arg)});
@@ -418,9 +420,11 @@ fn writeFailureContext(
                 @intFromEnum(j.id), @intFromEnum(j.body), @intFromEnum(j.remainder),
             }),
             .jump => |j| context.append(" target={d}", .{@intFromEnum(j.target)}),
-            .assign_ref => |a| context.append(" target={d} op={s} next={d}", .{
-                @intFromEnum(a.target), @tagName(a.op), @intFromEnum(a.next),
-            }),
+            .assign_ref => |a| {
+                context.append(" target={d} op=", .{@intFromEnum(a.target)});
+                appendRefOp(context, a.op);
+                context.append(" next={d}", .{@intFromEnum(a.next)});
+            },
             .set_local => |a| context.append(" target={d} value={d} mode={s} next={d}", .{
                 @intFromEnum(a.target), @intFromEnum(a.value), @tagName(a.mode), @intFromEnum(a.next),
             }),
@@ -495,6 +499,27 @@ fn appendLocalSpan(context: *FailureContext, store: *const LirStore, span: LIR.L
         context.append("{d}", .{@intFromEnum(local)});
     }
     context.append("]", .{});
+}
+
+fn appendRefOp(context: *FailureContext, op: LIR.RefOp) void {
+    switch (op) {
+        .local => |source| context.append("local({d})", .{@intFromEnum(source)}),
+        .discriminant => |ref| context.append("discriminant({d})", .{@intFromEnum(ref.source)}),
+        .field => |ref| context.append("field({d}, {d})", .{ @intFromEnum(ref.source), ref.field_idx }),
+        .tag_payload => |ref| context.append("tag_payload({d}, variant={d}, payload={d}, disc={d})", .{
+            @intFromEnum(ref.source),
+            ref.variant_index,
+            ref.payload_idx,
+            ref.tag_discriminant,
+        }),
+        .tag_payload_struct => |ref| context.append("tag_payload_struct({d}, variant={d}, disc={d})", .{
+            @intFromEnum(ref.source),
+            ref.variant_index,
+            ref.tag_discriminant,
+        }),
+        .list_reinterpret => |ref| context.append("list_reinterpret({d})", .{@intFromEnum(ref.backing_ref)}),
+        .nominal => |ref| context.append("nominal({d})", .{@intFromEnum(ref.backing_ref)}),
+    }
 }
 
 fn stmtMentionsLocal(store: *const LirStore, stmt: LIR.CFStmt, needle: LIR.LocalId) bool {

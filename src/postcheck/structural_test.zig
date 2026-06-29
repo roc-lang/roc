@@ -247,7 +247,7 @@ test "post-check stage products do not store expression cache state" {
 }
 
 test "checked module artifact does not store post-check lowering products" {
-    @setEvalBranchQuota(200_000);
+    @setEvalBranchQuota(1_000_000);
     comptime assertNoPostCheckType(check.CheckedModule.CheckedModuleArtifact.Serialized, "CheckedModuleArtifact.Serialized");
 }
 

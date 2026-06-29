@@ -209,6 +209,7 @@ const SourceLoc = @import("base").SourceLoc;
 const Region = @import("base").Region;
 const Common = @import("../common.zig");
 const Ast = @import("ast.zig");
+const Lift = @import("lift.zig");
 const Mono = @import("../monotype/ast.zig");
 const Type = @import("../monotype/type.zig");
 const check = @import("check");
@@ -399,6 +400,7 @@ const Pass = struct {
         try self.reserveSpecIds();
         try self.createSpecializations(original_fn_count);
         try self.rewriteExistingCalls();
+        try Lift.recomputeCaptures(self.allocator, self.program);
 
         self.program.next_symbol = self.symbols.next;
     }
