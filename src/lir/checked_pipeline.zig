@@ -196,11 +196,6 @@ pub fn lowerCheckedModulesToLir(
 ) LowerResourceError!LoweredProgram {
     try verifyCheckedBoundary(modules, target);
 
-    switch (target.specialization_strategy) {
-        .lss => {},
-        .boxy => checkedPipelineInvariant("boxy checked-to-LIR lowering is selected before the boxy lowerer exists"),
-    }
-
     const layout_requests = try collectLayoutRequests(allocator, modules.root.module, roots.layout_requests, roots.include_static_data_exports);
     defer allocator.free(layout_requests);
     const static_data_requests = switch (target.checked_module_state) {
@@ -211,6 +206,18 @@ pub fn lowerCheckedModulesToLir(
         .checking_finalization => try allocator.alloc(postcheck.Common.StaticDataRequest, 0),
     };
     defer allocator.free(static_data_requests);
+
+    switch (target.specialization_strategy) {
+        .lss => {},
+        .boxy => return lowerBoxyCheckedModulesToLir(
+            allocator,
+            modules,
+            roots,
+            target,
+            layout_requests,
+            static_data_requests,
+        ),
+    }
 
     var mono = try postcheck.Monotype.Lower.run(
         allocator,
@@ -292,6 +299,32 @@ pub fn lowerCheckedModulesToLir(
         .target_usize = target.target_usize,
         .runtime_value_schemas = runtime_value_schemas,
     };
+}
+
+fn lowerBoxyCheckedModulesToLir(
+    allocator: Allocator,
+    modules: CheckedModuleSet,
+    roots: RootRequestSet,
+    target: TargetConfig,
+    layout_requests: []const checked.CheckedTypeId,
+    static_data_requests: []const postcheck.Common.StaticDataRequest,
+) LowerResourceError!LoweredProgram {
+    _ = target;
+    var boxy_layout_requests = std.ArrayList(checked.CheckedTypeId).empty;
+    defer boxy_layout_requests.deinit(allocator);
+    try boxy_layout_requests.appendSlice(allocator, layout_requests);
+    for (static_data_requests) |request| {
+        try boxy_layout_requests.append(allocator, request.data.checked_type);
+    }
+
+    var plan = try postcheck.Boxy.Plan.analyzeProgram(allocator, .{
+        .checked_types = modules.root.module.checked_types.view(),
+        .roots = roots.requests,
+        .layout_requests = boxy_layout_requests.items,
+    }, .{});
+    defer plan.deinit();
+
+    checkedPipelineInvariant("boxy checked-to-LIR lowering has an explicit plan but the boxy lowerer is not implemented");
 }
 
 fn verifyCheckedBoundary(modules: CheckedModuleSet, target: TargetConfig) Allocator.Error!void {
