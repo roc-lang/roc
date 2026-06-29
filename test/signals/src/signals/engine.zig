@@ -31,6 +31,7 @@ const scope_runtime = @import("scope_runtime.zig");
 const each_runtime = @import("each_runtime.zig");
 const effects_runtime = @import("effects_runtime.zig");
 const structural_splice = @import("structural_splice.zig");
+const engine_scratch = @import("engine_scratch.zig");
 
 const enable_runtime_metrics = engine_metrics.enable_runtime_metrics;
 
@@ -235,32 +236,7 @@ pub const requiredEventBindingSlot = render_cache_mod.eventBindingSlot;
 pub const HostBinderToken = descriptor_stream.BinderToken;
 pub const HostBinderBinding = descriptor_stream.BinderBinding;
 
-const EngineScratch = struct {
-    debug_seen_render_nodes: std.ArrayListUnmanaged(bool) = .empty,
-    debug_expected_children: std.ArrayListUnmanaged(u64) = .empty,
-    binder_stack: std.ArrayListUnmanaged(HostBinderBinding) = .empty,
-    each_keys: std.ArrayListUnmanaged(HostValue) = .empty,
-    each_key_hashes: std.ArrayListUnmanaged(u64) = .empty,
-    each_next_hash_heads: std.AutoHashMapUnmanaged(u64, usize) = .empty,
-    each_next_hash_links: std.ArrayListUnmanaged(usize) = .empty,
-    each_matched_existing: std.ArrayListUnmanaged(bool) = .empty,
-    replacement_target_scopes: std.ArrayListUnmanaged(bool) = .empty,
-    elem_owned_removal: structural_splice.ElemOwnedRemovalScratch = .{},
-
-    fn deinit(self: *EngineScratch, allocator: std.mem.Allocator) void {
-        self.debug_seen_render_nodes.deinit(allocator);
-        self.debug_expected_children.deinit(allocator);
-        self.binder_stack.deinit(allocator);
-        self.each_keys.deinit(allocator);
-        self.each_key_hashes.deinit(allocator);
-        self.each_next_hash_heads.deinit(allocator);
-        self.each_next_hash_links.deinit(allocator);
-        self.each_matched_existing.deinit(allocator);
-        self.replacement_target_scopes.deinit(allocator);
-        self.elem_owned_removal.deinit(allocator);
-        self.* = .{};
-    }
-};
+const EngineScratch = engine_scratch.Scratch;
 
 // Descriptor stream
 //
