@@ -69,7 +69,7 @@ pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_
 
     // Reuse the Builtin module from the imported module
     // This ensures type variables for auto-imported types (Bool, Try, Str) are shared
-    const builtin_indices = compiled_builtins.builtin_indices;
+    const builtin_indices = compiled_builtins.builtinIndices(CIR);
     const builtin_env = other_test_env.builtin_module.env;
 
     // Initialize the module_env so we can use its ident store
@@ -218,7 +218,7 @@ pub fn init(module_name: []const u8, source: []const u8) TestEnvError!TestEnv {
     var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(gpa);
 
     // Load Builtin module once - Bool, Try, and Str are all types within this module
-    const builtin_indices = compiled_builtins.builtin_indices;
+    const builtin_indices = compiled_builtins.builtinIndices(CIR);
     var builtin_module = try builtin_static.moduleView(gpa, compiled_builtins.builtin_bin[0..], "Builtin", compiled_builtins.builtin_source);
     errdefer builtin_module.deinit();
 
@@ -331,7 +331,7 @@ pub fn countModuleNotFoundDiagnosticsAfterCanonicalization(module_name: []const 
     var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(gpa);
     defer module_envs.deinit();
 
-    const builtin_indices = compiled_builtins.builtin_indices;
+    const builtin_indices = compiled_builtins.builtinIndices(CIR);
     var builtin_module = try builtin_static.moduleView(gpa, compiled_builtins.builtin_bin[0..], "Builtin", compiled_builtins.builtin_source);
     defer builtin_module.deinit();
 

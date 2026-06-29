@@ -294,7 +294,7 @@ pub fn extractSemanticTokensWithImports(
     // Initialize CIR fields
     module_env.initCIRFields("semantic-tokens") catch return error.OutOfMemory;
 
-    const builtin_indices = compiled_builtins.builtin_indices;
+    const builtin_indices = compiled_builtins.builtinIndices(CIR);
     var builtin_module = builtin_static.moduleView(allocator, compiled_builtins.builtin_bin[0..], "Builtin", compiled_builtins.builtin_source) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         else => return extractSemanticTokens(allocator, source, info),

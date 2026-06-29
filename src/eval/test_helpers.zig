@@ -580,7 +580,7 @@ fn parseAndCheckProgramForProblemsImpl(
     const builtin_indices: CIR.BuiltinIndices = if (pre_published_builtin) |ppb|
         ppb.indices
     else
-        compiled_builtins.builtin_indices;
+        compiled_builtins.builtinIndices(CIR);
 
     var loaded_builtin: ?builtin_static.BuiltinModuleView = if (pre_published_builtin == null)
         try builtin_static.moduleView(
@@ -1007,7 +1007,7 @@ fn parseAndCanonicalizeProgramWithRootModeReporting(
     const builtin_indices: CIR.BuiltinIndices = if (pre_published_builtin) |ppb|
         ppb.indices
     else
-        compiled_builtins.builtin_indices;
+        compiled_builtins.builtinIndices(CIR);
 
     var loaded_builtin: ?builtin_static.BuiltinModuleView = if (pre_published_builtin == null)
         try builtin_static.moduleView(

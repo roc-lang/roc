@@ -105,6 +105,7 @@ pub const BuiltinIndices = struct {
     }
 };
 
+/// How the builtin compiler should locate a type declaration in Builtin.roc.
 pub const BuiltinTypeLookup = union(enum) {
     top_level: []const u8,
     nested: struct {
@@ -114,6 +115,7 @@ pub const BuiltinTypeLookup = union(enum) {
     qualified: []const u8,
 };
 
+/// Static registry entry describing one builtin type that the compiler needs by index.
 pub const BuiltinTypeSpec = struct {
     display_name: []const u8,
     qualified_name: []const u8,
@@ -124,6 +126,7 @@ pub const BuiltinTypeSpec = struct {
     auto_import: bool = true,
 };
 
+/// Ordered builtin type registry shared by builtin generation and runtime validation.
 pub const builtin_type_specs = [_]BuiltinTypeSpec{
     .{ .display_name = "Bool", .qualified_name = "Builtin.Bool", .type_field = "bool_type", .ident_field = "bool_ident", .lookup = .{ .top_level = "Bool" } },
     .{ .display_name = "Try", .qualified_name = "Builtin.Try", .type_field = "try_type", .ident_field = "try_ident", .lookup = .{ .top_level = "Try" } },
@@ -155,6 +158,7 @@ pub const builtin_type_specs = [_]BuiltinTypeSpec{
     .{ .display_name = "Numeral", .qualified_name = "Builtin.Num.Numeral", .type_field = "numeral_type", .ident_field = "numeral_ident", .lookup = .{ .nested = .{ .parent = "Num", .name = "Numeral" } } },
 };
 
+/// Nominal declarations that only group nested builtin types rather than representing builtin types.
 pub const builtin_type_container_names = [_][]const u8{
     "Builtin",
     "Builtin.Num",
@@ -181,6 +185,7 @@ fn hashInt(hash: u64, value: u64) u64 {
     return result;
 }
 
+/// Hash of the builtin type registry used to reject stale generated builtin index metadata.
 pub const BUILTIN_TYPE_REGISTRY_HASH: u64 = blk: {
     @setEvalBranchQuota(10_000);
     var hash = hashBytes(hash_offset, "roc-builtin-type-registry-v1");
@@ -204,6 +209,7 @@ pub const BUILTIN_TYPE_REGISTRY_HASH: u64 = blk: {
     break :blk hash;
 };
 
+/// Hash of the BuiltinIndices field layout used to reject stale generated index values.
 pub const BUILTIN_INDICES_LAYOUT_HASH: u64 = blk: {
     @setEvalBranchQuota(10_000);
     var hash = hashBytes(hash_offset, "roc-builtin-indices-layout-v1");

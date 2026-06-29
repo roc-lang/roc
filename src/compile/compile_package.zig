@@ -1748,7 +1748,7 @@ pub const PackageEnv = struct {
         available_artifacts: []const CheckedArtifact.ImportedModuleView,
         explicit_roots: []const CheckedArtifact.ExplicitRootRequestInput,
     ) TypeCheckModuleError!TypeCheckOutput {
-        const builtin_indices = compiled_builtins.builtin_indices;
+        const builtin_indices = compiled_builtins.builtinIndices(can.CIR);
 
         const module_builtin_ctx: Check.BuiltinContext = .{
             .module_name = env.qualified_module_ident,

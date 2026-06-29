@@ -530,27 +530,41 @@ fn writeBuiltinIndicesZig(
     var writer = file.writer(io, &write_buffer);
     const out = &writer.interface;
 
-    try out.writeAll(
-        \\const can = @import("can");
-        \\
-        \\const CIR = can.CIR;
-        \\
-    );
     try out.print("pub const builtin_type_registry_hash: u64 = 0x{x};\n", .{CIR.BUILTIN_TYPE_REGISTRY_HASH});
     try out.print("pub const builtin_indices_layout_hash: u64 = 0x{x};\n\n", .{CIR.BUILTIN_INDICES_LAYOUT_HASH});
-    try out.writeAll("pub const builtin_indices: CIR.BuiltinIndices = .{\n");
+    try out.writeAll("pub const builtin_indices_raw = .{\n");
 
     inline for (@typeInfo(BuiltinIndices).@"struct".fields) |field| {
         const value = @field(indices, field.name);
         if (field.type == CIR.Statement.Idx) {
-            try out.print("    .{s} = @enumFromInt({d}),\n", .{ field.name, @intFromEnum(value) });
+            try out.print("    .{s} = {d},\n", .{ field.name, @intFromEnum(value) });
         } else if (field.type == base.Ident.Idx) {
-            try out.print("    .{s} = @bitCast(@as(u32, {d})),\n", .{ field.name, @as(u32, @bitCast(value)) });
+            try out.print("    .{s} = {d},\n", .{ field.name, @as(u32, @bitCast(value)) });
         } else {
             @compileError("unsupported BuiltinIndices field type: " ++ @typeName(field.type));
         }
     }
 
-    try out.writeAll("};\n");
+    try out.writeAll(
+        \\};
+        \\
+        \\pub fn builtinIndices(comptime CIR: type) CIR.BuiltinIndices {
+        \\    return .{
+        \\
+    );
+    inline for (@typeInfo(BuiltinIndices).@"struct".fields) |field| {
+        if (field.type == CIR.Statement.Idx) {
+            try out.print("        .{s} = @enumFromInt(builtin_indices_raw.{s}),\n", .{ field.name, field.name });
+        } else if (field.type == base.Ident.Idx) {
+            try out.print("        .{s} = @bitCast(@as(u32, builtin_indices_raw.{s})),\n", .{ field.name, field.name });
+        } else {
+            @compileError("unsupported BuiltinIndices field type: " ++ @typeName(field.type));
+        }
+    }
+    try out.writeAll(
+        \\    };
+        \\}
+        \\
+    );
     try out.flush();
 }

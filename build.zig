@@ -2474,12 +2474,6 @@ pub fn build(b: *std.Build) void {
         "Builtin.roc",
     );
 
-    // Copy generated typed builtin indices.
-    _ = write_compiled_builtins.addCopyFile(
-        builtin_compiler.builtin_indices_zig,
-        "builtin_indices.zig",
-    );
-
     // Copy the baked CheckedModuleArtifact
     _ = write_compiled_builtins.addCopyFile(
         builtin_compiler.builtin_artifact_bin,
@@ -2490,14 +2484,17 @@ pub fn build(b: *std.Build) void {
     // The embedded blobs are copied by Zig at compile time into 16-byte-aligned
     // static storage, so runtime code can build views over them directly.
     const builtins_source_str =
-        \\const generated_indices = @import("builtin_indices.zig");
+        \\const generated_indices = @import("builtin_indices");
         \\
         \\const builtin_bin_raw = @embedFile("Builtin.bin");
         \\pub var builtin_bin: [builtin_bin_raw.len]u8 align(16) = builtin_bin_raw.*;
         \\pub const builtin_source = @embedFile("Builtin.roc");
         \\const builtin_artifact_bin_raw = @embedFile("Builtin.artifact.bin");
         \\pub var builtin_artifact_bin: [builtin_artifact_bin_raw.len]u8 align(16) = builtin_artifact_bin_raw.*;
-        \\pub const builtin_indices = generated_indices.builtin_indices;
+        \\pub const builtin_indices_raw = generated_indices.builtin_indices_raw;
+        \\pub fn builtinIndices(comptime CIR: type) CIR.BuiltinIndices {
+        \\    return generated_indices.builtinIndices(CIR);
+        \\}
         \\pub const builtin_type_registry_hash = generated_indices.builtin_type_registry_hash;
         \\pub const builtin_indices_layout_hash = generated_indices.builtin_indices_layout_hash;
         \\
@@ -2511,7 +2508,9 @@ pub fn build(b: *std.Build) void {
     const compiled_builtins_module = b.createModule(.{
         .root_source_file = compiled_builtins_source,
     });
-    compiled_builtins_module.addImport("can", roc_modules.can);
+    compiled_builtins_module.addImport("builtin_indices", b.createModule(.{
+        .root_source_file = builtin_compiler.builtin_indices_zig,
+    }));
 
     const bytebox = b.dependency("bytebox", .{
         .target = target,

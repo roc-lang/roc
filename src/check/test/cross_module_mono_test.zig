@@ -69,7 +69,7 @@ const MonoTestEnv = struct {
 
         var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(gpa);
 
-        const builtin_indices = compiled_builtins.builtin_indices;
+        const builtin_indices = compiled_builtins.builtinIndices(CIR);
         var builtin_module = try builtin_static.moduleView(gpa, compiled_builtins.builtin_bin[0..], "Builtin", compiled_builtins.builtin_source);
         errdefer builtin_module.deinit();
 
@@ -155,7 +155,7 @@ const MonoTestEnv = struct {
 
         var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(gpa);
 
-        const builtin_indices = compiled_builtins.builtin_indices;
+        const builtin_indices = compiled_builtins.builtinIndices(CIR);
         const builtin_env = other_env.builtin_module.env;
 
         module_env.* = try ModuleEnv.init(gpa, source);
@@ -271,7 +271,7 @@ const MonoTestEnv = struct {
 
         var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(gpa);
 
-        const builtin_indices = compiled_builtins.builtin_indices;
+        const builtin_indices = compiled_builtins.builtinIndices(CIR);
         const builtin_env = imports[0].env.builtin_module.env;
 
         module_env.* = try ModuleEnv.init(gpa, source);
@@ -621,7 +621,7 @@ test "type checker catches polymorphic recursion (infinite type)" {
     var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(gpa);
     defer module_envs.deinit();
 
-    const builtin_indices = compiled_builtins.builtin_indices;
+    const builtin_indices = compiled_builtins.builtinIndices(CIR);
     var builtin_module = try builtin_static.moduleView(gpa, compiled_builtins.builtin_bin[0..], "Builtin", compiled_builtins.builtin_source);
     defer builtin_module.deinit();
 

@@ -8,23 +8,28 @@ const ModuleEnv = @import("ModuleEnv.zig");
 const CIR = @import("CIR.zig");
 const CompactWriter = collections.CompactWriter;
 
+/// A tiny owned wrapper around a ModuleEnv whose internal slices point at static builtin bytes.
 pub const BuiltinModuleView = struct {
     env: *ModuleEnv,
     gpa: Allocator,
 
+    /// Destroy the wrapper ModuleEnv without freeing the static builtin backing bytes.
     pub fn deinit(self: *BuiltinModuleView) void {
         self.gpa.destroy(self.env);
         self.* = undefined;
     }
 };
 
+/// Validation failures for compiler-embedded builtin data.
 pub const BuiltinValidationError = error{
     StaleEmbeddedBuiltins,
     CorruptEmbeddedBuiltins,
 };
 
+/// Errors that can occur while making a ModuleEnv view over static serialized bytes.
 pub const StaticViewError = Allocator.Error || error{CorruptEmbeddedBuiltins};
 
+/// Build a ModuleEnv view over aligned static Builtin.bin bytes without copying the backing data.
 pub fn moduleView(
     gpa: Allocator,
     backing: []align(CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()) u8,
@@ -50,11 +55,13 @@ pub fn moduleView(
     };
 }
 
+/// Validate that generated builtin metadata matches the compiler's current builtin registry.
 pub fn validateBuiltinManifest(registry_hash: u64, indices_layout_hash: u64) error{StaleEmbeddedBuiltins}!void {
     if (registry_hash != CIR.BUILTIN_TYPE_REGISTRY_HASH) return error.StaleEmbeddedBuiltins;
     if (indices_layout_hash != CIR.BUILTIN_INDICES_LAYOUT_HASH) return error.StaleEmbeddedBuiltins;
 }
 
+/// Validate that generated builtin indices point at the expected declarations in the static module.
 pub fn validateBuiltinIndices(env: *const ModuleEnv, indices: CIR.BuiltinIndices) BuiltinValidationError!void {
     inline for (CIR.builtin_type_specs) |spec| {
         const stmt_idx = @field(indices, spec.type_field);

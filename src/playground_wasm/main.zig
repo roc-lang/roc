@@ -378,14 +378,6 @@ fn resetGlobalState() void {
         compiler_data = null;
     }
     cleanupReplState();
-    if (host_message_buffer) |buf| {
-        allocator.free(buf);
-        host_message_buffer = null;
-    }
-    if (host_response_buffer) |buf| {
-        allocator.free(buf);
-        host_response_buffer = null;
-    }
 }
 
 /// Writes a formatted string to the in-memory debug log.
@@ -415,8 +407,9 @@ fn logDebug(comptime format: []const u8, args: anytype) void {
         } else if (available_space > 0) {
             // Not even enough space for the full OOM message. Write what we can.
             const truncated_msg = "[OOM]";
-            @memcpy(target_slice[0..truncated_msg.len], truncated_msg);
-            debug_log_pos += truncated_msg.len;
+            const bytes_to_write = @min(available_space, truncated_msg.len);
+            @memcpy(target_slice[0..bytes_to_write], truncated_msg[0..bytes_to_write]);
+            debug_log_pos += bytes_to_write;
         }
         // If there's no space for even "[OOM]", we can't do anything.
         debug_log_oom = true;
@@ -1336,7 +1329,7 @@ fn compileSource(source: []const u8, module_name: []const u8) PlaygroundCompileE
     // compile consumes the same explicit Builtin module context.
 
     logDebug("compileSource: Loading builtin indices\n", .{});
-    const builtin_indices = compiled_builtins.builtin_indices;
+    const builtin_indices = compiled_builtins.builtinIndices(can.CIR);
     logDebug("compileSource: Builtin indices loaded, bool_type={}\n", .{@intFromEnum(builtin_indices.bool_type)});
 
     const builtin_module = try getCachedBuiltinModule();
