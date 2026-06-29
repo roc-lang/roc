@@ -11,6 +11,7 @@ const check = @import("check");
 const Allocator = std.mem.Allocator;
 const checked = check.CheckedModule;
 const canonical = check.CanonicalNames;
+const static_dispatch = check.StaticDispatchRegistry;
 const RecordFieldLabelId = @TypeOf(@as(checked.CheckedRecordField, undefined).name);
 const TagLabelId = @TypeOf(@as(checked.CheckedTag, undefined).name);
 const MethodNameId = @TypeOf(@as(checked.CheckedStaticDispatchConstraint, undefined).fn_name);
@@ -23,6 +24,8 @@ const empty_checked_procedure_templates = checked.CheckedProcedureTemplateTable{
 const empty_top_level_procedure_bindings = checked.TopLevelProcedureBindingTable{};
 const empty_compile_time_roots = checked.CompileTimeRootTable{};
 const empty_nested_proc_sites = checked.NestedProcSiteTable{};
+const empty_entry_wrappers = checked.EntryWrapperTable{};
+const empty_static_dispatch_plans = static_dispatch.StaticDispatchPlanTable{};
 
 pub const TypeRepId = enum(u32) { _ };
 pub const RootPlanId = enum(u32) { _ };
@@ -284,7 +287,9 @@ pub const ModuleView = struct {
     checked_types: checked.CheckedTypeStoreView,
     checked_bodies: checked.CheckedBodyStoreView = .{},
     compile_time_roots: *const checked.CompileTimeRootTable = &empty_compile_time_roots,
+    entry_wrappers: *const checked.EntryWrapperTable = &empty_entry_wrappers,
     resolved_value_refs: *const checked.ResolvedValueRefTable = &empty_resolved_value_refs,
+    static_dispatch_plans: *const static_dispatch.StaticDispatchPlanTable = &empty_static_dispatch_plans,
     checked_procedure_templates: *const checked.CheckedProcedureTemplateTable = &empty_checked_procedure_templates,
     nested_proc_sites: *const checked.NestedProcSiteTable = &empty_nested_proc_sites,
     top_level_procedure_bindings: *const checked.TopLevelProcedureBindingTable = &empty_top_level_procedure_bindings,
@@ -1115,7 +1120,7 @@ const Builder = struct {
         const root_expr = switch (template.body) {
             .checked_body => |body| view.checked_bodies.body(body).root_expr,
             .intrinsic_wrapper => boxyPlanInvariant("intrinsic wrapper reached boxy body type planning"),
-            .entry_wrapper => boxyPlanInvariant("compile-time entry wrapper reached runtime boxy body type planning"),
+            .entry_wrapper => |wrapper_id| view.entry_wrappers.get(wrapper_id).body_expr,
         };
         return .{
             .view = view,
@@ -1239,7 +1244,6 @@ const Builder = struct {
             .empty_record,
             .zero_argument_tag,
             .dispatch_call,
-            .method_eq,
             .type_dispatch_call,
             .runtime_error,
             .crash,
@@ -1318,6 +1322,7 @@ const Builder = struct {
                 try self.analyzeExprTypes(view, hash.value);
                 try self.analyzeExprTypes(view, hash.hasher);
             },
+            .method_eq => |plan| try self.analyzeDispatchPlanTypes(view, plan),
             .tuple_access => |access| try self.analyzeExprTypes(view, access.tuple),
             .expect_err => |expect_err| try self.analyzeExprTypes(view, expect_err.expr),
             .return_ => |ret| try self.analyzeExprTypes(view, ret.expr),
@@ -1333,6 +1338,31 @@ const Builder = struct {
 
     fn analyzeExprSliceTypes(self: *Builder, view: ModuleView, exprs: []const checked.CheckedExprId) Allocator.Error!void {
         for (exprs) |expr| try self.analyzeExprTypes(view, expr);
+    }
+
+    fn analyzeDispatchPlanTypes(
+        self: *Builder,
+        view: ModuleView,
+        maybe_plan: ?static_dispatch.StaticDispatchPlanId,
+    ) Allocator.Error!void {
+        const plan_id = maybe_plan orelse
+            boxyPlanInvariant("checked dispatch expression reached boxy planning without a dispatch plan");
+        const raw = @intFromEnum(plan_id);
+        if (raw >= view.static_dispatch_plans.plans.len) {
+            boxyPlanInvariant("checked dispatch expression referenced a missing dispatch plan");
+        }
+        const plan = view.static_dispatch_plans.plans[raw];
+        _ = try self.analyzeType(view, plan.dispatcher_ty);
+        _ = try self.analyzeType(view, plan.callable_ty);
+        for (plan.argsSlice(view.static_dispatch_plans)) |operand| {
+            switch (operand) {
+                .checked_expr => |operand_expr| try self.analyzeExprTypes(view, operand_expr),
+                .generated_interpolation_iter,
+                .generated_numeral,
+                .generated_quote,
+                => boxyPlanInvariant("generated static-dispatch operand reached boxy planning before generated operand lowering"),
+            }
+        }
     }
 
     fn analyzeStatementTypes(self: *Builder, view: ModuleView, statement_id: checked.CheckedStatementId) Allocator.Error!void {
@@ -1585,7 +1615,9 @@ fn moduleViewFromImported(imported: checked.ImportedModuleView) ModuleView {
         .checked_types = imported.checked_types,
         .checked_bodies = imported.checked_bodies,
         .compile_time_roots = imported.compile_time_roots,
+        .entry_wrappers = imported.entry_wrappers,
         .resolved_value_refs = imported.resolved_value_refs,
+        .static_dispatch_plans = imported.static_dispatch_plans,
         .checked_procedure_templates = imported.checked_procedure_templates,
         .nested_proc_sites = imported.nested_proc_sites,
         .top_level_procedure_bindings = imported.top_level_procedure_bindings,
@@ -1603,7 +1635,9 @@ fn moduleViewFromArtifact(artifact: *const checked.CheckedModuleArtifact) Module
         .checked_types = artifact.checked_types.view(),
         .checked_bodies = artifact.checked_bodies.view(),
         .compile_time_roots = &artifact.compile_time_roots,
+        .entry_wrappers = &artifact.entry_wrappers,
         .resolved_value_refs = &artifact.resolved_value_refs,
+        .static_dispatch_plans = &artifact.static_dispatch_plans,
         .checked_procedure_templates = &artifact.checked_procedure_templates,
         .nested_proc_sites = &artifact.nested_proc_sites,
         .top_level_procedure_bindings = &artifact.top_level_procedure_bindings,

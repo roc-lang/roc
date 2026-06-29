@@ -22,6 +22,7 @@ const names = check.CheckedNames;
 const LIR = lir_core.LIR;
 const LirProgram = lir_core.Program;
 const RootMetadata = lir_core.RootMetadata.RootMetadata;
+const static_dispatch = check.StaticDispatchRegistry;
 
 pub const RuntimeSchemaStore = solved_lir_lower.RuntimeSchemaStore;
 
@@ -74,12 +75,16 @@ const ProcedureModuleView = struct {
     canonical_names: *const names.CanonicalNameStore,
     checked_types: checked.CheckedTypeStoreView,
     checked_bodies: checked.CheckedBodyStoreView,
+    resolved_value_refs: *const checked.ResolvedValueRefTable,
     compile_time_roots: *const checked.CompileTimeRootTable,
+    entry_wrappers: *const checked.EntryWrapperTable,
+    static_dispatch_plans: *const static_dispatch.StaticDispatchPlanTable,
     checked_procedure_templates: *const checked.CheckedProcedureTemplateTable,
     nested_proc_sites: *const checked.NestedProcSiteTable,
     top_level_procedure_bindings: *const checked.TopLevelProcedureBindingTable,
     callable_eval_templates: checked.CallableEvalTemplateTableView,
     exported_procedure_bindings: checked.ExportedProcedureBindingView,
+    const_templates: *const checked.ConstTemplateTable,
     const_store: *const check.ConstStore.ConstStore,
 };
 
@@ -223,12 +228,12 @@ fn resolveProcedureTemplate(
     const body_id: ?checked.CheckedBodyId = switch (template.body) {
         .checked_body => |body| body,
         .intrinsic_wrapper => boxyLowerInvariant("intrinsic wrapper reached boxy checked-body worker resolution"),
-        .entry_wrapper => boxyLowerInvariant("compile-time entry wrapper reached runtime boxy worker resolution"),
+        .entry_wrapper => null,
     };
     const root_expr = switch (template.body) {
         .checked_body => |body| module.checked_bodies.body(body).root_expr,
         .intrinsic_wrapper => boxyLowerInvariant("intrinsic wrapper reached boxy checked-body worker resolution"),
-        .entry_wrapper => boxyLowerInvariant("compile-time entry wrapper reached runtime boxy worker resolution"),
+        .entry_wrapper => |wrapper_id| module.entry_wrappers.get(wrapper_id).body_expr,
     };
 
     return .{
@@ -337,12 +342,16 @@ fn rootProcedureModule(modules: Common.CheckedModules) ProcedureModuleView {
         .canonical_names = &artifact.canonical_names,
         .checked_types = artifact.checked_types.view(),
         .checked_bodies = artifact.checked_bodies.view(),
+        .resolved_value_refs = &artifact.resolved_value_refs,
         .compile_time_roots = &artifact.compile_time_roots,
+        .entry_wrappers = &artifact.entry_wrappers,
+        .static_dispatch_plans = &artifact.static_dispatch_plans,
         .checked_procedure_templates = &artifact.checked_procedure_templates,
         .nested_proc_sites = &artifact.nested_proc_sites,
         .top_level_procedure_bindings = &artifact.top_level_procedure_bindings,
         .callable_eval_templates = artifact.callable_eval_templates.view(),
         .exported_procedure_bindings = artifact.exported_procedure_bindings.view(),
+        .const_templates = &artifact.const_templates,
         .const_store = &artifact.const_store,
     };
 }
@@ -353,12 +362,16 @@ fn procedureModuleFromImport(import: checked.ImportedModuleView) ProcedureModule
         .canonical_names = import.canonical_names,
         .checked_types = import.checked_types,
         .checked_bodies = import.checked_bodies,
+        .resolved_value_refs = import.resolved_value_refs,
         .compile_time_roots = import.compile_time_roots,
+        .entry_wrappers = import.entry_wrappers,
+        .static_dispatch_plans = import.static_dispatch_plans,
         .checked_procedure_templates = import.checked_procedure_templates,
         .nested_proc_sites = import.nested_proc_sites,
         .top_level_procedure_bindings = import.top_level_procedure_bindings,
         .callable_eval_templates = import.callable_eval_templates,
         .exported_procedure_bindings = import.exported_procedure_bindings,
+        .const_templates = import.const_templates,
         .const_store = import.const_store,
     };
 }
@@ -689,7 +702,9 @@ const ProcBodyBuilder = struct {
             },
             .empty_record => try self.assignZst(target, next),
             .empty_list => try self.assignList(target, &.{}, next),
-            .lookup_local => |lookup| try self.assignLocal(target, self.localForPattern(lookup.pattern), next),
+            .lookup_local => |lookup| try self.lowerLookupLocalInto(target, expr.ty, lookup, next),
+            .lookup_external => |ref_id| try self.lowerResolvedLookupInto(target, expr.ty, ref_id, next),
+            .lookup_required => |ref_id| try self.lowerResolvedLookupInto(target, expr.ty, ref_id, next),
             .field_access => |access| try self.lowerFieldAccessInto(target, access.receiver, access.field_name, next),
             .tuple_access => |access| try self.lowerTupleAccessInto(target, access.tuple, access.elem_index, next),
             .list => |items| try self.lowerListInto(target, items, next),
@@ -702,6 +717,7 @@ const ProcBodyBuilder = struct {
             .unary_not => |child| try self.lowerUnaryLowLevelInto(target, .bool_not, child, next),
             .binop => |binop| try self.lowerBoolBinopInto(target, binop.op, binop.lhs, binop.rhs, next),
             .structural_eq => |eq| try self.lowerStructuralEqInto(target, eq.lhs, eq.rhs, eq.negated, next),
+            .method_eq => |plan| try self.lowerMethodEqInto(target, plan, next),
             .structural_hash => |hash| try self.lowerStructuralHashInto(target, hash.value, hash.hasher, next),
             .record => |record| try self.lowerRecordExprInto(target, expr.ty, record, next),
             .nominal => |nominal| try self.lowerNominalInto(target, nominal.backing_expr, next),
@@ -732,6 +748,441 @@ const ProcBodyBuilder = struct {
             .lambda => boxyLowerInvariant("nested lambda reached boxy expression lowering before erased callable lowering was emitted"),
             else => boxyLowerInvariant("checked expression form reached boxy body lowering before its LIR lowering was implemented"),
         };
+    }
+
+    fn lowerLookupLocalInto(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        checked_ty: checked.CheckedTypeId,
+        lookup: anytype,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        if (lookup.resolved) |ref_id| {
+            return try self.lowerResolvedLookupInto(target, checked_ty, ref_id, next);
+        }
+        return try self.assignLocal(target, self.localForPattern(lookup.pattern), next);
+    }
+
+    fn lowerResolvedLookupInto(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        checked_ty: checked.CheckedTypeId,
+        maybe_ref: ?checked.ResolvedValueRefId,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const ref_id = maybe_ref orelse
+            boxyLowerInvariant("checked lookup reached boxy lowering without a resolved value ref");
+        const record = self.resolvedValueRecord(ref_id);
+        return switch (record.ref) {
+            .local_param,
+            .local_value,
+            .local_mutable_version,
+            .pattern_binder,
+            => |local| try self.assignLocal(target, self.localForBinder(local.binder), next),
+            .selected_hoisted_const => |selected| blk: {
+                if (self.binderLocalOrNull(selected.local.binder)) |local| {
+                    break :blk try self.assignLocal(target, local, next);
+                }
+                break :blk try self.restoreConstUseInto(target, checked_ty, selected.const_use, next);
+            },
+            .top_level_const,
+            .imported_const,
+            => |const_use| try self.restoreConstUseInto(target, checked_ty, const_use, next),
+            .platform_required_const => |required| try self.restoreConstUseInto(target, checked_ty, required.const_use, next),
+            .local_proc => boxyLowerInvariant("local procedure value reached boxy lookup lowering before erased callable construction"),
+            .top_level_proc,
+            .imported_proc,
+            .hosted_proc,
+            .platform_required_proc,
+            .promoted_top_level_proc,
+            => boxyLowerInvariant("procedure value reached boxy lookup lowering before erased callable construction"),
+            .platform_required_declaration => boxyLowerInvariant("unbound platform-required declaration reached boxy lookup lowering"),
+        };
+    }
+
+    fn lowerMethodEqInto(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        maybe_plan: ?static_dispatch.StaticDispatchPlanId,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const plan = self.staticDispatchPlan(maybe_plan);
+        const eq = switch (plan.result_mode) {
+            .equality => |eq| eq,
+            else => boxyLowerInvariant("checked method equality used a non-equality dispatch plan"),
+        };
+        if (!eq.structural_allowed) {
+            boxyLowerInvariant("checked method equality reached boxy lowering without structural equality permission");
+        }
+        switch (plan.resolution) {
+            .unresolved_checked_plan => {},
+            .resolved_target => {
+                if (!checkedTypeUsesBuiltinStructuralEquality(self.module, plan.dispatcher_ty)) {
+                    boxyLowerInvariant("resolved method equality target reached boxy lowering before dispatch worker calls");
+                }
+            },
+        }
+
+        const operands = plan.argsSlice(self.module.static_dispatch_plans);
+        if (operands.len != 2) {
+            boxyLowerInvariant("checked method equality dispatch plan did not carry two operands");
+        }
+        const lhs = switch (operands[0]) {
+            .checked_expr => |expr| expr,
+            else => boxyLowerInvariant("checked method equality lhs was not a checked expression operand"),
+        };
+        const rhs = switch (operands[1]) {
+            .checked_expr => |expr| expr,
+            else => boxyLowerInvariant("checked method equality rhs was not a checked expression operand"),
+        };
+        return try self.lowerStructuralEqInto(target, lhs, rhs, eq.negated, next);
+    }
+
+    fn staticDispatchPlan(
+        self: *const ProcBodyBuilder,
+        maybe_plan: ?static_dispatch.StaticDispatchPlanId,
+    ) static_dispatch.StaticDispatchCallPlan {
+        const plan_id = maybe_plan orelse
+            boxyLowerInvariant("checked dispatch expression reached boxy lowering without a dispatch plan");
+        const raw = @intFromEnum(plan_id);
+        if (raw >= self.module.static_dispatch_plans.plans.len) {
+            boxyLowerInvariant("checked dispatch expression referenced a missing dispatch plan");
+        }
+        return self.module.static_dispatch_plans.plans[raw];
+    }
+
+    fn restoreConstUseInto(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        checked_ty: checked.CheckedTypeId,
+        const_use: checked.ConstUseTemplate,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const requested_ty = const_use.requested_source_ty_payload orelse
+            boxyLowerInvariant("checked const use reached boxy lowering without a requested checked type");
+        if (self.workerRuntimeLayoutForType(requested_ty).layoutIdx() != self.parent.result.store.getLocal(target).layout_idx) {
+            boxyLowerInvariant("checked const use target layout disagreed with requested checked type");
+        }
+        if (self.workerRuntimeLayoutForType(checked_ty).layoutIdx() != self.parent.result.store.getLocal(target).layout_idx) {
+            boxyLowerInvariant("checked const lookup expression type disagreed with target layout");
+        }
+
+        const store_module = procedureModuleByKey(self.parent.modules, checked.constModuleId(const_use.const_ref));
+        const template = store_module.const_templates.get(const_use.const_ref);
+        return switch (template.state) {
+            .stored_const => |stored| try self.restoreConstNodeInto(target, store_module, self.module, stored.node, requested_ty, next),
+            .reserved => boxyLowerInvariant("reserved checked const template reached runtime boxy lowering"),
+            .eval_template => boxyLowerInvariant("const eval template reached runtime boxy lowering before compile-time finalization stored its value"),
+        };
+    }
+
+    fn restoreConstNodeInto(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        store_module: ProcedureModuleView,
+        type_module: ProcedureModuleView,
+        node: checked.ConstNodeId,
+        checked_ty: checked.CheckedTypeId,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        if (@intFromEnum(node) >= store_module.const_store.values.items.len) {
+            boxyLowerInvariant("ConstStore node id was outside the store");
+        }
+        return switch (store_module.const_store.get(node)) {
+            .pending => boxyLowerInvariant("pending ConstStore node reached runtime boxy lowering"),
+            .zst => try self.assignZst(target, next),
+            .scalar => |scalar| try self.assignConstScalar(target, scalar, next),
+            .str => |str| try self.assignStringBytesView(target, store_module.const_store.strData(str.data), str.offset, str.len, next),
+            .crash => |str| try self.parent.result.store.addCFStmt(.{ .crash = .{
+                .msg = try self.parent.result.store.insertString(store_module.const_store.strBytes(str)),
+            } }),
+            .list => |items| try self.restoreConstListInto(target, store_module, type_module, items, checked_ty, next),
+            .box => |payload| try self.restoreConstBoxInto(target, store_module, type_module, payload, checked_ty, next),
+            .tuple => |items| try self.restoreConstTupleInto(target, store_module, type_module, items, checked_ty, next),
+            .record => |items| try self.restoreConstRecordInto(target, store_module, type_module, items, checked_ty, next),
+            .tag => |tag| try self.restoreConstTagInto(target, store_module, type_module, tag, checked_ty, next),
+            .nominal => |nominal| try self.restoreConstNominalInto(target, store_module, type_module, nominal.backing, checked_ty, next),
+            .fn_value => boxyLowerInvariant("ConstStore function value reached boxy const lookup before erased callable construction"),
+        };
+    }
+
+    fn restoreConstListInto(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        store_module: ProcedureModuleView,
+        type_module: ProcedureModuleView,
+        items: []const checked.ConstNodeId,
+        checked_ty: checked.CheckedTypeId,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const elem_ty = constListElemType(type_module, checked_ty);
+        const elem_layout = self.localListElemLayout(target);
+        const elem_locals = try self.parent.allocator.alloc(LIR.LocalId, items.len);
+        defer self.parent.allocator.free(elem_locals);
+
+        for (elem_locals) |*local| {
+            if (self.workerRuntimeLayoutForType(elem_ty).layoutIdx() != elem_layout) {
+                boxyLowerInvariant("ConstStore list element layout required box/adapt lowering before list construction");
+            }
+            local.* = try self.addFrameLocal(elem_layout);
+        }
+
+        var continuation = try self.assignList(target, elem_locals, next);
+        var index = items.len;
+        while (index > 0) {
+            index -= 1;
+            continuation = try self.restoreConstNodeInto(elem_locals[index], store_module, type_module, items[index], elem_ty, continuation);
+        }
+        return continuation;
+    }
+
+    fn restoreConstBoxInto(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        store_module: ProcedureModuleView,
+        type_module: ProcedureModuleView,
+        payload: checked.ConstNodeId,
+        checked_ty: checked.CheckedTypeId,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const payload_ty = constBoxPayloadType(type_module, checked_ty);
+        const payload_local = try self.addFrameLocal(self.workerRuntimeLayoutForType(payload_ty).layoutIdx());
+        const boxed = try self.assignBoxBoundary(target, payload_local, .box_box, next);
+        return try self.restoreConstNodeInto(payload_local, store_module, type_module, payload, payload_ty, boxed);
+    }
+
+    fn restoreConstTupleInto(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        store_module: ProcedureModuleView,
+        type_module: ProcedureModuleView,
+        items: []const checked.ConstNodeId,
+        checked_ty: checked.CheckedTypeId,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const item_tys = constTupleItemTypes(type_module, checked_ty);
+        if (item_tys.len != items.len) {
+            boxyLowerInvariant("ConstStore tuple length differed from checked tuple type");
+        }
+        const field_locals = try self.parent.allocator.alloc(LIR.LocalId, items.len);
+        defer self.parent.allocator.free(field_locals);
+        for (item_tys, field_locals) |item_ty, *local| {
+            local.* = try self.addFrameLocal(self.workerRuntimeLayoutForType(item_ty).layoutIdx());
+        }
+
+        var continuation = try self.parent.result.store.addCFStmt(.{ .assign_struct = .{
+            .target = target,
+            .fields = try self.parent.result.store.addLocalSpan(field_locals),
+            .next = next,
+        } });
+        var index = items.len;
+        while (index > 0) {
+            index -= 1;
+            continuation = try self.restoreConstNodeInto(field_locals[index], store_module, type_module, items[index], item_tys[index], continuation);
+        }
+        return continuation;
+    }
+
+    fn restoreConstRecordInto(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        store_module: ProcedureModuleView,
+        type_module: ProcedureModuleView,
+        items: []const checked.ConstNodeId,
+        checked_ty: checked.CheckedTypeId,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const fields = constRecordFields(type_module, checked_ty);
+        if (fields.len != items.len) {
+            boxyLowerInvariant("ConstStore record field count differed from checked record type");
+        }
+
+        const rep_id = self.repForType(checked_ty);
+        const rep = self.parent.plan.representations.items[@intFromEnum(rep_id)];
+        switch (rep.kind) {
+            .record,
+            .record_unbound,
+            => {},
+            else => boxyLowerInvariant("ConstStore record restored with a non-record boxy representation"),
+        }
+
+        const children = self.parent.plan.childSlice(rep.children);
+        const field_locals = try self.parent.allocator.alloc(LIR.LocalId, fields.len);
+        defer self.parent.allocator.free(field_locals);
+        const source_field_locals = try self.parent.allocator.alloc(?LIR.LocalId, fields.len);
+        defer self.parent.allocator.free(source_field_locals);
+        @memset(source_field_locals, null);
+
+        var layout_index: usize = 0;
+        for (children) |child| {
+            switch (child.role) {
+                .record_field => |label| {
+                    const source_index = constRecordFieldIndex(fields, label) orelse
+                        boxyLowerInvariant("ConstStore record representation referenced a field outside checked type");
+                    const local = try self.addFrameLocal(self.parent.layout_plan.rep_layouts[@intFromEnum(child.rep)].worker.layoutIdx());
+                    field_locals[layout_index] = local;
+                    source_field_locals[source_index] = local;
+                    layout_index += 1;
+                },
+                .record_ext => self.requireEmptyRecordExtension(child.rep),
+                else => boxyLowerInvariant("ConstStore record representation had a non-record child role"),
+            }
+        }
+        if (layout_index != fields.len) {
+            boxyLowerInvariant("ConstStore record representation field count differed from checked type");
+        }
+        for (source_field_locals) |maybe_local| {
+            if (maybe_local == null) {
+                boxyLowerInvariant("ConstStore record field was not selected by representation order");
+            }
+        }
+
+        var continuation = try self.parent.result.store.addCFStmt(.{ .assign_struct = .{
+            .target = target,
+            .fields = try self.parent.result.store.addLocalSpan(field_locals),
+            .next = next,
+        } });
+        var source_index = items.len;
+        while (source_index > 0) {
+            source_index -= 1;
+            continuation = try self.restoreConstNodeInto(source_field_locals[source_index].?, store_module, type_module, items[source_index], fields[source_index].ty, continuation);
+        }
+        return continuation;
+    }
+
+    fn restoreConstTagInto(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        store_module: ProcedureModuleView,
+        type_module: ProcedureModuleView,
+        tag: anytype,
+        checked_ty: checked.CheckedTypeId,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const rep_id = self.repForType(checked_ty);
+        const rep = self.parent.plan.representations.items[@intFromEnum(rep_id)];
+        return switch (rep.kind) {
+            .bool_tag_union => try self.restoreConstBoolTagInto(target, tag, next),
+            .tag_union => try self.restoreConstPlannedTagInto(target, store_module, type_module, rep, tag, checked_ty, next),
+            .empty_tag_union => boxyLowerInvariant("ConstStore tag value reached empty tag-union representation"),
+            else => boxyLowerInvariant("ConstStore tag restored with a non-tag-union representation"),
+        };
+    }
+
+    fn restoreConstBoolTagInto(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        tag: anytype,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        if (tag.payloads.len != 0) {
+            boxyLowerInvariant("ConstStore Bool tag carried a payload");
+        }
+        if (std.mem.eql(u8, tag.tag_name, "False")) return try self.assignBoolLiteral(target, false, next);
+        if (std.mem.eql(u8, tag.tag_name, "True")) return try self.assignBoolLiteral(target, true, next);
+        boxyLowerInvariant("ConstStore Bool tag had a non-Bool name");
+    }
+
+    fn restoreConstPlannedTagInto(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        store_module: ProcedureModuleView,
+        type_module: ProcedureModuleView,
+        rep: Plan.TypeRepresentation,
+        tag: anytype,
+        checked_ty: checked.CheckedTypeId,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const checked_tag = constTagPayloadTypes(type_module, checked_ty, tag.tag_name);
+        const name = checked_tag.name;
+        const payload_tys = checked_tag.payload_tys;
+        if (payload_tys.len != tag.payloads.len) {
+            boxyLowerInvariant("ConstStore tag payload count differed from checked tag type");
+        }
+
+        const variant = self.tagVariant(rep, name);
+        const payload_children = self.parent.plan.childSlice(variant.payloads);
+        if (payload_children.len != tag.payloads.len) {
+            boxyLowerInvariant("ConstStore tag payload count disagreed with its boxy representation");
+        }
+        for (payload_children, 0..) |child, index| {
+            switch (child.role) {
+                .tag_payload => |payload| {
+                    if (payload.tag != name or payload.index != index) {
+                        boxyLowerInvariant("ConstStore tag variant payload span did not match its payload child roles");
+                    }
+                },
+                else => boxyLowerInvariant("ConstStore tag variant payload span included a non-payload child"),
+            }
+        }
+
+        if (tag.payloads.len == 0) {
+            if (self.isZstLocal(target)) return try self.assignZst(target, next);
+            return try self.parent.result.store.addCFStmt(.{ .assign_tag = .{
+                .target = target,
+                .variant_index = variant.index,
+                .discriminant = variant.index,
+                .payload = null,
+                .next = next,
+            } });
+        }
+
+        const payload_layout = if (self.isZstLocal(target))
+            layout.Idx.zst
+        else
+            self.tagUnionPayloadLayout(self.parent.result.store.getLocal(target).layout_idx, variant.index);
+        const payload_local = try self.addFrameLocal(payload_layout);
+        if (self.isZstLocal(target) and !self.isZstLocal(payload_local)) {
+            boxyLowerInvariant("zero-sized ConstStore tag-union layout had a non-zero-sized payload");
+        }
+
+        const assign_tag = if (self.isZstLocal(target))
+            try self.assignZst(target, next)
+        else
+            try self.parent.result.store.addCFStmt(.{ .assign_tag = .{
+                .target = target,
+                .variant_index = variant.index,
+                .discriminant = variant.index,
+                .payload = payload_local,
+                .next = next,
+            } });
+
+        if (tag.payloads.len == 1) {
+            return try self.restoreConstNodeInto(payload_local, store_module, type_module, tag.payloads[0], payload_tys[0], assign_tag);
+        }
+
+        const field_locals = try self.parent.allocator.alloc(LIR.LocalId, tag.payloads.len);
+        defer self.parent.allocator.free(field_locals);
+        for (payload_children, field_locals) |child, *local| {
+            local.* = try self.addFrameLocal(self.parent.layout_plan.rep_layouts[@intFromEnum(child.rep)].worker.layoutIdx());
+        }
+
+        var continuation = try self.parent.result.store.addCFStmt(.{ .assign_struct = .{
+            .target = payload_local,
+            .fields = try self.parent.result.store.addLocalSpan(field_locals),
+            .next = assign_tag,
+        } });
+        var index = tag.payloads.len;
+        while (index > 0) {
+            index -= 1;
+            continuation = try self.restoreConstNodeInto(field_locals[index], store_module, type_module, tag.payloads[index], payload_tys[index], continuation);
+        }
+        return continuation;
+    }
+
+    fn restoreConstNominalInto(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        store_module: ProcedureModuleView,
+        type_module: ProcedureModuleView,
+        backing: checked.ConstNodeId,
+        checked_ty: checked.CheckedTypeId,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const backing_ty = constNominalBackingType(type_module, checked_ty);
+        const backing_local = try self.addFrameLocal(self.workerRuntimeLayoutForType(backing_ty).layoutIdx());
+        const assign = try self.assignNominalBoundary(target, backing_local, next);
+        return try self.restoreConstNodeInto(backing_local, store_module, type_module, backing, backing_ty, assign);
     }
 
     fn lowerDirectCallInto(
@@ -4486,6 +4937,41 @@ const ProcBodyBuilder = struct {
         } });
     }
 
+    fn assignConstScalar(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        scalar: checked.ConstScalar,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        return switch (scalar) {
+            .i8 => |value| try self.assignIntLiteral(target, value, next),
+            .i16 => |value| try self.assignIntLiteral(target, value, next),
+            .i32 => |value| try self.assignIntLiteral(target, value, next),
+            .i64 => |value| try self.assignIntLiteral(target, value, next),
+            .i128 => |value| try self.assignIntLiteral(target, value, next),
+            .u8 => |value| try self.assignIntLiteral(target, value, next),
+            .u16 => |value| try self.assignIntLiteral(target, value, next),
+            .u32 => |value| try self.assignIntLiteral(target, value, next),
+            .u64 => |value| try self.assignIntLiteral(target, value, next),
+            .u128 => |value| try self.assignIntLiteral(target, @bitCast(value), next),
+            .f32_bits => |bits| try self.parent.result.store.addCFStmt(.{ .assign_literal = .{
+                .target = target,
+                .value = .{ .f32_literal = @bitCast(bits) },
+                .next = next,
+            } }),
+            .f64_bits => |bits| try self.parent.result.store.addCFStmt(.{ .assign_literal = .{
+                .target = target,
+                .value = .{ .f64_literal = @bitCast(bits) },
+                .next = next,
+            } }),
+            .dec_bits => |bits| try self.parent.result.store.addCFStmt(.{ .assign_literal = .{
+                .target = target,
+                .value = .{ .dec_literal = bits },
+                .next = next,
+            } }),
+        };
+    }
+
     fn assignStringLiteral(
         self: *ProcBodyBuilder,
         target: LIR.LocalId,
@@ -4510,9 +4996,20 @@ const ProcBodyBuilder = struct {
         text: []const u8,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
+        return try self.assignStringBytesView(target, text, 0, @intCast(text.len), next);
+    }
+
+    fn assignStringBytesView(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        backing: []const u8,
+        offset: u32,
+        len: u32,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
         return try self.parent.result.store.addCFStmt(.{ .assign_literal = .{
             .target = target,
-            .value = .{ .str_literal = try self.parent.result.store.insertStringView(text, 0, @intCast(text.len)) },
+            .value = .{ .str_literal = try self.parent.result.store.insertStringView(backing, offset, len) },
             .next = next,
         } });
     }
@@ -4938,6 +5435,14 @@ const ProcBodyBuilder = struct {
         return self.localForBinder(binder);
     }
 
+    fn resolvedValueRecord(self: *const ProcBodyBuilder, ref_id: checked.ResolvedValueRefId) checked.ResolvedValueRefRecord {
+        const raw = @intFromEnum(ref_id);
+        if (raw >= self.module.resolved_value_refs.records.len) {
+            boxyLowerInvariant("checked lookup referenced a missing resolved value");
+        }
+        return self.module.resolved_value_refs.records[raw];
+    }
+
     fn workerReturnLayout(self: *const ProcBodyBuilder) @import("layout").Idx {
         if (self.worker_layout.ret) |ret| return ret.layoutIdx();
         return self.worker_layout.value.layoutIdx();
@@ -5167,6 +5672,129 @@ const ProcBodyBuilder = struct {
         );
     }
 };
+
+fn constListElemType(module: ProcedureModuleView, checked_ty: checked.CheckedTypeId) checked.CheckedTypeId {
+    const nominal = resolvedNominalPayload(module, checked_ty);
+    if (nominal.builtin != .list or nominal.args.len != 1) {
+        boxyLowerInvariant("ConstStore list restored with a non-list checked type");
+    }
+    return nominal.args[0];
+}
+
+fn constBoxPayloadType(module: ProcedureModuleView, checked_ty: checked.CheckedTypeId) checked.CheckedTypeId {
+    const nominal = resolvedNominalPayload(module, checked_ty);
+    if (nominal.builtin != .box or nominal.args.len != 1) {
+        boxyLowerInvariant("ConstStore box restored with a non-Box checked type");
+    }
+    return nominal.args[0];
+}
+
+fn checkedTypeUsesBuiltinStructuralEquality(module: ProcedureModuleView, checked_ty: checked.CheckedTypeId) bool {
+    return switch (resolvedTypePayload(module, checked_ty)) {
+        .nominal => |nominal| nominal.builtin != null,
+        .record,
+        .record_unbound,
+        .tuple,
+        .empty_record,
+        .tag_union,
+        .empty_tag_union,
+        => true,
+        .pending,
+        .flex,
+        .rigid,
+        .alias,
+        .function,
+        => false,
+    };
+}
+
+fn constNominalBackingType(module: ProcedureModuleView, checked_ty: checked.CheckedTypeId) checked.CheckedTypeId {
+    return resolvedNominalPayload(module, checked_ty).backing;
+}
+
+fn constTupleItemTypes(module: ProcedureModuleView, checked_ty: checked.CheckedTypeId) []const checked.CheckedTypeId {
+    return switch (resolvedTypePayload(module, checked_ty)) {
+        .tuple => |items| items,
+        else => boxyLowerInvariant("ConstStore tuple restored with a non-tuple checked type"),
+    };
+}
+
+fn constRecordFields(module: ProcedureModuleView, checked_ty: checked.CheckedTypeId) []const checked.CheckedRecordField {
+    return switch (resolvedTypePayload(module, checked_ty)) {
+        .record => |record| blk: {
+            constRecordExtensionIsEmpty(module, record.ext);
+            break :blk record.fields;
+        },
+        .record_unbound => |fields| fields,
+        .empty_record => &.{},
+        else => boxyLowerInvariant("ConstStore record restored with a non-record checked type"),
+    };
+}
+
+fn constRecordExtensionIsEmpty(module: ProcedureModuleView, checked_ty: checked.CheckedTypeId) void {
+    switch (resolvedTypePayload(module, checked_ty)) {
+        .empty_record => {},
+        else => boxyLowerInvariant("ConstStore record restored with an open checked row"),
+    }
+}
+
+fn constRecordFieldIndex(fields: []const checked.CheckedRecordField, label: names.RecordFieldLabelId) ?usize {
+    for (fields, 0..) |field, index| {
+        if (field.name == label) return index;
+    }
+    return null;
+}
+
+const ConstTagPayloadTypes = struct {
+    name: names.TagNameId,
+    payload_tys: []const checked.CheckedTypeId,
+};
+
+fn constTagPayloadTypes(
+    module: ProcedureModuleView,
+    checked_ty: checked.CheckedTypeId,
+    tag_name: []const u8,
+) ConstTagPayloadTypes {
+    const tag_union = switch (resolvedTypePayload(module, checked_ty)) {
+        .tag_union => |tag_union| tag_union,
+        else => boxyLowerInvariant("ConstStore tag restored with a non-tag-union checked type"),
+    };
+    constRecordExtensionIsEmpty(module, tag_union.ext);
+    for (tag_union.tags) |tag| {
+        if (std.mem.eql(u8, module.canonical_names.tagLabelText(tag.name), tag_name)) {
+            return .{
+                .name = tag.name,
+                .payload_tys = tag.argsSlice(module.checked_types),
+            };
+        }
+    }
+    boxyLowerInvariant("ConstStore tag name was missing from checked tag-union type");
+}
+
+fn resolvedNominalPayload(module: ProcedureModuleView, checked_ty: checked.CheckedTypeId) checked.CheckedNominalType {
+    return switch (resolvedTypePayload(module, checked_ty)) {
+        .nominal => |nominal| nominal,
+        else => boxyLowerInvariant("ConstStore nominal child lookup reached a non-nominal checked type"),
+    };
+}
+
+fn resolvedTypePayload(module: ProcedureModuleView, checked_ty: checked.CheckedTypeId) checked.CheckedTypePayload {
+    var current = checked_ty;
+    var depth: u16 = 0;
+    while (true) {
+        if (depth == 1024) boxyLowerInvariant("checked type alias chain exceeded boxy const lowering limit");
+        depth += 1;
+
+        switch (module.checked_types.payload(current)) {
+            .pending => boxyLowerInvariant("pending checked type reached boxy const lowering"),
+            .alias => |alias| {
+                current = alias.backing;
+                continue;
+            },
+            else => |payload| return payload,
+        }
+    }
+}
 
 fn appendRequestedLayouts(
     allocator: Allocator,
@@ -5723,6 +6351,140 @@ test "boxy lowerer emits private worker proc for zero-arg numeric lambda root" {
     switch (assign.value) {
         .i128_literal => |literal| {
             try std.testing.expectEqual(@as(i128, 42), literal.value);
+            try std.testing.expectEqual(@as(@TypeOf(literal.layout_idx), .u64), literal.layout_idx);
+        },
+        else => return error.TestUnexpectedResult,
+    }
+    try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = assign.target } }, out.lir_result.store.getCFStmt(assign.next));
+}
+
+test "boxy lowerer restores top-level consts from resolved local lookups" {
+    try expectBoxyTopLevelConstLookup(.local);
+}
+
+test "boxy lowerer restores top-level consts from resolved external lookups" {
+    try expectBoxyTopLevelConstLookup(.external);
+}
+
+const ConstLookupExprKind = enum {
+    local,
+    external,
+};
+
+fn expectBoxyTopLevelConstLookup(kind: ConstLookupExprKind) !void {
+    const gpa = std.testing.allocator;
+
+    var artifact = minimalCheckedArtifact(gpa);
+    defer artifact.canonical_names.deinit();
+    defer artifact.checked_types.deinit(gpa);
+    defer artifact.checked_bodies.deinit(gpa);
+    artifact.const_templates = .{};
+    defer artifact.const_templates.deinit(gpa);
+    artifact.const_store = check.ConstStore.ConstStore.init(gpa);
+    defer artifact.const_store.deinit();
+
+    try artifact.checked_types.payloads.append(gpa, .{
+        .nominal = builtinNominal(.u64, @enumFromInt(0), .{}),
+    });
+    try artifact.checked_types.payloads.append(gpa, .{
+        .function = .{
+            .kind = .pure,
+            .args = .{},
+            .ret = @enumFromInt(0),
+            .needs_instantiation = false,
+        },
+    });
+
+    const const_ref = try artifact.const_templates.reserveTopLevel(
+        gpa,
+        artifact.key,
+        0,
+        @enumFromInt(0),
+        typeSchemeKey(7),
+    );
+    const const_node = try artifact.const_store.append(.{ .scalar = .{ .u64 = 5 } });
+    artifact.const_templates.fillStoredConst(const_ref, .{ .node = const_node });
+
+    const template_ref = procedureTemplateRef(artifact.key, 0);
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(0),
+        .ty = @enumFromInt(1),
+        .source_region = base.Region.zero(),
+        .data = .{ .lambda = .{ .args = .{}, .body = @enumFromInt(1) } },
+    });
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(1),
+        .ty = @enumFromInt(0),
+        .source_region = base.Region.zero(),
+        .data = switch (kind) {
+            .local => .{ .lookup_local = .{
+                .pattern = @enumFromInt(0),
+                .resolved = @enumFromInt(0),
+            } },
+            .external => .{ .lookup_external = @enumFromInt(0) },
+        },
+    });
+    try artifact.checked_bodies.bodies.append(gpa, .{
+        .id = @enumFromInt(0),
+        .root_expr = @enumFromInt(0),
+        .owner_template = template_ref,
+    });
+    var templates = [_]checked.CheckedProcedureTemplate{
+        checkedTemplate(template_ref, @enumFromInt(1), @enumFromInt(0)),
+    };
+    artifact.checked_procedure_templates = .{ .templates = &templates };
+
+    var resolved_records = [_]checked.ResolvedValueRefRecord{
+        .{
+            .expr = @enumFromInt(1),
+            .ref = .{ .top_level_const = .{
+                .const_ref = const_ref,
+                .requested_source_ty_template = canonicalTypeKey(1),
+                .requested_source_ty_payload = @enumFromInt(0),
+            } },
+            .checked_ty = @enumFromInt(0),
+            .scope_depth = 0,
+        },
+    };
+    var refs_by_expr = [_]?checked.ResolvedValueRefId{
+        null,
+        @as(checked.ResolvedValueRefId, @enumFromInt(0)),
+    };
+    artifact.resolved_value_refs = .{
+        .records = &resolved_records,
+        .by_checked_expr = &refs_by_expr,
+    };
+
+    const root = checked.RootRequest{
+        .order = 0,
+        .module_idx = 0,
+        .kind = .runtime_entrypoint,
+        .source = .{ .def = @enumFromInt(0) },
+        .checked_type = @enumFromInt(1),
+        .abi = .roc,
+        .exposure = .private,
+        .procedure_template = template_ref,
+    };
+    var plan = try Plan.analyzeProgram(gpa, .{
+        .root_module = .{ .module = &artifact, .roots = undefined },
+        .roots = &.{root},
+    }, .{});
+    defer plan.deinit();
+
+    var out = try run(
+        gpa,
+        .{ .root = .{ .module = &artifact, .roots = undefined } },
+        .{},
+        &plan,
+        .{},
+    );
+    defer out.deinit();
+
+    const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
+    const assign = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_literal;
+    switch (assign.value) {
+        .i128_literal => |literal| {
+            try std.testing.expectEqual(@as(i128, 5), literal.value);
             try std.testing.expectEqual(@as(@TypeOf(literal.layout_idx), .u64), literal.layout_idx);
         },
         else => return error.TestUnexpectedResult,

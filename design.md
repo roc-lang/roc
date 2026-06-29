@@ -982,6 +982,7 @@ const DispatchPlan = struct {
     callable_ty: CheckedTypeId,
     args: []const DispatchOperand,
     result_mode: DispatchResultMode,
+    resolution: DispatchResolution,
 };
 
 const DispatchSite = union(enum) {
@@ -996,7 +997,9 @@ const DispatchDispatcher = union(enum) {
 
 const DispatchOperand = union(enum) {
     checked_expr: CheckedExprId,
-    compiler_loop_iterator_state: IteratorLoopStateId,
+    generated_interpolation_iter: CheckedExprId,
+    generated_numeral: NumeralLiteral,
+    generated_quote: CheckedStringLiteralId,
 };
 
 const DispatchResultMode = union(enum) {
@@ -1005,11 +1008,21 @@ const DispatchResultMode = union(enum) {
         structural_allowed: bool,
         negated: bool,
     },
+    hash: struct { structural_allowed: bool },
+    parser_for: struct { structural_allowed: bool },
+    encode_to: struct { structural_allowed: bool },
+};
+
+const DispatchResolution = union(enum) {
+    unresolved_checked_plan,
+    resolved_target: MethodTarget,
 };
 ```
 
 Source dispatch, type dispatch, method equality, and iterator `for` plans all
-use this one shape. Iterator `for` contains two plans:
+use checked dispatch plans. Iterator `for` uses its own iterator-dispatch
+operand shape because the `.next` call receives the compiler-created iterator
+state instead of an ordinary checked expression. It contains two plans:
 
 - call `.iter` on the source iterable value
 - call `.next` on the compiler-created iterator state local
@@ -1024,9 +1037,23 @@ find the method owner. For ordinary value dispatch, method equality, and
 iterator `.iter`/`.next`, `dispatcher` is an argument index into `args`; iterator
 `.next` uses the compiler-created iterator state operand in `args[0]`. For type
 dispatch, `dispatcher` is `type_only`, and `dispatcher_ty` is the checked type
-that determines the owner. The plan does not choose a concrete lowered call target
-for every future monomorphic specialization. Concrete target selection needs
-monomorphic type information, so it happens while producing Monotype IR.
+that determines the owner. `resolution` names the concrete checked method target
+when checking has enough information to publish one. When it remains
+`unresolved_checked_plan`, later lowering must use the plan plus its current
+type representation to choose either structural behavior or dictionary/vtable
+dispatch. Later stages must not rediscover a target from source names or type
+names.
+
+`result_mode` tells post-check lowering whether this is an ordinary value call,
+method equality, structural hashing, parser derivation, or encoding derivation.
+For method equality, the plan carries both `structural_allowed` and `negated`;
+boxy lowering consumes those fields directly. If structural equality is
+permitted and the dispatcher representation is structural or a builtin nominal
+whose equality is builtin, boxy lowering emits the same structural-equality LIR
+used by explicit `==`/`!=` structural nodes over the plan's two checked
+expression operands. If the plan names or requires a user method, boxy lowering
+emits the direct or dictionary/vtable call named by the checked plan instead of
+searching the method registry at LIR time.
 
 The method registry is an exact table keyed by `(MethodOwner, MethodNameId)`.
 It is not an owner-discovery mechanism. Post-check code may use it only after a
@@ -1969,6 +1996,38 @@ into root-module type ids and they are not recovered by name. A type that
 appears only in a local aggregate, temporary receiver, nested expression, or
 destructuring pattern is therefore still present in the explicit representation
 table consumed by lowering.
+
+Entry wrapper procedure templates name an `EntryWrapperTable` entry. Boxy
+planning and lowering use the wrapper's checked `body_expr` as the worker body
+for that procedure template. The wrapper table is checked artifact data; the
+boxy lowerer does not reconstruct wrapper bodies from root names, source
+strings, command kind, or host ABI metadata. Callable-eval roots are the
+separate case above: their runtime callable body is recovered from the finalized
+`ConstStore` function value, not from the compile-time evaluator entry wrapper.
+
+Checked value lookups are lowered from `ResolvedValueRefTable`. Local
+parameters, local values, mutable versions, and pattern binders map to the
+already-created LIR local for the checked binder. Selected hoisted constants
+reuse that local when the selected binder is currently live; otherwise they
+restore the selected const use. Top-level constants, imported constants, and
+platform-required constants restore their explicit `ConstUseTemplate`.
+Procedure-valued lookups are not restored as ordinary constants; they go
+through erased callable construction using the checked procedure template or
+stored `ConstStore` function value that names the callable. A checked lookup
+without a resolved value reference is an invariant failure in boxy lowering.
+
+Restoring a non-function `ConstStore` value in `.boxy` directly emits LIR for
+the requested checked type. The const node is read from the module that owns the
+stored value, while checked type interpretation uses the module named by the
+const use. This distinction preserves imported type identity and host ABI
+identity across module boundaries. Scalars, string views, lists, boxes, tuples,
+records, tags, booleans, and nominals are materialized as ordinary LIR
+construction statements under the already-planned boxy representation. The
+lowerer validates that the requested checked type and the expression target
+layout agree before emitting statements. Reserved const nodes, pending nodes,
+compile-time eval templates that were not finalized, and `fn_value` nodes at an
+ordinary value lookup are invariant failures; function values are restored only
+through erased callable construction.
 
 `.boxy` represents an unknown type-variable value as one ordinary Roc box
 payload pointer. This is the same runtime shape as `Box(T)`: a nullable or
@@ -4542,20 +4601,47 @@ a compiler bug, not a supported stored-constant representation.
 
 ```zig
 const ConstStore = struct {
-    nodes: []const ConstValue,
-    roots: []const ConstNodeId,
+    values: []const StoredValue,
+    fns: []const ConstFn,
+    node_pool: []const ConstNodeId,
+    capture_pool: []const ConstCapture,
+    string_bytes: []const u8,
+    string_data: []const Span,
 };
 
 const ConstValue = union(enum) {
+    pending,
+    zst,
     scalar: ConstScalar,
-    string: StringLiteralId,
-    list: Span(ConstNodeId),
-    tuple: Span(ConstNodeId),
-    record: Span(ConstField),
-    tag: ConstTag,
+    str: ConstStr,
+    list: []const ConstNodeId,
     box: ConstNodeId,
-    declared: ConstDeclared,
-    fn_: ConstFn,
+    tuple: []const ConstNodeId,
+    record: []const ConstNodeId,
+    crash: ConstStr,
+    tag: struct {
+        tag_name: []const u8,
+        payloads: []const ConstNodeId,
+    },
+    nominal: struct {
+        named_type: NamedType,
+        backing: ConstNodeId,
+    },
+    fn_value: ConstFnId,
+};
+```
+
+The serialized store uses POD `StoredValue` ranges into the flat pools. The
+public read form reconstructed by `ConstStore.get` is `ConstValue`; its list,
+tuple, record, and tag-payload fields are slices.
+
+`ConstStr` is a view into checked-module string backing data:
+
+```zig
+const ConstStr = struct {
+    data: ConstStrDataId,
+    offset: u32,
+    len: u32,
 };
 ```
 
@@ -4563,19 +4649,19 @@ const ConstValue = union(enum) {
 
 ```zig
 const ConstScalar = union(enum) {
-    signed_int: struct { width: IntWidth, bits: u128 },
-    unsigned_int: struct { width: IntWidth, bits: u128 },
+    i8: i8,
+    i16: i16,
+    i32: i32,
+    i64: i64,
+    i128: i128,
+    u8: u8,
+    u16: u16,
+    u32: u32,
+    u64: u64,
+    u128: u128,
     f32_bits: u32,
     f64_bits: u64,
-    dec: DecBits,
-};
-
-const IntWidth = enum {
-    @"8",
-    @"16",
-    @"32",
-    @"64",
-    @"128",
+    dec_bits: i128,
 };
 ```
 
@@ -4732,6 +4818,18 @@ already-packed runtime function value. It builds an ordinary Monotype callable
 from the explicit checked template and stored const captures, so the later
 lifting and lambda-set solving stages see the same kind of ordinary callable
 flow they would have seen if the value had been local source.
+
+When `.boxy` runtime lowering restores a cached non-function const, it does not
+create Monotype expressions. It reads the stored `ConstStore` node, interprets
+it under the checked type attached to the `ConstUseTemplate`, and emits ordinary
+LIR construction statements directly: literals for scalar and string views,
+aggregate construction for lists, tuples, records, tags, booleans, boxes, and
+nominals, and `crash` for stored compile-time crash values. The store module
+owns the const nodes and string backing data; the const use's type module owns
+the checked type payloads used to pick layouts and field/tag order. Boxy
+restoration therefore preserves imported type identity without projecting
+stored values into the root module. Stored `fn_value` nodes are restored only by
+the erased callable path described above, never as a raw aggregate lookup.
 
 After that, closure lifting, lambda solving, lambda mono lowering, layout
 commitment, and ARC run normally. This is what keeps module boundaries from
