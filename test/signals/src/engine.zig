@@ -29,6 +29,7 @@ const signal_records = @import("signal_records.zig");
 const active_graph = @import("active_signal_graph.zig");
 const scope_runtime = @import("scope_runtime.zig");
 const each_runtime = @import("each_runtime.zig");
+const effects_runtime = @import("effects_runtime.zig");
 
 const enable_runtime_metrics = engine_metrics.enable_runtime_metrics;
 
@@ -163,21 +164,8 @@ pub const HostActiveEventDesc = struct {
     payload_reducer: HostEventReducer,
 };
 
-pub const HostPendingTask = struct {
-    request_id: u64,
-    owner_scope_id: u64,
-    task_token: HostSignalToken,
-    task_name: []const u8,
-    request: []const u8,
-    active: bool,
-};
-
-pub const HostActiveInterval = struct {
-    token: u64,
-    source_token: HostSignalToken,
-    period_ms: u64,
-    active: bool,
-};
+pub const HostPendingTask = effects_runtime.PendingTask;
+pub const HostActiveInterval = effects_runtime.ActiveInterval;
 
 pub const HostSignalEventRoute = struct {
     event_id: u64,
@@ -2887,11 +2875,7 @@ pub fn Engine(comptime Ctx: type) type {
         }
 
         pub fn deinitPendingTask(self: *Self, ctx: Ctx.Handle, task: *HostPendingTask) void {
-            const allocator = Ctx.allocator(ctx);
-            releaseHostSignalToken(task.task_token, self.roc_host.?);
-            allocator.free(task.task_name);
-            allocator.free(task.request);
-            task.* = undefined;
+            effects_runtime.deinitPendingTask(Ctx.allocator(ctx), self.roc_host.?, task);
         }
 
         pub fn cancelPendingTask(self: *Self, ctx: Ctx.Handle, task: *HostPendingTask) void {
@@ -6151,53 +6135,15 @@ pub fn Engine(comptime Ctx: type) type {
         }
 
         pub fn appendPendingTask(self: *Self, ctx: Ctx.Handle, owner_scope_id: u64, task_token: HostSignalToken, task_name: []const u8, request: []const u8) u64 {
-            const allocator = Ctx.allocator(ctx);
-            if (self.next_task_request_id == std.math.maxInt(u64)) @panic("host task request id overflowed");
-            const request_id = self.next_task_request_id;
-            self.next_task_request_id += 1;
-
-            abi.increfBox(@ptrCast(task_token), 1);
-            const task_name_copy = allocator.dupe(u8, task_name) catch @panic("out of memory");
-            const request_copy = allocator.dupe(u8, request) catch {
-                allocator.free(task_name_copy);
-                @panic("out of memory");
-            };
-            self.pending_tasks.append(allocator, .{
-                .request_id = request_id,
-                .owner_scope_id = owner_scope_id,
-                .task_token = task_token,
-                .task_name = task_name_copy,
-                .request = request_copy,
-                .active = true,
-            }) catch {
-                releaseHostSignalToken(task_token, self.roc_host.?);
-                allocator.free(task_name_copy);
-                allocator.free(request_copy);
-                @panic("out of memory");
-            };
-            return request_id;
+            return effects_runtime.appendPendingTask(Ctx.allocator(ctx), &self.pending_tasks, &self.next_task_request_id, self.roc_host.?, owner_scope_id, task_token, task_name, request);
         }
 
         pub fn pendingTaskIndexByName(self: *Self, name: []const u8) ?usize {
-            var found: ?usize = null;
-            for (self.pending_tasks.items, 0..) |task, index| {
-                if (!task.active) continue;
-                if (!std.mem.eql(u8, task.task_name, name)) continue;
-                if (found != null) @panic("fake task result matched more than one pending request");
-                found = index;
-            }
-            return found;
+            return effects_runtime.pendingTaskIndexByName(self.pending_tasks.items, name);
         }
 
         pub fn removePendingTaskAt(self: *Self, index: usize) HostPendingTask {
-            if (index >= self.pending_tasks.items.len) @panic("pending task index is out of bounds");
-            const task = self.pending_tasks.items[index];
-            const last_index = self.pending_tasks.items.len - 1;
-            if (index != last_index) {
-                self.pending_tasks.items[index] = self.pending_tasks.items[last_index];
-            }
-            self.pending_tasks.items.len = last_index;
-            return task;
+            return effects_runtime.removePendingTaskAt(&self.pending_tasks, index);
         }
 
         pub fn activeTaskRecordByName(self: *Self, name: []const u8) ?*HostSignalRecord {
