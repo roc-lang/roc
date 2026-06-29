@@ -68,7 +68,7 @@ compare_by_index = |a, b| {
 # =============================================================================
 
 ## Map a type table entry to its Rust type string using structured TypeRepr
-type_id_to_rust = |type_table, duplicate_names, type_id| {
+type_id_to_rust = |type_table, duplicate_names, preferred_names, type_id| {
 	type_repr = TypeTable.get(TypeTable.from_list(type_table), type_id)
 	match type_repr {
 		RocRecord(rec) =>
@@ -77,26 +77,26 @@ type_id_to_rust = |type_table, duplicate_names, type_id| {
 			} else {
 				name_to_struct_name(rec.name)
 			}
-		RocTagUnion(tu) => resolve_tag_union_type_rust(type_table, duplicate_names, type_id, tu)
-		_ => type_repr_to_rust(type_table, duplicate_names, type_id, type_repr)
+		RocTagUnion(tu) => resolve_tag_union_type_rust(type_table, duplicate_names, preferred_names, type_id, tu)
+		_ => type_repr_to_rust(type_table, duplicate_names, preferred_names, type_id, type_repr)
 	}
 }
 
 ## Render one struct field declaration for a record field. Unnamed
 ## nominal-record padding fields become fixed-size byte arrays (`[u8; size]`);
 ## named fields use their resolved Rust type.
-rust_record_field_decl = |type_table, duplicate_names, field| {
+rust_record_field_decl = |type_table, duplicate_names, preferred_names, field| {
 	field_name = name_to_rust_field_ident(field.name)
 	rust_type = if field.is_padding {
 		"[u8; ${U64.to_str(field.size)}]"
 	} else {
-		type_id_to_rust(type_table, duplicate_names, field.type_id)
+		type_id_to_rust(type_table, duplicate_names, preferred_names, field.type_id)
 	}
 	"    pub ${field_name}: ${rust_type},\n"
 }
 
 ## Convert a TypeRepr to its Rust type string
-type_repr_to_rust = |type_table, duplicate_names, type_id, type_repr| {
+type_repr_to_rust = |type_table, duplicate_names, preferred_names, type_id, type_repr| {
 	match type_repr {
 		RocBool => "bool"
 		RocBox(inner_id) =>
@@ -104,7 +104,7 @@ type_repr_to_rust = |type_table, duplicate_names, type_id, type_repr| {
 				RocFunction(_) => "RocErasedCallable"
 				RocUnknown(_) => "RocBox"
 				_ => {
-					inner_rust = type_id_to_rust(type_table, duplicate_names, inner_id)
+					inner_rust = type_id_to_rust(type_table, duplicate_names, preferred_names, inner_id)
 					if inner_rust == "*mut c_void" {
 						"RocBox"
 					} else {
@@ -129,9 +129,9 @@ type_repr_to_rust = |type_table, duplicate_names, type_id, type_repr| {
 		RocDec => "f64"
 		RocList(elem_id) =>
 			if is_type_refcounted(type_table, elem_id) {
-				"RocList<${type_id_to_rust(type_table, duplicate_names, elem_id)}>"
+				"RocList<${type_id_to_rust(type_table, duplicate_names, preferred_names, elem_id)}>"
 			} else {
-				"RocListWith<${type_id_to_rust(type_table, duplicate_names, elem_id)}, false>"
+				"RocListWith<${type_id_to_rust(type_table, duplicate_names, preferred_names, elem_id)}, false>"
 			}
 		RocRecord(rec) =>
 			if rec.name == "" {
@@ -139,7 +139,7 @@ type_repr_to_rust = |type_table, duplicate_names, type_id, type_repr| {
 			} else {
 				name_to_struct_name(rec.name)
 			}
-		RocTagUnion(tu) => resolve_tag_union_type_rust(type_table, duplicate_names, type_id, tu)
+		RocTagUnion(tu) => resolve_tag_union_type_rust(type_table, duplicate_names, preferred_names, type_id, tu)
 		RocFunction(_) => "*mut c_void"
 		RocUnknown(_) => "*mut c_void"
 	}
@@ -147,13 +147,13 @@ type_repr_to_rust = |type_table, duplicate_names, type_id, type_repr| {
 
 ## Resolve a tag union to a Rust type. Single-variant unions are unwrapped to their payload.
 ## Multi-variant unions with a name return a generated struct name.
-resolve_tag_union_type_rust = |type_table, duplicate_names, type_id, tu| {
+resolve_tag_union_type_rust = |type_table, duplicate_names, preferred_names, type_id, tu| {
 	match TypeTable.single_variant_payload(tu) {
-		SinglePayload(payload_id) => type_id_to_rust(type_table, duplicate_names, payload_id)
+		SinglePayload(payload_id) => type_id_to_rust(type_table, duplicate_names, preferred_names, payload_id)
 		SingleNoPayload => "*mut c_void"
 		NotSingleVariant =>
 			if tu.name != "" {
-				tag_union_struct_name(duplicate_names, type_id, tu)
+				tag_union_struct_name(preferred_names, duplicate_names, type_id, tu)
 			} else {
 				"*mut c_void"
 			}
@@ -257,19 +257,43 @@ expect name_to_struct_name("__AnonStruct10") == "AnonStruct10"
 duplicate_tag_union_names : List(TypeRepr) -> List(Str)
 duplicate_tag_union_names = |type_table| TypeTable.duplicate_tag_union_names(TypeTable.from_list(type_table))
 
-## Return the emitted Rust struct name for a multi-variant tag union.
+## Return the fallback Rust struct name for a multi-variant tag union.
 ##
 ## Generic tag unions used heavily by hosted functions can appear many times in
 ## the type table with different payload layouts. Rust needs a distinct concrete
 ## type for each layout.
-tag_union_struct_name : List(Str), U64, TagUnionRepr -> Str
-tag_union_struct_name = |duplicate_names, type_id, tu| {
+default_tag_union_struct_name : List(Str), U64, TagUnionRepr -> Str
+default_tag_union_struct_name = |duplicate_names, type_id, tu| {
 	base = name_to_struct_name(tu.name)
 
 	if List.contains(duplicate_names, tu.name) {
 		"${base}Type${U64.to_str(type_id)}"
 	} else {
 		base
+	}
+}
+
+preferred_type_name_lookup_rust = |preferred_names, type_id| {
+	var $found = Bool.False
+	var $name = ""
+
+	for entry in preferred_names {
+		if !$found and entry.type_id == type_id {
+			$found = Bool.True
+			$name = entry.name
+		}
+	}
+
+	{ found: $found, name: $name }
+}
+
+## Return the emitted Rust struct name for a multi-variant tag union.
+tag_union_struct_name = |preferred_names, duplicate_names, type_id, tu| {
+	preferred = preferred_type_name_lookup_rust(preferred_names, type_id)
+	if preferred.found {
+		preferred.name
+	} else {
+		default_tag_union_struct_name(duplicate_names, type_id, tu)
 	}
 }
 
@@ -280,10 +304,141 @@ hosted_module_name_to_struct_name = |name| {
 	}
 }
 
+generated_type_names_rust = |type_table, duplicate_names| {
+	var $names = []
+	var $type_id = 0
+
+	for type_repr in type_table {
+		match type_repr {
+			RocRecord(rec) =>
+				if rec.name != "" {
+					$names = $names.append(name_to_struct_name(rec.name))
+				}
+			RocTagUnion(tu) =>
+				if List.len(tu.tags) >= 2 and tu.name != "" {
+					$names = $names.append(default_tag_union_struct_name(duplicate_names, $type_id, tu))
+				}
+			_ => {}
+		}
+
+		$type_id = $type_id + 1
+	}
+
+	$names
+}
+
+add_preferred_type_name_rust = |state, type_id, name| {
+	if name == "" or List.contains(state.seen_type_ids, type_id) or List.contains(state.seen_names, name) {
+		state
+	} else {
+		{
+			entries: state.entries.append({ type_id, name }),
+			seen_names: state.seen_names.append(name),
+			seen_type_ids: state.seen_type_ids.append(type_id),
+		}
+	}
+}
+
+collect_preferred_type_names_for_type_id_rust = |state, type_table, type_id, alias_base, module_base, visited_type_ids| {
+	if List.contains(visited_type_ids, type_id) {
+		return state
+	}
+
+	next_visited = visited_type_ids.append(type_id)
+
+	type_repr = TypeTable.get(TypeTable.from_list(type_table), type_id)
+	match type_repr {
+		RocTagUnion(tu) =>
+			match TypeTable.single_variant_payload(tu) {
+				SinglePayload(payload_id) =>
+					collect_preferred_type_names_for_type_id_rust(
+						state,
+						type_table,
+						payload_id,
+						alias_base,
+						module_base,
+						next_visited,
+					)
+				SingleNoPayload => state
+				NotSingleVariant =>
+					if tu.name != "" {
+						with_union_name =
+							if tu.name == "Try" {
+								add_preferred_type_name_rust(state, type_id, "${alias_base}Result")
+							} else if tu.name == "IOErr" {
+								add_preferred_type_name_rust(state, type_id, "${module_base}IOErr")
+							} else {
+								state
+							}
+
+						var $next = with_union_name
+						for tag in tu.tags {
+							child_base = "${alias_base}${capitalize_first(tag.name)}"
+							for payload_id in tag.payload {
+								$next = collect_preferred_type_names_for_type_id_rust(
+									$next,
+									type_table,
+									payload_id,
+									child_base,
+									module_base,
+									next_visited,
+								)
+							}
+						}
+						$next
+					} else {
+						state
+					}
+			}
+		RocList(elem_id) => collect_preferred_type_names_for_type_id_rust(state, type_table, elem_id, alias_base, module_base, next_visited)
+		RocBox(inner_id) => collect_preferred_type_names_for_type_id_rust(state, type_table, inner_id, alias_base, module_base, next_visited)
+		_ => state
+	}
+}
+
+provided_entry_root_type_id_rust = |type_table, entry| {
+	match TypeTable.get(TypeTable.from_list(type_table), entry.type_id) {
+		RocFunction(func) => func.ret
+		_ => entry.type_id
+	}
+}
+
+preferred_type_names_rust = |hosted_functions, provides_list, type_table, duplicate_names| {
+	var $state = { entries: [], seen_names: generated_type_names_rust(type_table, duplicate_names), seen_type_ids: [] }
+
+	for func in hosted_functions {
+		alias_base = name_to_struct_name(func.name)
+		module_base = hosted_module_name_to_struct_name(func.name)
+		$state = collect_preferred_type_names_for_type_id_rust(
+			$state,
+			type_table,
+			func.ret_type_id,
+			alias_base,
+			module_base,
+			[],
+		)
+	}
+
+	for entry in provides_list {
+		alias_base = name_to_struct_name(entry.name)
+		module_base = hosted_module_name_to_struct_name(entry.name)
+		$state = collect_preferred_type_names_for_type_id_rust(
+			$state,
+			type_table,
+			provided_entry_root_type_id_rust(type_table, entry),
+			alias_base,
+			module_base,
+			[],
+		)
+	}
+
+	$state.entries
+}
+
 ## RustGlue must keep distinct concrete structs for generic Roc types such as
 ## `Try` because different hosted functions can use different payload layouts.
-## These aliases give platform authors stable API-level names while leaving the
-## concrete layout names available for low-level generated code.
+## These aliases give platform authors stable API names for secondary names that
+## share a concrete layout.
 add_type_alias_rust = |state, alias, target| {
 	if alias == target or List.contains(state.seen, alias) {
 		state
@@ -308,7 +463,7 @@ add_tag_union_aliases_rust = |state, alias, target, tu| {
 	}
 }
 
-collect_semantic_type_aliases_for_type_id_rust = |state, type_table, duplicate_names, type_id, alias_base, module_base, visited_type_ids| {
+collect_platform_type_aliases_for_type_id_rust = |state, type_table, duplicate_names, preferred_names, type_id, alias_base, module_base, visited_type_ids| {
 	if List.contains(visited_type_ids, type_id) {
 		return state
 	}
@@ -319,17 +474,18 @@ collect_semantic_type_aliases_for_type_id_rust = |state, type_table, duplicate_n
 	match type_repr {
 		RocRecord(rec) =>
 			if rec.name != "" and rec.anonymous {
-				add_type_alias_rust(state, alias_base, type_id_to_rust(type_table, duplicate_names, type_id))
+				add_type_alias_rust(state, alias_base, type_id_to_rust(type_table, duplicate_names, preferred_names, type_id))
 			} else {
 				state
 			}
 		RocTagUnion(tu) =>
 			match TypeTable.single_variant_payload(tu) {
 				SinglePayload(payload_id) =>
-					collect_semantic_type_aliases_for_type_id_rust(
+					collect_platform_type_aliases_for_type_id_rust(
 						state,
 						type_table,
 						duplicate_names,
+						preferred_names,
 						payload_id,
 						alias_base,
 						module_base,
@@ -338,7 +494,7 @@ collect_semantic_type_aliases_for_type_id_rust = |state, type_table, duplicate_n
 				SingleNoPayload => state
 				NotSingleVariant =>
 					if tu.name != "" {
-						target = type_id_to_rust(type_table, duplicate_names, type_id)
+						target = type_id_to_rust(type_table, duplicate_names, preferred_names, type_id)
 						with_union_alias =
 							if tu.name == "Try" {
 								add_tag_union_aliases_rust(state, "${alias_base}Result", target, tu)
@@ -352,10 +508,11 @@ collect_semantic_type_aliases_for_type_id_rust = |state, type_table, duplicate_n
 						for tag in tu.tags {
 							child_base = "${alias_base}${capitalize_first(tag.name)}"
 							for payload_id in tag.payload {
-								$next = collect_semantic_type_aliases_for_type_id_rust(
+								$next = collect_platform_type_aliases_for_type_id_rust(
 									$next,
 									type_table,
 									duplicate_names,
+									preferred_names,
 									payload_id,
 									child_base,
 									module_base,
@@ -368,23 +525,39 @@ collect_semantic_type_aliases_for_type_id_rust = |state, type_table, duplicate_n
 						state
 					}
 			}
-		RocList(elem_id) => collect_semantic_type_aliases_for_type_id_rust(state, type_table, duplicate_names, elem_id, alias_base, module_base, next_visited)
-		RocBox(inner_id) => collect_semantic_type_aliases_for_type_id_rust(state, type_table, duplicate_names, inner_id, alias_base, module_base, next_visited)
+		RocList(elem_id) => collect_platform_type_aliases_for_type_id_rust(state, type_table, duplicate_names, preferred_names, elem_id, alias_base, module_base, next_visited)
+		RocBox(inner_id) => collect_platform_type_aliases_for_type_id_rust(state, type_table, duplicate_names, preferred_names, inner_id, alias_base, module_base, next_visited)
 		_ => state
 	}
 }
 
-generate_semantic_type_aliases_rust = |hosted_functions, type_table, duplicate_names| {
+generate_platform_type_aliases_rust = |hosted_functions, provides_list, type_table, duplicate_names, preferred_names| {
 	var $state = { content: "", seen: [] }
 
 	for func in hosted_functions {
 		alias_base = name_to_struct_name(func.name)
 		module_base = hosted_module_name_to_struct_name(func.name)
-		$state = collect_semantic_type_aliases_for_type_id_rust(
+		$state = collect_platform_type_aliases_for_type_id_rust(
 			$state,
 			type_table,
 			duplicate_names,
+			preferred_names,
 			func.ret_type_id,
+			alias_base,
+			module_base,
+			[],
+		)
+	}
+
+	for entry in provides_list {
+		alias_base = name_to_struct_name(entry.name)
+		module_base = hosted_module_name_to_struct_name(entry.name)
+		$state = collect_platform_type_aliases_for_type_id_rust(
+			$state,
+			type_table,
+			duplicate_names,
+			preferred_names,
+			provided_entry_root_type_id_rust(type_table, entry),
 			alias_base,
 			module_base,
 			[],
@@ -394,7 +567,7 @@ generate_semantic_type_aliases_rust = |hosted_functions, type_table, duplicate_n
 	if $state.content == "" {
 		""
 	} else {
-		"// =============================================================================\n// Semantic Type Aliases\n// =============================================================================\n\n${$state.content}\n"
+		"// Platform Type Aliases\n\n${$state.content}\n"
 	}
 }
 
@@ -566,6 +739,7 @@ lookup_record_in_type_table = |type_table, type_id| {
 ## Generate the complete Rust source file
 generate_rust_file = |hosted_functions, type_table, provides_list| {
 	duplicate_names = duplicate_tag_union_names(type_table)
+	preferred_names = preferred_type_names_rust(hosted_functions, provides_list, type_table, duplicate_names)
 
 	generate_rust_file_header
 		.concat(generate_rust_imports)
@@ -578,20 +752,20 @@ generate_rust_file = |hosted_functions, type_table, provides_list| {
 		.concat("\n")
 		.concat(generate_rust_roc_list)
 		.concat("\n")
-		.concat(generate_element_type_structs_rust(type_table, duplicate_names))
-		.concat(generate_tag_union_structs_rust(type_table, duplicate_names))
-		.concat(generate_all_record_structs_rust(hosted_functions, type_table, duplicate_names))
-		.concat(generate_all_args_structs_rust(hosted_functions, type_table, duplicate_names))
-		.concat(generate_semantic_type_aliases_rust(hosted_functions, type_table, duplicate_names))
-		.concat(generate_refcount_helpers_rust(type_table, duplicate_names))
+		.concat(generate_element_type_structs_rust(type_table, duplicate_names, preferred_names))
+		.concat(generate_tag_union_structs_rust(type_table, duplicate_names, preferred_names))
+		.concat(generate_all_record_structs_rust(hosted_functions, type_table, duplicate_names, preferred_names))
+		.concat(generate_all_args_structs_rust(hosted_functions, type_table, duplicate_names, preferred_names))
+		.concat(generate_platform_type_aliases_rust(hosted_functions, provides_list, type_table, duplicate_names, preferred_names))
+		.concat(generate_refcount_helpers_rust(type_table, duplicate_names, preferred_names))
 		.concat("\n")
 		.concat(generate_runtime_symbol_externs_rust)
 		.concat("\n")
-		.concat(generate_hosted_symbol_externs_rust(hosted_functions, type_table, duplicate_names))
+		.concat(generate_hosted_symbol_externs_rust(hosted_functions, type_table, duplicate_names, preferred_names))
 		.concat("\n")
 		.concat(generate_host_helpers_rust)
 		.concat("\n")
-		.concat(generate_entrypoint_externs_rust(provides_list, type_table, duplicate_names))
+		.concat(generate_entrypoint_externs_rust(provides_list, type_table, duplicate_names, preferred_names))
 }
 
 ## File header comment
@@ -1351,7 +1525,7 @@ generate_index_constants_rust = |hosted_functions, count| {
 }
 
 ## Generate #[repr(C)] structs for element types found in the type table.
-generate_element_type_structs_rust = |type_table, duplicate_names| {
+generate_element_type_structs_rust = |type_table, duplicate_names, preferred_names| {
 	var $structs = ""
 	var $seen_names = []
 
@@ -1365,7 +1539,7 @@ generate_element_type_structs_rust = |type_table, duplicate_names| {
 
 						var $field_strs = ""
 						for field in rec.fields {
-							$field_strs = Str.concat($field_strs, rust_record_field_decl(type_table, duplicate_names, field))
+							$field_strs = Str.concat($field_strs, rust_record_field_decl(type_table, duplicate_names, preferred_names, field))
 						}
 
 						# Size/alignment assertions (guarded by pointer width)
@@ -1389,7 +1563,7 @@ generate_element_type_structs_rust = |type_table, duplicate_names| {
 }
 
 ## Generate #[repr(C)] structs for tag union types found in the type table.
-generate_tag_union_structs_rust = |type_table, duplicate_names| {
+generate_tag_union_structs_rust = |type_table, duplicate_names, preferred_names| {
 	var $structs = ""
 	var $seen_names = []
 	var $type_id = 0
@@ -1398,10 +1572,10 @@ generate_tag_union_structs_rust = |type_table, duplicate_names| {
 		match type_repr {
 			RocTagUnion(tu) =>
 				if List.len(tu.tags) >= 2 and tu.name != "" {
-					struct_name = tag_union_struct_name(duplicate_names, $type_id, tu)
+					struct_name = tag_union_struct_name(preferred_names, duplicate_names, $type_id, tu)
 					if !(List.contains($seen_names, struct_name)) {
 						$seen_names = $seen_names.append(struct_name)
-						$structs = Str.concat($structs, generate_single_tag_union_rust(type_table, duplicate_names, $type_id, tu))
+						$structs = Str.concat($structs, generate_single_tag_union_rust(type_table, duplicate_names, preferred_names, $type_id, tu))
 					}
 				}
 			_ => {}
@@ -1414,8 +1588,8 @@ generate_tag_union_structs_rust = |type_table, duplicate_names| {
 }
 
 ## Generate Rust code for a single multi-variant tag union.
-generate_single_tag_union_rust = |type_table, duplicate_names, type_id, tu| {
-	struct_name = tag_union_struct_name(duplicate_names, type_id, tu)
+generate_single_tag_union_rust = |type_table, duplicate_names, preferred_names, type_id, tu| {
+	struct_name = tag_union_struct_name(preferred_names, duplicate_names, type_id, tu)
 	tag_count = List.len(tu.tags)
 	disc_type = disc_type_for_count(tag_count)
 
@@ -1441,7 +1615,7 @@ generate_single_tag_union_rust = |type_table, duplicate_names, type_id, tu| {
 				var $tuple_fields = ""
 				var $ti = 0
 				for pid in tag.payload {
-					rust_type = type_id_to_rust(type_table, duplicate_names, pid)
+					rust_type = type_id_to_rust(type_table, duplicate_names, preferred_names, pid)
 					$tuple_fields = Str.concat($tuple_fields, "    pub _${U64.to_str($ti)}: ${rust_type},\n")
 					$ti = $ti + 1
 				}
@@ -1466,7 +1640,7 @@ generate_single_tag_union_rust = |type_table, duplicate_names, type_id, tu| {
 				$union_fields = Str.concat($union_fields, "    pub ${snake}: [u8; 0],\n")
 			} else if List.len(union_tag.payload) == 1 {
 				rust_type = match List.first(union_tag.payload) {
-					Ok(pid) => type_id_to_rust(type_table, duplicate_names, pid)
+					Ok(pid) => type_id_to_rust(type_table, duplicate_names, preferred_names, pid)
 					Err(_) => "*mut c_void"
 				}
 				# Wrap in ManuallyDrop since union fields must be Copy or ManuallyDrop
@@ -1489,7 +1663,7 @@ generate_single_tag_union_rust = |type_table, duplicate_names, type_id, tu| {
 }
 
 ## Generate #[repr(C)] structs for record return types using type table.
-generate_all_record_structs_rust = |hosted_functions, type_table, duplicate_names| {
+generate_all_record_structs_rust = |hosted_functions, type_table, duplicate_names, preferred_names| {
 	var $structs = ""
 	for func in hosted_functions {
 		type_table_result = lookup_record_in_type_table(type_table, func.ret_type_id)
@@ -1499,7 +1673,7 @@ generate_all_record_structs_rust = |hosted_functions, type_table, duplicate_name
 
 			var $fields = ""
 			for field in type_table_result.fields {
-				$fields = Str.concat($fields, rust_record_field_decl(type_table, duplicate_names, field))
+				$fields = Str.concat($fields, rust_record_field_decl(type_table, duplicate_names, preferred_names, field))
 			}
 
 			assertions = if type_table_result.size > 0 {
@@ -1519,16 +1693,16 @@ generate_all_record_structs_rust = |hosted_functions, type_table, duplicate_name
 }
 
 ## Generate all argument #[repr(C)] structs
-generate_all_args_structs_rust = |hosted_functions, type_table, duplicate_names| {
+generate_all_args_structs_rust = |hosted_functions, type_table, duplicate_names, preferred_names| {
 	var $structs = ""
 	for func in hosted_functions {
-		$structs = Str.concat($structs, generate_args_struct_rust(func, type_table, duplicate_names))
+		$structs = Str.concat($structs, generate_args_struct_rust(func, type_table, duplicate_names, preferred_names))
 	}
 	$structs
 }
 
 ## Generate a single argument struct (empty string if no args).
-generate_args_struct_rust = |func, type_table, duplicate_names| {
+generate_args_struct_rust = |func, type_table, duplicate_names, preferred_names| {
 	if !(has_meaningful_args_rust(func, type_table)) {
 		return ""
 	}
@@ -1548,7 +1722,7 @@ generate_args_struct_rust = |func, type_table, duplicate_names| {
 	if type_table_result.found {
 		var $fields = ""
 		for field in type_table_result.fields {
-			$fields = Str.concat($fields, rust_record_field_decl(type_table, duplicate_names, field))
+			$fields = Str.concat($fields, rust_record_field_decl(type_table, duplicate_names, preferred_names, field))
 		}
 
 		assertions = if type_table_result.size > 0 {
@@ -1565,7 +1739,7 @@ generate_args_struct_rust = |func, type_table, duplicate_names| {
 	var $positional_fields = ""
 	var $idx = 0
 	for arg_type_id in func.arg_type_ids {
-		rust_type = type_id_to_rust(type_table, duplicate_names, arg_type_id)
+		rust_type = type_id_to_rust(type_table, duplicate_names, preferred_names, arg_type_id)
 		$positional_fields = Str.concat(
 			$positional_fields,
 			"    pub arg${U64.to_str($idx)}: ${rust_type},\n",
@@ -1613,7 +1787,7 @@ indent_lines = |text, prefix| {
 
 box_payload_decref_name_rust = |inner_id| "decref_box_payload_type${U64.to_str(inner_id)}"
 
-decref_helper_name_for_type_id_rust = |type_table, duplicate_names, type_id| {
+decref_helper_name_for_type_id_rust = |type_table, duplicate_names, preferred_names, type_id| {
 	type_repr = TypeTable.get(TypeTable.from_list(type_table), type_id)
 	match type_repr {
 		RocRecord(rec) =>
@@ -1624,7 +1798,7 @@ decref_helper_name_for_type_id_rust = |type_table, duplicate_names, type_id| {
 			}
 		RocTagUnion(tu) =>
 			if List.len(tu.tags) >= 2 and tu.name != "" {
-				"decref_${name_to_rust_fn_suffix(tag_union_struct_name(duplicate_names, type_id, tu))}"
+				"decref_${name_to_rust_fn_suffix(tag_union_struct_name(preferred_names, duplicate_names, type_id, tu))}"
 			} else {
 				""
 			}
@@ -1632,7 +1806,7 @@ decref_helper_name_for_type_id_rust = |type_table, duplicate_names, type_id| {
 	}
 }
 
-incref_helper_name_for_type_id_rust = |type_table, duplicate_names, type_id| {
+incref_helper_name_for_type_id_rust = |type_table, duplicate_names, preferred_names, type_id| {
 	type_repr = TypeTable.get(TypeTable.from_list(type_table), type_id)
 	match type_repr {
 		RocRecord(rec) =>
@@ -1643,7 +1817,7 @@ incref_helper_name_for_type_id_rust = |type_table, duplicate_names, type_id| {
 			}
 		RocTagUnion(tu) =>
 			if List.len(tu.tags) >= 2 and tu.name != "" {
-				"incref_${name_to_rust_fn_suffix(tag_union_struct_name(duplicate_names, type_id, tu))}"
+				"incref_${name_to_rust_fn_suffix(tag_union_struct_name(preferred_names, duplicate_names, type_id, tu))}"
 			} else {
 				""
 			}
@@ -1651,17 +1825,17 @@ incref_helper_name_for_type_id_rust = |type_table, duplicate_names, type_id| {
 	}
 }
 
-decref_stmt_for_type_id_rust = |type_table, duplicate_names, type_id, expr| {
+decref_stmt_for_type_id_rust = |type_table, duplicate_names, preferred_names, type_id, expr| {
 	type_repr = TypeTable.get(TypeTable.from_list(type_table), type_id)
-	decref_stmt_for_repr_rust(type_table, duplicate_names, type_id, type_repr, expr)
+	decref_stmt_for_repr_rust(type_table, duplicate_names, preferred_names, type_id, type_repr, expr)
 }
 
-decref_stmt_for_repr_rust = |type_table, duplicate_names, type_id, type_repr, expr| {
+decref_stmt_for_repr_rust = |type_table, duplicate_names, preferred_names, type_id, type_repr, expr| {
 	match type_repr {
 		RocStr => "    ${expr}.decref(roc_host);\n"
 		RocList(elem_id) => {
 			if is_type_refcounted(type_table, elem_id) {
-				elem_stmt = decref_stmt_for_type_id_rust(type_table, duplicate_names, elem_id, "item")
+				elem_stmt = decref_stmt_for_type_id_rust(type_table, duplicate_names, preferred_names, elem_id, "item")
 				if elem_stmt == "" {
 					"    compile_error!(\"missing decref helper for refcounted list element type id ${U64.to_str(elem_id)}\");\n"
 				} else {
@@ -1675,7 +1849,7 @@ decref_stmt_for_repr_rust = |type_table, duplicate_names, type_id, type_repr, ex
 			match TypeTable.get(TypeTable.from_list(type_table), inner_id) {
 				RocFunction(_) => "    decref_erased_callable(${expr}, roc_host);\n"
 				_ => {
-					inner_rust = type_id_to_rust(type_table, duplicate_names, inner_id)
+					inner_rust = type_id_to_rust(type_table, duplicate_names, preferred_names, inner_id)
 					if inner_rust == "RocBox" or inner_rust == "*mut c_void" {
 						"    decref_box(${expr} as RocBox, roc_host);\n"
 					} else if is_type_refcounted(type_table, inner_id) {
@@ -1689,7 +1863,7 @@ decref_stmt_for_repr_rust = |type_table, duplicate_names, type_id, type_repr, ex
 			if rec.name == "" {
 				""
 			} else {
-				helper = decref_helper_name_for_type_id_rust(type_table, duplicate_names, type_id)
+				helper = decref_helper_name_for_type_id_rust(type_table, duplicate_names, preferred_names, type_id)
 				if helper == "" {
 					""
 				} else {
@@ -1701,13 +1875,13 @@ decref_stmt_for_repr_rust = |type_table, duplicate_names, type_id, type_repr, ex
 				match List.first(tu.tags) {
 					Ok(tag) =>
 						match List.first(tag.payload) {
-							Ok(payload_id) => decref_stmt_for_type_id_rust(type_table, duplicate_names, payload_id, expr)
+							Ok(payload_id) => decref_stmt_for_type_id_rust(type_table, duplicate_names, preferred_names, payload_id, expr)
 							_ => ""
 						}
 					_ => ""
 				}
 			} else {
-				helper = decref_helper_name_for_type_id_rust(type_table, duplicate_names, type_id)
+				helper = decref_helper_name_for_type_id_rust(type_table, duplicate_names, preferred_names, type_id)
 				if helper == "" {
 					""
 				} else {
@@ -1718,12 +1892,12 @@ decref_stmt_for_repr_rust = |type_table, duplicate_names, type_id, type_repr, ex
 	}
 }
 
-incref_stmt_for_type_id_rust = |type_table, duplicate_names, type_id, expr| {
+incref_stmt_for_type_id_rust = |type_table, duplicate_names, preferred_names, type_id, expr| {
 	type_repr = TypeTable.get(TypeTable.from_list(type_table), type_id)
-	incref_stmt_for_repr_rust(type_table, duplicate_names, type_id, type_repr, expr)
+	incref_stmt_for_repr_rust(type_table, duplicate_names, preferred_names, type_id, type_repr, expr)
 }
 
-incref_stmt_for_repr_rust = |type_table, duplicate_names, type_id, type_repr, expr| {
+incref_stmt_for_repr_rust = |type_table, duplicate_names, preferred_names, type_id, type_repr, expr| {
 	match type_repr {
 		RocStr => "    ${expr}.incref(amount);\n"
 		RocList(_) => "    ${expr}.incref(amount);\n"
@@ -1736,7 +1910,7 @@ incref_stmt_for_repr_rust = |type_table, duplicate_names, type_id, type_repr, ex
 			if rec.name == "" {
 				""
 			} else {
-				helper = incref_helper_name_for_type_id_rust(type_table, duplicate_names, type_id)
+				helper = incref_helper_name_for_type_id_rust(type_table, duplicate_names, preferred_names, type_id)
 				if helper == "" {
 					""
 				} else {
@@ -1748,13 +1922,13 @@ incref_stmt_for_repr_rust = |type_table, duplicate_names, type_id, type_repr, ex
 				match List.first(tu.tags) {
 					Ok(tag) =>
 						match List.first(tag.payload) {
-							Ok(payload_id) => incref_stmt_for_type_id_rust(type_table, duplicate_names, payload_id, expr)
+							Ok(payload_id) => incref_stmt_for_type_id_rust(type_table, duplicate_names, preferred_names, payload_id, expr)
 							_ => ""
 						}
 					_ => ""
 				}
 			} else {
-				helper = incref_helper_name_for_type_id_rust(type_table, duplicate_names, type_id)
+				helper = incref_helper_name_for_type_id_rust(type_table, duplicate_names, preferred_names, type_id)
 				if helper == "" {
 					""
 				} else {
@@ -1765,7 +1939,7 @@ incref_stmt_for_repr_rust = |type_table, duplicate_names, type_id, type_repr, ex
 	}
 }
 
-generate_record_refcount_helpers_rust = |type_table, duplicate_names, rec| {
+generate_record_refcount_helpers_rust = |type_table, duplicate_names, preferred_names, rec| {
 	struct_name = name_to_struct_name(rec.name)
 	decref_name = "decref_${name_to_rust_fn_suffix(struct_name)}"
 	incref_name = "incref_${name_to_rust_fn_suffix(struct_name)}"
@@ -1775,8 +1949,8 @@ generate_record_refcount_helpers_rust = |type_table, duplicate_names, rec| {
 	for field in rec.fields {
 		if !field.is_padding {
 			field_expr = "value.${name_to_rust_field_ident(field.name)}"
-			$decref_body = Str.concat($decref_body, decref_stmt_for_type_id_rust(type_table, duplicate_names, field.type_id, field_expr))
-			$incref_body = Str.concat($incref_body, incref_stmt_for_type_id_rust(type_table, duplicate_names, field.type_id, field_expr))
+			$decref_body = Str.concat($decref_body, decref_stmt_for_type_id_rust(type_table, duplicate_names, preferred_names, field.type_id, field_expr))
+			$incref_body = Str.concat($incref_body, incref_stmt_for_type_id_rust(type_table, duplicate_names, preferred_names, field.type_id, field_expr))
 		}
 	}
 
@@ -1790,7 +1964,7 @@ generate_record_refcount_helpers_rust = |type_table, duplicate_names, rec| {
 	"/// Recursively decrement Roc-owned fields in ${struct_name}.\npub fn ${decref_name}(value: ${struct_name}, roc_host: &RocHost) {\n${$decref_body}}\n\n/// Increment Roc-owned fields in ${struct_name}.\npub fn ${incref_name}(value: ${struct_name}, amount: isize) {\n${$incref_body}}\n\n"
 }
 
-generate_tag_payload_refcount_branch_rust = |type_table, duplicate_names, struct_name, tag, mode| {
+generate_tag_payload_refcount_branch_rust = |type_table, duplicate_names, preferred_names, struct_name, tag, mode| {
 	snake = to_lower_snake_case(tag.name)
 	variant = capitalize_first(tag.name)
 	if List.is_empty(tag.payload) {
@@ -1803,9 +1977,9 @@ generate_tag_payload_refcount_branch_rust = |type_table, duplicate_names, struct
 				Ok(payload_id) => {
 					payload_expr = "payload"
 					if mode == "decref" {
-						decref_stmt_for_type_id_rust(type_table, duplicate_names, payload_id, payload_expr)
+						decref_stmt_for_type_id_rust(type_table, duplicate_names, preferred_names, payload_id, payload_expr)
 					} else {
-						incref_stmt_for_type_id_rust(type_table, duplicate_names, payload_id, payload_expr)
+						incref_stmt_for_type_id_rust(type_table, duplicate_names, preferred_names, payload_id, payload_expr)
 					}
 				}
 				_ => ""
@@ -1822,9 +1996,9 @@ generate_tag_payload_refcount_branch_rust = |type_table, duplicate_names, struct
 		for payload_id in tag.payload {
 			field_expr = "payload._${U64.to_str($idx)}"
 			stmt = if mode == "decref" {
-				decref_stmt_for_type_id_rust(type_table, duplicate_names, payload_id, field_expr)
+				decref_stmt_for_type_id_rust(type_table, duplicate_names, preferred_names, payload_id, field_expr)
 			} else {
-				incref_stmt_for_type_id_rust(type_table, duplicate_names, payload_id, field_expr)
+				incref_stmt_for_type_id_rust(type_table, duplicate_names, preferred_names, payload_id, field_expr)
 			}
 			$body = Str.concat($body, indent_lines(stmt, "        "))
 			$idx = $idx + 1
@@ -1834,21 +2008,21 @@ generate_tag_payload_refcount_branch_rust = |type_table, duplicate_names, struct
 	}
 }
 
-generate_tag_union_refcount_helpers_rust = |type_table, duplicate_names, type_id, tu| {
-	struct_name = tag_union_struct_name(duplicate_names, type_id, tu)
+generate_tag_union_refcount_helpers_rust = |type_table, duplicate_names, preferred_names, type_id, tu| {
+	struct_name = tag_union_struct_name(preferred_names, duplicate_names, type_id, tu)
 	decref_name = "decref_${name_to_rust_fn_suffix(struct_name)}"
 	incref_name = "incref_${name_to_rust_fn_suffix(struct_name)}"
 	var $decref_branches = ""
 	var $incref_branches = ""
 	for tag in tu.tags {
-		$decref_branches = Str.concat($decref_branches, generate_tag_payload_refcount_branch_rust(type_table, duplicate_names, struct_name, tag, "decref"))
-		$incref_branches = Str.concat($incref_branches, generate_tag_payload_refcount_branch_rust(type_table, duplicate_names, struct_name, tag, "incref"))
+		$decref_branches = Str.concat($decref_branches, generate_tag_payload_refcount_branch_rust(type_table, duplicate_names, preferred_names, struct_name, tag, "decref"))
+		$incref_branches = Str.concat($incref_branches, generate_tag_payload_refcount_branch_rust(type_table, duplicate_names, preferred_names, struct_name, tag, "incref"))
 	}
 
 	"/// Recursively decrement Roc-owned payloads in ${struct_name}.\npub fn ${decref_name}(value: ${struct_name}, roc_host: &RocHost) {\n    let _ = roc_host;\n    match value.tag {\n${$decref_branches}    }\n}\n\n/// Increment Roc-owned payloads in ${struct_name}.\npub fn ${incref_name}(value: ${struct_name}, amount: isize) {\n    let _ = amount;\n    match value.tag {\n${$incref_branches}    }\n}\n\n"
 }
 
-generate_box_payload_decref_helpers_rust = |type_table, duplicate_names| {
+generate_box_payload_decref_helpers_rust = |type_table, duplicate_names, preferred_names| {
 	var $helpers = ""
 	var $seen_inner_ids = []
 
@@ -1860,9 +2034,9 @@ generate_box_payload_decref_helpers_rust = |type_table, duplicate_names| {
 					match TypeTable.get(TypeTable.from_list(type_table), inner_id) {
 						RocFunction(_) => {}
 						_ => {
-							inner_rust = type_id_to_rust(type_table, duplicate_names, inner_id)
+							inner_rust = type_id_to_rust(type_table, duplicate_names, preferred_names, inner_id)
 							if inner_rust != "RocBox" and inner_rust != "*mut c_void" and is_type_refcounted(type_table, inner_id) {
-								stmt = decref_stmt_for_type_id_rust(type_table, duplicate_names, inner_id, "payload")
+								stmt = decref_stmt_for_type_id_rust(type_table, duplicate_names, preferred_names, inner_id, "payload")
 								$helpers = Str.concat(
 									$helpers,
 									"extern \"C\" fn ${box_payload_decref_name_rust(inner_id)}(data_ptr: *mut c_void, roc_host: *mut RocHost) {\n    if data_ptr.is_null() || roc_host.is_null() {\n        return;\n    }\n    let payload = unsafe { *(data_ptr as *const ${inner_rust}) };\n    let roc_host = unsafe { &*roc_host };\n${stmt}}\n\n",
@@ -1879,8 +2053,8 @@ generate_box_payload_decref_helpers_rust = |type_table, duplicate_names| {
 	$helpers
 }
 
-generate_refcount_helpers_rust = |type_table, duplicate_names| {
-	var $helpers = "// =============================================================================\n// Generated Refcount Helpers\n// =============================================================================\n\n"
+generate_refcount_helpers_rust = |type_table, duplicate_names, preferred_names| {
+	var $helpers = "// Generated Refcount Helpers\n\n"
 	var $seen_names = []
 	var $type_id = 0
 
@@ -1891,15 +2065,15 @@ generate_refcount_helpers_rust = |type_table, duplicate_names| {
 					struct_name = name_to_struct_name(rec.name)
 					if !(List.contains($seen_names, struct_name)) {
 						$seen_names = $seen_names.append(struct_name)
-						$helpers = Str.concat($helpers, generate_record_refcount_helpers_rust(type_table, duplicate_names, rec))
+						$helpers = Str.concat($helpers, generate_record_refcount_helpers_rust(type_table, duplicate_names, preferred_names, rec))
 					}
 				}
 			RocTagUnion(tu) =>
 				if List.len(tu.tags) >= 2 and tu.name != "" {
-					struct_name = tag_union_struct_name(duplicate_names, $type_id, tu)
+					struct_name = tag_union_struct_name(preferred_names, duplicate_names, $type_id, tu)
 					if !(List.contains($seen_names, struct_name)) {
 						$seen_names = $seen_names.append(struct_name)
-						$helpers = Str.concat($helpers, generate_tag_union_refcount_helpers_rust(type_table, duplicate_names, $type_id, tu))
+						$helpers = Str.concat($helpers, generate_tag_union_refcount_helpers_rust(type_table, duplicate_names, preferred_names, $type_id, tu))
 					}
 				}
 			_ => {}
@@ -1908,7 +2082,7 @@ generate_refcount_helpers_rust = |type_table, duplicate_names| {
 		$type_id = $type_id + 1
 	}
 
-	$helpers.concat(generate_box_payload_decref_helpers_rust(type_table, duplicate_names))
+	$helpers.concat(generate_box_payload_decref_helpers_rust(type_table, duplicate_names, preferred_names))
 }
 
 ## Check whether a type is the zero-sized Roc unit type.
@@ -1918,13 +2092,13 @@ is_unit_type_id_rust = |type_table, type_id| TypeTable.is_unit(TypeTable.from_li
 is_anonymous_record_type_id_rust = |type_table, type_id| TypeTable.is_anonymous_record(TypeTable.from_list(type_table), type_id)
 
 ## Build a natural C ABI parameter list from Roc function argument type IDs.
-direct_param_list_rust = |type_table, duplicate_names, arg_type_ids| {
+direct_param_list_rust = |type_table, duplicate_names, preferred_names, arg_type_ids| {
 	var $params = ""
 	var $idx = 0
 
 	for arg_type_id in arg_type_ids {
 		if !is_unit_type_id_rust(type_table, arg_type_id) {
-			arg_rust = type_id_to_rust(type_table, duplicate_names, arg_type_id)
+			arg_rust = type_id_to_rust(type_table, duplicate_names, preferred_names, arg_type_id)
 			sep = if $params == "" {
 				""
 			} else {
@@ -1940,7 +2114,7 @@ direct_param_list_rust = |type_table, duplicate_names, arg_type_ids| {
 
 ## Build a hosted symbol parameter list, using the generated Args wrapper for
 ## anonymous single-record arguments so direct-symbol glue stays readable.
-direct_hosted_param_list_rust = |type_table, duplicate_names, func| {
+direct_hosted_param_list_rust = |type_table, duplicate_names, preferred_names, func| {
 	use_args_wrapper =
 		if List.len(func.arg_type_ids) == 1 {
 			match List.first(func.arg_type_ids) {
@@ -1959,7 +2133,7 @@ direct_hosted_param_list_rust = |type_table, duplicate_names, func| {
 			arg_rust = if use_args_wrapper {
 				"${name_to_struct_name(func.name)}Args"
 			} else {
-				type_id_to_rust(type_table, duplicate_names, arg_type_id)
+				type_id_to_rust(type_table, duplicate_names, preferred_names, arg_type_id)
 			}
 			sep = if $params == "" {
 				""
@@ -1981,11 +2155,9 @@ direct_hosted_param_list_rust = |type_table, duplicate_names, func| {
 ## Generate direct extern declarations for the fixed runtime symbols every host defines.
 generate_runtime_symbol_externs_rust : Str
 generate_runtime_symbol_externs_rust =
-	\\// =============================================================================
 	\\// Runtime Symbols
 	\\//
 	\\// The host defines these linker symbols. Compiled Roc code calls them directly.
-	\\// =============================================================================
 	\\
 	\\#[allow(improper_ctypes)]
 	\\unsafe extern "C" {
@@ -1999,16 +2171,16 @@ generate_runtime_symbol_externs_rust =
 	\\
 
 ## Generate direct extern declarations for hosted symbols.
-generate_hosted_symbol_externs_rust = |hosted_functions, type_table, duplicate_names| {
+generate_hosted_symbol_externs_rust = |hosted_functions, type_table, duplicate_names, preferred_names| {
 	if List.is_empty(hosted_functions) {
 		return ""
 	}
 
-	var $result = "// =============================================================================\n// Hosted Symbols\n//\n// The platform host must export these symbols with the exact direct C ABI signatures.\n// Refcounted arguments are owned by the hosted function.\n// =============================================================================\n\n#[allow(improper_ctypes)]\nunsafe extern \"C\" {\n"
+	var $result = "// Hosted Symbols\n//\n// The platform host must export these symbols with the exact direct C ABI signatures.\n// Refcounted arguments are owned by the hosted function.\n\n#[allow(improper_ctypes)]\nunsafe extern \"C\" {\n"
 
 	for func in hosted_functions {
-		params = direct_hosted_param_list_rust(type_table, duplicate_names, func)
-		ret_rust = type_id_to_rust(type_table, duplicate_names, func.ret_type_id)
+		params = direct_hosted_param_list_rust(type_table, duplicate_names, preferred_names, func)
+		ret_rust = type_id_to_rust(type_table, duplicate_names, preferred_names, func.ret_type_id)
 		ret_suffix = if ret_rust == "()" {
 			""
 		} else {
@@ -2024,11 +2196,11 @@ generate_hosted_symbol_externs_rust = |hosted_functions, type_table, duplicate_n
 	Str.concat($result, "}\n")
 }
 
-generate_provided_decl_rust = |entry, type_table, duplicate_names, type_repr| {
+generate_provided_decl_rust = |entry, type_table, duplicate_names, preferred_names, type_repr| {
 	match type_repr {
 		RocFunction(func) => {
-			params = direct_param_list_rust(type_table, duplicate_names, func.args)
-			ret_rust = type_id_to_rust(type_table, duplicate_names, func.ret)
+			params = direct_param_list_rust(type_table, duplicate_names, preferred_names, func.args)
+			ret_rust = type_id_to_rust(type_table, duplicate_names, preferred_names, func.ret)
 			ret_suffix = if ret_rust == "()" {
 				""
 			} else {
@@ -2037,23 +2209,23 @@ generate_provided_decl_rust = |entry, type_table, duplicate_names, type_repr| {
 			"    /// Entrypoint: ${entry.name}\n    pub fn ${entry.ffi_symbol}(${params})${ret_suffix};\n\n"
 		}
 		_ => {
-			value_rust = type_id_to_rust(type_table, duplicate_names, entry.type_id)
+			value_rust = type_id_to_rust(type_table, duplicate_names, preferred_names, entry.type_id)
 			"    /// Static provided value: ${entry.name}\n    pub static ${entry.ffi_symbol}: ${value_rust};\n\n"
 		}
 	}
 }
 
 ## Generate extern declarations for entrypoints from the provides clause.
-generate_entrypoint_externs_rust = |provides_list, type_table, duplicate_names| {
+generate_entrypoint_externs_rust = |provides_list, type_table, duplicate_names, preferred_names| {
 	if List.is_empty(provides_list) {
 		return ""
 	}
 
-	var $result = "// =============================================================================\n// Provided Symbols\n//\n// Roc exports these symbols from the app with their natural C ABI signatures.\n// =============================================================================\n\n#[allow(improper_ctypes)]\nunsafe extern \"C\" {\n"
+	var $result = "// Provided Symbols\n//\n// Roc exports these symbols from the app with their natural C ABI signatures.\n\n#[allow(improper_ctypes)]\nunsafe extern \"C\" {\n"
 
 	for entry in provides_list {
 		type_repr = TypeTable.get(TypeTable.from_list(type_table), entry.type_id)
-		$result = Str.concat($result, generate_provided_decl_rust(entry, type_table, duplicate_names, type_repr))
+		$result = Str.concat($result, generate_provided_decl_rust(entry, type_table, duplicate_names, preferred_names, type_repr))
 	}
 
 	Str.concat($result, "}\n")

@@ -635,7 +635,7 @@ generate_hosted_fn_fields = |hosted_functions| {
 
 section : Str, Str -> Str
 section = |title, body|
-	"// =============================================================================\n// ${title}\n// =============================================================================\n\n${body}\n"
+	"// ${title}\n\n${body}\n"
 
 doc_comment : List(Str) -> Str
 doc_comment = |lines| {

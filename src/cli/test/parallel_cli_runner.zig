@@ -4898,13 +4898,23 @@ fn customGlueRustDuplicateTagUnions(io: std.Io, allocator: Allocator, env: *cons
         return customFailure(allocator, timer, "failed to read generated Rust file: {}", .{err});
 
     for ([_][]const u8{
-        "pub struct TryType",
-        "pub struct IOErrType",
+        "pub struct AUnitResult",
+        "pub struct AIOErr",
+        "pub struct DNestedResult",
+        "pub fn decref_aunit_result",
         "pub fn roc_a_nested",
         "pub fn roc_d_nested",
     }) |needle| {
         if (std.mem.find(u8, generated, needle) == null) {
             return customFailure(allocator, timer, "generated Rust duplicate-tag fixture missing {s}", .{needle});
+        }
+    }
+    for ([_][]const u8{
+        "TryType",
+        "IOErrType",
+    }) |needle| {
+        if (std.mem.find(u8, generated, needle) != null) {
+            return customFailure(allocator, timer, "generated Rust duplicate-tag fixture still contains structural name {s}", .{needle});
         }
     }
 
@@ -4925,14 +4935,23 @@ fn customGlueZigDuplicateTagUnions(io: std.Io, allocator: Allocator, env: *const
         return customFailure(allocator, timer, "failed to read generated Zig file: {}", .{err});
 
     for ([_][]const u8{
-        "pub const TryType",
-        "pub const IOErrType",
-        "pub fn decrefTryType",
+        "pub const AUnitResult",
+        "pub const AIOErr",
+        "pub const DNestedResult",
+        "pub fn decrefAUnitResult",
         "pub extern fn roc_a_nested",
         "pub extern fn roc_d_nested",
     }) |needle| {
         if (std.mem.find(u8, generated, needle) == null) {
             return customFailure(allocator, timer, "generated Zig duplicate-tag fixture missing {s}", .{needle});
+        }
+    }
+    for ([_][]const u8{
+        "TryType",
+        "IOErrType",
+    }) |needle| {
+        if (std.mem.find(u8, generated, needle) != null) {
+            return customFailure(allocator, timer, "generated Zig duplicate-tag fixture still contains structural name {s}", .{needle});
         }
     }
 
@@ -5149,6 +5168,7 @@ fn customGlueRust(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: 
         "HostedFunctions",
         "PlatformHostedFns",
         "pub struct RocAlloc",
+        "// =============================================================================",
     }) |needle| {
         if (std.mem.find(u8, generated, needle) != null) {
             return customFailure(allocator, timer, "generated Rust file still contains obsolete ABI text {s}", .{needle});
@@ -5205,6 +5225,7 @@ fn customGlueZig(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *
         "RocOps",
         "HostedFunctions",
         "PlatformHostedFns",
+        "// =============================================================================",
     }) |needle| {
         if (std.mem.find(u8, generated, needle) != null) {
             return customFailure(allocator, timer, "generated Zig file still contains obsolete ABI text {s}", .{needle});

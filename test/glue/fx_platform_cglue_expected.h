@@ -31,9 +31,7 @@
 extern "C" {
 #endif
 
-// =============================================================================
 // Core Roc Types
-// =============================================================================
 
 typedef struct {
     uint8_t* bytes;
@@ -76,9 +74,7 @@ static inline uint8_t* roc_erased_callable_capture_ptr(RocErasedCallable callabl
 }
 
 
-// =============================================================================
 // Reflected Roc Types
-// =============================================================================
 
 typedef struct {
     ROC_ALIGNAS(8) uint8_t bytes[32];
@@ -113,18 +109,14 @@ ROC_STATIC_ASSERT(ROC_ALIGNOF(Padded) == 4, "Padded alignment mismatch");
 #endif
 
 
-// =============================================================================
 // Hosted Function Infrastructure
-// =============================================================================
 
 struct RocOps;
 
 typedef void (*HostedFn)(void);
 
 
-// =============================================================================
 // Hosted Function Count
-// =============================================================================
 
 #define HOSTED_FUNCTION_COUNT 17
 
@@ -147,9 +139,7 @@ typedef void (*HostedFn)(void);
 #define HOSTED_IDX_STDIN_LINE 15
 #define HOSTED_IDX_STDOUT_LINE 16
 
-// =============================================================================
 // Argument Structures
-// =============================================================================
 
 
 /**
@@ -287,9 +277,7 @@ typedef struct {
 } StdoutLineArgs;
 
 
-// =============================================================================
 // Hosted Symbols
-// =============================================================================
 
 /* Builder.print_value!: Builder => {} */
 extern void roc_builder_print_value(Builder arg0);
@@ -343,17 +331,13 @@ extern RocStr roc_stdin_line(void);
 extern void roc_stdout_line(RocStr arg0);
 
 
-// =============================================================================
 // Provided Symbols
-// =============================================================================
 
 /* Entrypoint: main_for_host! */
 extern void roc_main(void);
 
 
-// =============================================================================
 // HostedFunctions Registry
-// =============================================================================
 
 /**
  * Registry of all hosted function implementations.
