@@ -217,10 +217,7 @@ pub const HostKeyedRowDiffResult = each_runtime.DiffResult;
 /// The retained key/item pair read back out of an `Ui.each` row scope. Named so
 /// the native forwarder and the engine method share one type instead of each
 /// declaring a distinct anonymous struct.
-pub const EachRowValues = struct {
-    key: HostValue,
-    item: HostValue,
-};
+pub const EachRowValues = scope_runtime.EachRowValues;
 
 pub const HostEachRowRenderSegment = each_runtime.RenderSegment;
 pub const HostEachRowRenderMove = each_runtime.RenderMove;
@@ -1604,14 +1601,7 @@ pub fn Engine(comptime Ctx: type) type {
         pub fn createEachRowScope(self: *Self, ctx: Ctx.Handle, parent_scope_id: u64, site_ordinal: u64, key_hash: u64, key: HostValue, item: HostValue, key_cap: HostValueCapability, item_cap: HostValueCapability) u64 {
             self.validateScopeId(parent_scope_id) catch @panic("scope id has no host scope descriptor");
 
-            const key_cell = HostValueCell.initRetained(key, key_cap, &self.pending_roc_metrics);
-            const item_cell = HostValueCell.initRetained(item, item_cap, &self.pending_roc_metrics);
-            const result = scope_tree.appendEachRow(HostEachRowScopeStep, Ctx.allocator(ctx), &self.scopes, parent_scope_id, .{
-                .site_ordinal = site_ordinal,
-                .key_hash = key_hash,
-                .key = key_cell,
-                .item = item_cell,
-            }) catch @panic("scope id has no host scope descriptor");
+            const result = scope_runtime.appendEachRow(Ctx.allocator(ctx), &self.scopes, parent_scope_id, site_ordinal, key_hash, key, item, key_cap, item_cap, &self.pending_roc_metrics) catch @panic("scope id has no host scope descriptor");
             self.recordScopeCreated();
             const site_index = self.ensureEachRowSiteIndex(Ctx.allocator(ctx), parent_scope_id, site_ordinal);
             self.appendEachRowToSiteIndex(Ctx.allocator(ctx), site_index, result.scope_id, key_hash);
@@ -1619,45 +1609,20 @@ pub fn Engine(comptime Ctx: type) type {
         }
 
         pub fn eachRowScopeItemEquals(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, scope_id: u64, item: HostValue) bool {
-            self.validateScopeId(scope_id) catch @panic("scope id has no host scope descriptor");
-            const scope = &self.scopes.items[@intCast(scope_id)];
             self.recordEachItemCompare();
-            return switch (scope.step) {
-                .each_row => |*row| row.item.valueEquals(ctx, roc_host, item),
-                .root, .component, .when_branch => @panic("scope id does not reference an each-row scope"),
-            };
+            return scope_runtime.eachRowItemEquals(self.scopes.items, ctx, roc_host, scope_id, item);
         }
 
         pub fn replaceEachRowScopeKey(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, scope_id: u64, key_hash: u64, key: HostValue, key_cap: HostValueCapability) void {
-            self.validateScopeId(scope_id) catch @panic("scope id has no host scope descriptor");
-            const scope = &self.scopes.items[@intCast(scope_id)];
-            switch (scope.step) {
-                .each_row => {},
-                .root, .component, .when_branch => @panic("scope id does not reference an each-row scope"),
-            }
-
-            scope.step.each_row.key_hash = key_hash;
-            scope.step.each_row.key.replaceRetained(ctx, roc_host, &self.pending_roc_metrics, key, key_cap);
+            scope_runtime.replaceEachRowKey(self.scopes.items, ctx, roc_host, &self.pending_roc_metrics, scope_id, key_hash, key, key_cap);
         }
 
         pub fn replaceEachRowScopeItemWithCapability(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, scope_id: u64, item: HostValue, item_cap: HostValueCapability) void {
-            self.validateScopeId(scope_id) catch @panic("scope id has no host scope descriptor");
-            const scope = &self.scopes.items[@intCast(scope_id)];
-            switch (scope.step) {
-                .each_row => {},
-                .root, .component, .when_branch => @panic("scope id does not reference an each-row scope"),
-            }
-
-            scope.step.each_row.item.replaceRetained(ctx, roc_host, &self.pending_roc_metrics, item, item_cap);
+            scope_runtime.replaceEachRowItem(self.scopes.items, ctx, roc_host, &self.pending_roc_metrics, scope_id, item, item_cap);
         }
 
         pub fn eachRowScopeValues(self: *Self, scope_id: u64) EachRowValues {
-            self.validateScopeId(scope_id) catch @panic("scope id has no host scope descriptor");
-            const scope = &self.scopes.items[@intCast(scope_id)];
-            return switch (scope.step) {
-                .each_row => |row| .{ .key = row.key.value, .item = row.item.value },
-                .root, .component, .when_branch => @panic("scope id does not reference an each-row scope"),
-            };
+            return scope_runtime.eachRowValues(self.scopes.items, scope_id);
         }
 
         pub fn syncEachRowScopes(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, parent_scope_id: u64, site_ordinal: u64, keys: []const HostValue, items: []const HostValue, ops: HostEachOps) HostKeyedRowDiffResult {
@@ -3449,31 +3414,16 @@ pub fn Engine(comptime Ctx: type) type {
         }
 
         pub fn eachRowScopeKeyEquals(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, scope_id: u64, key: HostValue) bool {
-            self.validateScopeId(scope_id) catch @panic("scope id has no host scope descriptor");
-            const scope = &self.scopes.items[@intCast(scope_id)];
             self.recordEachKeyReuseCompare();
-            return switch (scope.step) {
-                .each_row => |*row| row.key.valueEquals(ctx, roc_host, key),
-                .root, .component, .when_branch => @panic("scope id does not reference an each-row scope"),
-            };
+            return scope_runtime.eachRowKeyEquals(self.scopes.items, ctx, roc_host, scope_id, key);
         }
 
         pub fn eachRowScopeKeyValue(self: *Self, scope_id: u64) HostValue {
-            self.validateScopeId(scope_id) catch @panic("scope id has no host scope descriptor");
-            const scope = &self.scopes.items[@intCast(scope_id)];
-            return switch (scope.step) {
-                .each_row => |row| row.key.value,
-                .root, .component, .when_branch => @panic("scope id does not reference an each-row scope"),
-            };
+            return scope_runtime.eachRowKeyValue(self.scopes.items, scope_id);
         }
 
         pub fn eachRowScopeKeyHash(self: *Self, scope_id: u64) u64 {
-            self.validateScopeId(scope_id) catch @panic("scope id has no host scope descriptor");
-            const scope = &self.scopes.items[@intCast(scope_id)];
-            return switch (scope.step) {
-                .each_row => |row| row.key_hash,
-                .root, .component, .when_branch => @panic("scope id does not reference an each-row scope"),
-            };
+            return scope_runtime.eachRowKeyHash(self.scopes.items, scope_id);
         }
 
         pub fn hashEachKeyValue(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, key_text: abi.RocErasedCallable, key_cap: HostValueCapability, key: HostValue) u64 {

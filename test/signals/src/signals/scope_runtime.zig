@@ -3,6 +3,8 @@ const abi = @import("roc_platform_abi.zig");
 const retained_values = @import("retained_values.zig");
 const scope_tree = @import("scope_tree.zig");
 
+pub const HostValue = retained_values.HostValue;
+pub const HostValueCapability = retained_values.HostValueCapability;
 pub const HostValueCell = retained_values.HostValueCell;
 
 /// Per-row payload carried in an `Ui.each` scope: the row's key and item cells,
@@ -22,6 +24,11 @@ pub const EachSite = struct {
     site_ordinal: u64,
 };
 
+pub const EachRowValues = struct {
+    key: HostValue,
+    item: HostValue,
+};
+
 /// Drop the retained cells owned by an each-row scope step (no-op for the
 /// structural scope kinds, which carry no Roc values).
 pub fn deinitScopeStep(step: *ScopeStep, ctx: anytype, roc_host: *abi.RocHost, metrics: anytype) void {
@@ -32,6 +39,69 @@ pub fn deinitScopeStep(step: *ScopeStep, ctx: anytype, roc_host: *abi.RocHost, m
         },
         .root, .component, .when_branch => {},
     }
+}
+
+pub fn appendEachRow(allocator: std.mem.Allocator, scopes: *std.ArrayListUnmanaged(Scope), parent_scope_id: u64, site_ordinal: u64, key_hash: u64, key: HostValue, item: HostValue, key_cap: HostValueCapability, item_cap: HostValueCapability, metrics: anytype) scope_tree.Error!scope_tree.InternResult {
+    try scope_tree.validate(EachRowScopeStep, scopes.items, parent_scope_id);
+
+    const key_cell = HostValueCell.initRetained(key, key_cap, metrics);
+    const item_cell = HostValueCell.initRetained(item, item_cap, metrics);
+    return scope_tree.appendEachRow(EachRowScopeStep, allocator, scopes, parent_scope_id, .{
+        .site_ordinal = site_ordinal,
+        .key_hash = key_hash,
+        .key = key_cell,
+        .item = item_cell,
+    });
+}
+
+pub fn eachRow(scopes: []Scope, scope_id: u64) *EachRowScopeStep {
+    scope_tree.validate(EachRowScopeStep, scopes, scope_id) catch @panic("scope id has no host scope descriptor");
+    const scope = &scopes[@intCast(scope_id)];
+    return switch (scope.step) {
+        .each_row => |*row| row,
+        .root, .component, .when_branch => @panic("scope id does not reference an each-row scope"),
+    };
+}
+
+pub fn eachRowConst(scopes: []const Scope, scope_id: u64) *const EachRowScopeStep {
+    scope_tree.validate(EachRowScopeStep, scopes, scope_id) catch @panic("scope id has no host scope descriptor");
+    const scope = &scopes[@intCast(scope_id)];
+    return switch (scope.step) {
+        .each_row => |*row| row,
+        .root, .component, .when_branch => @panic("scope id does not reference an each-row scope"),
+    };
+}
+
+pub fn eachRowKeyEquals(scopes: []const Scope, ctx: anytype, roc_host: *abi.RocHost, scope_id: u64, key: HostValue) bool {
+    return eachRowConst(scopes, scope_id).key.valueEquals(ctx, roc_host, key);
+}
+
+pub fn eachRowItemEquals(scopes: []const Scope, ctx: anytype, roc_host: *abi.RocHost, scope_id: u64, item: HostValue) bool {
+    return eachRowConst(scopes, scope_id).item.valueEquals(ctx, roc_host, item);
+}
+
+pub fn replaceEachRowKey(scopes: []Scope, ctx: anytype, roc_host: *abi.RocHost, metrics: anytype, scope_id: u64, key_hash: u64, key: HostValue, key_cap: HostValueCapability) void {
+    const row = eachRow(scopes, scope_id);
+    row.key_hash = key_hash;
+    row.key.replaceRetained(ctx, roc_host, metrics, key, key_cap);
+}
+
+pub fn replaceEachRowItem(scopes: []Scope, ctx: anytype, roc_host: *abi.RocHost, metrics: anytype, scope_id: u64, item: HostValue, item_cap: HostValueCapability) void {
+    const row = eachRow(scopes, scope_id);
+    row.item.replaceRetained(ctx, roc_host, metrics, item, item_cap);
+}
+
+pub fn eachRowValues(scopes: []const Scope, scope_id: u64) EachRowValues {
+    const row = eachRowConst(scopes, scope_id);
+    return .{ .key = row.key.value, .item = row.item.value };
+}
+
+pub fn eachRowKeyValue(scopes: []const Scope, scope_id: u64) HostValue {
+    return eachRowConst(scopes, scope_id).key.value;
+}
+
+pub fn eachRowKeyHash(scopes: []const Scope, scope_id: u64) u64 {
+    return eachRowConst(scopes, scope_id).key_hash;
 }
 
 pub fn disposeSubtree(comptime Row: type, scopes: []scope_tree.Scope(Row), scope_id: u64, hooks: anytype) void {
@@ -140,4 +210,26 @@ test "scope runtime disposes active subtrees through explicit hooks" {
     try std.testing.expectEqualSlices(u64, &.{40}, hooks.removed_rows.items);
     try std.testing.expectEqual(@as(u64, 3), hooks.deinit_steps);
     try std.testing.expectEqual(@as(u64, 3), hooks.disposed_scopes);
+}
+
+test "scope runtime owns each-row scope values and key hash" {
+    var scopes: std.ArrayListUnmanaged(Scope) = .empty;
+    defer scopes.deinit(std.testing.allocator);
+
+    _ = try scope_tree.internRoot(EachRowScopeStep, std.testing.allocator, &scopes);
+
+    var metrics = struct {
+        pub fn bump(_: *@This(), comptime _: anytype, _: u64) void {}
+    }{};
+    const key_cap: HostValueCapability = std.mem.zeroes(HostValueCapability);
+    const item_cap: HostValueCapability = std.mem.zeroes(HostValueCapability);
+    const row = try appendEachRow(std.testing.allocator, &scopes, 0, 7, 42, 100, 200, key_cap, item_cap, &metrics);
+
+    try std.testing.expectEqual(@as(u64, 1), row.scope_id);
+    try std.testing.expectEqual(@as(u64, 42), eachRowKeyHash(scopes.items, row.scope_id));
+    try std.testing.expectEqual(@as(HostValue, 100), eachRowKeyValue(scopes.items, row.scope_id));
+
+    const values = eachRowValues(scopes.items, row.scope_id);
+    try std.testing.expectEqual(@as(HostValue, 100), values.key);
+    try std.testing.expectEqual(@as(HostValue, 200), values.item);
 }
