@@ -1,6 +1,7 @@
 const std = @import("std");
 
 const render = @import("render_commands.zig");
+const spec_parser = @import("spec/spec_parser.zig");
 
 pub const Element = struct {
     id: u64,
@@ -117,6 +118,53 @@ pub const NamedEvent = struct {
     }
 };
 
+pub fn implicitRole(elem: *const Element) ?[]const u8 {
+    if (elem.role) |role| return role;
+    if (std.mem.eql(u8, elem.tag, "button")) return "button";
+    if (std.mem.eql(u8, elem.tag, "h1") or
+        std.mem.eql(u8, elem.tag, "h2") or
+        std.mem.eql(u8, elem.tag, "h3") or
+        std.mem.eql(u8, elem.tag, "h4") or
+        std.mem.eql(u8, elem.tag, "h5") or
+        std.mem.eql(u8, elem.tag, "h6")) return "heading";
+    if (std.mem.eql(u8, elem.tag, "section")) return "region";
+    return null;
+}
+
+pub fn accessibleName(elem: *const Element) []const u8 {
+    if (elem.label) |label| return label;
+    if (elem.text) |text| return text;
+    if (elem.value) |value| return value;
+    return "";
+}
+
+pub fn matchesLocator(elem: *const Element, locator: spec_parser.Locator) bool {
+    return switch (locator.kind) {
+        .none => false,
+        .role_name => blk: {
+            const role = implicitRole(elem) orelse break :blk false;
+            const expected_role = locator.role orelse break :blk false;
+            const expected_name = locator.name orelse break :blk false;
+            break :blk std.mem.eql(u8, role, expected_role) and std.mem.eql(u8, accessibleName(elem), expected_name);
+        },
+        .label => blk: {
+            const expected = locator.label orelse break :blk false;
+            const label = elem.label orelse break :blk false;
+            break :blk std.mem.eql(u8, label, expected);
+        },
+        .text => blk: {
+            const expected = locator.text orelse break :blk false;
+            const text = elem.text orelse break :blk false;
+            break :blk std.mem.eql(u8, text, expected);
+        },
+        .test_id => blk: {
+            const expected = locator.test_id orelse break :blk false;
+            const test_id = elem.test_id orelse break :blk false;
+            break :blk std.mem.eql(u8, test_id, expected);
+        },
+    };
+}
+
 test "simulated DOM element indexes attrs and named events" {
     const allocator = std.testing.allocator;
     const tag = try allocator.dupe(u8, "button");
@@ -139,4 +187,28 @@ test "simulated DOM element indexes attrs and named events" {
     try std.testing.expectEqual(@as(?usize, null), elem.textAttrIndex("missing"));
     try std.testing.expectEqual(@as(?usize, 0), elem.namedEventIndex("submit"));
     try std.testing.expectEqual(@as(?usize, null), elem.namedEventIndex("click"));
+}
+
+test "simulated DOM matches spec locators" {
+    const allocator = std.testing.allocator;
+    const tag = try allocator.dupe(u8, "button");
+    var elem = Element.init(1, tag);
+    defer elem.deinit(allocator);
+
+    elem.text = try allocator.dupe(u8, "Save");
+    elem.test_id = try allocator.dupe(u8, "save-button");
+
+    try std.testing.expect(matchesLocator(&elem, .{
+        .kind = .role_name,
+        .role = "button",
+        .name = "Save",
+    }));
+    try std.testing.expect(matchesLocator(&elem, .{
+        .kind = .test_id,
+        .test_id = "save-button",
+    }));
+    try std.testing.expect(!matchesLocator(&elem, .{
+        .kind = .text,
+        .text = "Cancel",
+    }));
 }

@@ -1140,60 +1140,12 @@ const HostEnv = struct {
         self.roc_allocations.deinit(allocator);
     }
 
-    fn implicitRole(elem: *const DomElement) ?[]const u8 {
-        if (elem.role) |role| return role;
-        if (std.mem.eql(u8, elem.tag, "button")) return "button";
-        if (std.mem.eql(u8, elem.tag, "h1") or
-            std.mem.eql(u8, elem.tag, "h2") or
-            std.mem.eql(u8, elem.tag, "h3") or
-            std.mem.eql(u8, elem.tag, "h4") or
-            std.mem.eql(u8, elem.tag, "h5") or
-            std.mem.eql(u8, elem.tag, "h6")) return "heading";
-        if (std.mem.eql(u8, elem.tag, "section")) return "region";
-        return null;
-    }
-
-    fn accessibleName(elem: *const DomElement) []const u8 {
-        if (elem.label) |label| return label;
-        if (elem.text) |text| return text;
-        if (elem.value) |value| return value;
-        return "";
-    }
-
-    fn locatorMatches(self: *HostEnv, elem: *const DomElement, locator: Locator) bool {
-        _ = self;
-        return switch (locator.kind) {
-            .none => false,
-            .role_name => blk: {
-                const role = HostEnv.implicitRole(elem) orelse break :blk false;
-                const expected_role = locator.role orelse break :blk false;
-                const expected_name = locator.name orelse break :blk false;
-                break :blk std.mem.eql(u8, role, expected_role) and std.mem.eql(u8, HostEnv.accessibleName(elem), expected_name);
-            },
-            .label => blk: {
-                const expected = locator.label orelse break :blk false;
-                const label = elem.label orelse break :blk false;
-                break :blk std.mem.eql(u8, label, expected);
-            },
-            .text => blk: {
-                const expected = locator.text orelse break :blk false;
-                const text = elem.text orelse break :blk false;
-                break :blk std.mem.eql(u8, text, expected);
-            },
-            .test_id => blk: {
-                const expected = locator.test_id orelse break :blk false;
-                const test_id = elem.test_id orelse break :blk false;
-                break :blk std.mem.eql(u8, test_id, expected);
-            },
-        };
-    }
-
     fn findElementByLocator(self: *HostEnv, locator: Locator, line_num: usize) ?*DomElement {
         var found: ?*DomElement = null;
         var match_count: usize = 0;
         for (self.dom_elements.items) |*elem| {
             if (!elem.active) continue;
-            if (!self.locatorMatches(elem, locator)) continue;
+            if (!sim_dom.matchesLocator(elem, locator)) continue;
             match_count += 1;
             if (found == null) found = elem;
         }
@@ -1213,7 +1165,7 @@ const HostEnv = struct {
         var match_count: usize = 0;
         for (self.dom_elements.items) |*elem| {
             if (!elem.active) continue;
-            if (!self.locatorMatches(elem, locator)) continue;
+            if (!sim_dom.matchesLocator(elem, locator)) continue;
             match_count += 1;
         }
         return match_count;
