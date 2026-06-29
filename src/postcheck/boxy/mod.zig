@@ -4,6 +4,7 @@
 //! Monotype, Lambda Solved, Lambda Mono, lambda sets, or backend details.
 
 pub const Plan = @import("plan.zig");
+pub const Lower = @import("lower.zig");
 
 test "boxy declarations are referenced" {
     @import("std").testing.refAllDecls(@This());

@@ -263,6 +263,15 @@ pub fn lowerCheckedModulesToLir(
     solved = undefined;
     errdefer lowered.deinit();
 
+    return finishLoweredOutput(allocator, roots, target, &lowered);
+}
+
+fn finishLoweredOutput(
+    allocator: Allocator,
+    roots: RootRequestSet,
+    target: TargetConfig,
+    lowered: anytype,
+) LowerResourceError!LoweredProgram {
     // TRMC/TCE must rewrite recursive procs before ARC insertion: it deletes
     // calls and changes allocation sites, and ARC panics on pre-existing RC
     // statements (see src/lir/trmc.zig).
@@ -309,7 +318,6 @@ fn lowerBoxyCheckedModulesToLir(
     layout_requests: []const checked.CheckedTypeId,
     static_data_requests: []const postcheck.Common.StaticDataRequest,
 ) LowerResourceError!LoweredProgram {
-    _ = target;
     var boxy_layout_requests = std.ArrayList(checked.CheckedTypeId).empty;
     defer boxy_layout_requests.deinit(allocator);
     try boxy_layout_requests.appendSlice(allocator, layout_requests);
@@ -324,7 +332,16 @@ fn lowerBoxyCheckedModulesToLir(
     }, .{});
     defer plan.deinit();
 
-    checkedPipelineInvariant("boxy checked-to-LIR lowering has an explicit plan but the boxy lowerer is not implemented");
+    var lowered = try postcheck.Boxy.Lower.run(
+        allocator,
+        checkedModules(modules),
+        rootRequests(roots, layout_requests, static_data_requests),
+        &plan,
+        .{ .target_usize = target.target_usize },
+    );
+    errdefer lowered.deinit();
+
+    return finishLoweredOutput(allocator, roots, target, &lowered);
 }
 
 fn verifyCheckedBoundary(modules: CheckedModuleSet, target: TargetConfig) Allocator.Error!void {
