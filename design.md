@@ -3134,10 +3134,13 @@ decisions, or the LIR result.
 
 The `.boxy` builder owns corresponding temporary maps such as
 `CheckedTypeId -> BoxyTypeDescId`, `CheckedDispatchPlanId -> BoxyDictId`,
-`CheckedRootOrder -> LirProcSpecId`, and `CheckedExprId -> LirLocalId` while
-lowering one root/worker. These maps are caches of explicit checked and boxy
-lowering data. They must not recover missing facts from source syntax, type
-display strings, backend symbols, or runtime bytes.
+`CheckedTypeId -> BoxyRuntimeLayout`, `CheckedRootOrder -> LirProcSpecId`, and
+`CheckedExprId -> LirLocalId` while lowering one root/worker. A
+`BoxyRuntimeLayout` pairs the committed storage `layout.Idx` with any dynamic
+descriptor requirement for descriptor-governed Roc box pointers. These maps are
+caches of explicit checked and boxy lowering data. They must not recover missing
+facts from source syntax, type display strings, backend symbols, or runtime
+bytes.
 
 Release `.lss` builds must not allocate, fill, traverse, or validate a materialized
 Lambda Mono expression, pattern, or statement tree. Release builds may allocate
@@ -3265,10 +3268,11 @@ adapter plan. Adapters are reusable LIR side-table entries so host wrappers,
 container element conversions, method arguments, and method returns can all name
 the exact same conversion plan when they need the same representation change.
 
-Dynamic RC in boxy LIR is explicit. A local whose layout is a boxy dynamic value
-is pointer-sized, but its nested payload drop/copy behavior is not recoverable
-from the layout alone. ARC therefore emits RC statements whose helper plan
-contains the relevant `BoxyDescRef`:
+Dynamic RC in boxy LIR is explicit. A local whose boxy runtime layout is a
+dynamic value has a pointer-sized committed storage layout, but its nested
+payload drop/copy behavior is not recoverable from that storage layout alone.
+ARC therefore emits RC statements whose helper plan contains the relevant
+`BoxyDescRef`:
 
 ```zig
 const RcHelper = union(enum) {
@@ -3447,16 +3451,18 @@ Layout selection is the first stage that chooses runtime encodings:
 - list backing layout
 - erased callable payload layout
 - ABI-visible procedure argument and result layouts
-- boxy dynamic value pointer layouts
+- boxy dynamic value storage layouts plus descriptor-governed runtime-layout
+  records
 - boxy descriptor and dictionary table layouts
 
 In `.lss`, layout selection consumes Lambda Mono types and produces LIR layouts
 plus the runtime schemas and function result data that later compile-time
 output, static data export, and glue code need. In `.boxy`, layout selection
-consumes checked types plus boxy representation plans and produces internal
-boxy layouts, exact host ABI layouts for wrapper roots and static data exports,
-and LIR-owned descriptor/dictionary layouts. Later stages consume those
-explicit layouts, schemas, descriptors, dictionaries, and function result data.
+consumes checked types plus boxy representation plans and produces committed
+storage layouts, boxy runtime-layout records, exact host ABI layouts for
+wrapper roots and static data exports, and LIR-owned descriptor/dictionary
+layouts. Later stages consume those explicit layouts, runtime-layout records,
+schemas, descriptors, dictionaries, and function result data.
 They do not rediscover field order, tag discriminants, callable member
 encodings, erased callable payload shape, or dynamic box payload behavior.
 

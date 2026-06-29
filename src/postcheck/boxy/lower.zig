@@ -8,6 +8,7 @@ const base = @import("base");
 const lir_core = @import("lir_core");
 
 const Common = @import("../common.zig");
+const Layouts = @import("layouts.zig");
 const Plan = @import("plan.zig");
 const solved_lir_lower = @import("../solved_lir_lower.zig");
 
@@ -42,6 +43,9 @@ pub fn run(
 
     var result = try LirProgram.Result.init(allocator, options.target_usize);
     errdefer result.deinit();
+
+    var layout_plan = try Layouts.build(allocator, plan, &result.layouts, .{});
+    defer layout_plan.deinit();
 
     if (plan.roots.items.len != 0 or plan.root_reps.items.len != 0) {
         boxyLowerInvariant("boxy checked-to-LIR lowerer does not yet implement checked procedure lowering");
