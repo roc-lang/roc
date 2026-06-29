@@ -3065,7 +3065,7 @@ const ProcBodyBuilder = struct {
             .alias => try self.lowerInspectRepLocalInto(target, source, self.requiredSingleChild(rep_id, .alias_backing).rep, next),
             .nominal => |kind| switch (kind) {
                 .transparent => if (rep.declared_fields.len != 0)
-                    boxyLowerInvariant("declared-field nominal inspect reached boxy lowering before backing projection support")
+                    try self.lowerNominalBackingInspectLocalsInto(target, source, rep_id, next)
                 else
                     try self.lowerInspectRepLocalInto(target, source, self.requiredSingleChild(rep_id, .nominal_backing).rep, next),
                 .opaque_nominal => try self.assignStringBytesLiteral(target, "<opaque>", next),
@@ -3077,6 +3077,19 @@ const ProcBodyBuilder = struct {
             .tuple => try self.lowerTupleInspectLocalsInto(target, source, rep, next),
             .tag_union => try self.lowerTagUnionInspectLocalsInto(target, source, rep, next),
         };
+    }
+
+    fn lowerNominalBackingInspectLocalsInto(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        source: LIR.LocalId,
+        rep_id: Plan.TypeRepId,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const backing_rep = self.requiredSingleChild(rep_id, .nominal_backing).rep;
+        const backing = try self.addFrameLocal(self.workerRuntimeLayoutForRep(backing_rep).layoutIdx());
+        const inspect = try self.lowerInspectRepLocalInto(target, backing, backing_rep, next);
+        return try self.assignNominalBoundary(backing, source, inspect);
     }
 
     fn lowerPrimitiveInspectLocalsInto(
@@ -3612,7 +3625,7 @@ const ProcBodyBuilder = struct {
             .alias => try self.lowerEqRepLocalsInto(target, lhs, rhs, self.requiredSingleChild(rep_id, .alias_backing).rep, negated, next),
             .nominal => |kind| switch (kind) {
                 .transparent => if (rep.declared_fields.len != 0)
-                    try self.lowerDeclaredFieldEqLocalsInto(target, lhs, rhs, rep, negated, next)
+                    try self.lowerNominalBackingEqLocalsInto(target, lhs, rhs, rep_id, negated, next)
                 else
                     try self.lowerEqRepLocalsInto(target, lhs, rhs, self.requiredSingleChild(rep_id, .nominal_backing).rep, negated, next),
                 .opaque_nominal => boxyLowerInvariant("opaque nominal structural equality reached boxy lowering before descriptor equality support"),
@@ -3624,6 +3637,24 @@ const ProcBodyBuilder = struct {
             .tuple => try self.lowerTupleEqLocalsInto(target, lhs, rhs, rep, negated, next),
             .tag_union => try self.lowerTagUnionEqLocalsInto(target, lhs, rhs, rep, negated, next),
         };
+    }
+
+    fn lowerNominalBackingEqLocalsInto(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        lhs: LIR.LocalId,
+        rhs: LIR.LocalId,
+        rep_id: Plan.TypeRepId,
+        negated: bool,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const backing_rep = self.requiredSingleChild(rep_id, .nominal_backing).rep;
+        const backing_layout = self.workerRuntimeLayoutForRep(backing_rep).layoutIdx();
+        const lhs_backing = try self.addFrameLocal(backing_layout);
+        const rhs_backing = try self.addFrameLocal(backing_layout);
+        var continuation = try self.lowerEqRepLocalsInto(target, lhs_backing, rhs_backing, backing_rep, negated, next);
+        continuation = try self.assignNominalBoundary(rhs_backing, rhs, continuation);
+        return try self.assignNominalBoundary(lhs_backing, lhs, continuation);
     }
 
     fn lowerPrimitiveEqLocalsInto(
@@ -3762,27 +3793,6 @@ const ProcBodyBuilder = struct {
                 },
                 else => boxyLowerInvariant("tuple equality representation had a non-tuple child role"),
             }
-        }
-        return current;
-    }
-
-    fn lowerDeclaredFieldEqLocalsInto(
-        self: *ProcBodyBuilder,
-        target: LIR.LocalId,
-        lhs: LIR.LocalId,
-        rhs: LIR.LocalId,
-        rep: Plan.TypeRepresentation,
-        negated: bool,
-        next: LIR.CFStmtId,
-    ) Allocator.Error!LIR.CFStmtId {
-        var current = try self.assignBoolLiteral(target, !negated, next);
-        const failed = try self.assignBoolLiteral(target, negated, next);
-        const fields = self.parent.plan.declaredFieldSlice(rep.declared_fields);
-        var i = fields.len;
-        while (i > 0) {
-            i -= 1;
-            const field = fields[i];
-            current = try self.lowerFieldEqStep(lhs, rhs, field.rep, field.index, current, failed);
         }
         return current;
     }
@@ -3997,7 +4007,7 @@ const ProcBodyBuilder = struct {
             .alias => try self.lowerHashRepLocalsInto(target, value, hasher, self.requiredSingleChild(rep_id, .alias_backing).rep, next),
             .nominal => |kind| switch (kind) {
                 .transparent => if (rep.declared_fields.len != 0)
-                    try self.lowerDeclaredFieldHashLocalsInto(target, value, hasher, rep, next)
+                    try self.lowerNominalBackingHashLocalsInto(target, value, hasher, rep_id, next)
                 else
                     try self.lowerHashRepLocalsInto(target, value, hasher, self.requiredSingleChild(rep_id, .nominal_backing).rep, next),
                 .opaque_nominal => boxyLowerInvariant("opaque nominal structural hash reached boxy lowering before descriptor hash support"),
@@ -4009,6 +4019,20 @@ const ProcBodyBuilder = struct {
             .tuple => try self.lowerTupleHashLocalsInto(target, value, hasher, rep, next),
             .tag_union => try self.lowerTagUnionHashLocalsInto(target, value, hasher, rep, next),
         };
+    }
+
+    fn lowerNominalBackingHashLocalsInto(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        value: LIR.LocalId,
+        hasher: LIR.LocalId,
+        rep_id: Plan.TypeRepId,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const backing_rep = self.requiredSingleChild(rep_id, .nominal_backing).rep;
+        const backing = try self.addFrameLocal(self.workerRuntimeLayoutForRep(backing_rep).layoutIdx());
+        const hash = try self.lowerHashRepLocalsInto(target, backing, hasher, backing_rep, next);
+        return try self.assignNominalBoundary(backing, value, hash);
     }
 
     fn lowerPrimitiveHashLocalsInto(
@@ -4086,26 +4110,6 @@ const ProcBodyBuilder = struct {
                 },
                 else => boxyLowerInvariant("tuple hash representation had a non-tuple child role"),
             }
-        }
-        return try self.lowerFieldHashComponentsInto(target, value, hasher, components, next);
-    }
-
-    fn lowerDeclaredFieldHashLocalsInto(
-        self: *ProcBodyBuilder,
-        target: LIR.LocalId,
-        value: LIR.LocalId,
-        hasher: LIR.LocalId,
-        rep: Plan.TypeRepresentation,
-        next: LIR.CFStmtId,
-    ) Allocator.Error!LIR.CFStmtId {
-        const fields = self.parent.plan.declaredFieldSlice(rep.declared_fields);
-        const components = try self.parent.allocator.alloc(HashComponent, fields.len);
-        defer self.parent.allocator.free(components);
-        for (fields, components) |field, *component| {
-            component.* = .{
-                .rep = field.rep,
-                .field_index = field.index,
-            };
         }
         return try self.lowerFieldHashComponentsInto(target, value, hasher, components, next);
     }
@@ -11153,6 +11157,402 @@ test "boxy lowerer emits nominal boundary before backing record pattern binding"
     try std.testing.expectEqual(read_field.target, bind_field.op.local);
     try std.testing.expectEqual(bind_field.target, final_copy.op.local);
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = final_copy.target } }, out.lir_result.store.getCFStmt(final_copy.next));
+}
+
+test "boxy lowerer inspects declared-field nominals through backing projection" {
+    const gpa = std.testing.allocator;
+
+    var artifact = minimalCheckedArtifact(gpa);
+    defer artifact.canonical_names.deinit();
+    defer artifact.checked_types.deinit(gpa);
+    defer artifact.checked_bodies.deinit(gpa);
+
+    const field_a = try artifact.canonical_names.internRecordFieldLabel("a");
+    const field_b = try artifact.canonical_names.internRecordFieldLabel("b");
+    const nominal_key = names.NominalTypeKey{
+        .module_name = try artifact.canonical_names.internModuleName("Test"),
+        .type_name = try artifact.canonical_names.internTypeName("WithPadding"),
+        .source_decl = 5,
+    };
+
+    try artifact.checked_types.type_id_pool.append(gpa, @enumFromInt(0));
+    try artifact.checked_types.payloads.append(gpa, .{
+        .nominal = builtinNominal(.u8, @enumFromInt(0), .{}),
+    });
+    try artifact.checked_types.payloads.append(gpa, .{
+        .nominal = builtinNominal(.u16, @enumFromInt(1), .{}),
+    });
+    try artifact.checked_types.payloads.append(gpa, .empty_record);
+    try artifact.checked_types.record_field_pool.appendSlice(gpa, &.{
+        .{ .name = field_a, .ty = @as(checked.CheckedTypeId, @enumFromInt(0)) },
+        .{ .name = field_b, .ty = @as(checked.CheckedTypeId, @enumFromInt(1)) },
+    });
+    try artifact.checked_types.payloads.append(gpa, .{
+        .record = .{ .fields = .{ .start = 0, .len = 2 }, .ext = @enumFromInt(2) },
+    });
+    try artifact.checked_types.declared_field_pool.appendSlice(gpa, &.{
+        .{ .named = field_a },
+        .{ .padding = 0 },
+        .{ .named = field_b },
+    });
+    try artifact.checked_types.nominal_declarations.append(gpa, .{
+        .id = @enumFromInt(0),
+        .nominal = nominal_key,
+        .declaration_root = @enumFromInt(4),
+        .backing = @enumFromInt(3),
+        .pf_start = 0,
+        .pf_len = 1,
+        .df_start = 0,
+        .df_len = 3,
+    });
+    try artifact.checked_types.payloads.append(gpa, .{
+        .nominal = .{
+            .name = nominal_key.type_name,
+            .origin_module = nominal_key.module_name,
+            .source_decl = nominal_key.source_decl,
+            .is_opaque = false,
+            .backing = @enumFromInt(3),
+            .representation = .{ .local_declaration = @enumFromInt(0) },
+            .padding_field_types = .{ .start = 0, .len = 1 },
+            .declared_fields = .{ .start = 0, .len = 3 },
+        },
+    });
+    try artifact.checked_types.payloads.append(gpa, .{
+        .function = .{
+            .kind = .pure,
+            .args = .{},
+            .ret = @enumFromInt(2),
+            .needs_instantiation = false,
+        },
+    });
+
+    try artifact.checked_bodies.record_expr_field_pool.appendSlice(gpa, &.{
+        .{ .label = field_a, .value = @as(checked.CheckedExprId, @enumFromInt(4)) },
+        .{ .label = field_b, .value = @as(checked.CheckedExprId, @enumFromInt(5)) },
+    });
+
+    const template_ref = procedureTemplateRef(artifact.key, 0);
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(0),
+        .ty = @enumFromInt(5),
+        .source_region = base.Region.zero(),
+        .data = .{ .lambda = .{ .args = .{}, .body = @enumFromInt(1) } },
+    });
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(1),
+        .ty = @enumFromInt(2),
+        .source_region = base.Region.zero(),
+        .data = .{ .dbg = @enumFromInt(2) },
+    });
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(2),
+        .ty = @enumFromInt(4),
+        .source_region = base.Region.zero(),
+        .data = .{ .nominal = .{
+            .backing_expr = @enumFromInt(3),
+            .backing_type = .value,
+        } },
+    });
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(3),
+        .ty = @enumFromInt(3),
+        .source_region = base.Region.zero(),
+        .data = .{ .record = .{
+            .fields = .{ .start = 0, .len = 2 },
+            .ext = null,
+        } },
+    });
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(4),
+        .ty = @enumFromInt(0),
+        .source_region = base.Region.zero(),
+        .data = .{ .num = .{ .value = intValue(7), .kind = .u8 } },
+    });
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(5),
+        .ty = @enumFromInt(1),
+        .source_region = base.Region.zero(),
+        .data = .{ .num = .{ .value = intValue(500), .kind = .u16 } },
+    });
+    try artifact.checked_bodies.bodies.append(gpa, .{
+        .id = @enumFromInt(0),
+        .root_expr = @enumFromInt(0),
+        .owner_template = template_ref,
+    });
+    var templates = [_]checked.CheckedProcedureTemplate{
+        checkedTemplate(template_ref, @enumFromInt(5), @enumFromInt(0)),
+    };
+    artifact.checked_procedure_templates = .{ .templates = &templates };
+
+    const root = checked.RootRequest{
+        .order = 0,
+        .module_idx = 0,
+        .kind = .runtime_entrypoint,
+        .source = .{ .def = @enumFromInt(0) },
+        .checked_type = @enumFromInt(5),
+        .abi = .roc,
+        .exposure = .private,
+        .procedure_template = template_ref,
+    };
+    var plan = try Plan.analyzeProgram(gpa, .{
+        .root_module = .{ .module = &artifact, .roots = undefined },
+        .roots = &.{root},
+    }, .{});
+    defer plan.deinit();
+
+    var out = try run(
+        gpa,
+        .{ .root = .{ .module = &artifact, .roots = undefined } },
+        .{},
+        &plan,
+        .{},
+    );
+    defer out.deinit();
+
+    const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
+    const first = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_literal;
+    const second = out.lir_result.store.getCFStmt(first.next).assign_literal;
+    const backing_record = out.lir_result.store.getCFStmt(second.next).assign_struct;
+    const construct_nominal = out.lir_result.store.getCFStmt(backing_record.next).assign_ref;
+    const destruct_nominal = out.lir_result.store.getCFStmt(construct_nominal.next).assign_ref;
+
+    try std.testing.expectEqual(backing_record.target, construct_nominal.op.nominal.backing_ref);
+    try std.testing.expectEqual(construct_nominal.target, destruct_nominal.op.nominal.backing_ref);
+
+    var cursor = destruct_nominal.next;
+    var reads: [2]u16 = undefined;
+    var read_count: usize = 0;
+    var guard: usize = 0;
+    while (guard < 100) : (guard += 1) {
+        switch (out.lir_result.store.getCFStmt(cursor)) {
+            .assign_ref => |assign| {
+                switch (assign.op) {
+                    .field => |field| {
+                        try std.testing.expectEqual(destruct_nominal.target, field.source);
+                        if (read_count >= reads.len) return error.TestUnexpectedResult;
+                        reads[read_count] = field.field_idx;
+                        read_count += 1;
+                    },
+                    else => {},
+                }
+                cursor = assign.next;
+            },
+            .assign_literal => |assign| cursor = assign.next,
+            .assign_low_level => |assign| cursor = assign.next,
+            .debug => |debug| {
+                try std.testing.expectEqual(@as(usize, 2), read_count);
+                try std.testing.expectEqual(@as(u16, 0), reads[0]);
+                try std.testing.expectEqual(@as(u16, 1), reads[1]);
+                try std.testing.expect(debug.message != construct_nominal.target);
+                break;
+            },
+            else => return error.TestUnexpectedResult,
+        }
+    } else return error.TestUnexpectedResult;
+}
+
+test "boxy lowerer hashes declared-field nominals through backing projection" {
+    const gpa = std.testing.allocator;
+
+    var artifact = minimalCheckedArtifact(gpa);
+    defer artifact.canonical_names.deinit();
+    defer artifact.checked_types.deinit(gpa);
+    defer artifact.checked_bodies.deinit(gpa);
+
+    const field_a = try artifact.canonical_names.internRecordFieldLabel("a");
+    const field_b = try artifact.canonical_names.internRecordFieldLabel("b");
+    const nominal_key = names.NominalTypeKey{
+        .module_name = try artifact.canonical_names.internModuleName("Test"),
+        .type_name = try artifact.canonical_names.internTypeName("WithPadding"),
+        .source_decl = 5,
+    };
+
+    try artifact.checked_types.type_id_pool.append(gpa, @enumFromInt(0));
+    try artifact.checked_types.payloads.append(gpa, .{
+        .nominal = builtinNominal(.u8, @enumFromInt(0), .{}),
+    });
+    try artifact.checked_types.payloads.append(gpa, .{
+        .nominal = builtinNominal(.u16, @enumFromInt(1), .{}),
+    });
+    try artifact.checked_types.payloads.append(gpa, .empty_record);
+    try artifact.checked_types.record_field_pool.appendSlice(gpa, &.{
+        .{ .name = field_a, .ty = @as(checked.CheckedTypeId, @enumFromInt(0)) },
+        .{ .name = field_b, .ty = @as(checked.CheckedTypeId, @enumFromInt(1)) },
+    });
+    try artifact.checked_types.payloads.append(gpa, .{
+        .record = .{ .fields = .{ .start = 0, .len = 2 }, .ext = @enumFromInt(2) },
+    });
+    try artifact.checked_types.declared_field_pool.appendSlice(gpa, &.{
+        .{ .named = field_a },
+        .{ .padding = 0 },
+        .{ .named = field_b },
+    });
+    try artifact.checked_types.nominal_declarations.append(gpa, .{
+        .id = @enumFromInt(0),
+        .nominal = nominal_key,
+        .declaration_root = @enumFromInt(4),
+        .backing = @enumFromInt(3),
+        .pf_start = 0,
+        .pf_len = 1,
+        .df_start = 0,
+        .df_len = 3,
+    });
+    try artifact.checked_types.payloads.append(gpa, .{
+        .nominal = .{
+            .name = nominal_key.type_name,
+            .origin_module = nominal_key.module_name,
+            .source_decl = nominal_key.source_decl,
+            .is_opaque = false,
+            .backing = @enumFromInt(3),
+            .representation = .{ .local_declaration = @enumFromInt(0) },
+            .padding_field_types = .{ .start = 0, .len = 1 },
+            .declared_fields = .{ .start = 0, .len = 3 },
+        },
+    });
+    try artifact.checked_types.payloads.append(gpa, .{
+        .nominal = builtinNominal(.u64, @enumFromInt(5), .{}),
+    });
+    try artifact.checked_types.payloads.append(gpa, .{
+        .function = .{
+            .kind = .pure,
+            .args = .{},
+            .ret = @enumFromInt(5),
+            .needs_instantiation = false,
+        },
+    });
+
+    try artifact.checked_bodies.record_expr_field_pool.appendSlice(gpa, &.{
+        .{ .label = field_a, .value = @as(checked.CheckedExprId, @enumFromInt(4)) },
+        .{ .label = field_b, .value = @as(checked.CheckedExprId, @enumFromInt(5)) },
+    });
+
+    const template_ref = procedureTemplateRef(artifact.key, 0);
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(0),
+        .ty = @enumFromInt(6),
+        .source_region = base.Region.zero(),
+        .data = .{ .lambda = .{ .args = .{}, .body = @enumFromInt(1) } },
+    });
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(1),
+        .ty = @enumFromInt(5),
+        .source_region = base.Region.zero(),
+        .data = .{ .structural_hash = .{
+            .value = @enumFromInt(2),
+            .hasher = @enumFromInt(6),
+        } },
+    });
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(2),
+        .ty = @enumFromInt(4),
+        .source_region = base.Region.zero(),
+        .data = .{ .nominal = .{
+            .backing_expr = @enumFromInt(3),
+            .backing_type = .value,
+        } },
+    });
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(3),
+        .ty = @enumFromInt(3),
+        .source_region = base.Region.zero(),
+        .data = .{ .record = .{
+            .fields = .{ .start = 0, .len = 2 },
+            .ext = null,
+        } },
+    });
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(4),
+        .ty = @enumFromInt(0),
+        .source_region = base.Region.zero(),
+        .data = .{ .num = .{ .value = intValue(7), .kind = .u8 } },
+    });
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(5),
+        .ty = @enumFromInt(1),
+        .source_region = base.Region.zero(),
+        .data = .{ .num = .{ .value = intValue(500), .kind = .u16 } },
+    });
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(6),
+        .ty = @enumFromInt(5),
+        .source_region = base.Region.zero(),
+        .data = .{ .num = .{ .value = intValue(99), .kind = .u64 } },
+    });
+    try artifact.checked_bodies.bodies.append(gpa, .{
+        .id = @enumFromInt(0),
+        .root_expr = @enumFromInt(0),
+        .owner_template = template_ref,
+    });
+    var templates = [_]checked.CheckedProcedureTemplate{
+        checkedTemplate(template_ref, @enumFromInt(6), @enumFromInt(0)),
+    };
+    artifact.checked_procedure_templates = .{ .templates = &templates };
+
+    const root = checked.RootRequest{
+        .order = 0,
+        .module_idx = 0,
+        .kind = .runtime_entrypoint,
+        .source = .{ .def = @enumFromInt(0) },
+        .checked_type = @enumFromInt(6),
+        .abi = .roc,
+        .exposure = .private,
+        .procedure_template = template_ref,
+    };
+    var plan = try Plan.analyzeProgram(gpa, .{
+        .root_module = .{ .module = &artifact, .roots = undefined },
+        .roots = &.{root},
+    }, .{});
+    defer plan.deinit();
+
+    var out = try run(
+        gpa,
+        .{ .root = .{ .module = &artifact, .roots = undefined } },
+        .{},
+        &plan,
+        .{},
+    );
+    defer out.deinit();
+
+    const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
+    const first = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_literal;
+    const second = out.lir_result.store.getCFStmt(first.next).assign_literal;
+    const backing_record = out.lir_result.store.getCFStmt(second.next).assign_struct;
+    const construct_nominal = out.lir_result.store.getCFStmt(backing_record.next).assign_ref;
+    const seed = out.lir_result.store.getCFStmt(construct_nominal.next).assign_literal;
+    const destruct_nominal = out.lir_result.store.getCFStmt(seed.next).assign_ref;
+
+    try std.testing.expectEqual(backing_record.target, construct_nominal.op.nominal.backing_ref);
+    try std.testing.expectEqual(construct_nominal.target, destruct_nominal.op.nominal.backing_ref);
+
+    var cursor = destruct_nominal.next;
+    var reads: [2]u16 = undefined;
+    var read_count: usize = 0;
+    var guard: usize = 0;
+    while (guard < 32) : (guard += 1) {
+        switch (out.lir_result.store.getCFStmt(cursor)) {
+            .assign_ref => |assign| {
+                switch (assign.op) {
+                    .field => |field| {
+                        try std.testing.expectEqual(destruct_nominal.target, field.source);
+                        if (read_count >= reads.len) return error.TestUnexpectedResult;
+                        reads[read_count] = field.field_idx;
+                        read_count += 1;
+                    },
+                    else => {},
+                }
+                cursor = assign.next;
+            },
+            .assign_low_level => |assign| cursor = assign.next,
+            .ret => |ret| {
+                try std.testing.expectEqual(@as(usize, 2), read_count);
+                try std.testing.expectEqual(@as(u16, 0), reads[0]);
+                try std.testing.expectEqual(@as(u16, 1), reads[1]);
+                try std.testing.expect(ret.value != seed.target);
+                break;
+            },
+            else => return error.TestUnexpectedResult,
+        }
+    } else return error.TestUnexpectedResult;
 }
 
 test "boxy lowerer emits builtin Bool tags by checked Bool names" {
