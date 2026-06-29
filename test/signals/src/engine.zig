@@ -2207,43 +2207,15 @@ pub fn Engine(comptime Ctx: type) type {
         }
 
         pub fn activeTaskRecordByToken(self: *Self, token: HostSignalToken) ?*HostSignalRecord {
-            for (self.active_signal_graph.items) |node| {
-                switch (node.record.payload) {
-                    .task_source => |payload| {
-                        if (payload.token == token) return node.record;
-                    },
-                    .ref, .const_value, .map, .map2, .combine, .interval_source => {},
-                }
-            }
-            return null;
+            return effects_runtime.activeTaskRecordByToken(self.active_signal_graph.items, token);
         }
 
         pub fn activeIntervalRecordCountByPeriod(self: *const Self, period_ms: u64) u64 {
-            var count: u64 = 0;
-            for (self.active_signal_graph.items) |node| {
-                switch (node.record.payload) {
-                    .interval_source => |payload| {
-                        if (payload.period_ms == period_ms) count += 1;
-                    },
-                    .ref, .const_value, .map, .map2, .combine, .task_source => {},
-                }
-            }
-            return count;
+            return effects_runtime.activeIntervalRecordCountByPeriod(self.active_signal_graph.items, period_ms);
         }
 
         pub fn activeIntervalRecordByToken(self: *Self, source_token: HostSignalToken) ?*HostSignalRecord {
-            var found: ?*HostSignalRecord = null;
-            for (self.active_signal_graph.items) |node| {
-                switch (node.record.payload) {
-                    .interval_source => |payload| {
-                        if (payload.token != source_token) continue;
-                        if (found != null) @panic("interval token matched more than one active interval source");
-                        found = node.record;
-                    },
-                    .ref, .const_value, .map, .map2, .combine, .task_source => {},
-                }
-            }
-            return found;
+            return effects_runtime.activeIntervalRecordByToken(self.active_signal_graph.items, source_token);
         }
 
         pub fn activeIntervalSourceTokenByRuntimeToken(self: *Self, token: u64) ?HostSignalToken {
@@ -6036,33 +6008,11 @@ pub fn Engine(comptime Ctx: type) type {
         }
 
         pub fn activeTaskRecordByName(self: *Self, name: []const u8) ?*HostSignalRecord {
-            var found: ?*HostSignalRecord = null;
-            for (self.active_signal_graph.items) |node| {
-                switch (node.record.payload) {
-                    .task_source => |payload| {
-                        if (!std.mem.eql(u8, payload.name, name)) continue;
-                        if (found != null) @panic("fake task result matched more than one active task source");
-                        found = node.record;
-                    },
-                    .ref, .const_value, .map, .map2, .combine, .interval_source => {},
-                }
-            }
-            return found;
+            return effects_runtime.activeTaskRecordByName(self.active_signal_graph.items, name);
         }
 
         pub fn activeIntervalRecordByPeriod(self: *Self, period_ms: u64) ?*HostSignalRecord {
-            var found: ?*HostSignalRecord = null;
-            for (self.active_signal_graph.items) |node| {
-                switch (node.record.payload) {
-                    .interval_source => |payload| {
-                        if (payload.period_ms != period_ms) continue;
-                        if (found != null) @panic("tick_interval matched more than one active interval source");
-                        found = node.record;
-                    },
-                    .ref, .const_value, .map, .map2, .combine, .task_source => {},
-                }
-            }
-            return found;
+            return effects_runtime.activeIntervalRecordByPeriod(self.active_signal_graph.items, period_ms);
         }
 
         pub fn rebuildActiveEventsFromStream(self: *Self, ctx: Ctx.Handle, stream: *HostNodeDescriptorStream) void {

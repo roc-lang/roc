@@ -1,8 +1,10 @@
 const std = @import("std");
 const abi = @import("roc_platform_abi.zig");
 const retained_values = @import("retained_values.zig");
+const signal_records = @import("signal_records.zig");
 
 pub const HostSignalToken = retained_values.HostSignalToken;
+pub const HostSignalRecord = signal_records.Record;
 
 pub const PendingTask = struct {
     request_id: u64,
@@ -44,6 +46,76 @@ pub fn deinitCleanupEvents(allocator: std.mem.Allocator, events: *CleanupEvents)
     }
     events.deinit(allocator);
     events.* = .empty;
+}
+
+pub fn activeTaskRecordByToken(active_signal_graph: anytype, token: HostSignalToken) ?*HostSignalRecord {
+    for (active_signal_graph) |node| {
+        switch (node.record.payload) {
+            .task_source => |payload| {
+                if (payload.token == token) return node.record;
+            },
+            .ref, .const_value, .map, .map2, .combine, .interval_source => {},
+        }
+    }
+    return null;
+}
+
+pub fn activeTaskRecordByName(active_signal_graph: anytype, name: []const u8) ?*HostSignalRecord {
+    var found: ?*HostSignalRecord = null;
+    for (active_signal_graph) |node| {
+        switch (node.record.payload) {
+            .task_source => |payload| {
+                if (!std.mem.eql(u8, payload.name, name)) continue;
+                if (found != null) @panic("fake task result matched more than one active task source");
+                found = node.record;
+            },
+            .ref, .const_value, .map, .map2, .combine, .interval_source => {},
+        }
+    }
+    return found;
+}
+
+pub fn activeIntervalRecordCountByPeriod(active_signal_graph: anytype, period_ms: u64) u64 {
+    var count: u64 = 0;
+    for (active_signal_graph) |node| {
+        switch (node.record.payload) {
+            .interval_source => |payload| {
+                if (payload.period_ms == period_ms) count += 1;
+            },
+            .ref, .const_value, .map, .map2, .combine, .task_source => {},
+        }
+    }
+    return count;
+}
+
+pub fn activeIntervalRecordByToken(active_signal_graph: anytype, source_token: HostSignalToken) ?*HostSignalRecord {
+    var found: ?*HostSignalRecord = null;
+    for (active_signal_graph) |node| {
+        switch (node.record.payload) {
+            .interval_source => |payload| {
+                if (payload.token != source_token) continue;
+                if (found != null) @panic("interval token matched more than one active interval source");
+                found = node.record;
+            },
+            .ref, .const_value, .map, .map2, .combine, .task_source => {},
+        }
+    }
+    return found;
+}
+
+pub fn activeIntervalRecordByPeriod(active_signal_graph: anytype, period_ms: u64) ?*HostSignalRecord {
+    var found: ?*HostSignalRecord = null;
+    for (active_signal_graph) |node| {
+        switch (node.record.payload) {
+            .interval_source => |payload| {
+                if (payload.period_ms != period_ms) continue;
+                if (found != null) @panic("tick_interval matched more than one active interval source");
+                found = node.record;
+            },
+            .ref, .const_value, .map, .map2, .combine, .task_source => {},
+        }
+    }
+    return found;
 }
 
 pub fn appendPendingTask(
@@ -302,6 +374,39 @@ pub fn finishActiveIntervalSync(comptime Ctx: type, ctx: Ctx.Handle, intervals: 
     intervals.items.len = write_index;
 }
 
+const TestActiveNode = struct {
+    record: *HostSignalRecord,
+};
+
+fn testTaskRecord(token: HostSignalToken, name: []const u8) HostSignalRecord {
+    return .{
+        .ref_count = 1,
+        .payload = .{ .task_source = .{
+            .token = token,
+            .name = name,
+            .payload_cap = undefined,
+            .initial = undefined,
+            .done = undefined,
+            .failed = undefined,
+            .cap = undefined,
+            .reset_on_start = false,
+        } },
+    };
+}
+
+fn testIntervalRecord(token: HostSignalToken, period_ms: u64) HostSignalRecord {
+    return .{
+        .ref_count = 1,
+        .payload = .{ .interval_source = .{
+            .token = token,
+            .period_ms = period_ms,
+            .initial = undefined,
+            .tick = undefined,
+            .cap = undefined,
+        } },
+    };
+}
+
 test "effects runtime finds and removes pending tasks" {
     var first_token: u64 = 0;
     var second_token: u64 = 0;
@@ -330,6 +435,32 @@ test "effects runtime finds and removes pending tasks" {
     try std.testing.expectEqual(@as(u64, 1), removed.request_id);
     try std.testing.expectEqual(@as(usize, 1), tasks.items.len);
     try std.testing.expectEqual(@as(u64, 2), tasks.items[0].request_id);
+}
+
+test "effects runtime finds active effect source records" {
+    var task_token: u64 = 0;
+    var first_interval_token: u64 = 0;
+    var second_interval_token: u64 = 0;
+    var task_record = testTaskRecord(&task_token, "load");
+    var first_interval_record = testIntervalRecord(&first_interval_token, 250);
+    var second_interval_record = testIntervalRecord(&second_interval_token, 500);
+    var ref_record = HostSignalRecord{
+        .ref_count = 1,
+        .payload = .{ .ref = 42 },
+    };
+    const active_nodes = [_]TestActiveNode{
+        .{ .record = &ref_record },
+        .{ .record = &task_record },
+        .{ .record = &first_interval_record },
+        .{ .record = &second_interval_record },
+    };
+
+    try std.testing.expectEqual(@as(?*HostSignalRecord, &task_record), activeTaskRecordByToken(active_nodes[0..], &task_token));
+    try std.testing.expectEqual(@as(?*HostSignalRecord, &task_record), activeTaskRecordByName(active_nodes[0..], "load"));
+    try std.testing.expectEqual(@as(u64, 1), activeIntervalRecordCountByPeriod(active_nodes[0..], 250));
+    try std.testing.expectEqual(@as(?*HostSignalRecord, &first_interval_record), activeIntervalRecordByToken(active_nodes[0..], &first_interval_token));
+    try std.testing.expectEqual(@as(?*HostSignalRecord, &second_interval_record), activeIntervalRecordByPeriod(active_nodes[0..], 500));
+    try std.testing.expectEqual(@as(?*HostSignalRecord, null), activeTaskRecordByName(active_nodes[0..], "missing"));
 }
 
 test "effects runtime owns cleanup event storage" {
