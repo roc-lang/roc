@@ -815,7 +815,7 @@ test "boxy layout planner records private worker function arg and return layouts
     const extra_rep = program.root_reps.items[0];
     try program.workers.append(gpa, .{
         .id = @enumFromInt(1),
-        .request = roots[0],
+        .root_request = roots[0],
         .source = extra_source,
         .checked_type = @enumFromInt(2),
         .rep = extra_rep,

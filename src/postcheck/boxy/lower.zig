@@ -302,19 +302,23 @@ const ProcedureBuilder = struct {
         const body_expr = try self.bodyExprForWorker(resolved, &proc);
         const ret_layout = proc.workerReturnLayout();
         const ret_local = try proc.addFrameLocal(ret_layout);
-        const ret_stmt = try self.result.store.addCFStmt(.{ .ret = .{ .value = ret_local } });
-        const body_stmt = try proc.lowerExprInto(ret_local, body_expr, ret_stmt);
         const args_span = try self.result.store.addLocalSpan(proc.arg_locals.items);
-        const frame_span = try self.result.store.addLocalSpan(proc.frame_locals.items);
         const proc_id = try self.result.store.addProcSpec(.{
             .name = lirSymbol(self.symbols.fresh()),
             .args = args_span,
-            .frame_locals = frame_span,
-            .body = body_stmt,
+            .body = null,
             .ret_layout = ret_layout,
-            .stack_probe = self.stackProbeForProc(args_span, frame_span, ret_layout),
+            .stack_probe = self.stackProbeForProc(args_span, LIR.LocalSpan.empty(), ret_layout),
         });
         self.worker_procs[index] = proc_id;
+
+        const ret_stmt = try self.result.store.addCFStmt(.{ .ret = .{ .value = ret_local } });
+        const body_stmt = try proc.lowerExprInto(ret_local, body_expr, ret_stmt);
+        const frame_span = try self.result.store.addLocalSpan(proc.frame_locals.items);
+        const proc_spec = self.result.store.getProcSpecPtr(proc_id);
+        proc_spec.frame_locals = frame_span;
+        proc_spec.body = body_stmt;
+        proc_spec.stack_probe = self.stackProbeForProc(args_span, frame_span, ret_layout);
         return proc_id;
     }
 
@@ -528,6 +532,7 @@ const ProcBodyBuilder = struct {
                 break :blk try self.lowerRecordInto(target, expr.ty, record.fields, next);
             },
             .nominal => |nominal| try self.lowerNominalInto(target, nominal.backing_expr, next),
+            .call => |call| try self.lowerDirectCallInto(target, expr_id, call, next),
             .run_low_level => |run_low_level| try self.lowerLowLevelInto(target, run_low_level.op, run_low_level.args, next),
             .block => |block| blk: {
                 try self.reserveBlockBindings(block.statements);
@@ -553,6 +558,49 @@ const ProcBodyBuilder = struct {
             .lambda => boxyLowerInvariant("nested lambda reached boxy expression lowering before erased callable lowering was emitted"),
             else => boxyLowerInvariant("checked expression form reached boxy body lowering before its LIR lowering was implemented"),
         };
+    }
+
+    fn lowerDirectCallInto(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        call_expr: checked.CheckedExprId,
+        call: anytype,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        if (call.direct_target == null) {
+            boxyLowerInvariant("indirect checked call reached boxy lowering before erased callable call support");
+        }
+        const worker_id = self.parent.plan.directWorkerForCall(call_expr) orelse
+            boxyLowerInvariant("checked direct call reached boxy lowering without a planned worker");
+        const worker_layout = self.parent.layout_plan.workerLayoutFor(worker_id);
+        const worker_args = self.parent.layout_plan.workerLayoutSlice(worker_layout.args);
+        if (call.args.len != worker_args.len) {
+            boxyLowerInvariant("boxy direct call needed hidden arguments before descriptor or dictionary lowering");
+        }
+
+        for (call.args, worker_args) |arg, arg_layout| {
+            const arg_expr = self.module.checked_bodies.expr(arg);
+            if (self.workerRuntimeLayoutForType(arg_expr.ty).layoutIdx() != arg_layout.layoutIdx()) {
+                boxyLowerInvariant("boxy direct call needed argument adaptation before adapter lowering");
+            }
+        }
+
+        const ret_layout = if (worker_layout.ret) |ret| ret else worker_layout.value;
+        if (self.parent.result.store.getLocal(target).layout_idx != ret_layout.layoutIdx()) {
+            boxyLowerInvariant("boxy direct call needed return adaptation before adapter lowering");
+        }
+
+        const lowered = try self.lowerExprsToTemps(call.args);
+        defer self.parent.allocator.free(lowered);
+
+        var continuation = try self.parent.result.store.addCFStmt(.{ .assign_call = .{
+            .target = target,
+            .proc = try self.parent.emitWorker(worker_id),
+            .args = try self.parent.result.store.addLocalSpan(lowered),
+            .next = next,
+        } });
+        continuation = try self.prependLoweredExprs(call.args, lowered, continuation);
+        return continuation;
     }
 
     fn lowerIfInto(
@@ -4160,7 +4208,7 @@ test "boxy lowerer resolves procedure-template workers to checked bodies" {
     defer plan.deinit();
     try plan.workers.append(gpa, .{
         .id = @enumFromInt(0),
-        .request = dummyRootRequest(),
+        .root_request = dummyRootRequest(),
         .source = .{ .procedure_template = template_ref },
         .checked_type = @enumFromInt(9),
         .rep = @enumFromInt(0),
@@ -4210,7 +4258,7 @@ test "boxy lowerer resolves top-level direct bindings to checked bodies" {
     defer plan.deinit();
     try plan.workers.append(gpa, .{
         .id = @enumFromInt(0),
-        .request = dummyRootRequest(),
+        .root_request = dummyRootRequest(),
         .source = .{ .procedure_binding = @enumFromInt(0) },
         .checked_type = @enumFromInt(7),
         .rep = @enumFromInt(0),
@@ -4309,6 +4357,204 @@ test "boxy lowerer emits private worker proc for zero-arg numeric lambda root" {
         else => return error.TestUnexpectedResult,
     }
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = assign.target } }, out.lir_result.store.getCFStmt(assign.next));
+}
+
+test "boxy lowerer emits direct calls to planned private workers" {
+    const gpa = std.testing.allocator;
+
+    var artifact = minimalCheckedArtifact(gpa);
+    defer artifact.canonical_names.deinit();
+    defer artifact.checked_types.deinit(gpa);
+    defer artifact.checked_bodies.deinit(gpa);
+
+    try artifact.checked_types.type_id_pool.append(gpa, @enumFromInt(0));
+    try artifact.checked_types.payloads.append(gpa, .{
+        .nominal = builtinNominal(.u64, @enumFromInt(0), .{}),
+    });
+    try artifact.checked_types.payloads.append(gpa, .{
+        .function = .{
+            .kind = .pure,
+            .args = .{ .start = 0, .len = 1 },
+            .ret = @enumFromInt(0),
+            .needs_instantiation = false,
+        },
+    });
+    try artifact.checked_types.payloads.append(gpa, .{
+        .function = .{
+            .kind = .pure,
+            .args = .{},
+            .ret = @enumFromInt(0),
+            .needs_instantiation = false,
+        },
+    });
+
+    try artifact.checked_bodies.pattern_binders.append(gpa, .{
+        .id = @enumFromInt(0),
+        .pattern = @enumFromInt(0),
+        .reassignable = false,
+    });
+    try artifact.checked_bodies.pattern_binder_by_pattern.append(gpa, @enumFromInt(0));
+    try artifact.checked_bodies.pattern_id_pool.append(gpa, @enumFromInt(0));
+    try artifact.checked_bodies.stored_patterns.append(gpa, .{
+        .id = @enumFromInt(0),
+        .ty = @enumFromInt(0),
+        .source_region = base.Region.zero(),
+        .data = .{ .assign = @enumFromInt(0) },
+    });
+    try artifact.checked_bodies.expr_id_pool.append(gpa, @enumFromInt(3));
+
+    const root_template = procedureTemplateRef(artifact.key, 0);
+    const callee_template = procedureTemplateRef(artifact.key, 1);
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(0),
+        .ty = @enumFromInt(2),
+        .source_region = base.Region.zero(),
+        .data = .{ .lambda = .{ .args = .{}, .body = @enumFromInt(1) } },
+    });
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(1),
+        .ty = @enumFromInt(0),
+        .source_region = base.Region.zero(),
+        .data = .{ .call = .{
+            .func = @enumFromInt(2),
+            .args = .{ .start = 0, .len = 1 },
+            .called_via = .apply,
+            .source_fn_ty_payload = @enumFromInt(1),
+            .direct_target = @enumFromInt(0),
+        } },
+    });
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(2),
+        .ty = @enumFromInt(1),
+        .source_region = base.Region.zero(),
+        .data = .{ .lookup_external = @enumFromInt(0) },
+    });
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(3),
+        .ty = @enumFromInt(0),
+        .source_region = base.Region.zero(),
+        .data = .{ .num = .{ .value = intValue(41), .kind = .u64 } },
+    });
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(4),
+        .ty = @enumFromInt(1),
+        .source_region = base.Region.zero(),
+        .data = .{ .lambda = .{ .args = .{ .start = 0, .len = 1 }, .body = @enumFromInt(5) } },
+    });
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(5),
+        .ty = @enumFromInt(0),
+        .source_region = base.Region.zero(),
+        .data = .{ .lookup_local = .{ .pattern = @enumFromInt(0), .resolved = null } },
+    });
+    try artifact.checked_bodies.bodies.append(gpa, .{
+        .id = @enumFromInt(0),
+        .root_expr = @enumFromInt(0),
+        .owner_template = root_template,
+    });
+    try artifact.checked_bodies.bodies.append(gpa, .{
+        .id = @enumFromInt(1),
+        .root_expr = @enumFromInt(4),
+        .owner_template = callee_template,
+    });
+
+    var templates = [_]checked.CheckedProcedureTemplate{
+        checkedTemplate(root_template, @enumFromInt(2), @enumFromInt(0)),
+        checkedTemplate(callee_template, @enumFromInt(1), @enumFromInt(1)),
+    };
+    artifact.checked_procedure_templates = .{ .templates = &templates };
+
+    var bindings = [_]checked.TopLevelProcedureBinding{
+        .{
+            .source_scheme = typeSchemeKey(1),
+            .body = .{ .direct_template = .{
+                .proc_value = procedureValueRef(callee_template),
+                .template = .{ .checked = callee_template },
+            } },
+        },
+    };
+    artifact.top_level_procedure_bindings = .{ .bindings = &bindings };
+
+    var resolved_records = [_]checked.ResolvedValueRefRecord{
+        .{
+            .expr = @enumFromInt(2),
+            .ref = .{ .top_level_proc = .{
+                .binding = .{ .top_level = .{ .artifact = artifact.key, .binding = @enumFromInt(0) } },
+                .source_fn_ty_template = canonicalTypeKey(1),
+                .source_fn_ty_payload = @enumFromInt(1),
+            } },
+            .checked_ty = @enumFromInt(1),
+            .scope_depth = 0,
+        },
+    };
+    var refs_by_expr = [_]?checked.ResolvedValueRefId{
+        null,
+        null,
+        @as(checked.ResolvedValueRefId, @enumFromInt(0)),
+        null,
+        null,
+        null,
+    };
+    artifact.resolved_value_refs = .{
+        .records = &resolved_records,
+        .by_checked_expr = &refs_by_expr,
+    };
+
+    const root = checked.RootRequest{
+        .order = 0,
+        .module_idx = 0,
+        .kind = .runtime_entrypoint,
+        .source = .{ .def = @enumFromInt(0) },
+        .checked_type = @enumFromInt(2),
+        .abi = .roc,
+        .exposure = .private,
+        .procedure_template = root_template,
+    };
+    var plan = try Plan.analyzeProgram(gpa, .{
+        .root_module = .{ .module = &artifact, .roots = undefined },
+        .roots = &.{root},
+    }, .{});
+    defer plan.deinit();
+
+    try std.testing.expectEqual(@as(usize, 2), plan.workers.items.len);
+    const callee_worker = plan.directWorkerForCall(@enumFromInt(1)) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(Plan.WorkerSource{ .procedure_binding = @enumFromInt(0) }, plan.workers.items[@intFromEnum(callee_worker)].source);
+
+    var out = try run(
+        gpa,
+        .{ .root = .{ .module = &artifact, .roots = undefined } },
+        .{},
+        &plan,
+        .{},
+    );
+    defer out.deinit();
+
+    try std.testing.expectEqual(@as(usize, 1), out.lir_result.root_procs.items.len);
+    try std.testing.expectEqual(@as(usize, 2), out.lir_result.store.proc_specs.items.len);
+
+    const root_proc_id = out.lir_result.root_procs.items[0];
+    const root_proc = out.lir_result.store.getProcSpec(root_proc_id);
+    const arg = out.lir_result.store.getCFStmt(root_proc.body orelse return error.TestUnexpectedResult).assign_literal;
+    switch (arg.value) {
+        .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 41), literal.value),
+        else => return error.TestUnexpectedResult,
+    }
+    const call = out.lir_result.store.getCFStmt(arg.next).assign_call;
+    try std.testing.expect(call.proc != root_proc_id);
+    const call_args = out.lir_result.store.getLocalSpan(call.args);
+    try std.testing.expectEqual(@as(usize, 1), call_args.len);
+    try std.testing.expectEqual(arg.target, call_args[0]);
+    try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = call.target } }, out.lir_result.store.getCFStmt(call.next));
+
+    const callee_proc = out.lir_result.store.getProcSpec(call.proc);
+    const callee_args = out.lir_result.store.getLocalSpan(callee_proc.args);
+    try std.testing.expectEqual(@as(usize, 1), callee_args.len);
+    const callee_copy = out.lir_result.store.getCFStmt(callee_proc.body orelse return error.TestUnexpectedResult).assign_ref;
+    switch (callee_copy.op) {
+        .local => |local| try std.testing.expectEqual(callee_args[0], local),
+        else => return error.TestUnexpectedResult,
+    }
+    try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = callee_copy.target } }, out.lir_result.store.getCFStmt(callee_copy.next));
 }
 
 test "boxy lowerer emits checked crash as terminal LIR crash" {
@@ -9359,6 +9605,12 @@ fn moduleKey(byte: u8) checked.ModuleId {
 
 fn typeKey(byte: u8) names.TypeDigest {
     var key = names.TypeDigest{};
+    key.bytes[0] = byte;
+    return key;
+}
+
+fn canonicalTypeKey(byte: u8) names.CanonicalTypeKey {
+    var key = names.CanonicalTypeKey{};
     key.bytes[0] = byte;
     return key;
 }

@@ -153,10 +153,15 @@ pub const WorkerSource = union(enum) {
 
 pub const WorkerPlan = struct {
     id: WorkerPlanId,
-    request: checked.RootRequest,
+    root_request: ?checked.RootRequest = null,
     source: WorkerSource,
     checked_type: checked.CheckedTypeId,
     rep: TypeRepId,
+};
+
+pub const DirectCallPlan = struct {
+    call: checked.CheckedExprId,
+    worker: WorkerPlanId,
 };
 
 pub const RootPlan = struct {
@@ -173,6 +178,7 @@ pub const ProgramPlan = struct {
     allocator: Allocator,
     roots: std.ArrayList(RootPlan),
     workers: std.ArrayList(WorkerPlan),
+    direct_calls: std.ArrayList(DirectCallPlan),
     root_reps: std.ArrayList(TypeRepId),
     type_reps: std.ArrayList(TypeRepBinding),
     representations: std.ArrayList(TypeRepresentation),
@@ -187,6 +193,7 @@ pub const ProgramPlan = struct {
             .allocator = allocator,
             .roots = .empty,
             .workers = .empty,
+            .direct_calls = .empty,
             .root_reps = .empty,
             .type_reps = .empty,
             .representations = .empty,
@@ -207,6 +214,7 @@ pub const ProgramPlan = struct {
         self.representations.deinit(self.allocator);
         self.type_reps.deinit(self.allocator);
         self.root_reps.deinit(self.allocator);
+        self.direct_calls.deinit(self.allocator);
         self.workers.deinit(self.allocator);
         self.roots.deinit(self.allocator);
         self.* = ProgramPlan.init(self.allocator);
@@ -226,6 +234,13 @@ pub const ProgramPlan = struct {
 
     pub fn dictionarySlice(self: *const ProgramPlan, span: Span) []const DictionaryRequirement {
         return self.dictionaries.items[span.start .. span.start + span.len];
+    }
+
+    pub fn directWorkerForCall(self: *const ProgramPlan, call: checked.CheckedExprId) ?WorkerPlanId {
+        for (self.direct_calls.items) |direct| {
+            if (direct.call == call) return direct.worker;
+        }
+        return null;
     }
 
     pub fn repForSourceType(self: *const ProgramPlan, source_type: checked.CheckedTypeId) ?TypeRepId {
@@ -362,14 +377,7 @@ const Builder = struct {
         const rep = try self.analyzeType(root.checked_type);
         const source = workerSourceForRoot(root) orelse
             boxyPlanInvariant("boxy root request had no checked procedure worker source");
-        const worker_id: WorkerPlanId = @enumFromInt(@as(u32, @intCast(self.plan.workers.items.len)));
-        try self.plan.workers.append(self.allocator, .{
-            .id = worker_id,
-            .request = root,
-            .source = source,
-            .checked_type = root.checked_type,
-            .rep = rep,
-        });
+        const worker_id = try self.ensureWorker(source, root.checked_type, root);
 
         const id: RootPlanId = @enumFromInt(@as(u32, @intCast(self.plan.roots.items.len)));
         try self.plan.roots.append(self.allocator, .{
@@ -383,9 +391,43 @@ const Builder = struct {
         });
         try self.plan.root_reps.append(self.allocator, rep);
 
+        if (rep != self.plan.workers.items[@intFromEnum(worker_id)].rep) {
+            boxyPlanInvariant("boxy root worker representation disagreed with root representation");
+        }
+    }
+
+    fn ensureWorker(
+        self: *Builder,
+        source: WorkerSource,
+        checked_type: checked.CheckedTypeId,
+        root_request: ?checked.RootRequest,
+    ) Allocator.Error!WorkerPlanId {
+        const rep = try self.analyzeType(checked_type);
+        for (self.plan.workers.items) |worker| {
+            if (worker.checked_type == checked_type and workerSourceEql(worker.source, source)) {
+                if (root_request) |request| {
+                    if (worker.root_request == null) {
+                        self.plan.workers.items[@intFromEnum(worker.id)].root_request = request;
+                    }
+                }
+                return worker.id;
+            }
+        }
+
+        const worker_id: WorkerPlanId = @enumFromInt(@as(u32, @intCast(self.plan.workers.items.len)));
+        try self.plan.workers.append(self.allocator, .{
+            .id = worker_id,
+            .root_request = root_request,
+            .source = source,
+            .checked_type = checked_type,
+            .rep = rep,
+        });
+
         if (self.root_module != null) {
             try self.analyzeWorkerBodyTypes(source);
         }
+
+        return worker_id;
     }
 
     fn analyzeType(self: *Builder, ty: checked.CheckedTypeId) Allocator.Error!TypeRepId {
@@ -1019,6 +1061,7 @@ const Builder = struct {
                 try self.analyzeExprTypes(call.func);
                 try self.analyzeExprSliceTypes(call.args);
                 _ = try self.analyzeType(call.source_fn_ty_payload);
+                try self.analyzeDirectCallTarget(expr_id, call);
             },
             .record => |record| {
                 if (record.ext) |ext| try self.analyzeExprTypes(ext);
@@ -1177,6 +1220,105 @@ const Builder = struct {
             },
         }
     }
+
+    fn analyzeDirectCallTarget(
+        self: *Builder,
+        call_expr: checked.CheckedExprId,
+        call: anytype,
+    ) Allocator.Error!void {
+        const target = call.direct_target orelse return;
+        const source = self.workerSourceForDirectTarget(target);
+        const checked_type = self.workerCheckedTypeForDirectTarget(target, call.source_fn_ty_payload);
+        const worker = try self.ensureWorker(source, checked_type, null);
+        if (self.plan.directWorkerForCall(call_expr)) |existing| {
+            if (existing != worker) {
+                boxyPlanInvariant("boxy direct call plan tried to bind a checked call to two workers");
+            }
+            return;
+        }
+        try self.plan.direct_calls.append(self.allocator, .{
+            .call = call_expr,
+            .worker = worker,
+        });
+    }
+
+    fn workerSourceForDirectTarget(self: *Builder, target: checked.ResolvedValueId) WorkerSource {
+        const record = self.resolvedValueRecord(target);
+        return switch (record.ref) {
+            .top_level_proc,
+            .promoted_top_level_proc,
+            => |procedure| self.workerSourceForProcedureUse(procedure),
+            .platform_required_proc => |required| self.workerSourceForProcedureUse(required.procedure),
+            .local_proc => boxyPlanInvariant("local procedure direct call reached boxy planning before nested procedure worker planning"),
+            .imported_proc => boxyPlanInvariant("imported direct call reached boxy planning before imported body planning"),
+            .hosted_proc => boxyPlanInvariant("hosted direct call reached boxy planning before hosted wrapper planning"),
+            .local_param,
+            .local_value,
+            .local_mutable_version,
+            .pattern_binder,
+            .selected_hoisted_const,
+            .top_level_const,
+            .imported_const,
+            .platform_required_declaration,
+            .platform_required_const,
+            => boxyPlanInvariant("checked direct call target did not reference a procedure"),
+        };
+    }
+
+    fn workerCheckedTypeForDirectTarget(
+        self: *Builder,
+        target: checked.ResolvedValueId,
+        fallback: checked.CheckedTypeId,
+    ) checked.CheckedTypeId {
+        const record = self.resolvedValueRecord(target);
+        return switch (record.ref) {
+            .top_level_proc,
+            .promoted_top_level_proc,
+            .imported_proc,
+            .hosted_proc,
+            => |procedure| procedure.source_fn_ty_payload orelse fallback,
+            .platform_required_proc => |required| required.procedure.source_fn_ty_payload orelse
+                boxyPlanInvariant("platform-required direct call target had no relation-owned function type"),
+            .local_proc => fallback,
+            .local_param,
+            .local_value,
+            .local_mutable_version,
+            .pattern_binder,
+            .selected_hoisted_const,
+            .top_level_const,
+            .imported_const,
+            .platform_required_declaration,
+            .platform_required_const,
+            => boxyPlanInvariant("checked direct call target did not reference a procedure type"),
+        };
+    }
+
+    fn workerSourceForProcedureUse(self: *Builder, procedure: checked.ProcedureUseTemplate) WorkerSource {
+        return switch (procedure.binding) {
+            .top_level => |top_level| blk: {
+                self.requireRootArtifact(top_level.artifact);
+                _ = self.rootProcedureBindingBody(top_level.binding);
+                break :blk .{ .procedure_binding = top_level.binding };
+            },
+            .platform_required => |required| blk: {
+                self.requireRootArtifact(required.app_value.artifact);
+                _ = self.rootProcedureBindingBody(required.procedure_binding);
+                break :blk .{ .procedure_binding = required.procedure_binding };
+            },
+            .imported => boxyPlanInvariant("imported procedure use reached boxy planning before imported body planning"),
+            .hosted => boxyPlanInvariant("hosted procedure use reached boxy planning before hosted wrapper planning"),
+        };
+    }
+
+    fn resolvedValueRecord(self: *Builder, target: checked.ResolvedValueId) checked.ResolvedValueRefRecord {
+        const root_module = self.root_module orelse
+            boxyPlanInvariant("direct call target planning requires checked body metadata");
+        const raw = @intFromEnum(target);
+        if (raw >= root_module.module.resolved_value_refs.records.len) {
+            boxyPlanInvariant("checked direct call target referenced a missing resolved value");
+        }
+        return root_module.module.resolved_value_refs.records[raw];
+    }
 };
 
 fn rootRequiresHostWrapper(root: checked.RootRequest) bool {
@@ -1184,10 +1326,14 @@ fn rootRequiresHostWrapper(root: checked.RootRequest) bool {
 }
 
 fn workerSourceForRoot(root: checked.RootRequest) ?WorkerSource {
-    if (root.procedure_template) |template| return .{ .procedure_template = template };
     if (root.procedure_binding) |binding| return .{ .procedure_binding = binding };
     if (root.procedure_use) |procedure| return .{ .procedure_use = procedure };
+    if (root.procedure_template) |template| return .{ .procedure_template = template };
     return null;
+}
+
+fn workerSourceEql(a: WorkerSource, b: WorkerSource) bool {
+    return std.meta.eql(a, b);
 }
 
 fn moduleViewFromImported(imported: checked.ImportedModuleView) ModuleView {
