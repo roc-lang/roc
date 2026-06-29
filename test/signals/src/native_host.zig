@@ -18,6 +18,7 @@ const hv = @import("host_values.zig");
 const engine = @import("engine.zig");
 const spec_parser = @import("spec/spec_parser.zig");
 const benchmark = @import("bench/benchmark.zig");
+const sim_dom = @import("sim_dom.zig");
 
 const enable_runtime_metrics = builtin.is_test or build_options.metrics;
 
@@ -229,120 +230,8 @@ fn handleRocArithmeticError() noreturn {
     }
 }
 
-const DomElement = struct {
-    id: u64,
-    tag: []const u8,
-    role: ?[]const u8,
-    label: ?[]const u8,
-    test_id: ?[]const u8,
-    class: ?[]const u8,
-    text: ?[]const u8,
-    value: ?[]const u8,
-    checked: bool,
-    disabled: bool,
-    parent_id: ?u64,
-    children: std.ArrayListUnmanaged(u64),
-    bound_click_event: ?u64,
-    bound_input_event: ?u64,
-    bound_check_event: ?u64,
-    bound_pointer_down_event: ?u64,
-    bound_pointer_up_event: ?u64,
-    bound_pointer_enter_event: ?u64,
-    bound_pointer_leave_event: ?u64,
-    active: bool,
-    text_update_count: u64,
-    value_update_count: u64,
-    checked_update_count: u64,
-    disabled_update_count: u64,
-    attrs: std.ArrayListUnmanaged(DomTextAttr),
-    named_events: std.ArrayListUnmanaged(DomNamedEvent),
-
-    fn init(id: u64, tag: []const u8) DomElement {
-        return .{
-            .id = id,
-            .tag = tag,
-            .role = null,
-            .label = null,
-            .test_id = null,
-            .class = null,
-            .text = null,
-            .value = null,
-            .checked = false,
-            .disabled = false,
-            .parent_id = null,
-            .children = .empty,
-            .bound_click_event = null,
-            .bound_input_event = null,
-            .bound_check_event = null,
-            .bound_pointer_down_event = null,
-            .bound_pointer_up_event = null,
-            .bound_pointer_enter_event = null,
-            .bound_pointer_leave_event = null,
-            .active = true,
-            .text_update_count = 0,
-            .value_update_count = 0,
-            .checked_update_count = 0,
-            .disabled_update_count = 0,
-            .attrs = .empty,
-            .named_events = .empty,
-        };
-    }
-
-    fn deinit(self: *DomElement, allocator: std.mem.Allocator) void {
-        allocator.free(self.tag);
-        if (self.role) |role| allocator.free(role);
-        if (self.label) |label| allocator.free(label);
-        if (self.test_id) |test_id| allocator.free(test_id);
-        if (self.class) |class| allocator.free(class);
-        if (self.text) |text| allocator.free(text);
-        if (self.value) |value| allocator.free(value);
-        for (self.attrs.items) |attr| {
-            attr.deinit(allocator);
-        }
-        self.attrs.deinit(allocator);
-        for (self.named_events.items) |event| {
-            event.deinit(allocator);
-        }
-        self.named_events.deinit(allocator);
-        self.children.deinit(allocator);
-    }
-
-    fn textAttrIndex(self: *const DomElement, name: []const u8) ?usize {
-        for (self.attrs.items, 0..) |attr, index| {
-            if (std.mem.eql(u8, attr.name, name)) return index;
-        }
-        return null;
-    }
-
-    fn namedEventIndex(self: *const DomElement, name: []const u8) ?usize {
-        for (self.named_events.items, 0..) |event, index| {
-            if (std.mem.eql(u8, event.name, name)) return index;
-        }
-        return null;
-    }
-};
-
-const DomTextAttr = struct {
-    name: []const u8,
-    value: []const u8,
-
-    fn deinit(self: DomTextAttr, allocator: std.mem.Allocator) void {
-        allocator.free(self.name);
-        allocator.free(self.value);
-    }
-};
-
-const DomNamedEvent = struct {
-    name: []const u8,
-    event_id: u64,
-    options: u32,
-    payload_kind: EventPayloadKind,
-    payload_accessor: EventPayloadAccessor,
-
-    fn deinit(self: DomNamedEvent, allocator: std.mem.Allocator) void {
-        allocator.free(self.name);
-    }
-};
+const DomElement = sim_dom.Element;
+const DomNamedEvent = sim_dom.NamedEvent;
 
 const SpecCommandType = spec_parser.SpecCommandType;
 const LocatorKind = spec_parser.LocatorKind;
