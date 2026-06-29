@@ -1332,6 +1332,7 @@ const ProcBodyBuilder = struct {
         miss: ?PatternMiss,
         remaps: []const checked.CheckedAlternativeBinderRemap,
     ) Allocator.Error!LIR.CFStmtId {
+        if (self.patternIsIgnored(pattern_id)) return on_match;
         const pattern = self.module.checked_bodies.pattern(pattern_id);
         const field_local = try self.addFrameLocal(self.workerRuntimeLayoutForType(pattern.ty).layoutIdx());
         const bound = try self.lowerPatternThen(pattern_id, field_local, on_match, miss, remaps);
@@ -1869,6 +1870,7 @@ const ProcBodyBuilder = struct {
         field_index: u16,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
+        if (self.patternIsIgnored(pattern_id)) return next;
         const pattern = self.module.checked_bodies.pattern(pattern_id);
         const field_local = try self.addFrameLocal(self.workerRuntimeLayoutForType(pattern.ty).layoutIdx());
         const bound = try self.bindPatternFromLocal(pattern_id, field_local, next);
@@ -1894,6 +1896,7 @@ const ProcBodyBuilder = struct {
         reassigned_binders: []const checked.PatternBinderId,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
+        if (self.patternIsIgnored(pattern_id)) return next;
         const pattern = self.module.checked_bodies.pattern(pattern_id);
         const field_local = try self.addFrameLocal(self.workerRuntimeLayoutForType(pattern.ty).layoutIdx());
         const bound = try self.bindReassignPatternFromLocal(pattern_id, field_local, reassigned_binders, next);
@@ -8607,8 +8610,7 @@ test "boxy lowerer materializes record rest declaration patterns" {
     const first = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_literal;
     const second = out.lir_result.store.getCFStmt(first.next).assign_literal;
     const source_record = out.lir_result.store.getCFStmt(second.next).assign_struct;
-    const read_required_field = out.lir_result.store.getCFStmt(source_record.next).assign_ref;
-    const read_rest_field = out.lir_result.store.getCFStmt(read_required_field.next).assign_ref;
+    const read_rest_field = out.lir_result.store.getCFStmt(source_record.next).assign_ref;
     const rest_record = out.lir_result.store.getCFStmt(read_rest_field.next).assign_struct;
     const bind_rest = out.lir_result.store.getCFStmt(rest_record.next).assign_ref;
     const final_receiver = out.lir_result.store.getCFStmt(bind_rest.next).assign_ref;
@@ -8622,8 +8624,6 @@ test "boxy lowerer materializes record rest declaration patterns" {
         .i128_literal => |value| try std.testing.expectEqual(@as(i128, 22), value.value),
         else => return error.TestUnexpectedResult,
     }
-    try std.testing.expectEqual(source_record.target, read_required_field.op.field.source);
-    try std.testing.expectEqual(@as(u16, 0), read_required_field.op.field.field_idx);
     try std.testing.expectEqual(source_record.target, read_rest_field.op.field.source);
     try std.testing.expectEqual(@as(u16, 1), read_rest_field.op.field.field_idx);
     try std.testing.expectEqual(read_rest_field.target, out.lir_result.store.getLocalSpan(rest_record.fields)[0]);
