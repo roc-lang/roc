@@ -1751,61 +1751,19 @@ fn applyDirtyRenderSinks(host: *HostEnv, roc_host: *abi.RocHost, dirty_source_no
 }
 
 fn bindNodeEventKind(host: *HostEnv, elem_id: u64, kind: RenderEventKind, event_id: u64) void {
-    const elem = domElementById(host, elem_id);
-    switch (kind) {
-        .click => elem.bound_click_event = event_id,
-        .input => elem.bound_input_event = event_id,
-        .check => elem.bound_check_event = event_id,
-        .pointer_down => elem.bound_pointer_down_event = event_id,
-        .pointer_up => elem.bound_pointer_up_event = event_id,
-        .pointer_enter => elem.bound_pointer_enter_event = event_id,
-        .pointer_leave => elem.bound_pointer_leave_event = event_id,
-    }
+    sim_dom.bindEventKind(domElementById(host, elem_id), kind, event_id);
 }
 
 fn clearNodeEventKind(host: *HostEnv, elem_id: u64, kind: RenderEventKind) void {
-    const elem = domElementById(host, elem_id);
-    switch (kind) {
-        .click => elem.bound_click_event = null,
-        .input => elem.bound_input_event = null,
-        .check => elem.bound_check_event = null,
-        .pointer_down => elem.bound_pointer_down_event = null,
-        .pointer_up => elem.bound_pointer_up_event = null,
-        .pointer_enter => elem.bound_pointer_enter_event = null,
-        .pointer_leave => elem.bound_pointer_leave_event = null,
-    }
+    sim_dom.clearEventKind(domElementById(host, elem_id), kind);
 }
 
 fn bindNodeEventName(host: *HostEnv, elem_id: u64, name: []const u8, event_id: u64, options: u32, payload_kind: EventPayloadKind, payload_accessor: EventPayloadAccessor) void {
-    const allocator = host.hostAllocator();
-    const elem = domElementById(host, elem_id);
-    if (elem.namedEventIndex(name)) |index| {
-        const event = &elem.named_events.items[index];
-        event.event_id = event_id;
-        event.options = options;
-        event.payload_kind = payload_kind;
-        event.payload_accessor = payload_accessor;
-        return;
-    }
-
-    const name_copy = allocator.dupe(u8, name) catch std.process.exit(1);
-    elem.named_events.append(allocator, .{
-        .name = name_copy,
-        .event_id = event_id,
-        .options = options,
-        .payload_kind = payload_kind,
-        .payload_accessor = payload_accessor,
-    }) catch {
-        allocator.free(name_copy);
-        std.process.exit(1);
-    };
+    sim_dom.bindEventName(host.hostAllocator(), domElementById(host, elem_id), name, event_id, options, payload_kind, payload_accessor);
 }
 
 fn clearNodeEventName(host: *HostEnv, elem_id: u64, name: []const u8) void {
-    const elem = domElementById(host, elem_id);
-    const index = elem.namedEventIndex(name) orelse return;
-    const removed = elem.named_events.orderedRemove(index);
-    removed.deinit(host.hostAllocator());
+    sim_dom.clearEventName(host.hostAllocator(), domElementById(host, elem_id), name);
 }
 
 fn nodeEventName(elem: *const DomElement, name: []const u8) ?DomNamedEvent {

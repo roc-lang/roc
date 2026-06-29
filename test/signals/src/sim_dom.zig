@@ -281,6 +281,59 @@ pub fn namedEvent(elem: *const Element, name: []const u8) ?NamedEvent {
     return elem.named_events.items[index];
 }
 
+pub fn bindEventKind(elem: *Element, kind: render.EventKind, event_id: u64) void {
+    switch (kind) {
+        .click => elem.bound_click_event = event_id,
+        .input => elem.bound_input_event = event_id,
+        .check => elem.bound_check_event = event_id,
+        .pointer_down => elem.bound_pointer_down_event = event_id,
+        .pointer_up => elem.bound_pointer_up_event = event_id,
+        .pointer_enter => elem.bound_pointer_enter_event = event_id,
+        .pointer_leave => elem.bound_pointer_leave_event = event_id,
+    }
+}
+
+pub fn clearEventKind(elem: *Element, kind: render.EventKind) void {
+    switch (kind) {
+        .click => elem.bound_click_event = null,
+        .input => elem.bound_input_event = null,
+        .check => elem.bound_check_event = null,
+        .pointer_down => elem.bound_pointer_down_event = null,
+        .pointer_up => elem.bound_pointer_up_event = null,
+        .pointer_enter => elem.bound_pointer_enter_event = null,
+        .pointer_leave => elem.bound_pointer_leave_event = null,
+    }
+}
+
+pub fn bindEventName(allocator: std.mem.Allocator, elem: *Element, name: []const u8, event_id: u64, options: u32, payload_kind: render.EventPayloadKind, payload_accessor: render.EventPayloadAccessor) void {
+    if (elem.namedEventIndex(name)) |index| {
+        const event = &elem.named_events.items[index];
+        event.event_id = event_id;
+        event.options = options;
+        event.payload_kind = payload_kind;
+        event.payload_accessor = payload_accessor;
+        return;
+    }
+
+    const name_copy = allocator.dupe(u8, name) catch std.process.exit(1);
+    elem.named_events.append(allocator, .{
+        .name = name_copy,
+        .event_id = event_id,
+        .options = options,
+        .payload_kind = payload_kind,
+        .payload_accessor = payload_accessor,
+    }) catch {
+        allocator.free(name_copy);
+        std.process.exit(1);
+    };
+}
+
+pub fn clearEventName(allocator: std.mem.Allocator, elem: *Element, name: []const u8) void {
+    const index = elem.namedEventIndex(name) orelse return;
+    const removed = elem.named_events.orderedRemove(index);
+    removed.deinit(allocator);
+}
+
 test "simulated DOM element indexes attrs and named events" {
     const allocator = std.testing.allocator;
     const tag = try allocator.dupe(u8, "button");
@@ -357,4 +410,27 @@ test "simulated DOM mutation helpers update owned fields and counters" {
     setDisabled(&elem, true);
     try std.testing.expect(elem.checked);
     try std.testing.expect(elem.disabled);
+}
+
+test "simulated DOM binds and clears events" {
+    const allocator = std.testing.allocator;
+    const tag = try allocator.dupe(u8, "form");
+    var elem = Element.init(3, tag);
+    defer elem.deinit(allocator);
+
+    bindEventKind(&elem, .click, 11);
+    try std.testing.expectEqual(@as(?u64, 11), elem.bound_click_event);
+    clearEventKind(&elem, .click);
+    try std.testing.expectEqual(@as(?u64, null), elem.bound_click_event);
+
+    bindEventName(allocator, &elem, "submit", 21, 7, .unit, .none);
+    try std.testing.expectEqual(@as(u64, 21), namedEvent(&elem, "submit").?.event_id);
+    bindEventName(allocator, &elem, "submit", 22, 9, .bytes, .record_key_shift);
+    const updated = namedEvent(&elem, "submit").?;
+    try std.testing.expectEqual(@as(u64, 22), updated.event_id);
+    try std.testing.expectEqual(@as(u32, 9), updated.options);
+    try std.testing.expectEqual(render.EventPayloadKind.bytes, updated.payload_kind);
+    try std.testing.expectEqual(render.EventPayloadAccessor.record_key_shift, updated.payload_accessor);
+    clearEventName(allocator, &elem, "submit");
+    try std.testing.expect(namedEvent(&elem, "submit") == null);
 }
