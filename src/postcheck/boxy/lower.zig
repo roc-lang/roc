@@ -12456,6 +12456,151 @@ test "boxy lowerer emits list construction with committed element layout" {
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = list.target } }, out.lir_result.store.getCFStmt(list.next));
 }
 
+test "boxy lowerer stores dynamic list elements with boxy storage layout" {
+    const gpa = std.testing.allocator;
+
+    var artifact = minimalCheckedArtifact(gpa);
+    defer artifact.canonical_names.deinit();
+    defer artifact.checked_types.deinit(gpa);
+    defer artifact.checked_bodies.deinit(gpa);
+
+    try artifact.checked_types.type_id_pool.appendSlice(gpa, &.{
+        @as(checked.CheckedTypeId, @enumFromInt(0)), // List(a) element.
+        @as(checked.CheckedTypeId, @enumFromInt(0)), // First function argument.
+        @as(checked.CheckedTypeId, @enumFromInt(0)), // Second function argument.
+    });
+    try artifact.checked_types.payloads.append(gpa, .{ .flex = .{} });
+    try artifact.checked_types.payloads.append(gpa, .{
+        .nominal = builtinNominal(.list, @enumFromInt(1), .{ .start = 0, .len = 1 }),
+    });
+    try artifact.checked_types.payloads.append(gpa, .{
+        .function = .{
+            .kind = .pure,
+            .args = .{ .start = 1, .len = 2 },
+            .ret = @enumFromInt(1),
+            .needs_instantiation = false,
+        },
+    });
+
+    try artifact.checked_bodies.pattern_binders.append(gpa, .{
+        .id = @enumFromInt(0),
+        .pattern = @enumFromInt(0),
+        .reassignable = false,
+    });
+    try artifact.checked_bodies.pattern_binders.append(gpa, .{
+        .id = @enumFromInt(1),
+        .pattern = @enumFromInt(1),
+        .reassignable = false,
+    });
+    try artifact.checked_bodies.pattern_binder_by_pattern.appendSlice(gpa, &.{
+        @as(?checked.PatternBinderId, @enumFromInt(0)),
+        @as(?checked.PatternBinderId, @enumFromInt(1)),
+    });
+    try artifact.checked_bodies.pattern_id_pool.appendSlice(gpa, &.{
+        @as(checked.CheckedPatternId, @enumFromInt(0)),
+        @as(checked.CheckedPatternId, @enumFromInt(1)),
+    });
+    try artifact.checked_bodies.stored_patterns.append(gpa, .{
+        .id = @enumFromInt(0),
+        .ty = @enumFromInt(0),
+        .source_region = base.Region.zero(),
+        .data = .{ .assign = @enumFromInt(0) },
+    });
+    try artifact.checked_bodies.stored_patterns.append(gpa, .{
+        .id = @enumFromInt(1),
+        .ty = @enumFromInt(0),
+        .source_region = base.Region.zero(),
+        .data = .{ .assign = @enumFromInt(1) },
+    });
+    try artifact.checked_bodies.expr_id_pool.appendSlice(gpa, &.{
+        @as(checked.CheckedExprId, @enumFromInt(2)),
+        @as(checked.CheckedExprId, @enumFromInt(3)),
+    });
+
+    const template_ref = procedureTemplateRef(artifact.key, 0);
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(0),
+        .ty = @enumFromInt(2),
+        .source_region = base.Region.zero(),
+        .data = .{ .lambda = .{ .args = .{ .start = 0, .len = 2 }, .body = @enumFromInt(1) } },
+    });
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(1),
+        .ty = @enumFromInt(1),
+        .source_region = base.Region.zero(),
+        .data = .{ .list = .{ .start = 0, .len = 2 } },
+    });
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(2),
+        .ty = @enumFromInt(0),
+        .source_region = base.Region.zero(),
+        .data = .{ .lookup_local = .{ .pattern = @enumFromInt(0), .resolved = null } },
+    });
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(3),
+        .ty = @enumFromInt(0),
+        .source_region = base.Region.zero(),
+        .data = .{ .lookup_local = .{ .pattern = @enumFromInt(1), .resolved = null } },
+    });
+    try artifact.checked_bodies.bodies.append(gpa, .{
+        .id = @enumFromInt(0),
+        .root_expr = @enumFromInt(0),
+        .owner_template = template_ref,
+    });
+    var templates = [_]checked.CheckedProcedureTemplate{
+        checkedTemplate(template_ref, @enumFromInt(2), @enumFromInt(0)),
+    };
+    artifact.checked_procedure_templates = .{ .templates = &templates };
+
+    const root = checked.RootRequest{
+        .order = 0,
+        .module_idx = 0,
+        .kind = .runtime_entrypoint,
+        .source = .{ .def = @enumFromInt(0) },
+        .checked_type = @enumFromInt(2),
+        .abi = .roc,
+        .exposure = .private,
+        .procedure_template = template_ref,
+    };
+    var plan = try Plan.analyzeProgram(gpa, .{
+        .root_module = .{ .module = &artifact, .roots = undefined },
+        .roots = &.{root},
+    }, .{});
+    defer plan.deinit();
+
+    var out = try run(
+        gpa,
+        .{ .root = .{ .module = &artifact, .roots = undefined } },
+        .{},
+        &plan,
+        .{},
+    );
+    defer out.deinit();
+
+    const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
+    const args = out.lir_result.store.getLocalSpan(proc.args);
+    try std.testing.expectEqual(@as(usize, 2), args.len);
+
+    const first = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_ref;
+    switch (first.op) {
+        .local => |local| try std.testing.expectEqual(args[0], local),
+        else => return error.TestUnexpectedResult,
+    }
+    const second = out.lir_result.store.getCFStmt(first.next).assign_ref;
+    switch (second.op) {
+        .local => |local| try std.testing.expectEqual(args[1], local),
+        else => return error.TestUnexpectedResult,
+    }
+    const list = out.lir_result.store.getCFStmt(second.next).assign_list;
+    const list_layout = out.lir_result.layouts.getLayout(out.lir_result.store.getLocal(list.target).layout_idx);
+    try std.testing.expectEqual(layout.LayoutTag.list, list_layout.tag);
+    try std.testing.expectEqual(list_layout.getIdx(), out.lir_result.store.getLocal(first.target).layout_idx);
+    try std.testing.expectEqual(list_layout.getIdx(), out.lir_result.store.getLocal(second.target).layout_idx);
+    try std.testing.expectEqual(first.target, out.lir_result.store.getLocalSpan(list.elems)[0]);
+    try std.testing.expectEqual(second.target, out.lir_result.store.getLocalSpan(list.elems)[1]);
+    try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = list.target } }, out.lir_result.store.getCFStmt(list.next));
+}
+
 test "boxy lowerer inspects concrete lists with an index and string accumulator loop" {
     const gpa = std.testing.allocator;
 
