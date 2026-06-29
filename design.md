@@ -3235,6 +3235,17 @@ statements in front of the continuation. This lets `lookup_local` consume the
 same checked binder ids that checking produced; the lowerer never reconstructs
 lexical scope from source syntax or declaration names.
 
+Irrefutable declaration patterns lower as value binding plus explicit
+destructuring reads. Assignment patterns bind the RHS value directly. Tuple
+patterns read fields by checked tuple index. Record destructuring patterns read
+fields by translating the checked field label through the representation plan's
+ordered record roles. `as` patterns bind the whole source value and then bind
+their inner pattern from that same source. Transparent nominal patterns bind
+through the same explicit nominal boundary used by nominal expressions. Refutable
+declaration patterns, list rest construction, tag payload tests, literal tests,
+and string-pattern tests are lowered through the pattern-decision path rather
+than being treated as plain binding.
+
 Aggregate expression lowering allocates temporary LIR locals from each checked
 element or field type through the representation table, lowers children in
 source evaluation order, then emits the aggregate-building statement with a

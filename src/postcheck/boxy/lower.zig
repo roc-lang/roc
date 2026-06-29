@@ -795,7 +795,7 @@ const ProcBodyBuilder = struct {
         for (statements) |statement_id| {
             const statement = self.module.checked_bodies.statement(statement_id);
             switch (statement.data) {
-                .decl => |decl| try self.bindPatternToNewLocal(decl.pattern),
+                .decl => |decl| try self.reservePatternBindings(decl.pattern),
                 .import_,
                 .alias_decl,
                 .nominal_decl,
@@ -805,6 +805,142 @@ const ProcBodyBuilder = struct {
                 else => {},
             }
         }
+    }
+
+    fn lowerDeclPattern(
+        self: *ProcBodyBuilder,
+        pattern_id: checked.CheckedPatternId,
+        expr_id: checked.CheckedExprId,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const pattern = self.module.checked_bodies.pattern(pattern_id);
+        const source = switch (pattern.data) {
+            .assign => self.localForPattern(pattern_id),
+            else => try self.addFrameLocal(self.workerRuntimeLayoutForType(pattern.ty).layoutIdx()),
+        };
+        const bound = try self.bindPatternFromLocal(pattern_id, source, next);
+        return try self.lowerExprInto(source, expr_id, bound);
+    }
+
+    fn bindPatternFromLocal(
+        self: *ProcBodyBuilder,
+        pattern_id: checked.CheckedPatternId,
+        source: LIR.LocalId,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const pattern = self.module.checked_bodies.pattern(pattern_id);
+        return switch (pattern.data) {
+            .assign => blk: {
+                const target = self.localForPattern(pattern_id);
+                break :blk if (target == source) next else try self.assignLocal(target, source, next);
+            },
+            .as => |as| blk: {
+                const inner = try self.bindPatternFromLocal(as.pattern, source, next);
+                const binder_local = self.localForBinder(as.binder);
+                break :blk if (binder_local == source) inner else try self.assignLocal(binder_local, source, inner);
+            },
+            .tuple => |items| try self.bindTuplePattern(items, source, next),
+            .record_destructure => |destructs| try self.bindRecordPattern(pattern.ty, destructs, source, next),
+            .nominal => |nominal| try self.bindNominalPattern(nominal.backing_pattern, source, next),
+            .underscore => next,
+            .applied_tag,
+            .list,
+            .num_literal,
+            .small_dec_literal,
+            .dec_literal,
+            .frac_f32_literal,
+            .frac_f64_literal,
+            .str_literal,
+            .str_interpolation,
+            .runtime_error,
+            .pending,
+            => boxyLowerInvariant("refutable or pending checked pattern reached boxy irrefutable declaration binding"),
+        };
+    }
+
+    fn bindTuplePattern(
+        self: *ProcBodyBuilder,
+        items: []const checked.CheckedPatternId,
+        source: LIR.LocalId,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        var continuation = next;
+        var index = items.len;
+        while (index > 0) {
+            index -= 1;
+            if (index > std.math.maxInt(u16)) {
+                boxyLowerInvariant("tuple pattern index exceeded LIR field index range");
+            }
+            continuation = try self.bindFieldPattern(items[index], source, @intCast(index), continuation);
+        }
+        return continuation;
+    }
+
+    fn bindRecordPattern(
+        self: *ProcBodyBuilder,
+        record_ty: checked.CheckedTypeId,
+        destructs: []const checked.CheckedRecordDestruct,
+        source: LIR.LocalId,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        var continuation = next;
+        var index = destructs.len;
+        while (index > 0) {
+            index -= 1;
+            const destruct = destructs[index];
+            const child_pattern = switch (destruct.kind) {
+                .required,
+                .sub_pattern,
+                => |child| child,
+                .rest => boxyLowerInvariant("record rest pattern reached boxy declaration binding before rest-value lowering"),
+            };
+            continuation = try self.bindFieldPattern(
+                child_pattern,
+                source,
+                self.recordFieldLayoutIndex(record_ty, destruct.label),
+                continuation,
+            );
+        }
+        return continuation;
+    }
+
+    fn bindNominalPattern(
+        self: *ProcBodyBuilder,
+        backing_pattern: checked.CheckedPatternId,
+        source: LIR.LocalId,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const backing = self.module.checked_bodies.pattern(backing_pattern);
+        const backing_layout = self.workerRuntimeLayoutForType(backing.ty).layoutIdx();
+        const source_layout = self.parent.result.store.getLocal(source).layout_idx;
+        if (backing_layout != source_layout) {
+            boxyLowerInvariant("nominal pattern required explicit nominal boundary lowering before binding");
+        }
+        return try self.bindPatternFromLocal(backing_pattern, source, next);
+    }
+
+    fn bindFieldPattern(
+        self: *ProcBodyBuilder,
+        pattern_id: checked.CheckedPatternId,
+        source: LIR.LocalId,
+        field_index: u16,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const pattern = self.module.checked_bodies.pattern(pattern_id);
+        const field_local = try self.addFrameLocal(self.workerRuntimeLayoutForType(pattern.ty).layoutIdx());
+        const bound = try self.bindPatternFromLocal(pattern_id, field_local, next);
+        const read = if (self.isZstLocal(field_local))
+            try self.assignZst(field_local, bound)
+        else
+            try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
+                .target = field_local,
+                .op = .{ .field = .{
+                    .source = source,
+                    .field_idx = field_index,
+                } },
+                .next = bound,
+            } });
+        return read;
     }
 
     fn lowerStatement(
@@ -818,7 +954,7 @@ const ProcBodyBuilder = struct {
         self.parent.result.store.current_region = statement.source_region;
 
         return switch (statement.data) {
-            .decl => |decl| try self.lowerExprInto(self.localForPattern(decl.pattern), decl.expr, next),
+            .decl => |decl| try self.lowerDeclPattern(decl.pattern, decl.expr, next),
             .import_,
             .alias_decl,
             .nominal_decl,
@@ -892,11 +1028,42 @@ const ProcBodyBuilder = struct {
         @memset(self.binder_locals, null);
     }
 
-    fn bindPatternToNewLocal(self: *ProcBodyBuilder, pattern_id: checked.CheckedPatternId) Allocator.Error!void {
+    fn reservePatternBindings(self: *ProcBodyBuilder, pattern_id: checked.CheckedPatternId) Allocator.Error!void {
         try self.ensureBinderLocals();
         const pattern = self.module.checked_bodies.pattern(pattern_id);
-        const local = try self.addFrameLocal(self.workerRuntimeLayoutForType(pattern.ty).layoutIdx());
-        self.bindPatternToLocal(pattern_id, local);
+        switch (pattern.data) {
+            .assign => |binder| try self.reserveBinderLocal(binder, pattern.ty),
+            .as => |as| {
+                try self.reserveBinderLocal(as.binder, pattern.ty);
+                try self.reservePatternBindings(as.pattern);
+            },
+            .tuple => |items| for (items) |item| try self.reservePatternBindings(item),
+            .record_destructure => |destructs| {
+                for (destructs) |destruct| {
+                    switch (destruct.kind) {
+                        .required,
+                        .sub_pattern,
+                        .rest,
+                        => |child| try self.reservePatternBindings(child),
+                    }
+                }
+            },
+            .nominal => |nominal| try self.reservePatternBindings(nominal.backing_pattern),
+            .underscore,
+            .num_literal,
+            .small_dec_literal,
+            .dec_literal,
+            .frac_f32_literal,
+            .frac_f64_literal,
+            .str_literal,
+            .str_interpolation,
+            => {},
+            .applied_tag,
+            .list,
+            .runtime_error,
+            .pending,
+            => boxyLowerInvariant("refutable or pending checked pattern reached boxy irrefutable binder reservation"),
+        }
     }
 
     fn bindPatternToLocal(self: *ProcBodyBuilder, pattern_id: checked.CheckedPatternId, local: LIR.LocalId) void {
@@ -907,11 +1074,27 @@ const ProcBodyBuilder = struct {
         }
     }
 
+    fn reserveBinderLocal(
+        self: *ProcBodyBuilder,
+        binder: checked.PatternBinderId,
+        ty: checked.CheckedTypeId,
+    ) Allocator.Error!void {
+        const local = try self.addFrameLocal(self.workerRuntimeLayoutForType(ty).layoutIdx());
+        self.bindLocal(binder, local);
+    }
+
     fn bindLocal(self: *ProcBodyBuilder, binder: checked.PatternBinderId, local: LIR.LocalId) void {
         const index = @intFromEnum(binder);
-        if (index >= self.binder_locals.len) boxyLowerInvariant("boxy lambda arg referenced a missing pattern binder");
-        if (self.binder_locals[index] != null) boxyLowerInvariant("boxy lambda arg bound the same pattern binder more than once");
+        if (index >= self.binder_locals.len) boxyLowerInvariant("boxy pattern referenced a missing pattern binder");
+        if (self.binder_locals[index] != null) boxyLowerInvariant("boxy pattern bound the same pattern binder more than once");
         self.binder_locals[index] = local;
+    }
+
+    fn localForBinder(self: *ProcBodyBuilder, binder: checked.PatternBinderId) LIR.LocalId {
+        const binder_index = @intFromEnum(binder);
+        if (binder_index >= self.binder_locals.len) boxyLowerInvariant("boxy local lookup referenced a missing binder local");
+        return self.binder_locals[binder_index] orelse
+            boxyLowerInvariant("boxy local lookup referenced a binder before it was bound");
     }
 
     fn localForPattern(self: *ProcBodyBuilder, pattern: checked.CheckedPatternId) LIR.LocalId {
@@ -921,10 +1104,7 @@ const ProcBodyBuilder = struct {
         }
         const binder = self.module.checked_bodies.pattern_binder_by_pattern[pattern_index] orelse
             boxyLowerInvariant("boxy local lookup referenced a non-binding pattern");
-        const binder_index = @intFromEnum(binder);
-        if (binder_index >= self.binder_locals.len) boxyLowerInvariant("boxy local lookup referenced a missing binder local");
-        return self.binder_locals[binder_index] orelse
-            boxyLowerInvariant("boxy local lookup referenced a binder before it was bound");
+        return self.localForBinder(binder);
     }
 
     fn workerReturnLayout(self: *const ProcBodyBuilder) @import("layout").Idx {
@@ -1617,6 +1797,194 @@ test "boxy lowerer emits block declaration bindings with checked type layouts" {
 
     const final_copy = out.lir_result.store.getCFStmt(decl_assign.next).assign_ref;
     try std.testing.expectEqual(decl_assign.target, final_copy.op.local);
+    try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = final_copy.target } }, out.lir_result.store.getCFStmt(final_copy.next));
+}
+
+test "boxy lowerer destructures tuple declaration patterns" {
+    const gpa = std.testing.allocator;
+
+    var artifact = minimalCheckedArtifact(gpa);
+    defer artifact.canonical_names.deinit();
+    defer artifact.checked_types.deinit(gpa);
+    defer artifact.checked_bodies.deinit(gpa);
+
+    try artifact.checked_types.type_id_pool.appendSlice(gpa, &.{
+        @as(checked.CheckedTypeId, @enumFromInt(0)),
+        @as(checked.CheckedTypeId, @enumFromInt(0)),
+    });
+    try artifact.checked_types.payloads.append(gpa, .{
+        .nominal = builtinNominal(.u64, @enumFromInt(0), .{}),
+    });
+    try artifact.checked_types.payloads.append(gpa, .{
+        .tuple = .{ .start = 0, .len = 2 },
+    });
+    try artifact.checked_types.payloads.append(gpa, .{
+        .function = .{
+            .kind = .pure,
+            .args = .{},
+            .ret = @enumFromInt(0),
+            .needs_instantiation = false,
+        },
+    });
+
+    try artifact.checked_bodies.pattern_binders.append(gpa, .{
+        .id = @enumFromInt(0),
+        .pattern = @enumFromInt(1),
+        .reassignable = false,
+    });
+    try artifact.checked_bodies.pattern_binders.append(gpa, .{
+        .id = @enumFromInt(1),
+        .pattern = @enumFromInt(2),
+        .reassignable = false,
+    });
+    try artifact.checked_bodies.pattern_binder_by_pattern.appendSlice(gpa, &.{
+        null,
+        @as(?checked.PatternBinderId, @enumFromInt(0)),
+        @as(?checked.PatternBinderId, @enumFromInt(1)),
+    });
+    try artifact.checked_bodies.pattern_id_pool.appendSlice(gpa, &.{
+        @as(checked.CheckedPatternId, @enumFromInt(1)),
+        @as(checked.CheckedPatternId, @enumFromInt(2)),
+    });
+    try artifact.checked_bodies.stored_patterns.append(gpa, .{
+        .id = @enumFromInt(0),
+        .ty = @enumFromInt(1),
+        .source_region = base.Region.zero(),
+        .data = .{ .tuple = .{ .start = 0, .len = 2 } },
+    });
+    try artifact.checked_bodies.stored_patterns.append(gpa, .{
+        .id = @enumFromInt(1),
+        .ty = @enumFromInt(0),
+        .source_region = base.Region.zero(),
+        .data = .{ .assign = @enumFromInt(0) },
+    });
+    try artifact.checked_bodies.stored_patterns.append(gpa, .{
+        .id = @enumFromInt(2),
+        .ty = @enumFromInt(0),
+        .source_region = base.Region.zero(),
+        .data = .{ .assign = @enumFromInt(1) },
+    });
+
+    try artifact.checked_bodies.statement_id_pool.append(gpa, @enumFromInt(0));
+    try artifact.checked_bodies.stored_statements.append(gpa, .{
+        .id = @enumFromInt(0),
+        .source_region = base.Region.zero(),
+        .data = .{ .decl = .{
+            .pattern = @enumFromInt(0),
+            .expr = @enumFromInt(2),
+        } },
+    });
+    try artifact.checked_bodies.expr_id_pool.appendSlice(gpa, &.{
+        @as(checked.CheckedExprId, @enumFromInt(5)),
+        @as(checked.CheckedExprId, @enumFromInt(6)),
+    });
+
+    const template_ref = procedureTemplateRef(artifact.key, 0);
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(0),
+        .ty = @enumFromInt(2),
+        .source_region = base.Region.zero(),
+        .data = .{ .lambda = .{ .args = .{}, .body = @enumFromInt(1) } },
+    });
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(1),
+        .ty = @enumFromInt(0),
+        .source_region = base.Region.zero(),
+        .data = .{ .block = .{
+            .statements = .{ .start = 0, .len = 1 },
+            .final_expr = @enumFromInt(4),
+        } },
+    });
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(2),
+        .ty = @enumFromInt(1),
+        .source_region = base.Region.zero(),
+        .data = .{ .tuple = .{ .start = 0, .len = 2 } },
+    });
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(3),
+        .ty = @enumFromInt(0),
+        .source_region = base.Region.zero(),
+        .data = .{ .num = .{ .value = intValue(0), .kind = .u64 } },
+    });
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(4),
+        .ty = @enumFromInt(0),
+        .source_region = base.Region.zero(),
+        .data = .{ .lookup_local = .{ .pattern = @enumFromInt(2), .resolved = null } },
+    });
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(5),
+        .ty = @enumFromInt(0),
+        .source_region = base.Region.zero(),
+        .data = .{ .num = .{ .value = intValue(1), .kind = .u64 } },
+    });
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(6),
+        .ty = @enumFromInt(0),
+        .source_region = base.Region.zero(),
+        .data = .{ .num = .{ .value = intValue(2), .kind = .u64 } },
+    });
+    try artifact.checked_bodies.bodies.append(gpa, .{
+        .id = @enumFromInt(0),
+        .root_expr = @enumFromInt(0),
+        .owner_template = template_ref,
+    });
+    var templates = [_]checked.CheckedProcedureTemplate{
+        checkedTemplate(template_ref, @enumFromInt(2), @enumFromInt(0)),
+    };
+    artifact.checked_procedure_templates = .{ .templates = &templates };
+
+    const root = checked.RootRequest{
+        .order = 0,
+        .module_idx = 0,
+        .kind = .runtime_entrypoint,
+        .source = .{ .def = @enumFromInt(0) },
+        .checked_type = @enumFromInt(2),
+        .abi = .roc,
+        .exposure = .private,
+        .procedure_template = template_ref,
+    };
+    var plan = try Plan.analyzeProgram(gpa, .{
+        .root_module = .{ .module = &artifact, .roots = undefined },
+        .roots = &.{root},
+    }, .{});
+    defer plan.deinit();
+
+    var out = try run(
+        gpa,
+        .{ .root = .{ .module = &artifact, .roots = undefined } },
+        .{},
+        &plan,
+        .{},
+    );
+    defer out.deinit();
+
+    const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
+    const first = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_literal;
+    const second = out.lir_result.store.getCFStmt(first.next).assign_literal;
+    const tuple = out.lir_result.store.getCFStmt(second.next).assign_struct;
+    const read_first = out.lir_result.store.getCFStmt(tuple.next).assign_ref;
+    const bind_first = out.lir_result.store.getCFStmt(read_first.next).assign_ref;
+    const read_second = out.lir_result.store.getCFStmt(bind_first.next).assign_ref;
+    const bind_second = out.lir_result.store.getCFStmt(read_second.next).assign_ref;
+    const final_copy = out.lir_result.store.getCFStmt(bind_second.next).assign_ref;
+
+    switch (first.value) {
+        .i128_literal => |value| try std.testing.expectEqual(@as(i128, 1), value.value),
+        else => return error.TestUnexpectedResult,
+    }
+    switch (second.value) {
+        .i128_literal => |value| try std.testing.expectEqual(@as(i128, 2), value.value),
+        else => return error.TestUnexpectedResult,
+    }
+    try std.testing.expectEqual(tuple.target, read_first.op.field.source);
+    try std.testing.expectEqual(@as(u16, 0), read_first.op.field.field_idx);
+    try std.testing.expectEqual(read_first.target, bind_first.op.local);
+    try std.testing.expectEqual(tuple.target, read_second.op.field.source);
+    try std.testing.expectEqual(@as(u16, 1), read_second.op.field.field_idx);
+    try std.testing.expectEqual(read_second.target, bind_second.op.local);
+    try std.testing.expectEqual(bind_second.target, final_copy.op.local);
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = final_copy.target } }, out.lir_result.store.getCFStmt(final_copy.next));
 }
 
