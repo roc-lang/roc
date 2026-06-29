@@ -1,1 +1,1 @@
-RecordField := { alignment : U64, is_padding : Bool, name : Str, size : U64, type_id : U64 }
+RecordField := { is_padding : Bool, name : Str, type_id : U64 }

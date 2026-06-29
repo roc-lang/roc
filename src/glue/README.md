@@ -91,7 +91,7 @@ language-specific.
 | Risk | Required generated support | Runtime control |
 | --- | --- | --- |
 | Owned-vs-borrowed boundary confusion for hosted args, provided returns, and stored values | Explicit retain/release/move helpers and generated hosted-function comments/signatures that make ownership transfer visible | TBA |
-| Recursive refcounting for nested records, tag payloads, lists, boxes, closures, and recursive types through `Box` | Data-driven recursive retain/release helpers derived from compiler RC plans, not from type names | TBA |
+| Recursive refcounting for nested records, tag payloads, lists, boxes, closures, and recursive types through `Box` | Data-driven recursive retain/release helpers emitted from compiler RC plans, not from type names | TBA |
 | Lists with refcounted elements, including backing element-count headers | List helpers that know element width, alignment, and whether element teardown is required | TBA |
 | Seamless slices for `Str` and `List` | Allocation-base recovery helpers that never free the visible slice pointer directly | TBA |
 | Roc allocation headers, static refcount zero, and deallocation alignment | Allocator wrappers and assertions for header size, alignment, canaries, and static-data no-op release | TBA |

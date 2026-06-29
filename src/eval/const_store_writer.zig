@@ -125,6 +125,7 @@ pub const Writer = struct {
     ) Allocator.Error!checked.ConstNodeId {
         return switch (self.constPlan(plan_id)) {
             .pending => writerInvariant("pending const plan reached ConstStore writer"),
+            .layout_only => writerInvariant("layout-only const plan reached ConstStore writer"),
             .zst => try self.module.const_store.append(.zst),
             .scalar => try self.module.const_store.append(.{ .scalar = self.storeScalar(layout_idx, value) }),
             .str => try self.storeStr(value),
@@ -481,6 +482,7 @@ pub const Writer = struct {
     ) Allocator.Error!void {
         switch (self.constPlan(plan_id)) {
             .pending => writerInvariant("pending const plan reached string backing collection"),
+            .layout_only => writerInvariant("layout-only const plan reached string backing collection"),
             .zst,
             .scalar,
             => {},

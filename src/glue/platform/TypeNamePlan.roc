@@ -1,6 +1,5 @@
 import ProvidesEntry exposing [ProvidesEntry]
 import RocName exposing [RocName]
-import TypeRepr exposing [TypeRepr]
 import TypeTable exposing [TypeTable]
 
 ## Shared traversal for generated type names and platform aliases.
@@ -12,23 +11,46 @@ import TypeTable exposing [TypeTable]
 ## Target generators provide already-sanitized alias_base and module_base strings
 ## because language-specific escaping and reserved words stay local. This module
 ## only walks the reflected type graph and returns data plans.
-TypeNamePlan := {}.{
+TypeNamePlan := { table : TypeTable }.{
 	Root := { alias_base : Str, module_base : Str, type_id : U64 }
 
 	PreferredName := { name : Str, type_id : U64 }
+
+	PreferredNames := { entries : List(PreferredName) }.{
+		from_list : List(PreferredName) -> PreferredNames
+		from_list = |entries| PreferredNames.{ entries }
+
+		lookup : PreferredNames, U64 -> { found : Bool, name : Str }
+		lookup = |preferred_names, type_id| {
+			var $found = Bool.False
+			var $name = ""
+
+			for entry in preferred_names.entries {
+				if !$found and entry.type_id == type_id {
+					$found = Bool.True
+					$name = entry.name
+				}
+			}
+
+			{ found: $found, name: $name }
+		}
+	}
 
 	AliasKind := [PlainAlias, TagUnionAlias]
 
 	AliasPlan := { alias : Str, kind : AliasKind, type_id : U64 }
 
-	preferred_names : List(TypeRepr), List(Str), List(Root) -> List(PreferredName)
-	preferred_names = |type_table, existing_names, roots| {
+	from_table : TypeTable -> TypeNamePlan
+	from_table = |table| TypeNamePlan.{ table }
+
+	preferred_names : TypeNamePlan, List(Str), List(Root) -> PreferredNames
+	preferred_names = |planner, existing_names, roots| {
 		var $state = { entries: [], seen_names: existing_names, seen_type_ids: [] }
 
 		for root in roots {
 			$state = collect_preferred_for_type_id(
 				$state,
-				type_table,
+				planner.table,
 				root.type_id,
 				root.alias_base,
 				root.module_base,
@@ -36,32 +58,17 @@ TypeNamePlan := {}.{
 			)
 		}
 
-		$state.entries
+		PreferredNames.from_list($state.entries)
 	}
 
-	lookup_preferred : List(PreferredName), U64 -> { found : Bool, name : Str }
-	lookup_preferred = |preferred_names_list, type_id| {
-		var $found = Bool.False
-		var $name = ""
-
-		for entry in preferred_names_list {
-			if !$found and entry.type_id == type_id {
-				$found = Bool.True
-				$name = entry.name
-			}
-		}
-
-		{ found: $found, name: $name }
-	}
-
-	alias_plan : List(TypeRepr), List(Root) -> List(AliasPlan)
-	alias_plan = |type_table, roots| {
+	alias_plan : TypeNamePlan, List(Root) -> List(AliasPlan)
+	alias_plan = |planner, roots| {
 		var $state = { entries: [], seen_aliases: [] }
 
 		for root in roots {
 			$state = collect_aliases_for_type_id(
 				$state,
-				type_table,
+				planner.table,
 				root.type_id,
 				root.alias_base,
 				root.module_base,
@@ -72,9 +79,9 @@ TypeNamePlan := {}.{
 		$state.entries
 	}
 
-	provided_entry_root_type_id : List(TypeRepr), ProvidesEntry -> U64
-	provided_entry_root_type_id = |type_table, entry| {
-		match TypeTable.get(TypeTable.from_list(type_table), entry.type_id) {
+	provided_entry_root_type_id : TypeNamePlan, ProvidesEntry -> U64
+	provided_entry_root_type_id = |planner, entry| {
+		match planner.table.get(entry.type_id) {
 			RocFunction(func) => func.ret
 			_ => entry.type_id
 		}
@@ -87,7 +94,7 @@ TypeNamePlan := {}.{
 
 		next_visited = visited_type_ids.append(type_id)
 
-		type_repr = TypeTable.get(TypeTable.from_list(type_table), type_id)
+		type_repr = type_table.get(type_id)
 		match type_repr {
 			RocTagUnion(tu) =>
 				match TypeTable.single_variant_payload(tu) {
@@ -156,7 +163,7 @@ TypeNamePlan := {}.{
 
 		next_visited = visited_type_ids.append(type_id)
 
-		type_repr = TypeTable.get(TypeTable.from_list(type_table), type_id)
+		type_repr = type_table.get(type_id)
 		match type_repr {
 			RocRecord(rec) =>
 				if rec.name != "" and rec.anonymous {

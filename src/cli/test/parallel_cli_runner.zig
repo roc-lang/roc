@@ -5438,7 +5438,7 @@ fn customGlueZig(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *
         "pub fn decref(self: @This(), roc_host: *RocHost) void",
         "fn decrefBoxPayloadType",
         "pub extern fn roc_alloc(length: usize, alignment: usize) callconv(.c) ?*anyopaque;",
-        "pub const BuilderPrint_valueArgs = extern struct",
+        "pub const BuilderPrint_valueArgs = if (@sizeOf(usize) == 4) extern struct",
         "pub extern fn roc_stdout_line(arg0: RocStr) callconv(.c) void;",
         "pub extern fn roc_main() callconv(.c) void;",
     }) |needle| {
@@ -5770,7 +5770,7 @@ fn customGlueZigBangRecordFieldNames(io: std.Io, allocator: Allocator, env: *con
     for ([_][]const u8{
         "@\"init!\": *anyopaque",
         "@\"render!\": *anyopaque",
-        "pub const HostSet_mouseArgs = extern struct",
+        "pub const HostSet_mouseArgs = if (@sizeOf(usize) == 4) extern struct",
         "pub extern fn roc_host_set_mouse(arg0: HostSet_mouseArgs) callconv(.c) void;",
     }) |needle| {
         if (std.mem.find(u8, generated, needle) == null) {

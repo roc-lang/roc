@@ -4,11 +4,10 @@ app [make_glue] { pf: platform "../platform/main.roc" }
 import pf.Types exposing [Types]
 import pf.File exposing [File]
 import pf.TypeRepr exposing [TypeRepr]
-import pf.AbiLayout exposing [AbiLayout]
+import pf.AbiFieldLayout exposing [AbiFieldLayout]
 import pf.ArgShape exposing [ArgShape]
 import pf.GlueInput exposing [GlueInput]
 import pf.HostedFunctionInfo exposing [HostedFunctionInfo]
-import pf.RecordField exposing [RecordField]
 import pf.TagUnionRepr exposing [TagUnionRepr]
 import pf.ProvidesEntry exposing [ProvidesEntry]
 import pf.TypeTable exposing [TypeTable]
@@ -17,7 +16,8 @@ import pf.RocName exposing [RocName]
 make_glue : List(Types) -> Try(List(File), Str)
 make_glue = |types_list| {
 	input = GlueInput.from_types(types_list)
-	header_content = generate_c_header(input.hosted_functions, input.type_table, input.provides_entries)
+	type_table = TypeTable.from_list(input.types)
+	header_content = generate_c_header(input.hosted_functions, type_table, input.provides_entries)
 
 	Ok([{ name: "roc_platform_abi.h", content: header_content }])
 }
@@ -26,18 +26,18 @@ make_glue = |types_list| {
 # TypeRepr-based C Type Mapping
 # =============================================================================
 
-type_id_to_c : List(TypeRepr), List(Str), List(Str), U64 -> Str
+type_id_to_c : TypeTable, List(Str), List(Str), U64 -> Str
 type_id_to_c = |type_table, duplicate_record_names, duplicate_tag_names, type_id| {
-	type_repr = TypeTable.get(TypeTable.from_list(type_table), type_id)
+	type_repr = type_table.get(type_id)
 	type_repr_to_c(type_table, duplicate_record_names, duplicate_tag_names, type_id, type_repr)
 }
 
-type_repr_to_c : List(TypeRepr), List(Str), List(Str), U64, TypeRepr -> Str
+type_repr_to_c : TypeTable, List(Str), List(Str), U64, TypeRepr -> Str
 type_repr_to_c = |type_table, duplicate_record_names, duplicate_tag_names, type_id, type_repr| {
 	match type_repr {
 		RocBool => "bool"
 		RocBox(inner_id) =>
-			match TypeTable.get(TypeTable.from_list(type_table), inner_id) {
+			match type_table.get(inner_id) {
 				RocFunction(_) => "RocErasedCallable"
 				RocUnknown(_) => "RocBox"
 				_ => {
@@ -90,24 +90,37 @@ resolve_tag_union_type_c = |type_table, duplicate_record_names, duplicate_tag_na
 	}
 }
 
-c_record_field_decl : List(TypeRepr), List(Str), List(Str), RecordField -> Str
-c_record_field_decl = |type_table, duplicate_record_names, duplicate_tag_names, field| {
+c_record_field_decl : TypeTable, List(Str), List(Str), AbiFieldLayout, Bool -> Str
+c_record_field_decl = |type_table, duplicate_record_names, duplicate_tag_names, field, is_wasm32| {
 	field_name = name_to_c_field_ident(field.name)
 	if field.is_padding {
-		"    uint8_t ${field_name}[${U64.to_str(field.size)}];\n"
+		size = if is_wasm32 { field.size32 } else { field.size64 }
+		if size == 0 {
+			""
+		} else {
+			"    uint8_t ${field_name}[${U64.to_str(size)}];\n"
+		}
 	} else {
 		c_type = type_id_to_c(type_table, duplicate_record_names, duplicate_tag_names, field.type_id)
 		"    ${c_type} ${field_name};\n"
 	}
 }
 
-duplicate_record_names : List(TypeRepr) -> List(Str)
+c_record_fields_decl = |type_table, duplicate_record_names, duplicate_tag_names, fields, is_wasm32| {
+	var $field_strs = ""
+	for field in AbiFieldLayout.sort_by_target_offset(fields, is_wasm32) {
+		$field_strs = Str.concat($field_strs, c_record_field_decl(type_table, duplicate_record_names, duplicate_tag_names, field, is_wasm32))
+	}
+	$field_strs
+}
+
+duplicate_record_names : TypeTable -> List(Str)
 duplicate_record_names = |type_table| {
 	var $seen_names = []
 	var $duplicates = []
 
-	for type_repr in type_table {
-		match type_repr {
+	for type_info in type_table.entries() {
+		match type_info.repr {
 			RocRecord(rec) =>
 				if rec.name != "" {
 					if List.contains($seen_names, rec.name) {
@@ -134,8 +147,8 @@ record_struct_name = |duplicate_names, type_id, rec| {
 	}
 }
 
-duplicate_tag_union_names : List(TypeRepr) -> List(Str)
-duplicate_tag_union_names = |type_table| TypeTable.duplicate_tag_union_names(TypeTable.from_list(type_table))
+duplicate_tag_union_names : TypeTable -> List(Str)
+duplicate_tag_union_names = |type_table| type_table.duplicate_tag_union_names()
 
 tag_union_struct_name : List(Str), U64, TagUnionRepr -> Str
 tag_union_struct_name = |duplicate_names, type_id, tu| {
@@ -246,7 +259,7 @@ expect name_to_c_field_ident("struct") == "struct_field"
 # Header Generation
 # =============================================================================
 
-generate_c_header : List(HostedFunctionInfo), List(TypeRepr), List(ProvidesEntry) -> Str
+generate_c_header : List(HostedFunctionInfo), TypeTable, List(ProvidesEntry) -> Str
 generate_c_header = |hosted_functions, type_table, provides_list| {
 	duplicate_records = duplicate_record_names(type_table)
 	duplicate_tags = duplicate_tag_union_names(type_table)
@@ -309,16 +322,14 @@ generate_opaque_type_decls = |type_table, duplicate_records, duplicate_tags| {
 	var $seen_names = []
 	var $type_id = 0
 
-	for type_repr in type_table {
-		match type_repr {
+	for type_info in type_table.entries() {
+		match type_info.repr {
 			RocRecord(rec) =>
 				if rec.name != "" {
 					type_name = record_struct_name(duplicate_records, $type_id, rec)
 					if !(List.contains($seen_names, type_name)) {
 						$seen_names = $seen_names.append(type_name)
-						native_layout = AbiLayout.record_layout_from_fields(type_table, rec.fields)
-						wasm32_layout = AbiLayout.record_layout_from_fields_32(type_table, rec.fields)
-						$decls = Str.concat($decls, generate_opaque_type_decl(type_name, native_layout.size, native_layout.alignment, wasm32_layout.size, wasm32_layout.alignment))
+						$decls = Str.concat($decls, generate_opaque_type_decl(type_name, type_info.layout.size64, type_info.layout.alignment64, type_info.layout.size32, type_info.layout.alignment32))
 					}
 				}
 			RocTagUnion(tu) =>
@@ -326,9 +337,7 @@ generate_opaque_type_decls = |type_table, duplicate_records, duplicate_tags| {
 					type_name = tag_union_struct_name(duplicate_tags, $type_id, tu)
 					if !(List.contains($seen_names, type_name)) {
 						$seen_names = $seen_names.append(type_name)
-						native_layout = AbiLayout.tag_union_layout_64(type_table, tu)
-						wasm32_layout = AbiLayout.tag_union_layout_32(type_table, tu)
-						$decls = Str.concat($decls, generate_opaque_type_decl(type_name, native_layout.size, native_layout.alignment, wasm32_layout.size, wasm32_layout.alignment))
+						$decls = Str.concat($decls, generate_opaque_type_decl(type_name, type_info.layout.size64, type_info.layout.alignment64, type_info.layout.size32, type_info.layout.alignment32))
 					}
 				}
 			_ => {}
@@ -375,15 +384,7 @@ static_asserts = |type_name, size, alignment| {
 	}
 }
 
-native_64_static_asserts = |type_name, size, alignment| {
-	if size > 0 {
-		"#if UINTPTR_MAX == UINT64_MAX\n${static_asserts(type_name, size, alignment)}#endif\n\n"
-	} else {
-		""
-	}
-}
-
-generate_all_args_structs : List(HostedFunctionInfo), List(TypeRepr), List(Str), List(Str) -> Str
+generate_all_args_structs : List(HostedFunctionInfo), TypeTable, List(Str), List(Str) -> Str
 generate_all_args_structs = |hosted_functions, type_table, duplicate_records, duplicate_tags| {
 	var $args_structs = ""
 	for func in hosted_functions {
@@ -392,17 +393,16 @@ generate_all_args_structs = |hosted_functions, type_table, duplicate_records, du
 	$args_structs
 }
 
-generate_args_struct : HostedFunctionInfo, List(TypeRepr), List(Str), List(Str) -> Str
+generate_args_struct : HostedFunctionInfo, TypeTable, List(Str), List(Str) -> Str
 generate_args_struct = |func, type_table, duplicate_records, duplicate_tags| {
 	struct_name = name_to_struct_name(func.name)
+	arg_shape = ArgShape.from_table(type_table)
 
-	match ArgShape.hosted_args(type_table, func) {
+	match arg_shape.hosted_args(func) {
 		NoMeaningfulArgs => ""
 		SingleRecordArg(record) => {
-			var $fields = ""
-			for field in record.fields {
-				$fields = Str.concat($fields, c_record_field_decl(type_table, duplicate_records, duplicate_tags, field))
-			}
+			native_fields = c_record_fields_decl(type_table, duplicate_records, duplicate_tags, record.fields, Bool.False)
+			wasm32_fields = c_record_fields_decl(type_table, duplicate_records, duplicate_tags, record.fields, Bool.True)
 
 			doc = doc_comment([
 				"Arguments for ${func.name}",
@@ -411,8 +411,9 @@ generate_args_struct = |func, type_table, duplicate_records, duplicate_tags| {
 			])
 
 			args_name = "${struct_name}Args"
-			args_assertions = native_64_static_asserts(args_name, record.size, record.alignment)
-			"${doc}typedef struct {\n${$fields}} ${args_name};\n${args_assertions}"
+			native_assertions = static_asserts(args_name, record.layout.size64, record.layout.alignment64)
+			wasm32_assertions = static_asserts(args_name, record.layout.size32, record.layout.alignment32)
+			"${doc}#if UINTPTR_MAX == UINT64_MAX\ntypedef struct {\n${native_fields}} ${args_name};\n${native_assertions}#else\ntypedef struct {\n${wasm32_fields}} ${args_name};\n${wasm32_assertions}#endif\n\n"
 		}
 		PositionalArgs(arg_type_ids) => {
 			var $positional_fields = ""
@@ -437,8 +438,9 @@ generate_args_struct = |func, type_table, duplicate_records, duplicate_tags| {
 direct_param_list = |type_table, duplicate_records, duplicate_tags, arg_type_ids| {
 	var $params = ""
 	var $idx = 0
+	arg_shape = ArgShape.from_table(type_table)
 
-	for arg_type_id in ArgShape.positional_non_unit_type_ids(type_table, arg_type_ids) {
+	for arg_type_id in arg_shape.positional_non_unit_type_ids(arg_type_ids) {
 		arg_c = type_id_to_c(type_table, duplicate_records, duplicate_tags, arg_type_id)
 		sep = if $params == "" {
 			""
@@ -456,14 +458,15 @@ direct_param_list = |type_table, duplicate_records, duplicate_tags, arg_type_ids
 	}
 }
 
-direct_hosted_param_list : List(TypeRepr), List(Str), List(Str), HostedFunctionInfo -> Str
+direct_hosted_param_list : TypeTable, List(Str), List(Str), HostedFunctionInfo -> Str
 direct_hosted_param_list = |type_table, duplicate_records, duplicate_tags, func| {
-	use_args_wrapper = ArgShape.single_arg_is_anonymous_record(type_table, func.arg_type_ids)
+	arg_shape = ArgShape.from_table(type_table)
+	use_args_wrapper = arg_shape.single_arg_is_anonymous_record(func.arg_type_ids)
 
 	var $params = ""
 	var $idx = 0
 
-	for arg_type_id in ArgShape.positional_non_unit_type_ids(type_table, func.arg_type_ids) {
+	for arg_type_id in arg_shape.positional_non_unit_type_ids(func.arg_type_ids) {
 		arg_c = if use_args_wrapper {
 			"${name_to_struct_name(func.name)}Args"
 		} else {
@@ -485,7 +488,7 @@ direct_hosted_param_list = |type_table, duplicate_records, duplicate_tags, func|
 	}
 }
 
-generate_hosted_symbol_decls : List(HostedFunctionInfo), List(TypeRepr), List(Str), List(Str) -> Str
+generate_hosted_symbol_decls : List(HostedFunctionInfo), TypeTable, List(Str), List(Str) -> Str
 generate_hosted_symbol_decls = |hosted_functions, type_table, duplicate_records, duplicate_tags| {
 	if List.is_empty(hosted_functions) {
 		return ""
@@ -508,7 +511,7 @@ generate_provided_symbol_decls = |provides_list, type_table, duplicate_records, 
 
 	var $decls = ""
 	for entry in provides_list {
-		type_repr = TypeTable.get(TypeTable.from_list(type_table), entry.type_id)
+		type_repr = type_table.get(entry.type_id)
 		match type_repr {
 			RocFunction(func) => {
 				params = direct_param_list(type_table, duplicate_records, duplicate_tags, func.args)

@@ -1,6 +1,6 @@
 import HostedFunctionInfo exposing [HostedFunctionInfo]
 import ProvidesEntry exposing [ProvidesEntry]
-import TypeRepr exposing [TypeRepr]
+import TypeInfo exposing [TypeInfo]
 import Types exposing [Types]
 
 ## Normalized input shared by glue generators.
@@ -16,21 +16,19 @@ import Types exposing [Types]
 ## This helper only qualifies hosted function names with their module names and
 ## sorts by HostedFunctionInfo.index, matching the compiler-emitted index order.
 ## It does not derive ABI shape or inspect source syntax.
-GlueInput := {}.{
-	Input := {
-		hosted_functions : List(HostedFunctionInfo),
-		provides_entries : List(ProvidesEntry),
-		type_table : List(TypeRepr),
-	}
-
-	from_types : List(Types) -> Input
+GlueInput := {
+	hosted_functions : List(HostedFunctionInfo),
+	provides_entries : List(ProvidesEntry),
+	types : List(TypeInfo),
+}.{
+	from_types : List(Types) -> GlueInput
 	from_types = |types_list| {
 		var $hosted_functions = []
-		var $type_table = []
+		var $types = []
 		var $provides_entries = []
 
 		for types in types_list {
-			$type_table = types.type_table
+			$types = types.types
 			$provides_entries = types.provides_entries
 
 			for mod in types.modules {
@@ -54,7 +52,7 @@ GlueInput := {}.{
 		{
 			hosted_functions: List.sort_with($hosted_functions, compare_by_index),
 			provides_entries: $provides_entries,
-			type_table: $type_table,
+			types: $types,
 		}
 	}
 
