@@ -612,6 +612,8 @@ const DevRootProgressState = enum(u8) {
     done,
 };
 
+const ProgressMillis = usize;
+
 const DevRootResult = enum {
     pending,
     success,
@@ -699,8 +701,8 @@ const DevRootJob = struct {
     host: CompileTimeHost,
     result: DevRootResult = .pending,
     progress: std.atomic.Value(u8) = std.atomic.Value(u8).init(@intFromEnum(DevRootProgressState.pending)),
-    start_ns: std.atomic.Value(i64) = std.atomic.Value(i64).init(0),
-    last_progress_ns: std.atomic.Value(i64) = std.atomic.Value(i64).init(0),
+    start_ms: std.atomic.Value(ProgressMillis) = std.atomic.Value(ProgressMillis).init(0),
+    last_progress_ms: std.atomic.Value(ProgressMillis) = std.atomic.Value(ProgressMillis).init(0),
     label: DevRootLabel,
 
     fn deinit(self: *DevRootJob, allocator: Allocator) void {
@@ -767,20 +769,20 @@ const DevProgressReporter = struct {
 
     fn reportDue(self: *DevProgressReporter, io: std.Io) void {
         const stderr = self.options.stderr orelse return;
-        const now = nowNs(io);
-        const threshold: i64 = @intCast(self.options.slow_root_threshold_ns);
-        const period: i64 = @intCast(self.options.slow_root_period_ns);
-        const spinner = spinnerByte(@intCast(@divFloor(now, @as(i64, 250 * std.time.ns_per_ms))));
+        const now = nowMs(io);
+        const threshold = progressDurationMs(self.options.slow_root_threshold_ns);
+        const period = progressDurationMs(self.options.slow_root_period_ns);
+        const spinner = spinnerByte(now / 250);
 
         for (self.jobs) |*job| {
             const progress: DevRootProgressState = @enumFromInt(job.progress.load(.acquire));
             if (progress != .running) continue;
-            const started_at = job.start_ns.load(.acquire);
-            if (started_at == 0 or now - started_at < threshold) continue;
-            const last = job.last_progress_ns.load(.acquire);
-            if (last != 0 and now - last < period) continue;
-            if (job.last_progress_ns.cmpxchgStrong(last, now, .acq_rel, .acquire) != null) continue;
-            const elapsed_s = @divTrunc(now - started_at, std.time.ns_per_s);
+            const started_at = job.start_ms.load(.acquire);
+            if (started_at == 0 or now -% started_at < threshold) continue;
+            const last = job.last_progress_ms.load(.acquire);
+            if (last != 0 and now -% last < period) continue;
+            if (job.last_progress_ms.cmpxchgStrong(last, now, .acq_rel, .acquire) != null) continue;
+            const elapsed_s = (now -% started_at) / std.time.ms_per_s;
             var line_buf: [4096]u8 = undefined;
             const line = progressLine(&line_buf, spinner, job.label, @intCast(elapsed_s)) catch return;
             stderr.writeAll(line);
@@ -1031,8 +1033,8 @@ fn devRootWorker(_: Allocator, context: *DevRunContext, item_id: usize) void {
     const job = &context.jobs[item_id];
     job.host.resetForRun();
     job.progress.store(@intFromEnum(DevRootProgressState.running), .release);
-    job.start_ns.store(if (context.std_io) |io| nowNs(io) else 0, .release);
-    job.last_progress_ns.store(0, .release);
+    job.start_ms.store(if (context.std_io) |io| nowMs(io) else 0, .release);
+    job.last_progress_ms.store(0, .release);
 
     var crash_boundary = job.host.enterCrashBoundary();
     const sj = crash_boundary.set();
@@ -1060,6 +1062,16 @@ fn devRootWorker(_: Allocator, context: *DevRunContext, item_id: usize) void {
 
 fn nowNs(io: std.Io) i64 {
     return @intCast(@max(0, std.Io.Timestamp.now(io, .awake).nanoseconds));
+}
+
+fn nowMs(io: std.Io) ProgressMillis {
+    const ns: u64 = @intCast(nowNs(io));
+    return @truncate(ns / std.time.ns_per_ms);
+}
+
+fn progressDurationMs(ns: u64) ProgressMillis {
+    const ms = ns / std.time.ns_per_ms;
+    return @intCast(@min(ms, std.math.maxInt(ProgressMillis)));
 }
 
 fn spinnerByte(tick: usize) u8 {

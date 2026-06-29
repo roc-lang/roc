@@ -14169,11 +14169,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 ));
             }
 
-            // Allocate stack space for spilled arguments
-            if (stack_space_size > 0) {
-                try self.emitSubImm(.w64, stack_ptr, stack_ptr, stack_space_size);
-            }
-
             const frozen_args = try self.allocator.alloc(FrozenCallArg, arg_infos.len);
             defer self.allocator.free(frozen_args);
             for (arg_infos, 0..) |info, i| {
@@ -14194,6 +14189,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try self.emitComptimeCallEnter(hooks)
             else
                 false;
+
+            // Allocate stack space for the callee's spilled arguments only after
+            // CTFE hooks have run. The hook call has its own C ABI stack setup.
+            if (stack_space_size > 0) {
+                try self.emitSubImm(.w64, stack_ptr, stack_ptr, stack_space_size);
+            }
 
             // Place arguments in registers or on stack
             var reg_idx: u8 = 0;
