@@ -67,6 +67,17 @@ pub const HostNodeTextNodeDesc = descriptor_stream.TextNodeDesc;
 pub const HostNodeStaticTextAttrDesc = descriptor_stream.StaticTextAttrDesc;
 pub const HostNodeStaticCustomTextAttrDesc = descriptor_stream.StaticCustomTextAttrDesc;
 pub const HostNodeStaticBoolAttrDesc = descriptor_stream.StaticBoolAttrDesc;
+pub const HostNodeScopeSiteDesc = descriptor_stream.ScopeSiteDesc;
+pub const HostNodeSignalTextNodeDesc = descriptor_stream.SignalTextNodeDesc;
+pub const HostNodeSignalTextAttrDesc = descriptor_stream.SignalTextAttrDesc;
+pub const HostNodeSignalCustomTextAttrDesc = descriptor_stream.SignalCustomTextAttrDesc;
+pub const HostNodeSignalBoolAttrDesc = descriptor_stream.SignalBoolAttrDesc;
+pub const HostNodeOnChangeDesc = descriptor_stream.OnChangeDesc;
+pub const HostNodeEventDesc = descriptor_stream.EventDesc;
+pub const HostNodeNamedEventDesc = descriptor_stream.NamedEventDesc;
+pub const HostNodeStateDesc = descriptor_stream.StateDesc;
+pub const HostNodeWhenDesc = descriptor_stream.WhenDesc;
+pub const HostNodeEachDesc = descriptor_stream.EachDesc;
 pub const HostNodeMountDesc = descriptor_stream.MountDesc;
 pub const HostNodeCleanupDesc = descriptor_stream.CleanupDesc;
 pub const HostValueCapability = retained_values.HostValueCapability;
@@ -279,14 +290,8 @@ pub fn requiredEventBindingSlot(bindings: *HostRequiredEventBindings, kind: Rend
     };
 }
 
-/// Identity token interned per `Ui.state` binder.
-pub const HostBinderToken = *u64;
-
-/// Binds a state binder token to the node id it resolves to within a scope.
-pub const HostBinderBinding = struct {
-    token: HostBinderToken,
-    node_id: u64,
-};
+pub const HostBinderToken = descriptor_stream.BinderToken;
+pub const HostBinderBinding = descriptor_stream.BinderBinding;
 
 const EngineScratch = struct {
     debug_seen_render_nodes: std.ArrayListUnmanaged(bool) = .empty,
@@ -313,101 +318,6 @@ const EngineScratch = struct {
         self.elem_owned_removal.deinit(allocator);
         self.* = .{};
     }
-};
-
-pub const HostNodeScopeSiteDesc = struct {
-    node_id: u64,
-    scope_id: u64,
-    ordinal: u64,
-    parent_elem_id: u64,
-    render_insert_index: usize,
-    kind: HostNodeScopeSiteKind,
-    binder_bindings: []HostBinderBinding,
-};
-
-pub const HostNodeSignalTextNodeDesc = struct {
-    elem_id: u64,
-    parent_elem_id: u64,
-    scope_id: u64,
-    signal: HostSignalBinding,
-    read: HostTextRead,
-    cached_value: HostSignalCacheSlot = .absent,
-};
-
-pub const HostNodeSignalTextAttrDesc = struct {
-    elem_id: u64,
-    field: RenderTextField,
-    signal: HostSignalBinding,
-    read: HostTextRead,
-    cached_value: HostSignalCacheSlot = .absent,
-};
-
-pub const HostNodeSignalCustomTextAttrDesc = struct {
-    elem_id: u64,
-    name: []const u8,
-    signal: HostSignalBinding,
-    read: HostTextRead,
-    cached_value: HostSignalCacheSlot = .absent,
-};
-
-pub const HostNodeSignalBoolAttrDesc = struct {
-    elem_id: u64,
-    field: RenderBoolField,
-    signal: HostSignalBinding,
-    read: HostBoolRead,
-    cached_value: HostSignalCacheSlot = .absent,
-};
-
-pub const HostNodeOnChangeDesc = struct {
-    scope_id: u64,
-    signal: HostSignalBinding,
-    to_cmd: abi.RocErasedCallable,
-    cached_value: HostSignalCacheSlot = .absent,
-};
-
-pub const HostNodeEventDesc = struct {
-    elem_id: u64,
-    kind: RenderEventKind,
-    binder_token: HostBinderToken,
-    target_node_id: u64,
-    payload_kind: EventPayloadKind,
-    payload_accessor: EventPayloadAccessor,
-    payload_reducer: HostEventReducer,
-    owns_payload_reducer: bool = true,
-};
-
-pub const HostNodeNamedEventDesc = struct {
-    elem_id: u64,
-    name: []const u8,
-    options: u32,
-    binder_token: HostBinderToken,
-    target_node_id: u64,
-    payload_kind: EventPayloadKind,
-    payload_accessor: EventPayloadAccessor,
-    payload_reducer: HostEventReducer,
-    owns_payload_reducer: bool = true,
-};
-
-pub const HostNodeStateDesc = struct {
-    node_id: u64,
-    initial: abi.RocErasedCallable,
-    cap: HostValueCapability,
-};
-
-pub const HostNodeWhenDesc = struct {
-    node_id: u64,
-    condition: HostSignalBinding,
-    read: HostBoolRead,
-    when_false: abi.Elem,
-    when_true: abi.Elem,
-    cached_value: HostSignalCacheSlot = .absent,
-};
-
-pub const HostNodeEachDesc = struct {
-    node_id: u64,
-    items: HostSignalBinding,
-    ops: HostEachOps,
-    cached_value: HostSignalCacheSlot = .absent,
 };
 
 // Descriptor stream
