@@ -47,6 +47,7 @@ pub const FnTemplate = struct {
 pub const CaptureSlot = struct {
     id: const_store.CaptureId,
     slot: u32,
+    ty: const_store.ConstTypeId,
     plan: ConstPlanId,
 };
 
@@ -126,6 +127,8 @@ pub const Result = struct {
     root_procs: std.ArrayList(LIR.LirProcSpecId),
     root_metadata: std.ArrayList(root.RootMetadata),
     requested_layouts: std.ArrayList(RequestedLayout),
+    const_types: const_store.ConstTypeStore,
+    const_type_names: names.NameStore,
     fn_sets: std.ArrayList(FnSet),
     erased_fns: std.ArrayList(ErasedFns),
     const_plans: std.ArrayList(ConstPlan),
@@ -139,6 +142,8 @@ pub const Result = struct {
             .root_procs = .empty,
             .root_metadata = .empty,
             .requested_layouts = .empty,
+            .const_types = const_store.ConstTypeStore.init(allocator),
+            .const_type_names = names.NameStore.init(allocator),
             .fn_sets = .empty,
             .erased_fns = .empty,
             .const_plans = .empty,
@@ -160,6 +165,8 @@ pub const Result = struct {
         deinitErasedFns(allocator, self.erased_fns.items);
         self.erased_fns.deinit(allocator);
         self.fn_sets.deinit(allocator);
+        self.const_type_names.deinit();
+        self.const_types.deinit();
         self.requested_layouts.deinit(allocator);
         self.root_metadata.deinit(allocator);
         self.root_procs.deinit(allocator);
