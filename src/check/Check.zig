@@ -9727,6 +9727,13 @@ const CheckStep = enum {
     /// into `did_err`, advance the cursor by 2, then schedule the next value
     /// child (or fall through to `.exit` once all pairs are consumed).
     interp_after_part_segment,
+    /// `e_for` resume step: the `iterable` child has been checked. Build the
+    /// iterator/step dispatch constraints (which depend on the pattern's
+    /// `item_var` and the iterable's var), record the for-loop dispatch plan,
+    /// then schedule the `body` child. Runs between the iterable and body
+    /// frames, mirroring the between-child constraint construction in the
+    /// inlined `checkIteratorForLoop`.
+    for_after_iterable,
 };
 
 /// Per-node-kind loop/scratch state for interleaving nodes. `none` for the
@@ -9776,6 +9783,13 @@ const CheckKindState = union(enum) {
         first_var: Var,
         did_err: bool,
         part_cursor: usize,
+    },
+    /// State for `e_for`. Created in `.enter` after the pattern is checked
+    /// inline; carries the pattern's `item_var` (needed to build the
+    /// iterator/step dispatch constraints in the `for_after_iterable` resume
+    /// step, once the iterable child has been checked).
+    for_loop: struct {
+        item_var: Var,
     },
 };
 
@@ -11967,6 +11981,19 @@ fn checkExprIter(self: *Self, root_idx: CIR.Expr.Idx, root_env: *Env, root_expec
                     .e_interpolation => {
                         try self.enterInterpolationExpr(top);
                     },
+                    // INTERLEAVING: `e_for` marks the hoist observable effect,
+                    // checks its pattern inline, and schedules the `iterable`
+                    // child. The `for_after_iterable` resume step builds the
+                    // iterator/step dispatch constraints (which depend on the
+                    // pattern's `item_var` and the iterable's var) and records
+                    // the for-loop dispatch plan before scheduling the `body`
+                    // child; `.exit` unifies the loop expr with `{}`. Delegated
+                    // to a helper (NOT inlined) so its scheduling/constraint
+                    // locals do not bloat `checkExprIter`'s native stack frame on
+                    // the deep statement-nesting spine (mirrors `enterCallExpr`).
+                    .e_for => {
+                        try self.enterForExpr(top);
+                    },
                     // Helper-delegating / per-child-state kinds: like the leaf
                     // kinds below, advance to `.exit` and run the recursive body
                     // verbatim there. Their child `checkExpr` calls re-enter the
@@ -12044,6 +12071,15 @@ fn checkExprIter(self: *Self, root_idx: CIR.Expr.Idx, root_env: *Env, root_expec
             },
             .interp_after_part_segment => {
                 try self.interpAfterPartSegment(top);
+            },
+            // `e_for` resume step. The `iterable` child has been checked and its
+            // `does_fx` OR'd into this frame. Delegated to a helper (NOT inlined)
+            // so its constraint-building locals do not bloat `checkExprIter`'s
+            // native stack frame on the deep statement-nesting spine. The helper
+            // builds the iterator/step dispatch constraints, records the for-loop
+            // dispatch plan, advances to `.exit`, and schedules the `body` child.
+            .for_after_iterable => {
+                try self.forAfterIterable(top);
             },
             .exit => {
                 const f = &self.check_frame_stack.items[top];
@@ -13131,6 +13167,19 @@ fn checkExprIter(self: *Self, root_idx: CIR.Expr.Idx, root_env: *Env, root_expec
                     .e_interpolation => {
                         try self.checkInterpolationPostLoop(top);
                     },
+                    // POST-BODY body for `e_for`. The pattern, iterable, and body
+                    // children have all been checked (the iterable/body via
+                    // scheduled frames, their `does_fx` OR'd into `f.does_fx` on
+                    // pop; the iterator/step dispatch constraints were built in
+                    // the `for_after_iterable` resume step). Like `for` loops in
+                    // general, the loop body is an ordinary expression whose final
+                    // value is discarded by the loop construct: the loop
+                    // expression evaluates to `{}`, but the body is not required
+                    // to produce `{}`. `unifyWith` does not append to
+                    // `check_frame_stack`, so `f` stays valid through this arm.
+                    .e_for => {
+                        try self.unifyWith(f.prologue.expr_var, .{ .structure = .empty_record }, f.env);
+                    },
                     else => unreachable, // gated by isMigratedKind
                 }
                 const does_fx = try self.checkExitEpilogue(
@@ -13205,6 +13254,12 @@ fn isMigratedKind(expr: CIR.Expr) bool {
         // `parts` children with between-child unifies; `.exit` builds the
         // iterator constraint.
         .e_interpolation,
+        // Interleaving loop kind: `.enter` checks the pattern inline and
+        // schedules the `iterable` child; the `for_after_iterable` resume step
+        // builds the iterator/step dispatch constraints and records the for-loop
+        // dispatch plan before scheduling the `body` child; `.exit` unifies the
+        // loop expr with `{}`.
+        .e_for,
         // Variable-arity multi-child kinds (this batch): schedule every child
         // as a frame in `.enter`, run the post-child body in `.exit`.
         .e_list,
@@ -16462,6 +16517,91 @@ fn publishUnaryDispatchExpr(
         constraint_fn_var,
         surface_origin,
     );
+}
+
+/// `e_for` `.enter` step for the iterative driver (extracted from
+/// `checkExprIter` so its scheduling local does not bloat that function's native
+/// stack frame on the deep statement-nesting spine — mirrors `enterCallExpr`).
+///
+/// Inlines the front of `checkIteratorForLoop`: marks the hoist observable
+/// effect, checks the loop pattern inline (patterns are not on the work stack;
+/// `checkPattern` does not append to `check_frame_stack`, so `items[top]` stays
+/// valid across it), parks the pattern's `item_var` in `kind_state.for_loop`,
+/// advances the frame to `.for_after_iterable`, and schedules the `iterable`
+/// child (`append` may realloc, so the schedule is done last). `top` indexes the
+/// for-loop frame.
+fn enterForExpr(self: *Self, top: usize) Allocator.Error!void {
+    const for_expr = self.cir.store.getExpr(self.check_frame_stack.items[top].expr_idx).e_for;
+    const env = self.check_frame_stack.items[top].env;
+    const child_expected = self.check_frame_stack.items[top].prologue.child_expected;
+
+    // `for` is an observable effect; mark BEFORE checking the children, matching
+    // the recursive arm's ordering (`markCurrentHoistObservableEffect` runs
+    // before `checkIteratorForLoop`).
+    self.markCurrentHoistObservableEffect();
+
+    // Check the loop pattern inline (mirrors `checkIteratorForLoop`'s leading
+    // `checkPattern(pattern, .for_, env)`).
+    try self.checkPattern(for_expr.patt, .for_, env);
+    const item_var: Var = ModuleEnv.varFrom(for_expr.patt);
+
+    // Park `item_var` for the resume step, advance, THEN schedule the iterable
+    // (the append below may realloc, invalidating `items[top]` pointers).
+    self.check_frame_stack.items[top].kind_state = .{ .for_loop = .{ .item_var = item_var } };
+    self.check_frame_stack.items[top].step = .for_after_iterable;
+    try self.check_frame_stack.append(self.gpa, makeEnterFrame(for_expr.expr, env, child_expected));
+}
+
+/// `e_for` `for_after_iterable` resume step for the iterative driver (extracted
+/// from `checkExprIter` so its constraint-building locals do not bloat that
+/// function's native stack frame — mirrors `checkCallAfterFunc`).
+///
+/// Inlines the BETWEEN-CHILD body of `checkIteratorForLoop`: now that the
+/// iterable child has been checked, build the `iter`/`next` synthetic receiver
+/// dispatch constraints (which depend on the pattern's `item_var` and the
+/// iterable's var) and record the for-loop dispatch plan, then schedule the
+/// `body` child. None of the constraint-building calls re-enter `checkExpr` or
+/// append to `check_frame_stack`, so `items[top]` stays valid until the final
+/// `body` schedule (which may realloc).
+fn forAfterIterable(self: *Self, top: usize) Allocator.Error!void {
+    const for_expr = self.cir.store.getExpr(self.check_frame_stack.items[top].expr_idx).e_for;
+    const env = self.check_frame_stack.items[top].env;
+    const child_expected = self.check_frame_stack.items[top].prologue.child_expected;
+    const loop_region = self.check_frame_stack.items[top].prologue.expr_region;
+    const item_var = self.check_frame_stack.items[top].kind_state.for_loop.item_var;
+    const loop_node = ModuleEnv.nodeIdxFrom(self.check_frame_stack.items[top].expr_idx);
+
+    const iterable = for_expr.expr;
+    const iterable_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(iterable));
+    const iterable_var: Var = ModuleEnv.varFrom(iterable);
+
+    const iterator_var = try self.mkIterVar(item_var, env, iterable_region);
+    const iter_method = try @constCast(self.cir).insertIdent(base.Ident.for_text("iter"));
+    const iter_fn_var = try self.mkSyntheticReceiverDispatchConstraint(
+        iterable_var,
+        &.{},
+        iterator_var,
+        iter_method,
+        env,
+        iterable_region,
+    );
+
+    const step_var = try self.freshFromContent(try self.mkIteratorStepContent(item_var, iterator_var, env), env, loop_region);
+    const next_method = try @constCast(self.cir).insertIdent(base.Ident.for_text("next"));
+    const next_fn_var = try self.mkSyntheticReceiverDispatchConstraint(
+        iterator_var,
+        &.{},
+        step_var,
+        next_method,
+        env,
+        loop_region,
+    );
+
+    try self.cir.recordForLoopDispatchPlan(loop_node, ModuleEnv.nodeIdxFrom(for_expr.patt), ModuleEnv.nodeIdxFrom(iterable), iter_fn_var, next_fn_var);
+
+    // Advance, THEN schedule the body (the append below may realloc).
+    self.check_frame_stack.items[top].step = .exit;
+    try self.check_frame_stack.append(self.gpa, makeEnterFrame(for_expr.body, env, child_expected));
 }
 
 fn checkIteratorForLoop(

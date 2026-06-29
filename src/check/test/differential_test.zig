@@ -350,6 +350,26 @@ test "differential: for-loop over range (type dispatch) matches" {
     );
 }
 
+test "differential: for-loop over list (interleaved pattern/iterable/body) matches" {
+    // Exercises e_for as an interleaving kind: the loop pattern is checked
+    // inline in `.enter`, the `iterable` (a list) is scheduled as a child, the
+    // `for_after_iterable` resume step builds the iter/next dispatch constraints
+    // from the pattern's item_var and the iterable's var, and the `body` is
+    // scheduled before `.exit` unifies the loop expr with `{}`.
+    try expectIterMatchesRecursive(
+        \\sum_list : List(U64) -> U64
+        \\sum_list = |items| {
+        \\    var total = 0
+        \\    for x in items {
+        \\        total = total + x
+        \\    }
+        \\    total
+        \\}
+        \\
+        \\main! = |_args| sum_list([1, 2, 3])
+    );
+}
+
 test "differential: string interpolation (interleaved parts) matches" {
     // Exercises e_interpolation: the `first` segment, an interpolated value
     // child (`x`), and a following segment child, with the between-child
