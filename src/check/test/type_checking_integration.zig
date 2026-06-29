@@ -4871,7 +4871,10 @@ test "check type - nested same-module mutually recursive nominal types" {
     try checkTypesModule(source, .{ .pass = .{ .def = "mk" } }, "{} -> Tree");
 }
 
-test "check type - primitive-backed nominal lifts numeric literal" {
+test "check type - bare numeric literal does not lift into a primitive-backed nominal" {
+    // A literal does NOT implicitly become a nominal value. `Distance` declares no
+    // `from_numeral`, so a bare `0` is rejected; use explicit `Distance.(0)` (see
+    // "explicit value-backed nominal construction") or declare a `from_numeral`.
     const source =
         \\main! = |_| {}
         \\
@@ -4880,10 +4883,10 @@ test "check type - primitive-backed nominal lifts numeric literal" {
         \\d : Distance
         \\d = 0
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "Distance");
+    try checkTypesModule(source, .fail, "Type Mismatch");
 }
 
-test "check type - primitive-backed nominal lifts string literal" {
+test "check type - bare string literal does not lift into a primitive-backed nominal" {
     const source =
         \\main! = |_| {}
         \\
@@ -4892,10 +4895,10 @@ test "check type - primitive-backed nominal lifts string literal" {
         \\token : Token
         \\token = "abc"
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "Token");
+    try checkTypesModule(source, .fail, "Type Mismatch");
 }
 
-test "check type - multi-level numeric nominal chain lifts numeric literal" {
+test "check type - bare numeric literal does not lift through a nominal chain" {
     const source =
         \\main! = |_| {}
         \\
@@ -4905,22 +4908,20 @@ test "check type - multi-level numeric nominal chain lifts numeric literal" {
         \\x : Outer
         \\x = 0
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "Outer");
+    try checkTypesModule(source, .fail, "Type Mismatch");
 }
 
-test "check type - builtin-backed nominal does not inherit backing methods" {
-    // A literal lifts into `Distance` because `from_numeral` is inherited from
-    // the `U64` backing (the backing-chain walk). Other methods are NOT inherited
-    // that way: `+` requires `Distance` to provide `add`, which it does not, so
-    // this is a MISSING METHOD error — not a TYPE MISMATCH. This pins the
-    // asymmetry: only the literal conversion rides through the backing chain.
+test "check type - constructed nominal does not inherit backing methods" {
+    // `d` is a real Distance, built explicitly. `+` requires Distance to provide
+    // `add`, which it does not: newtypes do not inherit their backing's methods.
+    // This is a MISSING METHOD error, distinct from the literal-coercion rejection.
     const source =
         \\main! = |_| {}
         \\
         \\Distance := U64
         \\
         \\d : Distance
-        \\d = 0
+        \\d = Distance.(0)
         \\
         \\total = d + d
     ;
@@ -4993,6 +4994,174 @@ test "check type - opaque nominal construction in defining module" {
         \\s = Secret.(7)
     ;
     try checkTypesModule(source, .{ .pass = .last_def }, "Secret");
+}
+
+test "check type - nominal destructure pattern in match binds the backing value" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\Distance := U64
+        \\
+        \\unwrap : Distance -> U64
+        \\unwrap = |d| match d {
+        \\    Distance.(n) => n
+        \\}
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Distance -> U64");
+}
+
+test "check type - nominal destructure pattern in lambda arg binds the backing value" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\Distance := U64
+        \\
+        \\unwrap : Distance -> U64
+        \\unwrap = |Distance.(n)| n
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Distance -> U64");
+}
+
+// LITERAL COERCION + STRUCTURAL LIFTING INTO NOMINALS (executable spec)
+//
+// Two DIFFERENT operations, deliberately kept separate:
+//
+//  - STRUCTURAL values (records/tags) LIFT into a matching nominal by
+//    unification — the value structurally IS the backing. Single-level only;
+//    chain composition is unsupported (the "does not lift through a newtype
+//    chain" cases below stay rejected).
+//
+//  - LITERALS do NOT implicitly lift. `from_` is the explicit, per-nominal
+//    opt-in: a literal coerces into a nominal only if that nominal is a builtin
+//    or declares its own from_. There is no walk into the backing chain to
+//    inherit an opt-in the nominal never declared. To put a literal into a
+//    transparent newtype, use explicit construction (`Nominal.(value)`).
+//    See docs/langref/types.md ("Constructing Nominal Types").
+
+test "consolidated - record literal lifts into record-backed nominal (control)" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\Point := { x : U64 }
+        \\
+        \\p : Point
+        \\p = { x: 1 }
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Point");
+}
+
+test "consolidated - record literal does not lift through a newtype chain" {
+    // Structural lifting is single-level only: it does NOT compose through a
+    // transparent newtype chain (`Outer := Inner := { … }`). Pinned as the
+    // current rejection. We may support chain composition in the future — or we
+    // may decide not to.
+    const source =
+        \\main! = |_| {}
+        \\
+        \\Inner := { x : U64 }
+        \\Outer := Inner
+        \\
+        \\p : Outer
+        \\p = { x: 1 }
+    ;
+    try checkTypesModule(source, .fail_first, "Type Mismatch");
+}
+
+test "consolidated - tag lifts into tag-backed nominal (control)" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\Color := [Red, Green]
+        \\
+        \\c : Color
+        \\c = Red
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Color");
+}
+
+test "consolidated - tag does not lift through a newtype chain" {
+    // Same as the record case: tag lifting is single-level and does not compose
+    // through a transparent newtype chain. Pinned as the current rejection; we
+    // may support chain composition in the future, or we may decide not to.
+    const source =
+        \\main! = |_| {}
+        \\
+        \\InnerC := [Red, Green]
+        \\OuterC := InnerC
+        \\
+        \\c : OuterC
+        \\c = Red
+    ;
+    try checkTypesModule(source, .fail_first, "Type Mismatch");
+}
+
+test "consolidated - bare literal does not lift through a builtin newtype chain" {
+    // OuterN declares no from_; a bare literal is rejected regardless of value.
+    const source =
+        \\main! = |_| {}
+        \\
+        \\InnerN := U64
+        \\OuterN := InnerN
+        \\
+        \\n : OuterN
+        \\n = 5
+    ;
+    try checkTypesModule(source, .fail_first, "Type Mismatch");
+}
+
+test "consolidated - a mid-chain custom from_ is NOT inherited through a transparent newtype" {
+    // Inner declares from_numeral, but Outer (transparent over Inner) does not.
+    // No implicit inheritance through the chain, so a bare literal annotated as
+    // Outer is rejected. Use Outer.(...) or declare from_ on Outer.
+    const source =
+        \\main! = |_| {}
+        \\
+        \\Inner := U8.{
+        \\    from_numeral : Numeral -> Try(Inner, [InvalidNumeral(Str)])
+        \\    from_numeral = |_| Ok(Inner.(0))
+        \\}
+        \\Outer := Inner
+        \\
+        \\x : Outer
+        \\x = 300
+    ;
+    try checkTypesModule(source, .fail_first, "Type Mismatch");
+}
+
+test "consolidated - bare string literal does not lift through a builtin newtype chain" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\InnerS := Str
+        \\OuterS := InnerS
+        \\s : OuterS
+        \\s = "hi"
+    ;
+    try checkTypesModule(source, .fail_first, "Type Mismatch");
+}
+
+test "consolidated - explicit construction puts a literal through a newtype chain" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\Inner := U64
+        \\Outer := Inner
+        \\
+        \\x : Outer
+        \\x = Outer.(Inner.(5))
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Outer");
+}
+
+test "consolidated - literal into a record-backed nominal is rejected" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\W := { x : U8 }
+        \\w : W
+        \\w = 5
+    ;
+    try checkTypesModule(source, .fail_first, "Type Mismatch");
 }
 
 // early return //
@@ -6179,7 +6348,7 @@ test "check type - annotation with open ext without wildcard is non-exhaustive" 
         \\  }
         \\}
     ;
-    try checkTypesModule(source, .fail, "Non-exhaustive Match");
+    try checkTypesModule(source, .fail, "Non Exhaustive Match");
 }
 
 test "check type - exhaustive match with nested payload is inferred as closed" {

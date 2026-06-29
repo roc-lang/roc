@@ -2538,7 +2538,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
         .default_app_missing_main => |data| blk: {
             const region_info = self.calcRegionInfo(data.region);
 
-            var report = try Report.init(allocator, "Missing Main! Function", "", .runtime_error);
+            var report = try Report.init(allocator, "Missing `main!` Function", "", .runtime_error);
             try report.headline.addReflowingText("Default app modules must have a ");
             try report.headline.addInlineCode("main!");
             try report.headline.addReflowingText(" function.");
@@ -2568,7 +2568,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
         .default_app_wrong_arity => |data| blk: {
             const region_info = self.calcRegionInfo(data.region);
 
-            var report = try Report.init(allocator, "Main! Should Take 1 Argument", "", .runtime_error);
+            var report = try Report.init(allocator, "`main!` Should Take 1 Argument", "", .runtime_error);
             try report.headline.addInlineCode("main!");
             try report.headline.addReflowingText(" is defined but has the wrong number of arguments. ");
             try report.headline.addInlineCode("main!");

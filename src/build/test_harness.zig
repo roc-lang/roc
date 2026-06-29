@@ -432,10 +432,42 @@ pub fn nsToMs(ns: u64) f64 {
     return @as(f64, @floatFromInt(ns)) / 1_000_000.0;
 }
 
-/// Print a single row of timing statistics, or dashes if no data is available.
+/// Destination stream for human-facing report output (summaries, timing
+/// tables, per-test lines).
+pub const ReportDest = enum { stdout, stderr };
+
+/// Print formatted report output to stdout.
+///
+/// Routine runner output belongs on stdout, not stderr. zig's build runner
+/// treats a child's stderr as diagnostic output and echoes it — together with
+/// a misleading "failed command" line — even when the process exits 0 (it
+/// optimistically records the command at spawn and only clears it on certain
+/// paths). A Run step created with `expectExitCode` captures stderr for this
+/// purpose. Keeping a passing run's output on stdout leaves stderr empty, so
+/// the build stays quiet on success; genuine failures still go to stderr and
+/// fail the step. Silently drops the line on a formatting/write error.
+pub fn printStdout(comptime fmt: []const u8, args: anytype) void {
+    var buf: [4096]u8 = undefined;
+    const text = std.fmt.bufPrint(&buf, fmt, args) catch return;
+    writeAll(stdoutFd(), text);
+}
+
+fn reportPrint(dest: ReportDest, comptime fmt: []const u8, args: anytype) void {
+    switch (dest) {
+        .stdout => printStdout(fmt, args),
+        .stderr => std.debug.print(fmt, args),
+    }
+}
+
+/// Print a single timing statistics row to stderr.
 pub fn printStatsRow(label: []const u8, stats: ?TimingStats) void {
+    printStatsRowTo(.stderr, label, stats);
+}
+
+/// Like `printStatsRow`, but routes to the given destination stream.
+pub fn printStatsRowTo(dest: ReportDest, label: []const u8, stats: ?TimingStats) void {
     if (stats) |s| {
-        std.debug.print("  {s:<8} {d:>8.1} {d:>8.1} {d:>8.1} {d:>8.1} {d:>8.1} {d:>8.1} {d:>8.1}   {d:>3}\n", .{
+        reportPrint(dest, "  {s:<8} {d:>8.1} {d:>8.1} {d:>8.1} {d:>8.1} {d:>8.1} {d:>8.1} {d:>8.1}   {d:>3}\n", .{
             label,
             nsToMs(s.min),
             nsToMs(s.max),
@@ -451,10 +483,15 @@ pub fn printStatsRow(label: []const u8, stats: ?TimingStats) void {
 
 /// Print the header row for timing statistics output.
 pub fn printStatsHeader() void {
-    std.debug.print("  {s:<8} {s:>8} {s:>8} {s:>8} {s:>8} {s:>8} {s:>8} {s:>8}   {s:>3}\n", .{
+    printStatsHeaderTo(.stderr);
+}
+
+/// Like `printStatsHeader`, but routes to the given destination stream.
+pub fn printStatsHeaderTo(dest: ReportDest) void {
+    reportPrint(dest, "  {s:<8} {s:>8} {s:>8} {s:>8} {s:>8} {s:>8} {s:>8} {s:>8}   {s:>3}\n", .{
         "Phase", "Min", "Max", "Mean", "Median", "StdDev", "P95", "Total", "N",
     });
-    std.debug.print("  {s:-<8} {s:->8} {s:->8} {s:->8} {s:->8} {s:->8} {s:->8} {s:->8}   {s:->3}\n", .{
+    reportPrint(dest, "  {s:-<8} {s:->8} {s:->8} {s:->8} {s:->8} {s:->8} {s:->8} {s:->8}   {s:->3}\n", .{
         "", "", "", "", "", "", "", "", "",
     });
 }
@@ -462,6 +499,19 @@ pub fn printStatsHeader() void {
 /// Print the N slowest tests by duration. Caller provides a getName callback
 /// to extract the display name from the test spec.
 pub fn printSlowestN(
+    comptime Spec: type,
+    specs: []const Spec,
+    durations: []const u64,
+    n: usize,
+    gpa: Allocator,
+    comptime getName: fn (Spec) []const u8,
+) void {
+    printSlowestNTo(.stderr, Spec, specs, durations, n, gpa, getName);
+}
+
+/// Like `printSlowestN`, but routes to the given destination stream.
+pub fn printSlowestNTo(
+    dest: ReportDest,
     comptime Spec: type,
     specs: []const Spec,
     durations: []const u64,
@@ -488,10 +538,10 @@ pub fn printSlowestN(
 
     const show_count = @min(n, top_buf.items.len);
     if (show_count > 0) {
-        std.debug.print("\n  Slowest {d} tests:\n", .{show_count});
+        reportPrint(dest, "\n  Slowest {d} tests:\n", .{show_count});
         for (top_buf.items[0..show_count], 1..) |entry, rank| {
             const ms = nsToMs(entry.duration_ns);
-            std.debug.print("    {d}. {s}  ({d:.1}ms)\n", .{ rank, getName(specs[entry.idx]), ms });
+            reportPrint(dest, "    {d}. {s}  ({d:.1}ms)\n", .{ rank, getName(specs[entry.idx]), ms });
         }
     }
 }

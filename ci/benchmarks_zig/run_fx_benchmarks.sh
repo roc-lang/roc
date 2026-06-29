@@ -175,21 +175,6 @@ is_intentional_error_fixture() {
     return 1
 }
 
-is_non_benchmark_fixture() {
-    local filename="$1"
-
-    # These files are tiny semantic/codegen regression fixtures. They should run
-    # in the FX test suite, but `roc <file> --no-cache` mostly measures fixed
-    # compiler/linker setup for them rather than program execution.
-    case "$filename" in
-        zst_nested_singleton_shapes.roc)
-            return 0
-            ;;
-    esac
-
-    return 1
-}
-
 probe_command() {
     local roc_bin="$1"
     local fx_file="$2"
@@ -415,10 +400,6 @@ for fx_file in test/fx/*.roc; do
         echo "Skipping $fx_file (intentional error fixture)"
         continue
     fi
-    if is_non_benchmark_fixture "$filename"; then
-        echo "Skipping $fx_file (semantic regression fixture, not an execution benchmark)"
-        continue
-    fi
     # Skip files that don't have a main! entry point (app [ main! ])
     if ! grep -qE '^app[[:space:]]*\[[[:space:]]*main![[:space:]]*\]' "$fx_file" 2>/dev/null; then
         echo "Skipping $fx_file (no main! entry point)"
@@ -442,8 +423,8 @@ SKIPPED_BASELINE_FILES=()
 SKIPPED_EXIT_CODE_DIFF_FILES=()
 SKIPPED_OUTPUT_DIFF_FILES=()
 
-# Files for which we additionally benchmark `roc check` and `roc build`.
-CHECK_BUILD_FILES=(
+# Files for which we additionally benchmark `roc check`.
+CHECK_FILES=(
     test/fx/issue8826_full.roc
     test/fx/aoc_day2.roc
     test/fx/host_boxed_fn_boundary.roc
@@ -454,6 +435,19 @@ CHECK_BUILD_FILES=(
     test/fx/repeating_pattern_segfault.roc
     test/fx/primitive_encode.roc
     test/fx/dbg_corrupts_recursive_tag_union.roc
+)
+
+# Files for which we additionally benchmark `roc build`.
+BUILD_FILES=(
+    test/fx/issue8826_full.roc
+    test/fx/aoc_day2.roc
+    test/fx/host_boxed_fn_boundary.roc
+    test/fx/record_builder_cli_parser.roc
+    test/fx/zst_nested_singleton_shapes.roc
+    test/fx/index_oob_instantiate.roc
+    test/fx/wildcard_match_open_union_bug.roc
+    test/fx/repeating_pattern_segfault.roc
+    test/fx/primitive_encode.roc
 )
 
 # Pick hyperfine failure-handling args for a check/build benchmark on a given
@@ -584,14 +578,14 @@ done
 
 echo ""
 echo "=== Running roc check benchmarks ==="
-for fx_file in "${CHECK_BUILD_FILES[@]}"; do
+for fx_file in "${CHECK_FILES[@]}"; do
     extra_args=$(check_build_extra_args_for "$(basename "$fx_file")")
     benchmark_file "$fx_file" "check" "$extra_args" ""
 done
 
 echo ""
 echo "=== Running roc build benchmarks ==="
-for fx_file in "${CHECK_BUILD_FILES[@]}"; do
+for fx_file in "${BUILD_FILES[@]}"; do
     extra_args=$(check_build_extra_args_for "$(basename "$fx_file")")
     benchmark_file "$fx_file" "build" "$extra_args" ""
 done

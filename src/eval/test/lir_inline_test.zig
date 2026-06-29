@@ -71,7 +71,7 @@ fn lowerModule(
 }
 
 const LowerModuleOptions = struct {
-    debug_effects: lir.CheckedPipeline.DebugEffectMode = .run,
+    inline_expects: lir.CheckedPipeline.InlineExpectMode = .run,
     proc_debug_names: bool = false,
     imports: []const helpers.ModuleSource = &.{},
 };
@@ -109,7 +109,7 @@ fn lowerModuleWithOptions(
         .{
             .target_usize = base.target.TargetUsize.native,
             .inline_mode = inline_mode,
-            .debug_effects = options.debug_effects,
+            .inline_expects = options.inline_expects,
             .proc_debug_names = options.proc_debug_names,
         },
     );
@@ -121,13 +121,13 @@ fn lowerModuleWithOptions(
     };
 }
 
-fn lowerModuleWithDebugEffects(
+fn lowerModuleWithInlineExpects(
     allocator: Allocator,
     source: []const u8,
     inline_mode: lir.CheckedPipeline.InlineMode,
-    debug_effects: lir.CheckedPipeline.DebugEffectMode,
+    inline_expects: lir.CheckedPipeline.InlineExpectMode,
 ) TestError!LoweredSource {
-    return lowerModuleWithOptions(allocator, source, inline_mode, .{ .debug_effects = debug_effects });
+    return lowerModuleWithOptions(allocator, source, inline_mode, .{ .inline_expects = inline_expects });
 }
 
 fn lowerModuleWithProcDebugNames(
@@ -223,7 +223,7 @@ fn countDebugEffectStmts(lowered: *const lir.CheckedPipeline.LoweredProgram) Deb
     return counts;
 }
 
-test "optimized debug effect lowering erases inline dbg and expect" {
+test "optimized inline expect lowering omits expects and keeps dbg" {
     const allocator = std.testing.allocator;
     const source =
         \\module [main]
@@ -237,19 +237,19 @@ test "optimized debug effect lowering erases inline dbg and expect" {
         \\}
     ;
 
-    var run_effects = try lowerModuleWithDebugEffects(allocator, source, .wrappers, .run);
+    var run_effects = try lowerModuleWithInlineExpects(allocator, source, .wrappers, .run);
     defer run_effects.deinit(allocator);
 
     const run_counts = countDebugEffectStmts(&run_effects.lowered);
     try std.testing.expect(run_counts.debug > 0);
     try std.testing.expect(run_counts.expect > 0);
 
-    var erased_effects = try lowerModuleWithDebugEffects(allocator, source, .wrappers, .erase);
-    defer erased_effects.deinit(allocator);
+    var omitted_effects = try lowerModuleWithInlineExpects(allocator, source, .wrappers, .omit);
+    defer omitted_effects.deinit(allocator);
 
-    const erased_counts = countDebugEffectStmts(&erased_effects.lowered);
-    try std.testing.expectEqual(@as(usize, 0), erased_counts.debug);
-    try std.testing.expectEqual(@as(usize, 0), erased_counts.expect);
+    const omitted_counts = countDebugEffectStmts(&omitted_effects.lowered);
+    try std.testing.expect(omitted_counts.debug > 0);
+    try std.testing.expectEqual(@as(usize, 0), omitted_counts.expect);
 }
 
 test "nominal record lays out fields in declared order" {
@@ -842,12 +842,16 @@ fn markReachableLiftedExpr(
         .frac_f64_lit,
         .dec_lit,
         .str_lit,
-        .fn_ref,
         .crash,
         .comptime_exhaustiveness_failed,
         .uninitialized,
         .uninitialized_payload,
         => {},
+        .fn_ref => |fn_ref| {
+            for (program.exprSpan(fn_ref.captures)) |capture| {
+                markReachableLiftedExpr(program, capture, reachable);
+            }
+        },
         .list,
         .tuple,
         => |items| for (program.exprSpan(items)) |child| markReachableLiftedExpr(program, child, reachable),
@@ -887,6 +891,7 @@ fn markReachableLiftedExpr(
         },
         .call_proc => |call| {
             for (program.exprSpan(call.args)) |arg| markReachableLiftedExpr(program, arg, reachable);
+            for (program.exprSpan(call.captures)) |capture| markReachableLiftedExpr(program, capture, reachable);
         },
         .low_level => |call| for (program.exprSpan(call.args)) |arg| markReachableLiftedExpr(program, arg, reachable),
         .field_access => |field| markReachableLiftedExpr(program, field.receiver, reachable),

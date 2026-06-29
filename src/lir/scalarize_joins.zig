@@ -258,6 +258,9 @@ const Pass = struct {
         try combined.appendSlice(self.allocator, self.store.getLocalSpan(proc.frame_locals));
         try combined.appendSlice(self.allocator, self.new_locals.items);
         proc.frame_locals = try self.store.addLocalSpan(combined.items);
+        if (self.store.procNeedsStackProbe(self.layouts, proc.*)) {
+            proc.stack_probe = .required;
+        }
     }
 
     /// `param_is_proc_arg` records whether this join parameter is also one of

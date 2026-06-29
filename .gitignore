@@ -29,6 +29,7 @@ generated-docs
 zig-out
 zig-pkg
 .zig-cache
+.tmp/
 .direnv
 .envrc
 *.rs.bk

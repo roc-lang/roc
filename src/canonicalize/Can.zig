@@ -14795,6 +14795,62 @@ fn finishTagPattern(
     }
 }
 
+/// Canonicalize a `Type.(pattern)` nominal-value destructure pattern: `type_ident`
+/// is the nominal type and `backing_args` is the backing pattern (a single value,
+/// or several for a tuple backing). This is the inverse of `Type.(value)`
+/// construction; the type-checker handles `.nominal` patterns via the same
+/// `checkNominalTypeUsage` path as construction.
+fn finishNominalBackingPattern(
+    self: *Self,
+    type_ident: Ident.Idx,
+    backing_args: Pattern.Span,
+    region: Region,
+) std.mem.Allocator.Error!Pattern.Idx {
+    const nominal_type_decl_stmt_idx = (try self.scopeLookupOrPrepareTypeDecl(type_ident)) orelse
+        return try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .undeclared_type = .{
+            .name = type_ident,
+            .region = region,
+        } });
+
+    switch (self.env.store.getStatement(nominal_type_decl_stmt_idx)) {
+        .s_nominal_decl => {
+            const backing_slice = self.env.store.slicePatterns(backing_args);
+            if (backing_slice.len == 1) {
+                return try self.env.addPattern(CIR.Pattern{
+                    .nominal = .{
+                        .nominal_type_decl = nominal_type_decl_stmt_idx,
+                        .backing_pattern = backing_slice[0],
+                        .backing_type = .value,
+                    },
+                }, region);
+            }
+            const tuple_pattern_idx = try self.env.addPattern(Pattern{
+                .tuple = .{ .patterns = backing_args },
+            }, region);
+            return try self.env.addPattern(CIR.Pattern{
+                .nominal = .{
+                    .nominal_type_decl = nominal_type_decl_stmt_idx,
+                    .backing_pattern = tuple_pattern_idx,
+                    .backing_type = .tuple,
+                },
+            }, region);
+        },
+        .s_alias_decl => {
+            return try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .type_alias_but_needed_nominal = .{
+                .name = type_ident,
+                .region = region,
+            } });
+        },
+        else => {
+            const feature = try self.env.insertString("nominal destructure of non-nominal type");
+            return try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .not_implemented = .{
+                .feature = feature,
+                .region = region,
+            } });
+        },
+    }
+}
+
 const PatternKernelLabel = enum {
     dispatch,
     parse,
@@ -14817,6 +14873,7 @@ const PatternKernelTagNextWork = struct {
     region: Region,
     scratch_top: u32,
     next: usize,
+    backing_value: bool = false,
 };
 const PatternKernelTagAfterArgWork = struct {
     tag_name: Ident.Idx,
@@ -14826,6 +14883,7 @@ const PatternKernelTagAfterArgWork = struct {
     scratch_top: u32,
     next: usize,
     arg_idx: AST.Pattern.Idx,
+    backing_value: bool = false,
 };
 const PatternKernelRecordNextWork = struct {
     fields: AST.PatternRecordField.Span,
@@ -16550,6 +16608,7 @@ pub fn canonicalizePattern(
                         .region = self.parse_ir.tokenizedRegionToRegion(e.region),
                         .scratch_top = self.env.store.scratchPatternTop(),
                         .next = 0,
+                        .backing_value = e.backing_value,
                     });
                 },
                 .record => |e| {
@@ -16616,6 +16675,14 @@ pub fn canonicalizePattern(
             if (state.next >= args.len) {
                 const arg_span = try self.env.store.patternSpanFrom(state.scratch_top);
 
+                // `Type.(pattern)` nominal-value destructure: the collected args
+                // are the backing pattern, and `tag_name` is the nominal type
+                // (not a tag). Build a nominal pattern whose backing is the value.
+                if (state.backing_value) {
+                    last_pattern = try self.finishNominalBackingPattern(state.tag_name, arg_span, state.region);
+                    continue :patternkernel_loop .dispatch;
+                }
+
                 // Create the pattern node with type var
                 const tag_pattern_idx = try self.env.addPattern(Pattern{
                     .applied_tag = .{
@@ -16637,6 +16704,7 @@ pub fn canonicalizePattern(
                 .scratch_top = state.scratch_top,
                 .next = state.next + 1,
                 .arg_idx = arg_idx,
+                .backing_value = state.backing_value,
             });
             try stacks.pushParse(frame_allocator, arg_idx);
 
@@ -16662,6 +16730,7 @@ pub fn canonicalizePattern(
                 .region = state.region,
                 .scratch_top = state.scratch_top,
                 .next = state.next,
+                .backing_value = state.backing_value,
             });
 
             continue :patternkernel_loop .dispatch;

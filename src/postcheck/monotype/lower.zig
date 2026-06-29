@@ -28,10 +28,19 @@ const static_dispatch = check.StaticDispatchRegistry;
 const Ident = base.Ident;
 
 /// Options used while lowering checked modules into Monotype IR.
+pub const InlineExpectMode = enum {
+    run,
+    omit,
+};
+
+/// Configuration for lowering checked modules into Monotype IR.
 pub const Options = struct {
     /// Preserve source-level procedure names for consumers that present runtime
     /// diagnostics from lowered code.
     proc_debug_names: bool = false,
+    /// Whether inline expects should be lowered at all. Optimized runtime builds
+    /// omit them before their conditions can affect control-flow decisions.
+    inline_expects: InlineExpectMode = .run,
 };
 
 /// Lower checked modules and explicit roots into Monotype IR.
@@ -345,6 +354,7 @@ const Builder = struct {
     root_view: checked.ImportedModuleView,
     program: *Ast.Program,
     proc_debug_names: bool,
+    inline_expects: InlineExpectMode,
     symbols: Common.SymbolGen = .{},
     type_cache: std.AutoHashMap(CheckedTypeAddress, Type.TypeId),
     /// Monotypes owned by the builder-global type cache. They are lowered
@@ -376,6 +386,7 @@ const Builder = struct {
             .root_view = checked.importedView(modules.root.module),
             .program = program,
             .proc_debug_names = options.proc_debug_names,
+            .inline_expects = options.inline_expects,
             .type_cache = std.AutoHashMap(CheckedTypeAddress, Type.TypeId).init(allocator),
             .unsolved_monos = std.AutoHashMap(Type.TypeId, void).init(allocator),
             .lowered_templates = std.AutoHashMap(TemplateFamily, std.ArrayList(LoweredTemplate)).init(allocator),
@@ -900,7 +911,7 @@ const Builder = struct {
                 const fn_id = try self.lowerFnTemplateDef(view, fn_template);
                 break :blk try self.program.addExpr(.{
                     .ty = self.program.fnSource(fn_id).mono_fn_ty,
-                    .data = .{ .fn_def = fn_id },
+                    .data = .{ .fn_def = .{ .fn_id = fn_id } },
                 });
             },
             .callable_eval_template => |template_id| try self.lowerCallableEvalBindingValue(view, template_id, mono_fn_ty),
@@ -2327,7 +2338,7 @@ const Builder = struct {
             const mono_fn_id = try self.lowerRestoredConstFnTemplate(type_view, template);
             return try self.program.addExpr(.{
                 .ty = self.program.fnSource(mono_fn_id).mono_fn_ty,
-                .data = .{ .fn_def = mono_fn_id },
+                .data = .{ .fn_def = .{ .fn_id = mono_fn_id } },
             });
         }
 
@@ -2346,9 +2357,9 @@ const Builder = struct {
 
         const captures = try self.allocator.alloc(struct {
             binder: checked.PatternBinderId,
+            local: Ast.LocalId,
             previous: ?Ast.LocalId,
             value: Ast.ExprId,
-            pat: Ast.PatId,
         }, fn_value.captures.len);
         var initialized: usize = 0;
         errdefer {
@@ -2373,14 +2384,13 @@ const Builder = struct {
             const value_expr = try fn_ctx.restoreConstNodeAtType(store_view, fn_view, capture.value, lowered_ty);
             const local = try self.program.addLocalWithBinder(self.symbols.fresh(), lowered_ty, binder);
             try bindLocalName(self.program, fn_view, local, binder);
-            const pat = try self.program.addPat(.{ .ty = lowered_ty, .data = .{ .bind = local } });
             const previous = fn_ctx.binders.get(binder);
             try fn_ctx.binders.put(binder, local);
             captures[index] = .{
                 .binder = binder,
+                .local = local,
                 .previous = previous,
                 .value = value_expr,
-                .pat = pat,
             };
             initialized += 1;
         }
@@ -2398,25 +2408,22 @@ const Builder = struct {
             }
         }
 
-        var expr = try self.program.addExpr(.{
+        const capture_values = try self.allocator.alloc(Ast.FnDefCapture, captures.len);
+        defer self.allocator.free(capture_values);
+        for (captures, 0..) |capture, index| {
+            capture_values[index] = .{ .local = capture.local, .value = capture.value };
+        }
+
+        const expr = try self.program.addExpr(.{
             .ty = ty,
             .data = switch (lambda_expr.data) {
-                .lambda => try fn_ctx.lowerLambdaExpr(lambda_expr_id, template),
+                .lambda => .{ .fn_def = .{
+                    .fn_id = try self.lowerNestedFnFromContext(&fn_ctx, lambda_expr_id, template),
+                    .captures = try self.program.addFnDefCaptureSpan(capture_values),
+                } },
                 else => Common.invariant("stored capturing function did not reference a checked lambda"),
             },
         });
-        var index = captures.len;
-        while (index > 0) {
-            index -= 1;
-            expr = try self.program.addExpr(.{
-                .ty = ty,
-                .data = .{ .let_ = .{
-                    .bind = captures[index].pat,
-                    .value = captures[index].value,
-                    .rest = expr,
-                } },
-            });
-        }
         try self.drainSpecRequests(graph);
         return expr;
     }
@@ -4233,7 +4240,10 @@ const BodyContext = struct {
                 .msg = try self.lowerExpectErrMessage(expect_err.expr, expect_err.snippet),
                 .region = expr.source_region,
             } },
-            .expect => |child| .{ .expect = try self.lowerExpr(child) },
+            .expect => |child| if (self.builder.inline_expects == .omit)
+                .unit
+            else
+                .{ .expect = try self.lowerExpr(child) },
             .break_ => try self.breakCurrentLoopExprData(),
             .return_ => |ret| .{ .return_ = try self.lowerReturn(ret) },
             .for_ => |for_| try self.lowerIteratorFor(for_, ty, &.{}),
@@ -4443,7 +4453,7 @@ const BodyContext = struct {
             switch (record.ref) {
                 .local_proc => |local| return try self.builder.program.addExpr(.{
                     .ty = ty,
-                    .data = .{ .fn_def = try self.fnTemplateForLocalProcWithMono(local, expr.ty, self.view.types.rootKey(expr.ty), ty) },
+                    .data = .{ .fn_def = .{ .fn_id = try self.fnTemplateForLocalProcWithMono(local, expr.ty, self.view.types.rootKey(expr.ty), ty) } },
                 }),
                 .top_level_proc,
                 .imported_proc,
@@ -4477,7 +4487,7 @@ const BodyContext = struct {
                         const fn_id = try self.builder.lowerFnTemplateDef(view, fn_template);
                         break :blk try self.builder.program.addExpr(.{
                             .ty = mono_fn_ty,
-                            .data = .{ .fn_def = fn_id },
+                            .data = .{ .fn_def = .{ .fn_id = fn_id } },
                         });
                     }
                 }
@@ -4494,7 +4504,7 @@ const BodyContext = struct {
                     mono_fn_ty,
                 );
                 const fn_id = try self.builder.lowerFnTemplateDefFromContext(self, fn_template);
-                break :blk try self.builder.program.addExpr(.{ .ty = mono_fn_ty, .data = .{ .fn_def = fn_id } });
+                break :blk try self.builder.program.addExpr(.{ .ty = mono_fn_ty, .data = .{ .fn_def = .{ .fn_id = fn_id } } });
             },
             .platform_required => Common.invariant("platform required procedure reached parse intrinsic callback lowering"),
         };
@@ -8272,11 +8282,11 @@ const BodyContext = struct {
         call: anytype,
         expected_ret_ty: ?Type.TypeId,
     ) Allocator.Error!?LoweredCall {
-        if (self.checkedExprDiverges(call.func)) {
+        if (self.checkedExprDivergesInLoweredRuntime(call.func)) {
             return try self.lowerDivergentCallOperand(checked_ret_ty, call.func, expected_ret_ty);
         }
         for (call.args) |arg| {
-            if (self.checkedExprDiverges(arg)) {
+            if (self.checkedExprDivergesInLoweredRuntime(arg)) {
                 return try self.lowerDivergentCallOperand(checked_ret_ty, arg, expected_ret_ty);
             }
         }
@@ -8858,7 +8868,7 @@ const BodyContext = struct {
             .pattern_binder,
             .selected_hoisted_const,
             => Common.invariant("local lookup reached Monotype without a current local binding"),
-            .local_proc => |local| .{ .fn_def = try self.fnTemplateForLocalProcWithMono(local, checked_ty, self.view.types.rootKey(checked_ty), ty) },
+            .local_proc => |local| .{ .fn_def = .{ .fn_id = try self.fnTemplateForLocalProcWithMono(local, checked_ty, self.view.types.rootKey(checked_ty), ty) } },
             .top_level_proc,
             .imported_proc,
             .hosted_proc,
@@ -8913,7 +8923,7 @@ const BodyContext = struct {
                     mono_fn_ty,
                 );
                 const fn_id = try self.builder.lowerFnTemplateDefFromContext(self, fn_template);
-                break :blk try self.builder.program.addExpr(.{ .ty = mono_fn_ty, .data = .{ .fn_def = fn_id } });
+                break :blk try self.builder.program.addExpr(.{ .ty = mono_fn_ty, .data = .{ .fn_def = .{ .fn_id = fn_id } } });
             },
             .platform_required => |required| blk: {
                 const view = self.builder.moduleForId(checked.requiredProcedureModuleId(required));
@@ -9840,10 +9850,37 @@ const BodyContext = struct {
         return switch (lambda.data) {
             .lambda => blk: {
                 const nested = try self.builder.fnTemplateForNestedExprWithMono(self.view, self.owner_template, expr_id, lambda.ty, self.view.types.rootKey(lambda.ty), closure_ty, self.current_fn_key);
-                break :blk try self.lowerLambdaExpr(expr_id, nested);
+                switch (nested.fn_def) {
+                    .nested => {},
+                    else => Common.invariant("closure expression was not assigned a nested function identity"),
+                }
+                break :blk .{ .fn_def = .{
+                    .fn_id = try self.builder.lowerNestedFnFromContext(self, expr_id, nested),
+                    .captures = try self.lowerClosureCaptureExprSpan(closure.captures),
+                } };
             },
             else => Common.invariant("checked closure did not point at a lambda expression"),
         };
+    }
+
+    fn lowerClosureCaptureExprSpan(self: *BodyContext, captures: []const checked.CheckedCapture) Allocator.Error!Ast.Span(Ast.FnDefCapture) {
+        if (captures.len == 0) return .empty();
+
+        var capture_values = std.ArrayList(Ast.FnDefCapture).empty;
+        defer capture_values.deinit(self.allocator);
+
+        for (captures) |capture| {
+            const binder = checkedCaptureBinder(self.view, capture.pattern);
+            const local = self.binders.get(binder) orelse continue;
+            const ty = self.builder.program.locals.items[@intFromEnum(local)].ty;
+            const value = try self.builder.program.addExpr(.{
+                .ty = ty,
+                .data = .{ .local = local },
+            });
+            try capture_values.append(self.allocator, .{ .local = local, .value = value });
+        }
+
+        return try self.builder.program.addFnDefCaptureSpan(capture_values.items);
     }
 
     fn closureFunctionType(self: *BodyContext, closure: anytype) Allocator.Error!Type.TypeId {
@@ -9882,7 +9919,7 @@ const BodyContext = struct {
             .nested => {},
             else => Common.invariant("expression-position lambda was not assigned a nested function identity"),
         }
-        return .{ .fn_def = try self.builder.lowerNestedFnFromContext(self, expr_id, nested) };
+        return .{ .fn_def = .{ .fn_id = try self.builder.lowerNestedFnFromContext(self, expr_id, nested) } };
     }
 
     fn lowerDispatchExpr(
@@ -10565,7 +10602,7 @@ const BodyContext = struct {
     ) Allocator.Error!Ast.ExprId {
         return switch (plan.result_mode) {
             .equality => |eq| if (eq.structural_allowed) blk: {
-                const operands = try self.lowerStructuralBinaryOperands("equality", plan, callable_mono_ty, arg_ctx, pre_lowered);
+                const operands = try self.lowerStructuralEqualityOperands(plan, arg_ctx);
                 var result = try self.lowerEqualityExpr(operands.derived_ty, operands.first, operands.second, self.view.names.methodNameText(plan.method), ret_ty);
                 if (eq.negated) {
                     result = try self.builder.lowLevelExpr(.bool_not, &.{result}, ret_ty);
@@ -10582,18 +10619,42 @@ const BodyContext = struct {
         };
     }
 
-    /// The two lowered operands of a structural binary derivation (equality /
-    /// hash) plus `derived_ty`, the type being derived on (the operands' shared
-    /// type), which the terminal lowering needs.
+    /// The two lowered operands of a structural derivation plus `derived_ty`,
+    /// the type being derived on, which the terminal lowering needs.
     const StructuralBinaryOperands = struct {
         first: Ast.ExprId,
         second: Ast.ExprId,
         derived_ty: Type.TypeId,
     };
 
-    /// Lower the two operands of a structural equality/hash dispatch, honoring a
-    /// `pre_lowered` operand at index 0 or 1. `noun` is the derivation name used
-    /// only in invariant diagnostics.
+    fn lowerStructuralEqualityOperands(
+        self: *BodyContext,
+        plan: static_dispatch.StaticDispatchCallPlan,
+        arg_ctx: *BodyContext,
+    ) Allocator.Error!StructuralBinaryOperands {
+        const plan_args = plan.argsSlice(self.view.static_dispatch_plans);
+        if (plan_args.len != 2) Common.invariant("structural equality dispatch plan must have two operands");
+        const lhs_expr = switch (plan_args[0]) {
+            .checked_expr => |expr| expr,
+            else => Common.invariant("structural equality operand was not a checked expression"),
+        };
+        const rhs_expr = switch (plan_args[1]) {
+            .checked_expr => |expr| expr,
+            else => Common.invariant("structural equality operand was not a checked expression"),
+        };
+        const operand_ty = try arg_ctx.structuralEqualityOperandType(.{ .lhs = lhs_expr, .rhs = rhs_expr });
+        const first = try arg_ctx.lowerExprAtType(lhs_expr, operand_ty);
+        const second = try arg_ctx.lowerExprAtType(rhs_expr, operand_ty);
+        return .{
+            .first = first,
+            .second = second,
+            .derived_ty = operand_ty,
+        };
+    }
+
+    /// Lower the value and hasher operands of a structural hash dispatch,
+    /// honoring a `pre_lowered` operand at index 0 or 1. `noun` is the derivation
+    /// name used only in invariant diagnostics.
     fn lowerStructuralBinaryOperands(
         self: *BodyContext,
         comptime noun: []const u8,
@@ -11987,7 +12048,7 @@ const BodyContext = struct {
         body: checked.CheckedExprId,
         result_ty: Type.TypeId,
     ) Allocator.Error!Ast.ExprId {
-        if (self.checkedExprDiverges(body)) {
+        if (self.checkedExprDivergesInLoweredRuntime(body)) {
             return try self.lowerDivergentExprAtType(body, result_ty);
         }
         return try self.lowerExprAtType(body, result_ty);
@@ -13177,7 +13238,7 @@ const BodyContext = struct {
         state_ty: Type.TypeId,
         merge_binders: []const MergeBinder,
     ) Allocator.Error!Ast.ExprId {
-        if (self.checkedExprDiverges(body)) return try self.lowerDivergentExprAtType(body, state_ty);
+        if (self.checkedExprDivergesInLoweredRuntime(body)) return try self.lowerDivergentExprAtType(body, state_ty);
 
         const checked_body = self.view.bodies.expr(body);
         switch (checked_body.data) {
@@ -13186,7 +13247,7 @@ const BodyContext = struct {
                 defer self.allocator.free(statements.items);
                 const value = if (statements.diverges)
                     try self.unreachableAfterDivergentStatementExpr(result_ty)
-                else if (self.checkedExprDiverges(block.final_expr))
+                else if (self.checkedExprDivergesInLoweredRuntime(block.final_expr))
                     try self.lowerDivergentExprAtType(block.final_expr, result_ty)
                 else
                     try self.lowerExprAtType(block.final_expr, result_ty);
@@ -13208,7 +13269,7 @@ const BodyContext = struct {
         state_ty: Type.TypeId,
         merge_binders: []const MergeBinder,
     ) Allocator.Error!Ast.ExprId {
-        if (self.checkedExprDiverges(body)) return try self.lowerDivergentExprAtType(body, state_ty);
+        if (self.checkedExprDivergesInLoweredRuntime(body)) return try self.lowerDivergentExprAtType(body, state_ty);
 
         const checked_body = self.view.bodies.expr(body);
         switch (checked_body.data) {
@@ -13216,7 +13277,7 @@ const BodyContext = struct {
                 var statements = try self.lowerBlockStatements(block.statements);
                 defer self.allocator.free(statements.items);
                 if (!statements.diverges) {
-                    const final_stmt = try self.builder.program.addStmt(.{ .expr = if (self.checkedExprDiverges(block.final_expr))
+                    const final_stmt = try self.builder.program.addStmt(.{ .expr = if (self.checkedExprDivergesInLoweredRuntime(block.final_expr))
                         try self.lowerDivergentExprAtType(block.final_expr, try self.lowerType(checked_body.ty))
                     else
                         try self.lowerExpr(block.final_expr) });
@@ -13325,7 +13386,7 @@ const BodyContext = struct {
             .statements = try self.builder.program.addStmtSpan(stmts.items[0..stmts.len]),
             .final_expr = if (stmts.diverges)
                 try self.unreachableAfterDivergentStatementExpr(ty)
-            else if (self.checkedExprDiverges(block.final_expr))
+            else if (self.checkedExprDivergesInLoweredRuntime(block.final_expr))
                 try self.lowerDivergentExprAtType(block.final_expr, ty)
             else
                 try self.lowerExprAtType(block.final_expr, ty),
@@ -13359,7 +13420,7 @@ const BodyContext = struct {
             if (!try self.appendExpandedPatternStatement(statement, &lowered)) {
                 try lowered.append(self.allocator, try self.lowerStatement(statement));
             }
-            if (self.checkedStatementDiverges(statement)) lowered.diverges = true;
+            if (self.checkedStatementDivergesInLoweredRuntime(statement)) lowered.diverges = true;
         }
         return lowered;
     }
@@ -13463,7 +13524,6 @@ const BodyContext = struct {
             .crash,
             .dbg,
             .expr,
-            .expect,
             .for_,
             .while_,
             .infinite_loop,
@@ -13471,6 +13531,7 @@ const BodyContext = struct {
             .break_,
             .return_,
             => true,
+            .expect => self.builder.inline_expects == .run,
             .import_,
             .alias_decl,
             .nominal_decl,
@@ -13552,6 +13613,148 @@ const BodyContext = struct {
             Common.invariant("checked divergence referenced a missing statement");
         }
         return self.view.bodies.statementDiverges(statement_id);
+    }
+
+    /// Checked divergence is computed before this lowering pass can omit inline
+    /// expects, so optimized builds need a divergence view of the lowered code.
+    fn checkedStatementDivergesInLoweredRuntime(self: *BodyContext, statement_id: checked.CheckedStatementId) bool {
+        if (!self.checkedStatementDiverges(statement_id)) return false;
+        if (self.builder.inline_expects == .run) return true;
+
+        return switch (self.view.bodies.statement(statement_id).data) {
+            .crash,
+            .break_,
+            .return_,
+            => true,
+            .decl => |decl| self.checkedExprDivergesInLoweredRuntime(decl.expr),
+            .var_ => |var_| self.checkedExprDivergesInLoweredRuntime(var_.expr),
+            .var_uninitialized => false,
+            .reassign => |reassign| self.checkedExprDivergesInLoweredRuntime(reassign.expr),
+            .dbg,
+            .expr,
+            => |expr| self.checkedExprDivergesInLoweredRuntime(expr),
+            .expect => false,
+            .for_ => |for_| self.checkedExprDivergesInLoweredRuntime(for_.expr),
+            .while_ => |while_| self.checkedExprDivergesInLoweredRuntime(while_.cond),
+            .infinite_loop => true,
+            .breakable_loop => |loop| self.checkedExprDivergesInLoweredRuntime(loop.cond),
+            .pending,
+            .import_,
+            .alias_decl,
+            .nominal_decl,
+            .type_anno,
+            .type_var_alias,
+            .runtime_error,
+            => false,
+        };
+    }
+
+    fn checkedAnyExprDivergesInLoweredRuntime(self: *BodyContext, items: []const checked.CheckedExprId) bool {
+        for (items) |item| {
+            if (self.checkedExprDivergesInLoweredRuntime(item)) return true;
+        }
+        return false;
+    }
+
+    fn checkedExprDivergesInLoweredRuntime(self: *BodyContext, expr_id: checked.CheckedExprId) bool {
+        if (!self.checkedExprDiverges(expr_id)) return false;
+        if (self.builder.inline_expects == .run) return true;
+
+        return switch (self.view.bodies.expr(expr_id).data) {
+            .crash,
+            .ellipsis,
+            .break_,
+            .return_,
+            => true,
+            .str => |items| self.checkedAnyExprDivergesInLoweredRuntime(items),
+            .list => |items| self.checkedAnyExprDivergesInLoweredRuntime(items),
+            .tuple => |items| self.checkedAnyExprDivergesInLoweredRuntime(items),
+            .match_ => |match| blk: {
+                if (self.checkedExprDivergesInLoweredRuntime(match.cond)) break :blk true;
+                if (match.branches.len == 0) break :blk false;
+                for (match.branches) |branch| {
+                    if (branch.guard != null) break :blk false;
+                    if (!self.checkedExprDivergesInLoweredRuntime(branch.value)) break :blk false;
+                }
+                break :blk true;
+            },
+            .if_ => |if_| blk: {
+                if (if_.branches.len > 0 and self.checkedExprDivergesInLoweredRuntime(if_.branches[0].cond)) {
+                    break :blk true;
+                }
+                for (if_.branches) |branch| {
+                    if (!self.checkedExprDivergesInLoweredRuntime(branch.body)) break :blk false;
+                }
+                break :blk self.checkedExprDivergesInLoweredRuntime(if_.final_else);
+            },
+            .call => |call| blk: {
+                if (self.checkedExprDivergesInLoweredRuntime(call.func)) break :blk true;
+                break :blk self.checkedAnyExprDivergesInLoweredRuntime(call.args);
+            },
+            .record => |record| blk: {
+                if (record.ext) |ext| {
+                    if (self.checkedExprDivergesInLoweredRuntime(ext)) break :blk true;
+                }
+                for (record.fields) |field| {
+                    if (self.checkedExprDivergesInLoweredRuntime(field.value)) break :blk true;
+                }
+                break :blk false;
+            },
+            .block => |block| blk: {
+                for (block.statements) |statement| {
+                    if (self.checkedStatementDivergesInLoweredRuntime(statement)) break :blk true;
+                }
+                break :blk self.checkedExprDivergesInLoweredRuntime(block.final_expr);
+            },
+            .tag => |tag| self.checkedAnyExprDivergesInLoweredRuntime(tag.args),
+            .nominal => |nominal| self.checkedExprDivergesInLoweredRuntime(nominal.backing_expr),
+            .closure,
+            .lambda,
+            => false,
+            .binop => |binop| self.checkedExprDivergesInLoweredRuntime(binop.lhs) or
+                self.checkedExprDivergesInLoweredRuntime(binop.rhs),
+            .unary_minus,
+            .unary_not,
+            .dbg,
+            => |child| self.checkedExprDivergesInLoweredRuntime(child),
+            .expect => false,
+            .expect_err => true,
+            .field_access => |field| self.checkedExprDivergesInLoweredRuntime(field.receiver),
+            .structural_eq => |eq| self.checkedExprDivergesInLoweredRuntime(eq.lhs) or
+                self.checkedExprDivergesInLoweredRuntime(eq.rhs),
+            .structural_hash => |hash| self.checkedExprDivergesInLoweredRuntime(hash.value) or
+                self.checkedExprDivergesInLoweredRuntime(hash.hasher),
+            .tuple_access => |access| self.checkedExprDivergesInLoweredRuntime(access.tuple),
+            .for_ => |for_| self.checkedExprDivergesInLoweredRuntime(for_.expr),
+            .run_low_level => |low_level| self.checkedAnyExprDivergesInLoweredRuntime(low_level.args),
+            .pending,
+            .num,
+            .frac_f32,
+            .frac_f64,
+            .dec,
+            .dec_small,
+            .num_from_numeral,
+            .typed_int,
+            .typed_frac,
+            .typed_num_from_numeral,
+            .str_from_quote,
+            .str_segment,
+            .bytes_literal,
+            .lookup_local,
+            .lookup_external,
+            .lookup_required,
+            .empty_list,
+            .empty_record,
+            .zero_argument_tag,
+            .dispatch_call,
+            .interpolation,
+            .method_eq,
+            .type_dispatch_call,
+            .runtime_error,
+            .anno_only,
+            .hosted_lambda,
+            => false,
+        };
     }
 
     const LoopCarry = struct {
@@ -13878,7 +14081,7 @@ const BodyContext = struct {
             .block => |block| {
                 var statement_diverges = false;
                 for (block.statements) |statement| {
-                    if (self.checkedStatementDiverges(statement)) statement_diverges = true;
+                    if (self.checkedStatementDivergesInLoweredRuntime(statement)) statement_diverges = true;
                 }
                 const extra: usize = if (statement_diverges) 0 else 1;
                 const lowered_statements = try self.allocator.alloc(Ast.StmtId, block.statements.len + extra);
@@ -13887,7 +14090,7 @@ const BodyContext = struct {
                     lowered_statements[i] = try self.lowerStatement(statement);
                 }
                 if (!statement_diverges) {
-                    lowered_statements[block.statements.len] = try self.builder.program.addStmt(.{ .expr = if (self.checkedExprDiverges(block.final_expr))
+                    lowered_statements[block.statements.len] = try self.builder.program.addStmt(.{ .expr = if (self.checkedExprDivergesInLoweredRuntime(block.final_expr))
                         try self.lowerDivergentExprAtType(block.final_expr, result_ty)
                     else
                         try self.lowerExpr(block.final_expr) });
@@ -13919,7 +14122,7 @@ const BodyContext = struct {
             .block => |block| {
                 var statement_diverges = false;
                 for (block.statements) |statement| {
-                    if (self.checkedStatementDiverges(statement)) statement_diverges = true;
+                    if (self.checkedStatementDivergesInLoweredRuntime(statement)) statement_diverges = true;
                 }
                 const extra: usize = if (statement_diverges) 0 else 1;
                 const lowered_statements = try self.allocator.alloc(Ast.StmtId, block.statements.len + extra);
@@ -13928,7 +14131,7 @@ const BodyContext = struct {
                     lowered_statements[i] = try self.lowerStatement(statement);
                 }
                 if (!statement_diverges) {
-                    lowered_statements[block.statements.len] = try self.builder.program.addStmt(.{ .expr = if (self.checkedExprDiverges(block.final_expr))
+                    lowered_statements[block.statements.len] = try self.builder.program.addStmt(.{ .expr = if (self.checkedExprDivergesInLoweredRuntime(block.final_expr))
                         try self.lowerDivergentExprAtType(block.final_expr, result_ty)
                     else
                         try self.lowerExpr(block.final_expr) });
@@ -14195,8 +14398,10 @@ const BodyContext = struct {
             .unary_minus,
             .unary_not,
             .dbg,
-            .expect,
             => |child| try self.collectReassignedBindersInExpr(child, out),
+            .expect => |child| if (self.builder.inline_expects == .run) {
+                try self.collectReassignedBindersInExpr(child, out);
+            },
             .expect_err => |expect_err| try self.collectReassignedBindersInExpr(expect_err.expr, out),
             .field_access => |field| try self.collectReassignedBindersInExpr(field.receiver, out),
             .structural_eq => |eq| {
@@ -14265,8 +14470,10 @@ const BodyContext = struct {
             },
             .dbg,
             .expr,
-            .expect,
             => |expr| try self.collectReassignedBindersInExpr(expr, out),
+            .expect => |expr| if (self.builder.inline_expects == .run) {
+                try self.collectReassignedBindersInExpr(expr, out);
+            },
             .for_ => |for_| {
                 try self.collectReassignedBindersInExpr(for_.expr, out);
                 try self.collectReassignedBindersInExpr(for_.body, out);
@@ -14428,7 +14635,10 @@ const BodyContext = struct {
             .crash => |msg| .{ .crash = try self.lowerStringLiteral(msg) },
             .dbg => |child| .{ .dbg = try self.lowerDbgMessage(child) },
             .expr => |child| try self.lowerExprStatement(child),
-            .expect => |child| .{ .expect = try self.lowerExpr(child) },
+            .expect => |child| if (self.builder.inline_expects == .omit) blk: {
+                const unit_ty = try self.unitType();
+                break :blk .{ .expr = try self.builder.program.addExpr(.{ .ty = unit_ty, .data = .unit }) };
+            } else .{ .expect = try self.lowerExpr(child) },
             .for_ => |for_| blk: {
                 var reassigned = std.ArrayList(checked.PatternBinderId).empty;
                 defer reassigned.deinit(self.allocator);
@@ -15018,12 +15228,17 @@ const EqDeriver = struct {
         return try self.derivationOwnedCall(EqDeriver, ty, operand, ctx);
     }
 
-    /// Decomposes structural equality on a nominal type by unwrapping both operands to
-    /// their shared backing representation and comparing those. The nominal unwrap is a
-    /// transparent alias at runtime, and recursing on the backing dispatches any owned
-    /// types nested within it (e.g. a list inside the backing tag union) instead of
-    /// leaving them for the LIR structural-equality lowering.
+    /// Decomposes structural equality on a nominal type. Record and tuple backings are
+    /// decomposed through the nominal operands so field/tuple access sees the nominal
+    /// layout; other backings are unwrapped and compared in their shared backing
+    /// representation.
     fn named(self: *BodyContext, named_ty: Type.TypeId, backing_ty: Type.TypeId, operand: Operand, ctx: BodyContext.DerivationCtx) Allocator.Error!Ast.ExprId {
+        switch (self.builder.program.types.get(backing_ty)) {
+            .record => |fields| return try self.derivationRecord(EqDeriver, self.builder.program.types.fieldSpan(fields), operand, ctx),
+            .tuple => |items| return try self.derivationTuple(EqDeriver, self.builder.program.types.span(items), operand, ctx),
+            else => {},
+        }
+
         const lhs_inner = try self.builder.program.addLocal(self.builder.symbols.fresh(), backing_ty);
         const rhs_inner = try self.builder.program.addLocal(self.builder.symbols.fresh(), backing_ty);
 
@@ -15237,6 +15452,12 @@ const HashDeriver = struct {
     }
 
     fn named(self: *BodyContext, named_ty: Type.TypeId, backing_ty: Type.TypeId, operand: Operand, ctx: BodyContext.DerivationCtx) Allocator.Error!Ast.ExprId {
+        switch (self.builder.program.types.get(backing_ty)) {
+            .record => |fields| return try self.derivationRecord(HashDeriver, self.builder.program.types.fieldSpan(fields), operand, ctx),
+            .tuple => |items| return try self.derivationTuple(HashDeriver, self.builder.program.types.span(items), operand, ctx),
+            else => {},
+        }
+
         const inner = try self.builder.program.addLocal(self.builder.symbols.fresh(), backing_ty);
         const hashed = try self.lowerDerivation(HashDeriver, backing_ty, .{
             .value = try self.builder.localExpr(inner, backing_ty),
@@ -15600,6 +15821,13 @@ fn checkedBinderType(view: ModuleView, binder: checked.PatternBinderId) checked.
     const pattern_raw = @intFromEnum(pattern);
     if (pattern_raw >= view.bodies.patternCount()) Common.invariant("stored function capture pattern is outside checked body store");
     return view.bodies.pattern(@enumFromInt(pattern_raw)).ty;
+}
+
+fn checkedCaptureBinder(view: ModuleView, pattern: checked.CheckedPatternId) checked.PatternBinderId {
+    const raw = @intFromEnum(pattern);
+    if (raw >= view.bodies.pattern_binder_by_pattern.len) Common.invariant("checked closure capture pattern was outside the binder index");
+    return view.bodies.pattern_binder_by_pattern[raw] orelse
+        Common.invariant("checked closure capture pattern had no binder");
 }
 
 fn constCaptureBinder(id: check.ConstStore.CaptureId) checked.PatternBinderId {

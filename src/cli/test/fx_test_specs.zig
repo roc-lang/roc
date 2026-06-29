@@ -15,6 +15,8 @@ pub const TestSpec = struct {
     roc_file: []const u8,
     /// IO spec for --test mode
     io_spec: []const u8,
+    /// Stderr substrings expected during build-only cross-compilation.
+    expected_build_stderr_contains: []const []const u8 = &.{},
     /// Optional description of what the test verifies
     description: []const u8 = "",
     /// Skip this test on Windows (usually due to dev backend limitations)
@@ -368,6 +370,7 @@ pub const io_spec_tests = [_]TestSpec{
     .{
         .roc_file = "test/fx/dbg_corrupts_recursive_tag_union.roc",
         .io_spec = "1>Child is Text: hello",
+        .expected_build_stderr_contains = &.{"`DBG` IN OPTIMIZED BUILD"},
         .description = "Regression test: dbg on recursive tag union preserves variant discriminant (issue #8804)",
     },
     .{

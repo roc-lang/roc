@@ -79,6 +79,7 @@ pub fn crossCompile(
     target: []const u8,
     output_name: []const u8,
     backend: ?[]const u8,
+    expected_stderr_contains: []const []const u8,
 ) RunnerError!TestResult {
     const target_arg = try std.fmt.allocPrint(allocator, "--target={s}", .{target});
     defer allocator.free(target_arg);
@@ -113,7 +114,7 @@ pub fn crossCompile(
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
 
-    return handleProcessResult(std_io, result, output_name);
+    return handleProcessResult(std_io, result, output_name, expectedStderrForBackend(backend, expected_stderr_contains));
 }
 
 /// Build a Roc app natively (no cross-compilation).
@@ -491,7 +492,32 @@ fn hasMemoryErrors(stderr: []const u8) ?[]const u8 {
     return null;
 }
 
-fn handleProcessResult(std_io: std.Io, result: std.process.RunResult, output_name: []const u8) TestResult {
+fn missingExpectedStderr(stderr: []const u8, expected_stderr_contains: []const []const u8) ?[]const u8 {
+    for (expected_stderr_contains) |needle| {
+        if (std.mem.find(u8, stderr, needle) == null) {
+            return needle;
+        }
+    }
+
+    return null;
+}
+
+fn expectedStderrForBackend(backend: ?[]const u8, expected_stderr_contains: []const []const u8) []const []const u8 {
+    // A null backend means plain `roc build`, whose default emits optimized
+    // build diagnostics.
+    const backend_name = backend orelse return expected_stderr_contains;
+    if (std.mem.eql(u8, backend_name, "size") or std.mem.eql(u8, backend_name, "speed")) {
+        return expected_stderr_contains;
+    }
+    return &.{};
+}
+
+fn handleProcessResult(
+    std_io: std.Io,
+    result: std.process.RunResult,
+    output_name: []const u8,
+    expected_stderr_contains: []const []const u8,
+) TestResult {
     // Check for memory errors in stderr (GPA errors or Roc runtime leak detection)
     if (hasMemoryErrors(result.stderr)) |msg| {
         std.debug.print("FAIL ({s})\n", .{msg});
@@ -502,7 +528,17 @@ fn handleProcessResult(std_io: std.Io, result: std.process.RunResult, output_nam
 
     switch (result.term) {
         .exited => |code| {
-            if (code == 0) {
+            const expected_diagnostics_exit = expected_stderr_contains.len > 0;
+            if (code == 0 or (code == 2 and expected_diagnostics_exit)) {
+                if (missingExpectedStderr(result.stderr, expected_stderr_contains)) |needle| {
+                    std.debug.print("FAIL (missing expected stderr: {s})\n", .{needle});
+                    if (result.stderr.len > 0) {
+                        printTruncatedOutput(result.stderr, 5, "       ");
+                    }
+                    cleanup(std_io, output_name);
+                    return .failed;
+                }
+
                 // Verify executable was created
                 if (std.Io.Dir.cwd().access(std_io, output_name, .{})) |_| {
                     std.debug.print("OK\n", .{});

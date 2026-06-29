@@ -2116,9 +2116,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const fn_addr: usize = @intFromPtr(&dev_wrappers.roc_builtins_list_prepend);
                     const elem_incref_reg = if (list_abi.elem_layout_idx) |idx| try self.emitBuiltinInternalOptionalRcHelperAddress(.incref, idx) else null;
                     defer if (elem_incref_reg) |reg| self.codegen.freeGeneral(reg);
+                    const elem_decref_reg = if (list_abi.elem_layout_idx) |idx| try self.emitBuiltinInternalOptionalRcHelperAddress(.decref, idx) else null;
+                    defer if (elem_decref_reg) |reg| self.codegen.freeGeneral(reg);
 
                     {
-                        // wrapListPrepend(out, list_bytes, list_len, list_cap, alignment, element, element_width, elements_refcounted, element_incref, update_mode, roc_ops)
+                        // wrapListPrepend(out, list_bytes, list_len, list_cap, alignment, element, element_width, elements_refcounted, element_incref, element_decref, update_mode, roc_ops)
                         const base_reg = frame_ptr;
                         var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
 
@@ -2131,6 +2133,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try builder.addImmArg(@intCast(list_abi.elem_size_align.size));
                         try builder.addImmArg(if (list_abi.elements_refcounted) @as(usize, 1) else 0);
                         if (elem_incref_reg) |reg| try builder.addRegArg(reg) else try builder.addImmArg(0);
+                        if (elem_decref_reg) |reg| try builder.addRegArg(reg) else try builder.addImmArg(0);
                         try builder.addImmArg(updateModeImmForArg0(ll.unique_args));
                         try builder.addRegArg(roc_ops_reg);
 
@@ -5468,9 +5471,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const fn_addr: usize = @intFromPtr(&dev_wrappers.roc_builtins_list_reserve);
             const elem_incref_reg = if (list_abi.elem_layout_idx) |idx| try self.emitBuiltinInternalOptionalRcHelperAddress(.incref, idx) else null;
             defer if (elem_incref_reg) |reg| self.codegen.freeGeneral(reg);
+            const elem_decref_reg = if (list_abi.elem_layout_idx) |idx| try self.emitBuiltinInternalOptionalRcHelperAddress(.decref, idx) else null;
+            defer if (elem_decref_reg) |reg| self.codegen.freeGeneral(reg);
 
             {
-                // wrapListReserve(out, list_bytes, list_len, list_cap, alignment, spare, element_width, elements_refcounted, element_incref, update_mode, roc_ops)
+                // wrapListReserve(out, list_bytes, list_len, list_cap, alignment, spare, element_width, elements_refcounted, element_incref, element_decref, update_mode, roc_ops)
                 const base_reg = frame_ptr;
                 var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
 
@@ -5483,6 +5488,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try builder.addImmArg(@intCast(list_abi.elem_size_align.size));
                 try builder.addImmArg(if (list_abi.elements_refcounted) @as(usize, 1) else 0);
                 if (elem_incref_reg) |reg| try builder.addRegArg(reg) else try builder.addImmArg(0);
+                if (elem_decref_reg) |reg| try builder.addRegArg(reg) else try builder.addImmArg(0);
                 try builder.addImmArg(updateModeImmForArg0(ll.unique_args));
                 try builder.addRegArg(roc_ops_reg);
 
@@ -13346,6 +13352,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// callee-saved registers are used, then prepends prologue and adjusts relocations.
         fn compileProcSpec(self: *Self, proc_id: lir.LIR.LirProcSpecId, proc: LirProcSpec) Allocator.Error!void {
             const key: u32 = @intFromEnum(proc_id);
+            const stack_probe_required = proc.stack_probe == .required;
             // Save current state - procedure has its own scope that shouldn't pollute caller
             const saved_stack_offset = self.codegen.stack_offset;
             const saved_callee_saved_used = self.codegen.callee_saved_used;
@@ -13524,6 +13531,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 var builder = CodeGen.DeferredFrameBuilder.init();
                 builder.setCalleeSavedMask(self.codegen.callee_saved_used);
                 builder.setStackSize(actual_locals);
+                builder.setStackProbeRequired(stack_probe_required);
                 try builder.emitEpilogue(&self.codegen.emit);
             }
 
@@ -13542,7 +13550,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 // Pass only the actual locals size — the builder adds callee-saved space internally.
                 const prologue_start = self.codegen.currentOffset();
                 const actual_locals_x86: u32 = @intCast(-self.codegen.stack_offset - CodeGen.CALLEE_SAVED_AREA_SIZE);
-                try self.codegen.emitPrologueWithAlloc(actual_locals_x86);
+                try self.codegen.emitPrologueWithAllocAndStackProbe(actual_locals_x86, stack_probe_required);
                 const prologue_size = self.codegen.currentOffset() - prologue_start;
 
                 // Re-append body
@@ -13600,6 +13608,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 var frame_builder = CodeGen.DeferredFrameBuilder.init();
                 frame_builder.setCalleeSavedMask(self.codegen.callee_saved_used);
                 frame_builder.setStackSize(actual_locals);
+                frame_builder.setStackProbeRequired(stack_probe_required);
                 if (self.uses_caller_stack_arg_base) {
                     frame_builder.setCallerStackArgBaseReg(caller_stack_arg_base_reg);
                 }

@@ -26,7 +26,8 @@ pub const MAGIC: u32 = 0x52494c52; // "RLIR" in little-endian bytes.
 /// v8: LIR statements carry explicit checked source regions for diagnostics.
 /// v9: image is pointer-width independent; the target is supplied at view time
 ///     rather than recorded in the header.
-pub const FORMAT_VERSION: u32 = 9;
+/// v10: LIR proc specs carry explicit native stack-probe requirements.
+pub const FORMAT_VERSION: u32 = 10;
 
 /// Public `ImageError` declaration.
 pub const ImageError = error{

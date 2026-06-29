@@ -263,21 +263,30 @@ fn printResults(
             .timeout => timed_out += 1,
         }
 
-        if (result.status != .pass or verbose) {
+        // Failures go to stderr so zig's build runner surfaces them when the
+        // step fails; routine and verbose-pass output goes to stdout (see
+        // harness.printStdout) to keep a passing run's stderr empty.
+        const is_failure = result.status != .pass and result.status != .skip;
+        if (is_failure) {
             std.debug.print("  {s:<8} {s}  ({d:.1}ms)\n", .{
                 statusLabel(result.status),
                 spec.name,
                 nsToMs(result.duration_ns),
             });
             if (result.message) |message| std.debug.print("        {s}\n", .{message});
-            if (result.status != .pass and result.status != .skip) {
-                std.debug.print("        Repro: zig build run-test-zig-module-lsp_integration -- --test-filter \"{s}\"\n\n", .{spec.name});
-            }
+            std.debug.print("        Repro: zig build run-test-zig-module-lsp_integration -- --test-filter \"{s}\"\n\n", .{spec.name});
+        } else if (verbose) {
+            harness.printStdout("  {s:<8} {s}  ({d:.1}ms)\n", .{
+                statusLabel(result.status),
+                spec.name,
+                nsToMs(result.duration_ns),
+            });
+            if (result.message) |message| harness.printStdout("        {s}\n", .{message});
         }
     }
 
-    std.debug.print("\n=== LSP Integration Summary ===\n", .{});
-    std.debug.print(
+    harness.printStdout("\n=== LSP Integration Summary ===\n", .{});
+    harness.printStdout(
         "{d}/{d} passed, {d} failed, {d} skipped, {d} crashed, {d} timed out, {d:.1}s wall, {d} workers\n",
         .{ passed, specs.len, failed, skipped, crashed, timed_out, @as(f64, @floatFromInt(wall_ns)) / 1_000_000_000.0, workers },
     );
@@ -287,11 +296,11 @@ fn printResults(
     for (results, 0..) |result, i| durations[i] = result.duration_ns;
 
     if (harness.computeTimingStats(durations)) |_| {
-        std.debug.print("\n=== Timing Summary (ms) ===\n", .{});
-        harness.printStatsHeader();
-        harness.printStatsRow("integration", harness.computeTimingStats(durations));
+        harness.printStdout("\n=== Timing Summary (ms) ===\n", .{});
+        harness.printStatsHeaderTo(.stdout);
+        harness.printStatsRowTo(.stdout, "integration", harness.computeTimingStats(durations));
     }
-    harness.printSlowestN(integration.Spec, specs, durations, 5, allocator, getTestName);
+    harness.printSlowestNTo(.stdout, integration.Spec, specs, durations, 5, allocator, getTestName);
 }
 
 fn statsSummary(results: []const TestResult) harness.StatsSummary {
@@ -416,7 +425,7 @@ pub fn main(init: std.process.Init) RunnerMainError!void {
 
     const specs = try buildSpecs(arena, args.filters);
     if (specs.len == 0) {
-        std.debug.print("No LSP integration specs matched filters.\n", .{});
+        harness.printStdout("No LSP integration specs matched filters.\n", .{});
         return;
     }
 
@@ -459,8 +468,8 @@ pub fn main(init: std.process.Init) RunnerMainError!void {
     const cpu_count = std.Thread.getCpuCount() catch 4;
     const max_children = args.max_threads orelse @min(cpu_count, specs.len);
 
-    std.debug.print("=== LSP Integration Harness ===\n", .{});
-    std.debug.print("{d} specs, {d} workers, {d}s timeout\n\n", .{ specs.len, max_children, args.timeout_ms / 1000 });
+    harness.printStdout("=== LSP Integration Harness ===\n", .{});
+    harness.printStdout("{d} specs, {d} workers, {d}s timeout\n\n", .{ specs.len, max_children, args.timeout_ms / 1000 });
 
     const results = try gpa.alloc(TestResult, specs.len);
     defer gpa.free(results);

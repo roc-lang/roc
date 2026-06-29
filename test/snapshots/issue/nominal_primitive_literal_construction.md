@@ -22,9 +22,49 @@ goodValue : GoodDerived
 goodValue = "test"
 ~~~
 # EXPECTED
-NIL
+TYPE MISMATCH - nominal_primitive_literal_construction.md:4:7:4:8
+TYPE MISMATCH - nominal_primitive_literal_construction.md:9:9:9:14
+TYPE MISMATCH - nominal_primitive_literal_construction.md:15:13:15:19
 # PROBLEMS
-NIL
+
+┌───────────────┐
+│ TYPE MISMATCH ├─ This number is being used where a non-number type is ──────┐
+└┬──────────────┘  needed.                                                    │
+ │                                                                            │
+ │  uid = 0                                                                   │
+ │        ‾                                                                   │
+ └───────────────────────────── nominal_primitive_literal_construction.md:4:7 ┘
+
+    Other code expects this to have the type:
+
+        UserId
+
+
+┌───────────────┐
+│ TYPE MISMATCH ├─ This string literal is being used where a non-string ──────┐
+└┬──────────────┘  type is needed.                                            │
+ │                                                                            │
+ │  token = "abc"                                                             │
+ │          ‾‾‾‾‾                                                             │
+ └───────────────────────────── nominal_primitive_literal_construction.md:9:9 ┘
+
+    The type was determined to be:
+
+        Token
+
+
+┌───────────────┐
+│ TYPE MISMATCH ├─ This string literal is being used where a non-string ──────┐
+└┬──────────────┘  type is needed.                                            │
+ │                                                                            │
+ │  goodValue = "test"                                                        │
+ │              ‾‾‾‾‾‾                                                        │
+ └─────────────────────────── nominal_primitive_literal_construction.md:15:13 ┘
+
+    The type was determined to be:
+
+        GoodDerived
+
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,UpperIdent,

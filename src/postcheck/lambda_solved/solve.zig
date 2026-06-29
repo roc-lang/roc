@@ -440,7 +440,17 @@ const Solver = struct {
             .def_ref,
             .fn_def,
             => Common.invariant("pre-lift function expression reached Lambda Solved"),
-            .fn_ref => |fn_id| try self.unify(expected, self.program.fn_tys.items[@intFromEnum(fn_id)]),
+            .fn_ref => |fn_ref| {
+                try self.unify(expected, self.program.fn_tys.items[@intFromEnum(fn_ref.fn_id)]);
+                const captures = self.liftedCapturesForFn(fn_ref.fn_id);
+                const capture_exprs = self.program.lifted.exprSpan(fn_ref.captures);
+                if (captures.len != capture_exprs.len) {
+                    Common.invariant("function reference capture count differs from its target");
+                }
+                for (captures, capture_exprs) |capture, capture_expr| {
+                    _ = try self.expectExpr(capture_expr, self.localTy(capture.local));
+                }
+            },
             .call_value => |call| {
                 const func = try self.functionShape(try self.inferExpr(call.callee));
                 const args = self.program.lifted.exprSpan(call.args);
@@ -458,6 +468,12 @@ const Solver = struct {
                 try self.unify(expected, func.ret);
                 for (args, 0..) |arg, i| {
                     _ = try self.expectExpr(arg, self.program.types.spanItem(func.args, i));
+                }
+                const captures = self.liftedCapturesForFn(callee);
+                const capture_exprs = self.program.lifted.exprSpan(call.captures);
+                if (captures.len != capture_exprs.len) Common.invariant("procedure call capture count differs from its callee");
+                for (captures, capture_exprs) |capture, capture_expr| {
+                    _ = try self.expectExpr(capture_expr, self.localTy(capture.local));
                 }
             },
             .low_level => |call| {
@@ -689,7 +705,7 @@ const Solver = struct {
         const expr = self.program.lifted.exprs.items[index];
         const ty = switch (expr.data) {
             .local => |local| self.localTy(local),
-            .fn_ref => |fn_id| self.program.fn_tys.items[@intFromEnum(fn_id)],
+            .fn_ref => |fn_ref| self.program.fn_tys.items[@intFromEnum(fn_ref.fn_id)],
             .call_proc => |call| (try self.functionShape(self.program.fn_tys.items[@intFromEnum(Lifted.callProcCallee(call))])).ret,
             else => try self.lowerTypeFresh(expr.ty),
         };
@@ -707,7 +723,7 @@ const Solver = struct {
         const expr = self.program.lifted.exprs.items[index];
         const ty = switch (expr.data) {
             .local => |local| self.localTy(local),
-            .fn_ref => |fn_id| self.program.fn_tys.items[@intFromEnum(fn_id)],
+            .fn_ref => |fn_ref| self.program.fn_tys.items[@intFromEnum(fn_ref.fn_id)],
             else => expected,
         };
         try self.unify(ty, expected);
@@ -738,6 +754,10 @@ const Solver = struct {
             .func => |func| .{ .args = func.args, .callable = func.callable, .ret = func.ret },
             else => Common.invariant("call expression had a non-function checked type"),
         };
+    }
+
+    fn liftedCapturesForFn(self: *Solver, fn_id: Lifted.FnId) []const Lifted.TypedLocal {
+        return self.program.lifted.typedLocalSpan(self.program.lifted.fns.items[@intFromEnum(fn_id)].captures);
     }
 
     fn localTy(self: *Solver, local: Lifted.LocalId) Type.TypeVarId {

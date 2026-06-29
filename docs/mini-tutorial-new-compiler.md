@@ -215,7 +215,7 @@ digits_to_num = |digits| digits.fold(0, |num, digit| (num * 10) + digit)
 
 ### Blocks
 
-Note that there are no curly braces in this one. That's because actually every Roc function has one expression
+Note that there are no curly braces in the `digits_to_num` definition. That's because every Roc function has one expression
 after its arguments (e.g. you can write `|arg| arg.to_str()`), but that expression can be a _block_ if you like.
 Here's an example of a block expression:
 

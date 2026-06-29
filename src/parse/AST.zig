@@ -150,7 +150,7 @@ pub fn tokenizeDiagnosticToReport(self: *AST, diagnostic: tokenize.Diagnostic, a
         .InvalidUnicodeEscapeSequence => "Invalid Unicode Escape Sequence",
         .InvalidEscapeSequence => "Invalid Escape Sequence",
         .UnclosedString => "Unclosed String",
-        .NonPrintableUnicodeInStrLiteral => "Non-printable Unicode In String-like Literal",
+        .NonPrintableUnicodeInStrLiteral => "Nonprintable Unicode in String Literal",
         .InvalidUtf8InSource => "Invalid UTF-8",
         .DollarInMiddleOfIdentifier => "Stray Dollar Sign",
         .SingleQuoteTooLong => "Single Quote Too Long",
@@ -1350,6 +1350,11 @@ pub const Pattern = union(enum) {
         tag_tok: Token.Idx,
         args: Pattern.Span,
         qualifiers: Token.Span,
+        /// True when written as `Type.(pattern)` — a nominal-value destructure
+        /// (the inverse of `Type.(value)` construction), where `tag_tok` is the
+        /// nominal type and `args` is the backing pattern. False for ordinary
+        /// tag patterns like `Tag(args)` / `Module.Tag`.
+        backing_value: bool = false,
         region: TokenizedRegion,
     },
     int: struct {
