@@ -295,6 +295,43 @@ test "differential: method call / dispatch call matches" {
     );
 }
 
+test "differential: e_call (apply) — interleaved func/args migration matches" {
+    // Exercises the migrated e_call apply path: a generalized immediately-invoked
+    // lambda (`(|x| ...)(arg)`, forcing the instantiate-on-generalized branch in
+    // the `call_after_func` resume step), a top-level multi-arg function call
+    // (rigid-shared args unified pairwise), a nested call passed as an argument
+    // (per-arg `checking_call_arg` re-assertion), and an effectful call (the
+    // effectful-func `does_fx` accumulator). Covers func + arg child scheduling,
+    // did_err reconstruction, and the post-args constraint-publishing body.
+    try expectIterMatchesRecursive(
+        \\add = |a, b| a + b
+        \\
+        \\pick = |x, y| if x > y x else y
+        \\
+        \\main! = |_args| {
+        \\    iife = (|n| n + 1)(10)
+        \\    summed = add(1, 2)
+        \\    picked = pick(summed, iife)
+        \\    nested = add(add(3, 4), 5)
+        \\    (iife, summed, picked, nested)
+        \\}
+    );
+}
+
+test "differential: e_call with bare-lambda (unmigrated) arg keeps call-arg flag" {
+    // Regression guard: a function-literal call argument that canonicalizes to a
+    // bare `e_lambda` (no captures, so NOT a migrated kind) takes the iterative
+    // driver's escape hatch. It must still be checked with `checking_call_arg`
+    // set, exactly like the recursive arm's per-arg flag — otherwise the lambda
+    // is wrongly generalized and the result stays polymorphic (`a`) instead of
+    // defaulting (`Dec`). The literal-defaulting outcome differs unless the flag
+    // is honored, so this exercises the escape-hatch `call_arg` re-assertion.
+    try expectIterMatchesRecursive(
+        \\apply2 = |f, x| f(x)
+        \\result = apply2(|n| n + 1, 10)
+    );
+}
+
 test "differential: for-loop over range (type dispatch) matches" {
     // Exercises the type-dispatch call path (e_type_method_call /
     // e_type_dispatch_call) used to drive an inclusive-range `for` iterator,

@@ -9708,6 +9708,11 @@ fn unifyMatchAltPatternBindings(
 const CheckStep = enum {
     enter,
     exit,
+    /// `e_call` resume step: the function child has been checked; instantiate a
+    /// generalized func var and schedule the argument children. Runs between the
+    /// func frame popping and the arg frames being scheduled (`.exit` then runs
+    /// the post-args body).
+    call_after_func,
 };
 
 /// Per-node-kind loop/scratch state for interleaving nodes. `none` for the
@@ -9737,6 +9742,14 @@ const CheckKindState = union(enum) {
         saved_checking_call_arg: bool,
         saved_checking_immediate_callee: bool,
     },
+    /// State for `e_call` (apply/record_builder/range). Carries what the `.exit`
+    /// post-args body needs from the `call_after_func` resume step: the
+    /// (possibly instantiated) function var, and the func-side `did_err` flag
+    /// (the arg-side errors are OR'd in during `.exit` by re-resolving each arg).
+    call: struct {
+        func_var: Var,
+        did_err: bool,
+    },
 };
 
 /// A reified `checkExpr` stack frame. Must be cheap to memcpy (lives in an
@@ -9747,6 +9760,21 @@ const CheckFrame = struct {
     expected: Expected,
     step: CheckStep,
     does_fx: bool,
+    /// When true, the driver re-asserts `self.checking_call_arg` immediately
+    /// before this frame's `.enter` prologue runs (the prologue consumes the
+    /// flag). Used by `e_call` to mark the function and every argument child as
+    /// call-args, reproducing the recursive arm's per-child
+    /// `self.checking_call_arg = true` even though the children run as separately
+    /// scheduled frames. Default false (no effect on other kinds; never CLEARS
+    /// the flag, so the root frame's externally-set value is preserved).
+    call_arg: bool = false,
+    /// When true, the driver re-asserts `self.checking_immediate_callee` immediately
+    /// before this frame's `.enter` prologue runs (the prologue consumes the flag).
+    /// Used by `e_call` to mark the immediately-invoked function child, and by
+    /// `e_closure` to forward its own immediate-callee status to the inner lambda,
+    /// reproducing the recursive arm's `self.checking_immediate_callee = true`.
+    /// Default false (the consumed default; never CLEARS the flag).
+    immediate_callee: bool = false,
     kind_state: CheckKindState = .none,
     // Filled in `.enter` by `checkEnterPrologue`, consumed in `.exit`:
     prologue: ExprPrologue = undefined,
@@ -11684,8 +11712,23 @@ fn checkExprIter(self: *Self, root_idx: CIR.Expr.Idx, root_env: *Env, root_expec
         // Escape hatch BEFORE the iterative prologue: unmigrated kinds run the
         // whole node natively, then the frame is finished as a unit.
         if (self.check_frame_stack.items[top].step == .enter and !isMigratedKind(self.cir.store.getExpr(expr_idx))) {
-            const f = self.check_frame_stack.items[top];
-            const fx = try self.checkExprRecursive(f.expr_idx, f.env, f.expected);
+            // Read the fields we need into scalars rather than copying the whole
+            // 224-byte `CheckFrame` by value: this is the deep statement-nesting
+            // recursion spine, and `checkExprIter`'s native stack frame must stay
+            // small (a by-value frame copy here measurably lowers the safe nesting
+            // depth). `checkExprRecursive` re-enters the driver and may realloc the
+            // stack, so capture before the call and do not index `items[top]` after.
+            const f_env = self.check_frame_stack.items[top].env;
+            const f_expected = self.check_frame_stack.items[top].expected;
+            // Re-assert the transient call-arg flag for `e_call`'s func/arg
+            // children that land on UNMIGRATED kinds (e.g. a bare `e_lambda`
+            // argument with no captures). `checkExprRecursive`'s prologue consumes
+            // `self.checking_call_arg`; the migrated `.enter` dispatch sets this
+            // for migrated children, but the escape hatch bypasses that path, so
+            // an unmigrated call-arg would otherwise be wrongly generalized.
+            if (self.check_frame_stack.items[top].call_arg) self.checking_call_arg = true;
+            if (self.check_frame_stack.items[top].immediate_callee) self.checking_immediate_callee = true;
+            const fx = try self.checkExprRecursive(expr_idx, f_env, f_expected);
             self.finishFrameAndPropagate(top, frame_base, fx, &root_does_fx);
             continue;
         }
@@ -11694,6 +11737,11 @@ fn checkExprIter(self: *Self, root_idx: CIR.Expr.Idx, root_env: *Env, root_expec
         switch (self.check_frame_stack.items[top].step) {
             .enter => {
                 const frame = &self.check_frame_stack.items[top];
+                // Re-assert the transient call-arg flag for `e_call`'s func/arg
+                // children before the prologue consumes it. Only SETS (never
+                // clears), so a root frame's externally-set value is preserved.
+                if (frame.call_arg) self.checking_call_arg = true;
+                if (frame.immediate_callee) self.checking_immediate_callee = true;
                 frame.prologue = try self.checkEnterPrologue(frame.expr_idx, frame.env, frame.expected);
                 switch (frame.prologue.expr) {
                     .e_tuple_access => |ta| {
@@ -11864,6 +11912,19 @@ fn checkExprIter(self: *Self, root_idx: CIR.Expr.Idx, root_env: *Env, root_expec
                         try self.check_frame_stack.append(self.gpa, makeEnterFrame(h.hasher, child_env, child_expected));
                         try self.check_frame_stack.append(self.gpa, makeEnterFrame(h.value, child_env, child_expected));
                     },
+                    // INTERLEAVING: `e_call` schedules its function child (marked
+                    // `call_arg` so the func re-asserts `checking_call_arg` at its
+                    // own prologue, matching the recursive arm's
+                    // `self.checking_call_arg = true` before `checkExpr(call.func)`).
+                    // The `call_after_func` resume step instantiates a generalized
+                    // func var and schedules the arg children; `.exit` runs the
+                    // post-args body. The non-apply/record_builder/range `else`
+                    // case has no children — advance straight to `.exit`. Delegated
+                    // to a helper (NOT inlined) so its `CheckFrame`-sized scheduling
+                    // local does not bloat `checkExprIter`'s native stack frame.
+                    .e_call => {
+                        try self.enterCallExpr(top);
+                    },
                     // Helper-delegating / per-child-state kinds: like the leaf
                     // kinds below, advance to `.exit` and run the recursive body
                     // verbatim there. Their child `checkExpr` calls re-enter the
@@ -11917,6 +11978,16 @@ fn checkExprIter(self: *Self, root_idx: CIR.Expr.Idx, root_env: *Env, root_expec
                     },
                     else => unreachable, // gated by isMigratedKind
                 }
+            },
+            // `e_call` resume step. The function child has been checked and its
+            // `does_fx` OR'd into this frame. Delegated to a helper (NOT inlined)
+            // so its `CheckFrame`-sized arg-scheduling local does not bloat
+            // `checkExprIter`'s native stack frame on the deep statement-nesting
+            // spine. The helper resolves/instantiates the func var, parks it in
+            // `kind_state.call`, advances to `.exit`, and schedules the arg
+            // children (each marked `call_arg`).
+            .call_after_func => {
+                try self.checkCallAfterFunc(top);
             },
             .exit => {
                 const f = &self.check_frame_stack.items[top];
@@ -12957,6 +13028,40 @@ fn checkExprIter(self: *Self, root_idx: CIR.Expr.Idx, root_env: *Env, root_expec
                         const fx = try self.checkRunLowLevelExpr(env, child_expected, run_ll);
                         self.check_frame_stack.items[top].does_fx = fx;
                     },
+                    // INTERLEAVING POST-CHILD body for `e_call`. The function child
+                    // and every arg child were checked via scheduled frames; their
+                    // `does_fx` was OR'd into `f.does_fx` on pop. The (instantiated)
+                    // func var and the func-side `did_err` were parked by the
+                    // `call_after_func` resume step. The unify/constraint body lives
+                    // in `checkCallExprPostArgs` (NOT inlined) to keep
+                    // `checkExprIter`'s native stack frame small for the deep
+                    // statement-nesting spine. That helper performs no `checkExpr`
+                    // re-entry and never appends to `check_frame_stack`, so `f`
+                    // stays valid across it; the effectful flag it returns is OR'd
+                    // into `does_fx` through `items[top]`.
+                    .e_call => |call| {
+                        switch (call.called_via) {
+                            .apply, .record_builder, .range => {
+                                const eff = try self.checkCallExprPostArgs(
+                                    call,
+                                    f.env,
+                                    f.prologue.expr_var,
+                                    f.prologue.expr_region,
+                                    f.expr_idx,
+                                    f.kind_state.call.func_var,
+                                    f.kind_state.call.did_err,
+                                );
+                                if (eff) self.check_frame_stack.items[top].does_fx = true;
+                            },
+                            else => {
+                                // The canonicalizer currently only produces apply, record_builder, or range for e_call expressions.
+                                // Other call types (binop, unary_op, string_interpolation) are
+                                // represented as different expression types. If we hit this, there's a compiler bug.
+                                std.debug.assert(false);
+                                try self.unifyWith(f.prologue.expr_var, .err, f.env);
+                            },
+                        }
+                    },
                     else => unreachable, // gated by isMigratedKind
                 }
                 const does_fx = try self.checkExitEpilogue(
@@ -13022,6 +13127,10 @@ fn isMigratedKind(expr: CIR.Expr) bool {
         .e_run_low_level,
         .e_type_dispatch_call,
         .e_type_method_call,
+        // Interleaving call kind: `.enter` schedules the func child, the
+        // `call_after_func` resume step instantiates a generalized func var and
+        // schedules the arg children, and `.exit` runs the post-args body.
+        .e_call,
         // Variable-arity multi-child kinds (this batch): schedule every child
         // as a frame in `.enter`, run the post-child body in `.exit`.
         .e_list,
@@ -15343,6 +15452,342 @@ fn checkMethodCallExpr(
         );
     }
     return does_fx;
+}
+
+/// `e_call` `.enter` scheduling for the iterative driver (extracted from
+/// `checkExprIter` so its `CheckFrame`-sized local stays off that function's
+/// native stack frame). For apply/record_builder/range, schedules the function
+/// child (marked `call_arg`) and advances the call frame to `call_after_func`;
+/// otherwise advances straight to `.exit` (the no-children compiler-bug path).
+/// `top` indexes the call frame. The `append` may realloc, so the call frame is
+/// re-indexed via `items[top]` (never held as a pointer across the append).
+fn enterCallExpr(self: *Self, top: usize) Allocator.Error!void {
+    const call = self.cir.store.getExpr(self.check_frame_stack.items[top].expr_idx).e_call;
+    switch (call.called_via) {
+        .apply, .record_builder, .range => {
+            const child_env = self.check_frame_stack.items[top].env;
+            const child_expected = self.check_frame_stack.items[top].prologue.child_expected;
+            self.check_frame_stack.items[top].step = .call_after_func;
+            const fr_idx = self.check_frame_stack.items.len;
+            try self.check_frame_stack.append(self.gpa, makeEnterFrame(call.func, child_env, child_expected));
+            self.check_frame_stack.items[fr_idx].call_arg = true;
+            // The function is the immediately-invoked callee — mark it so its
+            // prologue re-asserts `checking_immediate_callee` (matching the
+            // recursive arm's `self.checking_immediate_callee = true` before
+            // checking `call.func`). Argument children are NOT immediate callees,
+            // so they keep the consumed default (false).
+            self.check_frame_stack.items[fr_idx].immediate_callee = true;
+        },
+        else => {
+            self.check_frame_stack.items[top].step = .exit;
+        },
+    }
+}
+
+/// `e_call` `call_after_func` resume step for the iterative driver (extracted
+/// from `checkExprIter` to keep its `CheckFrame`-sized arg-scheduling local off
+/// that function's native stack frame). The function child has been checked;
+/// this resolves/instantiates the func var, parks it (and the func-side error
+/// flag) in `kind_state.call`, advances the call frame to `.exit`, and schedules
+/// every argument child (marked `call_arg`). `top` indexes the call frame; it is
+/// re-indexed via `items[top]` across each `append` (which may realloc).
+fn checkCallAfterFunc(self: *Self, top: usize) Allocator.Error!void {
+    const call = self.cir.store.getExpr(self.check_frame_stack.items[top].expr_idx).e_call;
+    const env = self.check_frame_stack.items[top].env;
+    const child_expected = self.check_frame_stack.items[top].prologue.child_expected;
+
+    const call_func_expr_var = ModuleEnv.varFrom(call.func);
+
+    // If the function was generalized (e.g. an immediately-invoked lambda
+    // `(|x| ...)(arg)`), instantiate it so the call site gets fresh type
+    // variables. (instantiateVar does not touch the frame stack, so `items[top]`
+    // stays valid across it.)
+    const func_var = blk_instantiate: {
+        const resolved = self.types.resolveVar(call_func_expr_var);
+        if (resolved.desc.rank == Rank.generalized) {
+            break :blk_instantiate try self.instantiateVar(
+                call_func_expr_var,
+                env,
+                .use_last_var,
+            );
+        } else {
+            break :blk_instantiate call_func_expr_var;
+        }
+    };
+    const resolved_func = self.types.resolveVar(func_var).desc.content;
+    const did_err = resolved_func == .err;
+
+    // Park the func var + func-side error flag for `.exit`, advance to `.exit`,
+    // THEN schedule the args (the appends below may realloc).
+    self.check_frame_stack.items[top].kind_state = .{ .call = .{
+        .func_var = func_var,
+        .did_err = did_err,
+    } };
+    self.check_frame_stack.items[top].step = .exit;
+
+    // Schedule every argument child (pushed in REVERSE so the first arg runs
+    // first), each marked `call_arg` so it re-asserts `checking_call_arg` at its
+    // own prologue (matching the recursive arm's per-arg
+    // `self.checking_call_arg = true`).
+    const call_arg_expr_idxs = self.cir.store.sliceExpr(call.args);
+    var i = call_arg_expr_idxs.len;
+    while (i > 0) {
+        i -= 1;
+        const fr_idx = self.check_frame_stack.items.len;
+        try self.check_frame_stack.append(self.gpa, makeEnterFrame(call_arg_expr_idxs[i], env, child_expected));
+        self.check_frame_stack.items[fr_idx].call_arg = true;
+    }
+}
+
+/// Post-children body of the `e_call` apply/record_builder/range arm, run by the
+/// iterative driver's `.exit` step once the function and every argument child
+/// have been checked (their `does_fx` already accumulated into the call frame).
+///
+/// `func_var` is the (possibly instantiated) function var produced by the
+/// `call_after_func` resume step; `func_did_err` is the func-side error flag
+/// from that step (the arg-side errors are recomputed here). Returns whether the
+/// called function is effectful (the caller ORs that into the frame's `does_fx`).
+///
+/// This lives in its own function — rather than inlined into `checkExprIter` —
+/// so the giant unify/constraint body does NOT bloat `checkExprIter`'s native
+/// stack frame, which is on the deep statement-nesting recursion spine (mirrors
+/// the call-family helpers' rationale). It is a leaf w.r.t. the work stack: it
+/// performs no `checkExpr`/`checkPattern` re-entry and never appends to
+/// `check_frame_stack`.
+fn checkCallExprPostArgs(
+    self: *Self,
+    call: @FieldType(CIR.Expr, "e_call"),
+    env: *Env,
+    expr_var: Var,
+    expr_region: Region,
+    call_node_idx: CIR.Expr.Idx,
+    func_var: Var,
+    func_did_err: bool,
+) Allocator.Error!bool {
+    // Whether the called function is effectful; mirrors the recursive arm's
+    // `does_fx = true`. Returned so the caller can OR it into the frame's
+    // accumulator. Preserved across the early-error returns below (the recursive
+    // arm's `break :blk` exits, which fire AFTER this is set).
+    var does_fx_eff = false;
+
+    const call_arg_expr_idxs = self.cir.store.sliceExpr(call.args);
+
+    // Reconstruct `did_err`: the func-side flag from `call_after_func`, OR'd with
+    // each arg's error content (re-resolved now that every arg is checked).
+    var did_err = func_did_err;
+    for (call_arg_expr_idxs) |call_arg_idx| {
+        did_err = did_err or (self.types.resolveVar(ModuleEnv.varFrom(call_arg_idx)).desc.content == .err);
+    }
+
+    if (did_err) {
+        // If the fn or any args had error, propagate the error
+        // without doing any additional work
+        try self.unifyWith(expr_var, .err, env);
+    } else {
+        // From the base function type, extract the actual function info
+        // and also track whether the function is effectful
+        const FuncInfo = struct { func: types_mod.Func, is_effectful: bool };
+        const mb_func_info: ?FuncInfo = inner_blk: {
+            // Here, we unwrap the function, following aliases, to get
+            // the actual function we want to check against
+            var var_ = func_var;
+            var guard = types_mod.debug.IterationGuard.init("checkExpr.call.unwrapFuncVar");
+            while (true) {
+                guard.tick();
+                switch (self.types.resolveVar(var_).desc.content) {
+                    .structure => |flat_type| {
+                        switch (flat_type) {
+                            .fn_pure => |func| break :inner_blk FuncInfo{ .func = func, .is_effectful = false },
+                            .fn_unbound => |func| break :inner_blk FuncInfo{ .func = func, .is_effectful = false },
+                            .fn_effectful => |func| break :inner_blk FuncInfo{ .func = func, .is_effectful = true },
+                            else => break :inner_blk null,
+                        }
+                    },
+                    .alias => |alias| {
+                        var_ = self.types.getAliasBackingVar(alias);
+                    },
+                    else => break :inner_blk null,
+                }
+            }
+        };
+        const mb_func = if (mb_func_info) |info| info.func else null;
+
+        // If the function being called is effectful, mark this expression as effectful
+        if (mb_func_info) |info| {
+            if (info.is_effectful) {
+                does_fx_eff = true;
+            }
+        }
+
+        // Get the name of the function (for error messages)
+        const func_name: ?Ident.Idx = self.getExprPatternIdent(call.func);
+
+        // Now, check the call args against the type of function
+        if (mb_func) |func| {
+            // Use index-based iteration instead of slices because unifyInContext
+            // may trigger reallocations that would invalidate slice pointers
+            const func_args_range = func.args;
+            const func_args_len = func_args_range.len();
+
+            if (func_args_len == call_arg_expr_idxs.len) {
+                // First, find all the "rigid" variables in a the function's type
+                // and unify the matching corresponding call arguments together.
+                //
+                // Here, "rigid" is in quotes because at this point, the expected function
+                // has been instantiated such that the rigid variables should all resolve
+                // to the same exact flex variable. So we are actually checking for flex
+                // variables here.
+                for (0..func_args_len) |i| {
+                    const expected_arg_1 = self.types.getVarAt(func_args_range, @intCast(i));
+                    const expected_resolved_1 = self.types.resolveVar(expected_arg_1);
+
+                    // Ensure the above comment is true. That is, that all
+                    // rigid vars for this function have been instantiated to
+                    // flex vars by the time we get here.
+                    // std.debug.assert(expected_resolved_1.desc.content != .rigid);
+
+                    // Skip any concrete arguments
+                    if (expected_resolved_1.desc.content != .flex and expected_resolved_1.desc.content != .rigid) {
+                        continue;
+                    }
+
+                    // Look for other arguments with the same type variable
+                    for (i + 1..func_args_len) |j| {
+                        const expected_arg_2 = self.types.getVarAt(func_args_range, @intCast(j));
+                        const expected_resolved_2 = self.types.resolveVar(expected_arg_2);
+                        if (expected_resolved_1.var_ == expected_resolved_2.var_) {
+                            // These two argument indexes in the called *function's*
+                            // type have the same rigid variable! So, we unify
+                            // the corresponding *call args*
+
+                            const arg_1 = @as(Var, ModuleEnv.varFrom(call_arg_expr_idxs[i]));
+                            const arg_2 = @as(Var, ModuleEnv.varFrom(call_arg_expr_idxs[j]));
+
+                            const unify_result = try self.unifyInContext(arg_1, arg_2, env, .{
+                                .fn_args_bound_var = .{
+                                    .fn_name = func_name,
+                                    .first_arg_var = arg_1,
+                                    .second_arg_var = arg_2,
+                                    .first_arg_index = @intCast(i),
+                                    .second_arg_index = @intCast(j),
+                                    .num_args = @intCast(call_arg_expr_idxs.len),
+                                },
+                            });
+                            if (unify_result.isProblem()) {
+                                // Context already set by unifyInContext
+                                // Stop execution
+                                try self.unifyWith(expr_var, .err, env);
+                                return does_fx_eff;
+                            }
+                        }
+                    }
+                }
+
+                // Check the function's arguments against the actual
+                // called arguments, unifying each one
+                for (call_arg_expr_idxs, 0..) |call_expr_idx, arg_index| {
+                    const expected_arg_var = self.types.getVarAt(func_args_range, @intCast(arg_index));
+                    const unify_result = try self.unifyInContext(expected_arg_var, ModuleEnv.varFrom(call_expr_idx), env, .{ .fn_call_arg = .{
+                        .fn_name = func_name,
+                        .call_expr = call_node_idx,
+                        .arg_index = @intCast(arg_index),
+                        .num_args = @intCast(call_arg_expr_idxs.len),
+                        .arg_var = ModuleEnv.varFrom(call_expr_idx),
+                    } });
+                    if (unify_result.isProblem()) {
+                        // Stop execution
+                        try self.unifyWith(expr_var, .err, env);
+                        return does_fx_eff;
+                    }
+                }
+
+                if (call.called_via == .record_builder) {
+                    const result = try self.enforceRecordBuilderMap2Return(func, env, call_node_idx, func_name);
+                    if (result.isProblem()) {
+                        try self.unifyWith(expr_var, .err, env);
+                        return does_fx_eff;
+                    }
+                }
+
+                // Redirect the expr to the function's return type
+                _ = try self.unify(expr_var, func.ret, env);
+            } else {
+                // We get here, then the arity of the function
+                // being called and the callsite do not match.
+                // This means it's a  regular type mismatch
+
+                // In this case, we fall back to a regular
+                // mismatch to show the actual vs expected, and
+                // allow the problem reporting  hint mechanism
+                // to add some context
+
+                const call_arg_vars: []Var = @ptrCast(call_arg_expr_idxs);
+                const call_func_ret = try self.fresh(env, expr_region);
+                const call_func_content = try self.types.mkFuncUnbound(call_arg_vars, call_func_ret);
+                const call_func_var = try self.freshFromContent(call_func_content, env, expr_region);
+
+                _ = try self.unifyInContext(func_var, call_func_var, env, .{ .fn_call_arity = .{
+                    .fn_name = func_name,
+                    .expected_args = @intCast(func_args_len),
+                    .actual_args = @intCast(call_arg_expr_idxs.len),
+                } });
+
+                // Then, we set the root expr to redirect to the return
+                // type of that function, since a call expr ultimate
+                // resolve to the  returned type
+                _ = try self.unify(expr_var, call_func_ret, env);
+            }
+        } else {
+            // We get here if the type of expr being called
+            // (`mk_fn` in `(mk_fn())(arg)`) is NOT already
+            // inferred to be a function type.
+
+            // This can mean a regular type mismatch, but it can also
+            // mean that the thing being called yet has not yet been
+            // inferred (like if this is an anonymous function param)
+
+            // Either way, we know what the type  *should* be, based
+            // on how it's being used here. So we create that func
+            // type and unify the function being called against it
+
+            const call_arg_vars: []Var = @ptrCast(call_arg_expr_idxs);
+            const call_func_ret = try self.fresh(env, expr_region);
+            const call_func_content = try self.types.mkFuncUnbound(call_arg_vars, call_func_ret);
+            const call_func_var = try self.freshFromContent(call_func_content, env, expr_region);
+
+            _ = try self.unify(func_var, call_func_var, env);
+
+            // Then, we set the root expr to redirect to the return
+            // type of that function, since a call expr ultimate
+            // resolve to the  returned type
+            _ = try self.unify(expr_var, call_func_ret, env);
+        }
+
+        const published_constraint_args: []Var = @ptrCast(call_arg_expr_idxs);
+        const published_constraint_func = Func{
+            .args = try self.types.appendVars(published_constraint_args),
+            .ret = expr_var,
+            .needs_instantiation = false,
+        };
+        const published_constraint_flat: FlatType = if (mb_func_info) |info|
+            if (info.is_effectful)
+                .{ .fn_effectful = published_constraint_func }
+            else
+                .{ .fn_pure = published_constraint_func }
+        else
+            .{ .fn_unbound = published_constraint_func };
+        const published_constraint_fn_var = try self.freshFromContent(.{ .structure = published_constraint_flat }, env, expr_region);
+
+        try self.cir.store.replaceExprWithCallConstraint(
+            call_node_idx,
+            call.func,
+            call.args,
+            call.called_via,
+            published_constraint_fn_var,
+        );
+    }
+
+    return does_fx_eff;
 }
 
 /// Body of the `e_dispatch_call` arm, shared by `checkExprRecursive` and the
