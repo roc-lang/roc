@@ -21,7 +21,12 @@ dependencies on a second post-check representation. Hosted ABI metadata,
 platform metadata, symbols, literal ids, layout stores, and LIR stores live in
 neutral modules owned by their actual consumers.
 
-Everything in between those boundaries is a Cor-style typed IR pipeline:
+Everything in between those boundaries is selected by the runtime lowering
+strategy for the current compilation. The strategy is a post-check choice and
+never changes checked module output.
+
+The lambda-set-specializing strategy is called `.lss` internally. It is the
+Cor-style typed IR pipeline:
 
 ```text
 checked modules
@@ -34,11 +39,31 @@ checked modules
   -> backend, interpreter, or LirImage
 ```
 
-There is no separate MIR layer. There is no separate stored layout IR between
-Lambda Mono and LIR. Layout selection is owned by the direct Lambda Mono to LIR
-builder. In optimized builds, Lambda Mono is represented by explicit callable
-and procedure decision tables consumed by direct LIR lowering, not by a second
-stored expression, pattern, and statement tree.
+The boxing strategy is called `.boxy` internally. It skips Monotype,
+Monotype Lifted, Lambda Solved, and Lambda Mono:
+
+```text
+checked modules
+  -> boxy checked-to-LIR lowering
+  -> LIR
+  -> ARC insertion
+  -> backend, interpreter, or LirImage
+```
+
+`.boxy` does not construct or consume lambda sets. It lowers checked CIR plus
+checked types directly to LIR by representing polymorphic value positions as
+ordinary Roc box pointers, representing closures as boxed erased callables, and
+passing explicit runtime descriptors and dictionaries as hidden Roc-internal
+arguments or captures. The value shapes that can cross the host ABI remain
+exactly the source ABI shapes.
+
+There is no separate MIR layer in either strategy. There is no separate stored
+layout IR between a strategy-specific lowerer and LIR. Layout selection is owned
+by the selected LIR builder. In `.lss`, Lambda Mono is represented by explicit
+callable and procedure decision tables consumed by direct LIR lowering, not by a
+second stored expression, pattern, and statement tree. In `.boxy`, checked CIR
+is consumed directly with explicit boxy representation plans owned by that
+lowerer.
 
 ## Core Principles
 
@@ -588,25 +613,35 @@ CheckedModuleId =
 ```
 
 The cache id does not include target ABI, pointer width, layout ids, field offsets,
-alignment decisions, backend choice, object format, code-generation options, or
-post-check specialization state.
+alignment decisions, backend choice, object format, code-generation options,
+post-check lowering strategy, or post-check specialization state.
 
 Module boundaries are cache boundaries only. They must never change the final
 runtime behavior or performance of the compiled program, except for debug
 information. Compiling one large module and compiling the same code split across
-imports must produce the same reachable specializations, callable
-representations, layout decisions, ARC statements, and backend behavior.
+imports must produce the same reachable `.lss` specializations or `.boxy`
+descriptors, callable representations, layout decisions, ARC statements, and
+backend behavior for the same lowering strategy.
 
 The compiler does not cache Monotype IR, Monotype Lifted IR, Lambda Solved IR,
-Lambda Mono decisions, LIR, or any callable/layout representation derived from
-them as part of checked modules. Those structures are target/session products
-of the current root compilation.
+Lambda Mono decisions, boxy representation plans, boxy type descriptors, boxy
+dictionaries, LIR, or any callable/layout representation derived from them as
+part of checked modules. Those structures are target/session products of the
+current root compilation.
 
 Monotype IR is target-independent, but it is still post-check and root-specific.
 It depends on the roots requested for the current compilation, the reachable
 monomorphic specializations, and the static-dispatch and source-loop lowering
 performed for that compilation. `ConstStore` entries in checked modules are
 therefore checked-stage stored constants, not Monotype nodes.
+
+Boxy lowering is also post-check and root-specific. Its descriptors and
+dictionaries depend on the current roots, target pointer width, exact host ABI
+roots selected for this compilation, and the checked dispatch plans reachable
+from those roots. They are not checked cache data. Any cache that stores lowered
+LIR, LirImage data, object code, or executable output must include the lowering
+strategy and every target/backend input that can change the lowered
+representation.
 
 The checked module cache stores checked Roc values only. Roc language values are
 target-independent except for pointer-sized Roc values if the language exposes
@@ -646,7 +681,9 @@ Checked CIR may contain source-level forms such as static-dispatch calls,
 method equality, type-dispatch calls, and source `for` loops because those are
 part of the checked source module.
 
-Those forms do not survive Monotype IR lowering.
+Those forms do not survive runtime lowering. The `.lss` strategy removes them
+while producing Monotype IR. The `.boxy` strategy removes them while producing
+LIR directly from checked data.
 
 The checked boundary outputs immutable checked modules. A checked module is
 either complete or unavailable to later stages. Later stages may read checked
@@ -679,8 +716,9 @@ post-check state and is never visible to importers.
 The checked module may store checked-stage constant values in `ConstStore` and
 checked procedure templates for promoted callables. It must not store post-check
 representation data. In particular, the checked module does not contain runtime
-type payloads, value conversion plans, callable-set descriptors, erased callable
-ABI decisions, layout ids, runtime tag discriminants, or backend encodings.
+type payloads, value conversion plans, callable-set descriptors, boxy
+`TypeDesc` data, boxy dictionaries, erased callable ABI decisions, layout ids,
+runtime tag discriminants, or backend encodings.
 
 This is a checked-boundary rule, not merely a pipeline rule. Any checked
 module field whose only purpose is to feed post-check runtime representation is
@@ -1821,9 +1859,254 @@ monomorphizing the program, so interpolation segments use builtin `Str`
 directly. Normal non-interpolated quoted literals still convert through
 `from_quote` as described above.
 
+## Runtime Lowering Strategy
+
+Runtime compilation has one selected explicit lowering strategy:
+
+```zig
+const SpecializationStrategy = enum {
+    /// Lambda-set specialization: specialize polymorphism and callable flow
+    /// through Monotype, Lambda Solved, and Lambda Mono before LIR.
+    lss,
+
+    /// Box polymorphic values and closures, pass dictionaries/vtables, and
+    /// lower checked data directly to LIR without lambda sets.
+    boxy,
+};
+```
+
+The command-line spelling is `--specialize=yes` for `.lss` and
+`--specialize=no` for `.boxy`. All runtime-producing commands accept the flag
+except `roc check`, because `roc check` stops at checked module output and the
+checked module is independent of post-check lowering strategy. If the flag is
+omitted, `--opt=dev` and `--opt=interpreter` default to `.boxy`; `--opt=size`
+and `--opt=speed` default to `.lss`. The `--opt` flag still selects the
+code-generation backend and optimization family. The `--specialize` flag
+selects how checked data becomes LIR before ARC and code generation.
+
+Compiler progress text follows the selected strategy. `.lss` reports the
+lambda-set-specializing work as `Specializing`. `.boxy` reports the same
+pipeline position as `Lowering`, because it does not specialize lambda sets.
+
+The strategy is threaded explicitly through the public checked-to-LIR API and
+stored in every lowered-output cache key. It is not recovered from the backend,
+optimization level, target, root set, or whether a later stage asks for an
+interpreter image. Backends receive ARC-complete LIR and do not know whether the
+LIR came from `.lss` or `.boxy` except through ordinary LIR statements,
+layouts, descriptor tables, and root metadata.
+
+### `.lss` Runtime Lowering
+
+`.lss` is the lambda-set-specializing strategy. It runs:
+
+```text
+checked modules
+  -> Monotype IR
+  -> Monotype Lifted IR
+  -> Lambda Solved IR
+  -> Lambda Mono decisions
+  -> direct Lambda Mono to LIR lowering
+```
+
+It specializes polymorphic procedure templates to closed Monotype types, solves
+callable flow with lambda sets, turns finite function values into generated
+tag unions, uses packed erased callables only at explicit erased-callable
+boundaries, and emits concrete LIR layouts for every local, parameter, return,
+and static data request.
+
+`.lss` owns monomorphic static-dispatch elimination. A checked static-dispatch
+plan becomes a direct call or explicit structural operation while the current
+procedure specialization has concrete type information. Later stages never see
+checked dispatch nodes.
+
+### `.boxy` Runtime Lowering
+
+`.boxy` is the boxing strategy. It consumes immutable checked modules directly:
+
+```text
+checked modules
+  -> checked CIR + checked types + checked roots + checked dispatch plans
+  -> boxy representation planning
+  -> LIR
+```
+
+It does not create Monotype IR, Monotype Lifted IR, Lambda Solved IR, Lambda
+Mono decisions, lambda sets, finite callable tag unions, or lambda-set
+specializations. It also does not consult those data structures through a
+compatibility shim. The selected lowerer owns a separate checked-to-LIR path
+whose inputs are checked artifacts and whose output is ordinary LIR.
+
+Boxy representation has one purpose: reach LIR without whole-program
+monomorphic specialization. Runtime performance may be lower because generic
+values are boxed, functions are indirect erased callables, and polymorphic
+operations use dictionaries/vtables. Compile time is lower because no lambda
+sets, callable-flow specialization queue, or Monotype/Lambda Mono syntax
+pipeline is constructed for runtime roots.
+
+`.boxy` represents an unknown type-variable value as one ordinary Roc box
+payload pointer. This is the same runtime shape as `Box(T)`: a nullable or
+non-null pointer-sized Roc value whose allocation stores the payload bytes and
+whose refcount lives immediately before the data pointer according to the
+ordinary Roc allocation layout. The type information needed to copy, drop,
+allocate, inspect, or dispatch on that payload is not stored in the value.
+It travels separately as explicit hidden data.
+
+Function values in `.boxy` use the erased callable representation. A function
+value is one Roc refcounted allocation whose data pointer is the function
+value. The payload starts with the erased-callable header and stores capture
+bytes after the fixed capture offset. Captures may include hidden descriptors
+or dictionaries because the host ABI for `Box(function)` already treats
+capture bytes as opaque. The value pointer and header layout do not change.
+Zero-capture functions may use a static or otherwise canonical erased callable
+payload, but their value shape is still the erased callable pointer.
+
+Source `Box(a)` does not add a second box merely because `.boxy` already
+represents the internal type variable `a` as a boxed payload pointer. The
+compiler-internal boxiness of `a` and the source-level `Box(a)` representation
+are representation-equivalent in that case. This equivalence applies only when
+one layer is the compiler's internal boxy representation of a type variable.
+Explicit source nesting is preserved at concrete host boundaries: if the source
+type is `Box(Box(U64))`, the host-visible representation has two ordinary Roc
+box layers.
+
+The representation of a container with an unknown element type is committed by
+substituting the boxy value representation at the unknown positions. For
+example, an internal `.boxy` record field of type `a` is a pointer-sized boxed
+payload field, and an internal `.boxy` `List(a)` stores pointer-sized boxed
+payload elements. If such a value crosses a host ABI boundary, the wrapper uses
+the exact checked host layout for that boundary and adapts between the
+host-visible layout and the internal boxy layout. Host layout selection is
+never derived from the internal boxy layout.
+
+### Boxy `TypeDesc`
+
+A boxy `TypeDesc` is runtime data for representation, not method dispatch. It
+describes the operations needed for a value representation:
+
+- size and alignment of the payload representation when the payload is stored
+  inside a box or copied between stack/heap slots
+- whether the payload contains Roc-managed values
+- the explicit nested drop/incref/free/copy plan for payload bytes
+- the concrete LIR layout for known concrete payloads
+- descriptor references for nested dynamic payload positions
+- optional structural operation entries such as equality or hashing only when
+  those operations are representation operations rather than user methods
+
+The exact field order and encoding of `TypeDesc` is LIR-owned static data.
+Every descriptor has an explicit id in the lowered program. Backends and the
+interpreter consume descriptor ids or descriptor-pointer locals through LIR
+statements; they do not synthesize descriptors from type names, layout shapes,
+or object symbols.
+
+Descriptors are never stored inside ordinary Roc values. A value of type
+variable `a` is a one-word box pointer, not `{ data, desc }`. A record field,
+list element, tag payload, function argument, return value, or host ABI slot
+whose source value is `a` stores only the value representation. The descriptor
+is passed as a hidden argument, captured by an erased callable, loaded from a
+static descriptor table, or carried in a hidden local that the selected lowerer
+introduced explicitly.
+
+### Boxy Dictionaries And Vtables
+
+A boxy dictionary is runtime data for polymorphic behavior and static dispatch.
+It is distinct from `TypeDesc`. A dictionary may contain:
+
+- method function pointers
+- hidden `TypeDesc` references required by those methods
+- nested dictionaries required by constrained arguments or results
+- static metadata for checked dispatch plans
+
+The dictionary is built from checked dispatch plans, checked method registries,
+and checked type information. It is not built by method-name search at LIR time.
+If a polymorphic function requires a method dictionary, that dictionary is an
+explicit hidden parameter or capture. If a concrete call site invokes the
+function, the caller supplies the exact static dictionary for the concrete
+checked type. If a higher-order function captures a polymorphic function, the
+erased callable capture stores the hidden dictionary it needs.
+
+LIR exposes indirect dictionary calls as ordinary explicit indirect calls with
+a known LIR call shape. The LIR statement names the dictionary local or static
+dictionary id, the method slot, the explicit Roc arguments, and every hidden
+descriptor/dictionary argument. Dev codegen, LLVM codegen, and the interpreter
+implement the same generic indirect-call primitive. They do not know static
+dispatch semantics, do not look up methods by name, and do not reconstruct
+dictionaries. Seeing an indirect call is still useful to a backend because it
+can lower the call with the normal target calling convention, keep arguments in
+registers, and avoid a universal trampoline.
+
+### Boxy Host ABI Adapters
+
+The host ABI is independent of lowering strategy. `.boxy` changes only private
+Roc implementation procedures. Any LIR root whose checked root metadata has
+`RootAbi.platform` or `RootAbi.hosted`, and any provided static data export,
+uses the exact host ABI layout derived from the checked source type. Hidden
+`TypeDesc` or dictionary values are never added to a host-visible signature.
+
+For a host-visible function, `.boxy` emits two logical procedure layers:
+
+```text
+host ABI wrapper/root proc
+  exact checked arg/ret layouts
+  no hidden args in the exported or hosted ABI
+  adapts between host layouts and internal boxy layouts
+  supplies static or derivable hidden TypeDesc/Dict values
+  calls private boxy worker
+
+private boxy worker
+  internal boxy layouts
+  explicit hidden TypeDesc/Dict params
+  no host ABI exposure
+```
+
+Only the wrapper is listed in `root_procs` with the checked root metadata. The
+private worker is an ordinary private LIR proc. Native entrypoint wrappers,
+interpreter shims, glue, static data export, and ABI cache digests therefore see
+the same host layouts under `.lss` and `.boxy`.
+
+Hosted calls use the same rule in the opposite direction. The LIR hosted proc
+retains its exact checked hosted ABI. A boxy call site adapts internal boxy
+arguments into that ABI, calls the hosted proc, and adapts the result back to
+the internal boxy representation when needed. It must not change the hosted
+symbol signature and must not ask the host to provide hidden descriptors.
+
+`RocBox(RocUnknown)` at the host boundary is opaque unless Roc already has
+explicit descriptor data on the Roc side. The host ABI passes only the Roc box
+pointer. There is no ABI slot for a payload descriptor, and the Roc box
+allocation does not contain one. Therefore `.boxy` may retain, move, return, or
+shallow-drop an opaque box according to the existing host ABI contract, but it
+must not structurally inspect or recursively drop an unknown payload unless an
+explicit `TypeDesc` is available from checked Roc-side data. The compiler must
+not use a default descriptor, assume the payload has no nested Roc values, or
+derive a descriptor from runtime bytes.
+
+### Compile-Time Evaluation Strategy
+
+`--specialize` does not affect compile-time evaluation during checking
+finalization. Compile-time evaluation uses the existing checked-finalization
+pipeline described in Compile-Time Constants, runs the LIR interpreter, and
+stores checked values in `ConstStore`. Runtime `.boxy` builds do not make
+compile-time roots use boxy descriptors, dictionaries, or host ABI adapters.
+
+### Strategy Equivalence Tests
+
+The compiler does not perform production-release ABI equivalence verification
+between `.lss` and `.boxy`. Doing so would spend end-user time on an invariant
+that the compiler test suite owns.
+
+Tests must verify that the two strategies produce the same host-visible ABI for
+the same checked artifact: exported and hosted symbol signatures, lowered C ABI
+placements, glue type tables, provided static data layouts, entrypoint ABI
+digests, and root metadata. Differences in private proc shape, hidden
+descriptors/dictionaries, indirect calls, RC statement count, backend code size,
+or runtime performance are allowed.
+
 ## Shared Post-Check Model
 
-Every post-check IR has a typed IR store:
+Every typed post-check IR has an explicit typed store. `.lss` uses this for
+the Monotype, Monotype Lifted, Lambda Solved, and Lambda Mono stages. `.boxy`
+does not create those stages, but its checked-to-LIR lowerer still uses
+explicit typed side stores for boxy `TypeDesc`, dictionary, hidden-argument,
+and adapter plans while building LIR.
 
 ```zig
 pub const ExprId = enum(u32) { _ };
@@ -1847,6 +2130,9 @@ Type-store ownership is explicit at each stage boundary:
   change types.
 - Lambda Solved IR owns a new type store with lambda-set variables.
 - Lambda Mono owns a new type store with no function types.
+- Boxy lowering consumes the checked type store and owns boxy descriptor and
+  dictionary stores. It does not allocate a Monotype or Lambda Solved type
+  store.
 - LIR owns committed layouts, not post-check type ids.
 
 A later stage must not reinterpret an earlier stage's type ids unless the stage
@@ -1878,14 +2164,19 @@ algorithms. These worklists do not cross stage boundaries and do not output
 checked data.
 
 The only meaning-producing worklists in post-check compilation are stage-local
-specialization queues. A specialization queue is driven by explicit calls or
-roots discovered while lowering the previous stage. It is not a general
-post-demand repair list.
+strategy worklists. In `.lss`, these are specialization queues driven by
+explicit calls or roots discovered while lowering the previous stage. In
+`.boxy`, these are descriptor, dictionary, adapter, and private-worker queues
+driven by explicit checked roots, checked type positions, checked dispatch
+plans, and LIR statements emitted by the boxy lowerer. They are not general
+post-demand repair lists.
 
 ## Monotype IR
 
-Monotype IR is the first post-check typed representation. It keeps only the
-expression and pattern forms that are meaningful after checking, and every
+Monotype IR is the first post-check typed representation in the `.lss`
+strategy and in the existing compile-time evaluation pipeline. `.boxy` runtime
+lowering does not construct Monotype IR. Monotype keeps only the expression and
+pattern forms that are meaningful after checking, and every
 expression and pattern has a monomorphic type.
 
 Monotype IR is produced from checked modules and explicit root requests. It
@@ -2304,7 +2595,7 @@ on lifted function definitions.
 
 ### Monotype Specialization
 
-Monotype specialization is root driven.
+Monotype specialization is `.lss`-only and root driven.
 
 ```zig
 const MonoSpec = struct {
@@ -2352,7 +2643,10 @@ its own closed instantiation.
 
 ### Static Dispatch In Monotype
 
-Static dispatch is resolved while producing Monotype IR.
+Static dispatch is resolved while producing Monotype IR in `.lss`. `.boxy`
+does not enter this stage; it resolves the same checked dispatch plans to
+dictionary/vtable calls or concrete structural operations while lowering
+checked CIR directly to LIR.
 
 For each checked dispatch plan in a body specialization:
 
@@ -2438,8 +2732,8 @@ No `for` node exists after Monotype IR.
 
 ## Monotype Lifted IR
 
-Monotype Lifted IR removes closures and local functions from expression
-position. Its type store is the Monotype type store.
+Monotype Lifted IR is `.lss`-only. It removes closures and local functions from
+expression position. Its type store is the Monotype type store.
 
 The expression language is intentionally close to Monotype IR, and the
 implementation consumes Monotype expression storage in place. Expression,
@@ -2503,8 +2797,9 @@ remains the source consumed by Lambda Solved and later stages.
 
 ## Lambda Solved IR
 
-Lambda Solved IR introduces lambda sets into the stage-local type store and
-solves callable flow.
+Lambda Solved IR is `.lss`-only. It introduces lambda sets into the
+stage-local type store and solves callable flow. `.boxy` runtime lowering never
+constructs Lambda Solved IR and therefore never encounters a lambda set.
 
 This is where Roc intentionally follows Cor's data model for callable values:
 callable representation information is type information in this post-check IR,
@@ -2593,8 +2888,9 @@ output, and no representation recovery later.
 
 ### Erased Callable Requirements
 
-`erased` callable requirements are explicit data entering Lambda Solved IR.
-They are not inferred from backend needs or recovered from runtime encodings.
+In `.lss`, `erased` callable requirements are explicit data entering Lambda
+Solved IR. They are not inferred from backend needs or recovered from runtime
+encodings.
 
 The producers are:
 
@@ -2619,13 +2915,20 @@ No ordinary source expression becomes erased because a later stage finds finite
 dispatch inconvenient. Erasure is introduced only by one of the checked boundary
 data above.
 
+This `.lss` rule is separate from `.boxy` closure representation. `.boxy` uses
+boxed erased callables for function values by strategy, but it still does not
+change host ABI requirements or infer host-facing erased slots from backend
+convenience. A `.boxy` erased callable is an internal function-value
+representation unless the checked host ABI already requires `Box(function)`.
+
 ## Lambda Mono Decisions
 
-Lambda Mono consumes Lambda Solved IR and chooses function-free callable,
-procedure, capture, and type representation data. These decisions are explicit
-stage output, but release builds do not store a full Lambda Mono expression,
-pattern, or statement tree. The direct LIR builder consumes the Lambda Solved
-lifted syntax together with Lambda Mono decision tables.
+Lambda Mono is `.lss`-only. It consumes Lambda Solved IR and chooses
+function-free callable, procedure, capture, and type representation data. These
+decisions are explicit stage output, but release builds do not store a full
+Lambda Mono expression, pattern, or statement tree. The direct `.lss` LIR
+builder consumes the Lambda Solved lifted syntax together with Lambda Mono
+decision tables. `.boxy` does not construct Lambda Mono decisions.
 
 The Lambda Mono type store has no function type. Function values have already
 become ordinary value representations:
@@ -2791,10 +3094,19 @@ after-the-result conversion.
 
 ## Direct LIR Lowering
 
-LIR lowering consumes Lambda Solved lifted syntax plus Lambda Mono decision
-tables directly. It is the only production path from Lambda Solved to LIR.
+LIR lowering has two production frontends selected by `SpecializationStrategy`.
+Both frontends produce the same ownership-neutral LIR contract consumed by ARC:
 
-There is no separate stored layout IR. The Lambda Mono to LIR builder owns:
+- `.lss` consumes Lambda Solved lifted syntax plus Lambda Mono decision tables.
+- `.boxy` consumes checked CIR, checked types, checked roots, checked dispatch
+  plans, checked method registries, and checked platform/hosted metadata.
+
+There is no strategy fallback. The selected frontend either emits complete LIR
+from its explicit inputs or stops on a compiler invariant failure. A frontend
+must not call the other strategy to fill missing data.
+
+There is no separate stored layout IR. In `.lss`, the Lambda Mono to LIR
+builder owns:
 
 - a layout builder that interns and commits recursive layouts from
   Lambda Mono type nodes
@@ -2813,23 +3125,131 @@ There is no separate stored layout IR. The Lambda Mono to LIR builder owns:
 
 These are builder responsibilities, not a separate meaning-carrying IR.
 
-The builder may maintain temporary maps such as `TypeId -> layout.Idx`,
+The `.lss` builder may maintain temporary maps such as `TypeId -> layout.Idx`,
 `LambdaMonoFnId -> LirProcSpecId`, `LiftedLocalId -> LirLocalId`, and
 `LiftedExprId -> lowered logical expression` while lowering one function
 specialization. These maps are caches of work the builder owns. They must not
 contain checked data that are absent from Lambda Solved IR, Lambda Mono
 decisions, or the LIR result.
 
-Release builds must not allocate, fill, traverse, or validate a materialized
+The `.boxy` builder owns corresponding temporary maps such as
+`CheckedTypeId -> BoxyTypeDescId`, `CheckedDispatchPlanId -> BoxyDictId`,
+`CheckedRootOrder -> LirProcSpecId`, and `CheckedExprId -> LirLocalId` while
+lowering one root/worker. These maps are caches of explicit checked and boxy
+lowering data. They must not recover missing facts from source syntax, type
+display strings, backend symbols, or runtime bytes.
+
+Release `.lss` builds must not allocate, fill, traverse, or validate a materialized
 Lambda Mono expression, pattern, or statement tree. Release builds may allocate
 only the Lambda Mono decision data needed by direct LIR lowering: function-free types,
 function specializations, callable variants, capture records, root/layout/schema
 requests, and builder-local scratch storage.
 
+Release `.boxy` builds must not allocate Monotype, Monotype Lifted, Lambda
+Solved, Lambda Mono, lambda-set, or finite-callable-tag-union syntax as a
+compatibility representation. They may allocate only boxy descriptor,
+dictionary, adapter, worker, layout, and builder-local scratch data needed to
+emit LIR.
+
+### Boxy Checked-To-LIR Lowering
+
+The boxy lowerer emits private worker procs whose explicit arguments are the Roc
+source arguments after boxy representation, followed by hidden `TypeDesc` and
+dictionary arguments required by the checked type and dispatch plans. Hidden
+arguments are ordinary LIR locals in private procs. They are not part of root
+metadata and are never exposed to the host ABI.
+
+For every checked function value expression, the boxy lowerer emits an
+`assign_packed_erased_fn`-style LIR statement that creates an erased callable
+payload. The payload stores the function entry and capture bytes. Capture bytes
+store ordinary captured Roc values plus any hidden descriptors or dictionaries
+the function body needs. The erased callable's `on_drop` plan is explicit LIR
+data selected before backend lowering.
+
+For every checked call through a function value, the boxy lowerer emits an
+erased-call LIR statement. For every checked direct call to a known procedure, it
+emits a direct LIR call to the corresponding private boxy worker and supplies
+the hidden descriptors and dictionaries required by that worker. For every
+checked static-dispatch call, it emits either:
+
+- a concrete direct structural operation when the checked dispatch plan and the
+  current type representation make the operation statically concrete, or
+- an explicit dictionary/vtable indirect call when the checked plan requires
+  polymorphic behavior.
+
+The lowerer must not discover method owners by searching registries at LIR
+time. It consumes the checked dispatch plan and checked method registry entries
+that checking already produced.
+
+Boxy box/unbox/adapt operations are explicit LIR statements or explicit helper
+calls selected by the lowerer:
+
+- boxing a concrete value allocates an ordinary Roc box with the concrete
+  payload layout and initializes payload bytes
+- boxing a value that is already in boxy type-variable representation reuses
+  the same box pointer when the source type layer is the compiler-internal
+  boxiness of that type variable
+- unboxing a value for a concrete host ABI or concrete operation copies payload
+  bytes according to the explicit descriptor or concrete layout
+- adapting a container copies, moves, or aliases according to explicit
+  descriptor and layout data; it never assumes that equal pointer size implies
+  equal semantic representation
+
+### Boxy LIR Data
+
+The LIR program contains descriptor and dictionary tables when `.boxy` emits
+statements that reference them:
+
+```zig
+const BoxyTypeDescId = enum(u32) { _ };
+const BoxyDictId = enum(u32) { _ };
+
+const BoxyDescRef = union(enum) {
+    static_desc: BoxyTypeDescId,
+    local: LirLocalId,
+};
+
+const BoxyDictRef = union(enum) {
+    static_dict: BoxyDictId,
+    local: LirLocalId,
+};
+```
+
+The exact descriptor and dictionary payload structs are owned by LIR, not by a
+backend. Their contents are serialized into LirImage when any reachable LIR
+statement references them. A backend may cache lowered helper code for a
+descriptor or dictionary, but it must not change the descriptor's meaning.
+
+Dynamic RC in boxy LIR is explicit. A local whose layout is a boxy dynamic value
+is pointer-sized, but its nested payload drop/copy behavior is not recoverable
+from the layout alone. ARC therefore emits RC statements whose helper plan
+contains the relevant `BoxyDescRef`:
+
+```zig
+const RcHelper = union(enum) {
+    static_layout: layout.RcHelperKey,
+    boxy_dynamic: struct {
+        op: RcOp,
+        desc: BoxyDescRef,
+    },
+};
+```
+
+Backends and the interpreter lower that helper mechanically. They do not inspect
+the dynamic value, synthesize descriptors, or choose a shallower drop because a
+descriptor is missing. A missing descriptor at a statement that requires one is
+a lowering invariant failure.
+
+Boxy indirect calls are also explicit. A dictionary-call statement names the
+dictionary, method slot, argument span, result target, and hidden argument span.
+The backend lowers it as an indirect call with an explicit call shape. It does
+not know the checked method name or perform vtable lookup logic.
+
 ### Debug Lambda Mono Verification
 
-Debug builds may additionally materialize the logical Lambda Mono tree for
-verification. That tree is never an input to production lowering, never a
+This verification applies only to `.lss`. Debug builds may additionally
+materialize the logical Lambda Mono tree for verification. That tree is never
+an input to production lowering, never a
 substitute result, and never a recovery path. The direct solved-to-LIR builder
 always produces the LIR result first. The debug verifier then checks a
 separately materialized Lambda Mono tree against the direct path.
@@ -2860,8 +3280,9 @@ must not continue by using the materialized Lambda Mono LIR.
 
 ### Direct Builder Internal Contracts
 
-The direct LIR builder is one compiler stage, but its internal components have
-explicit contracts so the stage does not become an implicit reconstruction layer:
+The selected LIR builder is one compiler stage, but its internal components have
+explicit contracts so the stage does not become an implicit reconstruction layer.
+The `.lss` builder components are:
 
 - the layout builder consumes only Lambda Mono type nodes and emits committed
   LIR layouts plus explicit maps from checked ids to runtime encodings for
@@ -2878,14 +3299,38 @@ explicit contracts so the stage does not become an implicit reconstruction layer
 - schema output consumes committed nominal layouts and checked
   nominal identities
 
-No internal component may inspect source syntax, checked bodies, display names,
-runtime bytes, backend symbols, or any data outside the direct-builder inputs.
-Internal maps are work caches only. If an internal component needs data that
-is not in Lambda Solved IR, Lambda Mono decisions, committed layouts, checked
-identities explicitly passed to the builder, or the LIR result it is
-constructing, the earlier stage contract is incomplete.
-The direct builder must not invent conversion operations to repair a mismatch
-between Lambda Mono decisions and committed layouts.
+The `.boxy` builder components are:
+
+- the boxy representation planner consumes checked types and checked root
+  metadata, then emits internal boxy layouts, host adapter plans, and hidden
+  descriptor/dictionary requirements
+- the descriptor builder consumes checked types, committed payload layouts, and
+  nested descriptor references, then emits LIR-owned `TypeDesc` entries
+- the dictionary builder consumes checked dispatch plans and checked method
+  registry entries, then emits LIR-owned dictionary/vtable entries
+- the adapter builder consumes checked host ABI roots and committed host
+  layouts, then emits host-shaped root procs and private boxy worker calls
+- the procedure builder consumes checked procedure templates, boxy hidden
+  parameter plans, and committed layouts, then emits private LIR procedure ids
+  plus root metadata for host-shaped wrappers
+- the local builder consumes checked binder ids, boxy representation plans, and
+  committed layouts, then emits LIR locals
+- the pattern builder consumes checked patterns and committed boxy layouts, then
+  emits LIR control flow
+- callable lowering consumes checked function values and hidden capture plans,
+  then emits erased-callable packing and erased-call statements
+
+No internal component may inspect source syntax, display names, runtime bytes,
+backend symbols, or any data outside the selected builder's explicit inputs.
+The `.lss` builder consumes Lambda Solved/Lambda Mono data, not checked bodies.
+The `.boxy` builder may consume the checked bodies named by explicit checked
+roots and reachable checked procedure templates, because checked CIR is its
+source IR. Internal maps are work caches only. If an internal component needs
+data that is not in the selected strategy's explicit inputs, committed layouts,
+checked identities explicitly passed to the builder, or the LIR result it is
+constructing, the earlier stage contract is incomplete. The direct builder must
+not invent conversion operations to repair a mismatch between strategy decisions
+and committed layouts.
 
 The direct builder returns one explicit output object:
 
@@ -2897,6 +3342,8 @@ const LirLowerOutput = struct {
     root_metadata: Span(RootMetadata),
     requested_layouts: Span(RequestedLayout),
     runtime_schemas: RuntimeSchemaStore,
+    boxy_type_descs: Span(BoxyTypeDesc),
+    boxy_dicts: Span(BoxyDict),
     fn_sets: Span(FnSet),
     erased_fns: Span(ErasedFns),
 };
@@ -2906,15 +3353,18 @@ const LirLowerOutput = struct {
 consumed by ARC and then by backends, the interpreter, and LirImage.
 `requested_layouts` is for static data and provided data exports that asked for
 layout decisions during the same lowering. `runtime_schemas` is for glue and
-static data. `fn_sets` and `erased_fns` are temporary compile-time output
-contexts used by `CheckedModuleBuilder` while storing function values in
-`ConstStore`. Capture slots are stored inside the corresponding function
-variant or erased-function entry.
+static data. `boxy_type_descs` and `boxy_dicts` are LIR-owned runtime tables
+used only when reachable LIR statements reference them. `fn_sets` and
+`erased_fns` are temporary compile-time output contexts used by
+`CheckedModuleBuilder` while storing function values in `ConstStore`. Capture
+slots are stored inside the corresponding function variant or erased-function
+entry.
 
 The output owns all of these stores and spans. Consumers borrow the fields they
 need and must not add their own side stores for the same data. `LirImage`
 contains only the ARC-inserted LIR fields: `store`, `layouts`, `root_procs`,
-platform entrypoints, and target usize.
+platform entrypoints, target usize, and any reachable LIR-owned boxy descriptor
+or dictionary tables referenced by the image.
 
 ### Layout Selection
 
@@ -2927,12 +3377,18 @@ Layout selection is the first stage that chooses runtime encodings:
 - list backing layout
 - erased callable payload layout
 - ABI-visible procedure argument and result layouts
+- boxy dynamic value pointer layouts
+- boxy descriptor and dictionary table layouts
 
-Layout selection consumes Lambda Mono types and produces LIR layouts plus the
-runtime schemas and function result data that later compile-time output,
-static data export, and glue code need. Later stages consume those explicit
-layouts, schemas, and function result data. They do not rediscover field order,
-tag discriminants, callable member encodings, or erased callable payload shape.
+In `.lss`, layout selection consumes Lambda Mono types and produces LIR layouts
+plus the runtime schemas and function result data that later compile-time
+output, static data export, and glue code need. In `.boxy`, layout selection
+consumes checked types plus boxy representation plans and produces internal
+boxy layouts, exact host ABI layouts for wrapper roots and static data exports,
+and LIR-owned descriptor/dictionary layouts. Later stages consume those
+explicit layouts, schemas, descriptors, dictionaries, and function result data.
+They do not rediscover field order, tag discriminants, callable member
+encodings, erased callable payload shape, or dynamic box payload behavior.
 
 When layout commitment assigns a runtime discriminant or field offset to a
 generated function tag, the builder outputs the mapping from the stage-local
@@ -3004,8 +3460,9 @@ backends agree.
 ### Pattern Lowering
 
 Pattern decision construction is part of the direct LIR builder. It consumes
-Lambda Mono patterns and committed layouts and emits LIR control flow. There is
-no persisted pattern-decision IR.
+strategy-specific patterns and committed layouts and emits LIR control flow.
+`.lss` consumes Lambda Mono patterns. `.boxy` consumes checked patterns plus
+boxy representation plans. There is no persisted pattern-decision IR.
 
 ### ARC
 
@@ -3060,19 +3517,25 @@ The ARC stage contract does not change:
   modules, LirImage, or any consumer-visible structure; everything the solver
   computes is ARC-stage-local and is dropped when the stage finishes
 
-Borrow inference runs after every other post-check transformation:
-monomorphization, lifting, call-pattern specialization, lambda-set solving,
-inlining decisions, and LIR lowering are all complete before solving starts.
-This ordering is required, not incidental:
+Borrow inference runs after every other selected post-check transformation.
+For `.lss`, monomorphization, lifting, call-pattern specialization,
+lambda-set solving, inlining decisions, Lambda Mono decisions, and LIR lowering
+are all complete before solving starts. For `.boxy`, checked-to-LIR lowering,
+boxy descriptor/dictionary emission, host adapter emission, and LIR lowering
+are all complete before solving starts. This ordering is required, not
+incidental:
 
-- inference attaches resources to refcounted positions of committed layouts,
-  which exist only after LIR lowering commits them
+- inference attaches resources to refcounted positions of committed layouts and
+  explicit dynamic boxy descriptors, which exist only after LIR lowering commits
+  them
 - every specializing or restructuring pass changes which values exist and how
   calls are shaped, which invalidates an ownership solution; solving once,
   last, means the solution is never patched after a later transformation
-- earlier specialization makes inference more precise: call-pattern
+- earlier `.lss` specialization makes inference more precise: call-pattern
   specialization deletes refcounted aggregate intermediates outright and
-  exposes per-position flow that one aggregate-typed parameter would hide
+  exposes per-position flow that one aggregate-typed parameter would hide.
+  `.boxy` intentionally gives up that precision for lower compile time, but it
+  still exposes every value and dynamic descriptor explicitly before ARC starts.
 
 The dependency is one-directional. Upstream stages feed borrow inference;
 the solution is consumed only by emission within the same ARC stage. No
@@ -3113,8 +3576,10 @@ and its moves to the absence of both at a final owned occurrence.
 ### Resources Over Layouts
 
 A local participates in inference iff its layout contains refcounted data
-(`layoutContainsRefcounted`). Each participating local owns one resource per
-rc node reachable in its committed layout:
+(`layoutContainsRefcounted`) or its LIR layout is a boxy dynamic value whose
+descriptor says the value owns Roc-managed storage. Each participating local
+owns one resource per rc node reachable in its committed layout or dynamic
+descriptor:
 
 - the top-level value itself, when its layout is `str`, `list`, `list_of_zst`,
   `box`, `box_of_zst`, or `erased_callable`
@@ -3123,6 +3588,7 @@ rc node reachable in its committed layout:
 - one resource per refcounted field of a `struct_`
 - one resource per refcounted payload position of each `tag_union` variant
 - the captures resource of a `closure` / `erased_callable`
+- the top-level and payload resources described by a boxy `TypeDesc`
 
 Rc positions are interned per `layout.Idx` as a stage-local place table. The
 place graph is finite: committed layouts guard every recursive occurrence
@@ -3131,6 +3597,12 @@ as boxes), and a place path that re-enters a layout already on the path folds
 into the earlier place. One place under a recursive box therefore stands for
 every unrolled occurrence, which matches the typing rule below that nested
 modes are uniform through an owning rc.
+
+Boxy dynamic places are interned per descriptor identity and dynamic position,
+not by value pointer. A dynamic value is pointer-sized at the LIR layout level,
+but its payload ownership graph is descriptor-defined. ARC consumes the
+descriptor reference emitted by boxy lowering; it never treats a pointer-sized
+dynamic value as a shallow pointer merely because the layout is one word.
 
 Nested resources carry two modes, following the paper's storage/access split:
 
@@ -3205,6 +3677,19 @@ generates constraints per statement:
 - `assign_call_erased`: the erased-callable ABI is a pinned all-owned
   `RcSig`: refcounted args owned, captures owned by the callee, result owned.
   Inference does not flow modes through erased callable values.
+- `assign_call_dict` / boxy dictionary indirect calls: instantiate the explicit
+  call shape named by the LIR statement. Hidden descriptor and dictionary
+  arguments obey the same ownership modes as ordinary arguments according to
+  their layouts. Method selection is already encoded in the dictionary slot;
+  ARC does not inspect checked method names.
+- boxy box/adapt statements: constraints come from the explicit source local,
+  target local, concrete layout, and `TypeDesc` references named by the
+  statement. Boxing a concrete payload creates a new owned top-level box
+  resource whose nested payload storage constraints come from the descriptor.
+  Reusing an existing boxy type-variable representation is pure flow of the
+  top-level box resource, not a new allocation. Unboxing or adapting into a
+  concrete host layout borrows or consumes the box payload according to the
+  statement's explicit ownership mode and descriptor.
 - `assign_low_level`: constraints come from the op's `RcEffect`. Args in
   `consume_args` are owned occurrences. Args outside `consume_args` are
   borrowed occurrences whose lender must be live at the call. Args in
@@ -3270,6 +3755,9 @@ before solving and never weakened:
   `platform_required_binding`, `hosted_export`, `test_expect`, `repl_expr`,
   `dev_expr`, and compile-time roots): every refcounted param owned on entry,
   every refcounted return position owned. This is the existing host ABI rule.
+  In `.boxy`, host-visible roots are host-shaped wrapper procs. Private boxy
+  workers are not root procs and their hidden descriptor/dictionary parameters
+  solve like ordinary private proc parameters unless another ABI rule pins them.
 - hosted procs: every refcounted arg owned by the host, result owned. This
   keeps the LirImage And Hosted Functions contract unchanged.
 - erased-callable procs (`ProcAbi.erased_callable`): all-owned, as above.
@@ -3337,8 +3825,12 @@ Emission also emits `free` where it does today (intent marker for a value
 the proc fully releases); `free` keeps its current meaning of decrement plus
 deallocation with nested decrefs through the RC helper plan.
 
-RC helper selection is unchanged: each emitted statement carries the helper
-derived from the local's layout, and helper choice stays in this stage.
+RC helper selection stays in this stage. For ordinary concrete layouts, each
+emitted statement carries the helper derived from the local's layout. For boxy
+dynamic values, each emitted statement carries the dynamic helper plan and
+`TypeDesc` reference selected by ARC from explicit LIR descriptor data. In both
+cases, helper choice is complete before backends, the interpreter, or LirImage
+consume the LIR.
 
 Emission decisions ask liveness questions with on-demand forward scans over
 the ownership-neutral statement graph, the same shape the all-owned inserter
@@ -3356,6 +3848,11 @@ debug compiler builds pay, and any certifier slowness is fixed inside the
 certifier, never by weakening what it checks.
 
 ### Mode Specialization
+
+This section describes ARC mode specialization, not the user-facing
+`--specialize` lowering-strategy flag. The two choices are independent concepts:
+`--specialize=yes|no` selects `.lss` versus `.boxy` before LIR, while ARC mode
+specialization decides how many ownership-signature variants to emit after LIR.
 
 A proc's solved `RcSig` is the most-borrowed signature its body admits.
 Callers can always adapt to it, but adaptation has a cost: passing an owned
@@ -3391,7 +3888,8 @@ A build without mode specialization is the same worklist with every demand
 vector forced to the solved `RcSig`, which yields exactly one variant per
 proc. Dev builds (`--opt=dev`) and compile-time evaluation use that
 single-variant form, because solving is the only new compile-time cost they
-accept. `--opt=speed` and `--opt=size` both enable full specialization;
+accept. Interpreter builds (`--opt=interpreter`) also use the single-variant
+form. `--opt=speed` and `--opt=size` both enable full specialization;
 specialization clones proc bodies, but each variant carries fewer RC
 statements, and variant counts are bounded by realized demand vectors. All
 forms run the identical solver; they differ only in which demand vectors get
@@ -3638,8 +4136,9 @@ parallel insertion paths at any point:
 
 ## Compile-Time Constants
 
-Compile-time constants use the same post-check pipeline as runtime code while a
-checked module is being finalized:
+Compile-time constants use the existing checked-finalization pipeline while a
+checked module is being finalized. This path is unaffected by the runtime
+`--specialize` flag:
 
 ```text
 checked CIR
@@ -3657,6 +4156,12 @@ checked CIR
 The compile-time evaluator is an LIR interpreter. It does not interpret
 Monotype IR, Lambda Solved IR, logical Lambda Mono expressions, or any
 source-level IR.
+
+Runtime `.boxy` builds do not make compile-time roots use boxy lowering.
+Compile-time finalization continues to lower the requested compile-time roots
+through the existing Monotype/Lambda/LIR path, interpret the result, and store
+checked values in `ConstStore`. This keeps `roc check` and compile-time
+evaluation independent of runtime backend and specialization choices.
 
 Compile-time ARC insertion runs the same borrow-inference solver as runtime
 ARC insertion in its single-variant form: one proc per solved `RcSig`, no
@@ -3903,6 +4408,18 @@ The compiler must not infer different ownership behavior from hosted function
 names, return types, or body absence. Hosted-argument ownership is an ABI rule,
 and generated glue must document it for platform authors.
 
+LirImage stores the already-lowered platform entrypoint table. For `.boxy`,
+those entrypoints are the host-shaped wrapper procs, not private boxy workers.
+The image may also store LIR-owned boxy descriptor and dictionary tables if
+reachable LIR statements reference them. Those tables are internal interpreter
+data; they do not add fields to platform entrypoint signatures or hosted
+function signatures.
+
+Hosted proc entries keep their exact checked hosted ABI in both strategies. A
+boxy caller adapts arguments before the hosted call and adapts the result after
+the hosted call. It must not change the hosted dispatch index, hosted symbol
+name, natural C ABI signature, ownership rule, or generated glue declaration.
+
 ## Build Outputs And The Targets Header
 
 A platform's `targets:` header section declares, per target, both the link
@@ -3971,6 +4488,39 @@ need per-call context (for example an arena) own its delivery out of band
 executes Roc code — including threads that invoke stored boxed Roc closures.
 Generated glue exposes closure invocation through helpers that set and restore
 that state so the contract is enforced by signatures rather than remembered.
+
+The host symbol ABI is identical for `.lss` and `.boxy`. Host-facing signatures
+are derived from checked platform/provided/hosted declarations and the shared
+C ABI classifier. They are not derived from private `.boxy` worker layouts,
+hidden descriptor arguments, hidden dictionaries, or internal boxy dynamic
+layouts. A strategy change may alter private Roc procedures and generated code,
+but it must not alter:
+
+- exported `provides` symbol names
+- hosted symbol names
+- argument or return count
+- argument or return layouts
+- C ABI register/stack placements
+- static data symbol layouts
+- `RocBox`, `RocList`, `RocStr`, erased-callable, nominal, record, or tag-union
+  host representation
+- ownership transfer rules for refcounted host ABI values
+
+`Box(T)` in host ABI is always the ordinary Roc box representation: one Roc
+refcounted allocation whose data pointer is the value. `Box(function)` is the
+ordinary erased-callable representation: one Roc refcounted allocation whose
+payload starts with the erased-callable header. `.boxy` may use those same
+representations internally, but it may not add a descriptor pointer to either
+value shape and may not change allocation headers.
+
+When glue represents an unknown value as `RocUnknown` or `RocBox(RocUnknown)`,
+the host sees an opaque pointer-shaped value. The compiler must not expect the
+host to provide a payload descriptor for it. If a boxy wrapper needs a payload
+descriptor for a host-originating box, that descriptor must be available from
+explicit Roc-side checked data; otherwise the wrapper may only treat the box as
+opaque. Shallow retain/move/return/drop of an opaque box follows the existing
+host ABI contract. Recursive payload teardown or structural inspection requires
+an explicit `TypeDesc`.
 
 Weak linkage exists to break the app/host reference cycle without imposing
 link order; COFF has no equivalent weak external, and needs none: the app
@@ -4165,8 +4715,8 @@ shim child and the internal rebuild worker.
 
 ## Relationship To Cor LSS
 
-The post-check design mirrors Cor's LSS experiment after solving, adapted for
-Roc's checked module boundary and existing LIR.
+The `.lss` runtime lowering strategy mirrors Cor's LSS experiment after
+solving, adapted for Roc's checked module boundary and existing LIR.
 
 | Cor LSS stage | Roc stage |
 | --- | --- |
@@ -4178,7 +4728,7 @@ Roc's checked module boundary and existing LIR.
 | `ir` | direct Lambda Mono to LIR builder |
 | `eval` | LIR interpreter for compile-time evaluation |
 
-Roc intentionally keeps Cor's post-solve shape:
+`.lss` intentionally keeps Cor's post-solve shape:
 
 - Monotype IR is closed, monomorphic typed IR.
 - Monotype Lifted IR has top-level lifted functions and explicit captures.
@@ -4232,24 +4782,41 @@ lowering. Direct LIR lowering consumes those ids and span positions; it does not
 look up record fields or tag variants by display label to recover missing row
 relationships.
 
+`.boxy` is not a Cor LSS pipeline. It deliberately avoids the Monotype,
+Lambda Solved, and Lambda Mono stages for runtime roots. It keeps the same
+checked boundary and LIR boundary, but it reaches LIR by boxing polymorphic
+values, boxing closures as erased callables, and passing explicit descriptors
+and dictionaries. Its correctness is measured by the same observable Roc
+semantics and the same host ABI, not by producing the same private procedures or
+callable representation as `.lss`.
+
 ## Forbidden Shapes
 
 The post-check pipeline must not contain:
 
 - MIR as a separate compiler layer
-- a persisted layout IR between Lambda Mono and LIR
+- a persisted layout IR between Lambda Mono and LIR, or between boxy
+  representation planning and LIR
 - post-demand worklists
-- alternate post-check lowering paths
+- implicit fallback lowering paths outside the selected explicit strategy
 - comparing against another lowering path to decide compiler behavior
-- callable descriptor replacement
+- callable descriptor replacement in `.lss`
 - callable value repointing
 - late payload output
 - generic conversion expressions, post-hoc conversion plan tables, or mismatch
   patching lowering paths
 - checked-module runtime payloads, value conversion plans, callable-set
-  descriptors, or erased ABI decisions
+  descriptors, boxy descriptors, boxy dictionaries, or erased ABI decisions
 - owner discovery by method-registry intersection
 - backend reference-counting decisions
+- descriptor or dictionary pointers stored inside ordinary Roc value
+  representations
+- host ABI signatures that include hidden boxy `TypeDesc` or dictionary
+  arguments
+- changing `Box(T)`, `Box(function)`, `RocUnknown`, or any other host-visible
+  runtime representation based on the selected lowering strategy
+- using shallow drop, default descriptors, runtime bytes, or pointer width as a
+  substitute for an explicit `TypeDesc`
 - mode, lifetime, or RC-signature data stored in checked modules, LirImage,
   or any structure that outlives ARC insertion
 - user-facing errors after checked module output
@@ -4262,7 +4829,10 @@ The allowed replacement is explicit stage ownership:
 - Monotype Lifted owns closure lifting
 - Lambda Solved owns callable flow in the type graph
 - Lambda Mono owns explicit callable value representation
-- LIR lowering owns committed layouts and statement lowering
+- Boxy lowering owns descriptor/dictionary planning and checked-to-LIR lowering
+  for `.boxy`
+- LIR lowering owns committed layouts and statement lowering for the selected
+  strategy
 - ARC owns borrow inference, mode specialization, and reference-count
   insertion
 - backends own only backend code generation from explicit LIR
@@ -4287,11 +4857,33 @@ Minimum boundary checks:
 - Lambda Mono decisions contain no function type and no value-call node.
 - Lambda Mono decisions contain no unresolved lambda set.
 - Lambda Mono decisions contain no runtime tag discriminants or layout ids.
+- `.boxy` runtime lowering constructs no Monotype, Monotype Lifted, Lambda
+  Solved, Lambda Mono, or lambda-set data for runtime roots.
+- `.boxy` value locals that require dynamic payload behavior have an explicit
+  `TypeDesc` source available at every statement that boxes, unboxes, copies,
+  recursively drops, or structurally inspects the value.
+- `.boxy` dictionaries are produced only from checked dispatch plans and
+  checked method registries; no LIR stage performs owner discovery by method
+  name or registry intersection.
+- `.boxy` host-visible root procs have exactly the checked host ABI layouts and
+  contain no hidden descriptor or dictionary arguments. Hidden values appear
+  only in private workers or opaque erased-callable captures.
+- `.boxy` provided static data requests use the exact host-visible checked
+  layouts, not internal boxy layouts.
 - Checked compile-time stores contain only `ConstStore` data.
-- LIR lowering receives only Lambda Solved lifted syntax plus Lambda Mono
-  decisions.
+- LIR lowering receives only the selected strategy's explicit inputs: Lambda
+  Solved lifted syntax plus Lambda Mono decisions for `.lss`, or checked
+  artifacts plus boxy representation data for `.boxy`.
 - ARC insertion receives LIR containing no RC statements.
+- ARC insertion sees dynamic boxy RC helper plans only where the LIR statement
+  carries an explicit descriptor reference.
 - ARC output passes the debug borrow certifier.
 - Backends receive only ARC-complete LIR.
+
+The test suite also verifies cross-strategy host ABI equivalence. For the same
+checked artifact, `.lss` and `.boxy` must agree on exported and hosted symbol
+signatures, lowered C ABI placements, glue type tables, provided static data
+layouts, entrypoint ABI digests, and root metadata. This equivalence check is a
+test obligation, not a release-build compiler pass.
 
 If a boundary check fails, the compiler stops as a compiler bug.
