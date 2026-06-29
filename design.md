@@ -3149,12 +3149,20 @@ facts from source syntax, type display strings, backend symbols, or runtime
 bytes.
 
 Boxy representation planning consumes checked nominal declared-order entries
-directly. It lowers each named entry to the matching backing-row child and each
-padding entry to the instantiated padding type referenced by its ordinal. The
-boxy layout planner then emits a nominal struct node in that declared order and
-marks it with the shared layout graph's nominal-struct marker. The ordinary
-layout store verifies or repairs the field order; boxy does not implement a
-separate nominal layout algorithm.
+directly. For usage payloads whose finalized representation points at a local or
+imported box-payload capability, the planner obtains the instantiated backing
+root and padding roots from that capability rather than treating empty
+`padding_field_types` on the usage payload as absence of padding. Imported
+capability roots are source-module checked ids; the planner maps them into the
+root checked type store by their published canonical checked type keys. Named
+declared fields from imported declarations are matched against the projected
+root backing row through canonical field-label text, not by assuming equal
+module-local label ids. The planner lowers each named entry to the matching
+backing-row child and each padding entry to the instantiated padding type
+referenced by its ordinal. The boxy layout planner then emits a nominal struct
+node in that declared order and marks it with the shared layout graph's
+nominal-struct marker. The ordinary layout store verifies or repairs the field
+order; boxy does not implement a separate nominal layout algorithm.
 
 Release `.lss` builds must not allocate, fill, traverse, or validate a materialized
 Lambda Mono expression, pattern, or statement tree. Release builds may allocate

@@ -326,7 +326,8 @@ fn lowerBoxyCheckedModulesToLir(
     }
 
     var plan = try postcheck.Boxy.Plan.analyzeProgram(allocator, .{
-        .checked_types = modules.root.module.checked_types.view(),
+        .root_module = modules.root,
+        .imports = modules.imports,
         .roots = roots.requests,
         .layout_requests = boxy_layout_requests.items,
     }, .{});

@@ -10,11 +10,14 @@ const check = @import("check");
 
 const Allocator = std.mem.Allocator;
 const checked = check.CheckedModule;
+const canonical = check.CanonicalNames;
 const RecordFieldLabelId = @TypeOf(@as(checked.CheckedRecordField, undefined).name);
 const TagLabelId = @TypeOf(@as(checked.CheckedTag, undefined).name);
 const MethodNameId = @TypeOf(@as(checked.CheckedStaticDispatchConstraint, undefined).fn_name);
 const StaticDispatchOrigin = @TypeOf(@as(checked.CheckedStaticDispatchConstraint, undefined).origin);
 const NumeralInfo = std.meta.Child(@TypeOf(@as(checked.CheckedStaticDispatchConstraint, undefined).num_literal));
+
+const empty_interface_capabilities = checked.ModuleInterfaceCapabilities{};
 
 pub const TypeRepId = enum(u32) { _ };
 pub const RootPlanId = enum(u32) { _ };
@@ -188,8 +191,19 @@ pub const ProgramPlan = struct {
 
 pub const AnalyzeOptions = struct {};
 
-pub const ProgramInput = struct {
+pub const ModuleView = struct {
+    key: checked.ModuleId = .{},
+    canonical_names: ?*const canonical.CanonicalNameStore = null,
     checked_types: checked.CheckedTypeStoreView,
+    interface_capabilities: *const checked.ModuleInterfaceCapabilities = &empty_interface_capabilities,
+};
+
+pub const ProgramInput = struct {
+    checked_types: checked.CheckedTypeStoreView = .{},
+    root_view: ?ModuleView = null,
+    extra_module_views: []const ModuleView = &.{},
+    root_module: ?checked.LoweringModuleView = null,
+    imports: []const checked.ImportedModuleView = &.{},
     roots: []const checked.RootRequest = &.{},
     layout_requests: []const checked.CheckedTypeId = &.{},
 };
@@ -199,7 +213,7 @@ pub fn analyzeProgram(
     input: ProgramInput,
     _: AnalyzeOptions,
 ) Allocator.Error!ProgramPlan {
-    var builder = Builder.init(allocator, input.checked_types);
+    var builder = Builder.init(allocator, input);
     defer builder.deinit();
 
     for (input.roots) |root| {
@@ -231,14 +245,27 @@ pub fn analyzeCheckedTypes(
 
 const Builder = struct {
     allocator: Allocator,
-    checked_types: checked.CheckedTypeStoreView,
+    root_view: ModuleView,
+    extra_module_views: []const ModuleView,
+    imports: []const checked.ImportedModuleView,
+    relation_modules: []const checked.ImportedModuleView,
     plan: ProgramPlan,
     by_type: std.AutoHashMap(checked.CheckedTypeId, TypeRepId),
 
-    fn init(allocator: Allocator, checked_types: checked.CheckedTypeStoreView) Builder {
+    fn init(allocator: Allocator, input: ProgramInput) Builder {
+        const root_view = if (input.root_view) |root_view|
+            root_view
+        else if (input.root_module) |root_module|
+            moduleViewFromImported(checked.importedView(root_module.module))
+        else
+            ModuleView{ .checked_types = input.checked_types };
+
         return .{
             .allocator = allocator,
-            .checked_types = checked_types,
+            .root_view = root_view,
+            .extra_module_views = input.extra_module_views,
+            .imports = if (input.root_module != null) input.imports else &.{},
+            .relation_modules = if (input.root_module) |root_module| root_module.relation_modules else &.{},
             .plan = ProgramPlan.init(allocator),
             .by_type = std.AutoHashMap(checked.CheckedTypeId, TypeRepId).init(allocator),
         };
@@ -247,6 +274,30 @@ const Builder = struct {
     fn deinit(self: *Builder) void {
         self.by_type.deinit();
         self.plan.deinit();
+    }
+
+    fn moduleForId(self: *Builder, module_id: checked.ModuleId) ModuleView {
+        if (moduleKeyEqual(module_id, self.root_view.key)) return self.root_view;
+        for (self.extra_module_views) |view| {
+            if (moduleKeyEqual(module_id, view.key)) return view;
+        }
+        for (self.imports) |imported| {
+            if (moduleKeyEqual(module_id, imported.key)) return moduleViewFromImported(imported);
+        }
+        for (self.relation_modules) |relation| {
+            if (moduleKeyEqual(module_id, relation.key)) return moduleViewFromImported(relation);
+        }
+        boxyPlanInvariant("checked nominal representation referenced a module outside boxy planner input");
+    }
+
+    fn typeInRootView(
+        self: *Builder,
+        source_view: ModuleView,
+        source_ty: checked.CheckedTypeId,
+    ) Allocator.Error!checked.CheckedTypeId {
+        if (moduleKeyEqual(source_view.key, self.root_view.key)) return source_ty;
+        return self.root_view.checked_types.rootForKey(source_view.checked_types.rootKey(source_ty)) orelse
+            boxyPlanInvariant("checked capability type was not projected into the root checked type store");
     }
 
     fn analyzeRoot(self: *Builder, root: checked.RootRequest) Allocator.Error!void {
@@ -280,7 +331,7 @@ const Builder = struct {
     }
 
     fn buildRepresentation(self: *Builder, ty: checked.CheckedTypeId) Allocator.Error!TypeRepresentation {
-        const payload = self.checked_types.payload(ty);
+        const payload = self.root_view.checked_types.payload(ty);
         return switch (payload) {
             .pending => boxyPlanInvariant("checked type payload was pending during boxy planning"),
             .flex => |flex| try self.dynamicRepresentation(ty, .flex, flex.constraints),
@@ -317,15 +368,16 @@ const Builder = struct {
         ty: checked.CheckedTypeId,
         alias: checked.CheckedAliasType,
     ) Allocator.Error!TypeRepresentation {
-        const start = self.childStart();
-        try self.appendChild(.alias_backing, alias.backing);
+        var children = std.ArrayList(RepChild).empty;
+        defer children.deinit(self.allocator);
+        try self.appendPendingChild(&children, .alias_backing, alias.backing);
         for (alias.args, 0..) |arg, index| {
-            try self.appendChild(.{ .alias_arg = @intCast(index) }, arg);
+            try self.appendPendingChild(&children, .{ .alias_arg = @intCast(index) }, arg);
         }
         return .{
             .source_type = ty,
             .kind = .alias,
-            .children = self.childSpanFrom(start),
+            .children = try self.commitPendingChildren(children.items),
         };
     }
 
@@ -336,17 +388,18 @@ const Builder = struct {
         fields: []const checked.CheckedRecordField,
         ext: ?checked.CheckedTypeId,
     ) Allocator.Error!TypeRepresentation {
-        const start = self.childStart();
+        var children = std.ArrayList(RepChild).empty;
+        defer children.deinit(self.allocator);
         for (fields) |field| {
-            try self.appendChild(.{ .record_field = field.name }, field.ty);
+            try self.appendPendingChild(&children, .{ .record_field = field.name }, field.ty);
         }
         if (ext) |ext_ty| {
-            try self.appendChild(.record_ext, ext_ty);
+            try self.appendPendingChild(&children, .record_ext, ext_ty);
         }
         return .{
             .source_type = ty,
             .kind = kind,
-            .children = self.childSpanFrom(start),
+            .children = try self.commitPendingChildren(children.items),
         };
     }
 
@@ -355,14 +408,15 @@ const Builder = struct {
         ty: checked.CheckedTypeId,
         elems: []const checked.CheckedTypeId,
     ) Allocator.Error!TypeRepresentation {
-        const start = self.childStart();
+        var children = std.ArrayList(RepChild).empty;
+        defer children.deinit(self.allocator);
         for (elems, 0..) |elem, index| {
-            try self.appendChild(.{ .tuple_elem = @intCast(index) }, elem);
+            try self.appendPendingChild(&children, .{ .tuple_elem = @intCast(index) }, elem);
         }
         return .{
             .source_type = ty,
             .kind = .tuple,
-            .children = self.childSpanFrom(start),
+            .children = try self.commitPendingChildren(children.items),
         };
     }
 
@@ -387,17 +441,25 @@ const Builder = struct {
             }
         }
 
-        const start = self.childStart();
+        var children = std.ArrayList(RepChild).empty;
+        defer children.deinit(self.allocator);
         if (nominal.representation != .opaque_without_backing) {
-            try self.appendChild(.nominal_backing, nominal.backing);
+            try self.appendPendingChild(&children, .nominal_backing, try self.nominalBackingType(nominal));
         }
         for (nominal.args, 0..) |arg, index| {
-            try self.appendChild(.{ .nominal_arg = @intCast(index) }, arg);
+            try self.appendPendingChild(&children, .{ .nominal_arg = @intCast(index) }, arg);
         }
-        for (nominal.padding_field_types, 0..) |padding, index| {
-            try self.appendChild(.{ .nominal_padding_field = @intCast(index) }, padding);
+        if (self.nominalPaddingSource(nominal)) |padding_source| {
+            for (padding_source.types, 0..) |padding, index| {
+                try self.appendPendingChild(
+                    &children,
+                    .{ .nominal_padding_field = @intCast(index) },
+                    try self.typeInRootView(padding_source.view, padding),
+                );
+            }
         }
-        const declared_fields = try self.appendNominalDeclaredFields(nominal);
+        const backing_ty = try self.nominalBackingType(nominal);
+        const declared_fields = try self.appendNominalDeclaredFields(nominal, backing_ty);
         return .{
             .source_type = ty,
             .kind = .{ .nominal = if (nominal.representation == .opaque_without_backing)
@@ -406,29 +468,148 @@ const Builder = struct {
                 .builtin_other
             else
                 .transparent },
-            .children = self.childSpanFrom(start),
+            .children = try self.commitPendingChildren(children.items),
             .declared_fields = declared_fields,
+        };
+    }
+
+    const NominalPaddingSource = struct {
+        view: ModuleView,
+        types: []const checked.CheckedTypeId,
+    };
+
+    const NominalDeclaredSource = struct {
+        field_view: ModuleView,
+        fields: []const checked.CheckedDeclaredField,
+        padding_view: ModuleView,
+        padding_types: []const checked.CheckedTypeId,
+    };
+
+    const NominalDeclarationLookup = struct {
+        view: ModuleView,
+        declaration: checked.CheckedNominalDeclaration,
+        padding_view: ModuleView,
+        padding_types: []const checked.CheckedTypeId,
+    };
+
+    fn nominalBackingType(
+        self: *Builder,
+        nominal: checked.CheckedNominalType,
+    ) Allocator.Error!checked.CheckedTypeId {
+        return switch (nominal.representation) {
+            .local_box_payload_capability => |capability| self.root_view.interface_capabilities.boxPayloadCapability(capability.capability).backing_ty,
+            .imported_box_payload_capability => |capability| blk: {
+                const source_view = self.moduleForId(checked.importedBoxPayloadCapabilityModuleId(capability));
+                const source_capability = source_view.interface_capabilities.boxPayloadCapability(capability.capability);
+                break :blk try self.typeInRootView(source_view, source_capability.backing_ty);
+            },
+            .builtin,
+            .local_declaration,
+            .imported_declaration,
+            .opaque_without_backing,
+            => nominal.backing,
+        };
+    }
+
+    fn nominalPaddingSource(self: *Builder, nominal: checked.CheckedNominalType) ?NominalPaddingSource {
+        if (nominal.padding_field_types.len != 0) return .{
+            .view = self.root_view,
+            .types = nominal.padding_field_types,
+        };
+        const lookup = self.nominalDeclarationFor(nominal) orelse return null;
+        if (lookup.padding_types.len == 0) return null;
+        return .{
+            .view = lookup.padding_view,
+            .types = lookup.padding_types,
+        };
+    }
+
+    fn nominalDeclaredSource(self: *Builder, nominal: checked.CheckedNominalType) ?NominalDeclaredSource {
+        if (nominal.declared_fields.len != 0) return .{
+            .field_view = self.root_view,
+            .fields = nominal.declared_fields,
+            .padding_view = self.root_view,
+            .padding_types = nominal.padding_field_types,
+        };
+        const lookup = self.nominalDeclarationFor(nominal) orelse return null;
+        const fields = lookup.declaration.declaredFields(lookup.view.checked_types);
+        if (fields.len == 0) return null;
+        return .{
+            .field_view = lookup.view,
+            .fields = fields,
+            .padding_view = lookup.padding_view,
+            .padding_types = lookup.padding_types,
+        };
+    }
+
+    fn nominalDeclarationFor(self: *Builder, nominal: checked.CheckedNominalType) ?NominalDeclarationLookup {
+        return switch (nominal.representation) {
+            .local_declaration => |id| blk: {
+                const declaration = self.root_view.checked_types.nominalDeclarationById(id);
+                break :blk .{
+                    .view = self.root_view,
+                    .declaration = declaration,
+                    .padding_view = self.root_view,
+                    .padding_types = declaration.paddingFieldTypes(self.root_view.checked_types),
+                };
+            },
+            .imported_declaration => |imported| blk: {
+                const source_view = self.moduleForId(checked.importedNominalDeclarationModuleId(imported));
+                const declaration = source_view.checked_types.nominalDeclarationById(imported.declaration);
+                break :blk .{
+                    .view = source_view,
+                    .declaration = declaration,
+                    .padding_view = source_view,
+                    .padding_types = declaration.paddingFieldTypes(source_view.checked_types),
+                };
+            },
+            .local_box_payload_capability => |capability_ref| blk: {
+                const capability = self.root_view.interface_capabilities.boxPayloadCapability(capability_ref.capability);
+                const declaration = self.root_view.checked_types.nominalDeclaration(capability.nominal) orelse break :blk null;
+                break :blk .{
+                    .view = self.root_view,
+                    .declaration = declaration,
+                    .padding_view = self.root_view,
+                    .padding_types = capability.paddingFieldTys(self.root_view.interface_capabilities),
+                };
+            },
+            .imported_box_payload_capability => |capability_ref| blk: {
+                const source_view = self.moduleForId(checked.importedBoxPayloadCapabilityModuleId(capability_ref));
+                const capability = source_view.interface_capabilities.boxPayloadCapability(capability_ref.capability);
+                const declaration = source_view.checked_types.nominalDeclaration(capability.nominal) orelse break :blk null;
+                break :blk .{
+                    .view = source_view,
+                    .declaration = declaration,
+                    .padding_view = source_view,
+                    .padding_types = capability.paddingFieldTys(source_view.interface_capabilities),
+                };
+            },
+            .builtin,
+            .opaque_without_backing,
+            => null,
         };
     }
 
     fn appendNominalDeclaredFields(
         self: *Builder,
         nominal: checked.CheckedNominalType,
+        backing_ty: checked.CheckedTypeId,
     ) Allocator.Error!Span {
-        if (nominal.declared_fields.len == 0) return Span.empty();
-        const backing_fields = switch (self.checked_types.payload(nominal.backing)) {
+        const source = self.nominalDeclaredSource(nominal) orelse return Span.empty();
+        const backing_fields = switch (self.root_view.checked_types.payload(backing_ty)) {
             .record => |record| record.fields,
             else => boxyPlanInvariant("checked nominal declared field order had a non-record backing"),
         };
 
-        const start: u32 = @intCast(self.plan.declared_fields.items.len);
+        var pending = std.ArrayList(DeclaredField).empty;
+        defer pending.deinit(self.allocator);
         var padding_ordinal: u16 = 0;
-        for (nominal.declared_fields) |declared| {
+        for (source.fields) |declared| {
             switch (declared) {
                 .named => |name| {
-                    const field = self.nominalBackingField(backing_fields, name) orelse
+                    const field = self.nominalBackingField(source.field_view, backing_fields, name) orelse
                         boxyPlanInvariant("checked nominal declared named field was missing from backing row");
-                    try self.plan.declared_fields.append(self.allocator, .{
+                    try pending.append(self.allocator, .{
                         .index = field.index,
                         .source_type = field.ty,
                         .rep = try self.analyzeType(field.ty),
@@ -436,11 +617,11 @@ const Builder = struct {
                 },
                 .padding => |index| {
                     const raw_index: usize = @intCast(index);
-                    if (raw_index >= nominal.padding_field_types.len) {
+                    if (raw_index >= source.padding_types.len) {
                         boxyPlanInvariant("checked nominal declared padding field index was out of range");
                     }
-                    const padding_ty = nominal.padding_field_types[raw_index];
-                    try self.plan.declared_fields.append(self.allocator, .{
+                    const padding_ty = try self.typeInRootView(source.padding_view, source.padding_types[raw_index]);
+                    try pending.append(self.allocator, .{
                         .index = @intCast(backing_fields.len + padding_ordinal),
                         .source_type = padding_ty,
                         .rep = try self.analyzeType(padding_ty),
@@ -450,10 +631,9 @@ const Builder = struct {
                 },
             }
         }
-        return .{
-            .start = start,
-            .len = @intCast(self.plan.declared_fields.items.len - start),
-        };
+        const start: u32 = @intCast(self.plan.declared_fields.items.len);
+        try self.plan.declared_fields.appendSlice(self.allocator, pending.items);
+        return .{ .start = start, .len = @intCast(pending.items.len) };
     }
 
     const NominalBackingField = struct {
@@ -462,17 +642,35 @@ const Builder = struct {
     };
 
     fn nominalBackingField(
-        _: *Builder,
+        self: *Builder,
+        field_view: ModuleView,
         backing_fields: []const checked.CheckedRecordField,
         name: RecordFieldLabelId,
     ) ?NominalBackingField {
         for (backing_fields, 0..) |field, index| {
-            if (field.name == name) return .{
+            if (self.recordFieldNameMatches(field_view, name, self.root_view, field.name)) return .{
                 .index = @intCast(index),
                 .ty = field.ty,
             };
         }
         return null;
+    }
+
+    fn recordFieldNameMatches(
+        _: *Builder,
+        source_view: ModuleView,
+        source_name: RecordFieldLabelId,
+        target_view: ModuleView,
+        target_name: RecordFieldLabelId,
+    ) bool {
+        if (moduleKeyEqual(source_view.key, target_view.key)) return source_name == target_name;
+        const source_names = source_view.canonical_names orelse return source_name == target_name;
+        const target_names = target_view.canonical_names orelse return source_name == target_name;
+        return std.mem.eql(
+            u8,
+            source_names.recordFieldLabelText(source_name),
+            target_names.recordFieldLabelText(target_name),
+        );
     }
 
     fn builtinUnaryNominalRepresentation(
@@ -485,12 +683,13 @@ const Builder = struct {
         if (nominal.args.len != 1) {
             boxyPlanInvariant("builtin unary nominal had an unexpected checked argument count");
         }
-        const start = self.childStart();
-        try self.appendChild(role, nominal.args[0]);
+        var children = std.ArrayList(RepChild).empty;
+        defer children.deinit(self.allocator);
+        try self.appendPendingChild(&children, role, nominal.args[0]);
         return .{
             .source_type = ty,
             .kind = kind,
-            .children = self.childSpanFrom(start),
+            .children = try self.commitPendingChildren(children.items),
         };
     }
 
@@ -499,15 +698,16 @@ const Builder = struct {
         ty: checked.CheckedTypeId,
         function: checked.CheckedFunctionType,
     ) Allocator.Error!TypeRepresentation {
-        const start = self.childStart();
+        var children = std.ArrayList(RepChild).empty;
+        defer children.deinit(self.allocator);
         for (function.args, 0..) |arg, index| {
-            try self.appendChild(.{ .function_arg = @intCast(index) }, arg);
+            try self.appendPendingChild(&children, .{ .function_arg = @intCast(index) }, arg);
         }
-        try self.appendChild(.function_ret, function.ret);
+        try self.appendPendingChild(&children, .function_ret, function.ret);
         return .{
             .source_type = ty,
             .kind = .{ .erased_callable = checked.finalizedFunctionKind(function.kind) },
-            .children = self.childSpanFrom(start),
+            .children = try self.commitPendingChildren(children.items),
         };
     }
 
@@ -516,17 +716,18 @@ const Builder = struct {
         ty: checked.CheckedTypeId,
         tag_union: checked.CheckedTagUnionType,
     ) Allocator.Error!TypeRepresentation {
-        const start = self.childStart();
+        var children = std.ArrayList(RepChild).empty;
+        defer children.deinit(self.allocator);
         for (tag_union.tags) |tag| {
-            for (tag.argsSlice(self.checked_types), 0..) |arg, index| {
-                try self.appendChild(.{ .tag_payload = .{ .tag = tag.name, .index = @intCast(index) } }, arg);
+            for (tag.argsSlice(self.root_view.checked_types), 0..) |arg, index| {
+                try self.appendPendingChild(&children, .{ .tag_payload = .{ .tag = tag.name, .index = @intCast(index) } }, arg);
             }
         }
-        try self.appendChild(.tag_ext, tag_union.ext);
+        try self.appendPendingChild(&children, .tag_ext, tag_union.ext);
         return .{
             .source_type = ty,
             .kind = .tag_union,
-            .children = self.childSpanFrom(start),
+            .children = try self.commitPendingChildren(children.items),
         };
     }
 
@@ -550,23 +751,23 @@ const Builder = struct {
         return .{ .start = start, .len = @intCast(constraints.len) };
     }
 
-    fn appendChild(self: *Builder, role: ChildRole, source_type: checked.CheckedTypeId) Allocator.Error!void {
-        try self.plan.children.append(self.allocator, .{
+    fn appendPendingChild(
+        self: *Builder,
+        pending: *std.ArrayList(RepChild),
+        role: ChildRole,
+        source_type: checked.CheckedTypeId,
+    ) Allocator.Error!void {
+        try pending.append(self.allocator, .{
             .role = role,
             .source_type = source_type,
             .rep = try self.analyzeType(source_type),
         });
     }
 
-    fn childStart(self: *const Builder) u32 {
-        return @intCast(self.plan.children.items.len);
-    }
-
-    fn childSpanFrom(self: *const Builder, start: u32) Span {
-        return .{
-            .start = start,
-            .len = @intCast(self.plan.children.items.len - start),
-        };
+    fn commitPendingChildren(self: *Builder, pending: []const RepChild) Allocator.Error!Span {
+        const start: u32 = @intCast(self.plan.children.items.len);
+        try self.plan.children.appendSlice(self.allocator, pending);
+        return .{ .start = start, .len = @intCast(pending.len) };
     }
 
     fn propagateDynamicRequirements(self: *Builder) void {
@@ -612,6 +813,19 @@ const Builder = struct {
 
 fn rootRequiresHostWrapper(root: checked.RootRequest) bool {
     return root.abi != .roc or root.exposure != .private;
+}
+
+fn moduleViewFromImported(imported: checked.ImportedModuleView) ModuleView {
+    return .{
+        .key = imported.key,
+        .canonical_names = imported.canonical_names,
+        .checked_types = imported.checked_types,
+        .interface_capabilities = imported.interface_capabilities,
+    };
+}
+
+fn moduleKeyEqual(a: checked.ModuleId, b: checked.ModuleId) bool {
+    return std.mem.eql(u8, a.bytes[0..], b.bytes[0..]);
 }
 
 fn descriptorReason(kind: RepresentationKind) ?DescriptorReason {
@@ -811,6 +1025,268 @@ test "boxy planner records nominal declared field order from checked payloads" {
     try std.testing.expect(!fields[2].is_padding);
 }
 
+test "boxy planner resolves local nominal declared order from box payload capability" {
+    const gpa = std.testing.allocator;
+
+    const field_a: RecordFieldLabelId = @enumFromInt(1);
+    const field_b: RecordFieldLabelId = @enumFromInt(2);
+    const nominal_key = canonical.NominalTypeKey{
+        .module_name = @enumFromInt(4),
+        .type_name = @enumFromInt(3),
+        .source_decl = 9,
+    };
+    const type_pool = [_]checked.CheckedTypeId{@enumFromInt(0)};
+    const record_fields = [_]checked.CheckedRecordField{
+        .{ .name = field_a, .ty = @enumFromInt(0) },
+        .{ .name = field_b, .ty = @enumFromInt(1) },
+    };
+    const declared_fields = [_]checked.CheckedDeclaredField{
+        .{ .named = field_a },
+        .{ .padding = 0 },
+        .{ .named = field_b },
+    };
+    const declarations = [_]checked.CheckedNominalDeclaration{
+        .{
+            .id = @enumFromInt(0),
+            .nominal = nominal_key,
+            .declaration_root = @enumFromInt(4),
+            .backing = @enumFromInt(3),
+            .pf_start = 0,
+            .pf_len = 1,
+            .df_start = 0,
+            .df_len = declared_fields.len,
+        },
+    };
+    const payloads = [_]checked.StoredCheckedTypePayload{
+        .{ .nominal = builtinNominal(.u8, @enumFromInt(0), .{}) },
+        .{ .nominal = builtinNominal(.u16, @enumFromInt(1), .{}) },
+        .{ .empty_record = {} },
+        .{ .record = .{ .fields = .{ .start = 0, .len = 2 }, .ext = @enumFromInt(2) } },
+        .{ .nominal = .{
+            .name = nominal_key.type_name,
+            .origin_module = nominal_key.module_name,
+            .source_decl = nominal_key.source_decl,
+            .is_opaque = false,
+            .backing = @enumFromInt(3),
+            .representation = .{ .local_box_payload_capability = .{ .capability = @enumFromInt(0) } },
+        } },
+    };
+    const capability_padding = [_]checked.CheckedTypeId{@enumFromInt(0)};
+    const capabilities = [_]checked.BoxPayloadCapabilityEntry{
+        .{
+            .id = @enumFromInt(0),
+            .nominal = nominal_key,
+            .source_ty_payload = @enumFromInt(4),
+            .source_ty = typeKey(14),
+            .backing_ty = @enumFromInt(3),
+            .backing_ty_key = typeKey(13),
+            .padding_start = 0,
+            .padding_len = 1,
+            .is_opaque = false,
+        },
+    };
+    const interface_capabilities = checked.ModuleInterfaceCapabilities{
+        .boxed_payload_templates = &capabilities,
+        .padding_pool = &capability_padding,
+    };
+    const view = checked.CheckedTypeStoreView{
+        .stored_payloads = &payloads,
+        .nominal_declarations = &declarations,
+        .type_id_pool = &type_pool,
+        .record_field_pool = &record_fields,
+        .declared_field_pool = &declared_fields,
+    };
+
+    var plan = try analyzeProgram(gpa, .{
+        .root_view = .{
+            .key = moduleKey(1),
+            .checked_types = view,
+            .interface_capabilities = &interface_capabilities,
+        },
+        .layout_requests = &.{@as(checked.CheckedTypeId, @enumFromInt(4))},
+    }, .{});
+    defer plan.deinit();
+
+    const nominal = plan.representations.items[@intFromEnum(plan.root_reps.items[0])];
+    const children = plan.childSlice(nominal.children);
+    try std.testing.expectEqual(@as(usize, 2), children.len);
+    try std.testing.expectEqual(ChildRole.nominal_backing, children[0].role);
+    try std.testing.expectEqual(ChildRole{ .nominal_padding_field = 0 }, children[1].role);
+    try std.testing.expectEqual(@as(checked.CheckedTypeId, @enumFromInt(0)), children[1].source_type);
+
+    const fields = plan.declaredFieldSlice(nominal.declared_fields);
+    try std.testing.expectEqual(@as(usize, 3), fields.len);
+    try std.testing.expectEqual(@as(u16, 0), fields[0].index);
+    try std.testing.expectEqual(@as(u16, 2), fields[1].index);
+    try std.testing.expect(fields[1].is_padding);
+    try std.testing.expectEqual(@as(checked.CheckedTypeId, @enumFromInt(0)), fields[1].source_type);
+    try std.testing.expectEqual(@as(u16, 1), fields[2].index);
+}
+
+test "boxy planner maps imported box payload capability types into the root view" {
+    const gpa = std.testing.allocator;
+
+    var root_names = canonical.CanonicalNameStore.init(gpa);
+    defer root_names.deinit();
+    var source_names = canonical.CanonicalNameStore.init(gpa);
+    defer source_names.deinit();
+
+    _ = try root_names.internRecordFieldLabel("different-root-id");
+    const root_a = try root_names.internRecordFieldLabel("a");
+    const root_b = try root_names.internRecordFieldLabel("b");
+    const source_a = try source_names.internRecordFieldLabel("a");
+    _ = try source_names.internRecordFieldLabel("different-source-id");
+    const source_b = try source_names.internRecordFieldLabel("b");
+
+    const root_key = moduleKey(1);
+    const source_key = moduleKey(2);
+    const nominal_key = canonical.NominalTypeKey{
+        .module_name = @enumFromInt(4),
+        .type_name = @enumFromInt(3),
+        .source_decl = 9,
+    };
+
+    const root_record_fields = [_]checked.CheckedRecordField{
+        .{ .name = root_a, .ty = @enumFromInt(0) },
+        .{ .name = root_b, .ty = @enumFromInt(1) },
+    };
+    const root_payloads = [_]checked.StoredCheckedTypePayload{
+        .{ .nominal = builtinNominal(.u8, @enumFromInt(0), .{}) },
+        .{ .nominal = builtinNominal(.u16, @enumFromInt(1), .{}) },
+        .{ .empty_record = {} },
+        .{ .record = .{ .fields = .{ .start = 0, .len = 2 }, .ext = @enumFromInt(2) } },
+        .{ .nominal = .{
+            .name = nominal_key.type_name,
+            .origin_module = nominal_key.module_name,
+            .source_decl = nominal_key.source_decl,
+            .is_opaque = false,
+            .backing = @enumFromInt(3),
+            .representation = .{ .imported_box_payload_capability = .{
+                .artifact = source_key,
+                .capability = @enumFromInt(0),
+            } },
+        } },
+    };
+    const root_roots = [_]checked.CheckedTypeRoot{
+        .{ .id = @enumFromInt(0), .key = typeKey(15) },
+        .{ .id = @enumFromInt(1), .key = typeKey(11) },
+        .{ .id = @enumFromInt(2), .key = typeKey(12) },
+        .{ .id = @enumFromInt(3), .key = typeKey(13) },
+        .{ .id = @enumFromInt(4), .key = typeKey(14) },
+    };
+    const root_view = checked.CheckedTypeStoreView{
+        .roots = &root_roots,
+        .stored_payloads = &root_payloads,
+        .record_field_pool = &root_record_fields,
+    };
+
+    const source_type_pool = [_]checked.CheckedTypeId{@enumFromInt(5)};
+    const source_record_fields = [_]checked.CheckedRecordField{
+        .{ .name = source_a, .ty = @enumFromInt(5) },
+        .{ .name = source_b, .ty = @enumFromInt(1) },
+    };
+    const source_declared_fields = [_]checked.CheckedDeclaredField{
+        .{ .named = source_a },
+        .{ .padding = 0 },
+        .{ .named = source_b },
+    };
+    const source_declarations = [_]checked.CheckedNominalDeclaration{
+        .{
+            .id = @enumFromInt(0),
+            .nominal = nominal_key,
+            .declaration_root = @enumFromInt(4),
+            .backing = @enumFromInt(3),
+            .pf_start = 0,
+            .pf_len = 1,
+            .df_start = 0,
+            .df_len = source_declared_fields.len,
+        },
+    };
+    const source_payloads = [_]checked.StoredCheckedTypePayload{
+        .{ .nominal = builtinNominal(.u8, @enumFromInt(0), .{}) },
+        .{ .nominal = builtinNominal(.u16, @enumFromInt(1), .{}) },
+        .{ .empty_record = {} },
+        .{ .record = .{ .fields = .{ .start = 0, .len = 2 }, .ext = @enumFromInt(2) } },
+        .{ .nominal = .{
+            .name = nominal_key.type_name,
+            .origin_module = nominal_key.module_name,
+            .source_decl = nominal_key.source_decl,
+            .is_opaque = false,
+            .backing = @enumFromInt(3),
+            .representation = .{ .local_box_payload_capability = .{ .capability = @enumFromInt(0) } },
+        } },
+        .{ .nominal = builtinNominal(.u8, @enumFromInt(5), .{}) },
+    };
+    const source_roots = [_]checked.CheckedTypeRoot{
+        .{ .id = @enumFromInt(0), .key = typeKey(10) },
+        .{ .id = @enumFromInt(1), .key = typeKey(11) },
+        .{ .id = @enumFromInt(2), .key = typeKey(12) },
+        .{ .id = @enumFromInt(3), .key = typeKey(13) },
+        .{ .id = @enumFromInt(4), .key = typeKey(14) },
+        .{ .id = @enumFromInt(5), .key = typeKey(15) },
+    };
+    const source_capability_padding = [_]checked.CheckedTypeId{@enumFromInt(5)};
+    const source_capabilities = [_]checked.BoxPayloadCapabilityEntry{
+        .{
+            .id = @enumFromInt(0),
+            .nominal = nominal_key,
+            .source_ty_payload = @enumFromInt(4),
+            .source_ty = typeKey(14),
+            .backing_ty = @enumFromInt(3),
+            .backing_ty_key = typeKey(13),
+            .padding_start = 0,
+            .padding_len = 1,
+            .is_opaque = false,
+        },
+    };
+    const source_interface_capabilities = checked.ModuleInterfaceCapabilities{
+        .boxed_payload_templates = &source_capabilities,
+        .padding_pool = &source_capability_padding,
+    };
+    const source_view = checked.CheckedTypeStoreView{
+        .roots = &source_roots,
+        .stored_payloads = &source_payloads,
+        .nominal_declarations = &source_declarations,
+        .type_id_pool = &source_type_pool,
+        .record_field_pool = &source_record_fields,
+        .declared_field_pool = &source_declared_fields,
+    };
+
+    var plan = try analyzeProgram(gpa, .{
+        .root_view = .{
+            .key = root_key,
+            .canonical_names = &root_names,
+            .checked_types = root_view,
+        },
+        .extra_module_views = &.{
+            .{
+                .key = source_key,
+                .canonical_names = &source_names,
+                .checked_types = source_view,
+                .interface_capabilities = &source_interface_capabilities,
+            },
+        },
+        .layout_requests = &.{@as(checked.CheckedTypeId, @enumFromInt(4))},
+    }, .{});
+    defer plan.deinit();
+
+    const nominal = plan.representations.items[@intFromEnum(plan.root_reps.items[0])];
+    const children = plan.childSlice(nominal.children);
+    try std.testing.expectEqual(@as(usize, 2), children.len);
+    try std.testing.expectEqual(@as(checked.CheckedTypeId, @enumFromInt(3)), children[0].source_type);
+    try std.testing.expectEqual(@as(checked.CheckedTypeId, @enumFromInt(0)), children[1].source_type);
+
+    const fields = plan.declaredFieldSlice(nominal.declared_fields);
+    try std.testing.expectEqual(@as(usize, 3), fields.len);
+    try std.testing.expectEqual(@as(u16, 0), fields[0].index);
+    try std.testing.expectEqual(@as(checked.CheckedTypeId, @enumFromInt(0)), fields[0].source_type);
+    try std.testing.expectEqual(@as(u16, 2), fields[1].index);
+    try std.testing.expect(fields[1].is_padding);
+    try std.testing.expectEqual(@as(checked.CheckedTypeId, @enumFromInt(0)), fields[1].source_type);
+    try std.testing.expectEqual(@as(u16, 1), fields[2].index);
+    try std.testing.expectEqual(@as(checked.CheckedTypeId, @enumFromInt(1)), fields[2].source_type);
+}
+
 fn builtinNominal(
     builtin: checked.CheckedBuiltinNominal,
     backing: checked.CheckedTypeId,
@@ -825,4 +1301,16 @@ fn builtinNominal(
         .representation = .{ .builtin = builtin },
         .args = args,
     };
+}
+
+fn moduleKey(byte: u8) checked.ModuleId {
+    var key = checked.ModuleId{};
+    key.bytes[0] = byte;
+    return key;
+}
+
+fn typeKey(byte: u8) canonical.CanonicalTypeKey {
+    var key = canonical.CanonicalTypeKey{};
+    key.bytes[0] = byte;
+    return key;
 }
