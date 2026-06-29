@@ -341,6 +341,7 @@ fn lowerBoxyCheckedModulesToLir(
         .{
             .target_usize = target.target_usize,
             .list_in_place_map = target.list_in_place_map,
+            .proc_debug_names = target.proc_debug_names,
         },
     );
     errdefer lowered.deinit();

@@ -38,6 +38,7 @@ pub const Output = struct {
 pub const Options = struct {
     target_usize: base.target.TargetUsize = .native,
     list_in_place_map: bool = false,
+    proc_debug_names: bool = false,
 };
 
 pub fn run(
@@ -278,6 +279,9 @@ const ProcedureBuilder = struct {
                 .private_worker_only => worker_proc,
                 .host_shaped_wrapper => try self.emitHostWrapper(root_layout, worker_layout, worker_proc),
             };
+            if (self.options.proc_debug_names and root.wrapper_kind == .host_shaped_wrapper) {
+                try self.result.store.copyProcDebugInfo(root_proc, worker_proc);
+            }
             try self.result.root_procs.append(self.allocator, root_proc);
             try self.result.root_metadata.append(self.allocator, RootMetadata.fromCheckedRoot(root.request));
         }
@@ -311,6 +315,7 @@ const ProcedureBuilder = struct {
             .stack_probe = self.stackProbeForProc(args_span, LIR.LocalSpan.empty(), ret_layout),
         });
         self.worker_procs[index] = proc_id;
+        try self.setProcDebugName(proc_id, resolved);
 
         const ret_stmt = try self.result.store.addCFStmt(.{ .ret = .{ .value = ret_local } });
         const body_stmt = try proc.lowerExprInto(ret_local, body_expr, ret_stmt);
@@ -320,6 +325,17 @@ const ProcedureBuilder = struct {
         proc_spec.body = body_stmt;
         proc_spec.stack_probe = self.stackProbeForProc(args_span, frame_span, ret_layout);
         return proc_id;
+    }
+
+    fn setProcDebugName(
+        self: *ProcedureBuilder,
+        proc_id: LIR.LirProcSpecId,
+        resolved: ResolvedWorker,
+    ) Allocator.Error!void {
+        if (!self.options.proc_debug_names) return;
+        const proc_base = resolved.module.canonical_names.procBase(resolved.template.proc_base);
+        const export_name = proc_base.export_name orelse return;
+        try self.result.store.setProcDebugName(proc_id, resolved.module.canonical_names.exportNameText(export_name));
     }
 
     fn bodyExprForWorker(
@@ -9529,7 +9545,7 @@ test "boxy lowerer publishes host wrapper proc for exported roots" {
         },
     });
 
-    const template_ref = procedureTemplateRef(artifact.key, 0);
+    const template_ref = try namedProcedureTemplateRef(&artifact, 0, "exported_main");
     try artifact.checked_bodies.stored_exprs.append(gpa, .{
         .id = @enumFromInt(0),
         .ty = @enumFromInt(1),
@@ -9573,7 +9589,7 @@ test "boxy lowerer publishes host wrapper proc for exported roots" {
         .{ .root = .{ .module = &artifact, .roots = undefined } },
         .{},
         &plan,
-        .{},
+        .{ .proc_debug_names = true },
     );
     defer out.deinit();
 
@@ -9585,6 +9601,8 @@ test "boxy lowerer publishes host wrapper proc for exported roots" {
     try std.testing.expect(call.args.isEmpty());
     try std.testing.expect(call.proc != wrapper_id);
     try std.testing.expectEqual(@as(@TypeOf(wrapper.ret_layout), .u64), wrapper.ret_layout);
+    try std.testing.expectEqualStrings("exported_main", out.lir_result.store.procDebugName(wrapper_id) orelse return error.TestUnexpectedResult);
+    try std.testing.expectEqualStrings("exported_main", out.lir_result.store.procDebugName(call.proc) orelse return error.TestUnexpectedResult);
     try std.testing.expectEqual(@as(u32, 11), out.lir_result.root_metadata.items[0].order);
     try std.testing.expectEqual(@as(lir_core.RootMetadata.RootExposure, .exported), out.lir_result.root_metadata.items[0].exposure);
 }
@@ -9925,6 +9943,27 @@ fn procedureTemplateRef(key: checked.CheckedModuleArtifactKey, raw_template_id: 
     return .{
         .artifact = .{ .bytes = key.bytes },
         .proc_base = @enumFromInt(raw_template_id),
+        .template = @enumFromInt(raw_template_id),
+    };
+}
+
+fn namedProcedureTemplateRef(
+    artifact: *checked.CheckedModuleArtifact,
+    raw_template_id: u32,
+    proc_name: []const u8,
+) Allocator.Error!names.ProcedureTemplateRef {
+    const module_name = try artifact.canonical_names.internModuleName("Test");
+    const export_name = try artifact.canonical_names.internExportName(proc_name);
+    const proc_base = try artifact.canonical_names.internProcBase(.{
+        .module_name = module_name,
+        .export_name = export_name,
+        .kind = .checked_source,
+        .ordinal = raw_template_id,
+        .source_def_idx = raw_template_id,
+    });
+    return .{
+        .artifact = .{ .bytes = artifact.key.bytes },
+        .proc_base = proc_base,
         .template = @enumFromInt(raw_template_id),
     };
 }
