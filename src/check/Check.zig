@@ -9713,6 +9713,20 @@ const CheckStep = enum {
     /// func frame popping and the arg frames being scheduled (`.exit` then runs
     /// the post-args body).
     call_after_func,
+    /// `e_interpolation` resume step: the `first` child has been checked. Create
+    /// `str_var`/`item_var`, unify `first_var` with `str_var`, seed `did_err`,
+    /// then schedule the first `parts` value child (or fall through to `.exit`
+    /// if there are no parts).
+    interp_after_first,
+    /// `e_interpolation` resume step: a `parts[cursor]` interpolated-value child
+    /// has been checked. Fold its error into `did_err`, then schedule the paired
+    /// `parts[cursor+1]` following-segment child.
+    interp_after_part_value,
+    /// `e_interpolation` resume step: a `parts[cursor+1]` following-segment child
+    /// has been checked. Unify `str_var` with the segment var, fold its error
+    /// into `did_err`, advance the cursor by 2, then schedule the next value
+    /// child (or fall through to `.exit` once all pairs are consumed).
+    interp_after_part_segment,
 };
 
 /// Per-node-kind loop/scratch state for interleaving nodes. `none` for the
@@ -9749,6 +9763,19 @@ const CheckKindState = union(enum) {
     call: struct {
         func_var: Var,
         did_err: bool,
+    },
+    /// State for `e_interpolation`. Created after the `first` child is checked
+    /// (the `interp_after_first` resume step), carried across the per-pair
+    /// resume steps, and consumed by `.exit` to build the iterator constraint.
+    /// `part_cursor` indexes the current `parts` pair (even index = value child,
+    /// next index = following-segment child), mirroring the recursive loop's
+    /// `part_i`.
+    interpolation: struct {
+        str_var: Var,
+        item_var: Var,
+        first_var: Var,
+        did_err: bool,
+        part_cursor: usize,
     },
 };
 
@@ -11925,6 +11952,21 @@ fn checkExprIter(self: *Self, root_idx: CIR.Expr.Idx, root_env: *Env, root_expec
                     .e_call => {
                         try self.enterCallExpr(top);
                     },
+                    // INTERLEAVING: `e_interpolation` schedules its `first`
+                    // child (marked `call_arg` so it re-asserts
+                    // `self.checking_call_arg` at its own prologue, matching the
+                    // recursive arm's `self.checking_call_arg = true` before
+                    // `checkExpr(interpolation.first)`). The `interp_after_first`
+                    // resume step creates `str_var`/`item_var`, runs the
+                    // first-child unify, and schedules the `parts` children; the
+                    // per-pair resume steps run the between-segment unifies; and
+                    // `.exit` builds the iterator constraint. Delegated to a
+                    // helper (NOT inlined) so its `CheckFrame`-sized scheduling
+                    // local does not bloat `checkExprIter`'s native stack frame
+                    // on the deep statement-nesting spine (mirrors `enterCallExpr`).
+                    .e_interpolation => {
+                        try self.enterInterpolationExpr(top);
+                    },
                     // Helper-delegating / per-child-state kinds: like the leaf
                     // kinds below, advance to `.exit` and run the recursive body
                     // verbatim there. Their child `checkExpr` calls re-enter the
@@ -11988,6 +12030,20 @@ fn checkExprIter(self: *Self, root_idx: CIR.Expr.Idx, root_env: *Env, root_expec
             // children (each marked `call_arg`).
             .call_after_func => {
                 try self.checkCallAfterFunc(top);
+            },
+            // `e_interpolation` resume steps. Each is delegated to a helper (NOT
+            // inlined) so its `CheckFrame`-sized scheduling locals do not bloat
+            // `checkExprIter`'s native stack frame, which is on the deep
+            // statement-nesting recursion spine (mirrors the `e_call` helpers'
+            // rationale — inlining these measurably lowers the safe depth).
+            .interp_after_first => {
+                try self.interpAfterFirst(top);
+            },
+            .interp_after_part_value => {
+                try self.interpAfterPartValue(top);
+            },
+            .interp_after_part_segment => {
+                try self.interpAfterPartSegment(top);
             },
             .exit => {
                 const f = &self.check_frame_stack.items[top];
@@ -13062,6 +13118,19 @@ fn checkExprIter(self: *Self, root_idx: CIR.Expr.Idx, root_env: *Env, root_expec
                             },
                         }
                     },
+                    // INTERLEAVING POST-LOOP body for `e_interpolation`. The
+                    // `first` and every `parts` child were checked via scheduled
+                    // frames (their `does_fx` OR'd into `f.does_fx` on pop);
+                    // `first_var`/`str_var`/`item_var`/`did_err` were parked
+                    // across the resume steps. Delegated to a helper (NOT
+                    // inlined) — its many constraint-building locals would bloat
+                    // `checkExprIter`'s native stack frame on the deep
+                    // statement-nesting spine (mirrors `checkCallExprPostArgs`).
+                    // The helper performs no `checkExpr` re-entry and never
+                    // appends to `check_frame_stack`, so `f` stays valid.
+                    .e_interpolation => {
+                        try self.checkInterpolationPostLoop(top);
+                    },
                     else => unreachable, // gated by isMigratedKind
                 }
                 const does_fx = try self.checkExitEpilogue(
@@ -13131,6 +13200,11 @@ fn isMigratedKind(expr: CIR.Expr) bool {
         // `call_after_func` resume step instantiates a generalized func var and
         // schedules the arg children, and `.exit` runs the post-args body.
         .e_call,
+        // Interleaving variable-arity kind: `.enter` schedules the `first`
+        // child; `interp_after_first` and the per-pair resume steps schedule the
+        // `parts` children with between-child unifies; `.exit` builds the
+        // iterator constraint.
+        .e_interpolation,
         // Variable-arity multi-child kinds (this batch): schedule every child
         // as a frame in `.enter`, run the post-child body in `.exit`.
         .e_list,
@@ -15461,6 +15535,188 @@ fn checkMethodCallExpr(
 /// otherwise advances straight to `.exit` (the no-children compiler-bug path).
 /// `top` indexes the call frame. The `append` may realloc, so the call frame is
 /// re-indexed via `items[top]` (never held as a pointer across the append).
+/// `e_interpolation` `.enter` dispatch (extracted from `checkExprIter` to keep
+/// its `CheckFrame`-sized scheduling local off that function's native stack
+/// frame, which is on the deep statement-nesting recursion spine). Advances the
+/// frame to `interp_after_first` and schedules the `first` child, marked
+/// `call_arg`. `top` is re-indexed via `items[top]`/`items[fr_idx]` across the
+/// `append` (which may realloc).
+fn enterInterpolationExpr(self: *Self, top: usize) Allocator.Error!void {
+    const interpolation = self.cir.store.getExpr(self.check_frame_stack.items[top].expr_idx).e_interpolation;
+    const child_env = self.check_frame_stack.items[top].env;
+    const child_expected = self.check_frame_stack.items[top].prologue.child_expected;
+    self.check_frame_stack.items[top].step = .interp_after_first;
+    const fr_idx = self.check_frame_stack.items.len;
+    try self.check_frame_stack.append(self.gpa, makeEnterFrame(interpolation.first, child_env, child_expected));
+    self.check_frame_stack.items[fr_idx].call_arg = true;
+}
+
+/// `e_interpolation` `interp_after_first` resume step (extracted from
+/// `checkExprIter` to keep its `CheckFrame`-sized scheduling local off that
+/// function's native stack frame, which is on the deep statement-nesting
+/// recursion spine). The `first` child has been checked; mirror the recursive
+/// arm's ordering — create `str_var`, unify it with `first_var`, seed
+/// `did_err`, then create `item_var` (created AFTER the unify in the recursive
+/// loop, so fresh-var allocation order is byte-identical). Parks the per-pair
+/// loop state in `kind_state.interpolation`, then schedules the first `parts`
+/// value child (marked `call_arg`) or advances straight to `.exit` if there are
+/// no parts. `top` is re-indexed via `items[top]` across the `append` (realloc).
+fn interpAfterFirst(self: *Self, top: usize) Allocator.Error!void {
+    const env = self.check_frame_stack.items[top].env;
+    const expr_region = self.check_frame_stack.items[top].prologue.expr_region;
+    const interpolation = self.cir.store.getExpr(self.check_frame_stack.items[top].expr_idx).e_interpolation;
+
+    const first_var = ModuleEnv.varFrom(interpolation.first);
+    const str_var = try self.freshStr(env, expr_region);
+    _ = try self.unify(first_var, str_var, env);
+    const did_err = self.types.resolveVar(first_var).desc.content == .err;
+
+    const parts = self.cir.store.sliceExpr(interpolation.parts);
+    std.debug.assert(parts.len % 2 == 0);
+    const item_var = try self.fresh(env, expr_region);
+
+    // None of the calls above appended to `check_frame_stack`, so `items[top]`
+    // is valid here; park state BEFORE scheduling (the append may realloc).
+    self.check_frame_stack.items[top].kind_state = .{ .interpolation = .{
+        .str_var = str_var,
+        .item_var = item_var,
+        .first_var = first_var,
+        .did_err = did_err,
+        .part_cursor = 0,
+    } };
+
+    if (parts.len == 0) {
+        // No parts: run `.exit`'s post-loop body on the next iteration.
+        self.check_frame_stack.items[top].step = .exit;
+    } else {
+        // Schedule the first value child (parts[0]); the segment child
+        // (parts[1]) is scheduled by `interpAfterPartValue`.
+        self.check_frame_stack.items[top].step = .interp_after_part_value;
+        const child_expected = self.check_frame_stack.items[top].prologue.child_expected;
+        const fr_idx = self.check_frame_stack.items.len;
+        try self.check_frame_stack.append(self.gpa, makeEnterFrame(parts[0], env, child_expected));
+        self.check_frame_stack.items[fr_idx].call_arg = true;
+    }
+}
+
+/// `e_interpolation` `interp_after_part_value` resume step. A `parts[cursor]`
+/// interpolated-value child has been checked; fold its error into `did_err`,
+/// then schedule the paired following-segment child (`parts[cursor+1]`), marked
+/// `call_arg` (mirrors the recursive arm's per-child
+/// `self.checking_call_arg = true`). `top` is re-indexed across the `append`.
+fn interpAfterPartValue(self: *Self, top: usize) Allocator.Error!void {
+    const cursor = self.check_frame_stack.items[top].kind_state.interpolation.part_cursor;
+    const interpolation = self.cir.store.getExpr(self.check_frame_stack.items[top].expr_idx).e_interpolation;
+    const parts = self.cir.store.sliceExpr(interpolation.parts);
+    const interpolated_var = ModuleEnv.varFrom(parts[cursor]);
+    if (self.types.resolveVar(interpolated_var).desc.content == .err) {
+        self.check_frame_stack.items[top].kind_state.interpolation.did_err = true;
+    }
+
+    self.check_frame_stack.items[top].step = .interp_after_part_segment;
+    const child_env = self.check_frame_stack.items[top].env;
+    const child_expected = self.check_frame_stack.items[top].prologue.child_expected;
+    const fr_idx = self.check_frame_stack.items.len;
+    try self.check_frame_stack.append(self.gpa, makeEnterFrame(parts[cursor + 1], child_env, child_expected));
+    self.check_frame_stack.items[fr_idx].call_arg = true;
+}
+
+/// `e_interpolation` `interp_after_part_segment` resume step. A
+/// `parts[cursor+1]` following-segment child has been checked; unify `str_var`
+/// with it (the recursive arm's `unify(str_var, following_segment_var)`), fold
+/// its error into `did_err`, advance the cursor by 2, then schedule the next
+/// value child or advance to `.exit` once all pairs are consumed. `top` is
+/// re-indexed across the `append`.
+fn interpAfterPartSegment(self: *Self, top: usize) Allocator.Error!void {
+    const cursor = self.check_frame_stack.items[top].kind_state.interpolation.part_cursor;
+    const str_var = self.check_frame_stack.items[top].kind_state.interpolation.str_var;
+    const env = self.check_frame_stack.items[top].env;
+    const interpolation = self.cir.store.getExpr(self.check_frame_stack.items[top].expr_idx).e_interpolation;
+    const parts = self.cir.store.sliceExpr(interpolation.parts);
+    const following_segment_var = ModuleEnv.varFrom(parts[cursor + 1]);
+    _ = try self.unify(str_var, following_segment_var, env);
+    if (self.types.resolveVar(following_segment_var).desc.content == .err) {
+        self.check_frame_stack.items[top].kind_state.interpolation.did_err = true;
+    }
+    const next_cursor = cursor + 2;
+    self.check_frame_stack.items[top].kind_state.interpolation.part_cursor = next_cursor;
+
+    if (next_cursor < parts.len) {
+        self.check_frame_stack.items[top].step = .interp_after_part_value;
+        const child_expected = self.check_frame_stack.items[top].prologue.child_expected;
+        const fr_idx = self.check_frame_stack.items.len;
+        try self.check_frame_stack.append(self.gpa, makeEnterFrame(parts[next_cursor], env, child_expected));
+        self.check_frame_stack.items[fr_idx].call_arg = true;
+    } else {
+        self.check_frame_stack.items[top].step = .exit;
+    }
+}
+
+/// Post-children body of the `e_interpolation` arm, run by the iterative
+/// driver's `.exit` step once `first` and every `parts` child have been checked
+/// (their `does_fx` already accumulated into the frame). Copied verbatim from
+/// the recursive arm's post-loop body. Reads the parked
+/// `first_var`/`str_var`/`item_var`/`did_err` out of `kind_state.interpolation`
+/// and builds the iterator-protocol constraint. Lives in its own function —
+/// rather than inlined into `checkExprIter` — so its many constraint-building
+/// locals do NOT bloat `checkExprIter`'s native stack frame on the deep
+/// statement-nesting spine (mirrors `checkCallExprPostArgs`). It is a leaf
+/// w.r.t. the work stack: no `checkExpr` re-entry, never appends to
+/// `check_frame_stack`, so `items[top]` stays valid throughout.
+fn checkInterpolationPostLoop(self: *Self, top: usize) Allocator.Error!void {
+    const env = self.check_frame_stack.items[top].env;
+    const expr_var = self.check_frame_stack.items[top].prologue.expr_var;
+    const expr_region = self.check_frame_stack.items[top].prologue.expr_region;
+    const expr_idx = self.check_frame_stack.items[top].expr_idx;
+    const interpolation = self.cir.store.getExpr(expr_idx).e_interpolation;
+    const st = self.check_frame_stack.items[top].kind_state.interpolation;
+    const first_var = st.first_var;
+    const str_var = st.str_var;
+    const item_var = st.item_var;
+    const did_err = st.did_err;
+
+    const pair_elems = try self.types.appendVars(&.{ item_var, str_var });
+    const pair_var = try self.freshFromContent(.{ .structure = .{
+        .tuple = .{ .elems = pair_elems },
+    } }, env, expr_region);
+    const rest_var = try self.mkIterVar(pair_var, env, expr_region);
+    try self.setVarRank(rest_var, env);
+
+    const step_content = try self.mkIteratorStepContent(pair_var, rest_var, env);
+    const step_ret_var = try self.freshFromContent(step_content, env, expr_region);
+    const empty_args = try self.types.appendVars(&.{});
+    const step_fn_var = try self.freshFromContent(.{ .structure = .{ .fn_unbound = Func{
+        .args = empty_args,
+        .ret = step_ret_var,
+        .needs_instantiation = false,
+    } } }, env, expr_region);
+
+    if (did_err) {
+        try self.unifyWith(expr_var, .err, env);
+    } else {
+        const dispatcher_var = (try self.explicitTypeSuffixVar(expr_idx, expr_region, env)) orelse expr_var;
+        const arg_vars = [_]Var{ first_var, rest_var };
+        const constraint_fn_var = try self.mkInterpolationConstraint(
+            dispatcher_var,
+            &arg_vars,
+            expr_var,
+            item_var,
+            self.cir.idents.from_interpolation,
+            env,
+            interpolation.method_name_region,
+            expr_idx,
+        );
+        try self.cir.store.replaceExprWithInterpolationConstraint(
+            expr_idx,
+            interpolation.first,
+            interpolation.parts,
+            interpolation.method_name_region,
+            constraint_fn_var,
+            step_fn_var,
+        );
+    }
+}
+
 fn enterCallExpr(self: *Self, top: usize) Allocator.Error!void {
     const call = self.cir.store.getExpr(self.check_frame_stack.items[top].expr_idx).e_call;
     switch (call.called_via) {

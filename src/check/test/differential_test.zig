@@ -349,3 +349,30 @@ test "differential: for-loop over range (type dispatch) matches" {
         \\main! = |_args| total
     );
 }
+
+test "differential: string interpolation (interleaved parts) matches" {
+    // Exercises e_interpolation: the `first` segment, an interpolated value
+    // child (`x`), and a following segment child, with the between-child
+    // str-var unifies and the iterator-protocol constraint built in `.exit`.
+    try expectIterMatchesRecursive(
+        \\greet = |name| {
+        \\    x = name
+        \\    "a${x}b"
+        \\}
+        \\
+        \\main! = |_args| greet("world")
+    );
+}
+
+test "differential: string interpolation with multiple parts matches" {
+    // Two interpolated segments drive the per-pair resume loop more than once,
+    // exercising the cursor advance across `interp_after_part_value` /
+    // `interp_after_part_segment`.
+    try expectIterMatchesRecursive(
+        \\main! = |_args| {
+        \\    a = 1
+        \\    b = 2
+        \\    "x=${a.to_str()} y=${b.to_str()}!"
+        \\}
+    );
+}
