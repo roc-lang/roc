@@ -28,7 +28,8 @@ pub const MAGIC: u32 = 0x52494c52; // "RLIR" in little-endian bytes.
 ///     rather than recorded in the header.
 /// v10: LIR proc specs carry explicit native stack-probe requirements.
 /// v11: LIR images carry reachable boxy descriptor/dictionary tables.
-pub const FORMAT_VERSION: u32 = 11;
+/// v12: LIR RC statements carry explicit concrete-or-boxy helper metadata.
+pub const FORMAT_VERSION: u32 = 12;
 
 /// Public `ImageError` declaration.
 pub const ImageError = error{

@@ -4112,13 +4112,13 @@ const Inserter = struct {
         return if (self.solution.isVisible(local)) .atomic else .single_thread;
     }
 
-    fn rcHelperForLocal(self: *const Inserter, op: layout_mod.RcOp, local: LIR.LocalId) layout_mod.RcHelper {
+    fn rcHelperForLocal(self: *const Inserter, op: layout_mod.RcOp, local: LIR.LocalId) LIR.RcHelper {
         const local_layout = self.store.getLocal(local).layout_idx;
         const helper = self.rcHelperForLayout(op, local_layout);
         if (self.layouts.rcHelperPlan(helper) == .noop) {
             arcInvariant("ARC attempted to emit a noop RC helper for a refcounted local");
         }
-        return helper;
+        return LIR.RcHelper.fromConcrete(helper);
     }
 
     fn rcHelperForLayout(self: *const Inserter, op: layout_mod.RcOp, layout_idx: layout_mod.Idx) layout_mod.RcHelper {

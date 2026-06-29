@@ -9574,6 +9574,25 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.emitRcHelperCallAtStackOffset(helper, base_offset, count);
         }
 
+        fn emitExplicitRcStmtHelperCallForValue(
+            self: *Self,
+            helper: LIR.RcHelper,
+            atomicity: RcAtomicity,
+            value_loc: ValueLocation,
+            count: u16,
+        ) Allocator.Error!void {
+            switch (helper) {
+                .concrete => |concrete| try self.emitExplicitRcHelperCallForValue(.{
+                    .key = concrete,
+                    .atomicity = atomicity,
+                }, value_loc, count),
+                .boxy => std.debug.panic(
+                    "LIR/codegen invariant violated: boxy descriptor RC reached dev backend before descriptor RC codegen is implemented",
+                    .{},
+                ),
+            }
+        }
+
         fn emitRawRcHelperCallFromPtrReg(
             self: *Self,
             helper: RcHelperVariant,
@@ -13184,14 +13203,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Generate code for incref operation.
         fn generateIncref(self: *Self, rc_op: anytype) Allocator.Error!ValueLocation {
             const value_loc = try self.generateRcOperandValue(rc_op.value);
-            try self.emitExplicitRcHelperCallForValue(.{ .key = rc_op.rc, .atomicity = rc_op.atomicity }, value_loc, rc_op.count);
+            try self.emitExplicitRcStmtHelperCallForValue(rc_op.rc, rc_op.atomicity, value_loc, rc_op.count);
             return value_loc;
         }
 
         /// Generate code for decref operation.
         fn generateDecref(self: *Self, rc_op: anytype) Allocator.Error!ValueLocation {
             const value_loc = try self.generateRcOperandValue(rc_op.value);
-            try self.emitExplicitRcHelperCallForValue(.{ .key = rc_op.rc, .atomicity = rc_op.atomicity }, value_loc, 1);
+            try self.emitExplicitRcStmtHelperCallForValue(rc_op.rc, rc_op.atomicity, value_loc, 1);
             return value_loc;
         }
 
@@ -13223,7 +13242,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Generate code for free operation.
         fn generateFree(self: *Self, rc_op: anytype) Allocator.Error!ValueLocation {
             const value_loc = try self.generateRcOperandValue(rc_op.value);
-            try self.emitExplicitRcHelperCallForValue(.{ .key = rc_op.rc, .atomicity = rc_op.atomicity }, value_loc, 1);
+            try self.emitExplicitRcStmtHelperCallForValue(rc_op.rc, rc_op.atomicity, value_loc, 1);
             return value_loc;
         }
 
@@ -17562,7 +17581,7 @@ test "two-arg proc list join loop returns full length" {
     const ret_result = try store.addCFStmt(.{ .ret = .{ .value = result } });
     const drop_list = try store.addCFStmt(.{ .decref = .{
         .value = root_list,
-        .rc = .{ .op = .decref, .layout_idx = list_layout },
+        .rc = LIR.RcHelper.fromConcrete(.{ .op = .decref, .layout_idx = list_layout }),
         .next = ret_result,
     } });
     const call_args = try store.addLocalSpan(&.{ root_list, ignored });
@@ -17697,7 +17716,7 @@ test "box_alloc_zeroed cell is zeroed, writable through ptr_cast, and freed by d
     // decref also verifies the cell came from allocateWithRefcount with rc=1.
     const drop_cell = try store.addCFStmt(.{ .decref = .{
         .value = cell,
-        .rc = .{ .op = .decref, .layout_idx = box_u64 },
+        .rc = LIR.RcHelper.fromConcrete(.{ .op = .decref, .layout_idx = box_u64 }),
         .next = ret,
     } });
     const add_args = try store.addLocalSpan(&.{ pre, post });

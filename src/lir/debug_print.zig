@@ -178,26 +178,34 @@ const Printer = struct {
                 },
                 .incref => |s| {
                     try writeIndent(indent, writer);
-                    try writer.print("incref l{d} x{d}\n", .{ @intFromEnum(s.value), s.count });
+                    try writer.print("incref l{d} x{d} ", .{ @intFromEnum(s.value), s.count });
+                    try writeRcHelper(s.rc, writer);
+                    try writer.writeAll("\n");
                     current = s.next;
                 },
                 .decref => |s| {
                     try writeIndent(indent, writer);
-                    try writer.print("decref l{d}\n", .{@intFromEnum(s.value)});
+                    try writer.print("decref l{d} ", .{@intFromEnum(s.value)});
+                    try writeRcHelper(s.rc, writer);
+                    try writer.writeAll("\n");
                     current = s.next;
                 },
                 .decref_if_initialized => |s| {
                     try writeIndent(indent, writer);
-                    try writer.print("decref_if_initialized cond=l{d} mask=0x{x} value=l{d}\n", .{
+                    try writer.print("decref_if_initialized cond=l{d} mask=0x{x} value=l{d} ", .{
                         @intFromEnum(s.cond),
                         s.cond_mask,
                         @intFromEnum(s.value),
                     });
+                    try writeRcHelper(s.rc, writer);
+                    try writer.writeAll("\n");
                     current = s.next;
                 },
                 .free => |s| {
                     try writeIndent(indent, writer);
-                    try writer.print("free l{d}\n", .{@intFromEnum(s.value)});
+                    try writer.print("free l{d} ", .{@intFromEnum(s.value)});
+                    try writeRcHelper(s.rc, writer);
+                    try writer.writeAll("\n");
                     current = s.next;
                 },
                 .switch_stmt => |s| {
@@ -387,6 +395,54 @@ fn writeLayout(layouts: *const layout_mod.Store, idx: layout_mod.Idx, writer: *s
     try writer.print("{s}#{d}", .{ @tagName(layouts.getLayout(idx).tag), raw });
 }
 
+fn writeRcHelper(helper: LIR.RcHelper, writer: *std.Io.Writer) Error!void {
+    switch (helper) {
+        .concrete => |rc| try writer.print("rc=concrete({s},{d})", .{ @tagName(rc.op), @intFromEnum(rc.layout_idx) }),
+        .boxy => |desc| {
+            try writer.writeAll("rc=boxy(");
+            try writeBoxyDescRef(desc, writer);
+            try writer.writeAll(")");
+        },
+    }
+}
+
+fn writeBoxyDescRef(desc: LIR.BoxyDescRef, writer: *std.Io.Writer) Error!void {
+    switch (desc) {
+        .static => |id| try writer.print("desc#{d}", .{@intFromEnum(id)}),
+        .local => |local| try writer.print("desc=l{d}", .{@intFromEnum(local)}),
+    }
+}
+
 fn writeIndent(indent: usize, writer: *std.Io.Writer) Error!void {
     for (0..indent) |_| try writer.writeAll("  ");
+}
+
+test "debug print includes boxy RC helper descriptor references" {
+    const allocator = std.testing.allocator;
+
+    var store = LirStore.init(allocator);
+    defer store.deinit();
+
+    var layouts = try layout_mod.Store.init(allocator, .u64);
+    defer layouts.deinit();
+
+    const value = try store.addLocal(.{ .layout_idx = .str });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = value } });
+    const incref = try store.addCFStmt(.{ .incref = .{
+        .value = value,
+        .rc = .{ .boxy = .{ .static = @enumFromInt(3) } },
+        .next = ret,
+    } });
+    const proc = try store.addProcSpec(.{
+        .name = .none,
+        .args = .empty(),
+        .body = incref,
+        .ret_layout = .str,
+    });
+
+    var buffer: std.Io.Writer.Allocating = .init(allocator);
+    defer buffer.deinit();
+    try writeProc(allocator, &store, &layouts, proc, &buffer.writer);
+
+    try std.testing.expect(std.mem.indexOf(u8, buffer.written(), "incref l0 x1 rc=boxy(desc#3)\n") != null);
 }

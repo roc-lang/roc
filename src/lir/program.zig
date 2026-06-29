@@ -84,55 +84,13 @@ pub const ErasedFns = struct {
 /// Identifier for a constant storage plan emitted with LIR.
 pub const ConstPlanId = enum(u32) { _ };
 
-/// Identifier for one boxy runtime type descriptor owned by a LIR program.
-pub const BoxyTypeDescId = enum(u32) { _ };
-
-/// Identifier for one boxy runtime dictionary owned by a LIR program.
-pub const BoxyDictId = enum(u32) { _ };
-
-/// Reference to type-descriptor data available to boxy LIR.
-pub const BoxyDescRef = union(enum) {
-    static: BoxyTypeDescId,
-    local: LIR.LocalId,
-};
-
-/// Reference to dictionary data available to boxy LIR.
-pub const BoxyDictRef = union(enum) {
-    static: BoxyDictId,
-    local: LIR.LocalId,
-};
-
-/// Span into a boxy side-table pool.
-pub const BoxySpan = extern struct {
-    start: u32 = 0,
-    len: u32 = 0,
-
-    pub fn empty() BoxySpan {
-        return .{};
-    }
-};
-
-/// Explicit runtime operation needed for a dynamic boxy payload.
-pub const BoxyPayloadOp = enum {
-    copy,
-    incref,
-    decref,
-    drop,
-    free,
-};
-
-/// One explicitly planned payload operation. It never asks a backend to infer
-/// reference-counting behavior from a pointer-shaped value.
-pub const BoxyPayloadStep = union(enum) {
-    concrete: struct {
-        op: BoxyPayloadOp,
-        layout_idx: layout.Idx,
-    },
-    dynamic: struct {
-        op: BoxyPayloadOp,
-        desc: BoxyDescRef,
-    },
-};
+pub const BoxyTypeDescId = LIR.BoxyTypeDescId;
+pub const BoxyDictId = LIR.BoxyDictId;
+pub const BoxyDescRef = LIR.BoxyDescRef;
+pub const BoxyDictRef = LIR.BoxyDictRef;
+pub const BoxySpan = LIR.BoxySpan;
+pub const BoxyPayloadOp = LIR.BoxyPayloadOp;
+pub const BoxyPayloadStep = LIR.BoxyPayloadStep;
 
 /// Runtime data for representation and structural operations on a boxy value.
 pub const BoxyTypeDesc = struct {

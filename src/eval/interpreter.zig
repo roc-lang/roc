@@ -3586,12 +3586,18 @@ pub const Interpreter = struct {
 
     fn performExplicitRcStmt(
         self: *LirInterpreter,
-        helper: layout_mod.RcHelper,
+        helper: LIR.RcHelper,
         val: Value,
         count: u16,
         atomicity: LIR.RcAtomicity,
     ) void {
-        self.performRcHelperRequired(helper, val, count, runtimeRcAtomicity(atomicity));
+        switch (helper) {
+            .concrete => |concrete| self.performRcHelperRequired(concrete, val, count, runtimeRcAtomicity(atomicity)),
+            .boxy => self.invariantFailed(
+                "LIR/interpreter invariant violated: boxy descriptor RC reached interpreter before descriptor RC execution is implemented",
+                .{},
+            ),
+        }
     }
 
     fn performBuiltinInternalRc(

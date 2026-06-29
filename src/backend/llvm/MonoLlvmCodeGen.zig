@@ -2194,19 +2194,19 @@ pub const MonoLlvmCodeGen = struct {
                 try work.append(wa, .{ .node = marker.next });
             },
             .incref => |inc| {
-                try self.emitRcForLocal(.incref, inc.value, inc.count, inc.atomicity);
+                try self.emitExplicitRcStmt(inc.rc, inc.value, inc.count, inc.atomicity);
                 try work.append(wa, .{ .node = inc.next });
             },
             .decref => |dec| {
-                try self.emitRcForLocal(.decref, dec.value, 1, dec.atomicity);
+                try self.emitExplicitRcStmt(dec.rc, dec.value, 1, dec.atomicity);
                 try work.append(wa, .{ .node = dec.next });
             },
             .decref_if_initialized => |dec| {
-                try self.emitDecrefIfInitialized(dec.cond, dec.cond_mask, dec.value, dec.atomicity);
+                try self.emitDecrefIfInitialized(dec.cond, dec.cond_mask, dec.value, dec.rc, dec.atomicity);
                 try work.append(wa, .{ .node = dec.next });
             },
             .free => |free_stmt| {
-                try self.emitRcForLocal(.free, free_stmt.value, 1, free_stmt.atomicity);
+                try self.emitExplicitRcStmt(free_stmt.rc, free_stmt.value, 1, free_stmt.atomicity);
                 try work.append(wa, .{ .node = free_stmt.next });
             },
             .switch_stmt => |sw| try self.emitSwitch(sw, wa, work),
@@ -3466,6 +3466,7 @@ pub const MonoLlvmCodeGen = struct {
         cond: LocalId,
         cond_mask: u64,
         value: LocalId,
+        helper: lir.LIR.RcHelper,
         atomicity: lir.LIR.RcAtomicity,
     ) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
@@ -3479,7 +3480,7 @@ pub const MonoLlvmCodeGen = struct {
         _ = wip.brCond(is_initialized, release_block, next_block, .then_likely) catch return error.OutOfMemory;
 
         wip.cursor = .{ .block = release_block };
-        try self.emitRcForLocal(.decref, value, 1, atomicity);
+        try self.emitExplicitRcStmt(helper, value, 1, atomicity);
         if (!self.currentBlockHasTerminator()) {
             _ = wip.br(next_block) catch return error.OutOfMemory;
         }
@@ -6539,14 +6540,35 @@ pub const MonoLlvmCodeGen = struct {
         }
     }
 
+    fn emitExplicitRcStmt(self: *MonoLlvmCodeGen, helper: lir.LIR.RcHelper, local: LocalId, count: u16, atomicity: RcAtomicity) Error!void {
+        switch (helper) {
+            .concrete => |helper_key| try self.emitConcreteRcForLocal(helper_key, local, count, atomicity),
+            .boxy => return error.CompilationFailed,
+        }
+    }
+
     fn emitRcForLocal(self: *MonoLlvmCodeGen, op: layout.RcOp, local: LocalId, count: u16, atomicity: RcAtomicity) Error!void {
         const slot_v = self.slot(local);
         if (slot_v.size == 0) return;
 
         const layout_val = self.layoutValue(slot_v.layout_idx);
         if (!self.layouts().layoutContainsRefcounted(layout_val)) return;
+        const helper_key: layout.RcHelperKey = if (layout_val.tag == .closure)
+            .{
+                .op = if (op == .free) .decref else op,
+                .layout_idx = layout_val.getClosure().captures_layout_idx,
+            }
+        else
+            .{ .op = op, .layout_idx = slot_v.layout_idx };
+        try self.emitConcreteRcForLocal(helper_key, local, count, atomicity);
+    }
+
+    fn emitConcreteRcForLocal(self: *MonoLlvmCodeGen, helper_key: layout.RcHelperKey, local: LocalId, count: u16, atomicity: RcAtomicity) Error!void {
+        const slot_v = self.slot(local);
+        if (slot_v.size == 0) return;
+
         if (self.deferredStrCapture(local) != null) {
-            switch (op) {
+            switch (helper_key.op) {
                 .incref => try self.noteDeferredStrCaptureIncref(local, count, atomicity),
                 .decref,
                 .free,
@@ -6555,14 +6577,6 @@ pub const MonoLlvmCodeGen = struct {
             return;
         }
         const rc_ptr = slot_v.ptr;
-
-        const helper_key: layout.RcHelperKey = if (layout_val.tag == .closure)
-            .{
-                .op = if (op == .free) .decref else op,
-                .layout_idx = layout_val.getClosure().captures_layout_idx,
-            }
-        else
-            .{ .op = op, .layout_idx = slot_v.layout_idx };
 
         const builder = self.builder orelse return error.CompilationFailed;
         const count_value = if (helper_key.op == .incref)

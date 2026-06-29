@@ -8114,14 +8114,21 @@ fn generateRefOp(self: *Self, op: RefOp, target_layout: layout.Idx) Allocator.Er
 fn generateRcStmt(
     self: *Self,
     value: ProcLocalId,
-    rc: RcHelperKey,
+    rc: LIR.RcHelper,
     atomicity: RcAtomicity,
     inc_count: u16,
 ) Allocator.Error!void {
+    const concrete = switch (rc) {
+        .concrete => |helper| helper,
+        .boxy => wasmInvariantFmt(
+            "WASM/codegen invariant violated: boxy descriptor RC reached wasm backend before descriptor RC codegen is implemented",
+            .{},
+        ),
+    };
     try self.emitProcLocal(value);
     const value_local = self.storage.allocAnonymousLocal(try self.procLocalValType(value)) catch return error.OutOfMemory;
     try self.emitLocalSet(value_local);
-    try self.emitExplicitRcForValueLocal(rc, atomicity, value_local, try self.procLocalValType(value), inc_count);
+    try self.emitExplicitRcForValueLocal(concrete, atomicity, value_local, try self.procLocalValType(value), inc_count);
 }
 
 fn listElemLayout(self: *Self, list_layout_idx: layout.Idx) layout.Idx {

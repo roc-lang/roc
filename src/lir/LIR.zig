@@ -59,6 +59,24 @@ pub const LocalId = enum(u32) {
     _,
 };
 
+/// Identifier for one boxy runtime type descriptor owned by a LIR program.
+pub const BoxyTypeDescId = enum(u32) { _ };
+
+/// Identifier for one boxy runtime dictionary owned by a LIR program.
+pub const BoxyDictId = enum(u32) { _ };
+
+/// Reference to type-descriptor data available to boxy LIR.
+pub const BoxyDescRef = union(enum) {
+    static: BoxyTypeDescId,
+    local: LocalId,
+};
+
+/// Reference to dictionary data available to boxy LIR.
+pub const BoxyDictRef = union(enum) {
+    static: BoxyDictId,
+    local: LocalId,
+};
+
 /// Identifier of a stored statement/control-flow node.
 pub const CFStmtId = enum(u32) {
     _,
@@ -126,6 +144,59 @@ pub const U64Span = extern struct {
     /// Reports whether this span contains no u64 values.
     pub fn isEmpty(self: U64Span) bool {
         return self.len == 0;
+    }
+};
+
+/// Span into a boxy side-table pool.
+pub const BoxySpan = extern struct {
+    start: u32 = 0,
+    len: u32 = 0,
+
+    pub fn empty() BoxySpan {
+        return .{};
+    }
+};
+
+/// Explicit runtime operation needed for a dynamic boxy payload.
+pub const BoxyPayloadOp = enum {
+    copy,
+    incref,
+    decref,
+    drop,
+    free,
+};
+
+/// One explicitly planned payload operation. It never asks a backend to infer
+/// reference-counting behavior from a pointer-shaped value.
+pub const BoxyPayloadStep = union(enum) {
+    concrete: struct {
+        op: BoxyPayloadOp,
+        layout_idx: layout.Idx,
+    },
+    dynamic: struct {
+        op: BoxyPayloadOp,
+        desc: BoxyDescRef,
+    },
+};
+
+/// Explicit helper selected by ARC/lowering for one RC statement.
+///
+/// `.concrete` is the canonical layout-keyed helper used by the LSS pipeline.
+/// `.boxy` is a descriptor-keyed helper selected by boxy lowering for values
+/// whose refcounted payload shape is known only through runtime type metadata.
+pub const RcHelper = union(enum) {
+    concrete: layout.RcHelper,
+    boxy: BoxyDescRef,
+
+    pub fn fromConcrete(helper: layout.RcHelper) RcHelper {
+        return .{ .concrete = helper };
+    }
+
+    pub fn concreteOrNull(self: RcHelper) ?layout.RcHelper {
+        return switch (self) {
+            .concrete => |helper| helper,
+            .boxy => null,
+        };
     }
 };
 
@@ -520,14 +591,14 @@ pub const CFStmt = union(enum) {
     },
     incref: struct {
         value: LocalId,
-        rc: layout.RcHelper,
+        rc: RcHelper,
         count: u16 = 1,
         atomicity: RcAtomicity = .atomic,
         next: CFStmtId,
     },
     decref: struct {
         value: LocalId,
-        rc: layout.RcHelper,
+        rc: RcHelper,
         atomicity: RcAtomicity = .atomic,
         next: CFStmtId,
     },
@@ -539,13 +610,13 @@ pub const CFStmt = union(enum) {
         cond: LocalId,
         cond_mask: u64 = 1,
         value: LocalId,
-        rc: layout.RcHelper,
+        rc: RcHelper,
         atomicity: RcAtomicity = .atomic,
         next: CFStmtId,
     },
     free: struct {
         value: LocalId,
-        rc: layout.RcHelper,
+        rc: RcHelper,
         atomicity: RcAtomicity = .atomic,
         next: CFStmtId,
     },
@@ -714,4 +785,21 @@ pub const LirPattern = union(enum) {
 test "Symbol size and alignment" {
     try std.testing.expectEqual(@as(usize, 8), @sizeOf(Symbol));
     try std.testing.expectEqual(@as(usize, 8), @alignOf(Symbol));
+}
+
+test "RcHelper distinguishes concrete layout helpers from boxy descriptor helpers" {
+    const concrete = RcHelper.fromConcrete(.{ .op = .incref, .layout_idx = .str });
+    const concrete_key = concrete.concreteOrNull() orelse return error.TestExpectedEqual;
+    try std.testing.expectEqual(layout.RcOp.incref, concrete_key.op);
+    try std.testing.expectEqual(layout.Idx.str, concrete_key.layout_idx);
+
+    const boxy = RcHelper{ .boxy = .{ .static = @enumFromInt(7) } };
+    try std.testing.expect(boxy.concreteOrNull() == null);
+    switch (boxy) {
+        .boxy => |desc| switch (desc) {
+            .static => |id| try std.testing.expectEqual(@as(u32, 7), @intFromEnum(id)),
+            .local => return error.TestExpectedEqual,
+        },
+        .concrete => return error.TestExpectedEqual,
+    }
 }

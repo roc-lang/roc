@@ -2508,8 +2508,8 @@ const CertifyTest = struct {
         return id;
     }
 
-    fn rcHelper(op: layout_mod.RcOp, layout_idx: layout_mod.Idx) layout_mod.RcHelper {
-        return .{ .op = op, .layout_idx = layout_idx };
+    fn rcHelper(op: layout_mod.RcOp, layout_idx: layout_mod.Idx) LIR.RcHelper {
+        return LIR.RcHelper.fromConcrete(.{ .op = op, .layout_idx = layout_idx });
     }
 
     fn assignStr(self: *CertifyTest, target: LIR.LocalId, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
