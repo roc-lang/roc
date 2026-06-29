@@ -133,7 +133,6 @@ fn hashEachKeyText(bytes: []const u8) u64 {
     return std.hash.Wyhash.hash(0, bytes);
 }
 
-const missing_each_row_index = each_runtime.missing_row_index;
 const HostEachRowSiteIndexMap = each_runtime.SiteIndexMap;
 const HostEachRowMembership = each_runtime.Membership;
 const HostEachRowSite = each_runtime.Site;
@@ -261,24 +260,7 @@ pub const RecomputeApplyOutcome = struct {
     structural_render_required: bool,
 };
 
-pub const HostKeyedRowDiffResult = struct {
-    scope_ids: []u64,
-    row_items_changed: []bool,
-    scope_created: []bool,
-    removed_scope_ids: []u64,
-    rows_reused: u64,
-    rows_created: u64,
-    rows_removed: u64,
-    row_items_unchanged: u64,
-    row_items_updated: u64,
-
-    pub fn deinit(self: HostKeyedRowDiffResult, allocator: std.mem.Allocator) void {
-        allocator.free(self.scope_ids);
-        allocator.free(self.row_items_changed);
-        allocator.free(self.scope_created);
-        allocator.free(self.removed_scope_ids);
-    }
-};
+pub const HostKeyedRowDiffResult = each_runtime.DiffResult;
 
 /// The retained key/item pair read back out of an `Ui.each` row scope. Named so
 /// the native forwarder and the engine method share one type instead of each
@@ -1659,6 +1641,61 @@ pub fn Engine(comptime Ctx: type) type {
             }
         };
 
+        const EachRowSync = struct {
+            engine: *Self,
+            ctx: Ctx.Handle,
+            roc_host: *abi.RocHost,
+            ops: HostEachOps,
+
+            pub fn recordEachSync(self: *@This(), next_len: usize, existing_len: usize) void {
+                self.engine.recordEachSync(next_len, existing_len);
+            }
+
+            pub fn hashKey(self: *@This(), key: HostValue) u64 {
+                return self.engine.hashEachKeyValue(self.ctx, self.roc_host, self.ops.key_text, self.ops.key_capability, key);
+            }
+
+            pub fn nextKeysEqual(self: *@This(), left: HostValue, right: HostValue) bool {
+                return self.engine.eachKeysEqual(self.ctx, self.roc_host, self.ops, left, right);
+            }
+
+            pub fn existingKeyEquals(self: *@This(), scope_id: u64, key: HostValue) bool {
+                return self.engine.eachRowScopeKeyEquals(self.ctx, self.roc_host, scope_id, key);
+            }
+
+            pub fn rowItemEquals(self: *@This(), scope_id: u64, item: HostValue) bool {
+                return self.engine.eachRowScopeItemEquals(self.ctx, self.roc_host, scope_id, item);
+            }
+
+            pub fn replaceRowKey(self: *@This(), scope_id: u64, key_hash: u64, key: HostValue) void {
+                self.engine.replaceEachRowScopeKey(self.ctx, self.roc_host, scope_id, key_hash, key, self.ops.key_capability);
+            }
+
+            pub fn replaceRowItem(self: *@This(), scope_id: u64, item: HostValue) void {
+                self.engine.replaceEachRowScopeItemWithCapability(self.ctx, self.roc_host, scope_id, item, self.ops.item_capability);
+            }
+
+            pub fn createRow(self: *@This(), parent_scope_id: u64, site_ordinal: u64, key_hash: u64, key: HostValue, item: HostValue) u64 {
+                return self.engine.createEachRowScope(self.ctx, parent_scope_id, site_ordinal, key_hash, key, item, self.ops.key_capability, self.ops.item_capability);
+            }
+
+            pub fn disposeScope(self: *@This(), scope_id: u64) void {
+                self.engine.disposeScopeSubtree(self.ctx, self.roc_host, scope_id);
+            }
+
+            pub fn rowKeyHash(self: *@This(), scope_id: u64) u64 {
+                return self.engine.eachRowScopeKeyHash(scope_id);
+            }
+
+            pub fn recordRows(self: *@This(), rows_reused: u64, rows_created: u64, rows_removed: u64) void {
+                var metrics = self.engine.pending_roc_metrics;
+                metrics.bump(.rows_reused, rows_reused);
+                metrics.bump(.rows_created, rows_created);
+                metrics.bump(.rows_removed, rows_removed);
+                self.engine.pending_roc_metrics = metrics;
+            }
+        };
+
         const ScopeIdentityDeactivation = struct {
             engine: *Self,
             ctx: Ctx.Handle,
@@ -2152,11 +2189,6 @@ pub fn Engine(comptime Ctx: type) type {
         fn removeEachRowFromSiteIndex(self: *Self, scope_id: u64, key_hash: u64) void {
             var row_keys = EachRowScopeKeyLookup{ .engine = self };
             each_runtime.removeRowFromSiteIndex(&self.each_row_sites, &self.each_row_memberships_by_scope_id, scope_id, key_hash, &row_keys);
-        }
-
-        fn replaceEachRowSiteRows(self: *Self, allocator: std.mem.Allocator, site_index: usize, scope_ids: []const u64) void {
-            var row_keys = EachRowScopeKeyLookup{ .engine = self };
-            each_runtime.replaceSiteRows(allocator, &self.each_row_sites, &self.each_row_memberships_by_scope_id, site_index, scope_ids, &row_keys);
         }
 
         pub fn deactivateState(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, node_id: u64) void {
@@ -2977,147 +3009,10 @@ pub fn Engine(comptime Ctx: type) type {
 
         pub fn syncEachRowScopes(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, parent_scope_id: u64, site_ordinal: u64, keys: []const HostValue, items: []const HostValue, ops: HostEachOps) HostKeyedRowDiffResult {
             self.validateScopeId(parent_scope_id) catch @panic("scope id has no host scope descriptor");
-            if (keys.len != items.len) @panic("Ui.each keyed scope received mismatched key and item lists");
-
             const allocator = Ctx.allocator(ctx);
             const site_index = self.ensureEachRowSiteIndex(allocator, parent_scope_id, site_ordinal);
-            const existing_len = self.each_row_sites.items[site_index].scope_ids.items.len;
-            self.recordEachSync(keys.len, existing_len);
-
-            const key_cap = ops.key_capability;
-            const item_cap = ops.item_capability;
-            self.scratch.each_key_hashes.resize(allocator, keys.len) catch @panic("out of memory");
-            defer self.scratch.each_key_hashes.clearRetainingCapacity();
-            const key_hashes = self.scratch.each_key_hashes.items;
-            for (keys, 0..) |key, key_index| {
-                key_hashes[key_index] = self.hashEachKeyValue(ctx, roc_host, ops.key_text, ops.key_capability, key);
-            }
-
-            const next_hash_heads = &self.scratch.each_next_hash_heads;
-            next_hash_heads.clearRetainingCapacity();
-            defer next_hash_heads.clearRetainingCapacity();
-
-            self.scratch.each_next_hash_links.resize(allocator, keys.len) catch @panic("out of memory");
-            defer self.scratch.each_next_hash_links.clearRetainingCapacity();
-            const next_hash_links = self.scratch.each_next_hash_links.items;
-            @memset(next_hash_links, missing_each_row_index);
-
-            for (key_hashes, 0..) |hash, key_index| {
-                if (next_hash_heads.get(hash)) |head| {
-                    var previous_index = head;
-                    while (previous_index != missing_each_row_index) {
-                        if (self.eachKeysEqual(ctx, roc_host, ops, keys[previous_index], keys[key_index])) {
-                            @panic("keyed row diff operation failed");
-                        }
-                        previous_index = next_hash_links[previous_index];
-                    }
-                }
-
-                const entry = next_hash_heads.getOrPut(allocator, hash) catch @panic("out of memory");
-                if (entry.found_existing) {
-                    next_hash_links[key_index] = entry.value_ptr.*;
-                }
-                entry.value_ptr.* = key_index;
-            }
-
-            self.scratch.each_matched_existing.resize(allocator, existing_len) catch @panic("out of memory");
-            defer self.scratch.each_matched_existing.clearRetainingCapacity();
-            const matched_existing = self.scratch.each_matched_existing.items;
-            @memset(matched_existing, false);
-
-            var next_scope_ids = allocator.alloc(u64, keys.len) catch @panic("out of memory");
-            errdefer allocator.free(next_scope_ids);
-            var row_items_changed = allocator.alloc(bool, keys.len) catch @panic("out of memory");
-            errdefer allocator.free(row_items_changed);
-            var scope_created = allocator.alloc(bool, keys.len) catch @panic("out of memory");
-            errdefer allocator.free(scope_created);
-            var removed_scope_ids: std.ArrayListUnmanaged(u64) = .empty;
-            errdefer removed_scope_ids.deinit(allocator);
-
-            var rows_reused: u64 = 0;
-            var rows_created: u64 = 0;
-            var row_items_unchanged: u64 = 0;
-            var row_items_updated: u64 = 0;
-
-            for (key_hashes, keys, items, 0..) |hash, key, item, key_index| {
-                var matched_scope_id: ?u64 = null;
-                const site = &self.each_row_sites.items[site_index];
-                if (site.hash_heads.get(hash)) |head| {
-                    var existing_index = head;
-                    while (existing_index != missing_each_row_index) {
-                        if (existing_index < existing_len and !matched_existing[existing_index]) {
-                            const scope_id = site.scope_ids.items[existing_index];
-                            if (self.eachRowScopeKeyEquals(ctx, roc_host, scope_id, key)) {
-                                matched_existing[existing_index] = true;
-                                matched_scope_id = scope_id;
-                                break;
-                            }
-                        }
-                        existing_index = site.hash_links.items[existing_index];
-                    }
-                }
-
-                if (matched_scope_id) |scope_id| {
-                    next_scope_ids[key_index] = scope_id;
-                    scope_created[key_index] = false;
-                    rows_reused += 1;
-
-                    const row_item_equal = self.eachRowScopeItemEquals(ctx, roc_host, scope_id, item);
-                    self.replaceEachRowScopeKey(ctx, roc_host, scope_id, hash, key, key_cap);
-                    self.replaceEachRowScopeItemWithCapability(ctx, roc_host, scope_id, item, item_cap);
-                    if (row_item_equal) {
-                        row_items_changed[key_index] = false;
-                        row_items_unchanged += 1;
-                    } else {
-                        row_items_changed[key_index] = true;
-                        row_items_updated += 1;
-                    }
-                } else {
-                    next_scope_ids[key_index] = std.math.maxInt(u64);
-                    row_items_changed[key_index] = true;
-                    scope_created[key_index] = true;
-                    rows_created += 1;
-                }
-            }
-
-            {
-                const site = &self.each_row_sites.items[site_index];
-                for (site.scope_ids.items[0..existing_len], 0..) |scope_id, existing_index| {
-                    if (matched_existing[existing_index]) continue;
-                    removed_scope_ids.append(allocator, scope_id) catch @panic("out of memory");
-                }
-            }
-
-            for (scope_created, key_hashes, keys, items, 0..) |created, hash, key, item, key_index| {
-                if (!created) continue;
-                next_scope_ids[key_index] = self.createEachRowScope(ctx, parent_scope_id, site_ordinal, hash, key, item, key_cap, item_cap);
-            }
-
-            for (removed_scope_ids.items) |scope_id| {
-                self.disposeScopeSubtree(ctx, roc_host, scope_id);
-            }
-
-            self.replaceEachRowSiteRows(allocator, site_index, next_scope_ids);
-            const removed = removed_scope_ids.toOwnedSlice(allocator) catch @panic("out of memory");
-            errdefer allocator.free(removed);
-
-            var metrics = self.pending_roc_metrics;
-            metrics.bump(.rows_reused, rows_reused);
-            metrics.bump(.rows_created, rows_created);
-            metrics.bump(.rows_removed, @intCast(removed.len));
-            self.pending_roc_metrics = metrics;
-
-            return .{
-                .scope_ids = next_scope_ids,
-                .row_items_changed = row_items_changed,
-                .scope_created = scope_created,
-                .removed_scope_ids = removed,
-                .rows_reused = rows_reused,
-                .rows_created = rows_created,
-                .rows_removed = @intCast(removed.len),
-                .row_items_unchanged = row_items_unchanged,
-                .row_items_updated = row_items_updated,
-            };
+            var sync = EachRowSync{ .engine = self, .ctx = ctx, .roc_host = roc_host, .ops = ops };
+            return each_runtime.syncRows(allocator, &self.each_row_sites, &self.each_row_memberships_by_scope_id, site_index, parent_scope_id, site_ordinal, keys, items, &sync);
         }
 
         pub fn syncActiveEachRowScopes(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, site: HostNodeScopeSiteDesc, each: HostNodeEachDesc) HostKeyedRowDiffResult {

@@ -41,6 +41,25 @@ pub const Site = struct {
     }
 };
 
+pub const DiffResult = struct {
+    scope_ids: []u64,
+    row_items_changed: []bool,
+    scope_created: []bool,
+    removed_scope_ids: []u64,
+    rows_reused: u64,
+    rows_created: u64,
+    rows_removed: u64,
+    row_items_unchanged: u64,
+    row_items_updated: u64,
+
+    pub fn deinit(self: DiffResult, allocator: std.mem.Allocator) void {
+        allocator.free(self.scope_ids);
+        allocator.free(self.row_items_changed);
+        allocator.free(self.scope_created);
+        allocator.free(self.removed_scope_ids);
+    }
+};
+
 pub fn clearSites(allocator: std.mem.Allocator, sites: *std.ArrayListUnmanaged(Site), site_indexes: *SiteIndexMap, memberships: *std.ArrayListUnmanaged(?Membership)) void {
     for (sites.items) |*site| {
         site.deinit(allocator);
@@ -169,6 +188,149 @@ pub fn replaceSiteRows(allocator: std.mem.Allocator, sites: *std.ArrayListUnmana
     }
 }
 
+pub fn syncRows(
+    allocator: std.mem.Allocator,
+    sites: *std.ArrayListUnmanaged(Site),
+    memberships: *std.ArrayListUnmanaged(?Membership),
+    site_index: usize,
+    parent_scope_id: u64,
+    site_ordinal: u64,
+    keys: anytype,
+    items: anytype,
+    hooks: anytype,
+) DiffResult {
+    if (keys.len != items.len) @panic("Ui.each keyed scope received mismatched key and item lists");
+    if (site_index >= sites.items.len) @panic("each row site index exceeded site table");
+
+    const existing_len = sites.items[site_index].scope_ids.items.len;
+    hooks.recordEachSync(keys.len, existing_len);
+
+    const key_hashes = allocator.alloc(u64, keys.len) catch @panic("out of memory");
+    defer allocator.free(key_hashes);
+    for (keys, 0..) |key, key_index| {
+        key_hashes[key_index] = hooks.hashKey(key);
+    }
+
+    var next_hash_heads: std.AutoHashMapUnmanaged(u64, usize) = .{};
+    defer next_hash_heads.deinit(allocator);
+
+    const next_hash_links = allocator.alloc(usize, keys.len) catch @panic("out of memory");
+    defer allocator.free(next_hash_links);
+    @memset(next_hash_links, missing_row_index);
+
+    for (key_hashes, 0..) |hash, key_index| {
+        if (next_hash_heads.get(hash)) |head| {
+            var previous_index = head;
+            while (previous_index != missing_row_index) {
+                if (hooks.nextKeysEqual(keys[previous_index], keys[key_index])) {
+                    @panic("keyed row diff operation failed");
+                }
+                previous_index = next_hash_links[previous_index];
+            }
+        }
+
+        const entry = next_hash_heads.getOrPut(allocator, hash) catch @panic("out of memory");
+        if (entry.found_existing) {
+            next_hash_links[key_index] = entry.value_ptr.*;
+        }
+        entry.value_ptr.* = key_index;
+    }
+
+    const matched_existing = allocator.alloc(bool, existing_len) catch @panic("out of memory");
+    defer allocator.free(matched_existing);
+    @memset(matched_existing, false);
+
+    var next_scope_ids = allocator.alloc(u64, keys.len) catch @panic("out of memory");
+    errdefer allocator.free(next_scope_ids);
+    var row_items_changed = allocator.alloc(bool, keys.len) catch @panic("out of memory");
+    errdefer allocator.free(row_items_changed);
+    var scope_created = allocator.alloc(bool, keys.len) catch @panic("out of memory");
+    errdefer allocator.free(scope_created);
+    var removed_scope_ids: std.ArrayListUnmanaged(u64) = .empty;
+    errdefer removed_scope_ids.deinit(allocator);
+
+    var rows_reused: u64 = 0;
+    var rows_created: u64 = 0;
+    var row_items_unchanged: u64 = 0;
+    var row_items_updated: u64 = 0;
+
+    for (key_hashes, keys, items, 0..) |hash, key, item, key_index| {
+        var matched_scope_id: ?u64 = null;
+        const site = &sites.items[site_index];
+        if (site.hash_heads.get(hash)) |head| {
+            var existing_index = head;
+            while (existing_index != missing_row_index) {
+                if (existing_index < existing_len and !matched_existing[existing_index]) {
+                    const scope_id = site.scope_ids.items[existing_index];
+                    if (hooks.existingKeyEquals(scope_id, key)) {
+                        matched_existing[existing_index] = true;
+                        matched_scope_id = scope_id;
+                        break;
+                    }
+                }
+                existing_index = site.hash_links.items[existing_index];
+            }
+        }
+
+        if (matched_scope_id) |scope_id| {
+            next_scope_ids[key_index] = scope_id;
+            scope_created[key_index] = false;
+            rows_reused += 1;
+
+            const row_item_equal = hooks.rowItemEquals(scope_id, item);
+            hooks.replaceRowKey(scope_id, hash, key);
+            hooks.replaceRowItem(scope_id, item);
+            if (row_item_equal) {
+                row_items_changed[key_index] = false;
+                row_items_unchanged += 1;
+            } else {
+                row_items_changed[key_index] = true;
+                row_items_updated += 1;
+            }
+        } else {
+            next_scope_ids[key_index] = std.math.maxInt(u64);
+            row_items_changed[key_index] = true;
+            scope_created[key_index] = true;
+            rows_created += 1;
+        }
+    }
+
+    {
+        const site = &sites.items[site_index];
+        for (site.scope_ids.items[0..existing_len], 0..) |scope_id, existing_index| {
+            if (matched_existing[existing_index]) continue;
+            removed_scope_ids.append(allocator, scope_id) catch @panic("out of memory");
+        }
+    }
+
+    for (scope_created, key_hashes, keys, items, 0..) |created, hash, key, item, key_index| {
+        if (!created) continue;
+        next_scope_ids[key_index] = hooks.createRow(parent_scope_id, site_ordinal, hash, key, item);
+    }
+
+    for (removed_scope_ids.items) |scope_id| {
+        hooks.disposeScope(scope_id);
+    }
+
+    replaceSiteRows(allocator, sites, memberships, site_index, next_scope_ids, hooks);
+    const removed = removed_scope_ids.toOwnedSlice(allocator) catch @panic("out of memory");
+    errdefer allocator.free(removed);
+
+    hooks.recordRows(rows_reused, rows_created, @intCast(removed.len));
+
+    return .{
+        .scope_ids = next_scope_ids,
+        .row_items_changed = row_items_changed,
+        .scope_created = scope_created,
+        .removed_scope_ids = removed,
+        .rows_reused = rows_reused,
+        .rows_created = rows_created,
+        .rows_removed = @intCast(removed.len),
+        .row_items_unchanged = row_items_unchanged,
+        .row_items_updated = row_items_updated,
+    };
+}
+
 fn rowKeysHash(row_keys: anytype, scope_id: u64) u64 {
     return row_keys.rowKeyHash(scope_id);
 }
@@ -227,6 +389,76 @@ const TestRowKeys = struct {
     }
 };
 
+const TestSyncHooks = struct {
+    keys_by_scope: []u64,
+    items_by_scope: []u64,
+    next_scope_id: u64,
+    disposed_scopes: std.ArrayListUnmanaged(u64) = .empty,
+    sync_next_len: usize = 0,
+    sync_existing_len: usize = 0,
+    rows_reused: u64 = 0,
+    rows_created: u64 = 0,
+    rows_removed: u64 = 0,
+
+    fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
+        self.disposed_scopes.deinit(allocator);
+    }
+
+    pub fn recordEachSync(self: *@This(), next_len: usize, existing_len: usize) void {
+        self.sync_next_len = next_len;
+        self.sync_existing_len = existing_len;
+    }
+
+    pub fn hashKey(_: *@This(), key: u64) u64 {
+        return key;
+    }
+
+    pub fn nextKeysEqual(_: *@This(), left: u64, right: u64) bool {
+        return left == right;
+    }
+
+    pub fn existingKeyEquals(self: *@This(), scope_id: u64, key: u64) bool {
+        return self.keys_by_scope[@intCast(scope_id)] == key;
+    }
+
+    pub fn rowItemEquals(self: *@This(), scope_id: u64, item: u64) bool {
+        return self.items_by_scope[@intCast(scope_id)] == item;
+    }
+
+    pub fn replaceRowKey(self: *@This(), scope_id: u64, hash: u64, key: u64) void {
+        if (hash != key) @panic("test key hash must match key");
+        self.keys_by_scope[@intCast(scope_id)] = key;
+    }
+
+    pub fn replaceRowItem(self: *@This(), scope_id: u64, item: u64) void {
+        self.items_by_scope[@intCast(scope_id)] = item;
+    }
+
+    pub fn createRow(self: *@This(), parent_scope_id: u64, site_ordinal: u64, hash: u64, key: u64, item: u64) u64 {
+        if (parent_scope_id != 1 or site_ordinal != 2) @panic("test row was created for the wrong site");
+        if (hash != key) @panic("test key hash must match key");
+        const scope_id = self.next_scope_id;
+        self.next_scope_id += 1;
+        self.keys_by_scope[@intCast(scope_id)] = key;
+        self.items_by_scope[@intCast(scope_id)] = item;
+        return scope_id;
+    }
+
+    pub fn disposeScope(self: *@This(), scope_id: u64) void {
+        self.disposed_scopes.append(std.testing.allocator, scope_id) catch @panic("out of memory");
+    }
+
+    pub fn rowKeyHash(self: *@This(), scope_id: u64) u64 {
+        return self.keys_by_scope[@intCast(scope_id)];
+    }
+
+    pub fn recordRows(self: *@This(), rows_reused: u64, rows_created: u64, rows_removed: u64) void {
+        self.rows_reused = rows_reused;
+        self.rows_created = rows_created;
+        self.rows_removed = rows_removed;
+    }
+};
+
 test "each runtime appends rows and tracks memberships" {
     var sites: std.ArrayListUnmanaged(Site) = .empty;
     var indexes: SiteIndexMap = .empty;
@@ -244,6 +476,56 @@ test "each runtime appends rows and tracks memberships" {
     try std.testing.expectEqual(Membership{ .site_index = site_index, .row_index = 1 }, memberships.items[11].?);
     try std.testing.expectEqual(@as(usize, 1), sites.items[site_index].hash_heads.get(5).?);
     try std.testing.expectEqual(@as(usize, 0), sites.items[site_index].hash_links.items[1]);
+}
+
+test "each runtime sync reuses creates removes and rebuilds rows" {
+    var sites: std.ArrayListUnmanaged(Site) = .empty;
+    var indexes: SiteIndexMap = .empty;
+    var memberships: std.ArrayListUnmanaged(?Membership) = .empty;
+    defer clearSites(std.testing.allocator, &sites, &indexes, &memberships);
+
+    const site_index = ensureSiteIndex(std.testing.allocator, &sites, &indexes, 1, 2);
+    appendRowToSiteIndex(std.testing.allocator, &sites, &memberships, site_index, 10, 1);
+    appendRowToSiteIndex(std.testing.allocator, &sites, &memberships, site_index, 11, 2);
+
+    var keys_by_scope = [_]u64{0} ** 16;
+    var items_by_scope = [_]u64{0} ** 16;
+    keys_by_scope[10] = 1;
+    items_by_scope[10] = 100;
+    keys_by_scope[11] = 2;
+    items_by_scope[11] = 200;
+
+    var hooks = TestSyncHooks{
+        .keys_by_scope = &keys_by_scope,
+        .items_by_scope = &items_by_scope,
+        .next_scope_id = 12,
+    };
+    defer hooks.deinit(std.testing.allocator);
+
+    const keys = [_]u64{ 2, 3 };
+    const items = [_]u64{ 200, 300 };
+    const diff = syncRows(std.testing.allocator, &sites, &memberships, site_index, 1, 2, &keys, &items, &hooks);
+    defer diff.deinit(std.testing.allocator);
+
+    try std.testing.expectEqualSlices(u64, &.{ 11, 12 }, diff.scope_ids);
+    try std.testing.expectEqualSlices(bool, &.{ false, true }, diff.row_items_changed);
+    try std.testing.expectEqualSlices(bool, &.{ false, true }, diff.scope_created);
+    try std.testing.expectEqualSlices(u64, &.{10}, diff.removed_scope_ids);
+    try std.testing.expectEqualSlices(u64, &.{10}, hooks.disposed_scopes.items);
+    try std.testing.expectEqual(@as(u64, 1), diff.rows_reused);
+    try std.testing.expectEqual(@as(u64, 1), diff.rows_created);
+    try std.testing.expectEqual(@as(u64, 1), diff.rows_removed);
+    try std.testing.expectEqual(@as(u64, 1), diff.row_items_unchanged);
+    try std.testing.expectEqual(@as(u64, 0), diff.row_items_updated);
+    try std.testing.expectEqual(@as(usize, 2), hooks.sync_next_len);
+    try std.testing.expectEqual(@as(usize, 2), hooks.sync_existing_len);
+    try std.testing.expectEqualSlices(u64, &.{ 11, 12 }, sites.items[site_index].scope_ids.items);
+    try std.testing.expectEqual(Membership{ .site_index = site_index, .row_index = 0 }, memberships.items[11].?);
+    try std.testing.expectEqual(Membership{ .site_index = site_index, .row_index = 1 }, memberships.items[12].?);
+    try std.testing.expectEqual(@as(?Membership, null), memberships.items[10]);
+    try std.testing.expectEqual(@as(u64, 1), hooks.rows_reused);
+    try std.testing.expectEqual(@as(u64, 1), hooks.rows_created);
+    try std.testing.expectEqual(@as(u64, 1), hooks.rows_removed);
 }
 
 test "each runtime removes rows and rewrites moved memberships" {
