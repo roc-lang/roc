@@ -3271,6 +3271,15 @@ tag-union layout, then emits `assign_tag`. Builtin `Bool` uses the explicit
 builtin order `False = 0`, `True = 1`; that mapping is a checked builtin rule,
 not a backend layout query.
 
+List construction uses the committed list layout to select the element storage
+layout. Each checked element expression lowers into an element local in source
+order, and the list literal emits one `assign_list` with an element span in that
+same order. Empty list literals emit `assign_list` with an empty element span at
+the target list layout. If a checked element's worker layout differs from the
+committed element storage layout, the boxy lowerer emits the explicit box/adapt
+statement required by that boundary; it never inserts an implicit conversion or
+asks the backend to reinterpret list element bytes.
+
 For every checked function value expression, the boxy lowerer emits an
 `assign_packed_erased_fn`-style LIR statement that creates an erased callable
 payload. The payload stores the function entry and capture bytes. Capture bytes
