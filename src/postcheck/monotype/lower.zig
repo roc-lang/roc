@@ -28,10 +28,19 @@ const static_dispatch = check.StaticDispatchRegistry;
 const Ident = base.Ident;
 
 /// Options used while lowering checked modules into Monotype IR.
+pub const InlineExpectMode = enum {
+    run,
+    omit,
+};
+
+/// Configuration for lowering checked modules into Monotype IR.
 pub const Options = struct {
     /// Preserve source-level procedure names for consumers that present runtime
     /// diagnostics from lowered code.
     proc_debug_names: bool = false,
+    /// Whether inline expects should be lowered at all. Optimized runtime builds
+    /// omit them before their conditions can affect control-flow decisions.
+    inline_expects: InlineExpectMode = .run,
 };
 
 /// Lower checked modules and explicit roots into Monotype IR.
@@ -345,6 +354,7 @@ const Builder = struct {
     root_view: checked.ImportedModuleView,
     program: *Ast.Program,
     proc_debug_names: bool,
+    inline_expects: InlineExpectMode,
     symbols: Common.SymbolGen = .{},
     type_cache: std.AutoHashMap(CheckedTypeAddress, Type.TypeId),
     /// Monotypes owned by the builder-global type cache. They are lowered
@@ -376,6 +386,7 @@ const Builder = struct {
             .root_view = checked.importedView(modules.root.module),
             .program = program,
             .proc_debug_names = options.proc_debug_names,
+            .inline_expects = options.inline_expects,
             .type_cache = std.AutoHashMap(CheckedTypeAddress, Type.TypeId).init(allocator),
             .unsolved_monos = std.AutoHashMap(Type.TypeId, void).init(allocator),
             .lowered_templates = std.AutoHashMap(TemplateFamily, std.ArrayList(LoweredTemplate)).init(allocator),
@@ -900,7 +911,7 @@ const Builder = struct {
                 const fn_id = try self.lowerFnTemplateDef(view, fn_template);
                 break :blk try self.program.addExpr(.{
                     .ty = self.program.fnSource(fn_id).mono_fn_ty,
-                    .data = .{ .fn_def = fn_id },
+                    .data = .{ .fn_def = .{ .fn_id = fn_id } },
                 });
             },
             .callable_eval_template => |template_id| try self.lowerCallableEvalBindingValue(view, template_id, mono_fn_ty),
@@ -1007,7 +1018,7 @@ const Builder = struct {
         const family = TemplateFamily.from(template_ref, source_fn_key);
         const family_entry = try self.lowered_templates.getOrPut(family);
         if (!family_entry.found_existing) family_entry.value_ptr.* = .empty;
-        const fn_ty_digest = self.program.types.typeDigest(&self.program.names, fn_ty);
+        const fn_ty_digest = self.program.types.specializationDigest(&self.program.names, fn_ty);
         var reserved_def: ?Ast.DefId = null;
         var lower_fn_ty = fn_ty;
         for (family_entry.value_ptr.items) |*existing| {
@@ -1086,9 +1097,9 @@ const Builder = struct {
             try family_entry.value_ptr.append(self.allocator, .{
                 .def = def_id,
                 .request_fn_ty = lower_fn_ty,
-                .request_digest = self.program.types.typeDigest(&self.program.names, lower_fn_ty),
+                .request_digest = self.program.types.specializationDigest(&self.program.names, lower_fn_ty),
                 .solved_fn_ty = lower_fn_ty,
-                .solved_digest = self.program.types.typeDigest(&self.program.names, lower_fn_ty),
+                .solved_digest = self.program.types.specializationDigest(&self.program.names, lower_fn_ty),
                 .status = .lowering,
             });
             break :blk .{
@@ -1191,7 +1202,7 @@ const Builder = struct {
         const family = TemplateFamily.from(template_ref, source_fn_key);
         const family_entry = try self.lowered_templates.getOrPut(family);
         if (!family_entry.found_existing) family_entry.value_ptr.* = .empty;
-        const fn_ty_digest = self.program.types.typeDigest(&self.program.names, fn_ty);
+        const fn_ty_digest = self.program.types.specializationDigest(&self.program.names, fn_ty);
         for (family_entry.value_ptr.items) |existing| {
             var matched_ty: ?Type.TypeId = null;
             if (existing.request_fn_ty == fn_ty) {
@@ -1256,7 +1267,7 @@ const Builder = struct {
         for (entries.items) |*entry| {
             if (entry.def != def) continue;
             entry.solved_fn_ty = fn_ty;
-            entry.solved_digest = self.program.types.typeDigest(&self.program.names, fn_ty);
+            entry.solved_digest = self.program.types.specializationDigest(&self.program.names, fn_ty);
             entry.status = .ready;
             return;
         }
@@ -1568,13 +1579,14 @@ const Builder = struct {
             }
         }
         const backing = try ctx.lowerType(ctx.nominalBackingRoot(nominal));
-        return try self.structuralBackingForNominal(view, nominal, backing);
+        return try self.structuralBackingForNominal(view, nominal, mono_args, backing);
     }
 
     fn structuralBackingForNominal(
         self: *Builder,
         view: ModuleView,
         nominal: checked.CheckedNominalType,
+        mono_args: []const Type.TypeId,
         backing: Type.TypeId,
     ) Allocator.Error!Type.TypeId {
         const owner_def = try self.typeDef(view, nominal.origin_module, nominal.name, nominal.source_decl);
@@ -1586,13 +1598,27 @@ const Builder = struct {
             try seen.put(current, {});
             switch (self.program.types.get(current)) {
                 .named => |named| {
-                    if (named.kind != .alias and !sameTypeDef(named.def, owner_def)) return current;
+                    if (named.kind != .alias and (!sameTypeDef(named.def, owner_def) or !self.sameNominalArgs(named.args, mono_args))) {
+                        return current;
+                    }
                     const next = named.backing orelse return current;
                     current = next.ty;
                 },
                 else => return current,
             }
         }
+    }
+
+    fn sameNominalArgs(self: *Builder, actual_span: Type.Span, expected: []const Type.TypeId) bool {
+        const actual = self.program.types.span(actual_span);
+        if (actual.len != expected.len) return false;
+        for (actual, expected) |actual_ty, expected_ty| {
+            if (actual_ty == expected_ty) continue;
+            const actual_digest = self.program.types.specializationDigest(&self.program.names, actual_ty);
+            const expected_digest = self.program.types.specializationDigest(&self.program.names, expected_ty);
+            if (!std.mem.eql(u8, actual_digest.bytes[0..], expected_digest.bytes[0..])) return false;
+        }
+        return true;
     }
 
     fn tupleItemTypes(self: *Builder, ty: Type.TypeId) []const Type.TypeId {
@@ -2149,10 +2175,10 @@ const Builder = struct {
         const family = NestedFnFamily.from(nested, fn_template.source_fn_key);
         const family_entry = try self.lowered_nested_fns.getOrPut(family);
         if (!family_entry.found_existing) family_entry.value_ptr.* = .empty;
-        const fn_ty_digest = self.program.types.typeDigest(&self.program.names, fn_template.mono_fn_ty);
+        const fn_ty_digest = self.program.types.specializationDigest(&self.program.names, fn_template.mono_fn_ty);
         for (family_entry.value_ptr.items) |existing| {
             if (existing.fn_ty != fn_template.mono_fn_ty) {
-                const existing_digest = self.program.types.typeDigest(&self.program.names, existing.fn_ty);
+                const existing_digest = self.program.types.specializationDigest(&self.program.names, existing.fn_ty);
                 if (!std.mem.eql(u8, existing_digest.bytes[0..], fn_ty_digest.bytes[0..])) continue;
                 try request.ctx.graph.unify(
                     try request.ctx.graph.importMono(fn_template.mono_fn_ty),
@@ -2249,6 +2275,29 @@ const Builder = struct {
         };
     }
 
+    fn restoredConstFnTemplateToMono(
+        self: *Builder,
+        store_view: ModuleView,
+        fn_id: checked.ConstFnId,
+        fn_value: check.ConstStore.ConstFn,
+        mono_fn_ty: Type.TypeId,
+    ) Allocator.Error!Ast.FnTemplate {
+        var template = try self.constFnTemplateToMono(fn_value, mono_fn_ty);
+        if (fn_value.captures.len == 0) return template;
+
+        switch (template.fn_def) {
+            .nested => |nested| {
+                template.fn_def = .{ .nested = .{
+                    .owner = nested.owner,
+                    .site = nested.site,
+                    .context_fn_key = restoredConstFnContextKey(store_view.key, fn_id, fn_value.source_fn_key),
+                } };
+            },
+            else => Common.invariant("capturing stored function had no nested function identity"),
+        }
+        return template;
+    }
+
     fn constFnDefToMono(self: *Builder, fn_def: anytype) Allocator.Error!Ast.FnDef {
         return switch (fn_def) {
             .local_template => |template| .{ .local_template = template },
@@ -2284,12 +2333,12 @@ const Builder = struct {
         if (fn_value.fn_def == .encode_to_runtime) {
             return try self.restoreConstEncodeToRuntimeFnExpr(store_view, fn_value, ty);
         }
-        const template = try self.constFnTemplateToMono(fn_value, ty);
+        const template = try self.restoredConstFnTemplateToMono(store_view, fn_id, fn_value, ty);
         if (fn_value.captures.len == 0) {
             const mono_fn_id = try self.lowerRestoredConstFnTemplate(type_view, template);
             return try self.program.addExpr(.{
                 .ty = self.program.fnSource(mono_fn_id).mono_fn_ty,
-                .data = .{ .fn_def = mono_fn_id },
+                .data = .{ .fn_def = .{ .fn_id = mono_fn_id } },
             });
         }
 
@@ -2308,9 +2357,9 @@ const Builder = struct {
 
         const captures = try self.allocator.alloc(struct {
             binder: checked.PatternBinderId,
+            local: Ast.LocalId,
             previous: ?Ast.LocalId,
             value: Ast.ExprId,
-            pat: Ast.PatId,
         }, fn_value.captures.len);
         var initialized: usize = 0;
         errdefer {
@@ -2335,14 +2384,13 @@ const Builder = struct {
             const value_expr = try fn_ctx.restoreConstNodeAtType(store_view, fn_view, capture.value, lowered_ty);
             const local = try self.program.addLocalWithBinder(self.symbols.fresh(), lowered_ty, binder);
             try bindLocalName(self.program, fn_view, local, binder);
-            const pat = try self.program.addPat(.{ .ty = lowered_ty, .data = .{ .bind = local } });
             const previous = fn_ctx.binders.get(binder);
             try fn_ctx.binders.put(binder, local);
             captures[index] = .{
                 .binder = binder,
+                .local = local,
                 .previous = previous,
                 .value = value_expr,
-                .pat = pat,
             };
             initialized += 1;
         }
@@ -2360,25 +2408,22 @@ const Builder = struct {
             }
         }
 
-        var expr = try self.program.addExpr(.{
+        const capture_values = try self.allocator.alloc(Ast.FnDefCapture, captures.len);
+        defer self.allocator.free(capture_values);
+        for (captures, 0..) |capture, index| {
+            capture_values[index] = .{ .local = capture.local, .value = capture.value };
+        }
+
+        const expr = try self.program.addExpr(.{
             .ty = ty,
             .data = switch (lambda_expr.data) {
-                .lambda => try fn_ctx.lowerLambdaExpr(lambda_expr_id, template),
+                .lambda => .{ .fn_def = .{
+                    .fn_id = try self.lowerNestedFnFromContext(&fn_ctx, lambda_expr_id, template),
+                    .captures = try self.program.addFnDefCaptureSpan(capture_values),
+                } },
                 else => Common.invariant("stored capturing function did not reference a checked lambda"),
             },
         });
-        var index = captures.len;
-        while (index > 0) {
-            index -= 1;
-            expr = try self.program.addExpr(.{
-                .ty = ty,
-                .data = .{ .let_ = .{
-                    .bind = captures[index].pat,
-                    .value = captures[index].value,
-                    .rest = expr,
-                } },
-            });
-        }
         try self.drainSpecRequests(graph);
         return expr;
     }
@@ -3978,6 +4023,23 @@ const BodyContext = struct {
         return try self.lowerExprWithType(expr_id, expr_ty);
     }
 
+    fn lowerReturn(self: *BodyContext, ret: anytype) Allocator.Error!Ast.Return {
+        const target = try self.returnTargetType(ret.lambda);
+        return .{
+            .value = try self.lowerExprAtType(ret.expr, target),
+            .target = target,
+        };
+    }
+
+    fn returnTargetType(self: *BodyContext, lambda_id: checked.CheckedExprId) Allocator.Error!Type.TypeId {
+        const lambda_expr = self.view.bodies.expr(lambda_id);
+        const body_id = switch (lambda_expr.data) {
+            .lambda => |lambda| lambda.body,
+            else => Common.invariant("checked return target did not reference a lambda"),
+        };
+        return try self.lowerType(self.view.bodies.expr(body_id).ty);
+    }
+
     fn lowerComptimeRootExprAtType(
         self: *BodyContext,
         expr_id: checked.CheckedExprId,
@@ -4178,9 +4240,12 @@ const BodyContext = struct {
                 .msg = try self.lowerExpectErrMessage(expect_err.expr, expect_err.snippet),
                 .region = expr.source_region,
             } },
-            .expect => |child| .{ .expect = try self.lowerExpr(child) },
+            .expect => |child| if (self.builder.inline_expects == .omit)
+                .unit
+            else
+                .{ .expect = try self.lowerExpr(child) },
             .break_ => try self.breakCurrentLoopExprData(),
-            .return_ => |ret| .{ .return_ = try self.lowerExpr(ret.expr) },
+            .return_ => |ret| .{ .return_ = try self.lowerReturn(ret) },
             .for_ => |for_| try self.lowerIteratorFor(for_, ty, &.{}),
             .hosted_lambda => Common.invariant("hosted lambda expression reached ordinary Monotype expression lowering"),
             .run_low_level => |low_level| .{ .low_level = .{ .op = low_level.op, .args = try self.lowerExprSpan(low_level.args) } },
@@ -4388,7 +4453,7 @@ const BodyContext = struct {
             switch (record.ref) {
                 .local_proc => |local| return try self.builder.program.addExpr(.{
                     .ty = ty,
-                    .data = .{ .fn_def = try self.fnTemplateForLocalProcWithMono(local, expr.ty, self.view.types.rootKey(expr.ty), ty) },
+                    .data = .{ .fn_def = .{ .fn_id = try self.fnTemplateForLocalProcWithMono(local, expr.ty, self.view.types.rootKey(expr.ty), ty) } },
                 }),
                 .top_level_proc,
                 .imported_proc,
@@ -4422,7 +4487,7 @@ const BodyContext = struct {
                         const fn_id = try self.builder.lowerFnTemplateDef(view, fn_template);
                         break :blk try self.builder.program.addExpr(.{
                             .ty = mono_fn_ty,
-                            .data = .{ .fn_def = fn_id },
+                            .data = .{ .fn_def = .{ .fn_id = fn_id } },
                         });
                     }
                 }
@@ -4439,7 +4504,7 @@ const BodyContext = struct {
                     mono_fn_ty,
                 );
                 const fn_id = try self.builder.lowerFnTemplateDefFromContext(self, fn_template);
-                break :blk try self.builder.program.addExpr(.{ .ty = mono_fn_ty, .data = .{ .fn_def = fn_id } });
+                break :blk try self.builder.program.addExpr(.{ .ty = mono_fn_ty, .data = .{ .fn_def = .{ .fn_id = fn_id } } });
             },
             .platform_required => Common.invariant("platform required procedure reached parse intrinsic callback lowering"),
         };
@@ -8109,7 +8174,16 @@ const BodyContext = struct {
     }
 
     fn lowerCall(self: *BodyContext, checked_ret_ty: checked.CheckedTypeId, call: anytype) Allocator.Error!LoweredCall {
-        if (try self.lowerCallThatCannotReachCallee(checked_ret_ty, call)) |lowered| return lowered;
+        return try self.lowerCallAtType(checked_ret_ty, call, null);
+    }
+
+    fn lowerCallAtType(
+        self: *BodyContext,
+        checked_ret_ty: checked.CheckedTypeId,
+        call: anytype,
+        expected_ret_ty: ?Type.TypeId,
+    ) Allocator.Error!LoweredCall {
+        if (try self.lowerCallThatCannotReachCallee(checked_ret_ty, call, expected_ret_ty)) |lowered| return lowered;
 
         if (call.direct_target) |target| {
             var call_ctx = try BodyContext.init(self.allocator, self.builder, self.view, self.owner_template, self.graph);
@@ -8118,11 +8192,16 @@ const BodyContext = struct {
             call_ctx.current_fn_key = self.current_fn_key;
 
             const source_fn_ty = self.directCallInstantiationSourceFnType(target, call.source_fn_ty_payload);
-            const mono_fn_ty = try call_ctx.instantiateCallTypeFromCaller(source_fn_ty, self, checked_ret_ty, call.args);
+            const mono_fn_ty = try call_ctx.instantiateCallTypeFromCallerAtType(source_fn_ty, self, checked_ret_ty, call.args, expected_ret_ty);
             const source_fn_key = call_ctx.view.types.rootKey(source_fn_ty);
             const callee = try self.fnTemplateForDirectCallWithMono(target, source_fn_ty, source_fn_key, mono_fn_ty);
             const fn_data = self.builder.functionShape(mono_fn_ty, "checked direct call target had a non-function type");
             try self.constrainTypeToMono(checked_ret_ty, fn_data.ret);
+            if (expected_ret_ty) |expected| {
+                if (!self.sameType(expected, fn_data.ret)) {
+                    Common.invariant("checked direct call result type differed from its expected Monotype type");
+                }
+            }
             return .{
                 .ret_ty = fn_data.ret,
                 .data = .{ .call_proc = .{
@@ -8138,9 +8217,15 @@ const BodyContext = struct {
             call_ctx.owner_context_fn_key = self.owner_context_fn_key;
             call_ctx.current_fn_key = self.current_fn_key;
 
-            break :fn_ty try call_ctx.instantiateCallTypeFromCaller(call.source_fn_ty_payload, self, checked_ret_ty, call.args);
+            break :fn_ty try call_ctx.instantiateCallTypeFromCallerAtType(call.source_fn_ty_payload, self, checked_ret_ty, call.args, expected_ret_ty);
         };
         const fn_data = self.builder.functionShape(fn_ty, "checked call function type was not a function");
+        if (expected_ret_ty) |expected| {
+            if (!self.sameType(expected, fn_data.ret)) {
+                Common.invariant("checked indirect call result type differed from its expected Monotype type");
+            }
+            try self.constrainTypeToMono(checked_ret_ty, expected);
+        }
         return .{
             .ret_ty = fn_data.ret,
             .data = .{ .call_value = .{
@@ -8195,13 +8280,14 @@ const BodyContext = struct {
         self: *BodyContext,
         checked_ret_ty: checked.CheckedTypeId,
         call: anytype,
+        expected_ret_ty: ?Type.TypeId,
     ) Allocator.Error!?LoweredCall {
-        if (self.checkedExprDiverges(call.func)) {
-            return try self.lowerDivergentCallOperand(checked_ret_ty, call.func);
+        if (self.checkedExprDivergesInLoweredRuntime(call.func)) {
+            return try self.lowerDivergentCallOperand(checked_ret_ty, call.func, expected_ret_ty);
         }
         for (call.args) |arg| {
-            if (self.checkedExprDiverges(arg)) {
-                return try self.lowerDivergentCallOperand(checked_ret_ty, arg);
+            if (self.checkedExprDivergesInLoweredRuntime(arg)) {
+                return try self.lowerDivergentCallOperand(checked_ret_ty, arg, expected_ret_ty);
             }
         }
         return null;
@@ -8211,22 +8297,14 @@ const BodyContext = struct {
         self: *BodyContext,
         checked_ret_ty: checked.CheckedTypeId,
         operand: checked.CheckedExprId,
+        expected_ret_ty: ?Type.TypeId,
     ) Allocator.Error!LoweredCall {
-        const ret_ty = try self.lowerType(checked_ret_ty);
+        const ret_ty = expected_ret_ty orelse try self.lowerType(checked_ret_ty);
+        if (expected_ret_ty != null) try self.constrainTypeToMono(checked_ret_ty, ret_ty);
         return .{
             .ret_ty = ret_ty,
             .data = try self.lowerDivergentExprDataAtType(operand, ret_ty),
         };
-    }
-
-    fn instantiateCallTypeFromCaller(
-        self: *BodyContext,
-        source_fn_ty: checked.CheckedTypeId,
-        caller: *BodyContext,
-        checked_ret_ty: checked.CheckedTypeId,
-        checked_args: []const checked.CheckedExprId,
-    ) Allocator.Error!Type.TypeId {
-        return self.instantiateCallTypeFromCallerAtType(source_fn_ty, caller, checked_ret_ty, checked_args, null);
     }
 
     fn instantiateCallTypeFromCallerAtType(
@@ -8790,7 +8868,7 @@ const BodyContext = struct {
             .pattern_binder,
             .selected_hoisted_const,
             => Common.invariant("local lookup reached Monotype without a current local binding"),
-            .local_proc => |local| .{ .fn_def = try self.fnTemplateForLocalProcWithMono(local, checked_ty, self.view.types.rootKey(checked_ty), ty) },
+            .local_proc => |local| .{ .fn_def = .{ .fn_id = try self.fnTemplateForLocalProcWithMono(local, checked_ty, self.view.types.rootKey(checked_ty), ty) } },
             .top_level_proc,
             .imported_proc,
             .hosted_proc,
@@ -8845,7 +8923,7 @@ const BodyContext = struct {
                     mono_fn_ty,
                 );
                 const fn_id = try self.builder.lowerFnTemplateDefFromContext(self, fn_template);
-                break :blk try self.builder.program.addExpr(.{ .ty = mono_fn_ty, .data = .{ .fn_def = fn_id } });
+                break :blk try self.builder.program.addExpr(.{ .ty = mono_fn_ty, .data = .{ .fn_def = .{ .fn_id = fn_id } } });
             },
             .platform_required => |required| blk: {
                 const view = self.builder.moduleForId(checked.requiredProcedureModuleId(required));
@@ -9469,7 +9547,7 @@ const BodyContext = struct {
             .call => |call| {
                 if (try self.lowerParseIntrinsicCallExpr(checked_expr, expr.ty, call, ty)) |lowered| return lowered;
                 try self.constrainKnownType(expr.ty, ty);
-                const lowered = try self.lowerCall(expr.ty, call);
+                const lowered = try self.lowerCallAtType(expr.ty, call, ty);
                 if (!self.sameType(ty, lowered.ret_ty)) {
                     Common.invariant("checked call expression lowered at a type different from its context type");
                 }
@@ -9521,26 +9599,47 @@ const BodyContext = struct {
     }
 
     fn sameType(self: *BodyContext, expected: Type.TypeId, actual: Type.TypeId) bool {
-        return self.sameTypeInner(expected, actual, 0);
+        var visiting = std.AutoHashMap(TypePair, void).init(self.allocator);
+        defer visiting.deinit();
+        return self.sameTypeInner(expected, actual, &visiting);
     }
 
-    fn sameTypeInner(self: *BodyContext, expected: Type.TypeId, actual: Type.TypeId, depth: u8) bool {
+    const TypePair = struct {
+        expected: Type.TypeId,
+        actual: Type.TypeId,
+    };
+
+    fn sameTypeInner(
+        self: *BodyContext,
+        expected: Type.TypeId,
+        actual: Type.TypeId,
+        visiting: *std.AutoHashMap(TypePair, void),
+    ) bool {
         if (expected == actual) return true;
-        if (depth == 32) return false;
         if (monoAliasBacking(&self.builder.program.types, expected)) |backing| {
-            if (self.sameTypeInner(backing, actual, depth + 1)) return true;
+            if (self.sameTypeInner(backing, actual, visiting)) return true;
         }
         if (monoAliasBacking(&self.builder.program.types, actual)) |backing| {
-            if (self.sameTypeInner(expected, backing, depth + 1)) return true;
+            if (self.sameTypeInner(expected, backing, visiting)) return true;
         }
         const expected_digest = self.builder.program.types.typeDigest(&self.builder.program.names, expected);
         const actual_digest = self.builder.program.types.typeDigest(&self.builder.program.names, actual);
         if (std.mem.eql(u8, expected_digest.bytes[0..], actual_digest.bytes[0..])) return true;
 
-        return self.sameTypeContent(expected, actual, depth + 1);
+        const pair = TypePair{ .expected = expected, .actual = actual };
+        if (visiting.contains(pair)) return true;
+        visiting.put(pair, {}) catch Common.invariant("monotype equality could not record a recursive type pair");
+        defer _ = visiting.remove(pair);
+
+        return self.sameTypeContent(expected, actual, visiting);
     }
 
-    fn sameTypeContent(self: *BodyContext, expected: Type.TypeId, actual: Type.TypeId, depth: u8) bool {
+    fn sameTypeContent(
+        self: *BodyContext,
+        expected: Type.TypeId,
+        actual: Type.TypeId,
+        visiting: *std.AutoHashMap(TypePair, void),
+    ) bool {
         const expected_content = self.builder.program.types.get(expected);
         const actual_content = self.builder.program.types.get(actual);
         return switch (expected_content) {
@@ -9549,32 +9648,32 @@ const BodyContext = struct {
                 else => false,
             },
             .named => |named| switch (actual_content) {
-                .named => |actual_named| self.sameNamedType(named, actual_named, depth),
+                .named => |actual_named| self.sameNamedType(named, actual_named, visiting),
                 else => false,
             },
             .record => |fields| switch (actual_content) {
-                .record => |actual_fields| self.sameRecordFieldNames(fields, actual_fields, depth),
+                .record => |actual_fields| self.sameRecordFieldNames(fields, actual_fields, visiting),
                 else => false,
             },
             .tuple => |items| switch (actual_content) {
-                .tuple => |actual_items| self.sameTypeSpans(items, actual_items, depth),
+                .tuple => |actual_items| self.sameTypeSpans(items, actual_items, visiting),
                 else => false,
             },
             .tag_union => |tags| switch (actual_content) {
-                .tag_union => |actual_tags| self.sameTags(tags, actual_tags, depth),
+                .tag_union => |actual_tags| self.sameTags(tags, actual_tags, visiting),
                 else => false,
             },
             .list => |elem| switch (actual_content) {
-                .list => |actual_elem| self.sameTypeInner(elem, actual_elem, depth),
+                .list => |actual_elem| self.sameTypeInner(elem, actual_elem, visiting),
                 else => false,
             },
             .box => |elem| switch (actual_content) {
-                .box => |actual_elem| self.sameTypeInner(elem, actual_elem, depth),
+                .box => |actual_elem| self.sameTypeInner(elem, actual_elem, visiting),
                 else => false,
             },
             .func => |function| switch (actual_content) {
-                .func => |actual_function| self.sameTypeSpans(function.args, actual_function.args, depth) and
-                    self.sameTypeInner(function.ret, actual_function.ret, depth),
+                .func => |actual_function| self.sameTypeSpans(function.args, actual_function.args, visiting) and
+                    self.sameTypeInner(function.ret, actual_function.ret, visiting),
                 else => false,
             },
             .erased => |erased| switch (actual_content) {
@@ -9588,44 +9687,105 @@ const BodyContext = struct {
         };
     }
 
-    fn sameNamedType(self: *BodyContext, expected: anytype, actual: anytype, depth: u8) bool {
+    fn sameNamedType(
+        self: *BodyContext,
+        expected: anytype,
+        actual: anytype,
+        visiting: *std.AutoHashMap(TypePair, void),
+    ) bool {
         if (!std.mem.eql(u8, expected.named_type.module.bytes[0..], actual.named_type.module.bytes[0..])) return false;
         if (expected.def.module_name != actual.def.module_name) return false;
         if (expected.def.source_decl != actual.def.source_decl) return false;
         if (expected.def.source_decl == null and expected.def.type_name != actual.def.type_name) return false;
         if (expected.kind != actual.kind) return false;
         if (expected.builtin_owner != actual.builtin_owner) return false;
-        return self.sameTypeSpans(expected.args, actual.args, depth);
+        if (!self.sameTypeSpans(expected.args, actual.args, visiting)) return false;
+        if (!self.sameNamedBacking(expected.backing, actual.backing, visiting)) return false;
+        return self.sameDeclaredOrder(expected.declared_order, actual.declared_order, visiting);
     }
 
-    fn sameTypeSpans(self: *BodyContext, expected: Type.Span, actual: Type.Span, depth: u8) bool {
-        const expected_items = self.builder.program.types.span(expected);
-        const actual_items = self.builder.program.types.span(actual);
-        if (expected_items.len != actual_items.len) return false;
-        for (expected_items, actual_items) |expected_item, actual_item| {
-            if (!self.sameTypeInner(expected_item, actual_item, depth)) return false;
+    fn sameNamedBacking(
+        self: *BodyContext,
+        expected: anytype,
+        actual: anytype,
+        visiting: *std.AutoHashMap(TypePair, void),
+    ) bool {
+        if (expected == null and actual == null) return true;
+        if (expected == null or actual == null) return false;
+
+        const expected_backing = expected.?;
+        const actual_backing = actual.?;
+        if (expected_backing.use != actual_backing.use) return false;
+        return self.sameTypeInner(expected_backing.ty, actual_backing.ty, visiting);
+    }
+
+    fn sameDeclaredOrder(
+        self: *BodyContext,
+        expected: Type.Span,
+        actual: Type.Span,
+        visiting: *std.AutoHashMap(TypePair, void),
+    ) bool {
+        const expected_entries = self.builder.program.types.declaredFieldSpan(expected);
+        const actual_entries = self.builder.program.types.declaredFieldSpan(actual);
+        if (expected_entries.len != actual_entries.len) return false;
+        for (expected_entries, actual_entries) |expected_entry, actual_entry| {
+            switch (expected_entry) {
+                .named => |expected_name| switch (actual_entry) {
+                    .named => |actual_name| if (expected_name != actual_name) return false,
+                    .padding => return false,
+                },
+                .padding => |expected_ty| switch (actual_entry) {
+                    .named => return false,
+                    .padding => |actual_ty| if (!self.sameTypeInner(expected_ty, actual_ty, visiting)) return false,
+                },
+            }
         }
         return true;
     }
 
-    fn sameRecordFieldNames(self: *BodyContext, expected: Type.Span, actual: Type.Span, depth: u8) bool {
+    fn sameTypeSpans(
+        self: *BodyContext,
+        expected: Type.Span,
+        actual: Type.Span,
+        visiting: *std.AutoHashMap(TypePair, void),
+    ) bool {
+        const expected_items = self.builder.program.types.span(expected);
+        const actual_items = self.builder.program.types.span(actual);
+        if (expected_items.len != actual_items.len) return false;
+        for (expected_items, actual_items) |expected_item, actual_item| {
+            if (!self.sameTypeInner(expected_item, actual_item, visiting)) return false;
+        }
+        return true;
+    }
+
+    fn sameRecordFieldNames(
+        self: *BodyContext,
+        expected: Type.Span,
+        actual: Type.Span,
+        visiting: *std.AutoHashMap(TypePair, void),
+    ) bool {
         const expected_fields = self.builder.program.types.fieldSpan(expected);
         const actual_fields = self.builder.program.types.fieldSpan(actual);
         if (expected_fields.len != actual_fields.len) return false;
         for (expected_fields, actual_fields) |expected_field, actual_field| {
             if (expected_field.name != actual_field.name) return false;
-            if (!self.sameTypeInner(expected_field.ty, actual_field.ty, depth)) return false;
+            if (!self.sameTypeInner(expected_field.ty, actual_field.ty, visiting)) return false;
         }
         return true;
     }
 
-    fn sameTags(self: *BodyContext, expected: Type.Span, actual: Type.Span, depth: u8) bool {
+    fn sameTags(
+        self: *BodyContext,
+        expected: Type.Span,
+        actual: Type.Span,
+        visiting: *std.AutoHashMap(TypePair, void),
+    ) bool {
         const expected_tags = self.builder.program.types.tagSpan(expected);
         const actual_tags = self.builder.program.types.tagSpan(actual);
         if (expected_tags.len != actual_tags.len) return false;
         for (expected_tags, actual_tags) |expected_tag, actual_tag| {
             if (expected_tag.name != actual_tag.name) return false;
-            if (!self.sameTypeSpans(expected_tag.payloads, actual_tag.payloads, depth)) return false;
+            if (!self.sameTypeSpans(expected_tag.payloads, actual_tag.payloads, visiting)) return false;
         }
         return true;
     }
@@ -9690,10 +9850,37 @@ const BodyContext = struct {
         return switch (lambda.data) {
             .lambda => blk: {
                 const nested = try self.builder.fnTemplateForNestedExprWithMono(self.view, self.owner_template, expr_id, lambda.ty, self.view.types.rootKey(lambda.ty), closure_ty, self.current_fn_key);
-                break :blk try self.lowerLambdaExpr(expr_id, nested);
+                switch (nested.fn_def) {
+                    .nested => {},
+                    else => Common.invariant("closure expression was not assigned a nested function identity"),
+                }
+                break :blk .{ .fn_def = .{
+                    .fn_id = try self.builder.lowerNestedFnFromContext(self, expr_id, nested),
+                    .captures = try self.lowerClosureCaptureExprSpan(closure.captures),
+                } };
             },
             else => Common.invariant("checked closure did not point at a lambda expression"),
         };
+    }
+
+    fn lowerClosureCaptureExprSpan(self: *BodyContext, captures: []const checked.CheckedCapture) Allocator.Error!Ast.Span(Ast.FnDefCapture) {
+        if (captures.len == 0) return .empty();
+
+        var capture_values = std.ArrayList(Ast.FnDefCapture).empty;
+        defer capture_values.deinit(self.allocator);
+
+        for (captures) |capture| {
+            const binder = checkedCaptureBinder(self.view, capture.pattern);
+            const local = self.binders.get(binder) orelse continue;
+            const ty = self.builder.program.locals.items[@intFromEnum(local)].ty;
+            const value = try self.builder.program.addExpr(.{
+                .ty = ty,
+                .data = .{ .local = local },
+            });
+            try capture_values.append(self.allocator, .{ .local = local, .value = value });
+        }
+
+        return try self.builder.program.addFnDefCaptureSpan(capture_values.items);
     }
 
     fn closureFunctionType(self: *BodyContext, closure: anytype) Allocator.Error!Type.TypeId {
@@ -9732,7 +9919,7 @@ const BodyContext = struct {
             .nested => {},
             else => Common.invariant("expression-position lambda was not assigned a nested function identity"),
         }
-        return .{ .fn_def = try self.builder.lowerNestedFnFromContext(self, expr_id, nested) };
+        return .{ .fn_def = .{ .fn_id = try self.builder.lowerNestedFnFromContext(self, expr_id, nested) } };
     }
 
     fn lowerDispatchExpr(
@@ -10415,7 +10602,7 @@ const BodyContext = struct {
     ) Allocator.Error!Ast.ExprId {
         return switch (plan.result_mode) {
             .equality => |eq| if (eq.structural_allowed) blk: {
-                const operands = try self.lowerStructuralBinaryOperands("equality", plan, callable_mono_ty, arg_ctx, pre_lowered);
+                const operands = try self.lowerStructuralEqualityOperands(plan, arg_ctx);
                 var result = try self.lowerEqualityExpr(operands.derived_ty, operands.first, operands.second, self.view.names.methodNameText(plan.method), ret_ty);
                 if (eq.negated) {
                     result = try self.builder.lowLevelExpr(.bool_not, &.{result}, ret_ty);
@@ -10432,18 +10619,42 @@ const BodyContext = struct {
         };
     }
 
-    /// The two lowered operands of a structural binary derivation (equality /
-    /// hash) plus `derived_ty`, the type being derived on (the operands' shared
-    /// type), which the terminal lowering needs.
+    /// The two lowered operands of a structural derivation plus `derived_ty`,
+    /// the type being derived on, which the terminal lowering needs.
     const StructuralBinaryOperands = struct {
         first: Ast.ExprId,
         second: Ast.ExprId,
         derived_ty: Type.TypeId,
     };
 
-    /// Lower the two operands of a structural equality/hash dispatch, honoring a
-    /// `pre_lowered` operand at index 0 or 1. `noun` is the derivation name used
-    /// only in invariant diagnostics.
+    fn lowerStructuralEqualityOperands(
+        self: *BodyContext,
+        plan: static_dispatch.StaticDispatchCallPlan,
+        arg_ctx: *BodyContext,
+    ) Allocator.Error!StructuralBinaryOperands {
+        const plan_args = plan.argsSlice(self.view.static_dispatch_plans);
+        if (plan_args.len != 2) Common.invariant("structural equality dispatch plan must have two operands");
+        const lhs_expr = switch (plan_args[0]) {
+            .checked_expr => |expr| expr,
+            else => Common.invariant("structural equality operand was not a checked expression"),
+        };
+        const rhs_expr = switch (plan_args[1]) {
+            .checked_expr => |expr| expr,
+            else => Common.invariant("structural equality operand was not a checked expression"),
+        };
+        const operand_ty = try arg_ctx.structuralEqualityOperandType(.{ .lhs = lhs_expr, .rhs = rhs_expr });
+        const first = try arg_ctx.lowerExprAtType(lhs_expr, operand_ty);
+        const second = try arg_ctx.lowerExprAtType(rhs_expr, operand_ty);
+        return .{
+            .first = first,
+            .second = second,
+            .derived_ty = operand_ty,
+        };
+    }
+
+    /// Lower the value and hasher operands of a structural hash dispatch,
+    /// honoring a `pre_lowered` operand at index 0 or 1. `noun` is the derivation
+    /// name used only in invariant diagnostics.
     fn lowerStructuralBinaryOperands(
         self: *BodyContext,
         comptime noun: []const u8,
@@ -11837,7 +12048,7 @@ const BodyContext = struct {
         body: checked.CheckedExprId,
         result_ty: Type.TypeId,
     ) Allocator.Error!Ast.ExprId {
-        if (self.checkedExprDiverges(body)) {
+        if (self.checkedExprDivergesInLoweredRuntime(body)) {
             return try self.lowerDivergentExprAtType(body, result_ty);
         }
         return try self.lowerExprAtType(body, result_ty);
@@ -13027,7 +13238,7 @@ const BodyContext = struct {
         state_ty: Type.TypeId,
         merge_binders: []const MergeBinder,
     ) Allocator.Error!Ast.ExprId {
-        if (self.checkedExprDiverges(body)) return try self.lowerDivergentExprAtType(body, state_ty);
+        if (self.checkedExprDivergesInLoweredRuntime(body)) return try self.lowerDivergentExprAtType(body, state_ty);
 
         const checked_body = self.view.bodies.expr(body);
         switch (checked_body.data) {
@@ -13036,7 +13247,7 @@ const BodyContext = struct {
                 defer self.allocator.free(statements.items);
                 const value = if (statements.diverges)
                     try self.unreachableAfterDivergentStatementExpr(result_ty)
-                else if (self.checkedExprDiverges(block.final_expr))
+                else if (self.checkedExprDivergesInLoweredRuntime(block.final_expr))
                     try self.lowerDivergentExprAtType(block.final_expr, result_ty)
                 else
                     try self.lowerExprAtType(block.final_expr, result_ty);
@@ -13058,7 +13269,7 @@ const BodyContext = struct {
         state_ty: Type.TypeId,
         merge_binders: []const MergeBinder,
     ) Allocator.Error!Ast.ExprId {
-        if (self.checkedExprDiverges(body)) return try self.lowerDivergentExprAtType(body, state_ty);
+        if (self.checkedExprDivergesInLoweredRuntime(body)) return try self.lowerDivergentExprAtType(body, state_ty);
 
         const checked_body = self.view.bodies.expr(body);
         switch (checked_body.data) {
@@ -13066,7 +13277,7 @@ const BodyContext = struct {
                 var statements = try self.lowerBlockStatements(block.statements);
                 defer self.allocator.free(statements.items);
                 if (!statements.diverges) {
-                    const final_stmt = try self.builder.program.addStmt(.{ .expr = if (self.checkedExprDiverges(block.final_expr))
+                    const final_stmt = try self.builder.program.addStmt(.{ .expr = if (self.checkedExprDivergesInLoweredRuntime(block.final_expr))
                         try self.lowerDivergentExprAtType(block.final_expr, try self.lowerType(checked_body.ty))
                     else
                         try self.lowerExpr(block.final_expr) });
@@ -13175,7 +13386,7 @@ const BodyContext = struct {
             .statements = try self.builder.program.addStmtSpan(stmts.items[0..stmts.len]),
             .final_expr = if (stmts.diverges)
                 try self.unreachableAfterDivergentStatementExpr(ty)
-            else if (self.checkedExprDiverges(block.final_expr))
+            else if (self.checkedExprDivergesInLoweredRuntime(block.final_expr))
                 try self.lowerDivergentExprAtType(block.final_expr, ty)
             else
                 try self.lowerExprAtType(block.final_expr, ty),
@@ -13209,7 +13420,7 @@ const BodyContext = struct {
             if (!try self.appendExpandedPatternStatement(statement, &lowered)) {
                 try lowered.append(self.allocator, try self.lowerStatement(statement));
             }
-            if (self.checkedStatementDiverges(statement)) lowered.diverges = true;
+            if (self.checkedStatementDivergesInLoweredRuntime(statement)) lowered.diverges = true;
         }
         return lowered;
     }
@@ -13313,7 +13524,6 @@ const BodyContext = struct {
             .crash,
             .dbg,
             .expr,
-            .expect,
             .for_,
             .while_,
             .infinite_loop,
@@ -13321,6 +13531,7 @@ const BodyContext = struct {
             .break_,
             .return_,
             => true,
+            .expect => self.builder.inline_expects == .run,
             .import_,
             .alias_decl,
             .nominal_decl,
@@ -13376,7 +13587,7 @@ const BodyContext = struct {
                 .region = checked_expr.source_region,
             } },
             .break_ => try self.breakCurrentLoopExprData(),
-            .return_ => |ret| .{ .return_ = try self.lowerExpr(ret.expr) },
+            .return_ => |ret| .{ .return_ = try self.lowerReturn(ret) },
             else => Common.invariant("checked expression was marked divergent but has no divergent lowering path"),
         };
     }
@@ -13402,6 +13613,148 @@ const BodyContext = struct {
             Common.invariant("checked divergence referenced a missing statement");
         }
         return self.view.bodies.statementDiverges(statement_id);
+    }
+
+    /// Checked divergence is computed before this lowering pass can omit inline
+    /// expects, so optimized builds need a divergence view of the lowered code.
+    fn checkedStatementDivergesInLoweredRuntime(self: *BodyContext, statement_id: checked.CheckedStatementId) bool {
+        if (!self.checkedStatementDiverges(statement_id)) return false;
+        if (self.builder.inline_expects == .run) return true;
+
+        return switch (self.view.bodies.statement(statement_id).data) {
+            .crash,
+            .break_,
+            .return_,
+            => true,
+            .decl => |decl| self.checkedExprDivergesInLoweredRuntime(decl.expr),
+            .var_ => |var_| self.checkedExprDivergesInLoweredRuntime(var_.expr),
+            .var_uninitialized => false,
+            .reassign => |reassign| self.checkedExprDivergesInLoweredRuntime(reassign.expr),
+            .dbg,
+            .expr,
+            => |expr| self.checkedExprDivergesInLoweredRuntime(expr),
+            .expect => false,
+            .for_ => |for_| self.checkedExprDivergesInLoweredRuntime(for_.expr),
+            .while_ => |while_| self.checkedExprDivergesInLoweredRuntime(while_.cond),
+            .infinite_loop => true,
+            .breakable_loop => |loop| self.checkedExprDivergesInLoweredRuntime(loop.cond),
+            .pending,
+            .import_,
+            .alias_decl,
+            .nominal_decl,
+            .type_anno,
+            .type_var_alias,
+            .runtime_error,
+            => false,
+        };
+    }
+
+    fn checkedAnyExprDivergesInLoweredRuntime(self: *BodyContext, items: []const checked.CheckedExprId) bool {
+        for (items) |item| {
+            if (self.checkedExprDivergesInLoweredRuntime(item)) return true;
+        }
+        return false;
+    }
+
+    fn checkedExprDivergesInLoweredRuntime(self: *BodyContext, expr_id: checked.CheckedExprId) bool {
+        if (!self.checkedExprDiverges(expr_id)) return false;
+        if (self.builder.inline_expects == .run) return true;
+
+        return switch (self.view.bodies.expr(expr_id).data) {
+            .crash,
+            .ellipsis,
+            .break_,
+            .return_,
+            => true,
+            .str => |items| self.checkedAnyExprDivergesInLoweredRuntime(items),
+            .list => |items| self.checkedAnyExprDivergesInLoweredRuntime(items),
+            .tuple => |items| self.checkedAnyExprDivergesInLoweredRuntime(items),
+            .match_ => |match| blk: {
+                if (self.checkedExprDivergesInLoweredRuntime(match.cond)) break :blk true;
+                if (match.branches.len == 0) break :blk false;
+                for (match.branches) |branch| {
+                    if (branch.guard != null) break :blk false;
+                    if (!self.checkedExprDivergesInLoweredRuntime(branch.value)) break :blk false;
+                }
+                break :blk true;
+            },
+            .if_ => |if_| blk: {
+                if (if_.branches.len > 0 and self.checkedExprDivergesInLoweredRuntime(if_.branches[0].cond)) {
+                    break :blk true;
+                }
+                for (if_.branches) |branch| {
+                    if (!self.checkedExprDivergesInLoweredRuntime(branch.body)) break :blk false;
+                }
+                break :blk self.checkedExprDivergesInLoweredRuntime(if_.final_else);
+            },
+            .call => |call| blk: {
+                if (self.checkedExprDivergesInLoweredRuntime(call.func)) break :blk true;
+                break :blk self.checkedAnyExprDivergesInLoweredRuntime(call.args);
+            },
+            .record => |record| blk: {
+                if (record.ext) |ext| {
+                    if (self.checkedExprDivergesInLoweredRuntime(ext)) break :blk true;
+                }
+                for (record.fields) |field| {
+                    if (self.checkedExprDivergesInLoweredRuntime(field.value)) break :blk true;
+                }
+                break :blk false;
+            },
+            .block => |block| blk: {
+                for (block.statements) |statement| {
+                    if (self.checkedStatementDivergesInLoweredRuntime(statement)) break :blk true;
+                }
+                break :blk self.checkedExprDivergesInLoweredRuntime(block.final_expr);
+            },
+            .tag => |tag| self.checkedAnyExprDivergesInLoweredRuntime(tag.args),
+            .nominal => |nominal| self.checkedExprDivergesInLoweredRuntime(nominal.backing_expr),
+            .closure,
+            .lambda,
+            => false,
+            .binop => |binop| self.checkedExprDivergesInLoweredRuntime(binop.lhs) or
+                self.checkedExprDivergesInLoweredRuntime(binop.rhs),
+            .unary_minus,
+            .unary_not,
+            .dbg,
+            => |child| self.checkedExprDivergesInLoweredRuntime(child),
+            .expect => false,
+            .expect_err => true,
+            .field_access => |field| self.checkedExprDivergesInLoweredRuntime(field.receiver),
+            .structural_eq => |eq| self.checkedExprDivergesInLoweredRuntime(eq.lhs) or
+                self.checkedExprDivergesInLoweredRuntime(eq.rhs),
+            .structural_hash => |hash| self.checkedExprDivergesInLoweredRuntime(hash.value) or
+                self.checkedExprDivergesInLoweredRuntime(hash.hasher),
+            .tuple_access => |access| self.checkedExprDivergesInLoweredRuntime(access.tuple),
+            .for_ => |for_| self.checkedExprDivergesInLoweredRuntime(for_.expr),
+            .run_low_level => |low_level| self.checkedAnyExprDivergesInLoweredRuntime(low_level.args),
+            .pending,
+            .num,
+            .frac_f32,
+            .frac_f64,
+            .dec,
+            .dec_small,
+            .num_from_numeral,
+            .typed_int,
+            .typed_frac,
+            .typed_num_from_numeral,
+            .str_from_quote,
+            .str_segment,
+            .bytes_literal,
+            .lookup_local,
+            .lookup_external,
+            .lookup_required,
+            .empty_list,
+            .empty_record,
+            .zero_argument_tag,
+            .dispatch_call,
+            .interpolation,
+            .method_eq,
+            .type_dispatch_call,
+            .runtime_error,
+            .anno_only,
+            .hosted_lambda,
+            => false,
+        };
     }
 
     const LoopCarry = struct {
@@ -13728,7 +14081,7 @@ const BodyContext = struct {
             .block => |block| {
                 var statement_diverges = false;
                 for (block.statements) |statement| {
-                    if (self.checkedStatementDiverges(statement)) statement_diverges = true;
+                    if (self.checkedStatementDivergesInLoweredRuntime(statement)) statement_diverges = true;
                 }
                 const extra: usize = if (statement_diverges) 0 else 1;
                 const lowered_statements = try self.allocator.alloc(Ast.StmtId, block.statements.len + extra);
@@ -13737,7 +14090,7 @@ const BodyContext = struct {
                     lowered_statements[i] = try self.lowerStatement(statement);
                 }
                 if (!statement_diverges) {
-                    lowered_statements[block.statements.len] = try self.builder.program.addStmt(.{ .expr = if (self.checkedExprDiverges(block.final_expr))
+                    lowered_statements[block.statements.len] = try self.builder.program.addStmt(.{ .expr = if (self.checkedExprDivergesInLoweredRuntime(block.final_expr))
                         try self.lowerDivergentExprAtType(block.final_expr, result_ty)
                     else
                         try self.lowerExpr(block.final_expr) });
@@ -13769,7 +14122,7 @@ const BodyContext = struct {
             .block => |block| {
                 var statement_diverges = false;
                 for (block.statements) |statement| {
-                    if (self.checkedStatementDiverges(statement)) statement_diverges = true;
+                    if (self.checkedStatementDivergesInLoweredRuntime(statement)) statement_diverges = true;
                 }
                 const extra: usize = if (statement_diverges) 0 else 1;
                 const lowered_statements = try self.allocator.alloc(Ast.StmtId, block.statements.len + extra);
@@ -13778,7 +14131,7 @@ const BodyContext = struct {
                     lowered_statements[i] = try self.lowerStatement(statement);
                 }
                 if (!statement_diverges) {
-                    lowered_statements[block.statements.len] = try self.builder.program.addStmt(.{ .expr = if (self.checkedExprDiverges(block.final_expr))
+                    lowered_statements[block.statements.len] = try self.builder.program.addStmt(.{ .expr = if (self.checkedExprDivergesInLoweredRuntime(block.final_expr))
                         try self.lowerDivergentExprAtType(block.final_expr, result_ty)
                     else
                         try self.lowerExpr(block.final_expr) });
@@ -14045,8 +14398,10 @@ const BodyContext = struct {
             .unary_minus,
             .unary_not,
             .dbg,
-            .expect,
             => |child| try self.collectReassignedBindersInExpr(child, out),
+            .expect => |child| if (self.builder.inline_expects == .run) {
+                try self.collectReassignedBindersInExpr(child, out);
+            },
             .expect_err => |expect_err| try self.collectReassignedBindersInExpr(expect_err.expr, out),
             .field_access => |field| try self.collectReassignedBindersInExpr(field.receiver, out),
             .structural_eq => |eq| {
@@ -14115,8 +14470,10 @@ const BodyContext = struct {
             },
             .dbg,
             .expr,
-            .expect,
             => |expr| try self.collectReassignedBindersInExpr(expr, out),
+            .expect => |expr| if (self.builder.inline_expects == .run) {
+                try self.collectReassignedBindersInExpr(expr, out);
+            },
             .for_ => |for_| {
                 try self.collectReassignedBindersInExpr(for_.expr, out);
                 try self.collectReassignedBindersInExpr(for_.body, out);
@@ -14278,7 +14635,10 @@ const BodyContext = struct {
             .crash => |msg| .{ .crash = try self.lowerStringLiteral(msg) },
             .dbg => |child| .{ .dbg = try self.lowerDbgMessage(child) },
             .expr => |child| try self.lowerExprStatement(child),
-            .expect => |child| .{ .expect = try self.lowerExpr(child) },
+            .expect => |child| if (self.builder.inline_expects == .omit) blk: {
+                const unit_ty = try self.unitType();
+                break :blk .{ .expr = try self.builder.program.addExpr(.{ .ty = unit_ty, .data = .unit }) };
+            } else .{ .expect = try self.lowerExpr(child) },
             .for_ => |for_| blk: {
                 var reassigned = std.ArrayList(checked.PatternBinderId).empty;
                 defer reassigned.deinit(self.allocator);
@@ -14355,7 +14715,7 @@ const BodyContext = struct {
                 } };
             },
             .break_ => .{ .expr = try self.breakCurrentLoopExpr() },
-            .return_ => |ret| .{ .return_ = try self.lowerExpr(ret.expr) },
+            .return_ => |ret| .{ .return_ = try self.lowerReturn(ret) },
         };
         return try self.builder.program.addStmt(stmt);
     }
@@ -14739,6 +15099,42 @@ const BodyContext = struct {
     }
 };
 
+test "monotype sameType keeps failed alias alternatives out of recursion stack" {
+    var program = Ast.Program.init(std.testing.allocator);
+    defer program.deinit();
+
+    const module_name = try program.names.internModuleName("Test");
+    const type_name = try program.names.internTypeName("Alias");
+    const checked_ty: checked.CheckedTypeId = @enumFromInt(1);
+    const i64_ty = try program.types.add(.{ .primitive = .i64 });
+    const str_ty = try program.types.add(.{ .primitive = .str });
+    const alias_i64 = try program.types.add(.{ .named = .{
+        .named_type = .{ .module = .{}, .ty = checked_ty },
+        .def = .{ .module_name = module_name, .type_name = type_name },
+        .kind = .alias,
+        .args = Type.Span.empty(),
+        .backing = .{ .ty = i64_ty, .use = .inspectable },
+    } });
+    const alias_str = try program.types.add(.{ .named = .{
+        .named_type = .{ .module = .{}, .ty = checked_ty },
+        .def = .{ .module_name = module_name, .type_name = type_name },
+        .kind = .alias,
+        .args = Type.Span.empty(),
+        .backing = .{ .ty = str_ty, .use = .inspectable },
+    } });
+
+    var builder: Builder = undefined;
+    builder.program = &program;
+    var ctx: BodyContext = undefined;
+    ctx.allocator = std.testing.allocator;
+    ctx.builder = &builder;
+
+    try std.testing.expect(ctx.sameType(alias_i64, i64_ty));
+    try std.testing.expect(ctx.sameType(str_ty, alias_str));
+    try std.testing.expect(!ctx.sameType(alias_i64, alias_str));
+    try std.testing.expect(!ctx.sameType(alias_str, alias_i64));
+}
+
 /// Structural `is_eq` specifics for the generic derivation driver
 /// (`BodyContext.lowerDerivation`). Equality threads two operands, builds a
 /// component access on each, and conjoins the per-component bools with AND so
@@ -14832,12 +15228,17 @@ const EqDeriver = struct {
         return try self.derivationOwnedCall(EqDeriver, ty, operand, ctx);
     }
 
-    /// Decomposes structural equality on a nominal type by unwrapping both operands to
-    /// their shared backing representation and comparing those. The nominal unwrap is a
-    /// transparent alias at runtime, and recursing on the backing dispatches any owned
-    /// types nested within it (e.g. a list inside the backing tag union) instead of
-    /// leaving them for the LIR structural-equality lowering.
+    /// Decomposes structural equality on a nominal type. Record and tuple backings are
+    /// decomposed through the nominal operands so field/tuple access sees the nominal
+    /// layout; other backings are unwrapped and compared in their shared backing
+    /// representation.
     fn named(self: *BodyContext, named_ty: Type.TypeId, backing_ty: Type.TypeId, operand: Operand, ctx: BodyContext.DerivationCtx) Allocator.Error!Ast.ExprId {
+        switch (self.builder.program.types.get(backing_ty)) {
+            .record => |fields| return try self.derivationRecord(EqDeriver, self.builder.program.types.fieldSpan(fields), operand, ctx),
+            .tuple => |items| return try self.derivationTuple(EqDeriver, self.builder.program.types.span(items), operand, ctx),
+            else => {},
+        }
+
         const lhs_inner = try self.builder.program.addLocal(self.builder.symbols.fresh(), backing_ty);
         const rhs_inner = try self.builder.program.addLocal(self.builder.symbols.fresh(), backing_ty);
 
@@ -15051,6 +15452,12 @@ const HashDeriver = struct {
     }
 
     fn named(self: *BodyContext, named_ty: Type.TypeId, backing_ty: Type.TypeId, operand: Operand, ctx: BodyContext.DerivationCtx) Allocator.Error!Ast.ExprId {
+        switch (self.builder.program.types.get(backing_ty)) {
+            .record => |fields| return try self.derivationRecord(HashDeriver, self.builder.program.types.fieldSpan(fields), operand, ctx),
+            .tuple => |items| return try self.derivationTuple(HashDeriver, self.builder.program.types.span(items), operand, ctx),
+            else => {},
+        }
+
         const inner = try self.builder.program.addLocal(self.builder.symbols.fresh(), backing_ty);
         const hashed = try self.lowerDerivation(HashDeriver, backing_ty, .{
             .value = try self.builder.localExpr(inner, backing_ty),
@@ -15313,6 +15720,20 @@ fn generatedEncodeToRuntimeKey(
     return .{ .bytes = hasher.finalResult() };
 }
 
+fn restoredConstFnContextKey(
+    module_key: checked.ModuleId,
+    fn_id: checked.ConstFnId,
+    source_fn_key: names.TypeDigest,
+) names.TypeDigest {
+    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    hasher.update("roc.restored_const_fn_context");
+    hasher.update(&module_key.bytes);
+    hasher.update(&source_fn_key.bytes);
+    var fn_id_bytes = std.mem.nativeToLittle(u32, @intFromEnum(fn_id));
+    hasher.update(std.mem.asBytes(&fn_id_bytes));
+    return .{ .bytes = hasher.finalResult() };
+}
+
 fn parserEncodingCaptureId() u32 {
     return 0;
 }
@@ -15400,6 +15821,13 @@ fn checkedBinderType(view: ModuleView, binder: checked.PatternBinderId) checked.
     const pattern_raw = @intFromEnum(pattern);
     if (pattern_raw >= view.bodies.patternCount()) Common.invariant("stored function capture pattern is outside checked body store");
     return view.bodies.pattern(@enumFromInt(pattern_raw)).ty;
+}
+
+fn checkedCaptureBinder(view: ModuleView, pattern: checked.CheckedPatternId) checked.PatternBinderId {
+    const raw = @intFromEnum(pattern);
+    if (raw >= view.bodies.pattern_binder_by_pattern.len) Common.invariant("checked closure capture pattern was outside the binder index");
+    return view.bodies.pattern_binder_by_pattern[raw] orelse
+        Common.invariant("checked closure capture pattern had no binder");
 }
 
 fn constCaptureBinder(id: check.ConstStore.CaptureId) checked.PatternBinderId {

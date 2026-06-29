@@ -71,7 +71,7 @@ fn lowerModule(
 }
 
 const LowerModuleOptions = struct {
-    debug_effects: lir.CheckedPipeline.DebugEffectMode = .run,
+    inline_expects: lir.CheckedPipeline.InlineExpectMode = .run,
     proc_debug_names: bool = false,
     imports: []const helpers.ModuleSource = &.{},
 };
@@ -109,7 +109,7 @@ fn lowerModuleWithOptions(
         .{
             .target_usize = base.target.TargetUsize.native,
             .inline_mode = inline_mode,
-            .debug_effects = options.debug_effects,
+            .inline_expects = options.inline_expects,
             .proc_debug_names = options.proc_debug_names,
         },
     );
@@ -121,13 +121,13 @@ fn lowerModuleWithOptions(
     };
 }
 
-fn lowerModuleWithDebugEffects(
+fn lowerModuleWithInlineExpects(
     allocator: Allocator,
     source: []const u8,
     inline_mode: lir.CheckedPipeline.InlineMode,
-    debug_effects: lir.CheckedPipeline.DebugEffectMode,
+    inline_expects: lir.CheckedPipeline.InlineExpectMode,
 ) TestError!LoweredSource {
-    return lowerModuleWithOptions(allocator, source, inline_mode, .{ .debug_effects = debug_effects });
+    return lowerModuleWithOptions(allocator, source, inline_mode, .{ .inline_expects = inline_expects });
 }
 
 fn lowerModuleWithProcDebugNames(
@@ -223,7 +223,7 @@ fn countDebugEffectStmts(lowered: *const lir.CheckedPipeline.LoweredProgram) Deb
     return counts;
 }
 
-test "optimized debug effect lowering erases inline dbg and expect" {
+test "optimized inline expect lowering omits expects and keeps dbg" {
     const allocator = std.testing.allocator;
     const source =
         \\module [main]
@@ -237,30 +237,30 @@ test "optimized debug effect lowering erases inline dbg and expect" {
         \\}
     ;
 
-    var run_effects = try lowerModuleWithDebugEffects(allocator, source, .wrappers, .run);
+    var run_effects = try lowerModuleWithInlineExpects(allocator, source, .wrappers, .run);
     defer run_effects.deinit(allocator);
 
     const run_counts = countDebugEffectStmts(&run_effects.lowered);
     try std.testing.expect(run_counts.debug > 0);
     try std.testing.expect(run_counts.expect > 0);
 
-    var erased_effects = try lowerModuleWithDebugEffects(allocator, source, .wrappers, .erase);
-    defer erased_effects.deinit(allocator);
+    var omitted_effects = try lowerModuleWithInlineExpects(allocator, source, .wrappers, .omit);
+    defer omitted_effects.deinit(allocator);
 
-    const erased_counts = countDebugEffectStmts(&erased_effects.lowered);
-    try std.testing.expectEqual(@as(usize, 0), erased_counts.debug);
-    try std.testing.expectEqual(@as(usize, 0), erased_counts.expect);
+    const omitted_counts = countDebugEffectStmts(&omitted_effects.lowered);
+    try std.testing.expect(omitted_counts.debug > 0);
+    try std.testing.expectEqual(@as(usize, 0), omitted_counts.expect);
 }
 
 test "nominal record lays out fields in declared order" {
     const allocator = std.testing.allocator;
-    // Declared order { z: U16, y: U16, x: U32 } is padding-free, so it is kept
-    // verbatim. It differs from both alphabetical order ({ x, y, z }) and the
-    // descending-alignment sort, which would both hoist the U32 to offset 0.
+    // The unnamed `_ : {}` field opts this nominal record into declared-order
+    // layout, so { z: U16, y: U16, x: U32 } is kept verbatim. Without the marker
+    // it would sort structurally and hoist the U32 to offset 0.
     const source =
         \\module [main]
         \\
-        \\Account := { z : U16, y : U16, x : U32 }
+        \\Account := { z : U16, y : U16, x : U32, _ : {} }
         \\
         \\main : Account -> Account
         \\main = |account| account
@@ -281,7 +281,7 @@ test "nominal record lays out fields in declared order" {
     // z (original/lexicographic field index 2) at offset 0, x (index 0) at 4.
     try std.testing.expectEqual(@as(u32, 0), lowered.lir_result.layouts.getStructFieldOffsetByOriginalIndex(struct_idx, 2));
     try std.testing.expectEqual(@as(u32, 4), lowered.lir_result.layouts.getStructFieldOffsetByOriginalIndex(struct_idx, 0));
-    try std.testing.expectEqual(@as(u32, 8), lowered.lir_result.layouts.getStructData(struct_idx).size);
+    try std.testing.expectEqual(@as(u32, 8), lowered.lir_result.layouts.getStructSize(struct_idx));
 }
 
 test "imported nominal record lays out fields in declared order" {
@@ -289,7 +289,7 @@ test "imported nominal record lays out fields in declared order" {
     const acct_module =
         \\module [Account]
         \\
-        \\Account := { z : U16, y : U16, x : U32 }
+        \\Account := { z : U16, y : U16, x : U32, _ : {} }
     ;
     // An imported nominal record must lay out identically to a local one, or
     // values would be read with the wrong offsets across module boundaries.
@@ -314,7 +314,7 @@ test "imported nominal record lays out fields in declared order" {
 
     const struct_idx = layout_val.getStruct().idx;
     try std.testing.expectEqual(LayoutIdx.u16, lowered.lir_result.layouts.getStructFieldLayout(struct_idx, 0));
-    try std.testing.expectEqual(@as(u32, 8), lowered.lir_result.layouts.getStructData(struct_idx).size);
+    try std.testing.expectEqual(@as(u32, 8), lowered.lir_result.layouts.getStructSize(struct_idx));
 }
 
 test "nominal record reserves unnamed padding fields without inflating alignment" {
@@ -347,7 +347,7 @@ test "nominal record reserves unnamed padding fields without inflating alignment
     try std.testing.expectEqual(@as(u32, 4), lowered.lir_result.layouts.getStructFieldOffsetByOriginalIndex(struct_idx, 1));
     // Total size 8 and alignment 4 (padding bytes are alignment 1, so they do
     // not raise the struct's alignment above the U32's).
-    try std.testing.expectEqual(@as(u32, 8), lowered.lir_result.layouts.getStructData(struct_idx).size);
+    try std.testing.expectEqual(@as(u32, 8), lowered.lir_result.layouts.getStructSize(struct_idx));
     try std.testing.expectEqual(@as(u64, 4), layout_val.alignment(.u64).toByteUnits());
 }
 
@@ -378,7 +378,7 @@ test "generic nominal record instantiates unnamed padding to the argument's size
     // sizeof(U64) = 8 bytes, so the whole struct is 16 bytes (not 8).
     try std.testing.expectEqual(@as(u16, 2), lowered.lir_result.layouts.getStructData(struct_idx).fields.count);
     try std.testing.expectEqual(@as(u32, 0), lowered.lir_result.layouts.getStructFieldOffsetByOriginalIndex(struct_idx, 0));
-    try std.testing.expectEqual(@as(u32, 16), lowered.lir_result.layouts.getStructData(struct_idx).size);
+    try std.testing.expectEqual(@as(u32, 16), lowered.lir_result.layouts.getStructSize(struct_idx));
 }
 
 test "nominal record with a parenthesized backing still honors declared order and padding" {
@@ -407,7 +407,7 @@ test "nominal record with a parenthesized backing still honors declared order an
     try std.testing.expectEqual(@as(u16, 5), lowered.lir_result.layouts.getStructData(struct_idx).fields.count);
     try std.testing.expectEqual(@as(u32, 0), lowered.lir_result.layouts.getStructFieldOffsetByOriginalIndex(struct_idx, 0));
     try std.testing.expectEqual(@as(u32, 4), lowered.lir_result.layouts.getStructFieldOffsetByOriginalIndex(struct_idx, 1));
-    try std.testing.expectEqual(@as(u32, 8), lowered.lir_result.layouts.getStructData(struct_idx).size);
+    try std.testing.expectEqual(@as(u32, 8), lowered.lir_result.layouts.getStructSize(struct_idx));
 }
 
 fn liftModuleAfterSpecConstr(
@@ -758,7 +758,7 @@ fn procShapeMatchesIterCollect(shape: ProcShape, wanted: IterCollectShape) bool 
         .generic => shape.arg_count == 1 and
             shape.direct_call_count == 4 and
             shape.switch_count == 8 and
-            shape.join_count == 12 and
+            shape.join_count == 11 and
             shape.jump_count == 15 and
             shape.struct_assign_count >= 8,
     };
@@ -842,22 +842,26 @@ fn markReachableLiftedExpr(
         .frac_f64_lit,
         .dec_lit,
         .str_lit,
-        .fn_ref,
         .crash,
         .comptime_exhaustiveness_failed,
         .uninitialized,
         .uninitialized_payload,
         => {},
+        .fn_ref => |fn_ref| {
+            for (program.exprSpan(fn_ref.captures)) |capture| {
+                markReachableLiftedExpr(program, capture, reachable);
+            }
+        },
         .list,
         .tuple,
         => |items| for (program.exprSpan(items)) |child| markReachableLiftedExpr(program, child, reachable),
         .record => |fields| for (program.fieldExprSpan(fields)) |field| markReachableLiftedExpr(program, field.value, reachable),
         .tag => |tag| for (program.exprSpan(tag.payloads)) |payload| markReachableLiftedExpr(program, payload, reachable),
         .nominal,
-        .return_,
         .dbg,
         .expect,
         => |child| markReachableLiftedExpr(program, child, reachable),
+        .return_ => |ret| markReachableLiftedExpr(program, ret.value, reachable),
         .expect_err => |expect_err| markReachableLiftedExpr(program, expect_err.msg, reachable),
         .comptime_branch_taken => |taken| markReachableLiftedExpr(program, taken.body, reachable),
         .if_initialized_payload => |switch_| {
@@ -887,6 +891,7 @@ fn markReachableLiftedExpr(
         },
         .call_proc => |call| {
             for (program.exprSpan(call.args)) |arg| markReachableLiftedExpr(program, arg, reachable);
+            for (program.exprSpan(call.captures)) |capture| markReachableLiftedExpr(program, capture, reachable);
         },
         .low_level => |call| for (program.exprSpan(call.args)) |arg| markReachableLiftedExpr(program, arg, reachable),
         .field_access => |field| markReachableLiftedExpr(program, field.receiver, reachable),
@@ -936,8 +941,8 @@ fn markReachableLiftedStmt(
         .expr,
         .expect,
         .dbg,
-        .return_,
         => |expr| markReachableLiftedExpr(program, expr, reachable),
+        .return_ => |ret| markReachableLiftedExpr(program, ret.value, reachable),
         .crash => {},
         .uninitialized => {},
     }

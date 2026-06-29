@@ -36,7 +36,171 @@ pub const PackageDocs = struct {
         try writeIndent(writer, depth);
         try writer.writeAll(")\n");
     }
+
+    /// Promote the builtin types to top-level modules.
+    ///
+    /// The compiler models every builtin type (`Str`, `List`, `Num`, `Hasher`, …)
+    /// as a nested type inside one big `Builtin` type, purely so they can refer to
+    /// each other. Users never import `Builtin` and shouldn't have to know it
+    /// exists, so in the docs we splice it out: each top-level type under `Builtin`
+    /// becomes its own module (its members and nested types come along as that
+    /// module's entries). Every `Builtin`-relative type reference in a signature
+    /// then has its (empty) module path rewritten to the type's new owning module,
+    /// so cross-references resolve to the promoted pages instead of `Builtin`.
+    ///
+    /// No-op unless a module literally named `Builtin` is present, so other
+    /// packages are unaffected.
+    pub fn reshapeBuiltin(self: *PackageDocs, gpa: Allocator) Allocator.Error!void {
+        const bi = blk: {
+            for (self.modules, 0..) |*mod, i| {
+                if (std.mem.eql(u8, mod.name, "Builtin")) break :blk i;
+            }
+            return; // No Builtin module — nothing to reshape.
+        };
+
+        const builtin = self.modules[bi];
+
+        // type short-name -> owning top-level type name (e.g. "U8" -> "Num").
+        // Keys/values are slices into the (still-live) entry names.
+        var type_to_module = std.StringHashMapUnmanaged([]const u8).empty;
+        defer type_to_module.deinit(gpa);
+        for (builtin.entries) |*entry| {
+            try registerBuiltinTypes(gpa, &type_to_module, entry, entry.name);
+        }
+
+        // One module per top-level entry; the entry (with its children) moves in.
+        var promoted = std.ArrayList(ModuleDocs).empty;
+        errdefer promoted.deinit(gpa);
+        for (builtin.entries) |entry| {
+            const entries = try gpa.alloc(DocEntry, 1);
+            entries[0] = entry; // move (shares inner allocations)
+            try promoted.append(gpa, .{
+                .name = try gpa.dupe(u8, entry.name),
+                .package_name = try gpa.dupe(u8, builtin.package_name),
+                .kind = .type_module,
+                .module_doc = null,
+                .entries = entries,
+                .source_path = if (builtin.source_path) |p| try gpa.dupe(u8, p) else null,
+                .builtin_derived = true,
+            });
+        }
+
+        // Free the old Builtin shell — its entries were moved out, so free only
+        // the backing slice, not the elements.
+        gpa.free(builtin.entries);
+        if (builtin.module_doc) |doc| gpa.free(doc);
+        if (builtin.source_path) |p| gpa.free(p);
+        gpa.free(builtin.name);
+        gpa.free(builtin.package_name);
+
+        // Rebuild the module list: everything except Builtin, plus the promoted
+        // type modules, sorted for deterministic output.
+        var rebuilt = std.ArrayList(ModuleDocs).empty;
+        errdefer rebuilt.deinit(gpa);
+        for (self.modules, 0..) |mod, i| {
+            if (i != bi) try rebuilt.append(gpa, mod);
+        }
+        try rebuilt.appendSlice(gpa, promoted.items);
+        promoted.deinit(gpa);
+        gpa.free(self.modules);
+        self.modules = try rebuilt.toOwnedSlice(gpa);
+        std.mem.sort(ModuleDocs, self.modules, {}, moduleDocsLessThan);
+
+        // Now that every type knows its owning module, rewrite references.
+        for (self.modules) |*mod| {
+            for (mod.entries) |*entry| {
+                rewriteBuiltinTypeRefs(gpa, entry, &type_to_module);
+            }
+        }
+    }
 };
+
+/// Short (final dotted segment) of a possibly-qualified name.
+fn shortTypeName(name: []const u8) []const u8 {
+    return if (std.mem.findScalarLast(u8, name, '.')) |d| name[d + 1 ..] else name;
+}
+
+/// Record every type (not value) reachable from `entry` as belonging to
+/// `owner`, so a later reference by short name resolves to the owner module.
+fn registerBuiltinTypes(
+    gpa: Allocator,
+    map: *std.StringHashMapUnmanaged([]const u8),
+    entry: *const DocEntry,
+    owner: []const u8,
+) Allocator.Error!void {
+    if (entry.kind != .value) {
+        try map.put(gpa, shortTypeName(entry.name), owner);
+    }
+    for (entry.children) |*child| {
+        try registerBuiltinTypes(gpa, map, child, owner);
+    }
+}
+
+/// Rewrite the (empty) module path of every `Builtin`-relative type reference in
+/// `entry`'s signature, and its children's, to the type's new owning module.
+fn rewriteBuiltinTypeRefs(
+    gpa: Allocator,
+    entry: *DocEntry,
+    map: *const std.StringHashMapUnmanaged([]const u8),
+) void {
+    if (entry.type_signature) |sig| rewriteDocTypeRefs(gpa, sig, map);
+    for (entry.children) |*child| {
+        rewriteBuiltinTypeRefs(gpa, child, map);
+    }
+}
+
+/// Walk a `DocType` tree (iteratively, to tolerate deeply nested types) and
+/// repoint each builtin type reference at its owning module.
+fn rewriteDocTypeRefs(
+    gpa: Allocator,
+    root: *const DocType,
+    map: *const std.StringHashMapUnmanaged([]const u8),
+) void {
+    var stack = std.ArrayList(*const DocType).empty;
+    defer stack.deinit(gpa);
+    // If we can't even push the root, there is nothing safe to do.
+    stack.append(gpa, root) catch return;
+    while (stack.pop()) |node| {
+        switch (node.*) {
+            .type_ref => |ref| {
+                if (ref.module_path.len == 0) {
+                    if (map.get(shortTypeName(ref.type_name))) |owner| {
+                        const mutable = @constCast(node);
+                        const new_path = gpa.dupe(u8, owner) catch continue;
+                        gpa.free(mutable.type_ref.module_path);
+                        mutable.type_ref.module_path = new_path;
+                    }
+                }
+            },
+            .function => |func| {
+                for (func.args) |arg| stack.append(gpa, arg) catch {};
+                stack.append(gpa, func.ret) catch {};
+            },
+            .record => |rec| {
+                if (rec.ext) |ext| stack.append(gpa, ext) catch {};
+                for (rec.fields) |field| stack.append(gpa, field.type) catch {};
+            },
+            .tag_union => |tu| {
+                if (tu.ext) |ext| stack.append(gpa, ext) catch {};
+                for (tu.tags) |tag| {
+                    for (tag.args) |arg| stack.append(gpa, arg) catch {};
+                }
+            },
+            .tuple => |tup| {
+                for (tup.elems) |elem| stack.append(gpa, elem) catch {};
+            },
+            .apply => |app| {
+                stack.append(gpa, app.constructor) catch {};
+                for (app.args) |arg| stack.append(gpa, arg) catch {};
+            },
+            .where_clause => |wc| {
+                stack.append(gpa, wc.type) catch {};
+                for (wc.constraints) |c| stack.append(gpa, c.signature) catch {};
+            },
+            .type_var, .wildcard, .@"error" => {},
+        }
+    }
+}
 
 /// Documentation for a Roc application — the app's own modules,
 /// its platform, and all dependency packages (recursively).
@@ -160,6 +324,12 @@ pub const ModuleDocs = struct {
     /// 1-based source line where `module_doc`'s first `##` line begins.
     /// Zero when there is no module doc or the line is unknown.
     module_doc_start_line: u32 = 0,
+    /// True for modules synthesized by `PackageDocs.reshapeBuiltin` — each is one
+    /// of the builtin types (`Str`, `Num`, …) promoted to a top-level module so
+    /// the `Builtin` container never appears in the docs. The renderer uses this
+    /// to strip the module-name prefix from anchors, giving bare ids like
+    /// `write_u8` instead of `Hasher.write_u8`.
+    builtin_derived: bool = false,
 
     pub fn deinit(self: *ModuleDocs, gpa: Allocator) void {
         for (self.entries) |*entry| {

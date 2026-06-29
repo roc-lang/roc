@@ -40,6 +40,8 @@ pub fn run(
     owned.stmt_ids = .empty;
     var field_exprs = owned.field_exprs;
     owned.field_exprs = .empty;
+    var fn_def_captures = owned.fn_def_captures;
+    owned.fn_def_captures = .empty;
     var record_destructs = owned.record_destructs;
     owned.record_destructs = .empty;
     const str_pattern_steps = owned.str_pattern_steps;
@@ -82,6 +84,7 @@ pub fn run(
         typed_locals,
         stmt_ids,
         field_exprs,
+        fn_def_captures,
         record_destructs,
         str_pattern_steps,
         branches,
@@ -108,6 +111,7 @@ pub fn run(
     typed_locals = undefined;
     stmt_ids = undefined;
     field_exprs = undefined;
+    fn_def_captures = undefined;
     record_destructs = undefined;
     branches = undefined;
     if_branches = undefined;
@@ -246,6 +250,8 @@ const Lifter = struct {
             Common.invariant("Monotype Lifted function was reserved but not initialized");
         }
 
+        try self.completeFunctionReferenceCaptures();
+
         for (self.source.roots.items) |root| {
             const raw = @intFromEnum(root.def);
             if (raw >= self.def_map.len) Common.invariant("Monotype root references a missing definition");
@@ -269,6 +275,40 @@ const Lifter = struct {
                 .ty = request.ty,
                 .fn_id = fn_id,
             });
+        }
+    }
+
+    fn completeFunctionReferenceCaptures(self: *Lifter) Allocator.Error!void {
+        const expr_count = self.expr_done.len;
+        for (0..expr_count) |index| {
+            if (!self.expr_done[index]) continue;
+
+            switch (self.output.exprs.items[index].data) {
+                .fn_ref => |fn_ref| {
+                    const captures = self.output.typedLocalSpan(self.output.fns.items[@intFromEnum(fn_ref.fn_id)].captures);
+                    if (captures.len == fn_ref.captures.len) continue;
+                    if (fn_ref.captures.len != 0) Common.invariant("function reference capture operands disagreed with finalized lifted captures");
+                    const expr_id: Ast.ExprId = @enumFromInt(@as(u32, @intCast(index)));
+                    self.output.exprs.items[index].data = .{ .fn_ref = .{
+                        .fn_id = fn_ref.fn_id,
+                        .captures = try self.captureExprSpanFromTypedLocals(captures, expr_id),
+                    } };
+                },
+                .call_proc => |call| {
+                    const fn_id = Ast.callProcCallee(call);
+                    const captures = self.output.typedLocalSpan(self.output.fns.items[@intFromEnum(fn_id)].captures);
+                    if (captures.len == call.captures.len) continue;
+                    if (call.captures.len != 0) Common.invariant("direct call capture operands disagreed with finalized lifted captures");
+                    const expr_id: Ast.ExprId = @enumFromInt(@as(u32, @intCast(index)));
+                    self.output.exprs.items[index].data = .{ .call_proc = .{
+                        .callee = call.callee,
+                        .args = call.args,
+                        .captures = try self.captureExprSpanFromTypedLocals(captures, expr_id),
+                        .is_cold = call.is_cold,
+                    } };
+                },
+                else => {},
+            }
         }
     }
 
@@ -320,8 +360,8 @@ const Lifter = struct {
             .expr,
             .expect,
             .dbg,
-            .return_,
             => |expr| try self.rewriteExpr(expr),
+            .return_ => |ret| try self.rewriteExpr(ret.value),
             .crash => {},
         }
     }
@@ -344,18 +384,18 @@ const Lifter = struct {
             .uninitialized_payload,
             .crash,
             .comptime_exhaustiveness_failed,
-            .fn_ref,
             => {},
+            .fn_ref => |fn_ref| for (self.output.exprSpan(fn_ref.captures)) |capture| try self.rewriteExpr(capture),
             .list,
             .tuple,
             => |items| for (self.output.exprSpan(items)) |child| try self.rewriteExpr(child),
             .record => |fields| for (self.output.fieldExprSpan(fields)) |field| try self.rewriteExpr(field.value),
             .tag => |tag| for (self.output.exprSpan(tag.payloads)) |child| try self.rewriteExpr(child),
             .nominal,
-            .return_,
             .dbg,
             .expect,
             => |child| try self.rewriteExpr(child),
+            .return_ => |ret| try self.rewriteExpr(ret.value),
             .expect_err => |expect_err| try self.rewriteExpr(expect_err.msg),
             .comptime_branch_taken => |taken| try self.rewriteExpr(taken.body),
             .let_ => |let_| {
@@ -366,10 +406,21 @@ const Lifter = struct {
             .def_ref => |def_id| {
                 const raw = @intFromEnum(def_id);
                 if (raw >= self.def_map.len) Common.invariant("Monotype definition reference was outside the definition table");
-                expr.data = .{ .fn_ref = self.def_map[raw] orelse
-                    Common.invariant("Monotype definition reference reached lifting before its function was registered") };
+                const fn_id = self.def_map[raw] orelse
+                    Common.invariant("Monotype definition reference reached lifting before its function was registered");
+                self.output.exprs.items[index].data = .{ .fn_ref = .{
+                    .fn_id = fn_id,
+                    .captures = try self.captureExprSpanForFn(fn_id, expr_id),
+                } };
             },
-            .fn_def => |fn_id| expr.data = .{ .fn_ref = self.liftedFn(fn_id) },
+            .fn_def => |fn_def| {
+                for (self.output.fnDefCaptureSpan(fn_def.captures)) |capture| try self.rewriteExpr(capture.value);
+                const lifted = self.liftedFn(fn_def.fn_id);
+                self.output.exprs.items[index].data = .{ .fn_ref = .{
+                    .fn_id = lifted,
+                    .captures = try self.fnRefCaptureExprSpanForFnDef(lifted, fn_def.captures, expr_id),
+                } };
+            },
             .call_value => |call| {
                 try self.rewriteExpr(call.callee);
                 for (self.output.exprSpan(call.args)) |arg| try self.rewriteExpr(arg);
@@ -380,9 +431,11 @@ const Lifter = struct {
                     .lifted => |fn_id| fn_id,
                 };
                 for (self.output.exprSpan(call.args)) |arg| try self.rewriteExpr(arg);
-                expr.data = .{ .call_proc = .{
+                const captures = try self.captureExprSpanForFn(fn_id, expr_id);
+                self.output.exprs.items[index].data = .{ .call_proc = .{
                     .callee = .{ .lifted = fn_id },
                     .args = call.args,
+                    .captures = captures,
                     .is_cold = call.is_cold,
                 } };
             },
@@ -439,9 +492,13 @@ const Lifter = struct {
 
     fn liftLambda(self: *Lifter, expr_id: Mono.ExprId, ty: @import("../monotype/type.zig").TypeId, lambda: Mono.LambdaExpr) Allocator.Error!void {
         const fn_id = try self.reserveFn(lambda.fn_id);
-        self.output.exprs.items[@intFromEnum(expr_id)].data = .{ .fn_ref = fn_id };
-        if (self.nested_fn_ids.contains(fn_id)) return;
-        if (self.initialized_fns.contains(fn_id)) return;
+        if (self.nested_fn_ids.contains(fn_id) or self.initialized_fns.contains(fn_id)) {
+            self.output.exprs.items[@intFromEnum(expr_id)].data = .{ .fn_ref = .{
+                .fn_id = fn_id,
+                .captures = try self.captureExprSpanForFn(fn_id, expr_id),
+            } };
+            return;
+        }
 
         try self.setFnBody(fn_id, .{ .args = lambda.args, .body = .{ .roc = lambda.body } });
 
@@ -456,6 +513,11 @@ const Lifter = struct {
         defer bound.deinit();
         try bindTypedLocals(self.output, &bound, self.output.typedLocalSpan(lambda.args));
         try captures.collectExpr(lambda.body, &bound);
+
+        self.output.exprs.items[@intFromEnum(expr_id)].data = .{ .fn_ref = .{
+            .fn_id = fn_id,
+            .captures = try self.captureExprSpanFromTypedLocals(captures.items.items, expr_id),
+        } };
 
         try self.rewriteExpr(lambda.body);
         const capture_span = try self.output.addTypedLocalSpan(captures.items.items);
@@ -607,6 +669,65 @@ const Lifter = struct {
             Common.invariant("Monotype expression referenced a function specialization before lifting registered it");
     }
 
+    fn captureExprSpanForFn(self: *Lifter, fn_id: Ast.FnId, call_expr: Mono.ExprId) Allocator.Error!Ast.Span(Ast.ExprId) {
+        return try self.captureExprSpanFromTypedLocals(self.fn_captures[@intFromEnum(fn_id)].items, call_expr);
+    }
+
+    fn captureExprSpanFromTypedLocals(self: *Lifter, captures: []const Ast.TypedLocal, call_expr: Mono.ExprId) Allocator.Error!Ast.Span(Ast.ExprId) {
+        if (captures.len == 0) return .empty();
+
+        const saved_loc = self.output.current_loc;
+        defer self.output.current_loc = saved_loc;
+        const saved_region = self.output.current_region;
+        defer self.output.current_region = saved_region;
+        self.output.current_loc = self.output.exprLoc(call_expr);
+        self.output.current_region = self.output.exprRegion(call_expr);
+
+        const exprs = try self.allocator.alloc(Ast.ExprId, captures.len);
+        defer self.allocator.free(exprs);
+        for (captures, 0..) |capture, index| {
+            exprs[index] = try self.output.addExpr(.{
+                .ty = capture.ty,
+                .data = .{ .local = capture.local },
+            });
+        }
+        return try self.output.addExprSpan(exprs);
+    }
+
+    fn fnRefCaptureExprSpanForFnDef(
+        self: *Lifter,
+        fn_id: Ast.FnId,
+        explicit_span: Ast.Span(Ast.FnDefCapture),
+        call_expr: Mono.ExprId,
+    ) Allocator.Error!Ast.Span(Ast.ExprId) {
+        if (explicit_span.len == 0) return try self.captureExprSpanForFn(fn_id, call_expr);
+
+        const captures = self.fn_captures[@intFromEnum(fn_id)].items;
+        if (captures.len == 0) return .empty();
+
+        const saved_loc = self.output.current_loc;
+        defer self.output.current_loc = saved_loc;
+        const saved_region = self.output.current_region;
+        defer self.output.current_region = saved_region;
+        self.output.current_loc = self.output.exprLoc(call_expr);
+        self.output.current_region = self.output.exprRegion(call_expr);
+
+        const explicit = self.output.fnDefCaptureSpan(explicit_span);
+        const exprs = try self.allocator.alloc(Ast.ExprId, captures.len);
+        defer self.allocator.free(exprs);
+        for (captures, 0..) |capture, index| {
+            if (explicitFnDefCaptureValue(self.output, explicit, capture.local)) |value| {
+                exprs[index] = value;
+            } else {
+                exprs[index] = try self.output.addExpr(.{
+                    .ty = capture.ty,
+                    .data = .{ .local = capture.local },
+                });
+            }
+        }
+        return try self.output.addExprSpan(exprs);
+    }
+
     fn defSource(self: *Lifter, mono_fn_id: Mono.FnId, expected: ?Mono.FnTemplate) ?Mono.FnTemplate {
         const source = self.source.fnSource(mono_fn_id);
         if (expected) |template| {
@@ -684,6 +805,18 @@ const BoundSet = struct {
     }
 };
 
+fn explicitFnDefCaptureValue(program: *const Ast.Program, captures: []const Ast.FnDefCapture, local: Ast.LocalId) ?Ast.ExprId {
+    const target_binder = program.locals.items[@intFromEnum(local)].binder;
+    for (captures) |capture| {
+        if (capture.local == local) return capture.value;
+        const capture_binder = program.locals.items[@intFromEnum(capture.local)].binder;
+        if (target_binder != null and capture_binder != null and target_binder.? == capture_binder.?) {
+            return capture.value;
+        }
+    }
+    return null;
+}
+
 const CaptureSet = struct {
     allocator: Allocator,
     lifter: *Lifter,
@@ -743,18 +876,26 @@ const CaptureSet = struct {
             .crash,
             .comptime_exhaustiveness_failed,
             => {},
-            .fn_ref => |fn_id| try self.collectFnCaptures(fn_id, bound),
-            .fn_def => |fn_id| try self.collectFnCaptures(self.lifter.liftedFn(fn_id), bound),
+            .fn_ref => |fn_ref| for (input.exprSpan(fn_ref.captures)) |capture| try self.collectExpr(capture, bound),
+            .fn_def => |fn_def| {
+                const explicit = input.fnDefCaptureSpan(fn_def.captures);
+                if (explicit.len == 0) {
+                    try self.collectFnCaptures(self.lifter.liftedFn(fn_def.fn_id), bound);
+                } else {
+                    try self.collectFnCapturesExceptExplicit(self.lifter.liftedFn(fn_def.fn_id), explicit, bound);
+                    for (explicit) |capture| try self.collectExpr(capture.value, bound);
+                }
+            },
             .list,
             .tuple,
             => |items| for (input.exprSpan(items)) |child| try self.collectExpr(child, bound),
             .record => |fields| for (input.fieldExprSpan(fields)) |field| try self.collectExpr(field.value, bound),
             .tag => |tag| for (input.exprSpan(tag.payloads)) |child| try self.collectExpr(child, bound),
             .nominal,
-            .return_,
             .dbg,
             .expect,
             => |child| try self.collectExpr(child, bound),
+            .return_ => |ret| try self.collectExpr(ret.value, bound),
             .expect_err => |expect_err| try self.collectExpr(expect_err.msg, bound),
             .comptime_branch_taken => |taken| try self.collectExpr(taken.body, bound),
             .let_ => |let_| {
@@ -782,6 +923,7 @@ const CaptureSet = struct {
                     .lifted => |fn_id| try self.collectFnCaptures(fn_id, bound),
                 }
                 for (input.exprSpan(call.args)) |arg| try self.collectExpr(arg, bound);
+                for (input.exprSpan(call.captures)) |capture| try self.collectExpr(capture, bound);
             },
             .low_level => |call| for (input.exprSpan(call.args)) |arg| try self.collectExpr(arg, bound),
             .field_access => |field| try self.collectExpr(field.receiver, bound),
@@ -871,6 +1013,21 @@ const CaptureSet = struct {
         }
     }
 
+    fn collectFnCapturesExceptExplicit(
+        self: *CaptureSet,
+        fn_id: Ast.FnId,
+        explicit: []const Ast.FnDefCapture,
+        caller_bound: *BoundSet,
+    ) Allocator.Error!void {
+        const raw = @intFromEnum(fn_id);
+        if (raw >= self.lifter.fn_captures.len) Common.invariant("capture collection referenced a function without a solved capture set");
+        if (self.edges) |sink| try sink.append(self.allocator, fn_id);
+        for (self.lifter.fn_captures[raw].items) |capture| {
+            if (explicitFnDefCaptureValue(self.lifter.output, explicit, capture.local) != null) continue;
+            try self.addIfFree(capture.local, caller_bound);
+        }
+    }
+
     fn collectStmt(self: *CaptureSet, input: *const Ast.Program, stmt_id: Mono.StmtId, bound: *BoundSet, added: *std.ArrayList(Mono.LocalId)) Allocator.Error!void {
         switch (input.stmts.items[@intFromEnum(stmt_id)]) {
             .uninitialized => |pat| try bindPat(self.allocator, input, pat, bound, added),
@@ -886,8 +1043,8 @@ const CaptureSet = struct {
             .expr,
             .expect,
             .dbg,
-            .return_,
             => |expr| try self.collectExpr(expr, bound),
+            .return_ => |ret| try self.collectExpr(ret.value, bound),
             .crash => {},
         }
     }

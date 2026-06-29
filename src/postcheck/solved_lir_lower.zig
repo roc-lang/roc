@@ -104,19 +104,19 @@ pub const Output = struct {
     }
 };
 
-/// Options used by solved-to-LIR lowering.
-pub const DebugEffectMode = enum {
+/// Whether inline expects should materialize during lowering.
+pub const InlineExpectMode = enum {
     run,
-    erase,
+    omit,
 };
 
 /// Configuration for direct solved-to-LIR lowering.
 pub const Options = struct {
     inline_plan: SolvedInline.Plan = .{},
-    /// Whether inline `dbg` and `expect` are lowered into runtime statements.
-    /// Compile-time finalization and tests leave this enabled; optimized
-    /// runtime builds erase these effects before LIR reaches any backend.
-    debug_effects: DebugEffectMode = .run,
+    /// Whether inline `expect` is lowered into runtime statements. Compile-time
+    /// finalization and tests leave this enabled; optimized runtime builds omit
+    /// inline expects before LIR reaches any backend.
+    inline_expects: InlineExpectMode = .run,
     /// Allow `List.map` to reuse a unique input list's allocation for its
     /// output when the input and output element layouts are interchangeable.
     /// When disabled, `list_map_can_reuse` lowers to a constant 0 and the
@@ -264,7 +264,7 @@ const Lowerer = struct {
     fn_reachable: std.ArrayList(bool),
     fn_reach_queue: std.ArrayList(Type.FnId),
     inline_plan: SolvedInline.Plan,
-    debug_effects: DebugEffectMode,
+    inline_expects: InlineExpectMode,
     list_in_place_map: bool,
     proc_debug_names: bool,
     /// Match sites statically resolved by `foldListMapCanReuseMatch`,
@@ -326,7 +326,7 @@ const Lowerer = struct {
             .fn_reachable = .empty,
             .fn_reach_queue = .empty,
             .inline_plan = options.inline_plan,
-            .debug_effects = options.debug_effects,
+            .inline_expects = options.inline_expects,
             .list_in_place_map = options.list_in_place_map,
             .proc_debug_names = options.proc_debug_names,
             .folded_map_matches = .empty,
@@ -522,6 +522,7 @@ const Lowerer = struct {
                 const proc = self.result.store.getProcSpecPtr(proc_id);
                 proc.body = body;
                 proc.frame_locals = frame_locals;
+                proc.stack_probe = self.stackProbeForProc(proc.args, proc.frame_locals, proc.ret_layout);
             },
             .hosted => {
                 if (self.result.store.getProcSpec(proc_id).hosted == null) {
@@ -682,13 +683,16 @@ const Lowerer = struct {
             .roc => |body_id| self.solved.lifted.exprRegion(body_id),
             .hosted => base.Region.zero(),
         };
+        const args_span = try self.result.store.addLocalSpan(arg_locals);
+        const ret_layout = try self.layoutOfType(entry.ret);
         const proc = try self.result.store.addProcSpec(.{
             .name = lirSymbol(entry.symbol),
-            .args = try self.result.store.addLocalSpan(arg_locals),
+            .args = args_span,
             .body = null,
-            .ret_layout = try self.layoutOfType(entry.ret),
+            .ret_layout = ret_layout,
             .abi = if (spec.abi == .erased) .erased_callable else .roc,
             .hosted = try self.hostedProcForSource(source_fn.source),
+            .stack_probe = self.stackProbeForProc(args_span, LIR.LocalSpan.empty(), ret_layout),
         });
         if (self.proc_debug_names) {
             if (self.solved.lifted.procDebugName(source_fn.symbol)) |name| {
@@ -731,10 +735,6 @@ const Lowerer = struct {
             return try self.lowerCaptureBindingInto(target, capture, next);
         }
         return try self.assignLocal(target, try self.localForTyped(local, ty), next);
-    }
-
-    fn lowerCapturedLocalInto(self: *Lowerer, target: LIR.LocalId, local: Lifted.LocalId, ty: Type.TypeId, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
-        return try self.lowerLocalInto(target, local, ty, next);
     }
 
     fn lowerCaptureBindingInto(self: *Lowerer, target: LIR.LocalId, capture: CaptureBinding, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
@@ -1013,6 +1013,13 @@ const Lowerer = struct {
         }
         std.mem.sort(LIR.LocalId, sorted, {}, localIdLessThan);
         return try self.result.store.addLocalSpan(sorted);
+    }
+
+    fn stackProbeForProc(self: *Lowerer, args: LIR.LocalSpan, frame_locals: LIR.LocalSpan, ret_layout: layout.Idx) LIR.StackProbe {
+        if (self.result.store.localSpanNeedsStackProbe(&self.result.layouts, args)) return .required;
+        if (self.result.store.localSpanNeedsStackProbe(&self.result.layouts, frame_locals)) return .required;
+        if (LIR.layoutNeedsStackProbe(&self.result.layouts, ret_layout)) return .required;
+        return .default;
     }
 
     fn localIdLessThan(_: void, a: LIR.LocalId, b: LIR.LocalId) bool {
@@ -1377,9 +1384,9 @@ const Lowerer = struct {
         errdefer if (clone_owned) solved_clone.deinit();
 
         var materialized = try LambdaMonoLower.run(self.allocator, solved_clone, self.folded_map_matches.items, .{
-            .debug_effects = switch (self.debug_effects) {
+            .inline_expects = switch (self.inline_expects) {
                 .run => .run,
-                .erase => .erase,
+                .omit => .omit,
             },
         });
         clone_owned = false;
@@ -1558,10 +1565,17 @@ const Lowerer = struct {
             .def_ref,
             .fn_def,
             => Common.invariant("pre-lift function expression reached direct LIR lowering"),
-            .fn_ref => |fn_id| try self.lowerFnRefInto(target, expr_id, fn_id, next),
+            .fn_ref => |fn_ref| try self.lowerFnRefInto(target, expr_id, fn_ref.fn_id, self.solved.lifted.exprSpan(fn_ref.captures), next),
             .nominal => |backing| try self.lowerNominalInto(target, expr_ty, backing, next),
             .let_ => |let_| try self.lowerLetInto(target, let_, next),
-            .call_proc => |call| try self.lowerDirectProcCallInto(target, Lifted.callProcCallee(call), self.solved.lifted.exprSpan(call.args), call.is_cold, next),
+            .call_proc => |call| try self.lowerDirectProcCallInto(
+                target,
+                Lifted.callProcCallee(call),
+                self.solved.lifted.exprSpan(call.args),
+                self.solved.lifted.exprSpan(call.captures),
+                call.is_cold,
+                next,
+            ),
             .call_value => |call| try self.lowerValueCallInto(target, call.callee, self.solved.lifted.exprSpan(call.args), next),
             .low_level => |call| try self.lowerLowLevelInto(target, call.op, call.args, next),
             .field_access => |field| try self.lowerFieldAccessInto(target, field.receiver, field.field, next),
@@ -1577,7 +1591,7 @@ const Lowerer = struct {
             .loop_ => |loop| try self.lowerLoopInto(target, loop, next),
             .break_ => |value| try self.lowerBreak(value),
             .continue_ => |continue_| try self.lowerContinue(continue_.values),
-            .return_ => |value| try self.lowerReturn(value),
+            .return_ => |ret| try self.lowerReturn(ret),
             .crash => |msg| try self.result.store.addCFStmt(.{ .crash = .{
                 .msg = try self.result.store.insertString(self.stringLiteralText(msg)),
             } }),
@@ -1590,7 +1604,6 @@ const Lowerer = struct {
                 .site = try self.lowerComptimeSite(site),
             } }),
             .dbg => |child| blk: {
-                if (self.debug_effects == .erase) break :blk try self.assignZst(target, next);
                 const after_dbg = try self.assignZst(target, next);
                 const message = try self.addTemp(try self.lowerExprTy(child));
                 const debug_stmt = try self.result.store.addCFStmt(.{ .debug = .{ .message = message, .next = after_dbg } });
@@ -1604,7 +1617,7 @@ const Lowerer = struct {
                 } });
                 break :blk try self.lowerExprInto(message, expect_err.msg, expect_err_stmt);
             },
-            .expect => |child| if (self.debug_effects == .erase)
+            .expect => |child| if (self.inline_expects == .omit)
                 try self.assignZst(target, next)
             else
                 try self.lowerExpectExprInto(target, child, next),
@@ -1699,10 +1712,12 @@ const Lowerer = struct {
         return current;
     }
 
-    fn lowerCaptureRecordFromCapturesInto(
+    fn lowerCaptureRecordFromCaptureExprsInto(
         self: *Lowerer,
         target: LIR.LocalId,
+        fn_id: Lifted.FnId,
         capture_span: SolvedType.Span,
+        capture_exprs: []const Lifted.ExprId,
         capture_ty: Type.TypeId,
         next: LIR.CFStmtId,
     ) Common.LowerError!LIR.CFStmtId {
@@ -1712,6 +1727,9 @@ const Lowerer = struct {
             else => Common.invariant("callable capture payload was not a capture record"),
         };
         if (captures.len != fields.len) Common.invariant("callable capture payload arity differed from captured locals");
+        if (self.solved.lifted.typedLocalSpan(self.solved.lifted.fns.items[@intFromEnum(fn_id)].captures).len != capture_exprs.len) {
+            Common.invariant("function reference capture operand count differed from lifted function captures");
+        }
 
         const expr_locals = try self.allocator.alloc(LIR.LocalId, captures.len);
         defer self.allocator.free(expr_locals);
@@ -1755,9 +1773,27 @@ const Lowerer = struct {
                     current,
                 );
             }
-            current = try self.lowerCapturedLocalInto(expr_locals[i], captures[i].local, fields[i].ty, current);
+            current = if (self.captureExprForMemberCapture(fn_id, capture_exprs, captures[i])) |capture_expr|
+                try self.lowerExprInto(expr_locals[i], capture_expr, current)
+            else
+                try self.lowerLocalInto(expr_locals[i], captures[i].local, fields[i].ty, current);
         }
         return current;
+    }
+
+    fn captureExprForMemberCapture(
+        self: *Lowerer,
+        fn_id: Lifted.FnId,
+        capture_exprs: []const Lifted.ExprId,
+        member_capture: SolvedType.Capture,
+    ) ?Lifted.ExprId {
+        const fn_captures = self.solved.lifted.typedLocalSpan(self.solved.lifted.fns.items[@intFromEnum(fn_id)].captures);
+        for (fn_captures, capture_exprs) |fn_capture, capture_expr| {
+            if (fn_capture.local == member_capture.local) return capture_expr;
+            const fn_binder = self.solved.lifted.locals.items[@intFromEnum(fn_capture.local)].binder;
+            if (fn_binder != null and member_capture.binder != null and fn_binder.? == member_capture.binder.?) return capture_expr;
+        }
+        return null;
     }
 
     fn lowerRecordInto(
@@ -1860,7 +1896,62 @@ const Lowerer = struct {
         backing_layout: layout.Idx,
         next: LIR.CFStmtId,
     ) Common.LowerError!LIR.CFStmtId {
-        return try self.assignBoxBoundary(target, backing_local, backing_layout, next);
+        const target_layout = self.result.store.getLocal(target).layout_idx;
+        if (target_layout == backing_layout) return try self.assignLocal(target, backing_local, next);
+
+        const target_content = self.result.layouts.getLayout(target_layout);
+        const backing_content = self.result.layouts.getLayout(backing_layout);
+
+        if (target_content.tag == .box and self.result.layouts.getLayout(target_content.getIdx()).eql(backing_content)) {
+            return try self.assignUnaryLowLevel(target, .box_box, backing_local, next);
+        }
+        if (target_content.tag == .box_of_zst and self.result.layouts.isZeroSized(backing_content)) {
+            return try self.assignUnaryLowLevel(target, .box_box, backing_local, next);
+        }
+        if (backing_content.tag == .box and self.result.layouts.getLayout(backing_content.getIdx()).eql(target_content)) {
+            return try self.assignUnaryLowLevel(target, .box_unbox, backing_local, next);
+        }
+        if (backing_content.tag == .box_of_zst and self.result.layouts.isZeroSized(target_content)) {
+            return try self.assignUnaryLowLevel(target, .box_unbox, backing_local, next);
+        }
+
+        if (self.isZstLocal(target)) {
+            if (!self.isZstLocal(backing_local)) {
+                Common.invariant("nominal boundary tried to store non-zero-sized source into zero-sized target");
+            }
+            return try self.assignZst(target, next);
+        }
+
+        const target_is_box = target_content.tag == .box or target_content.tag == .box_of_zst;
+        const backing_is_box = backing_content.tag == .box or backing_content.tag == .box_of_zst;
+        const target_is_erased_ptr = target_content.tag == .scalar and target_content.getScalar().tag == .opaque_ptr;
+        const backing_is_erased_ptr = backing_content.tag == .scalar and backing_content.getScalar().tag == .opaque_ptr;
+        const target_is_list = target_content.tag == .list or target_content.tag == .list_of_zst;
+        const backing_is_list = backing_content.tag == .list or backing_content.tag == .list_of_zst;
+        const boxing_compatible =
+            (target_is_box == backing_is_box) or
+            (target_is_box and backing_is_erased_ptr) or
+            (backing_is_box and target_is_erased_ptr);
+        if ((target_is_box or backing_is_box or target_is_erased_ptr or backing_is_erased_ptr) and boxing_compatible and !target_is_list and !backing_is_list) {
+            return try self.result.store.addCFStmt(.{ .assign_ref = .{
+                .target = target,
+                .op = .{ .nominal = .{ .backing_ref = backing_local } },
+                .next = next,
+            } });
+        }
+
+        if (@import("builtin").mode == .Debug) {
+            std.debug.panic(
+                "postcheck invariant violated: LIR lowering expected nominal layouts to stay on one side of layout boxing, target={d} ({s}) source={d} ({s})",
+                .{
+                    @intFromEnum(target_layout),
+                    @tagName(target_content.tag),
+                    @intFromEnum(backing_layout),
+                    @tagName(backing_content.tag),
+                },
+            );
+        }
+        unreachable;
     }
 
     fn assignBoxBoundary(
@@ -1980,24 +2071,28 @@ const Lowerer = struct {
         target: LIR.LocalId,
         expr_id: Lifted.ExprId,
         fn_id: Lifted.FnId,
+        capture_exprs: []const Lifted.ExprId,
         next: LIR.CFStmtId,
     ) Common.LowerError!LIR.CFStmtId {
         const ty = try self.lowerExprTy(expr_id);
         const captures = self.memberCapturesForExpr(expr_id, fn_id);
+        if (self.solved.lifted.typedLocalSpan(self.solved.lifted.fns.items[@intFromEnum(fn_id)].captures).len != capture_exprs.len) {
+            Common.invariant("function reference capture operand count differed from lifted function captures");
+        }
         const fn_symbol = self.solved.lifted.fns.items[@intFromEnum(fn_id)].symbol;
         return switch (self.types.get(ty)) {
             .callable => |variants_span| blk: {
                 const variants = self.types.fnVariantSpan(variants_span);
                 for (variants, 0..) |variant, variant_index| {
                     if (variant.source != fn_symbol) continue;
-                    break :blk try self.lowerFiniteCallableValueInto(target, @intCast(variant_index), captures, variant.capture_ty, next);
+                    break :blk try self.lowerFiniteCallableValueInto(target, @intCast(variant_index), fn_id, captures, capture_exprs, variant.capture_ty, next);
                 }
                 Common.invariant("finite callable type did not contain referenced function");
             },
             .erased_fn => |erased| blk: {
                 for (self.types.fnVariantSpan(erased.members)) |variant| {
                     if (variant.source != fn_symbol) continue;
-                    break :blk try self.lowerPackedErasedFnInto(target, variant.target, captures, variant.capture_ty, next);
+                    break :blk try self.lowerPackedErasedFnInto(target, variant.target, fn_id, captures, capture_exprs, variant.capture_ty, next);
                 }
                 Common.invariant("erased callable type did not contain referenced function");
             },
@@ -2009,11 +2104,16 @@ const Lowerer = struct {
         self: *Lowerer,
         target: LIR.LocalId,
         variant_index: u16,
+        lifted_fn_id: Lifted.FnId,
         captures: SolvedType.Span,
+        capture_exprs: []const Lifted.ExprId,
         capture_ty: ?Type.TypeId,
         next: LIR.CFStmtId,
     ) Common.LowerError!LIR.CFStmtId {
         if (capture_ty) |payload_ty| {
+            if (self.solved.lifted.typedLocalSpan(self.solved.lifted.fns.items[@intFromEnum(lifted_fn_id)].captures).len != capture_exprs.len) {
+                Common.invariant("finite callable capture operand count differed from lifted function captures");
+            }
             const payload = try self.addTemp(payload_ty);
             if (self.isZstLocal(target) and !self.isZstLocal(payload)) {
                 Common.invariant("zero-sized callable layout had a non-zero-sized payload");
@@ -2028,8 +2128,9 @@ const Lowerer = struct {
                     .payload = payload,
                     .next = next,
                 } });
-            return try self.lowerCaptureRecordFromCapturesInto(payload, captures, payload_ty, assign);
+            return try self.lowerCaptureRecordFromCaptureExprsInto(payload, lifted_fn_id, captures, capture_exprs, payload_ty, assign);
         }
+        if (capture_exprs.len != 0) Common.invariant("finite callable without capture payload carried capture operands");
         if (self.isZstLocal(target)) return try self.assignZst(target, next);
         return try self.result.store.addCFStmt(.{ .assign_tag = .{
             .target = target,
@@ -2044,10 +2145,15 @@ const Lowerer = struct {
         self: *Lowerer,
         target: LIR.LocalId,
         fn_id: Type.FnId,
+        lifted_fn_id: Lifted.FnId,
         captures: SolvedType.Span,
+        capture_exprs: []const Lifted.ExprId,
         capture_ty: ?Type.TypeId,
         next: LIR.CFStmtId,
     ) Common.LowerError!LIR.CFStmtId {
+        if (self.solved.lifted.typedLocalSpan(self.solved.lifted.fns.items[@intFromEnum(lifted_fn_id)].captures).len != capture_exprs.len) {
+            Common.invariant("erased callable capture operand count differed from lifted function captures");
+        }
         const capture = if (capture_ty) |ty| try self.addTemp(ty) else null;
         const capture_layout = if (capture) |local| self.result.store.getLocal(local).layout_idx else null;
         const on_drop: LIR.ErasedCallableOnDrop = if (capture_layout) |layout_idx| blk: {
@@ -2066,7 +2172,8 @@ const Lowerer = struct {
             .on_drop = on_drop,
             .next = next,
         } });
-        if (capture_ty) |ty| return try self.lowerCaptureRecordFromCapturesInto(capture.?, captures, ty, assign);
+        if (capture_ty) |ty| return try self.lowerCaptureRecordFromCaptureExprsInto(capture.?, lifted_fn_id, captures, capture_exprs, ty, assign);
+        if (capture_exprs.len != 0) Common.invariant("erased callable without capture payload carried capture operands");
         return assign;
     }
 
@@ -2075,18 +2182,21 @@ const Lowerer = struct {
         target: LIR.LocalId,
         callee: Lifted.FnId,
         args: []const Lifted.ExprId,
+        capture_exprs: []const Lifted.ExprId,
         is_cold: bool,
         next: LIR.CFStmtId,
     ) Common.LowerError!LIR.CFStmtId {
         const target_fn = try self.ensureOwnFnSpec(callee, .finite);
         const captures = self.capturesForFn(callee);
         if (captures.len == 0) {
+            if (capture_exprs.len != 0) Common.invariant("direct call carried capture operands for a capture-free callee");
             return try self.lowerKnownCallInto(target, target_fn, args, null, is_cold, next);
         }
+        if (captures.len != capture_exprs.len) Common.invariant("direct call capture operand count differed from callee capture count");
         const capture_ty = try self.captureRecordType(captures);
         const capture_local = try self.addTemp(capture_ty);
         const call = try self.lowerKnownCallInto(target, target_fn, args, capture_local, is_cold, next);
-        return try self.lowerCaptureRecordFromCapturesInto(capture_local, captures, capture_ty, call);
+        return try self.lowerCaptureRecordFromCaptureExprsInto(capture_local, callee, captures, capture_exprs, capture_ty, call);
     }
 
     fn lowerKnownCallInto(
@@ -2222,7 +2332,10 @@ const Lowerer = struct {
     ) Common.LowerError!LIR.CFStmtId {
         const callee = try self.addTemp(try self.lowerExprTy(callee_expr));
         const done = self.freshJoinPointId();
-        const variants = self.types.fnVariantSpan(variants_span);
+        // Branch lowering can lower argument types that append more variants to
+        // self.types, so keep this iteration independent of the store backing.
+        const variants = try self.allocator.dupe(Type.FnVariant, self.types.fnVariantSpan(variants_span));
+        defer self.allocator.free(variants);
         var current = try self.result.store.addCFStmt(.{ .runtime_error = {} });
         var i = variants.len;
         while (i > 0) {
@@ -2274,18 +2387,37 @@ const Lowerer = struct {
             .box_box,
             .box_unbox,
             => return try self.lowerBoxBoundaryLowLevelInto(target, op, args, next),
-            .list_map_can_reuse => if (!try self.listMapLayoutsInterchangeable(args)) {
-                // Reuse is statically impossible (or disabled), so the
-                // runtime uniqueness check never needs to run. The op's
-                // arguments are pure local reads, so dropping them is safe.
-                return try self.result.store.addCFStmt(.{ .assign_literal = .{
+            .list_map_can_reuse => {
+                const interchangeable = try self.listMapLayoutsInterchangeable(args);
+                if (!interchangeable.get(.u32) and !interchangeable.get(.u64)) {
+                    // Reuse is statically impossible (or disabled) on every
+                    // width, so the runtime uniqueness check never needs to
+                    // run. The op's arguments are pure local reads, so dropping
+                    // them is safe.
+                    return try self.result.store.addCFStmt(.{ .assign_literal = .{
+                        .target = target,
+                        .value = .{ .i64_literal = .{
+                            .value = 0,
+                            .layout_idx = self.result.store.getLocal(target).layout_idx,
+                        } },
+                        .next = next,
+                    } });
+                }
+                // Reuse is possible on at least one width; carry the per-width
+                // bits so codegen forces a constant 0 on any width where the
+                // layouts are not interchangeable.
+                const lowered = try self.lowerExprsToTemps(args);
+                defer self.allocator.free(lowered.ids);
+                var current = try self.result.store.addCFStmt(.{ .assign_low_level = .{
                     .target = target,
-                    .value = .{ .i64_literal = .{
-                        .value = 0,
-                        .layout_idx = self.result.store.getLocal(target).layout_idx,
-                    } },
+                    .op = op,
+                    .rc_effect = op.rcEffect(),
+                    .args = try self.result.store.addLocalSpan(lowered.ids),
+                    .interchangeable = interchangeable,
                     .next = next,
                 } });
+                current = try self.prependExprs(lowered, current);
+                return current;
             },
             else => {},
         }
@@ -2312,23 +2444,25 @@ const Lowerer = struct {
         return current;
     }
 
-    /// Compile-time half of the `list_map_can_reuse` decision. Returns true
-    /// when the input and output element layouts of a `List.map` call are
-    /// interchangeable in one allocation, meaning the same element stride,
-    /// the same allocation alignment class, and the same refcounted-elements
-    /// header shape — in that case the runtime uniqueness check decides.
-    /// Returns false when reuse is statically impossible or disabled, in
-    /// which case the op lowers to a constant 0.
-    fn listMapLayoutsInterchangeable(self: *Lowerer, args: []const Lifted.ExprId) Common.LowerError!bool {
+    /// Compile-time half of the `list_map_can_reuse` decision, computed for
+    /// both pointer widths. A width's bit is true when the input and output
+    /// element layouts of a `List.map` call are interchangeable in one
+    /// allocation on that width — same element stride, same allocation
+    /// alignment class, and same refcounted-elements header shape — in which
+    /// case the runtime uniqueness check decides at that width. A false bit
+    /// means reuse is statically impossible (or the optimization is disabled)
+    /// on that width, so the op resolves to a constant 0 there. Both bits are
+    /// stored so the lowered op is target-independent: codegen selects the bit
+    /// for the width it is building.
+    fn listMapLayoutsInterchangeable(self: *Lowerer, args: []const Lifted.ExprId) Common.LowerError!layout.WidthValues(bool) {
+        const none = layout.WidthValues(bool).both(false, false);
         if (args.len != 2) Common.invariant("list_map_can_reuse reached LIR lowering with the wrong arity");
-        if (!self.list_in_place_map) return false;
+        if (!self.list_in_place_map) return none;
 
         const list_layout_idx = try self.layoutOfType(try self.lowerExprTy(args[0]));
         const list_layout = self.result.layouts.getLayout(list_layout_idx);
-        // A list of zero-sized elements has no allocation to reuse.
-        if (list_layout.tag != .list) return false;
-        const in_abi = self.result.layouts.builtinListAbi(list_layout_idx);
-        if (in_abi.elem_size == 0) return false;
+        if (list_layout.tag != .list) return none;
+        const in_elem_idx = self.result.layouts.runtimeRepresentationLayoutIdx(list_layout.getIdx());
 
         const transform_ty = self.solved.expr_tys.items[@intFromEnum(args[1])];
         const transform_root = self.solved.types.root(transform_ty);
@@ -2339,21 +2473,41 @@ const Lowerer = struct {
         const out_elem_idx = self.result.layouts.runtimeRepresentationLayoutIdx(
             try self.layoutOfType(try self.lowerType(out_ret)),
         );
-        const out_elem = self.result.layouts.getLayout(out_elem_idx);
 
-        if (self.result.layouts.layoutSize(out_elem) != in_abi.elem_size) return false;
+        return layout.WidthValues(bool).both(
+            self.listMapInterchangeableAtWidth(in_elem_idx, out_elem_idx, .u32),
+            self.listMapInterchangeableAtWidth(in_elem_idx, out_elem_idx, .u64),
+        );
+    }
+
+    /// Whether the input and output element layouts share one allocation at the
+    /// given pointer width. See `listMapLayoutsInterchangeable`.
+    fn listMapInterchangeableAtWidth(
+        self: *Lowerer,
+        in_elem_idx: layout.Idx,
+        out_elem_idx: layout.Idx,
+        target_usize: base.target.TargetUsize,
+    ) bool {
+        const layouts = &self.result.layouts;
+        const in_elem = layouts.getLayout(in_elem_idx);
+        // A list of zero-sized elements has no allocation to reuse.
+        const in_size = layouts.sizeAt(in_elem, target_usize);
+        if (in_size == 0) return false;
+
+        const out_elem = layouts.getLayout(out_elem_idx);
+        if (layouts.sizeAt(out_elem, target_usize) != in_size) return false;
 
         // The allocation's hidden header and the alignment passed to the
         // allocator both derive from max(ptr_width, element alignment) and
         // from whether elements are refcounted (which reserves an extra
         // element-count slot for seamless slices). Both must agree or a
         // later free would compute the wrong allocation pointer.
-        const target_usize = self.result.layouts.targetUsize();
         const ptr_width = target_usize.size();
+        const in_alignment: u32 = @intCast(in_elem.alignment(target_usize).toByteUnits());
         const out_alignment: u32 = @intCast(out_elem.alignment(target_usize).toByteUnits());
-        if (@max(ptr_width, in_abi.elem_alignment) != @max(ptr_width, out_alignment)) return false;
+        if (@max(ptr_width, in_alignment) != @max(ptr_width, out_alignment)) return false;
 
-        if (in_abi.contains_refcounted != self.result.layouts.layoutContainsRefcounted(out_elem)) return false;
+        if (layouts.layoutContainsRefcounted(in_elem) != layouts.layoutContainsRefcounted(out_elem)) return false;
 
         return true;
     }
@@ -2904,8 +3058,10 @@ const Lowerer = struct {
     ) Common.LowerError!?LIR.CFStmtId {
         const match = self.solved.lifted.listMapCanReuseMatch(scrutinee, branches_span) orelse return null;
         const args = self.solved.lifted.exprSpan(match.call_args);
-        if (self.list_in_place_map and try self.listMapLayoutsInterchangeable(args)) {
-            // Reuse is possible; the runtime uniqueness check decides.
+        const interchangeable = try self.listMapLayoutsInterchangeable(args);
+        if (interchangeable.get(.u32) or interchangeable.get(.u64)) {
+            // Reuse is possible on at least one width; keep the match so each
+            // backend can decide per the width it is building.
             return null;
         }
         if (builtin.mode == .Debug) {
@@ -3163,14 +3319,13 @@ const Lowerer = struct {
                 const temp = try self.addTemp(try self.lowerExprTy(expr_id));
                 break :blk try self.lowerExprInto(temp, expr_id, next);
             },
-            .expect => |expr_id| if (self.debug_effects == .erase) next else try self.lowerExpectStmt(expr_id, next),
+            .expect => |expr_id| if (self.inline_expects == .omit) next else try self.lowerExpectStmt(expr_id, next),
             .dbg => |expr_id| blk: {
-                if (self.debug_effects == .erase) break :blk next;
                 const temp = try self.addTemp(try self.lowerExprTy(expr_id));
                 const debug_stmt = try self.result.store.addCFStmt(.{ .debug = .{ .message = temp, .next = next } });
                 break :blk try self.lowerExprInto(temp, expr_id, debug_stmt);
             },
-            .return_ => |expr_id| try self.lowerReturn(expr_id),
+            .return_ => |ret| try self.lowerReturn(ret),
             .crash => |msg| try self.result.store.addCFStmt(.{ .crash = .{
                 .msg = try self.result.store.insertString(self.stringLiteralText(msg)),
             } }),
@@ -3350,11 +3505,11 @@ const Lowerer = struct {
         return jump;
     }
 
-    fn lowerReturn(self: *Lowerer, expr_id: Lifted.ExprId) Common.LowerError!LIR.CFStmtId {
+    fn lowerReturn(self: *Lowerer, ret: Mono.Return) Common.LowerError!LIR.CFStmtId {
         const ret_ty = self.current_ret_ty orelse Common.invariant("return expression reached LIR lowering outside a function");
         const ret_local = try self.addTemp(ret_ty);
         const ret_stmt = try self.result.store.addCFStmt(.{ .ret = .{ .value = ret_local } });
-        return try self.lowerExprInto(ret_local, expr_id, ret_stmt);
+        return try self.lowerExprInto(ret_local, ret.value, ret_stmt);
     }
 
     fn lowerExpectExprInto(self: *Lowerer, target: LIR.LocalId, child: Lifted.ExprId, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
@@ -3523,7 +3678,7 @@ const Lowerer = struct {
             .record => |fields| try self.lowerRecordPatternThen(pat_ty, fields, source, on_match, miss, continuation),
             .tuple => |items| try self.lowerTuplePatternThen(items, source, on_match, miss, continuation),
             .list => |list| try self.lowerListPatternThen(list, source, on_match, miss, continuation),
-            .nominal => |inner| try self.lowerPatternThen(inner, source, on_match, miss, continuation),
+            .nominal => |inner| try self.lowerNominalPatternThen(pat_ty, inner, source, on_match, miss, continuation),
             .tag => |tag| try self.lowerTagPatternThen(pat_ty, tag.name, tag.payloads, source, on_match, miss, continuation),
             .int_lit => |value| try self.lowerLiteralPatternThen(source, pat_ty, .{ .int_lit = value }, on_match, miss),
             .dec_lit => |value| try self.lowerLiteralPatternThen(source, pat_ty, .{ .dec_lit = value }, on_match, miss),
@@ -3801,9 +3956,57 @@ const Lowerer = struct {
             else
                 next) else next,
             .tag => |tag| try self.bindTagPayloadPatterns(self.tagIndex(pat_ty, tag.name), tag.payloads, source, next),
-            .nominal => |inner| try self.bindPattern(inner, source, next),
+            .nominal => |inner| try self.bindNominalPattern(pat_ty, inner, source, next),
             .int_lit, .dec_lit, .frac_f32_lit, .frac_f64_lit, .str_lit, .str_pattern => next,
         };
+    }
+
+    fn nominalPatternBackingType(
+        self: *Lowerer,
+        nominal_ty: Type.TypeId,
+        inner: Lifted.PatId,
+    ) Common.LowerError!Type.TypeId {
+        return switch (self.types.get(nominal_ty)) {
+            .named => |named| (named.backing orelse Common.invariant("nominal pattern target had no runtime backing")).ty,
+            .box => |elem| elem,
+            else => try self.lowerPatTy(inner),
+        };
+    }
+
+    fn nominalPatternBackingLocal(
+        self: *Lowerer,
+        nominal_ty: Type.TypeId,
+        inner: Lifted.PatId,
+    ) Common.LowerError!LIR.LocalId {
+        return try self.addLocalForLayout(try self.layoutOfType(try self.nominalPatternBackingType(nominal_ty, inner)));
+    }
+
+    fn bindNominalPattern(
+        self: *Lowerer,
+        nominal_ty: Type.TypeId,
+        inner: Lifted.PatId,
+        source: LIR.LocalId,
+        next: LIR.CFStmtId,
+    ) Common.LowerError!LIR.CFStmtId {
+        const source_layout = self.result.store.getLocal(source).layout_idx;
+        const backing_local = try self.nominalPatternBackingLocal(nominal_ty, inner);
+        const bound = try self.bindPattern(inner, backing_local, next);
+        return try self.assignNominalBoundary(backing_local, source, source_layout, bound);
+    }
+
+    fn lowerNominalPatternThen(
+        self: *Lowerer,
+        nominal_ty: Type.TypeId,
+        inner: Lifted.PatId,
+        source: LIR.LocalId,
+        on_match: LIR.CFStmtId,
+        miss: ?PatternMiss,
+        continuation: LIR.CFStmtId,
+    ) Common.LowerError!LIR.CFStmtId {
+        const source_layout = self.result.store.getLocal(source).layout_idx;
+        const backing_local = try self.nominalPatternBackingLocal(nominal_ty, inner);
+        const matched = try self.lowerPatternThen(inner, backing_local, on_match, miss, continuation);
+        return try self.assignNominalBoundary(backing_local, source, source_layout, matched);
     }
 
     fn lowerStrPatternThen(
@@ -5110,6 +5313,7 @@ fn cloneLiftedProgram(allocator: std.mem.Allocator, program: *const Lifted.Progr
         .typed_locals = try cloneArrayList(Lifted.TypedLocal, allocator, &program.typed_locals),
         .stmt_ids = try cloneArrayList(Lifted.StmtId, allocator, &program.stmt_ids),
         .field_exprs = try cloneArrayList(Lifted.FieldExpr, allocator, &program.field_exprs),
+        .fn_def_captures = try cloneArrayList(Lifted.FnDefCapture, allocator, &program.fn_def_captures),
         .record_destructs = try cloneArrayList(Lifted.RecordDestruct, allocator, &program.record_destructs),
         .str_pattern_steps = try cloneArrayList(Lifted.StrPatternStep, allocator, &program.str_pattern_steps),
         .branches = try cloneArrayList(Lifted.Branch, allocator, &program.branches),

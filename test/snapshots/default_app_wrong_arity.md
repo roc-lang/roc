@@ -12,7 +12,7 @@ main! = |arg1, arg2| {
 ~~~
 # EXPECTED
 UNUSED VARIABLE - default_app_wrong_arity.md:1:16:1:20
-MAIN! SHOULD TAKE 1 ARGUMENT - default_app_wrong_arity.md:1:1:3:2
+`MAIN!` SHOULD TAKE 1 ARGUMENT - default_app_wrong_arity.md:1:1:3:2
 # PROBLEMS
 
 ┌─────────────────┐
@@ -27,10 +27,10 @@ MAIN! SHOULD TAKE 1 ARGUMENT - default_app_wrong_arity.md:1:1:3:2
     to suppress this warning.
 
 
-┌──────────────────────────────┐
-│ MAIN! SHOULD TAKE 1 ARGUMENT ├─ `main!` is defined but has the wrong ───────┐
-└┬─────────────────────────────┘  number of arguments. `main!` should take    │
- │                                1 argument.                                 │
+┌────────────────────────────────┐
+│ `MAIN!` SHOULD TAKE 1 ARGUMENT ├─ `main!` is defined but has the wrong ─────┐
+└┬───────────────────────────────┘  number of arguments. `main!` should       │
+ │                                  take 1 argument.                          │
  │                                                                            │
  │  main! = |arg1, arg2| {                                                    │
  │      arg1                                                                  │

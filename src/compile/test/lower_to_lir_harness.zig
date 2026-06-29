@@ -9,13 +9,15 @@ const build_options = @import("build_options");
 const check = @import("check");
 const collections = @import("collections");
 const eval = @import("eval");
+const layout = @import("layout");
 const lir = @import("lir");
 const roc_target = @import("roc_target");
 
 const Coordinator = @import("../coordinator.zig").Coordinator;
 const CoreCtx = @import("ctx").CoreCtx;
 
-const LowerToLirHarnessError = std.mem.Allocator.Error ||
+/// Error set shared by LIR-lowering harness helpers and focused inspectors.
+pub const LowerToLirHarnessError = std.mem.Allocator.Error ||
     std.Io.Dir.CreateDirPathError ||
     std.Io.Dir.RealPathFileAllocError ||
     std.Io.Dir.WriteFileError ||
@@ -44,19 +46,47 @@ const LowerToLirHarnessError = std.mem.Allocator.Error ||
         UnsupportedBuiltinAnnotationOnly,
         UnsupportedHeader,
         WriteFailed,
+        Issue806UnsafeLargeStackStructAssign,
+        Issue806UnsafeLargeStackTagAssign,
+        Issue806UnsafeLargeStackSetLocalCopy,
+        Issue806UnsafeLargeStackCallReturn,
+        Issue806UnsafeLargeStackCallArgument,
+        Issue806UnsafeLargeStackReturn,
+        Issue806UnsafeLargeStackJoinParam,
+        Issue806UnsafeLargeStackClosureCapture,
+        Issue806UnsafeLargeStackPatternPayload,
+        Issue806MissingStackProbe,
     };
+
+/// Callback type for tests that inspect the lowered LIR store directly.
+pub const LirInspectFn = *const fn (
+    store: *const lir.LirStore,
+    layouts: *const layout.Store,
+) LowerToLirHarnessError!void;
+
+/// Options controlling how the harness lowers an app to LIR.
+pub const LirLoweringOptions = struct {
+    target_usize: base.target.TargetUsize = base.target.TargetUsize.native,
+    list_in_place_map: bool = false,
+};
 
 /// Lower an app whose body is `app_body` (everything after the platform header
 /// and the echo wiring) to LIR. Reaching the end without a panic means the
 /// program checked cleanly and passed ARC certification.
 pub fn expectLowersToLir(app_body: []const u8) LowerToLirHarnessError!void {
-    try runToLir(app_body, null);
+    try runToLir(app_body, null, .{}, null);
 }
 
 /// Lower an app at `app_path` to LIR. Reaching the end without a panic means
 /// the app checked cleanly and passed ARC certification.
 pub fn expectAppPathLowersToLir(app_path: []const u8) LowerToLirHarnessError!void {
-    try lowerAppPathToLir(std.testing.allocator, app_path, null);
+    try lowerAppPathToLir(std.testing.allocator, app_path, null, .{}, null);
+}
+
+/// Lower an app whose body is `app_body` to LIR, then run a focused invariant
+/// check against the actual lowered store and layout store.
+pub fn expectLirInspection(app_body: []const u8, inspect: LirInspectFn) LowerToLirHarnessError!void {
+    try runToLir(app_body, null, .{}, inspect);
 }
 
 /// Lower `app_body` twice and assert the two LIR dumps are byte-identical, so
@@ -71,12 +101,39 @@ pub fn expectDeterministicLir(app_body: []const u8) LowerToLirHarnessError!void 
     defer gpa.free(buf_b);
     var writer_a = std.Io.Writer.fixed(buf_a);
     var writer_b = std.Io.Writer.fixed(buf_b);
-    try runToLir(app_body, &writer_a);
-    try runToLir(app_body, &writer_b);
+    try runToLir(app_body, &writer_a, .{}, null);
+    try runToLir(app_body, &writer_b, .{}, null);
     try std.testing.expectEqualStrings(writer_a.buffered(), writer_b.buffered());
 }
 
-fn runToLir(app_body: []const u8, dump: ?*std.Io.Writer) LowerToLirHarnessError!void {
+/// Lower `app_body` for both pointer widths (with in-place `List.map` reuse
+/// enabled) and assert the two LIR dumps are byte-identical. This guards that
+/// lowering produces a target-independent op stream — the property that lets a
+/// single lowered LIR image be cached across 32-bit and 64-bit targets. A
+/// regression that reintroduced a pointer-width-dependent lowering decision
+/// (for example, baking the `list_map_can_reuse` interchangeability check for
+/// one width instead of carrying both) would make the dumps diverge and fail
+/// here.
+pub fn expectTargetIndependentLir(app_body: []const u8) LowerToLirHarnessError!void {
+    const gpa = std.testing.allocator;
+    const cap = 1 << 22;
+    const buf_a = try gpa.alloc(u8, cap);
+    defer gpa.free(buf_a);
+    const buf_b = try gpa.alloc(u8, cap);
+    defer gpa.free(buf_b);
+    var writer_a = std.Io.Writer.fixed(buf_a);
+    var writer_b = std.Io.Writer.fixed(buf_b);
+    try runToLir(app_body, &writer_a, .{ .target_usize = .u32, .list_in_place_map = true }, null);
+    try runToLir(app_body, &writer_b, .{ .target_usize = .u64, .list_in_place_map = true }, null);
+    try std.testing.expectEqualStrings(writer_a.buffered(), writer_b.buffered());
+}
+
+fn runToLir(
+    app_body: []const u8,
+    dump: ?*std.Io.Writer,
+    opts: LirLoweringOptions,
+    inspect: ?LirInspectFn,
+) LowerToLirHarnessError!void {
     const gpa = std.testing.allocator;
     var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
@@ -130,10 +187,16 @@ fn runToLir(app_body: []const u8, dump: ?*std.Io.Writer) LowerToLirHarnessError!
     const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "main.roc", gpa);
     defer gpa.free(app_path);
 
-    try lowerAppPathToLir(gpa, app_path, dump);
+    try lowerAppPathToLir(gpa, app_path, dump, opts, inspect);
 }
 
-fn lowerAppPathToLir(gpa: std.mem.Allocator, app_path: []const u8, dump: ?*std.Io.Writer) LowerToLirHarnessError!void {
+fn lowerAppPathToLir(
+    gpa: std.mem.Allocator,
+    app_path: []const u8,
+    dump: ?*std.Io.Writer,
+    opts: LirLoweringOptions,
+    inspect: ?LirInspectFn,
+) LowerToLirHarnessError!void {
     var arena_impl = collections.SingleThreadArena.init(gpa);
     defer arena_impl.deinit();
     const arena = arena_impl.allocator();
@@ -176,7 +239,7 @@ fn lowerAppPathToLir(gpa: std.mem.Allocator, app_path: []const u8, dump: ?*std.I
             .imports = imports,
         },
         .{ .requests = lir_roots },
-        .{ .target_usize = base.target.TargetUsize.native },
+        .{ .target_usize = opts.target_usize, .list_in_place_map = opts.list_in_place_map },
     );
     defer lowered.deinit();
 
@@ -186,5 +249,9 @@ fn lowerAppPathToLir(gpa: std.mem.Allocator, app_path: []const u8, dump: ?*std.I
         for (0..store.proc_specs.items.len) |index| {
             try lir.DebugPrint.writeProc(gpa, store, layouts, @enumFromInt(@as(u32, @intCast(index))), writer);
         }
+    }
+
+    if (inspect) |inspect_fn| {
+        try inspect_fn(&lowered.lir_result.store, &lowered.lir_result.layouts);
     }
 }

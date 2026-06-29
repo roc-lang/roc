@@ -3236,6 +3236,17 @@ pub const CheckedTypeStore = struct {
                     .root = root,
                 });
             }
+
+            const aliases = module_env.for_clause_aliases.sliceRange(required_type.type_aliases);
+            for (aliases) |alias| {
+                const alias_statement = module_env.store.getStatement(alias.alias_stmt_idx);
+                const alias_anno = switch (alias_statement) {
+                    .s_alias_decl => |decl| decl.anno,
+                    else => checkedArtifactInvariant("platform for-clause alias metadata referenced a non-alias statement", .{}),
+                };
+                _ = try appendCheckedTypeRoot(allocator, module, names, import_views, &store, &active, ModuleEnv.varFrom(alias.alias_stmt_idx));
+                _ = try appendCheckedTypeRoot(allocator, module, names, import_views, &store, &active, ModuleEnv.varFrom(alias_anno));
+            }
         }
 
         try appendStaticDispatchTypeRoots(allocator, module, names, import_views, source_nodes, &store, &active);
@@ -4143,7 +4154,6 @@ fn appendCheckedNominalDeclarationFromStatement(
         declaration_formals,
         anno_idx,
     );
-
     const padding_field_types = try paddingFieldTypesFromDeclarationAnno(
         allocator,
         module,
@@ -4363,13 +4373,59 @@ fn appendCheckedTypeRootFromDeclarationAnno(
                             ModuleEnv.varFrom(finalized),
                         );
                     }
-                    if (finalized != local.decl_idx) {
-                        checkedArtifactInvariant("checked declaration template generic application referenced an associated-type placeholder", .{});
+                    switch (module.getStatement(finalized)) {
+                        .s_alias_decl => {
+                            const result = try appendInstantiatedAliasDeclarationApplication(
+                                allocator,
+                                module,
+                                names,
+                                imports,
+                                store,
+                                active,
+                                local_type_declarations,
+                                finalized,
+                                actual_args,
+                            );
+                            if (actual_args_owned) {
+                                allocator.free(actual_args);
+                                actual_args_owned = false;
+                            }
+                            break :blk result;
+                        },
+                        .s_nominal_decl => if (finalized != local.decl_idx) {
+                            checkedArtifactInvariant("checked declaration template generic nominal application referenced an associated-type placeholder", .{});
+                        },
+                        else => checkedArtifactInvariant("checked declaration template generic application referenced a non-type declaration", .{}),
                     }
                 },
                 .builtin,
                 .external,
-                => {},
+                => {
+                    const generic_root = try appendCheckedTypeRoot(
+                        allocator,
+                        module,
+                        names,
+                        imports,
+                        store,
+                        active,
+                        ModuleEnv.varFrom(anno_idx),
+                    );
+                    const result = if (actual_args.len == 0)
+                        generic_root
+                    else
+                        try appendInstantiatedNamedApplicationFromTemplate(
+                            allocator,
+                            names,
+                            store,
+                            generic_root,
+                            actual_args,
+                        );
+                    if (actual_args_owned) {
+                        allocator.free(actual_args);
+                        actual_args_owned = false;
+                    }
+                    break :blk result;
+                },
                 .pending => checkedArtifactInvariant("checked declaration template still contained pending apply", .{}),
             }
             if (actual_args_owned) {
@@ -4396,6 +4452,180 @@ fn appendCheckedTypeRootFromDeclarationAnno(
         .malformed,
         => checkedArtifactInvariant("nominal declaration annotation was not a valid checked template", .{}),
     };
+}
+
+fn appendInstantiatedNamedApplicationFromTemplate(
+    allocator: Allocator,
+    names: *const canonical.CanonicalNameStore,
+    store: *CheckedTypeStore,
+    generic_root: CheckedTypeId,
+    actual_args: []const CheckedTypeId,
+) Allocator.Error!CheckedTypeId {
+    const generic_payload = store.payload(generic_root);
+    return switch (generic_payload) {
+        .alias => |alias| blk: {
+            if (alias.args.len != actual_args.len) {
+                checkedArtifactInvariant("checked declaration template alias application arity mismatch", .{});
+            }
+
+            const formals = try allocator.dupe(CheckedTypeId, alias.args);
+            defer allocator.free(formals);
+
+            var active = std.AutoHashMap(CheckedTypeId, CheckedTypeId).init(allocator);
+            defer active.deinit();
+            const backing = try store.cloneCheckedTypeRootSubstituting(
+                allocator,
+                names,
+                alias.backing,
+                formals,
+                actual_args,
+                &active,
+            );
+
+            const payload_args = if (actual_args.len == 0) &.{} else try allocator.dupe(CheckedTypeId, actual_args);
+            errdefer if (payload_args.len != 0) allocator.free(payload_args);
+
+            break :blk try appendExplicitCheckedTypePayload(allocator, names, store, .{ .alias = .{
+                .name = alias.name,
+                .origin_module = alias.origin_module,
+                .source_decl = alias.source_decl,
+                .builtin_origin = alias.builtin_origin,
+                .backing = backing,
+                .args = payload_args,
+            } });
+        },
+        .nominal => |nominal| blk: {
+            if (nominal.args.len != actual_args.len) {
+                checkedArtifactInvariant("checked declaration template nominal application arity mismatch", .{});
+            }
+
+            const formals = try allocator.dupe(CheckedTypeId, nominal.args);
+            defer allocator.free(formals);
+
+            var active = std.AutoHashMap(CheckedTypeId, CheckedTypeId).init(allocator);
+            defer active.deinit();
+            const backing = try store.cloneCheckedTypeRootSubstituting(
+                allocator,
+                names,
+                nominal.backing,
+                formals,
+                actual_args,
+                &active,
+            );
+            const padding_field_types = try store.cloneCheckedTypeIdSliceSubstituting(
+                allocator,
+                names,
+                nominal.padding_field_types,
+                formals,
+                actual_args,
+                &active,
+            );
+            errdefer if (padding_field_types.len != 0) allocator.free(padding_field_types);
+
+            const payload_args = if (actual_args.len == 0) &.{} else try allocator.dupe(CheckedTypeId, actual_args);
+            errdefer if (payload_args.len != 0) allocator.free(payload_args);
+
+            break :blk try appendExplicitCheckedTypePayload(allocator, names, store, .{ .nominal = .{
+                .name = nominal.name,
+                .origin_module = nominal.origin_module,
+                .source_decl = nominal.source_decl,
+                .builtin = nominal.builtin,
+                .is_opaque = nominal.is_opaque,
+                .backing = backing,
+                .representation = nominal.representation,
+                .args = payload_args,
+                .padding_field_types = padding_field_types,
+            } });
+        },
+        else => checkedArtifactInvariant("checked declaration template application did not resolve to a named type", .{}),
+    };
+}
+
+fn appendInstantiatedAliasDeclarationApplication(
+    allocator: Allocator,
+    module: TypedCIR.Module,
+    names: *canonical.CanonicalNameStore,
+    imports: CheckedImportViews,
+    store: *CheckedTypeStore,
+    active: *std.AutoHashMap(Var, CheckedTypeId),
+    local_type_declarations: *const LocalTypeDeclarationIndex,
+    statement_idx: CIR.Statement.Idx,
+    actual_args: []const CheckedTypeId,
+) Allocator.Error!CheckedTypeId {
+    const statement = module.getStatement(statement_idx);
+    const alias = switch (statement) {
+        .s_alias_decl => |alias| alias,
+        else => checkedArtifactInvariant("checked declaration template alias application resolved to a non-alias declaration", .{}),
+    };
+    if (alias.anno == .placeholder) {
+        checkedArtifactInvariant("checked declaration template alias application resolved to an unfinalized alias declaration", .{});
+    }
+
+    const module_env = module.moduleEnvConst();
+    const header = module_env.store.getTypeHeader(alias.header);
+    const header_args = module_env.store.sliceTypeAnnos(header.args);
+    if (header_args.len != actual_args.len) {
+        checkedArtifactInvariant("checked declaration template alias application arity mismatch", .{});
+    }
+
+    const declaration_formals = if (header_args.len == 0) &.{} else blk: {
+        const out = try allocator.alloc(DeclarationFormal, header_args.len);
+        errdefer allocator.free(out);
+        for (header_args, actual_args, 0..) |arg_anno, actual_arg, i| {
+            const arg = module_env.store.getTypeAnno(arg_anno);
+            out[i] = .{
+                .name = switch (arg) {
+                    .rigid_var => |rigid| rigid.name,
+                    else => checkedArtifactInvariant("alias declaration header argument was not a rigid type variable", .{}),
+                },
+                .root = actual_arg,
+            };
+        }
+        break :blk out;
+    };
+    defer if (declaration_formals.len != 0) allocator.free(declaration_formals);
+
+    const generic_root = try appendCheckedTypeRoot(
+        allocator,
+        module,
+        names,
+        imports,
+        store,
+        active,
+        ModuleEnv.varFrom(statement_idx),
+    );
+    const generic_payload = store.payload(generic_root);
+    const generic_alias = switch (generic_payload) {
+        .alias => |payload| payload,
+        else => checkedArtifactInvariant("checked declaration template alias application root was not an alias", .{}),
+    };
+    const alias_name = generic_alias.name;
+    const origin_module = generic_alias.origin_module;
+    const source_decl = generic_alias.source_decl;
+    const builtin_origin = generic_alias.builtin_origin;
+    const backing = try appendCheckedTypeRootFromDeclarationAnno(
+        allocator,
+        module,
+        names,
+        imports,
+        store,
+        active,
+        local_type_declarations,
+        declaration_formals,
+        alias.anno,
+    );
+
+    const payload_args = if (actual_args.len == 0) &.{} else try allocator.dupe(CheckedTypeId, actual_args);
+    errdefer if (payload_args.len != 0) allocator.free(payload_args);
+
+    return try appendExplicitCheckedTypePayload(allocator, names, store, .{ .alias = .{
+        .name = alias_name,
+        .origin_module = origin_module,
+        .source_decl = source_decl,
+        .builtin_origin = builtin_origin,
+        .backing = backing,
+        .args = payload_args,
+    } });
 }
 
 fn checkedTypeIdsFromDeclarationAnnoSpan(
@@ -14620,20 +14850,56 @@ fn applyPlatformForClauseSubstitutions(
     var actuals = std.ArrayList(CheckedTypeId).empty;
     defer actuals.deinit(allocator);
 
+    var projected_aliases = std.ArrayList(PlatformForClauseProjectedAlias).empty;
+    defer projected_aliases.deinit(allocator);
+
     for (module.requiresTypes()) |required_type| {
         const aliases = module_env.for_clause_aliases.sliceRange(required_type.type_aliases);
         for (aliases) |alias| {
-            const formal = checked_types.rootForSourceVar(module, ModuleEnv.varFrom(alias.alias_stmt_idx)) orelse {
+            const alias_statement = module_env.store.getStatement(alias.alias_stmt_idx);
+            const alias_anno = switch (alias_statement) {
+                .s_alias_decl => |decl| decl.anno,
+                else => checkedArtifactInvariant("platform for-clause substitution referenced a non-alias statement", .{}),
+            };
+
+            const formal_alias = checked_types.rootForSourceVar(module, ModuleEnv.varFrom(alias.alias_stmt_idx)) orelse {
                 checkedArtifactInvariant("platform for-clause substitution missing platform alias checked root", .{});
+            };
+            const formal_rigid = checked_types.rootForSourceVar(module, ModuleEnv.varFrom(alias_anno)) orelse {
+                checkedArtifactInvariant("platform for-clause substitution missing platform rigid checked root", .{});
             };
             const alias_name = module_env.getIdent(alias.alias_name);
             const app_type = (try appTypeDeclCheckedRootForName(allocator, app_view, alias_name)) orelse {
                 checkedArtifactInvariant("platform for-clause substitution missing matching app type declaration", .{});
             };
             const actual = try projector.project(app_type);
-            try appendUniquePlatformForClauseSubstitution(&formals, &actuals, allocator, formal, actual);
+
+            const formal_alias_payload = switch (checked_types.store.payload(formal_alias)) {
+                .alias => |payload| payload,
+                else => checkedArtifactInvariant("platform for-clause substitution platform alias root was not an alias", .{}),
+            };
+            try projected_aliases.append(allocator, .{
+                .name = formal_alias_payload.name,
+                .origin_module = formal_alias_payload.origin_module,
+                .source_decl = formal_alias_payload.source_decl orelse {
+                    checkedArtifactInvariant("platform for-clause substitution platform alias had no source declaration", .{});
+                },
+                .app_decl_root = actual,
+            });
+
+            try appendUniquePlatformForClauseSubstitution(&formals, &actuals, allocator, formal_alias, actual);
+            try appendUniquePlatformForClauseSubstitution(&formals, &actuals, allocator, formal_rigid, actual);
         }
     }
+
+    try appendPlatformForClauseAliasApplicationSubstitutions(
+        allocator,
+        names,
+        &checked_types.store,
+        projected_aliases.items,
+        &formals,
+        &actuals,
+    );
 
     if (formals.items.len == 0) return;
 
@@ -14651,6 +14917,116 @@ fn applyPlatformForClauseSubstitutions(
             &active,
         );
     }
+}
+
+const PlatformForClauseProjectedAlias = struct {
+    name: canonical.TypeNameId,
+    origin_module: canonical.ModuleNameId,
+    source_decl: u32,
+    app_decl_root: CheckedTypeId,
+};
+
+fn appendPlatformForClauseAliasApplicationSubstitutions(
+    allocator: Allocator,
+    names: *const canonical.CanonicalNameStore,
+    store: *CheckedTypeStore,
+    projected_aliases: []const PlatformForClauseProjectedAlias,
+    formals: *std.ArrayList(CheckedTypeId),
+    actuals: *std.ArrayList(CheckedTypeId),
+) Allocator.Error!void {
+    if (projected_aliases.len == 0) return;
+
+    const payload_count = store.payloads.items.len;
+    var active = std.AutoHashMap(CheckedTypeId, CheckedTypeId).init(allocator);
+    defer active.deinit();
+
+    var root_index: usize = 0;
+    while (root_index < payload_count) : (root_index += 1) {
+        const platform_root: CheckedTypeId = @enumFromInt(@as(u32, @intCast(root_index)));
+        const platform_alias = switch (store.payload(platform_root)) {
+            .alias => |alias| alias,
+            else => continue,
+        };
+        const projected = projectedForClauseAlias(projected_aliases, platform_alias) orelse continue;
+        if (platform_alias.args.len == 0) continue;
+
+        const actual = try applyProjectedForClauseAlias(
+            allocator,
+            names,
+            store,
+            projected.app_decl_root,
+            platform_alias.args,
+            formals.items,
+            actuals.items,
+            &active,
+        );
+        try appendUniquePlatformForClauseSubstitution(formals, actuals, allocator, platform_root, actual);
+    }
+}
+
+fn projectedForClauseAlias(
+    projected_aliases: []const PlatformForClauseProjectedAlias,
+    alias: CheckedAliasType,
+) ?PlatformForClauseProjectedAlias {
+    const source_decl = alias.source_decl orelse return null;
+    for (projected_aliases) |projected| {
+        if (projected.source_decl != source_decl) continue;
+        if (projected.name != alias.name) continue;
+        if (projected.origin_module != alias.origin_module) continue;
+        return projected;
+    }
+    return null;
+}
+
+fn applyProjectedForClauseAlias(
+    allocator: Allocator,
+    names: *const canonical.CanonicalNameStore,
+    store: *CheckedTypeStore,
+    app_decl_root: CheckedTypeId,
+    platform_args_view: []const CheckedTypeId,
+    base_formals: []const CheckedTypeId,
+    base_actuals: []const CheckedTypeId,
+    active: *std.AutoHashMap(CheckedTypeId, CheckedTypeId),
+) Allocator.Error!CheckedTypeId {
+    const platform_args = try allocator.dupe(CheckedTypeId, platform_args_view);
+    defer allocator.free(platform_args);
+
+    const applied_args = try allocator.alloc(CheckedTypeId, platform_args.len);
+    defer allocator.free(applied_args);
+
+    for (platform_args, 0..) |platform_arg, i| {
+        active.clearRetainingCapacity();
+        applied_args[i] = try store.cloneCheckedTypeRootSubstituting(
+            allocator,
+            names,
+            platform_arg,
+            base_formals,
+            base_actuals,
+            active,
+        );
+    }
+
+    const app_formals_view = switch (store.payload(app_decl_root)) {
+        .alias => |alias| alias.args,
+        .nominal => |nominal| nominal.args,
+        else => checkedArtifactInvariant("platform for-clause substitution app type root was not a type declaration", .{}),
+    };
+    if (app_formals_view.len != applied_args.len) {
+        checkedArtifactInvariant("platform for-clause substitution app type arity did not match platform alias application", .{});
+    }
+
+    const app_formals = try allocator.dupe(CheckedTypeId, app_formals_view);
+    defer allocator.free(app_formals);
+
+    active.clearRetainingCapacity();
+    return try store.cloneCheckedTypeRootSubstituting(
+        allocator,
+        names,
+        app_decl_root,
+        app_formals,
+        applied_args,
+        active,
+    );
 }
 
 fn appendUniquePlatformForClauseSubstitution(
@@ -18741,7 +19117,6 @@ pub const ModuleInterfaceCapabilities = struct {
             };
             if (nominal.builtin != null) continue;
             if (nominal.origin_module != current_module) continue;
-
             const source_key = checked_types.roots.items[i].key;
             const nominal_key = canonical.NominalTypeKey{
                 .module_name = nominal.origin_module,

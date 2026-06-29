@@ -733,6 +733,7 @@ pub fn addPattern(store: *NodeStore, pattern: AST.Pattern) std.mem.Allocator.Err
             try store.extra_data.append(store.gpa, t.args.span.len);
             try store.extra_data.append(store.gpa, t.qualifiers.span.start);
             try store.extra_data.append(store.gpa, t.qualifiers.span.len);
+            try store.extra_data.append(store.gpa, @intFromBool(t.backing_value));
 
             node.tag = .tag_patt;
             node.region = t.region;
@@ -1750,6 +1751,7 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: AST.Pattern.Idx) AST.Pat
             const args_len = store.extra_data.items[ed_start];
             const qualifiers_start = store.extra_data.items[ed_start + 1];
             const qualifiers_len = store.extra_data.items[ed_start + 2];
+            const backing_value = store.extra_data.items[ed_start + 3] != 0;
 
             return .{ .tag = .{
                 .tag_tok = node.main_token,
@@ -1761,6 +1763,7 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: AST.Pattern.Idx) AST.Pat
                     .start = qualifiers_start,
                     .len = qualifiers_len,
                 } },
+                .backing_value = backing_value,
                 .region = node.region,
             } };
         },

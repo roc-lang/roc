@@ -2,8 +2,129 @@
 
 const TestCase = @import("parallel_runner.zig").TestCase;
 
+const issue806RightmostField = "value.b.b.b.b.b.b.b.b.b.b.b.b";
+
+const issue806LargeAggregateSource =
+    \\R1 : { a : U64, b : U64 }
+    \\R2 : { a : R1, b : R1 }
+    \\R3 : { a : R2, b : R2 }
+    \\R4 : { a : R3, b : R3 }
+    \\R5 : { a : R4, b : R4 }
+    \\R6 : { a : R5, b : R5 }
+    \\R7 : { a : R6, b : R6 }
+    \\R8 : { a : R7, b : R7 }
+    \\R9 : { a : R8, b : R8 }
+    \\R10 : { a : R9, b : R9 }
+    \\R11 : { a : R10, b : R10 }
+    \\R12 : { a : R11, b : R11 }
+    \\
+    \\Wrapped := [Payload(R12)]
+    \\
+    \\make1 : U64 -> R1
+    \\make1 = |n| { a: n, b: n + 1 }
+    \\
+    \\make2 : U64 -> R2
+    \\make2 = |n| { a: make1(n), b: make1(n + 2) }
+    \\
+    \\make3 : U64 -> R3
+    \\make3 = |n| { a: make2(n), b: make2(n + 4) }
+    \\
+    \\make4 : U64 -> R4
+    \\make4 = |n| { a: make3(n), b: make3(n + 8) }
+    \\
+    \\make5 : U64 -> R5
+    \\make5 = |n| { a: make4(n), b: make4(n + 16) }
+    \\
+    \\make6 : U64 -> R6
+    \\make6 = |n| { a: make5(n), b: make5(n + 32) }
+    \\
+    \\make7 : U64 -> R7
+    \\make7 = |n| { a: make6(n), b: make6(n + 64) }
+    \\
+    \\make8 : U64 -> R8
+    \\make8 = |n| { a: make7(n), b: make7(n + 128) }
+    \\
+    \\make9 : U64 -> R9
+    \\make9 = |n| { a: make8(n), b: make8(n + 256) }
+    \\
+    \\make10 : U64 -> R10
+    \\make10 = |n| { a: make9(n), b: make9(n + 512) }
+    \\
+    \\make11 : U64 -> R11
+    \\make11 = |n| { a: make10(n), b: make10(n + 1024) }
+    \\
+    \\make12 : U64 -> R12
+    \\make12 = |n| { a: make11(n), b: make11(n + 2048) }
+    \\
+    \\wrap : U64 -> Wrapped
+    \\wrap = |n| Payload(make12(n))
+    \\
+    \\main = match wrap(1) {
+++ "    Payload(value) => " ++ issue806RightmostField ++ "\n" ++
+    \\}
+;
+
 /// Public value `tests`.
 pub const tests = [_]TestCase{
+    .{
+        .name = "issue 806: large aggregate evaluates across interpreter dev wasm and llvm",
+        .source_kind = .module,
+        .source = issue806LargeAggregateSource,
+        .expected = .{ .inspect_str = "4096" },
+    },
+    .{
+        // https://github.com/roc-lang/roc/issues/9796
+        // Two passing top-level expects that both instantiate a parser result
+        // alias through a type module must finalize independently without
+        // corrupting the checked data consumed by the next expect root.
+        .name = "issue 9796: multiple parser expects with forward alias both finalize",
+        .source_kind = .module,
+        .source =
+        \\Parser(input, a) :: { fun : input -> Parser.ParseResult(input, a) }.{
+        \\    ParseResult(input, a) : Try({ val : a, input : input }, [ParsingFailure(Str)])
+        \\
+        \\    build_primitive_parser : (input -> ParseResult(input, a)) -> Parser(input, a)
+        \\    build_primitive_parser = |fun| { { fun } }
+        \\
+        \\    parse_partial : Parser(input, a), input -> ParseResult(input, a)
+        \\    parse_partial = |{ fun }, input| {
+        \\        fun(input)
+        \\    }
+        \\
+        \\    chomp_until : a -> Parser(List(a), List(a)) where [a.is_eq : a, a -> Bool]
+        \\    chomp_until = |char| {
+        \\        build_primitive_parser(
+        \\            |input| {
+        \\                match input.find_first_index(|x| { x == char }) {
+        \\                    Ok(index) => {
+        \\                        val = input.sublist({ start: 0, len: index })
+        \\                        Ok({ val, input: input.drop_first(index) })
+        \\                    }
+        \\                    Err(_) => Err(ParsingFailure("character not found"))
+        \\                }
+        \\            }
+        \\        )
+        \\    }
+        \\}
+        \\
+        \\expect {
+        \\    input = "# H\nR".to_utf8()
+        \\    result = Parser.parse_partial(Parser.chomp_until('\n'), input)
+        \\    result == Ok({ val: ['#', ' ', 'H'], input: ['\n', 'R'] })
+        \\}
+        \\
+        \\expect {
+        \\    match Parser.parse_partial(Parser.chomp_until('\n'), []) {
+        \\        Ok(_) => Bool.False
+        \\        Err(ParsingFailure(_)) => Bool.True
+        \\    }
+        \\}
+        \\
+        \\main : U8
+        \\main = 0
+        ,
+        .expected = .{ .inspect_str = "0" },
+    },
     .{
         // https://github.com/roc-lang/roc/issues/9686
         // A type alias (`Score : U64`) defined in an imported type module is used

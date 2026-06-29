@@ -611,7 +611,7 @@ const StaticDataBuilder = struct {
         }
 
         const tag_data = self.layouts().getTagUnionData(tag_layout.getTagUnion().idx);
-        tag_data.writeDiscriminant(bytes[base_offset..].ptr, variant.discriminant);
+        tag_data.writeDiscriminant(bytes[base_offset..].ptr, variant.discriminant, self.layouts().targetUsize());
     }
 
     fn writeErasedFn(

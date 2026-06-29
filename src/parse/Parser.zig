@@ -764,7 +764,7 @@ fn parseExposedItemTokens(self: *Parser) std.mem.Allocator.Error!AST.ExposedItem
         },
         .UpperIdent => {
             var as: ?TokenIdx = null;
-            const qual_result = try self.readQualificationChain();
+            const qual_result = try self.readQualificationChain(.all_segments);
             self.pos = qual_result.final_token + 1;
             const ident = qual_result.final_token;
             if (self.peek() == .KwAs) {
@@ -1943,6 +1943,11 @@ const QualificationResult = struct {
     is_upper: bool,
 };
 
+const QualificationMode = enum {
+    all_segments,
+    expression_value_boundary,
+};
+
 fn CurrentStack(comptime State: type) type {
     return struct {
         current: ?State = null,
@@ -2004,6 +2009,9 @@ const PatternTagArgsState = struct {
     final_token: Token.Idx,
     qualifiers: Token.Span,
     scratch_top: u32,
+    /// True when parsing `Type.(pattern)` nominal-value destructuring args,
+    /// false for ordinary `Tag(args)` application args.
+    backing_value: bool = false,
 };
 
 const PatternListState = struct {
@@ -2668,7 +2676,7 @@ const TypeFnAfterRetState = struct {
 
 /// Parses a qualification chain (e.g., "json.Core.Utf8" -> ["json", "Core"])
 /// Returns the qualifiers and the final token
-fn readQualificationChain(self: *Parser) std.mem.Allocator.Error!QualificationResult {
+fn readQualificationChain(self: *Parser, mode: QualificationMode) std.mem.Allocator.Error!QualificationResult {
     std.debug.assert(self.peek() == .UpperIdent or self.peek() == .LowerIdent);
 
     const scratch_top = self.store.scratchTokenTop();
@@ -2679,6 +2687,7 @@ fn readQualificationChain(self: *Parser) std.mem.Allocator.Error!QualificationRe
     self.advance();
 
     var saw_qualifier = false;
+    var saw_lower_segment = false;
     while (true) {
         switch (self.peek()) {
             .NoSpaceDotUpperIdent => {
@@ -2689,10 +2698,14 @@ fn readQualificationChain(self: *Parser) std.mem.Allocator.Error!QualificationRe
                 self.advance();
             },
             .NoSpaceDotLowerIdent => {
+                if (mode == .expression_value_boundary and saw_lower_segment) {
+                    break;
+                }
                 saw_qualifier = true;
                 try self.store.addScratchToken(final_token);
                 final_token = self.pos;
                 is_upper = false;
+                saw_lower_segment = true;
                 self.advance();
             },
             else => break,
@@ -3034,7 +3047,7 @@ fn runExprStatementKernel(
                 }
                 if (tok == .UpperIdent) {
                     const start = self.pos;
-                    const qual_result = try self.readQualificationChain();
+                    const qual_result = try self.readQualificationChain(.expression_value_boundary);
                     self.pos = qual_result.final_token + 1;
                     const expr = if (qual_result.is_upper)
                         try self.store.addExpr(.{ .tag = .{
@@ -3487,7 +3500,7 @@ fn runExprStatementKernel(
                 const first_token_tag = self.peek();
                 if (first_token_tag == .LowerIdent or first_token_tag == .UpperIdent) {
                     const ident_start = self.pos;
-                    const qual_result = try self.readQualificationChain();
+                    const qual_result = try self.readQualificationChain(.expression_value_boundary);
                     self.pos = qual_result.final_token + 1;
                     const is_tag = if (qual_result.qualifiers.span.len == 0)
                         first_token_tag == .UpperIdent
@@ -4293,7 +4306,7 @@ fn runExprStatementKernel(
                 if (tok == .UpperIdent or tok == .LowerIdent) {
                     const start = self.pos;
                     const first_token_tag = self.peek();
-                    const qual_result = try self.readQualificationChain();
+                    const qual_result = try self.readQualificationChain(.all_segments);
                     self.pos = qual_result.final_token + 1;
 
                     const base_anno = if (first_token_tag == .LowerIdent and qual_result.qualifiers.span.len == 0)
@@ -5631,7 +5644,7 @@ fn runExprStatementKernel(
             } else if (tok_int < @intFromEnum(Token.Tag.OpPlus)) {
                 if (tok == .UpperIdent) {
                     const start = self.pos;
-                    const qual_result = try self.readQualificationChain();
+                    const qual_result = try self.readQualificationChain(.all_segments);
                     self.pos = qual_result.final_token + 1;
                     if (!qual_result.is_upper) {
                         last_pattern = try self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, start);
@@ -5644,6 +5657,21 @@ fn runExprStatementKernel(
                             .final_token = qual_result.final_token,
                             .qualifiers = qual_result.qualifiers,
                             .scratch_top = self.store.scratchPatternTop(),
+                        };
+                        continue :expr_kernel .pattern_tag_args_next;
+                    }
+                    if (self.peek() == .Dot and self.peekN(1) == .NoSpaceOpenRound) {
+                        // `Type.(pattern)` — nominal-value destructure, the inverse
+                        // of `Type.(value)` construction. Parse the backing
+                        // pattern(s) just like tag args, flagged as backing_value.
+                        self.advance(); // `.`
+                        self.advance(); // `(`
+                        pattern_tag_args_state = .{
+                            .start = start,
+                            .final_token = qual_result.final_token,
+                            .qualifiers = qual_result.qualifiers,
+                            .scratch_top = self.store.scratchPatternTop(),
+                            .backing_value = true,
                         };
                         continue :expr_kernel .pattern_tag_args_next;
                     }
@@ -5964,6 +5992,7 @@ fn runExprStatementKernel(
                     .args = args,
                     .tag_tok = pattern_tag_args_state.final_token,
                     .qualifiers = pattern_tag_args_state.qualifiers,
+                    .backing_value = pattern_tag_args_state.backing_value,
                 } });
                 continue :expr_kernel .pattern_complete;
             },

@@ -42,6 +42,7 @@ pub const BuildAppError = BuildRootError || error{NotAnApp};
 pub const BuildWithMainError = BuildError || CompileDiscoveredError;
 
 const ModuleEnv = can.ModuleEnv;
+const CIR = can.CIR;
 const PackageEnv = compile_package.PackageEnv;
 const SemanticModuleData = compile_package.SemanticModuleData;
 const ModuleTimingInfo = compile_package.TimingInfo;
@@ -197,6 +198,13 @@ pub const BuildEnv = struct {
 
     /// Optional source directory used to resolve imports from the root module.
     root_source_dir_override: ?[]const u8 = null,
+
+    /// Source mapping for a temporary synthetic root created by the CLI for a
+    /// headerless default app. These slices are borrowed from CLI-owned storage
+    /// that outlives this BuildEnv.
+    synthetic_root_original_path: ?[]const u8 = null,
+    synthetic_root_original_source: ?[]const u8 = null,
+    synthetic_root_header_len: usize = 0,
 
     /// Size limits applied during package version resolution.
     resolution_config: package_resolution.Config = .{},
@@ -462,6 +470,17 @@ pub const BuildEnv = struct {
 
     pub fn setRootSourceDirOverride(self: *BuildEnv, source_dir: []const u8) void {
         self.root_source_dir_override = source_dir;
+    }
+
+    pub fn setSyntheticRootSourceMapping(
+        self: *BuildEnv,
+        original_path: []const u8,
+        original_source: []const u8,
+        header_len: usize,
+    ) void {
+        self.synthetic_root_original_path = original_path;
+        self.synthetic_root_original_source = original_source;
+        self.synthetic_root_header_len = header_len;
     }
 
     pub fn setWatchInputTracking(self: *BuildEnv, enabled: bool) void {
@@ -2799,6 +2818,305 @@ pub const BuildEnv = struct {
             .errors = total_error_count,
             .warnings = total_warning_count,
         };
+    }
+
+    /// Render one warning for each `dbg` that remains in an optimized build.
+    /// Optimized builds intentionally keep `dbg` so users can debug performance
+    /// problems, but release artifacts should make those call sites visible.
+    pub fn renderOptimizedDbgWarnings(self: *BuildEnv, writer: anytype, opt_name: []const u8) Allocator.Error!usize {
+        const modules = try self.getCompiledModules(self.gpa);
+        defer self.gpa.free(modules);
+
+        var total: usize = 0;
+        for (modules) |mod| {
+            var regions = std.ArrayList(base.Region).empty;
+            defer regions.deinit(self.gpa);
+
+            try collectDbgRegionsInModule(self.gpa, mod.semantic.env, &regions);
+            for (regions.items) |region| {
+                try self.renderOptimizedDbgWarning(writer, mod.semantic.env, mod.path, opt_name, region);
+                total += 1;
+            }
+        }
+        return total;
+    }
+
+    fn renderOptimizedDbgWarning(
+        self: *BuildEnv,
+        writer: anytype,
+        env: *const ModuleEnv,
+        path: []const u8,
+        opt_name: []const u8,
+        region: base.Region,
+    ) Allocator.Error!void {
+        var report = try Report.init(self.gpa, "`dbg` in Optimized Build", "", .warning);
+        defer report.deinit();
+
+        try report.headline.addReflowingText("This optimized build was compiled from a ");
+        try report.headline.addInlineCode("dbg");
+        try report.headline.addReflowingText(" statement.");
+
+        try self.addOptimizedDbgSourceRegion(&report, env, path, region);
+
+        try report.document.addLineBreak();
+        try report.document.addReflowingText("Builds with ");
+        const opt_arg = try std.fmt.allocPrint(self.gpa, "--opt={s}", .{opt_name});
+        defer self.gpa.free(opt_arg);
+        const owned_opt_arg = try report.addOwnedString(opt_arg);
+        try report.document.addInlineCode(owned_opt_arg);
+        try report.document.addReflowingText(" keep ");
+        try report.document.addInlineCode("dbg");
+        try report.document.addReflowingText(" output, but ");
+        try report.document.addInlineCode("dbg");
+        try report.document.addReflowingText(" is intended for debugging.");
+
+        const palette = reporting.ColorUtils.getPaletteForConfig(reporting.ReportingConfig.initColorTerminal());
+        const config = reporting.ReportingConfig.initColorTerminal();
+        reporting.renderReportToTerminal(&report, writer, palette, config) catch {};
+    }
+
+    fn addOptimizedDbgSourceRegion(
+        self: *BuildEnv,
+        report: *Report,
+        env: *const ModuleEnv,
+        path: []const u8,
+        region: base.Region,
+    ) Allocator.Error!void {
+        if (self.synthetic_root_original_path) |original_path| {
+            if (self.synthetic_root_original_source) |original_source| {
+                if (self.discovered_root_abs) |root_path| {
+                    const header_len: u32 = @intCast(self.synthetic_root_header_len);
+                    if (std.mem.eql(u8, path, root_path) and region.start.offset >= header_len and region.end.offset >= header_len) {
+                        var line_starts = try base.RegionInfo.findLineStarts(self.gpa, original_source);
+                        defer line_starts.deinit(self.gpa);
+
+                        const mapped_region = base.Region.from_raw_offsets(
+                            region.start.offset - header_len,
+                            region.end.offset - header_len,
+                        );
+                        const region_info = base.RegionInfo.position(
+                            original_source,
+                            line_starts.items.items,
+                            mapped_region.start.offset,
+                            mapped_region.end.offset,
+                        ) catch unreachable;
+
+                        const owned_path = try report.addOwnedString(original_path);
+                        try report.document.addSourceRegion(
+                            region_info,
+                            .warning_highlight,
+                            owned_path,
+                            original_source,
+                            line_starts.items.items,
+                        );
+                        return;
+                    }
+                }
+            }
+        }
+
+        const owned_path = try report.addOwnedString(path);
+        try report.document.addSourceRegion(
+            env.calcRegionInfo(region),
+            .warning_highlight,
+            owned_path,
+            env.getSourceAll(),
+            env.getLineStartsAll(),
+        );
+    }
+
+    fn collectDbgRegionsInModule(
+        allocator: Allocator,
+        env: *const ModuleEnv,
+        regions: *std.ArrayList(base.Region),
+    ) Allocator.Error!void {
+        for (env.store.sliceDefs(env.all_defs)) |def_idx| {
+            const def = env.store.getDef(def_idx);
+            try collectDbgRegionsInExpr(allocator, env, regions, def.expr);
+        }
+
+        var offset: usize = 0;
+        while (offset < env.all_statements.span.len) : (offset += 1) {
+            try collectDbgRegionsInStatement(allocator, env, regions, env.store.statementAt(env.all_statements, offset));
+        }
+    }
+
+    fn collectDbgRegionsInStatement(
+        allocator: Allocator,
+        env: *const ModuleEnv,
+        regions: *std.ArrayList(base.Region),
+        statement_idx: CIR.Statement.Idx,
+    ) Allocator.Error!void {
+        switch (env.store.getStatement(statement_idx)) {
+            .s_decl => |stmt| try collectDbgRegionsInExpr(allocator, env, regions, stmt.expr),
+            .s_var => |stmt| try collectDbgRegionsInExpr(allocator, env, regions, stmt.expr),
+            .s_reassign => |stmt| try collectDbgRegionsInExpr(allocator, env, regions, stmt.expr),
+            .s_expr => |stmt| try collectDbgRegionsInExpr(allocator, env, regions, stmt.expr),
+            .s_expect => {},
+            .s_dbg => |stmt| {
+                try regions.append(allocator, env.store.getStatementRegion(statement_idx));
+                try collectDbgRegionsInExpr(allocator, env, regions, stmt.expr);
+            },
+            .s_for => |stmt| {
+                try collectDbgRegionsInExpr(allocator, env, regions, stmt.expr);
+                try collectDbgRegionsInExpr(allocator, env, regions, stmt.body);
+            },
+            .s_while => |stmt| {
+                try collectDbgRegionsInExpr(allocator, env, regions, stmt.cond);
+                try collectDbgRegionsInExpr(allocator, env, regions, stmt.body);
+            },
+            .s_infinite_loop => |stmt| {
+                try collectDbgRegionsInExpr(allocator, env, regions, stmt.cond);
+                try collectDbgRegionsInExpr(allocator, env, regions, stmt.body);
+            },
+            .s_breakable_loop => |stmt| {
+                try collectDbgRegionsInExpr(allocator, env, regions, stmt.cond);
+                try collectDbgRegionsInExpr(allocator, env, regions, stmt.body);
+            },
+            .s_return => |stmt| try collectDbgRegionsInExpr(allocator, env, regions, stmt.expr),
+            .s_crash,
+            .s_var_uninitialized,
+            .s_break,
+            .s_import,
+            .s_alias_decl,
+            .s_nominal_decl,
+            .s_type_anno,
+            .s_type_var_alias,
+            .s_runtime_error,
+            => {},
+        }
+    }
+
+    fn collectDbgRegionsInExprSpan(
+        allocator: Allocator,
+        env: *const ModuleEnv,
+        regions: *std.ArrayList(base.Region),
+        span: CIR.Expr.Span,
+    ) Allocator.Error!void {
+        for (env.store.sliceExpr(span)) |expr_idx| {
+            try collectDbgRegionsInExpr(allocator, env, regions, expr_idx);
+        }
+    }
+
+    fn collectDbgRegionsInExpr(
+        allocator: Allocator,
+        env: *const ModuleEnv,
+        regions: *std.ArrayList(base.Region),
+        expr_idx: CIR.Expr.Idx,
+    ) Allocator.Error!void {
+        switch (env.store.getExpr(expr_idx)) {
+            .e_str => |str| try collectDbgRegionsInExprSpan(allocator, env, regions, str.span),
+            .e_list => |list| try collectDbgRegionsInExprSpan(allocator, env, regions, list.elems),
+            .e_tuple => |tuple| try collectDbgRegionsInExprSpan(allocator, env, regions, tuple.elems),
+            .e_record => |record| {
+                if (record.ext) |ext| try collectDbgRegionsInExpr(allocator, env, regions, ext);
+                for (env.store.sliceRecordFields(record.fields)) |field_idx| {
+                    try collectDbgRegionsInExpr(allocator, env, regions, env.store.getRecordField(field_idx).value);
+                }
+            },
+            .e_block => |block| {
+                var offset: usize = 0;
+                while (offset < block.stmts.span.len) : (offset += 1) {
+                    try collectDbgRegionsInStatement(allocator, env, regions, env.store.statementAt(block.stmts, offset));
+                }
+                try collectDbgRegionsInExpr(allocator, env, regions, block.final_expr);
+            },
+            .e_if => |if_expr| {
+                for (env.store.sliceIfBranches(if_expr.branches)) |branch_idx| {
+                    const branch = env.store.getIfBranch(branch_idx);
+                    try collectDbgRegionsInExpr(allocator, env, regions, branch.cond);
+                    try collectDbgRegionsInExpr(allocator, env, regions, branch.body);
+                }
+                try collectDbgRegionsInExpr(allocator, env, regions, if_expr.final_else);
+            },
+            .e_match => |match_expr| {
+                try collectDbgRegionsInExpr(allocator, env, regions, match_expr.cond);
+                for (env.store.sliceMatchBranches(match_expr.branches)) |branch_idx| {
+                    const branch = env.store.getMatchBranch(branch_idx);
+                    if (branch.guard) |guard| try collectDbgRegionsInExpr(allocator, env, regions, guard);
+                    try collectDbgRegionsInExpr(allocator, env, regions, branch.value);
+                }
+            },
+            .e_call => |call| {
+                try collectDbgRegionsInExpr(allocator, env, regions, call.func);
+                try collectDbgRegionsInExprSpan(allocator, env, regions, call.args);
+            },
+            .e_lambda => |lambda| try collectDbgRegionsInExpr(allocator, env, regions, lambda.body),
+            .e_closure => |closure| try collectDbgRegionsInExpr(allocator, env, regions, closure.lambda_idx),
+            .e_nominal => |nominal| try collectDbgRegionsInExpr(allocator, env, regions, nominal.backing_expr),
+            .e_nominal_external => |nominal| try collectDbgRegionsInExpr(allocator, env, regions, nominal.backing_expr),
+            .e_binop => |binop| {
+                try collectDbgRegionsInExpr(allocator, env, regions, binop.lhs);
+                try collectDbgRegionsInExpr(allocator, env, regions, binop.rhs);
+            },
+            .e_unary_minus => |unary| try collectDbgRegionsInExpr(allocator, env, regions, unary.expr),
+            .e_unary_not => |unary| try collectDbgRegionsInExpr(allocator, env, regions, unary.expr),
+            .e_field_access => |field| try collectDbgRegionsInExpr(allocator, env, regions, field.receiver),
+            .e_method_call => |call| {
+                try collectDbgRegionsInExpr(allocator, env, regions, call.receiver);
+                try collectDbgRegionsInExprSpan(allocator, env, regions, call.args);
+            },
+            .e_dispatch_call => |call| {
+                try collectDbgRegionsInExpr(allocator, env, regions, call.receiver);
+                try collectDbgRegionsInExprSpan(allocator, env, regions, call.args);
+            },
+            .e_interpolation => |interpolation| {
+                try collectDbgRegionsInExpr(allocator, env, regions, interpolation.first);
+                try collectDbgRegionsInExprSpan(allocator, env, regions, interpolation.parts);
+            },
+            .e_structural_eq => |eq| {
+                try collectDbgRegionsInExpr(allocator, env, regions, eq.lhs);
+                try collectDbgRegionsInExpr(allocator, env, regions, eq.rhs);
+            },
+            .e_structural_hash => |hash| {
+                try collectDbgRegionsInExpr(allocator, env, regions, hash.value);
+                try collectDbgRegionsInExpr(allocator, env, regions, hash.hasher);
+            },
+            .e_method_eq => |eq| {
+                try collectDbgRegionsInExpr(allocator, env, regions, eq.lhs);
+                try collectDbgRegionsInExpr(allocator, env, regions, eq.rhs);
+            },
+            .e_type_method_call => |call| try collectDbgRegionsInExprSpan(allocator, env, regions, call.args),
+            .e_type_dispatch_call => |call| try collectDbgRegionsInExprSpan(allocator, env, regions, call.args),
+            .e_tuple_access => |access| try collectDbgRegionsInExpr(allocator, env, regions, access.tuple),
+            .e_dbg => |dbg| {
+                try regions.append(allocator, env.store.getExprRegion(expr_idx));
+                try collectDbgRegionsInExpr(allocator, env, regions, dbg.expr);
+            },
+            .e_expect_err => |expect_err| try collectDbgRegionsInExpr(allocator, env, regions, expect_err.expr),
+            .e_expect => {},
+            .e_return => |ret| try collectDbgRegionsInExpr(allocator, env, regions, ret.expr),
+            .e_for => |for_expr| {
+                try collectDbgRegionsInExpr(allocator, env, regions, for_expr.expr);
+                try collectDbgRegionsInExpr(allocator, env, regions, for_expr.body);
+            },
+            .e_run_low_level => |run| try collectDbgRegionsInExprSpan(allocator, env, regions, run.args),
+            .e_tag => |tag| try collectDbgRegionsInExprSpan(allocator, env, regions, tag.args),
+            .e_num,
+            .e_frac_f32,
+            .e_frac_f64,
+            .e_dec,
+            .e_dec_small,
+            .e_num_from_numeral,
+            .e_typed_int,
+            .e_typed_frac,
+            .e_typed_num_from_numeral,
+            .e_str_segment,
+            .e_bytes_literal,
+            .e_lookup_local,
+            .e_lookup_external,
+            .e_lookup_required,
+            .e_empty_list,
+            .e_empty_record,
+            .e_zero_argument_tag,
+            .e_runtime_error,
+            .e_crash,
+            .e_ellipsis,
+            .e_anno_only,
+            .e_break,
+            .e_hosted_lambda,
+            => {},
+        }
     }
 
     pub const RenderDiagnosticsResult = struct {

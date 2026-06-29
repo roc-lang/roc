@@ -390,9 +390,14 @@ pub fn CodeGen(comptime target: RocTarget) type {
         /// allocate stack space BEFORE saving callee-saved registers to [RBP-offset],
         /// otherwise those stores would be writing below RSP which is unsafe.
         pub fn emitPrologueWithAlloc(self: *Self, stack_size: u32) Allocator.Error!void {
+            try self.emitPrologueWithAllocAndStackProbe(stack_size, false);
+        }
+
+        pub fn emitPrologueWithAllocAndStackProbe(self: *Self, stack_size: u32, stack_probe_required: bool) Allocator.Error!void {
             var builder = DeferredFrameBuilder.init();
             builder.setCalleeSavedMask(self.callee_saved_used);
             builder.setStackSize(stack_size);
+            builder.setStackProbeRequired(stack_probe_required);
             _ = try builder.emitPrologue(&self.emit);
         }
 

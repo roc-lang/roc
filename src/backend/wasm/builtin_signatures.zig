@@ -141,7 +141,7 @@ pub const sigs: [@typeInfo(BuiltinKind).@"enum".fields.len]Sig = .{
     .{ .name = "roc_builtins_list_append_unsafe", .wasm_params = &.{ .i32, .i32, .i32, .i32, .i32, .i32, .i32 }, .wasm_results = &.{}, .takes_roc_ops = true },
     .{ .name = "roc_builtins_list_concat", .wasm_params = &.{ .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i64, .i32 }, .wasm_results = &.{}, .takes_roc_ops = true },
     .{ .name = "roc_builtins_list_drop_at", .wasm_params = &.{ .i32, .i32, .i32, .i32, .i32, .i32, .i64, .i32, .i32, .i32, .i32, .i32 }, .wasm_results = &.{}, .takes_roc_ops = true },
-    .{ .name = "roc_builtins_list_reserve", .wasm_params = &.{ .i32, .i32, .i32, .i32, .i32, .i64, .i32, .i32, .i32, .i32, .i32 }, .wasm_results = &.{}, .takes_roc_ops = true },
+    .{ .name = "roc_builtins_list_reserve", .wasm_params = &.{ .i32, .i32, .i32, .i32, .i32, .i64, .i32, .i32, .i32, .i32, .i32, .i32 }, .wasm_results = &.{}, .takes_roc_ops = true },
     .{ .name = "roc_builtins_list_replace", .wasm_params = &.{ .i32, .i32, .i32, .i32, .i32, .i64, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32 }, .wasm_results = &.{}, .takes_roc_ops = true },
     .{ .name = "roc_builtins_list_swap", .wasm_params = &.{ .i32, .i32, .i32, .i32, .i32, .i32, .i64, .i64, .i32, .i32, .i32, .i32, .i32 }, .wasm_results = &.{}, .takes_roc_ops = true },
     .{ .name = "roc_builtins_list_eq", .wasm_params = &.{ .i32, .i32, .i32, .i32, .i32, .i32, .i32 }, .wasm_results = &.{.i32}, .takes_roc_ops = false },

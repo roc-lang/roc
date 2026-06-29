@@ -215,7 +215,7 @@ fn runCrossCompileTests(
                 const output_name = try std.fmt.allocPrint(allocator, "{s}_{s}", .{ platform.name, target.name });
                 defer allocator.free(output_name);
 
-                const result = try runner_core.crossCompile(allocator, std_io, args.roc_binary, roc_file, target.name, output_name, args.opt);
+                const result = try runner_core.crossCompile(allocator, std_io, args.roc_binary, roc_file, target.name, output_name, args.opt, &.{});
                 stats.record(result);
             }
         },
@@ -251,7 +251,7 @@ fn runCrossCompileTests(
                     const output_name = try std.fmt.allocPrint(allocator, "{s}_{s}", .{ basename, target.name });
                     defer allocator.free(output_name);
 
-                    const result = try runner_core.crossCompile(allocator, std_io, args.roc_binary, spec.roc_file, target.name, output_name, args.opt);
+                    const result = try runner_core.crossCompile(allocator, std_io, args.roc_binary, spec.roc_file, target.name, output_name, args.opt, spec.expected_build_stderr_contains);
                     stats.record(result);
                 }
             }
@@ -288,7 +288,7 @@ fn runCrossCompileTests(
                     const output_name = try std.fmt.allocPrint(allocator, "{s}_{s}", .{ basename, target.name });
                     defer allocator.free(output_name);
 
-                    const result = try runner_core.crossCompile(allocator, std_io, args.roc_binary, spec.roc_file, target.name, output_name, args.opt);
+                    const result = try runner_core.crossCompile(allocator, std_io, args.roc_binary, spec.roc_file, target.name, output_name, args.opt, &.{});
                     stats.record(result);
                 }
             }

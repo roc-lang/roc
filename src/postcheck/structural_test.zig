@@ -106,7 +106,7 @@ test "Monotype lookup lowering uses explicit resolved use types" {
     const lower_lookup_at_type = sourceSliceBetween(lower_source, "fn lowerLookupExprAtType", "fn lowerProcedureUseValue");
 
     try expectContains(lower_call, "const fn_ty = (try self.indirectCalleeMonoType(call.func)) orelse fn_ty: {");
-    try expectContains(lower_call, "break :fn_ty try call_ctx.instantiateCallTypeFromCaller(call.source_fn_ty_payload, self, checked_ret_ty, call.args);");
+    try expectContains(lower_call, "break :fn_ty try call_ctx.instantiateCallTypeFromCallerAtType(call.source_fn_ty_payload, self, checked_ret_ty, call.args, expected_ret_ty);");
     try std.testing.expect(std.mem.find(u8, lower_call, "try self.lowerExprType(call.func)") == null);
     try std.testing.expect(std.mem.find(u8, lower_call, "try self.lowerType(call.source_fn_ty_payload)") == null);
 
@@ -214,11 +214,11 @@ test "post-check stage products do not store expression cache state" {
 test "Monotype lifting mutates only callable expression nodes in place" {
     const lifted_source = @embedFile("monotype_lifted/lift.zig");
     const rewrite_expr = sourceSliceBetween(lifted_source, "fn rewriteExpr", "fn liftLambda");
-    try expectContains(rewrite_expr, "expr.data = .{ .fn_ref");
-    try expectContains(rewrite_expr, "expr.data = .{ .call_proc");
+    try expectContains(rewrite_expr, "self.output.exprs.items[index].data = .{ .fn_ref");
+    try expectContains(rewrite_expr, "self.output.exprs.items[index].data = .{ .call_proc");
 
     const lift_lambda = sourceSliceBetween(lifted_source, "fn liftLambda", "fn reserveFn");
-    try expectContains(lift_lambda, "self.output.exprs.items[@intFromEnum(expr_id)].data = .{ .fn_ref = fn_id };");
+    try expectContains(lift_lambda, "self.output.exprs.items[@intFromEnum(expr_id)].data = .{ .fn_ref = .{");
 
     const lambda_mono_source = @embedFile("lambda_mono/lower.zig");
     const lower_fn = sourceSliceBetween(lambda_mono_source, "fn lowerFnSpec", "fn ensureOwnFnSpec");

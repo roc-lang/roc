@@ -113,7 +113,7 @@ pub fn fnTemplateDigest(template: FnTemplate, types: *const Type.Store, name_sto
     var hasher = std.crypto.hash.sha2.Sha256.init(.{});
     writeFnDef(&hasher, template.fn_def);
     writeBytes(&hasher, &template.source_fn_key.bytes);
-    const mono_digest = types.typeDigest(name_store, template.mono_fn_ty);
+    const mono_digest = types.specializationDigest(name_store, template.mono_fn_ty);
     writeBytes(&hasher, &mono_digest.bytes);
     return .{ .bytes = hasher.finalResult() };
 }
@@ -222,6 +222,32 @@ pub const CallValue = struct {
     args: Span(ExprId),
 };
 
+/// Reference to a lifted function value. `captures` contains the explicit
+/// values used to build the callable payload, parallel to that function's
+/// lifted capture span.
+pub const LiftedFunctionValue = struct {
+    fn_id: LiftedFnId,
+    captures: Span(ExprId) = Span(ExprId).empty(),
+};
+
+/// Explicit operand for one checked closure capture before lifting. The `local`
+/// identifies the checked capture in the closure creation context; `value` is
+/// the expression that supplies it there. Lifting matches it to the target
+/// function's solved captures by local id when possible, and by preserved
+/// checked binder identity when copied/specialized contexts use different
+/// Monotype local ids for the same checked capture.
+pub const FnDefCapture = struct {
+    local: LocalId,
+    value: ExprId,
+};
+
+/// Reference to a Monotype function value before lifting. `captures` contains
+/// keyed explicit values recorded at the checked closure creation site.
+pub const MonotypeFunctionValue = struct {
+    fn_id: FnId,
+    captures: Span(FnDefCapture) = Span(FnDefCapture).empty(),
+};
+
 /// Direct call target before or after Monotype lifting.
 pub const ProcCallee = union(enum) {
     func: FnId,
@@ -232,6 +258,10 @@ pub const ProcCallee = union(enum) {
 pub const CallProc = struct {
     callee: ProcCallee,
     args: Span(ExprId),
+    /// Explicit values for the callee's lifted captures, parallel to that
+    /// callee's capture span. Empty before Monotype lifting has resolved direct
+    /// call targets.
+    captures: Span(ExprId) = Span(ExprId).empty(),
     /// This direct call is on an explicitly generated cold path. Later stages
     /// may use this to avoid inlining and to attach backend cold-call metadata;
     /// they must not infer coldness from callee names or source paths.
@@ -343,6 +373,12 @@ pub const Expr = struct {
     data: ExprData,
 };
 
+/// A checked early return plus the explicit target lambda return type.
+pub const Return = struct {
+    value: ExprId,
+    target: Type.TypeId,
+};
+
 /// Monotype expression forms.
 pub const ExprData = union(enum) {
     local: LocalId,
@@ -365,8 +401,8 @@ pub const ExprData = union(enum) {
     },
     lambda: LambdaExpr,
     def_ref: DefId,
-    fn_def: FnId,
-    fn_ref: LiftedFnId,
+    fn_def: MonotypeFunctionValue,
+    fn_ref: LiftedFunctionValue,
     call_value: CallValue,
     call_proc: CallProc,
     low_level: LowLevelCall,
@@ -408,7 +444,7 @@ pub const ExprData = union(enum) {
     loop_: LoopExpr,
     break_: ?ExprId,
     continue_: ContinueExpr,
-    return_: ExprId,
+    return_: Return,
     crash: StringLiteralId,
     comptime_branch_taken: ComptimeBranchTaken,
     comptime_exhaustiveness_failed: ComptimeSiteId,
@@ -527,7 +563,7 @@ pub const Stmt = union(enum) {
     expr: ExprId,
     expect: ExprId,
     dbg: ExprId,
-    return_: ExprId,
+    return_: Return,
     crash: StringLiteralId,
 };
 
@@ -597,6 +633,7 @@ pub const Program = struct {
     typed_locals: std.ArrayList(TypedLocal),
     stmt_ids: std.ArrayList(StmtId),
     field_exprs: std.ArrayList(FieldExpr),
+    fn_def_captures: std.ArrayList(FnDefCapture),
     record_destructs: std.ArrayList(RecordDestruct),
     str_pattern_steps: std.ArrayList(StrPatternStep),
     branches: std.ArrayList(Branch),
@@ -646,6 +683,7 @@ pub const Program = struct {
             .typed_locals = .empty,
             .stmt_ids = .empty,
             .field_exprs = .empty,
+            .fn_def_captures = .empty,
             .record_destructs = .empty,
             .str_pattern_steps = .empty,
             .branches = .empty,
@@ -692,6 +730,7 @@ pub const Program = struct {
         self.branches.deinit(self.allocator);
         self.str_pattern_steps.deinit(self.allocator);
         self.record_destructs.deinit(self.allocator);
+        self.fn_def_captures.deinit(self.allocator);
         self.field_exprs.deinit(self.allocator);
         self.stmt_ids.deinit(self.allocator);
         self.typed_locals.deinit(self.allocator);
@@ -903,6 +942,12 @@ pub const Program = struct {
         return .{ .start = start, .len = @intCast(values.len) };
     }
 
+    pub fn addFnDefCaptureSpan(self: *Program, values: []const FnDefCapture) std.mem.Allocator.Error!Span(FnDefCapture) {
+        const start: u32 = @intCast(self.fn_def_captures.items.len);
+        try self.fn_def_captures.appendSlice(self.allocator, values);
+        return .{ .start = start, .len = @intCast(values.len) };
+    }
+
     pub fn addRecordDestructSpan(self: *Program, values: []const RecordDestruct) std.mem.Allocator.Error!Span(RecordDestruct) {
         const start: u32 = @intCast(self.record_destructs.items.len);
         try self.record_destructs.appendSlice(self.allocator, values);
@@ -951,6 +996,10 @@ pub const Program = struct {
 
     pub fn fieldExprSpan(self: *const Program, span_: Span(FieldExpr)) []const FieldExpr {
         return self.field_exprs.items[span_.start..][0..span_.len];
+    }
+
+    pub fn fnDefCaptureSpan(self: *const Program, span_: Span(FnDefCapture)) []const FnDefCapture {
+        return self.fn_def_captures.items[span_.start..][0..span_.len];
     }
 
     pub fn recordDestructSpan(self: *const Program, span_: Span(RecordDestruct)) []const RecordDestruct {
