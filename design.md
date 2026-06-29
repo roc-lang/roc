@@ -3234,6 +3234,12 @@ same path. A `str_from_quote` expression with a static-dispatch conversion plan
 is not a string literal assignment; it lowers through the checked dispatch plan
 for that conversion.
 
+Checked bytes literals follow the same byte-copying LIR literal path as string
+segments: the literal bytes are copied into the LIR string store and referenced
+by `assign_literal.str_literal`. The checked type remains `List(U8)` and layout
+selection comes from the checked type's boxy representation; the lowerer does
+not synthesize a list element-by-element from the bytes.
+
 Checked block lowering is continuation-based. Before the final expression is
 lowered, the body builder allocates and binds every checked declaration local
 from the block's explicit checked statement list, using the checked pattern type

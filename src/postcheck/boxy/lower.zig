@@ -469,6 +469,7 @@ const ProcBodyBuilder = struct {
                 .next = next,
             } }),
             .str_segment => |literal| try self.assignStringLiteral(target, literal, next),
+            .bytes_literal => |literal| try self.assignStringLiteral(target, literal, next),
             .str_from_quote => |quote| blk: {
                 if (quote.plan != null) {
                     boxyLowerInvariant("from_quote conversion reached boxy string literal lowering before static-dispatch call lowering");
@@ -3517,6 +3518,90 @@ test "boxy lowerer emits checked string segment literals" {
     const assign = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_literal;
     switch (assign.value) {
         .str_literal => |literal| try std.testing.expectEqualStrings("hello", out.lir_result.store.getStringLiteral(literal)),
+        else => return error.TestUnexpectedResult,
+    }
+    try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = assign.target } }, out.lir_result.store.getCFStmt(assign.next));
+}
+
+test "boxy lowerer emits checked bytes literals as byte-backed LIR literals" {
+    const gpa = std.testing.allocator;
+
+    var artifact = minimalCheckedArtifact(gpa);
+    defer artifact.canonical_names.deinit();
+    defer artifact.checked_types.deinit(gpa);
+    defer artifact.checked_bodies.deinit(gpa);
+
+    try artifact.checked_types.type_id_pool.append(gpa, @enumFromInt(0));
+    try artifact.checked_types.payloads.append(gpa, .{
+        .nominal = builtinNominal(.u8, @enumFromInt(0), .{}),
+    });
+    try artifact.checked_types.payloads.append(gpa, .{
+        .nominal = builtinNominal(.list, @enumFromInt(1), .{ .start = 0, .len = 1 }),
+    });
+    try artifact.checked_types.payloads.append(gpa, .{
+        .function = .{
+            .kind = .pure,
+            .args = .{},
+            .ret = @enumFromInt(1),
+            .needs_instantiation = false,
+        },
+    });
+
+    try artifact.checked_bodies.string_bytes.appendSlice(gpa, "abc");
+    try artifact.checked_bodies.string_ranges.append(gpa, .{ .start = 0, .len = 3 });
+
+    const template_ref = procedureTemplateRef(artifact.key, 0);
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(0),
+        .ty = @enumFromInt(2),
+        .source_region = base.Region.zero(),
+        .data = .{ .lambda = .{ .args = .{}, .body = @enumFromInt(1) } },
+    });
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(1),
+        .ty = @enumFromInt(1),
+        .source_region = base.Region.zero(),
+        .data = .{ .bytes_literal = @enumFromInt(0) },
+    });
+    try artifact.checked_bodies.bodies.append(gpa, .{
+        .id = @enumFromInt(0),
+        .root_expr = @enumFromInt(0),
+        .owner_template = template_ref,
+    });
+    var templates = [_]checked.CheckedProcedureTemplate{
+        checkedTemplate(template_ref, @enumFromInt(2), @enumFromInt(0)),
+    };
+    artifact.checked_procedure_templates = .{ .templates = &templates };
+
+    const root = checked.RootRequest{
+        .order = 0,
+        .module_idx = 0,
+        .kind = .runtime_entrypoint,
+        .source = .{ .def = @enumFromInt(0) },
+        .checked_type = @enumFromInt(2),
+        .abi = .roc,
+        .exposure = .private,
+        .procedure_template = template_ref,
+    };
+    var plan = try Plan.analyzeProgram(gpa, .{
+        .root_module = .{ .module = &artifact, .roots = undefined },
+        .roots = &.{root},
+    }, .{});
+    defer plan.deinit();
+
+    var out = try run(
+        gpa,
+        .{ .root = .{ .module = &artifact, .roots = undefined } },
+        .{},
+        &plan,
+        .{},
+    );
+    defer out.deinit();
+
+    const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
+    const assign = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_literal;
+    switch (assign.value) {
+        .str_literal => |literal| try std.testing.expectEqualStrings("abc", out.lir_result.store.getStringLiteral(literal)),
         else => return error.TestUnexpectedResult,
     }
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = assign.target } }, out.lir_result.store.getCFStmt(assign.next));
