@@ -600,6 +600,13 @@ pub const CFStmt = union(enum) {
         source_mode: BoxyTransferMode,
         next: CFStmtId,
     },
+    assign_boxy_inspect: struct {
+        target: LocalId,
+        source: LocalId,
+        source_desc: BoxyDescRef,
+        source_mode: BoxyTransferMode = .borrow,
+        next: CFStmtId,
+    },
     assign_call_dict: struct {
         target: LocalId,
         dict: BoxyDictRef,

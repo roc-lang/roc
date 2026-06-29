@@ -3324,6 +3324,12 @@ fn collectProcLocals(
                 try recordProcLocal(locals, assign.source);
                 try work.append(wa, assign.next);
             },
+            .assign_boxy_inspect => |assign| {
+                try recordProcLocal(locals, assign.target);
+                try recordProcLocal(locals, assign.source);
+                if (assign.source_desc.localOrNull()) |local| try recordProcLocal(locals, local);
+                try work.append(wa, assign.next);
+            },
             .assign_call_dict => |assign| {
                 try recordProcLocal(locals, assign.target);
                 if (assign.dict.localOrNull()) |local| try recordProcLocal(locals, local);
@@ -7440,6 +7446,7 @@ fn generateCFStmtNode(self: *Self, work: *std.ArrayList(StmtWork), wa: Allocator
         .assign_boxy_reuse_box,
         .assign_boxy_unbox,
         .assign_boxy_adapt,
+        .assign_boxy_inspect,
         .assign_call_dict,
         => std.debug.panic(
             "Wasm/codegen invariant violated: boxy LIR statement reached wasm codegen before boxy codegen is implemented",

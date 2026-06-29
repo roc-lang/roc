@@ -2084,8 +2084,9 @@ describes the operations needed for a value representation:
 - the explicit nested drop/incref/free/copy plan for payload bytes
 - the concrete LIR layout for known concrete payloads
 - descriptor references for nested dynamic payload positions
-- optional structural operation entries such as equality or hashing only when
-  those operations are representation operations rather than user methods
+- optional structural operation entries such as equality, hashing, or
+  inspection only when those operations are representation operations rather
+  than user methods
 
 The exact field order and encoding of `TypeDesc` is LIR-owned static data.
 Every descriptor has an explicit id in the lowered program. Backends and the
@@ -3632,6 +3633,10 @@ The boxy statement surface is:
   value using the statement's descriptor and source transfer mode
 - `assign_boxy_adapt`: applies a named adapter plan to a source local with an
   explicit transfer mode
+- `assign_boxy_inspect`: produces a `Str` by invoking the structural inspect
+  operation named by an explicit `TypeDesc`; the statement reads the source
+  local, the descriptor ref, and the transfer mode, and it never reconstructs
+  inspect behavior from the source value's pointer-shaped layout
 - `assign_call_dict`: performs a dictionary/vtable indirect call through a
   method slot with ordinary and hidden argument spans
 

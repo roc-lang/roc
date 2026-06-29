@@ -781,6 +781,7 @@ const Inserter = struct {
                 .assign_boxy_reuse_box,
                 .assign_boxy_unbox,
                 .assign_boxy_adapt,
+                .assign_boxy_inspect,
                 .assign_call_dict,
                 => arcInvariant("boxy LIR statement reached ARC insertion before boxy ARC constraints are implemented"),
                 .assign_low_level => |assign| {
@@ -1164,6 +1165,7 @@ const Inserter = struct {
             .assign_boxy_reuse_box,
             .assign_boxy_unbox,
             .assign_boxy_adapt,
+            .assign_boxy_inspect,
             .assign_call_dict,
             => arcInvariant("boxy LIR statement reached ARC clone before boxy ARC constraints are implemented"),
             .assign_low_level => |assign| {
@@ -1964,6 +1966,7 @@ const Inserter = struct {
                 .assign_boxy_reuse_box,
                 .assign_boxy_unbox,
                 .assign_boxy_adapt,
+                .assign_boxy_inspect,
                 .assign_call_dict,
                 => arcInvariant("boxy LIR statement reached ARC inference before boxy ARC constraints are implemented"),
                 .assign_low_level => |assign| {
@@ -2950,6 +2953,7 @@ const Inserter = struct {
                 .assign_boxy_reuse_box,
                 .assign_boxy_unbox,
                 .assign_boxy_adapt,
+                .assign_boxy_inspect,
                 .assign_call_dict,
                 .assign_list,
                 .assign_struct,
@@ -3190,6 +3194,7 @@ const Inserter = struct {
                 .assign_boxy_reuse_box => |assign| try stack.append(self.store.allocator, assign.next),
                 .assign_boxy_unbox => |assign| try stack.append(self.store.allocator, assign.next),
                 .assign_boxy_adapt => |assign| try stack.append(self.store.allocator, assign.next),
+                .assign_boxy_inspect => |assign| try stack.append(self.store.allocator, assign.next),
                 .assign_call_dict => |assign| try stack.append(self.store.allocator, assign.next),
                 .assign_low_level => |assign| try stack.append(self.store.allocator, assign.next),
                 .assign_list => |assign| try stack.append(self.store.allocator, assign.next),
@@ -3295,6 +3300,7 @@ const Inserter = struct {
                 .assign_boxy_reuse_box => |assign| try stack.append(self.store.allocator, assign.next),
                 .assign_boxy_unbox => |assign| try stack.append(self.store.allocator, assign.next),
                 .assign_boxy_adapt => |assign| try stack.append(self.store.allocator, assign.next),
+                .assign_boxy_inspect => |assign| try stack.append(self.store.allocator, assign.next),
                 .assign_call_dict => |assign| try stack.append(self.store.allocator, assign.next),
                 .assign_low_level => |assign| try stack.append(self.store.allocator, assign.next),
                 .assign_list => |assign| try stack.append(self.store.allocator, assign.next),
@@ -3546,6 +3552,12 @@ const Inserter = struct {
                 },
                 .assign_boxy_adapt => |assign| {
                     noteReadBeforeRebindLocal(&graph.nodes.items[node_index].reads, assign.source);
+                    setReadBeforeRebindDef(&graph, node_index, assign.target);
+                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
+                },
+                .assign_boxy_inspect => |assign| {
+                    noteReadBeforeRebindLocal(&graph.nodes.items[node_index].reads, assign.source);
+                    if (assign.source_desc.localOrNull()) |local| noteReadBeforeRebindLocal(&graph.nodes.items[node_index].reads, local);
                     setReadBeforeRebindDef(&graph, node_index, assign.target);
                     try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
                 },
@@ -3832,6 +3844,12 @@ const Inserter = struct {
                     if (assign.target == needle) continue;
                     try stack.append(self.store.allocator, assign.next);
                 },
+                .assign_boxy_inspect => |assign| {
+                    if (assign.source == needle) return true;
+                    if (assign.source_desc.localOrNull()) |local| if (local == needle) return true;
+                    if (assign.target == needle) continue;
+                    try stack.append(self.store.allocator, assign.next);
+                },
                 .assign_call_dict => |assign| {
                     if (assign.dict.localOrNull()) |local| if (local == needle) return true;
                     if (self.spanUsesLocal(assign.args, needle) or self.spanUsesLocal(assign.hidden_args, needle)) return true;
@@ -4063,6 +4081,11 @@ const Inserter = struct {
                 },
                 .assign_boxy_adapt => |assign| {
                     if (needles.contains(assign.source)) return true;
+                    try stack.append(self.store.allocator, assign.next);
+                },
+                .assign_boxy_inspect => |assign| {
+                    if (needles.contains(assign.source)) return true;
+                    if (assign.source_desc.localOrNull()) |local| if (needles.contains(local)) return true;
                     try stack.append(self.store.allocator, assign.next);
                 },
                 .assign_call_dict => |assign| {
@@ -4832,7 +4855,7 @@ const ArcTest = struct {
                     try stack.append(self.allocator, j.body);
                     try stack.append(self.allocator, j.remainder);
                 },
-                inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_call_dict, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |s| {
+                inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_call_dict, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |s| {
                     try stack.append(self.allocator, s.next);
                 },
                 .ret, .jump, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
@@ -4892,6 +4915,7 @@ const ArcTest = struct {
                 .assign_boxy_reuse_box => |assign| cursor = assign.next,
                 .assign_boxy_unbox => |assign| cursor = assign.next,
                 .assign_boxy_adapt => |assign| cursor = assign.next,
+                .assign_boxy_inspect => |assign| cursor = assign.next,
                 .assign_call_dict => |assign| cursor = assign.next,
                 .assign_low_level => |assign| cursor = assign.next,
                 .assign_list => |assign| cursor = assign.next,
@@ -4951,6 +4975,7 @@ const ArcTest = struct {
                 .assign_boxy_reuse_box => |assign| cursor = assign.next,
                 .assign_boxy_unbox => |assign| cursor = assign.next,
                 .assign_boxy_adapt => |assign| cursor = assign.next,
+                .assign_boxy_inspect => |assign| cursor = assign.next,
                 .assign_call_dict => |assign| cursor = assign.next,
                 .assign_low_level => |assign| cursor = assign.next,
                 .assign_list => |assign| cursor = assign.next,
@@ -6555,6 +6580,7 @@ fn expectDecrefBeforeStmt(f: *const ArcTest, start: LIR.CFStmtId, local: LIR.Loc
             .assign_boxy_reuse_box => |a| cursor = a.next,
             .assign_boxy_unbox => |a| cursor = a.next,
             .assign_boxy_adapt => |a| cursor = a.next,
+            .assign_boxy_inspect => |a| cursor = a.next,
             .assign_call_dict => |a| cursor = a.next,
             .assign_low_level => |a| cursor = a.next,
             .assign_list => |a| cursor = a.next,

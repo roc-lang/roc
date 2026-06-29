@@ -304,7 +304,7 @@ const Pass = struct {
                 if (self.localInfoMut(s.target).markAll(self.allocator)) changed = true;
                 try self.pushStmt(s.next);
             },
-            inline .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_call_dict, .assign_low_level => |s| {
+            inline .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_call_dict, .assign_low_level => |s| {
                 if (self.localInfoMut(s.target).markAll(self.allocator)) changed = true;
                 try self.pushStmt(s.next);
             },
@@ -463,6 +463,10 @@ const Pass = struct {
                 if (s.source_desc.localOrNull()) |local| self.noteUse(local);
             },
             .assign_boxy_adapt => |s| self.noteUse(s.source),
+            .assign_boxy_inspect => |s| {
+                self.noteUse(s.source);
+                if (s.source_desc.localOrNull()) |local| self.noteUse(local);
+            },
             .assign_call_dict => |s| {
                 if (s.dict.localOrNull()) |local| self.noteUse(local);
                 for (self.store.getLocalSpan(s.args)) |arg| self.noteUse(arg);
@@ -603,6 +607,7 @@ const Pass = struct {
                 .assign_boxy_reuse_box => |*s| s.next = self.resolveRedirect(s.next),
                 .assign_boxy_unbox => |*s| s.next = self.resolveRedirect(s.next),
                 .assign_boxy_adapt => |*s| s.next = self.resolveRedirect(s.next),
+                .assign_boxy_inspect => |*s| s.next = self.resolveRedirect(s.next),
                 .assign_call_dict => |*s| s.next = self.resolveRedirect(s.next),
                 .assign_low_level => |*s| s.next = self.resolveRedirect(s.next),
                 .assign_list => |*s| s.next = self.resolveRedirect(s.next),

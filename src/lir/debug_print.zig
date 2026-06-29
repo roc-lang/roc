@@ -173,6 +173,13 @@ const Printer = struct {
                     });
                     current = s.next;
                 },
+                .assign_boxy_inspect => |s| {
+                    try self.writeTarget(s.target, indent, writer);
+                    try writer.print("boxy_inspect source=l{d} desc=", .{@intFromEnum(s.source)});
+                    try writeBoxyDescRef(s.source_desc, writer);
+                    try writer.print(" mode={s}\n", .{@tagName(s.source_mode)});
+                    current = s.next;
+                },
                 .assign_call_dict => |s| {
                     try self.writeTarget(s.target, indent, writer);
                     try writer.writeAll("call_dict ");
@@ -546,12 +553,19 @@ test "debug print includes boxy statement surface" {
         .is_cold = true,
         .next = ret,
     } });
+    const inspect = try store.addCFStmt(.{ .assign_boxy_inspect = .{
+        .target = result,
+        .source = adapted,
+        .source_desc = .{ .local = desc },
+        .source_mode = .borrow,
+        .next = call,
+    } });
     const adapt = try store.addCFStmt(.{ .assign_boxy_adapt = .{
         .target = adapted,
         .source = unboxed,
         .adapter = @enumFromInt(5),
         .source_mode = .move,
-        .next = call,
+        .next = inspect,
     } });
     const unbox = try store.addCFStmt(.{ .assign_boxy_unbox = .{
         .target = unboxed,
@@ -603,5 +617,6 @@ test "debug print includes boxy statement surface" {
     try std.testing.expect(std.mem.indexOf(u8, printed, "l4:opaque_ptr = boxy_reuse_box source=l3 desc=desc=l1\n") != null);
     try std.testing.expect(std.mem.indexOf(u8, printed, "l5:str = boxy_unbox source=l4 desc=desc=l1 target_layout=str mode=borrow\n") != null);
     try std.testing.expect(std.mem.indexOf(u8, printed, "l6:opaque_ptr = boxy_adapt source=l5 adapter=5 mode=move\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, printed, "l7:u64 = boxy_inspect source=l6 desc=desc=l1 mode=borrow\n") != null);
     try std.testing.expect(std.mem.indexOf(u8, printed, "l7:u64 = call_dict dict=l2 slot=2 args=[l6] hidden=[l1] cold=true\n") != null);
 }

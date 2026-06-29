@@ -50,6 +50,7 @@ pub const RepLayouts = struct {
 pub const WorkerLayouts = struct {
     worker: Plan.WorkerPlanId,
     args: Plan.Span = .{},
+    hidden_descs: Plan.Span = .{},
     ret: ?RuntimeLayout = null,
     value: RuntimeLayout,
 };
@@ -225,6 +226,14 @@ const Builder = struct {
             try self.appendFunctionLayouts(&self.worker_layout_values, .worker, function);
             worker_layout.args = self.layoutSpanFrom(start, function.arg_count);
             worker_layout.ret = self.worker_layout_values.items[start + function.arg_count];
+        }
+        const hidden_descs = self.program.hiddenDescriptorParamSlice(worker.hidden_descs);
+        if (hidden_descs.len != 0) {
+            const hidden_start = self.layoutValueStart(&self.worker_layout_values);
+            for (hidden_descs) |_| {
+                try self.worker_layout_values.append(self.allocator, .{ .concrete = .opaque_ptr });
+            }
+            worker_layout.hidden_descs = self.layoutSpanFrom(hidden_start, @intCast(hidden_descs.len));
         }
 
         return worker_layout;

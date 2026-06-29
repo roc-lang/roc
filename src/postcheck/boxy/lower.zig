@@ -690,6 +690,7 @@ const ProcedureBuilder = struct {
         defer proc.deinit();
 
         const body_source = try self.bodySourceForWorker(resolved, &proc);
+        try proc.bindHiddenDescriptorArgs();
         const ret_layout = proc.workerReturnLayout();
         const ret_local = try proc.addFrameLocal(ret_layout);
         const args_span = try self.result.store.addLocalSpan(proc.arg_locals.items);
@@ -724,6 +725,9 @@ const ProcedureBuilder = struct {
         var proc = ProcBodyBuilder.init(self, resolved.module, self.layout_plan.workerLayoutFor(worker_id));
         defer proc.deinit();
 
+        if (proc.worker_layout.hidden_descs.len != 0) {
+            boxyLowerInvariant("hosted procedure worker tried to expose hidden descriptor arguments through hosted ABI");
+        }
         const function = checkedFunctionPayload(resolved.module, resolved.template.checked_fn_root);
         const worker_args = self.layout_plan.workerLayoutSlice(proc.worker_layout.args);
         if (function.args.len != worker_args.len) {
@@ -920,6 +924,7 @@ const ProcBodyBuilder = struct {
     frame_locals: std.ArrayList(LIR.LocalId),
     loop_stack: std.ArrayList(LoopContext),
     binder_locals: []?LIR.LocalId,
+    descriptor_locals: []?LIR.LocalId,
     next_join_point: u32,
     current_lambda: ?checked.CheckedExprId,
 
@@ -956,6 +961,11 @@ const ProcBodyBuilder = struct {
         str: checked.CheckedStringLiteralId,
     };
 
+    const DescriptorArgLocal = struct {
+        local: LIR.LocalId,
+        materialize: ?LIR.BoxyDescRef = null,
+    };
+
     fn init(parent: *ProcedureBuilder, module: ProcedureModuleView, worker_layout: Layouts.WorkerLayouts) ProcBodyBuilder {
         return .{
             .parent = parent,
@@ -965,12 +975,14 @@ const ProcBodyBuilder = struct {
             .frame_locals = .empty,
             .loop_stack = .empty,
             .binder_locals = &.{},
+            .descriptor_locals = &.{},
             .next_join_point = 0,
             .current_lambda = null,
         };
     }
 
     fn deinit(self: *ProcBodyBuilder) void {
+        self.parent.allocator.free(self.descriptor_locals);
         self.parent.allocator.free(self.binder_locals);
         self.loop_stack.deinit(self.parent.allocator);
         self.frame_locals.deinit(self.parent.allocator);
@@ -988,6 +1000,26 @@ const ProcBodyBuilder = struct {
                 boxyLowerInvariant("boxy worker lambda argument layout disagreed with checked pattern type");
             }
             self.bindPatternToLocal(pattern_id, local);
+        }
+    }
+
+    fn bindHiddenDescriptorArgs(self: *ProcBodyBuilder) Allocator.Error!void {
+        const worker = self.parent.plan.workers.items[@intFromEnum(self.worker_layout.worker)];
+        const params = self.parent.plan.hiddenDescriptorParamSlice(worker.hidden_descs);
+        const layouts = self.parent.layout_plan.workerLayoutSlice(self.worker_layout.hidden_descs);
+        if (params.len != layouts.len) {
+            boxyLowerInvariant("boxy worker hidden descriptor param count disagreed with layout plan");
+        }
+        if (params.len == 0) return;
+
+        try self.ensureDescriptorLocals();
+        for (params, layouts) |param, runtime_layout| {
+            const layout_idx = runtime_layout.layoutIdx();
+            if (layout_idx != .opaque_ptr) {
+                boxyLowerInvariant("boxy hidden descriptor arg layout was not opaque_ptr");
+            }
+            const local = try self.addArgLocal(layout_idx);
+            self.descriptor_locals[@intFromEnum(param.desc)] = local;
         }
     }
 
@@ -1521,12 +1553,13 @@ const ProcBodyBuilder = struct {
         if (call.direct_target == null) {
             boxyLowerInvariant("indirect checked call reached boxy lowering before erased callable call support");
         }
-        const worker_id = self.parent.plan.directWorkerForCall(.{ .module = self.module.key, .expr = call_expr }) orelse
+        const direct_plan = self.parent.plan.directCallPlanForCall(.{ .module = self.module.key, .expr = call_expr }) orelse
             boxyLowerInvariant("checked direct call reached boxy lowering without a planned worker");
+        const worker_id = direct_plan.worker;
         const worker_layout = self.parent.layout_plan.workerLayoutFor(worker_id);
         const worker_args = self.parent.layout_plan.workerLayoutSlice(worker_layout.args);
         if (call.args.len != worker_args.len) {
-            boxyLowerInvariant("boxy direct call needed hidden arguments before descriptor or dictionary lowering");
+            boxyLowerInvariant("boxy direct call source argument count disagreed with worker layout");
         }
 
         for (call.args, worker_args) |arg, arg_layout| {
@@ -1544,12 +1577,24 @@ const ProcBodyBuilder = struct {
         const lowered = try self.lowerExprsToTemps(call.args);
         defer self.parent.allocator.free(lowered);
 
+        const hidden_desc_args = self.parent.plan.directCallHiddenDescriptorArgSlice(direct_plan.hidden_desc_args);
+        const hidden_desc_locals = try self.lowerDirectCallHiddenDescriptorArgs(hidden_desc_args);
+        defer self.parent.allocator.free(hidden_desc_locals);
+
+        const call_locals = try self.parent.allocator.alloc(LIR.LocalId, lowered.len + hidden_desc_locals.len);
+        defer self.parent.allocator.free(call_locals);
+        @memcpy(call_locals[0..lowered.len], lowered);
+        for (hidden_desc_locals, 0..) |hidden, index| {
+            call_locals[lowered.len + index] = hidden.local;
+        }
+
         var continuation = try self.parent.result.store.addCFStmt(.{ .assign_call = .{
             .target = target,
             .proc = try self.parent.emitWorker(worker_id),
-            .args = try self.parent.result.store.addLocalSpan(lowered),
+            .args = try self.parent.result.store.addLocalSpan(call_locals),
             .next = next,
         } });
+        continuation = try self.prependHiddenDescriptorArgMaterialization(hidden_desc_locals, continuation);
         continuation = try self.prependLoweredExprs(call.args, lowered, continuation);
         return continuation;
     }
@@ -3441,6 +3486,56 @@ const ProcBodyBuilder = struct {
         return lowered;
     }
 
+    fn lowerDirectCallHiddenDescriptorArgs(
+        self: *ProcBodyBuilder,
+        hidden_args: []const Plan.DirectCallHiddenDescriptorArg,
+    ) Allocator.Error![]DescriptorArgLocal {
+        const lowered = try self.parent.allocator.alloc(DescriptorArgLocal, hidden_args.len);
+        errdefer self.parent.allocator.free(lowered);
+
+        for (hidden_args, lowered) |arg, *local| {
+            const desc_ref = self.descriptorRefForRep(arg.rep);
+            local.* = switch (desc_ref) {
+                .local => |desc_local| blk: {
+                    if (self.parent.result.store.getLocal(desc_local).layout_idx != .opaque_ptr) {
+                        boxyLowerInvariant("boxy hidden descriptor local was not opaque_ptr");
+                    }
+                    break :blk .{ .local = desc_local };
+                },
+                .static => blk: {
+                    const materialized = try self.addFrameLocal(.opaque_ptr);
+                    break :blk .{
+                        .local = materialized,
+                        .materialize = desc_ref,
+                    };
+                },
+            };
+        }
+
+        return lowered;
+    }
+
+    fn prependHiddenDescriptorArgMaterialization(
+        self: *ProcBodyBuilder,
+        hidden_args: []const DescriptorArgLocal,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        var continuation = next;
+        var index = hidden_args.len;
+        while (index > 0) {
+            index -= 1;
+            const hidden = hidden_args[index];
+            if (hidden.materialize) |desc| {
+                continuation = try self.parent.result.store.addCFStmt(.{ .assign_boxy_desc_ref = .{
+                    .target = hidden.local,
+                    .desc = desc,
+                    .next = continuation,
+                } });
+            }
+        }
+        return continuation;
+    }
+
     fn prependLoweredExprs(
         self: *ProcBodyBuilder,
         args: []const checked.CheckedExprId,
@@ -3985,7 +4080,13 @@ const ProcBodyBuilder = struct {
         const rep = self.parent.plan.representations.items[@intFromEnum(rep_id)];
         return switch (rep.kind) {
             .in_progress => boxyLowerInvariant("in-progress boxy representation reached inspect lowering"),
-            .dynamic => boxyLowerInvariant("dynamic inspect reached boxy lowering before descriptor inspect support"),
+            .dynamic => try self.parent.result.store.addCFStmt(.{ .assign_boxy_inspect = .{
+                .target = target,
+                .source = source,
+                .source_desc = self.descriptorRefForRep(rep_id),
+                .source_mode = .borrow,
+                .next = next,
+            } }),
             .erased_callable => try self.assignStringBytesLiteral(target, "<function>", next),
             .list => try self.lowerListInspectLocalsInto(target, source, rep_id, next),
             .box => try self.lowerBoxInspectLocalsInto(target, source, rep_id, next),
@@ -5469,6 +5570,12 @@ const ProcBodyBuilder = struct {
         @memset(self.binder_locals, null);
     }
 
+    fn ensureDescriptorLocals(self: *ProcBodyBuilder) Allocator.Error!void {
+        if (self.descriptor_locals.len != 0) return;
+        self.descriptor_locals = try self.parent.allocator.alloc(?LIR.LocalId, self.parent.plan.descriptors.items.len);
+        @memset(self.descriptor_locals, null);
+    }
+
     fn reservePatternBindings(self: *ProcBodyBuilder, pattern_id: checked.CheckedPatternId) Allocator.Error!void {
         try self.ensureBinderLocals();
         const pattern = self.module.checked_bodies.pattern(pattern_id);
@@ -5777,6 +5884,21 @@ const ProcBodyBuilder = struct {
     fn repForType(self: *const ProcBodyBuilder, ty: checked.CheckedTypeId) Plan.TypeRepId {
         return self.parent.plan.repForSourceType(.{ .module = self.module.key, .ty = ty }) orelse
             boxyLowerInvariant("checked body referenced a type missing from the boxy representation plan");
+    }
+
+    fn descriptorRefForRep(self: *const ProcBodyBuilder, rep_id: Plan.TypeRepId) LIR.BoxyDescRef {
+        const rep = self.parent.plan.representations.items[@intFromEnum(rep_id)];
+        if (rep.descriptor) |desc| return self.descriptorRefForRequirement(desc);
+        boxyLowerInvariant("boxy lowering required static TypeDesc emission before descriptor materialization for concrete reps");
+    }
+
+    fn descriptorRefForRequirement(self: *const ProcBodyBuilder, desc: Plan.DescriptorRequirementId) LIR.BoxyDescRef {
+        const desc_index = @intFromEnum(desc);
+        if (desc_index >= self.descriptor_locals.len) {
+            boxyLowerInvariant("boxy descriptor requirement was not available in this worker");
+        }
+        return .{ .local = self.descriptor_locals[desc_index] orelse
+            boxyLowerInvariant("boxy descriptor requirement had no bound local in this worker") };
     }
 
     fn workerRuntimeLayoutForType(self: *const ProcBodyBuilder, ty: checked.CheckedTypeId) Layouts.RuntimeLayout {
@@ -13898,7 +14020,9 @@ test "boxy lowerer stores dynamic list elements with boxy storage layout" {
 
     const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
     const args = out.lir_result.store.getLocalSpan(proc.args);
-    try std.testing.expectEqual(@as(usize, 2), args.len);
+    try std.testing.expectEqual(@as(usize, 4), args.len);
+    try std.testing.expectEqual(layout.Idx.opaque_ptr, out.lir_result.store.getLocal(args[2]).layout_idx);
+    try std.testing.expectEqual(layout.Idx.opaque_ptr, out.lir_result.store.getLocal(args[3]).layout_idx);
 
     const first = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_ref;
     switch (first.op) {
@@ -14448,7 +14572,9 @@ test "boxy lowerer reuses dynamic boxes for Box(a)" {
 
     const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
     const args = out.lir_result.store.getLocalSpan(proc.args);
-    try std.testing.expectEqual(@as(usize, 1), args.len);
+    try std.testing.expectEqual(@as(usize, 3), args.len);
+    try std.testing.expectEqual(layout.Idx.opaque_ptr, out.lir_result.store.getLocal(args[1]).layout_idx);
+    try std.testing.expectEqual(layout.Idx.opaque_ptr, out.lir_result.store.getLocal(args[2]).layout_idx);
 
     const from_arg = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_ref;
     switch (from_arg.op) {

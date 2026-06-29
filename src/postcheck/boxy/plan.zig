@@ -160,6 +160,18 @@ pub const DescriptorRequirement = struct {
     reason: DescriptorReason,
 };
 
+pub const HiddenDescriptorParam = struct {
+    source_type: TypeRef,
+    rep: TypeRepId,
+    desc: DescriptorRequirementId,
+};
+
+pub const DirectCallHiddenDescriptorArg = struct {
+    worker_desc: DescriptorRequirementId,
+    source_type: TypeRef,
+    rep: TypeRepId,
+};
+
 pub const DictionaryRequirement = struct {
     source_type: TypeRef,
     constraint_index: u32,
@@ -187,11 +199,14 @@ pub const WorkerPlan = struct {
     source: WorkerSource,
     checked_type: TypeRef,
     rep: TypeRepId,
+    hidden_descs: Span = .{},
 };
 
 pub const DirectCallPlan = struct {
     call: ExprRef,
     worker: WorkerPlanId,
+    source_fn_type: TypeRef,
+    hidden_desc_args: Span = .{},
 };
 
 pub const RootPlan = struct {
@@ -216,6 +231,8 @@ pub const ProgramPlan = struct {
     tag_variants: std.ArrayList(TagVariant),
     declared_fields: std.ArrayList(DeclaredField),
     descriptors: std.ArrayList(DescriptorRequirement),
+    hidden_descriptor_params: std.ArrayList(HiddenDescriptorParam),
+    direct_call_hidden_desc_args: std.ArrayList(DirectCallHiddenDescriptorArg),
     dictionaries: std.ArrayList(DictionaryRequirement),
 
     pub fn init(allocator: Allocator) ProgramPlan {
@@ -231,12 +248,16 @@ pub const ProgramPlan = struct {
             .tag_variants = .empty,
             .declared_fields = .empty,
             .descriptors = .empty,
+            .hidden_descriptor_params = .empty,
+            .direct_call_hidden_desc_args = .empty,
             .dictionaries = .empty,
         };
     }
 
     pub fn deinit(self: *ProgramPlan) void {
         self.dictionaries.deinit(self.allocator);
+        self.direct_call_hidden_desc_args.deinit(self.allocator);
+        self.hidden_descriptor_params.deinit(self.allocator);
         self.descriptors.deinit(self.allocator);
         self.declared_fields.deinit(self.allocator);
         self.tag_variants.deinit(self.allocator);
@@ -266,9 +287,21 @@ pub const ProgramPlan = struct {
         return self.dictionaries.items[span.start .. span.start + span.len];
     }
 
+    pub fn hiddenDescriptorParamSlice(self: *const ProgramPlan, span: Span) []const HiddenDescriptorParam {
+        return self.hidden_descriptor_params.items[span.start .. span.start + span.len];
+    }
+
+    pub fn directCallHiddenDescriptorArgSlice(self: *const ProgramPlan, span: Span) []const DirectCallHiddenDescriptorArg {
+        return self.direct_call_hidden_desc_args.items[span.start .. span.start + span.len];
+    }
+
     pub fn directWorkerForCall(self: *const ProgramPlan, call: ExprRef) ?WorkerPlanId {
+        return if (self.directCallPlanForCall(call)) |plan| plan.worker else null;
+    }
+
+    pub fn directCallPlanForCall(self: *const ProgramPlan, call: ExprRef) ?DirectCallPlan {
         for (self.direct_calls.items) |direct| {
-            if (exprRefEql(direct.call, call)) return direct.worker;
+            if (exprRefEql(direct.call, call)) return direct;
         }
         return null;
     }
@@ -330,6 +363,8 @@ pub fn analyzeProgram(
 
     builder.propagateDynamicRequirements();
     try builder.materializeDescriptorRequirements();
+    try builder.materializeWorkerHiddenDescriptorParams();
+    try builder.materializeDirectCallHiddenDescriptorArgs();
 
     const out = builder.plan;
     builder.plan = ProgramPlan.init(allocator);
@@ -1077,6 +1112,206 @@ const Builder = struct {
         }
     }
 
+    fn materializeWorkerHiddenDescriptorParams(self: *Builder) Allocator.Error!void {
+        for (self.plan.workers.items, 0..) |worker, worker_index| {
+            if (workerSourceIsHosted(worker.source)) {
+                self.plan.workers.items[worker_index].hidden_descs = .{};
+                continue;
+            }
+
+            var pending = std.ArrayList(HiddenDescriptorParam).empty;
+            defer pending.deinit(self.allocator);
+            var seen_reps = std.AutoHashMap(TypeRepId, void).init(self.allocator);
+            defer seen_reps.deinit();
+            var seen_descs = std.AutoHashMap(DescriptorRequirementId, void).init(self.allocator);
+            defer seen_descs.deinit();
+
+            if (try self.functionChildren(worker.rep)) |function| {
+                const children = self.plan.childSlice(self.plan.representations.items[@intFromEnum(function.rep)].children);
+                for (children[function.args_start..][0..function.arg_count]) |child| {
+                    try self.collectHiddenDescriptorsForRep(child.rep, &pending, &seen_reps, &seen_descs);
+                }
+                try self.collectHiddenDescriptorsForRep(function.ret, &pending, &seen_reps, &seen_descs);
+            } else {
+                try self.collectHiddenDescriptorsForRep(worker.rep, &pending, &seen_reps, &seen_descs);
+            }
+
+            const start: u32 = @intCast(self.plan.hidden_descriptor_params.items.len);
+            try self.plan.hidden_descriptor_params.appendSlice(self.allocator, pending.items);
+            self.plan.workers.items[worker_index].hidden_descs = .{
+                .start = start,
+                .len = @intCast(pending.items.len),
+            };
+        }
+    }
+
+    fn materializeDirectCallHiddenDescriptorArgs(self: *Builder) Allocator.Error!void {
+        for (self.plan.direct_calls.items, 0..) |direct, direct_index| {
+            const worker = self.plan.workers.items[@intFromEnum(direct.worker)];
+            const params = self.plan.hiddenDescriptorParamSlice(worker.hidden_descs);
+            if (params.len == 0) {
+                self.plan.direct_calls.items[direct_index].hidden_desc_args = .{};
+                continue;
+            }
+
+            const worker_function = (try self.functionChildren(worker.rep)) orelse
+                boxyPlanInvariant("boxy direct call target with hidden descriptors was not a function worker");
+            const call_rep = self.plan.repForSourceType(direct.source_fn_type) orelse
+                boxyPlanInvariant("boxy direct call source function type was not analyzed");
+            const call_function = (try self.functionChildren(call_rep)) orelse
+                boxyPlanInvariant("boxy direct call source type with hidden descriptors was not a function type");
+
+            if (worker_function.arg_count != call_function.arg_count) {
+                boxyPlanInvariant("boxy direct call hidden descriptor mapping saw mismatched function arity");
+            }
+
+            var pending = std.ArrayList(DirectCallHiddenDescriptorArg).empty;
+            defer pending.deinit(self.allocator);
+            var next_param: usize = 0;
+
+            const worker_children = self.plan.childSlice(self.plan.representations.items[@intFromEnum(worker_function.rep)].children);
+            const call_children = self.plan.childSlice(self.plan.representations.items[@intFromEnum(call_function.rep)].children);
+            for (
+                worker_children[worker_function.args_start..][0..worker_function.arg_count],
+                call_children[call_function.args_start..][0..call_function.arg_count],
+            ) |worker_child, call_child| {
+                if (!std.meta.eql(worker_child.role, call_child.role)) {
+                    boxyPlanInvariant("boxy direct call hidden descriptor mapping saw mismatched function argument roles");
+                }
+                try self.collectCallHiddenDescriptorArgs(worker_child.rep, call_child.rep, params, &next_param, &pending);
+            }
+            try self.collectCallHiddenDescriptorArgs(worker_function.ret, call_function.ret, params, &next_param, &pending);
+
+            if (next_param != params.len or pending.items.len != params.len) {
+                boxyPlanInvariant("boxy direct call hidden descriptor mapping did not cover every worker descriptor param");
+            }
+
+            const start: u32 = @intCast(self.plan.direct_call_hidden_desc_args.items.len);
+            try self.plan.direct_call_hidden_desc_args.appendSlice(self.allocator, pending.items);
+            self.plan.direct_calls.items[direct_index].hidden_desc_args = .{
+                .start = start,
+                .len = @intCast(pending.items.len),
+            };
+        }
+    }
+
+    fn collectHiddenDescriptorsForRep(
+        self: *Builder,
+        rep_id: TypeRepId,
+        pending: *std.ArrayList(HiddenDescriptorParam),
+        seen_reps: *std.AutoHashMap(TypeRepId, void),
+        seen_descs: *std.AutoHashMap(DescriptorRequirementId, void),
+    ) Allocator.Error!void {
+        const rep_entry = try seen_reps.getOrPut(rep_id);
+        if (rep_entry.found_existing) return;
+
+        const rep = self.plan.representations.items[@intFromEnum(rep_id)];
+        if (rep.descriptor) |desc| {
+            const desc_entry = try seen_descs.getOrPut(desc);
+            if (!desc_entry.found_existing) {
+                try pending.append(self.allocator, .{
+                    .source_type = rep.source_type,
+                    .rep = rep_id,
+                    .desc = desc,
+                });
+            }
+        }
+
+        for (self.plan.childSlice(rep.children)) |child| {
+            try self.collectHiddenDescriptorsForRep(child.rep, pending, seen_reps, seen_descs);
+        }
+    }
+
+    fn collectCallHiddenDescriptorArgs(
+        self: *Builder,
+        worker_rep_id: TypeRepId,
+        call_rep_id: TypeRepId,
+        params: []const HiddenDescriptorParam,
+        next_param: *usize,
+        pending: *std.ArrayList(DirectCallHiddenDescriptorArg),
+    ) Allocator.Error!void {
+        const worker_rep = self.plan.representations.items[@intFromEnum(worker_rep_id)];
+        const call_rep = self.plan.representations.items[@intFromEnum(call_rep_id)];
+
+        if (worker_rep.descriptor) |worker_desc| {
+            if (next_param.* >= params.len or params[next_param.*].desc != worker_desc) {
+                boxyPlanInvariant("boxy direct call hidden descriptor order disagreed with worker descriptor params");
+            }
+            next_param.* += 1;
+            try pending.append(self.allocator, .{
+                .worker_desc = worker_desc,
+                .source_type = call_rep.source_type,
+                .rep = call_rep_id,
+            });
+        }
+
+        if (worker_rep.children.len == 0) return;
+
+        const worker_children = self.plan.childSlice(worker_rep.children);
+        const call_children = self.plan.childSlice(call_rep.children);
+        for (worker_children) |worker_child| {
+            const call_child = findChildByRole(call_children, worker_child.role) orelse
+                boxyPlanInvariant("boxy direct call hidden descriptor mapping saw mismatched child roles");
+            try self.collectCallHiddenDescriptorArgs(worker_child.rep, call_child.rep, params, next_param, pending);
+        }
+    }
+
+    const FunctionChildren = struct {
+        rep: TypeRepId,
+        args_start: u32,
+        arg_count: u32,
+        ret: TypeRepId,
+    };
+
+    fn functionChildren(self: *Builder, rep_id: TypeRepId) Allocator.Error!?FunctionChildren {
+        const canonical_rep = try self.canonicalFunctionRep(rep_id);
+        const rep = self.plan.representations.items[@intFromEnum(canonical_rep)];
+        return switch (rep.kind) {
+            .erased_callable => blk: {
+                const children = self.plan.childSlice(rep.children);
+                var args_start: ?u32 = null;
+                var arg_count: u32 = 0;
+                var ret: ?TypeRepId = null;
+                for (children, 0..) |child, i| {
+                    switch (child.role) {
+                        .function_arg => {
+                            if (args_start == null) args_start = @intCast(i);
+                            arg_count += 1;
+                        },
+                        .function_ret => ret = child.rep,
+                        else => {},
+                    }
+                }
+                break :blk .{
+                    .rep = canonical_rep,
+                    .args_start = args_start orelse 0,
+                    .arg_count = arg_count,
+                    .ret = ret orelse boxyPlanInvariant("function representation had no return child"),
+                };
+            },
+            else => null,
+        };
+    }
+
+    fn canonicalFunctionRep(self: *Builder, rep_id: TypeRepId) Allocator.Error!TypeRepId {
+        var current = rep_id;
+        var depth: u16 = 0;
+        while (true) {
+            if (depth == 1024) boxyPlanInvariant("function root alias chain exceeded boxy planner limit");
+            depth += 1;
+
+            const rep = self.plan.representations.items[@intFromEnum(current)];
+            switch (rep.kind) {
+                .alias => current = requiredSingleChild(&self.plan, current, .alias_backing).rep,
+                .nominal => |kind| switch (kind) {
+                    .transparent => current = requiredSingleChild(&self.plan, current, .nominal_backing).rep,
+                    .opaque_nominal, .builtin_other => return current,
+                },
+                else => return current,
+            }
+        }
+    }
+
     fn analyzeWorkerBodyTypes(self: *Builder, source: WorkerSource) Allocator.Error!void {
         const body = self.rootWorkerBody(source);
         switch (body) {
@@ -1581,6 +1816,7 @@ const Builder = struct {
         try self.plan.direct_calls.append(self.allocator, .{
             .call = call_ref,
             .worker = worker,
+            .source_fn_type = typeRef(view, call.source_fn_ty_payload),
         });
     }
 
@@ -1703,8 +1939,42 @@ fn workerSourceForRoot(root: checked.RootRequest, root_key: checked.CheckedModul
     return null;
 }
 
+fn workerSourceIsHosted(source: WorkerSource) bool {
+    return switch (source) {
+        .procedure_use => |use| switch (use.binding) {
+            .hosted => true,
+            .top_level,
+            .platform_required,
+            .imported,
+            => false,
+        },
+        .procedure_template,
+        .procedure_binding,
+        => false,
+    };
+}
+
 fn workerSourceEql(a: WorkerSource, b: WorkerSource) bool {
     return std.meta.eql(a, b);
+}
+
+fn findChildByRole(children: []const RepChild, role: ChildRole) ?RepChild {
+    for (children) |child| {
+        if (std.meta.eql(child.role, role)) return child;
+    }
+    return null;
+}
+
+fn requiredSingleChild(plan: *const ProgramPlan, rep_id: TypeRepId, role: ChildRole) RepChild {
+    var found: ?RepChild = null;
+    const rep = plan.representations.items[@intFromEnum(rep_id)];
+    for (plan.childSlice(rep.children)) |child| {
+        if (std.meta.eql(child.role, role)) {
+            if (found != null) boxyPlanInvariant("boxy representation had duplicate child role");
+            found = child;
+        }
+    }
+    return found orelse boxyPlanInvariant("boxy representation was missing required child role");
 }
 
 fn checkedFunctionPayload(view: ModuleView, checked_ty: checked.CheckedTypeId) checked.CheckedFunctionType {

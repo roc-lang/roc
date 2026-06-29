@@ -128,6 +128,7 @@ pub const BoxyTypeDesc = struct {
     drop_plan: BoxySpan = .{},
     structural_eq: ?LIR.LirProcSpecId = null,
     structural_hash: ?LIR.LirProcSpecId = null,
+    structural_inspect: ?LIR.LirProcSpecId = null,
     debug_checked_type: ?checked.CheckedTypeId = null,
 };
 

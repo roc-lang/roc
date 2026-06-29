@@ -165,7 +165,7 @@ const Pass = struct {
                     try self.markProc(s.proc);
                     try self.pushStmt(s.next);
                 },
-                inline .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_call_dict, .assign_low_level => |s| try self.pushStmt(s.next),
+                inline .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_call_dict, .assign_low_level => |s| try self.pushStmt(s.next),
                 .assign_list => |s| try self.pushStmt(s.next),
                 .assign_struct => |s| try self.pushStmt(s.next),
                 .assign_tag => |s| try self.pushStmt(s.next),
@@ -378,6 +378,7 @@ const Pass = struct {
                 .assign_boxy_reuse_box,
                 .assign_boxy_unbox,
                 .assign_boxy_adapt,
+                .assign_boxy_inspect,
                 .assign_call_dict,
                 .assign_low_level,
                 .assign_list,
@@ -584,6 +585,7 @@ const Pass = struct {
             .assign_boxy_reuse_box,
             .assign_boxy_unbox,
             .assign_boxy_adapt,
+            .assign_boxy_inspect,
             .assign_call_dict,
             .assign_low_level,
             .assign_list,

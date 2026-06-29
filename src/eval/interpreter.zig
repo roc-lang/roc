@@ -1523,6 +1523,7 @@ pub const Interpreter = struct {
                 .assign_boxy_reuse_box => |assign| assign.next,
                 .assign_boxy_unbox => |assign| assign.next,
                 .assign_boxy_adapt => |assign| assign.next,
+                .assign_boxy_inspect => |assign| assign.next,
                 .assign_call_dict => |assign| assign.next,
                 .assign_low_level => |assign| assign.next,
                 .assign_list => |assign| assign.next,
@@ -1877,6 +1878,7 @@ pub const Interpreter = struct {
                 .assign_boxy_reuse_box,
                 .assign_boxy_unbox,
                 .assign_boxy_adapt,
+                .assign_boxy_inspect,
                 .assign_call_dict,
                 => return self.invariantFailedError(
                     "LIR/interpreter invariant violated: boxy LIR statement reached interpreter execution before boxy interpreter semantics are implemented at stmt {d}",
@@ -2268,6 +2270,7 @@ pub const Interpreter = struct {
                 .assign_boxy_reuse_box,
                 .assign_boxy_unbox,
                 .assign_boxy_adapt,
+                .assign_boxy_inspect,
                 .assign_call_dict,
                 => |assign| {
                     debugPrint("    {d}: {any}\n", .{ @intFromEnum(stmt_id), stmt });

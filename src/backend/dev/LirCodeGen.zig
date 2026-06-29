@@ -5957,6 +5957,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try locals.put(localKey(assign.source), assign.source);
                         try stack.append(sa, assign.next);
                     },
+                    .assign_boxy_inspect => |assign| {
+                        try locals.put(localKey(assign.source), assign.source);
+                        if (assign.source_desc.localOrNull()) |local| try locals.put(localKey(local), local);
+                        try stack.append(sa, assign.next);
+                    },
                     .assign_call_dict => |assign| {
                         if (assign.dict.localOrNull()) |local| try locals.put(localKey(local), local);
                         for (self.store.getLocalSpan(assign.args)) |arg| {
@@ -6145,6 +6150,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     .assign_boxy_adapt => |assign| {
                         try locals.put(localKey(assign.target), assign.target);
                         try locals.put(localKey(assign.source), assign.source);
+                        try stack.append(sa, assign.next);
+                    },
+                    .assign_boxy_inspect => |assign| {
+                        try locals.put(localKey(assign.target), assign.target);
+                        try locals.put(localKey(assign.source), assign.source);
+                        if (assign.source_desc.localOrNull()) |local| try locals.put(localKey(local), local);
                         try stack.append(sa, assign.next);
                     },
                     .assign_call_dict => |assign| {
@@ -15062,6 +15073,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         .assign_boxy_reuse_box,
                         .assign_boxy_unbox,
                         .assign_boxy_adapt,
+                        .assign_boxy_inspect,
                         .assign_call_dict,
                         => std.debug.panic(
                             "Dev/codegen invariant violated: boxy LIR statement reached dev codegen before boxy codegen is implemented",

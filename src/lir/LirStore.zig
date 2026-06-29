@@ -393,6 +393,7 @@ pub fn addCFStmt(self: *Self, stmt: CFStmt) Allocator.Error!CFStmtId {
         .assign_boxy_reuse_box,
         .assign_boxy_unbox,
         .assign_boxy_adapt,
+        .assign_boxy_inspect,
         .assign_call_dict,
         .assign_low_level,
         .assign_list,
