@@ -1772,25 +1772,11 @@ fn removeDomNode(host: *HostEnv, elem_id: u64) void {
         const parent = &host.dom_elements.items[@intCast(parent_id)];
         if (parent.active) {
             if (findDomChildIndex(parent, elem_id)) |child_index| {
-                _ = parent.children.orderedRemove(child_index);
+                sim_dom.removeChildAt(parent, child_index);
             }
         }
     }
-    elem.active = false;
-    elem.parent_id = null;
-    elem.bound_click_event = null;
-    elem.bound_input_event = null;
-    elem.bound_check_event = null;
-    elem.bound_pointer_down_event = null;
-    elem.bound_pointer_up_event = null;
-    elem.bound_pointer_enter_event = null;
-    elem.bound_pointer_leave_event = null;
-    for (elem.named_events.items) |event| {
-        event.deinit(allocator);
-    }
-    elem.named_events.clearRetainingCapacity();
-    elem.children.deinit(allocator);
-    elem.children = .empty;
+    sim_dom.deactivateRemovedNode(allocator, elem);
 }
 
 fn replaceDomChildrenForStructuralParent(host: *HostEnv, parent_elem_id: u64, next_child_ids: []const u64) void {
@@ -1811,12 +1797,9 @@ fn replaceDomChildrenForStructuralParent(host: *HostEnv, parent_elem_id: u64, ne
             const rendered = std.fmt.bufPrint(&message, "structural child replacement referenced inactive child {d} under parent {d}", .{ child_id, parent_elem_id }) catch "structural child replacement referenced inactive child";
             failHost(rendered);
         }
-        child.parent_id = parent_elem_id;
     }
 
-    parent.children.deinit(allocator);
-    parent.children = .empty;
-    parent.children.appendSlice(allocator, next_child_ids) catch std.process.exit(1);
+    sim_dom.replaceChildren(allocator, host.dom_elements.items, parent, next_child_ids);
 }
 
 fn applyNodeDescriptorStream(host: *HostEnv, roc_host: *abi.RocHost, stream: *HostNodeDescriptorStream) CommandCounts {

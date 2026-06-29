@@ -360,6 +360,37 @@ pub fn appendChild(allocator: std.mem.Allocator, parent: *Element, child: *Eleme
     parent.children.append(allocator, child.id) catch std.process.exit(1);
 }
 
+pub fn removeChildAt(parent: *Element, child_index: usize) void {
+    _ = parent.children.orderedRemove(child_index);
+}
+
+pub fn deactivateRemovedNode(allocator: std.mem.Allocator, elem: *Element) void {
+    elem.active = false;
+    elem.parent_id = null;
+    elem.bound_click_event = null;
+    elem.bound_input_event = null;
+    elem.bound_check_event = null;
+    elem.bound_pointer_down_event = null;
+    elem.bound_pointer_up_event = null;
+    elem.bound_pointer_enter_event = null;
+    elem.bound_pointer_leave_event = null;
+    for (elem.named_events.items) |event| {
+        event.deinit(allocator);
+    }
+    elem.named_events.clearRetainingCapacity();
+    elem.children.deinit(allocator);
+    elem.children = .empty;
+}
+
+pub fn replaceChildren(allocator: std.mem.Allocator, elements: []Element, parent: *Element, next_child_ids: []const u64) void {
+    for (next_child_ids) |child_id| {
+        elements[@intCast(child_id)].parent_id = parent.id;
+    }
+    parent.children.deinit(allocator);
+    parent.children = .empty;
+    parent.children.appendSlice(allocator, next_child_ids) catch std.process.exit(1);
+}
+
 test "simulated DOM element indexes attrs and named events" {
     const allocator = std.testing.allocator;
     const tag = try allocator.dupe(u8, "button");
@@ -479,4 +510,34 @@ test "simulated DOM resets and appends children" {
     appendChild(allocator, &elements.items[0], &elements.items[1]);
     try std.testing.expectEqual(@as(?u64, 0), elements.items[1].parent_id);
     try std.testing.expectEqualSlices(u64, &.{1}, elements.items[0].children.items);
+}
+
+test "simulated DOM replaces children and deactivates removed nodes" {
+    const allocator = std.testing.allocator;
+    var elements: std.ArrayListUnmanaged(Element) = .empty;
+    defer {
+        for (elements.items) |*elem| {
+            elem.deinit(allocator);
+        }
+        elements.deinit(allocator);
+    }
+
+    reset(allocator, &elements);
+    appendDetached(allocator, &elements, 1, "section");
+    appendDetached(allocator, &elements, 2, "p");
+    appendDetached(allocator, &elements, 3, "button");
+    appendChild(allocator, &elements.items[0], &elements.items[1]);
+    appendChild(allocator, &elements.items[1], &elements.items[2]);
+
+    replaceChildren(allocator, elements.items, &elements.items[0], &.{3});
+    try std.testing.expectEqual(@as(?u64, 0), elements.items[3].parent_id);
+    try std.testing.expectEqualSlices(u64, &.{3}, elements.items[0].children.items);
+
+    removeChildAt(&elements.items[0], 0);
+    try std.testing.expectEqual(@as(usize, 0), elements.items[0].children.items.len);
+    bindEventName(allocator, &elements.items[3], "click", 9, 0, .unit, .none);
+    deactivateRemovedNode(allocator, &elements.items[3]);
+    try std.testing.expect(!elements.items[3].active);
+    try std.testing.expectEqual(@as(?u64, null), elements.items[3].parent_id);
+    try std.testing.expectEqual(@as(usize, 0), elements.items[3].named_events.items.len);
 }
