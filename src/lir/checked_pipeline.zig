@@ -26,6 +26,8 @@ const checked = check.CheckedModule;
 /// Resource failure while lowering checked modules to LIR.
 pub const LowerResourceError = Allocator.Error;
 
+pub const SpecializationStrategy = base.SpecializationStrategy;
+
 /// Root checked module plus the checked imports visible to post-check lowering.
 pub const CheckedModuleSet = struct {
     root: checked.LoweringModuleView,
@@ -42,6 +44,7 @@ pub const RootRequestSet = struct {
 /// Target settings and checked module state for the checked-to-LIR pipeline.
 pub const TargetConfig = struct {
     target_usize: base.target.TargetUsize = base.target.TargetUsize.native,
+    specialization_strategy: SpecializationStrategy = .lss,
     checked_module_state: CheckedModuleState = .complete,
     inline_mode: InlineMode = .none,
     inline_expects: InlineExpectMode = .run,
@@ -192,6 +195,11 @@ pub fn lowerCheckedModulesToLir(
     target: TargetConfig,
 ) LowerResourceError!LoweredProgram {
     try verifyCheckedBoundary(modules, target);
+
+    switch (target.specialization_strategy) {
+        .lss => {},
+        .boxy => checkedPipelineInvariant("boxy checked-to-LIR lowering is selected before the boxy lowerer exists"),
+    }
 
     const layout_requests = try collectLayoutRequests(allocator, modules.root.module, roots.layout_requests, roots.include_static_data_exports);
     defer allocator.free(layout_requests);

@@ -1,8 +1,11 @@
 //! Command line argument parsing for the CLI
 const std = @import("std");
+const base = @import("base");
 const Allocator = std.mem.Allocator;
 const testing = std.testing;
 const mem = std.mem;
+
+const SpecializationStrategy = base.SpecializationStrategy;
 
 /// Errors that can occur while parsing CLI arguments.
 pub const ParseError = Allocator.Error || std.Io.Dir.OpenError || std.Io.Dir.Iterator.Error;
@@ -74,6 +77,17 @@ pub const OptLevel = enum {
             .size, .speed => .llvm,
         };
     }
+
+    pub fn defaultSpecializationStrategy(self: OptLevel) SpecializationStrategy {
+        return switch (self) {
+            .dev, .interpreter => .boxy,
+            .size, .speed => .lss,
+        };
+    }
+
+    pub fn effectiveSpecializationStrategy(self: OptLevel, explicit: ?SpecializationStrategy) SpecializationStrategy {
+        return explicit orelse self.defaultSpecializationStrategy();
+    }
 };
 
 /// Package download size limits for commands that resolve dependencies.
@@ -86,6 +100,12 @@ pub const ResolveLimitArgs = struct {
 const ResolveLimitParse = union(enum) {
     not_matched,
     ok,
+    problem: ArgProblem,
+};
+
+const SpecializeParse = union(enum) {
+    not_matched,
+    ok: SpecializationStrategy,
     problem: ArgProblem,
 };
 
@@ -108,6 +128,24 @@ fn parseResolveLimitFlag(arg: []const u8, limits: *ResolveLimitArgs) ResolveLimi
     return .not_matched;
 }
 
+fn parseSpecializeFlag(arg: []const u8) SpecializeParse {
+    const flag = "--specialize";
+    if (!mem.startsWith(u8, arg, flag)) return .not_matched;
+
+    if (getFlagValue(arg)) |value| {
+        if (SpecializationStrategy.fromCliValue(value)) |strategy| {
+            return .{ .ok = strategy };
+        }
+        return .{ .problem = ArgProblem{ .invalid_flag_value = .{
+            .flag = flag,
+            .value = value,
+            .valid_options = SpecializationStrategy.cliOptions(),
+        } } };
+    }
+
+    return .{ .problem = ArgProblem{ .missing_flag_value = .{ .flag = flag } } };
+}
+
 const resolve_limit_help =
     \\      --max-package-mb=<N>     Per-package decompressed size limit in MB (default: 10, 0 for unlimited)
     \\      --max-transitive-mb=<N>  Combined size limit in MB for each direct dependency's transitive packages (default: 100, 0 for unlimited)
@@ -117,6 +155,7 @@ const resolve_limit_help =
 pub const RunArgs = struct {
     path: []const u8, // the path of the roc file to be executed
     opt: OptLevel = .dev, // the optimization level (dev, interpreter, size, speed)
+    specialization_strategy: ?SpecializationStrategy = null, // explicit --specialize override, if provided
     target: ?[]const u8 = null, // the target to compile for (e.g., x64musl, x64glibc)
     app_args: []const []const u8 = &[_][]const u8{}, // any arguments to be passed to roc application being run
     no_cache: bool = false, // bypass the executable cache
@@ -145,6 +184,7 @@ pub const CheckArgs = struct {
 pub const BuildArgs = struct {
     path: []const u8, // the path to the roc file to be built
     opt: OptLevel, // the optimization level (dev, interpreter, size, speed)
+    specialization_strategy: ?SpecializationStrategy = null, // explicit --specialize override, if provided
     target: ?[]const u8 = null, // the target to compile for (e.g., x64musl, x64glibc)
     output: ?[]const u8 = null, // the path where the output binary should be created
     debug: bool = false, // include debug information in the output binary
@@ -174,6 +214,7 @@ pub const BuildArgs = struct {
 pub const TestArgs = struct {
     path: []const u8, // the path to the file to be tested
     opt: OptLevel, // the optimization level (dev, interpreter, size, speed)
+    specialization_strategy: ?SpecializationStrategy = null, // explicit --specialize override, if provided
     main: ?[]const u8, // the path to a roc file with an app header to be used to resolve dependencies
     verbose: bool = false, // enable verbose output showing individual test results
     no_cache: bool = false, // disable compilation caching, force re-run all tests
@@ -226,6 +267,7 @@ pub const ExperimentalLspArgs = struct {
 /// Arguments for `roc repl`
 pub const ReplArgs = struct {
     opt: OptLevel = .dev,
+    specialization_strategy: ?SpecializationStrategy = null,
     no_color: bool = false,
 };
 
@@ -235,6 +277,7 @@ pub const GlueArgs = struct {
     output_dir: []const u8, // path to the output directory for generated glue files (REQUIRED)
     platform_path: []const u8, // path to the platform .roc file (default: main.roc)
     opt: OptLevel = .dev,
+    specialization_strategy: ?SpecializationStrategy = null,
 };
 
 /// Parse a list of arguments.
@@ -291,6 +334,7 @@ const main_help =
     \\                     e.g. `roc app.roc -- arg1 arg2`
     \\Options:
     \\      --opt=<opt>                    Execution mode: dev (default, fast compilation), interpreter, size (LLVM) or speed (LLVM)
+    \\      --specialize=<yes|no>          Use lambda-set specialization (yes) or boxy lowering (no)
     \\      --target=<target>              Target to compile for (e.g., x64musl, x64glibc, arm64musl). Defaults to native target with musl for static linking
     \\      --no-cache                     Disable compilation and executable caches (useful for compiler and platform developers)
     \\      --allow-errors                 Allow execution even if there are type errors (warnings are always allowed)
@@ -351,6 +395,8 @@ fn parseCheck(args: []const []const u8) CliArgs {
                 .problem => |problem| return CliArgs{ .problem = problem },
                 else => {},
             }
+        } else if (mem.startsWith(u8, arg, "--specialize")) {
+            return CliArgs{ .problem = ArgProblem{ .unexpected_argument = .{ .cmd = "check", .arg = arg } } };
         } else if (mem.startsWith(u8, arg, "--main")) {
             if (getFlagValue(arg)) |value| {
                 main = value;
@@ -404,6 +450,7 @@ fn parseCheck(args: []const []const u8) CliArgs {
 fn parseBuild(args: []const []const u8) CliArgs {
     var path: ?[]const u8 = null;
     var opt: OptLevel = .speed;
+    var specialization_strategy: ?SpecializationStrategy = null;
     var target: ?[]const u8 = null;
     var output: ?[]const u8 = null;
     var debug: bool = false;
@@ -430,6 +477,7 @@ fn parseBuild(args: []const []const u8) CliArgs {
             \\Options:
             \\      --output=<output>              The full path to the output binary, including filename. To specify directory only, specify a path that ends in a directory separator (e.g. a slash)
             \\      --opt=<opt>                    Build mode: speed (default LLVM optimized), size (LLVM optimized for binary size), dev (native dev backend), or interpreter (embedded interpreter backend)
+            \\      --specialize=<yes|no>          Use lambda-set specialization (yes) or boxy lowering (no)
             \\      --target=<target>              Target to compile for (e.g., x64musl, x64glibc, arm64musl). Defaults to native target with musl for static linking
             \\      --debug                        Include debug information in the output binary
             \\      --allow-errors                 Allow building even if there are type errors (warnings are always allowed)
@@ -447,6 +495,12 @@ fn parseBuild(args: []const []const u8) CliArgs {
             switch (parseResolveLimitFlag(arg, &resolve_limits)) {
                 .problem => |problem| return CliArgs{ .problem = problem },
                 else => {},
+            }
+        } else if (mem.startsWith(u8, arg, "--specialize")) {
+            switch (parseSpecializeFlag(arg)) {
+                .ok => |strategy| specialization_strategy = strategy,
+                .problem => |problem| return CliArgs{ .problem = problem },
+                .not_matched => unreachable,
             }
         } else if (mem.startsWith(u8, arg, "--target")) {
             if (getFlagValue(arg)) |value| {
@@ -529,7 +583,7 @@ fn parseBuild(args: []const []const u8) CliArgs {
             path = arg;
         }
     }
-    return CliArgs{ .build = BuildArgs{ .path = path orelse "main.roc", .opt = opt, .target = target, .output = output, .debug = debug, .allow_errors = allow_errors, .verbose = verbose, .timings = timings, .no_cache = no_cache, .watch = watch, .watch_inputs_file = watch_inputs_file, .max_threads = max_threads, .wasm_memory = wasm_memory, .wasm_stack_size = wasm_stack_size, .resolve_limits = resolve_limits } };
+    return CliArgs{ .build = BuildArgs{ .path = path orelse "main.roc", .opt = opt, .specialization_strategy = specialization_strategy, .target = target, .output = output, .debug = debug, .allow_errors = allow_errors, .verbose = verbose, .timings = timings, .no_cache = no_cache, .watch = watch, .watch_inputs_file = watch_inputs_file, .max_threads = max_threads, .wasm_memory = wasm_memory, .wasm_stack_size = wasm_stack_size, .resolve_limits = resolve_limits } };
 }
 
 fn parseBundle(alloc: mem.Allocator, args: []const []const u8) std.mem.Allocator.Error!CliArgs {
@@ -703,6 +757,7 @@ fn parseFormat(alloc: mem.Allocator, args: []const []const u8) std.mem.Allocator
 fn parseTest(args: []const []const u8) CliArgs {
     var path: ?[]const u8 = null;
     var opt: OptLevel = .dev;
+    var specialization_strategy: ?SpecializationStrategy = null;
     var main: ?[]const u8 = null;
     var verbose: bool = false;
     var no_cache: bool = false;
@@ -722,6 +777,7 @@ fn parseTest(args: []const []const u8) CliArgs {
             \\
             \\Options:
             \\      --opt=<opt>                     Execution mode: dev (default, fast compilation), interpreter, size (LLVM) or speed (LLVM)
+            \\      --specialize=<yes|no>           Use lambda-set specialization (yes) or boxy lowering (no)
             \\      --main <main>                   The .roc file of the main app/package module to resolve dependencies from
             \\      --verbose                       Enable verbose output showing individual test results
             \\      --no-cache                      Disable compilation caching, force re-run all tests
@@ -734,6 +790,12 @@ fn parseTest(args: []const []const u8) CliArgs {
             switch (parseResolveLimitFlag(arg, &resolve_limits)) {
                 .problem => |problem| return CliArgs{ .problem = problem },
                 else => {},
+            }
+        } else if (mem.startsWith(u8, arg, "--specialize")) {
+            switch (parseSpecializeFlag(arg)) {
+                .ok => |strategy| specialization_strategy = strategy,
+                .problem => |problem| return CliArgs{ .problem = problem },
+                .not_matched => unreachable,
             }
         } else if (mem.startsWith(u8, arg, "--main")) {
             if (getFlagValue(arg)) |value| {
@@ -787,11 +849,12 @@ fn parseTest(args: []const []const u8) CliArgs {
             path = arg;
         }
     }
-    return CliArgs{ .test_cmd = TestArgs{ .path = path orelse "main.roc", .opt = opt, .main = main, .verbose = verbose, .no_cache = no_cache, .watch = watch, .watch_inputs_file = watch_inputs_file, .max_threads = max_threads, .resolve_limits = resolve_limits } };
+    return CliArgs{ .test_cmd = TestArgs{ .path = path orelse "main.roc", .opt = opt, .specialization_strategy = specialization_strategy, .main = main, .verbose = verbose, .no_cache = no_cache, .watch = watch, .watch_inputs_file = watch_inputs_file, .max_threads = max_threads, .resolve_limits = resolve_limits } };
 }
 
 fn parseRepl(args: []const []const u8) CliArgs {
     var opt: OptLevel = .dev;
+    var specialization_strategy: ?SpecializationStrategy = null;
     var no_color: bool = false;
 
     for (args) |arg| {
@@ -803,12 +866,19 @@ fn parseRepl(args: []const []const u8) CliArgs {
             \\
             \\Options:
             \\      --opt=<opt>  Execution mode: dev (default, fast compilation), interpreter, size (LLVM) or speed (LLVM)
+            \\      --specialize=<yes|no>  Use lambda-set specialization (yes) or boxy lowering (no)
             \\      --no-color   Do not use ANSI color codes in REPL diagnostics
             \\  -h, --help       Print help
             \\
             };
         } else if (mem.eql(u8, arg, "--no-color")) {
             no_color = true;
+        } else if (mem.startsWith(u8, arg, "--specialize")) {
+            switch (parseSpecializeFlag(arg)) {
+                .ok => |strategy| specialization_strategy = strategy,
+                .problem => |problem| return CliArgs{ .problem = problem },
+                .not_matched => unreachable,
+            }
         } else if (mem.startsWith(u8, arg, "--opt")) {
             if (getFlagValue(arg)) |value| {
                 if (OptLevel.from_str(value)) |level| {
@@ -823,7 +893,7 @@ fn parseRepl(args: []const []const u8) CliArgs {
             return CliArgs{ .problem = ArgProblem{ .unexpected_argument = .{ .cmd = "repl", .arg = arg } } };
         }
     }
-    return CliArgs{ .repl = .{ .opt = opt, .no_color = no_color } };
+    return CliArgs{ .repl = .{ .opt = opt, .specialization_strategy = specialization_strategy, .no_color = no_color } };
 }
 
 fn parseGlue(args: []const []const u8) CliArgs {
@@ -831,6 +901,7 @@ fn parseGlue(args: []const []const u8) CliArgs {
     var output_dir: ?[]const u8 = null;
     var platform_path: ?[]const u8 = null;
     var opt: OptLevel = .dev;
+    var specialization_strategy: ?SpecializationStrategy = null;
 
     for (args) |arg| {
         if (isHelpFlag(arg)) {
@@ -846,9 +917,16 @@ fn parseGlue(args: []const []const u8) CliArgs {
             \\
             \\Options:
             \\  --opt=<level>  Run the glue spec with dev or interpreter [default: dev]
+            \\  --specialize=<yes|no>  Use lambda-set specialization (yes) or boxy lowering (no)
             \\  -h, --help     Print help
             \\
             };
+        } else if (mem.startsWith(u8, arg, "--specialize")) {
+            switch (parseSpecializeFlag(arg)) {
+                .ok => |strategy| specialization_strategy = strategy,
+                .problem => |problem| return CliArgs{ .problem = problem },
+                .not_matched => unreachable,
+            }
         } else if (mem.startsWith(u8, arg, "--opt")) {
             if (getFlagValue(arg)) |value| {
                 if (OptLevel.from_str(value)) |level| {
@@ -891,6 +969,7 @@ fn parseGlue(args: []const []const u8) CliArgs {
         \\
         \\Options:
         \\  --opt=<level>  Run the glue spec with dev or interpreter [default: dev]
+        \\  --specialize=<yes|no>  Use lambda-set specialization (yes) or boxy lowering (no)
         \\  -h, --help     Print help
         \\
         };
@@ -912,6 +991,7 @@ fn parseGlue(args: []const []const u8) CliArgs {
         \\
         \\Options:
         \\  --opt=<level>  Run the glue spec with dev or interpreter [default: dev]
+        \\  --specialize=<yes|no>  Use lambda-set specialization (yes) or boxy lowering (no)
         \\  -h, --help     Print help
         \\
         };
@@ -922,6 +1002,7 @@ fn parseGlue(args: []const []const u8) CliArgs {
         .output_dir = output_dir.?,
         .platform_path = platform_path orelse "main.roc",
         .opt = opt,
+        .specialization_strategy = specialization_strategy,
     } };
 }
 
@@ -1085,6 +1166,7 @@ fn parseExperimentalLsp(args: []const []const u8) CliArgs {
 fn parseRun(alloc: mem.Allocator, args: []const []const u8) std.mem.Allocator.Error!CliArgs {
     var path: ?[]const u8 = null;
     var opt: OptLevel = .dev;
+    var specialization_strategy: ?SpecializationStrategy = null;
     var target: ?[]const u8 = null;
     var no_cache: bool = false;
     var allow_errors: bool = false;
@@ -1114,13 +1196,25 @@ fn parseRun(alloc: mem.Allocator, args: []const []const u8) std.mem.Allocator.Er
             return CliArgs{ .help = main_help };
         } else if (mem.startsWith(u8, arg, "--max-package-mb") or mem.startsWith(u8, arg, "--max-transitive-mb")) {
             switch (parseResolveLimitFlag(arg, &resolve_limits)) {
-                .problem => |problem| return CliArgs{ .problem = problem },
+                .problem => |problem| {
+                    app_args.deinit();
+                    return CliArgs{ .problem = problem };
+                },
                 else => {},
             }
         } else if (mem.eql(u8, arg, "-v") or mem.eql(u8, arg, "--version")) {
             // We need to free the paths here because we aren't returning the .format variant
             app_args.deinit();
             return CliArgs.version;
+        } else if (mem.startsWith(u8, arg, "--specialize")) {
+            switch (parseSpecializeFlag(arg)) {
+                .ok => |strategy| specialization_strategy = strategy,
+                .problem => |problem| {
+                    app_args.deinit();
+                    return CliArgs{ .problem = problem };
+                },
+                .not_matched => unreachable,
+            }
         } else if (mem.startsWith(u8, arg, "--target")) {
             if (getFlagValue(arg)) |value| {
                 target = value;
@@ -1177,7 +1271,7 @@ fn parseRun(alloc: mem.Allocator, args: []const []const u8) std.mem.Allocator.Er
             }
         }
     }
-    return CliArgs{ .run = RunArgs{ .path = path orelse "main.roc", .opt = opt, .target = target, .app_args = try app_args.toOwnedSlice(), .no_cache = no_cache, .allow_errors = allow_errors, .watch = watch, .timings = timings, .max_threads = max_threads, .resolve_limits = resolve_limits } };
+    return CliArgs{ .run = RunArgs{ .path = path orelse "main.roc", .opt = opt, .specialization_strategy = specialization_strategy, .target = target, .app_args = try app_args.toOwnedSlice(), .no_cache = no_cache, .allow_errors = allow_errors, .watch = watch, .timings = timings, .max_threads = max_threads, .resolve_limits = resolve_limits } };
 }
 
 fn isHelpFlag(arg: []const u8) bool {
@@ -1189,6 +1283,76 @@ fn getFlagValue(arg: []const u8) ?[]const u8 {
     // ignore the flag key
     _ = iter.next();
     return iter.next();
+}
+
+test "specialization strategy parsing" {
+    const gpa = testing.allocator;
+
+    try testing.expectEqual(SpecializationStrategy.boxy, OptLevel.dev.defaultSpecializationStrategy());
+    try testing.expectEqual(SpecializationStrategy.boxy, OptLevel.interpreter.defaultSpecializationStrategy());
+    try testing.expectEqual(SpecializationStrategy.lss, OptLevel.size.defaultSpecializationStrategy());
+    try testing.expectEqual(SpecializationStrategy.lss, OptLevel.speed.defaultSpecializationStrategy());
+    try testing.expectEqual(SpecializationStrategy.lss, OptLevel.dev.effectiveSpecializationStrategy(.lss));
+
+    {
+        const result = try parse(gpa, testing.io, &[_][]const u8{});
+        defer result.deinit(gpa);
+        try testing.expectEqual(@as(?SpecializationStrategy, null), result.run.specialization_strategy);
+    }
+    {
+        const result = try parse(gpa, testing.io, &[_][]const u8{ "--specialize=yes", "foo.roc" });
+        defer result.deinit(gpa);
+        try testing.expectEqual(SpecializationStrategy.lss, result.run.specialization_strategy.?);
+    }
+    {
+        const result = try parse(gpa, testing.io, &[_][]const u8{ "foo.roc", "--specialize=no" });
+        defer result.deinit(gpa);
+        try testing.expectEqual(SpecializationStrategy.boxy, result.run.specialization_strategy.?);
+    }
+    {
+        const result = try parse(gpa, testing.io, &[_][]const u8{ "foo.roc", "--", "--specialize=no" });
+        defer result.deinit(gpa);
+        try testing.expectEqual(@as(?SpecializationStrategy, null), result.run.specialization_strategy);
+        try testing.expectEqualStrings("--specialize=no", result.run.app_args[0]);
+    }
+    {
+        const result = try parse(gpa, testing.io, &[_][]const u8{"--specialize"});
+        defer result.deinit(gpa);
+        try testing.expectEqualStrings("--specialize", result.problem.missing_flag_value.flag);
+    }
+    {
+        const result = try parse(gpa, testing.io, &[_][]const u8{"--specialize=maybe"});
+        defer result.deinit(gpa);
+        try testing.expectEqualStrings("--specialize", result.problem.invalid_flag_value.flag);
+        try testing.expectEqualStrings("maybe", result.problem.invalid_flag_value.value);
+        try testing.expectEqualStrings("yes,no", result.problem.invalid_flag_value.valid_options);
+    }
+    {
+        const result = try parse(gpa, testing.io, &[_][]const u8{ "build", "--specialize=no" });
+        defer result.deinit(gpa);
+        try testing.expectEqual(SpecializationStrategy.boxy, result.build.specialization_strategy.?);
+    }
+    {
+        const result = try parse(gpa, testing.io, &[_][]const u8{ "test", "--specialize=yes" });
+        defer result.deinit(gpa);
+        try testing.expectEqual(SpecializationStrategy.lss, result.test_cmd.specialization_strategy.?);
+    }
+    {
+        const result = try parse(gpa, testing.io, &[_][]const u8{ "repl", "--specialize=no" });
+        defer result.deinit(gpa);
+        try testing.expectEqual(SpecializationStrategy.boxy, result.repl.specialization_strategy.?);
+    }
+    {
+        const result = try parse(gpa, testing.io, &[_][]const u8{ "glue", "--specialize=yes", "Glue.roc", "glue-out" });
+        defer result.deinit(gpa);
+        try testing.expectEqual(SpecializationStrategy.lss, result.glue.specialization_strategy.?);
+    }
+    {
+        const result = try parse(gpa, testing.io, &[_][]const u8{ "check", "--specialize=no" });
+        defer result.deinit(gpa);
+        try testing.expectEqualStrings("check", result.problem.unexpected_argument.cmd);
+        try testing.expectEqualStrings("--specialize=no", result.problem.unexpected_argument.arg);
+    }
 }
 
 test "default roc command" {

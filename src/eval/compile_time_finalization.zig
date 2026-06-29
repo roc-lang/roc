@@ -460,6 +460,7 @@ fn lowerEvalAndFinishRoots(
         .{ .requests = requests },
         .{
             .target_usize = base.target.TargetUsize.native,
+            .specialization_strategy = .lss,
             .checked_module_state = .checking_finalization,
         },
     );

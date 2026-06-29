@@ -13,6 +13,7 @@ pub const Scratch = @import("Scratch.zig").Scratch;
 pub const parallel = @import("parallel.zig");
 pub const SmallStringInterner = @import("SmallStringInterner.zig");
 pub const SerialStringInterner = @import("SerialStringInterner.zig");
+pub const SpecializationStrategy = @import("SpecializationStrategy.zig").SpecializationStrategy;
 
 /// Single-threaded arena allocator, re-exported from `collections` for callers
 /// that already depend on `base`.
@@ -141,6 +142,7 @@ test "base tests" {
     std.testing.refAllDecls(@import("Scratch.zig"));
     std.testing.refAllDecls(@import("SExprTree.zig"));
     std.testing.refAllDecls(@import("SmallStringInterner.zig"));
+    std.testing.refAllDecls(@import("SpecializationStrategy.zig"));
     std.testing.refAllDecls(@import("source_utils.zig"));
     std.testing.refAllDecls(@import("stack_overflow.zig"));
     std.testing.refAllDecls(@import("StringLiteral.zig"));
