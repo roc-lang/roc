@@ -60,6 +60,11 @@ pub const DiffResult = struct {
     }
 };
 
+const NextKeyIndexError = error{
+    OutOfMemory,
+    DuplicateKey,
+};
+
 pub fn clearSites(allocator: std.mem.Allocator, sites: *std.ArrayListUnmanaged(Site), site_indexes: *SiteIndexMap, memberships: *std.ArrayListUnmanaged(?Membership)) void {
     for (sites.items) |*site| {
         site.deinit(allocator);
@@ -216,25 +221,10 @@ pub fn syncRows(
 
     const next_hash_links = allocator.alloc(usize, keys.len) catch @panic("out of memory");
     defer allocator.free(next_hash_links);
-    @memset(next_hash_links, missing_row_index);
-
-    for (key_hashes, 0..) |hash, key_index| {
-        if (next_hash_heads.get(hash)) |head| {
-            var previous_index = head;
-            while (previous_index != missing_row_index) {
-                if (hooks.nextKeysEqual(keys[previous_index], keys[key_index])) {
-                    @panic("keyed row diff operation failed");
-                }
-                previous_index = next_hash_links[previous_index];
-            }
-        }
-
-        const entry = next_hash_heads.getOrPut(allocator, hash) catch @panic("out of memory");
-        if (entry.found_existing) {
-            next_hash_links[key_index] = entry.value_ptr.*;
-        }
-        entry.value_ptr.* = key_index;
-    }
+    indexNextKeys(allocator, &next_hash_heads, next_hash_links, key_hashes, keys, hooks) catch |err| switch (err) {
+        error.OutOfMemory => @panic("out of memory"),
+        error.DuplicateKey => @panic("keyed row diff operation failed"),
+    };
 
     const matched_existing = allocator.alloc(bool, existing_len) catch @panic("out of memory");
     defer allocator.free(matched_existing);
@@ -331,6 +321,35 @@ pub fn syncRows(
     };
 }
 
+fn indexNextKeys(
+    allocator: std.mem.Allocator,
+    next_hash_heads: *std.AutoHashMapUnmanaged(u64, usize),
+    next_hash_links: []usize,
+    key_hashes: []const u64,
+    keys: anytype,
+    hooks: anytype,
+) NextKeyIndexError!void {
+    @memset(next_hash_links, missing_row_index);
+
+    for (key_hashes, 0..) |hash, key_index| {
+        if (next_hash_heads.get(hash)) |head| {
+            var previous_index = head;
+            while (previous_index != missing_row_index) {
+                if (hooks.nextKeysEqual(keys[previous_index], keys[key_index])) {
+                    return error.DuplicateKey;
+                }
+                previous_index = next_hash_links[previous_index];
+            }
+        }
+
+        const entry = next_hash_heads.getOrPut(allocator, hash) catch return error.OutOfMemory;
+        if (entry.found_existing) {
+            next_hash_links[key_index] = entry.value_ptr.*;
+        }
+        entry.value_ptr.* = key_index;
+    }
+}
+
 fn rowKeysHash(row_keys: anytype, scope_id: u64) u64 {
     return row_keys.rowKeyHash(scope_id);
 }
@@ -393,6 +412,7 @@ const TestSyncHooks = struct {
     keys_by_scope: []u64,
     items_by_scope: []u64,
     next_scope_id: u64,
+    forced_hash: ?u64 = null,
     disposed_scopes: std.ArrayListUnmanaged(u64) = .empty,
     sync_next_len: usize = 0,
     sync_existing_len: usize = 0,
@@ -409,8 +429,16 @@ const TestSyncHooks = struct {
         self.sync_existing_len = existing_len;
     }
 
-    pub fn hashKey(_: *@This(), key: u64) u64 {
-        return key;
+    fn hashForKey(self: *@This(), key: u64) u64 {
+        return self.forced_hash orelse key;
+    }
+
+    fn expectHash(self: *@This(), hash: u64, key: u64) void {
+        if (hash != self.hashForKey(key)) @panic("test key hash must match key");
+    }
+
+    pub fn hashKey(self: *@This(), key: u64) u64 {
+        return self.hashForKey(key);
     }
 
     pub fn nextKeysEqual(_: *@This(), left: u64, right: u64) bool {
@@ -426,7 +454,7 @@ const TestSyncHooks = struct {
     }
 
     pub fn replaceRowKey(self: *@This(), scope_id: u64, hash: u64, key: u64) void {
-        if (hash != key) @panic("test key hash must match key");
+        self.expectHash(hash, key);
         self.keys_by_scope[@intCast(scope_id)] = key;
     }
 
@@ -436,7 +464,7 @@ const TestSyncHooks = struct {
 
     pub fn createRow(self: *@This(), parent_scope_id: u64, site_ordinal: u64, hash: u64, key: u64, item: u64) u64 {
         if (parent_scope_id != 1 or site_ordinal != 2) @panic("test row was created for the wrong site");
-        if (hash != key) @panic("test key hash must match key");
+        self.expectHash(hash, key);
         const scope_id = self.next_scope_id;
         self.next_scope_id += 1;
         self.keys_by_scope[@intCast(scope_id)] = key;
@@ -449,7 +477,7 @@ const TestSyncHooks = struct {
     }
 
     pub fn rowKeyHash(self: *@This(), scope_id: u64) u64 {
-        return self.keys_by_scope[@intCast(scope_id)];
+        return self.hashForKey(self.keys_by_scope[@intCast(scope_id)]);
     }
 
     pub fn recordRows(self: *@This(), rows_reused: u64, rows_created: u64, rows_removed: u64) void {
@@ -458,6 +486,30 @@ const TestSyncHooks = struct {
         self.rows_removed = rows_removed;
     }
 };
+
+test "each runtime detects duplicate next keys through typed equality" {
+    var next_hash_heads: std.AutoHashMapUnmanaged(u64, usize) = .{};
+    defer next_hash_heads.deinit(std.testing.allocator);
+
+    var next_hash_links = [_]usize{missing_row_index} ** 2;
+    const key_hashes = [_]u64{ 7, 7 };
+    const keys = [_]u64{ 1, 1 };
+
+    var keys_by_scope = [_]u64{};
+    var items_by_scope = [_]u64{};
+    var hooks = TestSyncHooks{
+        .keys_by_scope = &keys_by_scope,
+        .items_by_scope = &items_by_scope,
+        .next_scope_id = 0,
+        .forced_hash = 7,
+    };
+    defer hooks.deinit(std.testing.allocator);
+
+    try std.testing.expectError(
+        error.DuplicateKey,
+        indexNextKeys(std.testing.allocator, &next_hash_heads, &next_hash_links, &key_hashes, &keys, &hooks),
+    );
+}
 
 test "each runtime appends rows and tracks memberships" {
     var sites: std.ArrayListUnmanaged(Site) = .empty;
@@ -526,6 +578,50 @@ test "each runtime sync reuses creates removes and rebuilds rows" {
     try std.testing.expectEqual(@as(u64, 1), hooks.rows_reused);
     try std.testing.expectEqual(@as(u64, 1), hooks.rows_created);
     try std.testing.expectEqual(@as(u64, 1), hooks.rows_removed);
+}
+
+test "each runtime sync resolves hash collisions with typed equality" {
+    var sites: std.ArrayListUnmanaged(Site) = .empty;
+    var indexes: SiteIndexMap = .empty;
+    var memberships: std.ArrayListUnmanaged(?Membership) = .empty;
+    defer clearSites(std.testing.allocator, &sites, &indexes, &memberships);
+
+    const site_index = ensureSiteIndex(std.testing.allocator, &sites, &indexes, 1, 2);
+    appendRowToSiteIndex(std.testing.allocator, &sites, &memberships, site_index, 10, 0);
+    appendRowToSiteIndex(std.testing.allocator, &sites, &memberships, site_index, 11, 0);
+
+    var keys_by_scope = [_]u64{0} ** 16;
+    var items_by_scope = [_]u64{0} ** 16;
+    keys_by_scope[10] = 1;
+    items_by_scope[10] = 100;
+    keys_by_scope[11] = 2;
+    items_by_scope[11] = 200;
+
+    var hooks = TestSyncHooks{
+        .keys_by_scope = &keys_by_scope,
+        .items_by_scope = &items_by_scope,
+        .next_scope_id = 12,
+        .forced_hash = 0,
+    };
+    defer hooks.deinit(std.testing.allocator);
+
+    const keys = [_]u64{ 2, 1 };
+    const items = [_]u64{ 200, 100 };
+    const diff = syncRows(std.testing.allocator, &sites, &memberships, site_index, 1, 2, &keys, &items, &hooks);
+    defer diff.deinit(std.testing.allocator);
+
+    try std.testing.expectEqualSlices(u64, &.{ 11, 10 }, diff.scope_ids);
+    try std.testing.expectEqualSlices(bool, &.{ false, false }, diff.row_items_changed);
+    try std.testing.expectEqualSlices(bool, &.{ false, false }, diff.scope_created);
+    try std.testing.expectEqualSlices(u64, &.{}, diff.removed_scope_ids);
+    try std.testing.expectEqual(@as(u64, 2), diff.rows_reused);
+    try std.testing.expectEqual(@as(u64, 0), diff.rows_created);
+    try std.testing.expectEqual(@as(u64, 0), diff.rows_removed);
+    try std.testing.expectEqualSlices(u64, &.{ 11, 10 }, sites.items[site_index].scope_ids.items);
+    try std.testing.expectEqual(Membership{ .site_index = site_index, .row_index = 0 }, memberships.items[11].?);
+    try std.testing.expectEqual(Membership{ .site_index = site_index, .row_index = 1 }, memberships.items[10].?);
+    try std.testing.expectEqual(@as(usize, 1), sites.items[site_index].hash_heads.get(0).?);
+    try std.testing.expectEqual(@as(usize, 0), sites.items[site_index].hash_links.items[1]);
 }
 
 test "each runtime removes rows and rewrites moved memberships" {

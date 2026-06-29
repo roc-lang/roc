@@ -18,7 +18,6 @@ pub const erased_calls = @import("erased_calls.zig");
 pub const host_value_registry = @import("host_value_registry.zig");
 pub const host_values = @import("host_values.zig");
 pub const identity_table = @import("identity_table.zig");
-pub const keyed_rows = @import("keyed_rows.zig");
 pub const render = @import("render_commands.zig");
 pub const render_cache = @import("render_cache.zig");
 pub const render_sink = @import("render_sink.zig");
@@ -39,7 +38,6 @@ test {
     std.testing.refAllDecls(engine_metrics);
     std.testing.refAllDecls(host_value_registry);
     std.testing.refAllDecls(identity_table);
-    std.testing.refAllDecls(keyed_rows);
     std.testing.refAllDecls(render);
     std.testing.refAllDecls(render_cache);
     std.testing.refAllDecls(render_sink);
