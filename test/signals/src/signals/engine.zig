@@ -703,82 +703,44 @@ pub fn Engine(comptime Ctx: type) type {
             }
         }
 
-        fn pushCapabilities(ctx: Ctx.Handle, caps: []const HostValueCapability) void {
-            Ctx.pushHostValueCapabilities(ctx, caps);
-        }
-
-        fn popCapabilities(ctx: Ctx.Handle) void {
-            Ctx.popHostValueCapabilities(ctx);
-        }
-
         fn callHostValueToUnitWithCapability(ctx: Ctx.Handle, roc_host: *abi.RocHost, cap: HostValueCapability, callable: abi.RocErasedCallable, value: HostValue) void {
-            const caps = [_]HostValueCapability{cap};
-            pushCapabilities(ctx, &caps);
-            defer popCapabilities(ctx);
-            erased_calls.callErasedHostValueToUnit(roc_host, callable, value);
+            retained_values.callHostValueToUnitWithCapability(Ctx, ctx, roc_host, cap, callable, value);
         }
 
         fn callHostValueToHostValueWithCapability(ctx: Ctx.Handle, roc_host: *abi.RocHost, cap: HostValueCapability, callable: abi.RocErasedCallable, value: HostValue) HostValue {
-            const caps = [_]HostValueCapability{cap};
-            pushCapabilities(ctx, &caps);
-            defer popCapabilities(ctx);
-            return erased_calls.callErasedHostValueToHostValue(roc_host, callable, value);
+            return retained_values.callHostValueToHostValueWithCapability(Ctx, ctx, roc_host, cap, callable, value);
         }
 
         fn callHostValueToStartTaskCmdWithCapability(ctx: Ctx.Handle, roc_host: *abi.RocHost, cap: HostValueCapability, callable: abi.RocErasedCallable, value: HostValue) erased_calls.StartTaskCmd {
-            const caps = [_]HostValueCapability{cap};
-            pushCapabilities(ctx, &caps);
-            defer popCapabilities(ctx);
-            return erased_calls.callErasedHostValueToStartTaskCmd(roc_host, callable, value);
+            return retained_values.callHostValueToStartTaskCmdWithCapability(Ctx, ctx, roc_host, cap, callable, value);
         }
 
         fn callHostValueToStrWithCapability(ctx: Ctx.Handle, roc_host: *abi.RocHost, cap: HostValueCapability, callable: abi.RocErasedCallable, value: HostValue) abi.RocStr {
-            const caps = [_]HostValueCapability{cap};
-            pushCapabilities(ctx, &caps);
-            defer popCapabilities(ctx);
-            return erased_calls.callErasedHostValueToStr(roc_host, callable, value);
+            return retained_values.callHostValueToStrWithCapability(Ctx, ctx, roc_host, cap, callable, value);
         }
 
         fn callHostValueToBoolWithCapability(ctx: Ctx.Handle, roc_host: *abi.RocHost, cap: HostValueCapability, callable: abi.RocErasedCallable, value: HostValue) bool {
-            const caps = [_]HostValueCapability{cap};
-            pushCapabilities(ctx, &caps);
-            defer popCapabilities(ctx);
-            return erased_calls.callErasedHostValueToBool(roc_host, callable, value);
+            return retained_values.callHostValueToBoolWithCapability(Ctx, ctx, roc_host, cap, callable, value);
         }
 
         fn callHostValueToHostValueListWithCapability(ctx: Ctx.Handle, roc_host: *abi.RocHost, cap: HostValueCapability, callable: abi.RocErasedCallable, value: HostValue) HostValueList {
-            const caps = [_]HostValueCapability{cap};
-            pushCapabilities(ctx, &caps);
-            defer popCapabilities(ctx);
-            return erased_calls.callErasedHostValueToHostValueList(roc_host, callable, value);
+            return retained_values.callHostValueToHostValueListWithCapability(Ctx, ctx, roc_host, cap, callable, value);
         }
 
         fn callHostValueListToHostValueWithCapability(ctx: Ctx.Handle, roc_host: *abi.RocHost, cap: HostValueCapability, callable: abi.RocErasedCallable, value: HostValueList) HostValue {
-            const caps = [_]HostValueCapability{cap};
-            pushCapabilities(ctx, &caps);
-            defer popCapabilities(ctx);
-            return erased_calls.callErasedHostValueListToHostValue(roc_host, callable, value);
+            return retained_values.callHostValueListToHostValueWithCapability(Ctx, ctx, roc_host, cap, callable, value);
         }
 
         fn callHostValueHostValueToBoolWithCapability(ctx: Ctx.Handle, roc_host: *abi.RocHost, cap: HostValueCapability, callable: abi.RocErasedCallable, left: HostValue, right: HostValue) bool {
-            const caps = [_]HostValueCapability{cap};
-            pushCapabilities(ctx, &caps);
-            defer popCapabilities(ctx);
-            return erased_calls.callErasedHostValueHostValueToBool(roc_host, callable, left, right);
+            return retained_values.callHostValueHostValueToBoolWithCapability(Ctx, ctx, roc_host, cap, callable, left, right);
         }
 
         fn callHostValueHostValueToHostValueWithCapabilities(ctx: Ctx.Handle, roc_host: *abi.RocHost, left_cap: HostValueCapability, right_cap: HostValueCapability, callable: abi.RocErasedCallable, left: HostValue, right: HostValue) HostValue {
-            const caps = [_]HostValueCapability{ left_cap, right_cap };
-            pushCapabilities(ctx, &caps);
-            defer popCapabilities(ctx);
-            return erased_calls.callErasedHostValueHostValueToHostValue(roc_host, callable, left, right);
+            return retained_values.callHostValueHostValueToHostValueWithCapabilities(Ctx, ctx, roc_host, left_cap, right_cap, callable, left, right);
         }
 
         fn callHostValueHostValueToElemWithCapabilities(ctx: Ctx.Handle, roc_host: *abi.RocHost, left_cap: HostValueCapability, right_cap: HostValueCapability, callable: abi.RocErasedCallable, left: HostValue, right: HostValue) abi.Elem {
-            const caps = [_]HostValueCapability{ left_cap, right_cap };
-            pushCapabilities(ctx, &caps);
-            defer popCapabilities(ctx);
-            return erased_calls.callErasedHostValueHostValueToElem(roc_host, callable, left, right);
+            return retained_values.callHostValueHostValueToElemWithCapabilities(Ctx, ctx, roc_host, left_cap, right_cap, callable, left, right);
         }
 
         pub fn recordDispatch(self: *Self) void {
