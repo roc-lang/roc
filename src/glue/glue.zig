@@ -202,7 +202,7 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
         for (hosted_indices) |index| gpa.free(index.sort_key);
         gpa.free(hosted_indices);
     }
-    var hosted_symbols = collectHostedSymbols(gpa, modules) catch {
+    var hosted_symbols = collectHostedSymbols(gpa, &platform_info) catch {
         return error.OutOfMemory;
     };
     defer deinitHostedSymbols(gpa, &hosted_symbols);
@@ -554,14 +554,7 @@ fn hostedProcSortKey(
     artifact: *const CheckedArtifact.CheckedModuleArtifact,
     hosted: CheckedArtifact.HostedProc,
 ) Allocator.Error![]const u8 {
-    const module_name = artifact.canonical_names.moduleNameText(artifact.module_identity.module_name);
-    const local_name = artifact.canonical_names.externalSymbolNameText(hosted.external_symbol_name);
-    const qualified = try std.fmt.allocPrint(allocator, "{s}.{s}", .{ module_name, local_name });
-    if (!std.mem.endsWith(u8, qualified, "!")) return qualified;
-
-    const stripped = try allocator.dupe(u8, qualified[0 .. qualified.len - 1]);
-    allocator.free(qualified);
-    return stripped;
+    return try allocator.dupe(u8, hosted.orderKey(&artifact.hosted_procs));
 }
 
 fn hostedProcForDef(
@@ -653,30 +646,27 @@ fn deinitHostedSymbols(allocator: Allocator, hosted_symbols: *std.StringHashMap(
 
 fn collectHostedSymbols(
     allocator: Allocator,
-    modules: []const BuildEnv.CompiledModuleInfo,
+    platform_info: *const PlatformHeaderInfo,
 ) Allocator.Error!std.StringHashMap([]const u8) {
     var hosted_symbols = std.StringHashMap([]const u8).init(allocator);
     errdefer deinitHostedSymbols(allocator, &hosted_symbols);
 
-    for (modules) |mod| {
-        if (!mod.is_platform_main) continue;
-        const artifact = mod.semantic.checked_artifact orelse continue;
-        const env = artifact.moduleEnvConst();
-
-        for (env.hosted_entries.items.items) |entry| {
-            const module_name = if (entry.module_ident) |module_ident| env.getIdent(module_ident) else "";
-            const local_name = env.getIdent(entry.func_ident);
-            const key = try hostedKeyAlloc(allocator, module_name, local_name);
-            errdefer allocator.free(key);
-            const symbol = try allocator.dupe(u8, env.getString(entry.symbol));
-            errdefer allocator.free(symbol);
-            const gop = try hosted_symbols.getOrPut(key);
-            if (gop.found_existing) {
-                allocator.free(key);
-                allocator.free(symbol);
-            } else {
-                gop.value_ptr.* = symbol;
-            }
+    for (platform_info.hosted_entries) |entry| {
+        const key = try allocator.dupe(u8, entry.key);
+        const symbol = allocator.dupe(u8, entry.ffi_symbol) catch |err| {
+            allocator.free(key);
+            return err;
+        };
+        const gop = hosted_symbols.getOrPut(key) catch |err| {
+            allocator.free(key);
+            allocator.free(symbol);
+            return err;
+        };
+        if (gop.found_existing) {
+            allocator.free(key);
+            allocator.free(symbol);
+        } else {
+            gop.value_ptr.* = symbol;
         }
     }
 
@@ -782,6 +772,7 @@ fn argLayoutsForProc(
 /// Information extracted from a platform header for glue generation.
 pub const PlatformHeaderInfo = struct {
     requires_entries: []RequiresEntry,
+    hosted_entries: []HostedEntry,
     type_aliases: [][]const u8,
 
     pub const RequiresEntry = struct {
@@ -790,24 +781,86 @@ pub const PlatformHeaderInfo = struct {
         stub_expr: []const u8,
     };
 
+    pub const HostedEntry = struct {
+        key: []const u8,
+        ffi_symbol: []const u8,
+    };
+
     pub const ProvidesEntry = struct {
         name: []const u8,
         ffi_symbol: []const u8,
     };
 
     pub fn deinit(self: *const PlatformHeaderInfo, gpa: std.mem.Allocator) void {
-        for (self.requires_entries) |entry| {
-            gpa.free(entry.name);
-            gpa.free(entry.type_str);
-            gpa.free(entry.stub_expr);
-        }
-        gpa.free(self.requires_entries);
-        for (self.type_aliases) |alias_name| {
-            gpa.free(alias_name);
-        }
-        gpa.free(self.type_aliases);
+        deinitPlatformRequiresEntries(gpa, self.requires_entries);
+        deinitPlatformHostedEntries(gpa, self.hosted_entries);
+        deinitPlatformTypeAliases(gpa, self.type_aliases);
     }
 };
+
+fn deinitPlatformRequiresEntries(gpa: std.mem.Allocator, entries: []const PlatformHeaderInfo.RequiresEntry) void {
+    for (entries) |entry| {
+        gpa.free(entry.name);
+        gpa.free(entry.type_str);
+        gpa.free(entry.stub_expr);
+    }
+    gpa.free(entries);
+}
+
+fn deinitPlatformHostedEntries(gpa: std.mem.Allocator, entries: []const PlatformHeaderInfo.HostedEntry) void {
+    for (entries) |entry| {
+        gpa.free(entry.key);
+        gpa.free(entry.ffi_symbol);
+    }
+    gpa.free(entries);
+}
+
+fn deinitPlatformTypeAliases(gpa: std.mem.Allocator, aliases: []const []const u8) void {
+    for (aliases) |alias_name| {
+        gpa.free(alias_name);
+    }
+    gpa.free(aliases);
+}
+
+fn hostedEntryLocalNameAlloc(
+    gpa: Allocator,
+    env: *ModuleEnv,
+    ast: *const parse.AST,
+    entry: parse.AST.SymbolMapEntry,
+) Allocator.Error!?[]const u8 {
+    const direct = ast.tokens.resolveIdentifier(entry.func) orelse return null;
+    const module_tok = entry.module orelse return try gpa.dupe(u8, env.common.getIdent(direct));
+    if (entry.func == module_tok + 1) return try gpa.dupe(u8, env.common.getIdent(direct));
+
+    var text = std.ArrayList(u8).empty;
+    defer text.deinit(gpa);
+
+    var tok = module_tok + 1;
+    while (tok <= entry.func) : (tok += 1) {
+        const segment = ast.tokens.resolveIdentifier(tok) orelse return null;
+        if (text.items.len != 0) try text.append(gpa, '.');
+        try text.appendSlice(gpa, env.common.getIdent(segment));
+    }
+
+    return try text.toOwnedSlice(gpa);
+}
+
+fn hostedEntryKeyAllocFromAst(
+    gpa: Allocator,
+    env: *ModuleEnv,
+    ast: *const parse.AST,
+    entry: parse.AST.SymbolMapEntry,
+) Allocator.Error!?[]const u8 {
+    const local_name = (try hostedEntryLocalNameAlloc(gpa, env, ast, entry)) orelse return null;
+    defer gpa.free(local_name);
+
+    const module_name = if (entry.module) |module_tok| blk: {
+        const module_ident = ast.tokens.resolveIdentifier(module_tok) orelse return null;
+        break :blk env.common.getIdent(module_ident);
+    } else "";
+
+    return try hostedKeyAlloc(gpa, module_name, local_name);
+}
 
 /// Parse a platform header to extract requires entries and validate it's a platform file.
 fn parsePlatformHeader(gpa: Allocator, platform_path: []const u8, std_io: std.Io) (Allocator.Error || error{ FileNotFound, ParseFailed, NotPlatformFile })!PlatformHeaderInfo {
@@ -854,6 +907,33 @@ fn parsePlatformHeader(gpa: Allocator, platform_path: []const u8, std_io: std.Io
                     gpa.free(entry.stub_expr);
                 }
                 requires_entries.deinit(gpa);
+            }
+
+            var hosted_entries = std.ArrayList(PlatformHeaderInfo.HostedEntry).empty;
+            errdefer {
+                for (hosted_entries.items) |entry| {
+                    gpa.free(entry.key);
+                    gpa.free(entry.ffi_symbol);
+                }
+                hosted_entries.deinit(gpa);
+            }
+
+            const hosted_entries_ast = parse_ast.store.symbolMapEntrySlice(platform_header.hosted);
+            for (hosted_entries_ast) |entry_idx| {
+                const entry = parse_ast.store.getSymbolMapEntry(entry_idx);
+                const hosted_key = (try hostedEntryKeyAllocFromAst(gpa, &env, parse_ast, entry)) orelse continue;
+                const ffi_symbol = gpa.dupe(u8, parse_ast.resolve(entry.symbol)) catch |err| {
+                    gpa.free(hosted_key);
+                    return err;
+                };
+                hosted_entries.append(gpa, .{
+                    .key = hosted_key,
+                    .ffi_symbol = ffi_symbol,
+                }) catch |err| {
+                    gpa.free(hosted_key);
+                    gpa.free(ffi_symbol);
+                    return err;
+                };
             }
 
             // Use a hash set to deduplicate type aliases across requires entries
@@ -911,9 +991,17 @@ fn parsePlatformHeader(gpa: Allocator, platform_path: []const u8, std_io: std.Io
                 try type_aliases.append(gpa, key.*);
             }
 
+            const requires_entries_owned = try requires_entries.toOwnedSlice(gpa);
+            errdefer deinitPlatformRequiresEntries(gpa, requires_entries_owned);
+            const hosted_entries_owned = try hosted_entries.toOwnedSlice(gpa);
+            errdefer deinitPlatformHostedEntries(gpa, hosted_entries_owned);
+            const type_aliases_owned = try type_aliases.toOwnedSlice(gpa);
+            errdefer deinitPlatformTypeAliases(gpa, type_aliases_owned);
+
             return PlatformHeaderInfo{
-                .requires_entries = try requires_entries.toOwnedSlice(gpa),
-                .type_aliases = try type_aliases.toOwnedSlice(gpa),
+                .requires_entries = requires_entries_owned,
+                .hosted_entries = hosted_entries_owned,
+                .type_aliases = type_aliases_owned,
             };
         },
         else => return error.NotPlatformFile,
@@ -3434,7 +3522,7 @@ fn collectModuleTypeInfo(
         const type_str = try typeStringAlloc(gpa, artifact, checked_type);
         errdefer gpa.free(type_str);
 
-        if (hostedProcForDef(&artifact.hosted_procs, def_idx)) |_| {
+        if (hostedProcForDef(&artifact.hosted_procs, def_idx)) |hosted_proc| {
             // Extract record fields from function arg and return types.
             var arg_fields: []const CollectedModuleTypeInfo.CollectedRecordFieldInfo = &.{};
             errdefer {
@@ -3473,8 +3561,7 @@ fn collectModuleTypeInfo(
                 ret_type_id = try type_table.insertUnit();
             }
 
-            const hosted_key = try hostedKeyAlloc(gpa, module_name, local_name);
-            defer gpa.free(hosted_key);
+            const hosted_key = hosted_proc.orderKey(&artifact.hosted_procs);
             const hosted_symbol = hosted_symbols.get(hosted_key) orelse
                 glueInvariant("hosted function '{s}' has no platform hosted symbol", .{hosted_key});
             const ffi_symbol = try gpa.dupe(u8, hosted_symbol);
