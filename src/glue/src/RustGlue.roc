@@ -5,6 +5,10 @@ import pf.Types exposing [Types]
 import pf.File exposing [File]
 import pf.RecordFieldInfo exposing [RecordFieldInfo]
 import pf.TypeRepr exposing [TypeRepr]
+import pf.AbiLayout exposing [AbiLayout]
+import pf.ArgShape exposing [ArgShape]
+import pf.GlueInput exposing [GlueInput]
+import pf.TypeNamePlan exposing [TypeNamePlan]
 import pf.FunctionRepr exposing [FunctionRepr]
 import pf.RecordRepr exposing [RecordRepr]
 import pf.TagUnionRepr exposing [TagUnionRepr]
@@ -16,51 +20,10 @@ import pf.RocName exposing [RocName]
 
 make_glue : List(Types) -> Try(List(File), Str)
 make_glue = |types_list| {
-	# Collect all hosted functions from all modules, with module name prefix
-	var $hosted_functions = []
-	var $type_table = []
-	var $provides_entries = []
-
-	for types in types_list {
-		$type_table = types.type_table
-		$provides_entries = types.provides_entries
-
-		for mod in types.modules {
-			for func in mod.hosted_functions {
-				full_qualified_name = "${mod.name}.${func.name}"
-
-				hosted_func = {
-					arg_fields: func.arg_fields,
-					arg_type_ids: func.arg_type_ids,
-					ffi_symbol: func.ffi_symbol,
-					index: func.index,
-					name: full_qualified_name,
-					ret_fields: func.ret_fields,
-					ret_type_id: func.ret_type_id,
-					type_str: func.type_str,
-				}
-
-				$hosted_functions = $hosted_functions.append(hosted_func)
-			}
-		}
-	}
-
-	# Sort by index so array entries are in the correct order
-	sorted = List.sort_with($hosted_functions, compare_by_index)
-
-	rust_content = generate_rust_file(sorted, $type_table, $provides_entries)
+	input = GlueInput.from_types(types_list)
+	rust_content = generate_rust_file(input.hosted_functions, input.type_table, input.provides_entries)
 
 	Ok([{ name: "roc_platform_abi.rs", content: rust_content }])
-}
-
-compare_by_index = |a, b| {
-	if a.index < b.index {
-		return LT
-	}
-	if a.index > b.index {
-		return GT
-	}
-	EQ
 }
 
 # =============================================================================
@@ -176,293 +139,6 @@ is_type_refcounted = |type_table, type_id| TypeTable.is_refcounted(TypeTable.fro
 is_repr_refcounted : List(TypeRepr), TypeRepr -> Bool
 is_repr_refcounted = |type_table, type_repr| TypeTable.repr_is_refcounted(TypeTable.from_list(type_table), type_repr)
 
-align_forward_u64 : U64, U64 -> U64
-align_forward_u64 = |offset, alignment| {
-	if alignment == 0 {
-		offset
-	} else {
-		remainder = U64.rem_by(offset, alignment)
-		if remainder == 0 {
-			offset
-		} else {
-			offset + alignment - remainder
-		}
-	}
-}
-
-type_layout_64 : List(TypeRepr), U64 -> { size : U64, alignment : U64 }
-type_layout_64 = |type_table, type_id| {
-	type_repr = TypeTable.get(TypeTable.from_list(type_table), type_id)
-	repr_layout_64(type_table, type_repr)
-}
-
-repr_layout_64 : List(TypeRepr), TypeRepr -> { size : U64, alignment : U64 }
-repr_layout_64 = |type_table, type_repr| {
-	match type_repr {
-		RocBool => { size: 1, alignment: 1 }
-		RocBox(_) => { size: 8, alignment: 8 }
-		RocDec => { size: 8, alignment: 8 }
-		RocF32 => { size: 4, alignment: 4 }
-		RocF64 => { size: 8, alignment: 8 }
-		RocFunction(_) => { size: 8, alignment: 8 }
-		RocI128 => { size: 16, alignment: 16 }
-		RocI16 => { size: 2, alignment: 2 }
-		RocI32 => { size: 4, alignment: 4 }
-		RocI64 => { size: 8, alignment: 8 }
-		RocI8 => { size: 1, alignment: 1 }
-		RocList(_) => { size: 24, alignment: 8 }
-		RocRecord(rec) => record_layout_from_fields(type_table, rec.fields)
-		RocStr => { size: 24, alignment: 8 }
-		RocTagUnion(tu) =>
-			match TypeTable.single_variant_payload(tu) {
-				SinglePayload(payload_id) => type_layout_64(type_table, payload_id)
-				SingleNoPayload => { size: 0, alignment: 1 }
-				NotSingleVariant => { size: tu.size, alignment: tu.alignment }
-			}
-		RocU128 => { size: 16, alignment: 16 }
-		RocU16 => { size: 2, alignment: 2 }
-		RocU32 => { size: 4, alignment: 4 }
-		RocU64 => { size: 8, alignment: 8 }
-		RocU8 => { size: 1, alignment: 1 }
-		RocUnit => { size: 0, alignment: 1 }
-		RocUnknown(_) => { size: 8, alignment: 8 }
-	}
-}
-
-type_layout_32 : List(TypeRepr), U64 -> { size : U64, alignment : U64 }
-type_layout_32 = |type_table, type_id| {
-	type_repr = TypeTable.get(TypeTable.from_list(type_table), type_id)
-	repr_layout_32(type_table, type_repr)
-}
-
-repr_layout_32 : List(TypeRepr), TypeRepr -> { size : U64, alignment : U64 }
-repr_layout_32 = |type_table, type_repr| {
-	match type_repr {
-		RocBool => { size: 1, alignment: 1 }
-		RocBox(_) => { size: 4, alignment: 4 }
-		RocDec => { size: 8, alignment: 8 }
-		RocF32 => { size: 4, alignment: 4 }
-		RocF64 => { size: 8, alignment: 8 }
-		RocFunction(_) => { size: 4, alignment: 4 }
-		RocI128 => { size: 16, alignment: 16 }
-		RocI16 => { size: 2, alignment: 2 }
-		RocI32 => { size: 4, alignment: 4 }
-		RocI64 => { size: 8, alignment: 8 }
-		RocI8 => { size: 1, alignment: 1 }
-		RocList(_) => { size: 12, alignment: 4 }
-		RocRecord(rec) =>
-			record_layout_from_fields_32(
-				type_table,
-				if rec.anonymous {
-					record_fields_for_wasm32(type_table, rec.fields)
-				} else {
-					rec.fields
-				},
-			)
-		RocStr => { size: 12, alignment: 4 }
-		RocTagUnion(tu) => {
-			layout = tag_union_layout_32(type_table, tu)
-			{ size: layout.size, alignment: layout.alignment }
-		}
-		RocU128 => { size: 16, alignment: 16 }
-		RocU16 => { size: 2, alignment: 2 }
-		RocU32 => { size: 4, alignment: 4 }
-		RocU64 => { size: 8, alignment: 8 }
-		RocU8 => { size: 1, alignment: 1 }
-		RocUnit => { size: 0, alignment: 1 }
-		RocUnknown(_) => { size: 4, alignment: 4 }
-	}
-}
-
-record_layout_from_fields : List(TypeRepr), List(RecordField) -> { size : U64, alignment : U64 }
-record_layout_from_fields = |type_table, fields| {
-	var $offset = 0
-	var $alignment = 1
-
-	for field in fields {
-		field_layout = record_field_layout_64(type_table, field)
-		if field_layout.alignment > $alignment {
-			$alignment = field_layout.alignment
-		}
-		$offset = align_forward_u64($offset, field_layout.alignment)
-		$offset = $offset + field_layout.size
-	}
-
-	{ size: align_forward_u64($offset, $alignment), alignment: $alignment }
-}
-
-record_field_layout_64 : List(TypeRepr), RecordField -> { size : U64, alignment : U64 }
-record_field_layout_64 = |type_table, field| {
-	if field.is_padding {
-		{ size: field.size, alignment: 1 }
-	} else {
-		type_layout_64(type_table, field.type_id)
-	}
-}
-
-record_layout_from_fields_32 : List(TypeRepr), List(RecordField) -> { size : U64, alignment : U64 }
-record_layout_from_fields_32 = |type_table, fields| {
-	var $offset = 0
-	var $alignment = 1
-
-	for field in fields {
-		field_layout = record_field_layout_32(type_table, field)
-		if field_layout.alignment > $alignment {
-			$alignment = field_layout.alignment
-		}
-		$offset = align_forward_u64($offset, field_layout.alignment)
-		$offset = $offset + field_layout.size
-	}
-
-	{ size: align_forward_u64($offset, $alignment), alignment: $alignment }
-}
-
-record_field_layout_32 : List(TypeRepr), RecordField -> { size : U64, alignment : U64 }
-record_field_layout_32 = |type_table, field| {
-	if field.is_padding {
-		{ size: field.size, alignment: 1 }
-	} else {
-		type_layout_32(type_table, field.type_id)
-	}
-}
-
-tag_union_layout_32 : List(TypeRepr), TagUnionRepr -> { alignment : U64, discriminant_offset : U64, size : U64 }
-tag_union_layout_32 = |type_table, tu| {
-	match TypeTable.single_variant_payload(tu) {
-		SinglePayload(payload_id) => {
-			payload_layout = type_layout_32(type_table, payload_id)
-			{ size: payload_layout.size, alignment: payload_layout.alignment, discriminant_offset: payload_layout.size }
-		}
-		SingleNoPayload => { size: 0, alignment: 1, discriminant_offset: 0 }
-		NotSingleVariant => {
-			var $max_payload_size = 0
-			var $max_payload_alignment = 1
-
-			for tag in tu.tags {
-				payload_layout = if tag.payload_size == 0 {
-					{ size: 0, alignment: 1 }
-				} else {
-					tag_payload_layout_32(type_table, tag.payload)
-				}
-				if payload_layout.size > $max_payload_size {
-					$max_payload_size = payload_layout.size
-				}
-				if payload_layout.alignment > $max_payload_alignment {
-					$max_payload_alignment = payload_layout.alignment
-				}
-			}
-
-			disc = disc_layout_for_count(List.len(tu.tags))
-			disc_offset = align_forward_u64($max_payload_size, disc.alignment)
-			total_alignment = if $max_payload_alignment > disc.alignment {
-				$max_payload_alignment
-			} else {
-				disc.alignment
-			}
-			total_size = align_forward_u64(disc_offset + disc.size, total_alignment)
-			{ size: total_size, alignment: total_alignment, discriminant_offset: disc_offset }
-		}
-	}
-}
-
-tag_union_layout_64 : List(TypeRepr), TagUnionRepr -> { alignment : U64, discriminant_offset : U64, size : U64 }
-tag_union_layout_64 = |type_table, tu| {
-	match TypeTable.single_variant_payload(tu) {
-		SinglePayload(payload_id) => {
-			payload_layout = type_layout_64(type_table, payload_id)
-			{ size: payload_layout.size, alignment: payload_layout.alignment, discriminant_offset: payload_layout.size }
-		}
-		SingleNoPayload => { size: 0, alignment: 1, discriminant_offset: 0 }
-		NotSingleVariant => {
-			var $max_payload_size = 0
-			var $max_payload_alignment = 1
-
-			for tag in tu.tags {
-				payload_layout = if tag.payload_size == 0 {
-					{ size: 0, alignment: 1 }
-				} else {
-					{ size: tag.payload_size, alignment: tag.payload_alignment }
-				}
-				if payload_layout.size > $max_payload_size {
-					$max_payload_size = payload_layout.size
-				}
-				if payload_layout.alignment > $max_payload_alignment {
-					$max_payload_alignment = payload_layout.alignment
-				}
-			}
-
-			disc = disc_layout_for_count(List.len(tu.tags))
-			disc_offset = align_forward_u64($max_payload_size, disc.alignment)
-			total_alignment = if $max_payload_alignment > disc.alignment {
-				$max_payload_alignment
-			} else {
-				disc.alignment
-			}
-			total_size = align_forward_u64(disc_offset + disc.size, total_alignment)
-			{ size: total_size, alignment: total_alignment, discriminant_offset: disc_offset }
-		}
-	}
-}
-
-tag_payload_layout_32 : List(TypeRepr), List(U64) -> { size : U64, alignment : U64 }
-tag_payload_layout_32 = |type_table, payload| {
-	var $offset = 0
-	var $alignment = 1
-
-	for payload_id in payload {
-		payload_layout = type_layout_32(type_table, payload_id)
-		if payload_layout.alignment > $alignment {
-			$alignment = payload_layout.alignment
-		}
-		$offset = align_forward_u64($offset, payload_layout.alignment)
-		$offset = $offset + payload_layout.size
-	}
-
-	{ size: align_forward_u64($offset, $alignment), alignment: $alignment }
-}
-
-disc_layout_for_count = |count| {
-	if count <= 1 {
-		{ size: 0, alignment: 1 }
-	} else if count <= 256 {
-		{ size: 1, alignment: 1 }
-	} else if count <= 65536 {
-		{ size: 2, alignment: 2 }
-	} else {
-		{ size: 4, alignment: 4 }
-	}
-}
-
-compare_utf8_lists : List(U8), List(U8) -> [LT, EQ, GT]
-compare_utf8_lists = |left, right| {
-	match List.first(left) {
-		Ok(left_byte) =>
-			match List.first(right) {
-				Ok(right_byte) =>
-					if left_byte < right_byte {
-						LT
-					} else if left_byte > right_byte {
-						GT
-					} else {
-						compare_utf8_lists(List.drop_first(left, 1), List.drop_first(right, 1))
-					}
-				Err(_) => GT
-			}
-		Err(_) =>
-			if List.is_empty(right) {
-				EQ
-			} else {
-				LT
-			}
-	}
-}
-
-compare_str_bytes : Str, Str -> [LT, EQ, GT]
-compare_str_bytes = |left, right| compare_utf8_lists(Str.to_utf8(left), Str.to_utf8(right))
-
-record_fields_for_wasm32 : List(TypeRepr), List(RecordField) -> List(RecordField)
-record_fields_for_wasm32 = |_, fields| fields
-
 # =============================================================================
 # String Utilities
 # =============================================================================
@@ -516,29 +192,7 @@ expect lowercase_first("") == ""
 
 ## Convert function name to PascalCase struct name (e.g., "Stdout.line!" -> "StdoutLine")
 name_to_struct_name : Str -> Str
-name_to_struct_name = |name| {
-	parts = Str.split_on(name, ".")
-
-	var $result = ""
-	for part in parts {
-		for subpart in Str.split_on(part, "_") {
-			cleaned = subpart
-				->str_replace_all("!", "")
-				->str_replace_all("-", "")
-				->str_replace_all(" ", "")
-
-			if cleaned != "" {
-				$result = Str.concat($result, capitalize_first(cleaned))
-			}
-		}
-	}
-
-	if $result == "" {
-		"Anon"
-	} else {
-		$result
-	}
-}
+name_to_struct_name = |name| RocName.from_str(name).to_pascal_clean()
 
 expect name_to_struct_name("Stdout.line!") == "StdoutLine"
 expect name_to_struct_name("line!") == "Line"
@@ -568,23 +222,9 @@ default_tag_union_struct_name = |duplicate_names, type_id, tu| {
 	}
 }
 
-preferred_type_name_lookup_rust = |preferred_names, type_id| {
-	var $found = Bool.False
-	var $name = ""
-
-	for entry in preferred_names {
-		if !$found and entry.type_id == type_id {
-			$found = Bool.True
-			$name = entry.name
-		}
-	}
-
-	{ found: $found, name: $name }
-}
-
 ## Return the emitted Rust struct name for a multi-variant tag union.
 tag_union_struct_name = |preferred_names, duplicate_names, type_id, tu| {
-	preferred = preferred_type_name_lookup_rust(preferred_names, type_id)
+	preferred = TypeNamePlan.lookup_preferred(preferred_names, type_id)
 	if preferred.found {
 		preferred.name
 	} else {
@@ -622,112 +262,34 @@ generated_type_names_rust = |type_table, duplicate_names| {
 	$names
 }
 
-add_preferred_type_name_rust = |state, type_id, name| {
-	if name == "" or List.contains(state.seen_type_ids, type_id) or List.contains(state.seen_names, name) {
-		state
-	} else {
-		{
-			entries: state.entries.append({ type_id, name }),
-			seen_names: state.seen_names.append(name),
-			seen_type_ids: state.seen_type_ids.append(type_id),
-		}
-	}
-}
-
-collect_preferred_type_names_for_type_id_rust = |state, type_table, type_id, alias_base, module_base, visited_type_ids| {
-	if List.contains(visited_type_ids, type_id) {
-		return state
-	}
-
-	next_visited = visited_type_ids.append(type_id)
-
-	type_repr = TypeTable.get(TypeTable.from_list(type_table), type_id)
-	match type_repr {
-		RocTagUnion(tu) =>
-			match TypeTable.single_variant_payload(tu) {
-				SinglePayload(payload_id) =>
-					collect_preferred_type_names_for_type_id_rust(
-						state,
-						type_table,
-						payload_id,
-						alias_base,
-						module_base,
-						next_visited,
-					)
-				SingleNoPayload => state
-				NotSingleVariant =>
-					if tu.name != "" {
-						with_union_name =
-							if tu.name == "Try" {
-								add_preferred_type_name_rust(state, type_id, "${alias_base}Result")
-							} else if tu.name == "IOErr" {
-								add_preferred_type_name_rust(state, type_id, "${module_base}IOErr")
-							} else {
-								state
-							}
-
-						var $next = with_union_name
-						for tag in tu.tags {
-							child_base = "${alias_base}${capitalize_first(tag.name)}"
-							for payload_id in tag.payload {
-								$next = collect_preferred_type_names_for_type_id_rust(
-									$next,
-									type_table,
-									payload_id,
-									child_base,
-									module_base,
-									next_visited,
-								)
-							}
-						}
-						$next
-					} else {
-						state
-					}
-			}
-		RocList(elem_id) => collect_preferred_type_names_for_type_id_rust(state, type_table, elem_id, alias_base, module_base, next_visited)
-		RocBox(inner_id) => collect_preferred_type_names_for_type_id_rust(state, type_table, inner_id, alias_base, module_base, next_visited)
-		_ => state
-	}
-}
-
-provided_entry_root_type_id_rust = |type_table, entry| {
-	match TypeTable.get(TypeTable.from_list(type_table), entry.type_id) {
-		RocFunction(func) => func.ret
-		_ => entry.type_id
-	}
-}
-
-preferred_type_names_rust = |hosted_functions, provides_list, type_table, duplicate_names| {
-	var $state = { entries: [], seen_names: generated_type_names_rust(type_table, duplicate_names), seen_type_ids: [] }
+type_name_roots_rust = |hosted_functions, provides_list, type_table| {
+	var $roots = []
 
 	for func in hosted_functions {
-		alias_base = name_to_struct_name(func.name)
-		module_base = hosted_module_name_to_struct_name(func.name)
-		$state = collect_preferred_type_names_for_type_id_rust(
-			$state,
-			type_table,
-			func.ret_type_id,
-			alias_base,
-			module_base,
-			[],
-		)
+		$roots = $roots.append({
+			alias_base: name_to_struct_name(func.name),
+			module_base: hosted_module_name_to_struct_name(func.name),
+			type_id: func.ret_type_id,
+		})
 	}
 
 	for entry in provides_list {
-		alias_base = name_to_struct_name(entry.name)
-		module_base = hosted_module_name_to_struct_name(entry.name)
-		$state = collect_preferred_type_names_for_type_id_rust(
-			$state,
-			type_table,
-			provided_entry_root_type_id_rust(type_table, entry),
-			alias_base,
-			module_base,
-			[],
-		)
+		$roots = $roots.append({
+			alias_base: name_to_struct_name(entry.name),
+			module_base: hosted_module_name_to_struct_name(entry.name),
+			type_id: TypeNamePlan.provided_entry_root_type_id(type_table, entry),
+		})
 	}
 
-	$state.entries
+	$roots
+}
+
+preferred_type_names_rust = |hosted_functions, provides_list, type_table, duplicate_names| {
+	TypeNamePlan.preferred_names(
+		type_table,
+		generated_type_names_rust(type_table, duplicate_names),
+		type_name_roots_rust(hosted_functions, provides_list, type_table),
+	)
 }
 
 ## RustGlue must keep distinct concrete structs for generic Roc types such as
@@ -758,105 +320,19 @@ add_tag_union_aliases_rust = |state, alias, target, tu| {
 	}
 }
 
-collect_platform_type_aliases_for_type_id_rust = |state, type_table, duplicate_names, preferred_names, type_id, alias_base, module_base, visited_type_ids| {
-	if List.contains(visited_type_ids, type_id) {
-		return state
-	}
-
-	next_visited = visited_type_ids.append(type_id)
-
-	type_repr = TypeTable.get(TypeTable.from_list(type_table), type_id)
-	match type_repr {
-		RocRecord(rec) =>
-			if rec.name != "" and rec.anonymous {
-				add_type_alias_rust(state, alias_base, type_id_to_rust(type_table, duplicate_names, preferred_names, type_id))
-			} else {
-				state
-			}
-		RocTagUnion(tu) =>
-			match TypeTable.single_variant_payload(tu) {
-				SinglePayload(payload_id) =>
-					collect_platform_type_aliases_for_type_id_rust(
-						state,
-						type_table,
-						duplicate_names,
-						preferred_names,
-						payload_id,
-						alias_base,
-						module_base,
-						next_visited,
-					)
-				SingleNoPayload => state
-				NotSingleVariant =>
-					if tu.name != "" {
-						target = type_id_to_rust(type_table, duplicate_names, preferred_names, type_id)
-						with_union_alias =
-							if tu.name == "Try" {
-								add_tag_union_aliases_rust(state, "${alias_base}Result", target, tu)
-							} else if tu.name == "IOErr" {
-								add_tag_union_aliases_rust(state, "${module_base}IOErr", target, tu)
-							} else {
-								state
-							}
-
-						var $next = with_union_alias
-						for tag in tu.tags {
-							child_base = "${alias_base}${capitalize_first(tag.name)}"
-							for payload_id in tag.payload {
-								$next = collect_platform_type_aliases_for_type_id_rust(
-									$next,
-									type_table,
-									duplicate_names,
-									preferred_names,
-									payload_id,
-									child_base,
-									module_base,
-									next_visited,
-								)
-							}
-						}
-						$next
-					} else {
-						state
-					}
-			}
-		RocList(elem_id) => collect_platform_type_aliases_for_type_id_rust(state, type_table, duplicate_names, preferred_names, elem_id, alias_base, module_base, next_visited)
-		RocBox(inner_id) => collect_platform_type_aliases_for_type_id_rust(state, type_table, duplicate_names, preferred_names, inner_id, alias_base, module_base, next_visited)
-		_ => state
-	}
-}
-
 generate_platform_type_aliases_rust = |hosted_functions, provides_list, type_table, duplicate_names, preferred_names| {
 	var $state = { content: "", seen: [] }
 
-	for func in hosted_functions {
-		alias_base = name_to_struct_name(func.name)
-		module_base = hosted_module_name_to_struct_name(func.name)
-		$state = collect_platform_type_aliases_for_type_id_rust(
-			$state,
-			type_table,
-			duplicate_names,
-			preferred_names,
-			func.ret_type_id,
-			alias_base,
-			module_base,
-			[],
-		)
-	}
-
-	for entry in provides_list {
-		alias_base = name_to_struct_name(entry.name)
-		module_base = hosted_module_name_to_struct_name(entry.name)
-		$state = collect_platform_type_aliases_for_type_id_rust(
-			$state,
-			type_table,
-			duplicate_names,
-			preferred_names,
-			provided_entry_root_type_id_rust(type_table, entry),
-			alias_base,
-			module_base,
-			[],
-		)
+	for plan in TypeNamePlan.alias_plan(type_table, type_name_roots_rust(hosted_functions, provides_list, type_table)) {
+		target = type_id_to_rust(type_table, duplicate_names, preferred_names, plan.type_id)
+		$state = match plan.kind {
+			PlainAlias => add_type_alias_rust($state, plan.alias, target)
+			TagUnionAlias =>
+				match TypeTable.get(TypeTable.from_list(type_table), plan.type_id) {
+					RocTagUnion(tu) => add_tag_union_aliases_rust($state, plan.alias, target, tu)
+					_ => add_type_alias_rust($state, plan.alias, target)
+				}
+		}
 	}
 
 	if $state.content == "" {
@@ -884,13 +360,8 @@ expect name_to_snake("PartDef.Idx.get!") == "part_def_idx_get"
 name_to_rust_fn_suffix : Str -> Str
 name_to_rust_fn_suffix = |name| {
 	suffix =
-		name
-			->str_replace_all(".", "_")
-			->str_replace_all("!", "")
-			->str_replace_all("-", "_")
-			->str_replace_all(" ", "_")
-			->to_lower_snake_case()
-			->strip_leading_underscores()
+		RocName.from_str(name).to_lower_snake_identifier()
+			->RocName.strip_leading_underscores()
 
 	if suffix == "" or suffix == "_" {
 		"anon"
@@ -902,32 +373,6 @@ name_to_rust_fn_suffix = |name| {
 expect name_to_rust_fn_suffix("Host.Tree") == "host_tree"
 expect name_to_rust_fn_suffix("TryType17") == "try_type17"
 expect name_to_rust_fn_suffix("__AnonStruct10") == "anon_struct10"
-
-strip_leading_underscores : Str -> Str
-strip_leading_underscores = |s| {
-	bytes = Str.to_utf8(s)
-	var $drop_count = 0
-	var $done = Bool.False
-
-	for byte in bytes {
-		if !$done {
-			if byte == '_' {
-				$drop_count = $drop_count + 1
-			} else {
-				$done = Bool.True
-			}
-		}
-	}
-
-	new_bytes = List.drop_first(bytes, $drop_count)
-	match Str.from_utf8(new_bytes) {
-		Ok(str) => str
-		Err(_) => s
-	}
-}
-
-expect strip_leading_underscores("__anon") == "anon"
-expect strip_leading_underscores("anon") == "anon"
 
 ## Convert function name to SCREAMING_SNAKE_CASE (e.g., "Stdout.line!" -> "STDOUT_LINE")
 name_to_screaming_snake : Str -> Str
@@ -949,12 +394,7 @@ expect name_to_screaming_snake("PartDef.Idx.get!") == "PART_DEF_IDX_GET"
 name_to_rust_field_ident : Str -> Str
 name_to_rust_field_ident = |name| {
 	sanitized =
-		name
-			->str_replace_all("!", "_bang")
-			->str_replace_all("-", "_")
-			->str_replace_all(".", "_")
-			->str_replace_all(" ", "_")
-			->to_lower_snake_case()
+		RocName.from_str(name).to_bang_snake_identifier()
 
 	match sanitized {
 		"" => "_field"
@@ -1018,15 +458,6 @@ disc_type_for_count = |count| {
 # Type Table Helpers
 # =============================================================================
 
-## Look up a type_id in the type table and return record fields if it's a record.
-## Follows single-variant tag unions (unwrapping to their payload).
-lookup_record_in_type_table = |type_table, type_id| {
-	match TypeTable.record_layout(TypeTable.from_list(type_table), type_id) {
-		RecordFound(layout) => { found: Bool.True, fields: layout.fields, size: layout.size, alignment: layout.alignment, anonymous: TypeTable.is_anonymous_record(TypeTable.from_list(type_table), type_id) }
-		NotRecord => { found: Bool.False, fields: [], size: 0, alignment: 0, anonymous: Bool.False }
-	}
-}
-
 rust_layout_assertions = |type_name, native_layout, wasm32_layout| {
 	if native_layout.size > 0 or wasm32_layout.size > 0 {
 		"#[cfg(target_pointer_width = \"64\")]\nconst _: () = assert!(core::mem::size_of::<${type_name}>() == ${U64.to_str(native_layout.size)}, \"${type_name} size mismatch\");\n#[cfg(target_pointer_width = \"64\")]\nconst _: () = assert!(core::mem::align_of::<${type_name}>() == ${U64.to_str(native_layout.alignment)}, \"${type_name} alignment mismatch\");\n#[cfg(target_pointer_width = \"32\")]\nconst _: () = assert!(core::mem::size_of::<${type_name}>() == ${U64.to_str(wasm32_layout.size)}, \"${type_name} size mismatch\");\n#[cfg(target_pointer_width = \"32\")]\nconst _: () = assert!(core::mem::align_of::<${type_name}>() == ${U64.to_str(wasm32_layout.alignment)}, \"${type_name} alignment mismatch\");\n\n"
@@ -1045,14 +476,10 @@ rust_tag_union_layout_assertions = |type_name, native_layout, wasm32_layout| {
 
 generate_record_struct_decl_rust = |doc, struct_name, type_table, duplicate_names, preferred_names, fields, anonymous| {
 	native_field_strs = rust_record_fields_decl(type_table, duplicate_names, preferred_names, fields)
-	wasm32_fields = if anonymous {
-		record_fields_for_wasm32(type_table, fields)
-	} else {
-		fields
-	}
+	wasm32_fields = fields
 	wasm32_field_strs = rust_record_fields_decl(type_table, duplicate_names, preferred_names, wasm32_fields)
-	native_layout = record_layout_from_fields(type_table, fields)
-	wasm32_layout = record_layout_from_fields_32(type_table, wasm32_fields)
+	native_layout = AbiLayout.record_layout_from_fields(type_table, fields)
+	wasm32_layout = AbiLayout.record_layout_from_fields_32(type_table, wasm32_fields)
 	assertions = rust_layout_assertions(struct_name, native_layout, wasm32_layout)
 
 	struct_decl = if anonymous {
@@ -2065,8 +1492,8 @@ generate_single_tag_union_rust = |type_table, duplicate_names, preferred_names, 
 		}
 
 		# Size/alignment assertions
-		native_layout = tag_union_layout_64(type_table, tu)
-		wasm32_layout = tag_union_layout_32(type_table, tu)
+		native_layout = AbiLayout.tag_union_layout_64(type_table, tu)
+		wasm32_layout = AbiLayout.tag_union_layout_32(type_table, tu)
 		assertions = rust_tag_union_layout_assertions(struct_name, native_layout, wasm32_layout)
 		alignment_marker = "${struct_name}PayloadAlignment"
 
@@ -2078,15 +1505,16 @@ generate_single_tag_union_rust = |type_table, duplicate_names, preferred_names, 
 generate_all_record_structs_rust = |hosted_functions, type_table, duplicate_names, preferred_names| {
 	var $structs = ""
 	for func in hosted_functions {
-		type_table_result = lookup_record_in_type_table(type_table, func.ret_type_id)
-
-		if type_table_result.found {
-			struct_name = name_to_struct_name(func.name)
-			doc = "/// Return type record for ${func.name}\n/// Fields ordered by alignment descending (Roc ABI)\n"
-			$structs = Str.concat(
-				$structs,
-				generate_record_struct_decl_rust(doc, "${struct_name}RetRecord", type_table, duplicate_names, preferred_names, type_table_result.fields, type_table_result.anonymous),
-			)
+		match ArgShape.record_lookup(type_table, func.ret_type_id) {
+			ArgRecordFound(record) => {
+				struct_name = name_to_struct_name(func.name)
+				doc = "/// Return type record for ${func.name}\n/// Fields ordered by alignment descending (Roc ABI)\n"
+				$structs = Str.concat(
+					$structs,
+					generate_record_struct_decl_rust(doc, "${struct_name}RetRecord", type_table, duplicate_names, preferred_names, record.fields, record.anonymous),
+				)
+			}
+			ArgNotRecord => {}
 		}
 	}
 	$structs
@@ -2103,54 +1531,30 @@ generate_all_args_structs_rust = |hosted_functions, type_table, duplicate_names,
 
 ## Generate a single argument struct (empty string if no args).
 generate_args_struct_rust = |func, type_table, duplicate_names, preferred_names| {
-	if !(has_meaningful_args_rust(func, type_table)) {
-		return ""
-	}
-
 	struct_name = name_to_struct_name(func.name)
 
-	# Try type table lookup for single-record arg
-	type_table_result = if List.len(func.arg_type_ids) == 1 {
-		match List.first(func.arg_type_ids) {
-			Ok(arg_id) => lookup_record_in_type_table(type_table, arg_id)
-			Err(_) => { found: Bool.False, fields: [], size: 0, alignment: 0, anonymous: Bool.False }
+	match ArgShape.hosted_args(type_table, func) {
+		NoMeaningfulArgs => ""
+		SingleRecordArg(record) => {
+			doc = "/// Arguments for ${func.name}\n/// Roc signature: ${func.type_str}\n/// Refcounted fields are owned by the hosted function.\n"
+			generate_record_struct_decl_rust(doc, "${struct_name}Args", type_table, duplicate_names, preferred_names, record.fields, record.anonymous)
 		}
-	} else {
-		{ found: Bool.False, fields: [], size: 0, alignment: 0, anonymous: Bool.False }
-	}
+		PositionalArgs(arg_type_ids) => {
+			var $positional_fields = ""
+			var $idx = 0
+			for arg_type_id in arg_type_ids {
+				rust_type = type_id_to_rust(type_table, duplicate_names, preferred_names, arg_type_id)
+				$positional_fields = Str.concat(
+					$positional_fields,
+					"    pub arg${U64.to_str($idx)}: ${rust_type},\n",
+				)
+				$idx = $idx + 1
+			}
 
-	if type_table_result.found {
-		doc = "/// Arguments for ${func.name}\n/// Roc signature: ${func.type_str}\n/// Refcounted fields are owned by the hosted function.\n"
-		return generate_record_struct_decl_rust(doc, "${struct_name}Args", type_table, duplicate_names, preferred_names, type_table_result.fields, type_table_result.anonymous)
-	}
+			doc = "/// Arguments for ${func.name}\n/// Roc signature: ${func.type_str}\n/// Refcounted fields are owned by the hosted function.\n"
 
-	# Multi-arg or primitive args: use positional fields from type table
-	var $positional_fields = ""
-	var $idx = 0
-	for arg_type_id in func.arg_type_ids {
-		rust_type = type_id_to_rust(type_table, duplicate_names, preferred_names, arg_type_id)
-		$positional_fields = Str.concat(
-			$positional_fields,
-			"    pub arg${U64.to_str($idx)}: ${rust_type},\n",
-		)
-		$idx = $idx + 1
-	}
-
-	doc = "/// Arguments for ${func.name}\n/// Roc signature: ${func.type_str}\n/// Refcounted fields are owned by the hosted function.\n"
-
-	"${doc}#[repr(C)]\n#[derive(Clone, Copy)]\npub struct ${struct_name}Args {\n${$positional_fields}}\n\n"
-}
-
-has_meaningful_args_rust = |func, type_table| {
-	if List.is_empty(func.arg_type_ids) {
-		Bool.False
-	} else if List.len(func.arg_type_ids) == 1 {
-		match List.first(func.arg_type_ids) {
-			Ok(id) => !(TypeTable.is_unit(TypeTable.from_list(type_table), id))
-			_ => Bool.False
+			"${doc}#[repr(C)]\n#[derive(Clone, Copy)]\npub struct ${struct_name}Args {\n${$positional_fields}}\n\n"
 		}
-	} else {
-		Bool.True
 	}
 }
 
@@ -2430,28 +1834,20 @@ generate_refcount_helpers_rust = |type_table, duplicate_names, preferred_names| 
 	$helpers.concat(generate_box_payload_decref_helpers_rust(type_table, duplicate_names, preferred_names))
 }
 
-## Check whether a type is the zero-sized Roc unit type.
-is_unit_type_id_rust = |type_table, type_id| TypeTable.is_unit(TypeTable.from_list(type_table), type_id)
-
-## Check whether a type is an explicitly anonymous record shape.
-is_anonymous_record_type_id_rust = |type_table, type_id| TypeTable.is_anonymous_record(TypeTable.from_list(type_table), type_id)
-
 ## Build a natural C ABI parameter list from Roc function argument type IDs.
 direct_param_list_rust = |type_table, duplicate_names, preferred_names, arg_type_ids| {
 	var $params = ""
 	var $idx = 0
 
-	for arg_type_id in arg_type_ids {
-		if !is_unit_type_id_rust(type_table, arg_type_id) {
-			arg_rust = type_id_to_rust(type_table, duplicate_names, preferred_names, arg_type_id)
-			sep = if $params == "" {
-				""
-			} else {
-				", "
-			}
-			$params = "${$params}${sep}arg${U64.to_str($idx)}: ${arg_rust}"
-			$idx = $idx + 1
+	for arg_type_id in ArgShape.positional_non_unit_type_ids(type_table, arg_type_ids) {
+		arg_rust = type_id_to_rust(type_table, duplicate_names, preferred_names, arg_type_id)
+		sep = if $params == "" {
+			""
+		} else {
+			", "
 		}
+		$params = "${$params}${sep}arg${U64.to_str($idx)}: ${arg_rust}"
+		$idx = $idx + 1
 	}
 
 	$params
@@ -2460,34 +1856,24 @@ direct_param_list_rust = |type_table, duplicate_names, preferred_names, arg_type
 ## Build a hosted symbol parameter list, using the generated Args wrapper for
 ## anonymous single-record arguments so direct-symbol glue stays readable.
 direct_hosted_param_list_rust = |type_table, duplicate_names, preferred_names, func| {
-	use_args_wrapper =
-		if List.len(func.arg_type_ids) == 1 {
-			match List.first(func.arg_type_ids) {
-				Ok(arg_id) => is_anonymous_record_type_id_rust(type_table, arg_id)
-				Err(_) => Bool.False
-			}
-		} else {
-			Bool.False
-		}
+	use_args_wrapper = ArgShape.single_arg_is_anonymous_record(type_table, func.arg_type_ids)
 
 	var $params = ""
 	var $idx = 0
 
-	for arg_type_id in func.arg_type_ids {
-		if !is_unit_type_id_rust(type_table, arg_type_id) {
-			arg_rust = if use_args_wrapper {
-				"${name_to_struct_name(func.name)}Args"
-			} else {
-				type_id_to_rust(type_table, duplicate_names, preferred_names, arg_type_id)
-			}
-			sep = if $params == "" {
-				""
-			} else {
-				", "
-			}
-			$params = "${$params}${sep}arg${U64.to_str($idx)}: ${arg_rust}"
-			$idx = $idx + 1
+	for arg_type_id in ArgShape.positional_non_unit_type_ids(type_table, func.arg_type_ids) {
+		arg_rust = if use_args_wrapper {
+			"${name_to_struct_name(func.name)}Args"
+		} else {
+			type_id_to_rust(type_table, duplicate_names, preferred_names, arg_type_id)
 		}
+		sep = if $params == "" {
+			""
+		} else {
+			", "
+		}
+		$params = "${$params}${sep}arg${U64.to_str($idx)}: ${arg_rust}"
+		$idx = $idx + 1
 	}
 
 	$params
