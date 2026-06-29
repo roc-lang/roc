@@ -716,6 +716,7 @@ const DevRunContext = struct {
     executable: *const backend.ExecutableMemory,
     jobs: []DevRootJob,
     std_io: ?std.Io,
+    progress_reporter: ?*DevProgressReporter,
     had_oom: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
 };
 
@@ -725,6 +726,7 @@ const DevProgressReporter = struct {
     options: Options,
     jobs: []DevRootJob,
     stop: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    wake_epoch: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
     thread: ?DevProgressThread = null,
 
     fn init(options: Options, jobs: []DevRootJob) DevProgressReporter {
@@ -751,25 +753,51 @@ const DevProgressReporter = struct {
 
     fn finish(self: *DevProgressReporter) void {
         if (comptime base.parallel.is_freestanding) return;
+        const thread = self.thread orelse return;
         self.stop.store(true, .release);
-        if (self.thread) |thread| {
-            thread.join();
-            self.thread = null;
-        }
+        self.wake();
+        thread.join();
+        self.thread = null;
+    }
+
+    fn rootStarted(self: *DevProgressReporter) void {
+        if (comptime base.parallel.is_freestanding) return;
+        if (self.thread == null) return;
+        self.wake();
+    }
+
+    fn wake(self: *DevProgressReporter) void {
+        const io = self.options.std_io orelse return;
+        _ = self.wake_epoch.fetchAdd(1, .acq_rel);
+        std.Io.futexWake(io, u32, &self.wake_epoch.raw, 1);
     }
 
     fn progressThreadMain(self: *DevProgressReporter) void {
         const io = self.options.std_io orelse return;
         while (!self.stop.load(.acquire)) {
-            self.reportDue(io);
-            const delay_ns = @min(self.options.slow_root_period_ns / 4, 250 * std.time.ns_per_ms);
-            std.Io.sleep(io, .fromNanoseconds(@intCast(delay_ns)), .awake) catch {};
+            const epoch = self.wake_epoch.load(.acquire);
+            const now = nowMs(io);
+            self.reportDue(now);
+            const next_wait_ms = self.nextWaitMs(now);
+            if (self.stop.load(.acquire)) break;
+            if (next_wait_ms) |wait_ms| {
+                if (wait_ms == 0) continue;
+                self.waitForWake(io, epoch, .{ .duration = .{
+                    .raw = std.Io.Duration.fromMilliseconds(std.math.cast(i64, wait_ms) orelse std.math.maxInt(i64)),
+                    .clock = .awake,
+                } });
+            } else {
+                self.waitForWake(io, epoch, .none);
+            }
         }
     }
 
-    fn reportDue(self: *DevProgressReporter, io: std.Io) void {
+    fn waitForWake(self: *DevProgressReporter, io: std.Io, epoch: u32, timeout: std.Io.Timeout) void {
+        std.Io.futexWaitTimeout(io, u32, &self.wake_epoch.raw, epoch, timeout) catch {};
+    }
+
+    fn reportDue(self: *DevProgressReporter, now: ProgressMillis) void {
         const stderr = self.options.stderr orelse return;
-        const now = nowMs(io);
         const threshold = progressDurationMs(self.options.slow_root_threshold_ns);
         const period = progressDurationMs(self.options.slow_root_period_ns);
         const spinner = spinnerByte(now / 250);
@@ -787,6 +815,30 @@ const DevProgressReporter = struct {
             const line = progressLine(&line_buf, spinner, job.label, @intCast(elapsed_s)) catch return;
             stderr.writeAll(line);
         }
+    }
+
+    fn nextWaitMs(self: *DevProgressReporter, now: ProgressMillis) ?ProgressMillis {
+        const threshold = progressDurationMs(self.options.slow_root_threshold_ns);
+        const period = progressDurationMs(self.options.slow_root_period_ns);
+        var next: ?ProgressMillis = null;
+
+        for (self.jobs) |*job| {
+            const progress: DevRootProgressState = @enumFromInt(job.progress.load(.acquire));
+            if (progress != .running) continue;
+            const started_at = job.start_ms.load(.acquire);
+            if (started_at == 0) continue;
+            const wait = blk: {
+                const elapsed = now -% started_at;
+                if (elapsed < threshold) break :blk threshold - elapsed;
+                const last = job.last_progress_ms.load(.acquire);
+                if (last == 0) break :blk 0;
+                const since_last = now -% last;
+                break :blk if (since_last < period) period - since_last else 0;
+            };
+            if (next == null or wait < next.?) next = wait;
+        }
+
+        return next;
     }
 
     fn progressLine(
@@ -920,6 +972,7 @@ fn lowerDevEvalAndFinishRoots(
         .executable = &executable,
         .jobs = jobs[0..jobs_len],
         .std_io = options.std_io,
+        .progress_reporter = if (progress.thread == null) null else &progress,
     };
     const max_threads = if (options.max_threads == 0)
         0
@@ -1032,9 +1085,10 @@ fn lowerDevEvalAndFinishRoots(
 fn devRootWorker(_: Allocator, context: *DevRunContext, item_id: usize) void {
     const job = &context.jobs[item_id];
     job.host.resetForRun();
-    job.progress.store(@intFromEnum(DevRootProgressState.running), .release);
     job.start_ms.store(if (context.std_io) |io| nowMs(io) else 0, .release);
     job.last_progress_ms.store(0, .release);
+    job.progress.store(@intFromEnum(DevRootProgressState.running), .release);
+    if (context.progress_reporter) |progress| progress.rootStarted();
 
     var crash_boundary = job.host.enterCrashBoundary();
     const sj = crash_boundary.set();
