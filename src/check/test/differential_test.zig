@@ -396,3 +396,86 @@ test "differential: string interpolation with multiple parts matches" {
         \\}
     );
 }
+
+test "differential: if/else (single branch, no expected type) matches" {
+    // No annotation: the no-expected pairwise branch path (branch_var ref +
+    // final-else pairwise unify).
+    try expectIterMatchesRecursive(
+        \\main! = |_args| {
+        \\    x = 1
+        \\    if x > 0 "pos" else "nonpos"
+        \\}
+    );
+}
+
+test "differential: if/else-if/else (multi-branch pairwise) matches" {
+    // Three branch conds + final else: exercises the cursor loop and the
+    // per-branch pairwise unify with running last_if_branch contexts.
+    try expectIterMatchesRecursive(
+        \\main! = |_args| {
+        \\    x = 5
+        \\    if x > 10 {
+        \\        "big"
+        \\    } else if x > 3 {
+        \\        "mid"
+        \\    } else if x > 0 {
+        \\        "small"
+        \\    } else {
+        \\        "nonpos"
+        \\    }
+        \\}
+    );
+}
+
+test "differential: if/else with expected return annotation (accumulator path) matches" {
+    // The annotation supplies expected.branch_result, so the branch_acc
+    // accumulator path (checkBranchBodyAgainstExpected + closing
+    // unify(if, acc) + unify(if, expected_ret)) is exercised.
+    try expectIterMatchesRecursive(
+        \\classify : I64 -> Str
+        \\classify = |x| if x > 0 "pos" else if x == 0 "zero" else "neg"
+        \\
+        \\main! = |_args| classify(7)
+    );
+}
+
+test "differential: if branches feeding numeric meet (no annotation) matches" {
+    // Branch bodies are numeric literals that must meet to a common type via
+    // the pairwise path; exercises branch-body unification rather than Str.
+    try expectIterMatchesRecursive(
+        \\main! = |_args| {
+        \\    x = 2
+        \\    n = if x > 1 100 else if x > 0 10 else 1
+        \\    n
+        \\}
+    );
+}
+
+test "differential: if branch body type mismatch (error-recovery break) matches" {
+    // Second branch's body type disagrees with the first: drives the
+    // no-expected pairwise unify failure + error-recovery break that poisons
+    // remaining branch bodies to .err.
+    try expectIterMatchesRecursive(
+        \\main! = |_args| {
+        \\    x = 1
+        \\    if x > 2 "a" else if x > 1 2 else "c"
+        \\}
+    );
+}
+
+test "differential: nested if in branch body matches" {
+    // An if expression nested inside another if's branch body: the inner if is
+    // scheduled as a child frame under the outer if's body slot, exercising the
+    // recursion-flattening across nested conditionals.
+    try expectIterMatchesRecursive(
+        \\main! = |_args| {
+        \\    x = 3
+        \\    y = 4
+        \\    if x > 0 {
+        \\        if y > 0 "both" else "x-only"
+        \\    } else {
+        \\        "neither"
+        \\    }
+        \\}
+    );
+}

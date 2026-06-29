@@ -9734,6 +9734,21 @@ const CheckStep = enum {
     /// frames, mirroring the between-child constraint construction in the
     /// inlined `checkIteratorForLoop`.
     for_after_iterable,
+    /// `e_if` resume step: the condition of the branch at `if_else.cursor` has
+    /// been checked. Unify it with a fresh `Bool` (`.if_condition`), emit the
+    /// `warn_unused_branches` comptime warning, raise hoist-selection
+    /// suppression, then schedule that branch's body. Runs between each branch's
+    /// cond and body frames, mirroring `checkIfElseExpr`'s per-branch
+    /// cond-then-body interleave.
+    if_after_cond,
+    /// `e_if` resume step: the body of the branch at `if_else.cursor` has been
+    /// checked (under hoist-selection suppression). Lower suppression, fold the
+    /// body against the expected return type (accumulator path) OR pairwise-
+    /// unify it with the first branch's body var (entering error-recovery mode
+    /// on mismatch), advance the cursor, then schedule the next branch's cond
+    /// (looping back to `if_after_cond`) or the final-else body (advancing to
+    /// `.exit`). Mirrors the post-body half of `checkIfElseExpr`'s branch loop.
+    if_after_body,
 };
 
 /// Per-node-kind loop/scratch state for interleaving nodes. `none` for the
@@ -9790,6 +9805,21 @@ const CheckKindState = union(enum) {
     /// step, once the iterable child has been checked).
     for_loop: struct {
         item_var: Var,
+    },
+    /// State for `e_if`. Created in `.enter`; carries the cross-branch
+    /// accumulators that `checkIfElseExpr` keeps as locals. `cursor` indexes the
+    /// current branch in the `branches` slice (advanced in `if_after_body`).
+    /// `expected_branch_ret`/`branch_acc` drive the accumulator-vs-pairwise
+    /// split. `last_if_branch` feeds each branch's diagnostic context (the prior
+    /// branch's idx). `error_recovery`, once set by a failed pairwise body
+    /// unify, makes every subsequent branch body unify to `.err` (mirroring the
+    /// recursive arm's error-recovery sub-loop + break).
+    if_else: struct {
+        expected_branch_ret: ?Var,
+        branch_acc: ?Var,
+        cursor: usize,
+        last_if_branch: CIR.Expr.IfBranch.Idx,
+        error_recovery: bool,
     },
 };
 
@@ -11994,6 +12024,17 @@ fn checkExprIter(self: *Self, root_idx: CIR.Expr.Idx, root_env: *Env, root_expec
                     .e_for => {
                         try self.enterForExpr(top);
                     },
+                    // INTERLEAVING: `e_if` initializes the cross-branch
+                    // accumulator state and schedules the first branch's cond.
+                    // The `if_after_cond`/`if_after_body` resume steps run the
+                    // per-branch between-child unifies and loop the branch cursor;
+                    // `.exit` runs the final-else post-body. Delegated to a helper
+                    // (NOT inlined) so its scheduling locals do not bloat
+                    // `checkExprIter`'s native stack frame on the deep
+                    // statement-nesting spine (mirrors `enterForExpr`).
+                    .e_if => {
+                        try self.enterIfExpr(top);
+                    },
                     // Helper-delegating / per-child-state kinds: like the leaf
                     // kinds below, advance to `.exit` and run the recursive body
                     // verbatim there. Their child `checkExpr` calls re-enter the
@@ -12080,6 +12121,19 @@ fn checkExprIter(self: *Self, root_idx: CIR.Expr.Idx, root_env: *Env, root_expec
             // dispatch plan, advances to `.exit`, and schedules the `body` child.
             .for_after_iterable => {
                 try self.forAfterIterable(top);
+            },
+            // `e_if` resume steps. Each is delegated to a helper (NOT inlined)
+            // so its scheduling/constraint locals do not bloat `checkExprIter`'s
+            // native stack frame on the deep statement-nesting spine (mirrors the
+            // `e_for`/`e_call` resume helpers). `if_after_cond` runs the cond→Bool
+            // unify and schedules the body; `if_after_body` runs the post-body
+            // fold/pairwise-unify, advances the branch cursor, and schedules the
+            // next cond or the final else.
+            .if_after_cond => {
+                try self.ifAfterCond(top);
+            },
+            .if_after_body => {
+                try self.ifAfterBody(top);
             },
             .exit => {
                 const f = &self.check_frame_stack.items[top];
@@ -13180,6 +13234,17 @@ fn checkExprIter(self: *Self, root_idx: CIR.Expr.Idx, root_env: *Env, root_expec
                     .e_for => {
                         try self.unifyWith(f.prologue.expr_var, .{ .structure = .empty_record }, f.env);
                     },
+                    // INTERLEAVING POST-BODY for `e_if`: the final-else body has
+                    // been checked (under hoist-selection suppression raised by
+                    // `if_after_body`). Delegated to a helper (NOT inlined) so its
+                    // constraint locals do not bloat `checkExprIter`'s native
+                    // stack frame on the deep statement-nesting spine. The helper
+                    // performs no `checkExpr` re-entry and never appends to
+                    // `check_frame_stack`, so `f` stays valid; it runs the
+                    // final-else fold/pairwise-unify and the two closing unifies.
+                    .e_if => {
+                        try self.exitIfExpr(top);
+                    },
                     else => unreachable, // gated by isMigratedKind
                 }
                 const does_fx = try self.checkExitEpilogue(
@@ -13260,6 +13325,11 @@ fn isMigratedKind(expr: CIR.Expr) bool {
         // dispatch plan before scheduling the `body` child; `.exit` unifies the
         // loop expr with `{}`.
         .e_for,
+        // Interleaving conditional kind: `.enter` schedules the first branch's
+        // cond; `if_after_cond`/`if_after_body` run the per-branch between-child
+        // unifies and loop the branch cursor; `.exit` runs the final-else
+        // post-body and the closing unifies.
+        .e_if,
         // Variable-arity multi-child kinds (this batch): schedule every child
         // as a frame in `.enter`, run the post-child body in `.exit`.
         .e_list,
@@ -14873,6 +14943,246 @@ fn checkIfElseExpr(
     }
 
     return does_fx;
+}
+
+/// `e_if` `.enter` dispatch for the iterative driver (extracted from
+/// `checkExprIter` so its scheduling local does not bloat that function's native
+/// stack frame on the deep statement-nesting spine — mirrors `enterForExpr`).
+///
+/// Inlines the front of `checkIfElseExpr`: computes the cross-branch accumulator
+/// state (`expected_branch_ret`/`branch_acc`), parks it in `kind_state.if_else`,
+/// advances the frame to `if_after_cond`, and schedules the FIRST branch's
+/// condition (checked with `child_expected`, NOT under hoist-selection
+/// suppression — only bodies/the-else are suppressed). `top` indexes the if
+/// frame; the final `append` may realloc, so it is the last action.
+fn enterIfExpr(self: *Self, top: usize) Allocator.Error!void {
+    const if_ = self.cir.store.getExpr(self.check_frame_stack.items[top].expr_idx).e_if;
+    const env = self.check_frame_stack.items[top].env;
+    const expected = self.check_frame_stack.items[top].expected;
+    const expr_region = self.check_frame_stack.items[top].prologue.expr_region;
+    const child_expected = self.check_frame_stack.items[top].prologue.child_expected;
+
+    const expected_branch_ret = expected.branch_result;
+
+    // Fresh accumulator for the meet of all compatible branch bodies (only when
+    // there is an expected return type). Mirrors `checkIfElseExpr`.
+    const branch_acc: ?Var = if (expected_branch_ret != null) try self.fresh(env, expr_region) else null;
+
+    const branches = self.cir.store.sliceIfBranches(if_.branches);
+    std.debug.assert(branches.len > 0);
+    const first_branch_idx = branches[0];
+    const first_branch = self.cir.store.getIfBranch(first_branch_idx);
+
+    // Park cross-branch state; cursor starts at branch 0. `last_if_branch` is
+    // seeded to the first branch idx (matching `checkIfElseExpr`'s pre-loop init,
+    // where the first branch's diagnostic context uses `first_branch_idx`).
+    self.check_frame_stack.items[top].kind_state = .{ .if_else = .{
+        .expected_branch_ret = expected_branch_ret,
+        .branch_acc = branch_acc,
+        .cursor = 0,
+        .last_if_branch = first_branch_idx,
+        .error_recovery = false,
+    } };
+    self.check_frame_stack.items[top].step = .if_after_cond;
+
+    // Schedule the first branch's condition. `append` may realloc the backing
+    // array, so this is the last action (no `items[top]` writes after it).
+    try self.check_frame_stack.append(self.gpa, makeEnterFrame(first_branch.cond, env, child_expected));
+}
+
+/// `e_if` `if_after_cond` resume step (extracted from `checkExprIter` to keep its
+/// scheduling local off that function's native stack frame — mirrors
+/// `forAfterIterable`).
+///
+/// The condition of the branch at `kind_state.if_else.cursor` has been checked.
+/// Inlines the between-cond-and-body half of `checkIfElseExpr`'s per-branch
+/// work: unify the condition with a fresh `Bool` (`.if_condition`), emit the
+/// `warn_unused_branches` comptime warning, raise hoist-selection suppression
+/// for the body subtree (mirroring `checkExprWithHoistSelectionSuppressed`;
+/// lowered in `if_after_body`), advance to `if_after_body`, and schedule the
+/// branch body. The unify/warn calls do not append to the frame stack, so
+/// `items[top]` stays valid until the final `append` (which may realloc).
+fn ifAfterCond(self: *Self, top: usize) Allocator.Error!void {
+    const if_ = self.cir.store.getExpr(self.check_frame_stack.items[top].expr_idx).e_if;
+    const env = self.check_frame_stack.items[top].env;
+    const expected = self.check_frame_stack.items[top].expected;
+    const expr_region = self.check_frame_stack.items[top].prologue.expr_region;
+    const cursor = self.check_frame_stack.items[top].kind_state.if_else.cursor;
+
+    const branches = self.cir.store.sliceIfBranches(if_.branches);
+    const branch = self.cir.store.getIfBranch(branches[cursor]);
+
+    // Unify the condition with a fresh Bool (no frame-stack append below).
+    const cond_var: Var = ModuleEnv.varFrom(branch.cond);
+    const bool_var = try self.freshBool(env, expr_region);
+    const cond_result = try self.unifyInContext(bool_var, cond_var, env, .if_condition);
+    if (if_.warn_unused_branches and cond_result.isOk()) {
+        try self.warnIfComptimeConditionalExpr(branch.cond, .if_condition, expected);
+    }
+
+    // Raise hoist-selection suppression for the body subtree (lowered in
+    // `if_after_body`), mirroring `checkExprWithHoistSelectionSuppressed`.
+    self.hoist_selection_suppressed_depth += 1;
+
+    // Advance, THEN schedule the body (the append below may realloc).
+    self.check_frame_stack.items[top].step = .if_after_body;
+    const body_expected = expected.forBranchBody();
+    try self.check_frame_stack.append(self.gpa, makeEnterFrame(branch.body, env, body_expected));
+}
+
+/// `e_if` `if_after_body` resume step (extracted from `checkExprIter` to keep its
+/// scheduling local off that function's native stack frame — mirrors
+/// `forAfterIterable`).
+///
+/// The body of the branch at `kind_state.if_else.cursor` has been checked (under
+/// hoist-selection suppression). Inlines the post-body half of
+/// `checkIfElseExpr`'s branch loop: lower suppression, then either poison the
+/// body to `.err` (error-recovery mode), fold it against the expected return
+/// type (accumulator path), or pairwise-unify it with the first branch's body
+/// var (entering error-recovery on mismatch). Then advance the cursor and
+/// schedule the next branch's condition (looping to `if_after_cond`) or the
+/// final-else body (advancing to `.exit`, with suppression raised). The
+/// fold/unify calls do not append to the frame stack; the final `append` may
+/// realloc, so all `items[top]` writes precede it.
+fn ifAfterBody(self: *Self, top: usize) Allocator.Error!void {
+    const if_expr_idx = self.check_frame_stack.items[top].expr_idx;
+    const if_ = self.cir.store.getExpr(if_expr_idx).e_if;
+    const env = self.check_frame_stack.items[top].env;
+    const expected = self.check_frame_stack.items[top].expected;
+    const child_expected = self.check_frame_stack.items[top].prologue.child_expected;
+    const st = self.check_frame_stack.items[top].kind_state.if_else;
+    const cursor = st.cursor;
+
+    const branches = self.cir.store.sliceIfBranches(if_.branches);
+    const num_branches: u32 = @intCast(branches.len + 1);
+    const branch = self.cir.store.getIfBranch(branches[cursor]);
+
+    // The body subtree completed: lower the suppression raised in
+    // `if_after_cond` (mirrors `checkExprWithHoistSelectionSuppressed`'s defer).
+    self.hoist_selection_suppressed_depth -= 1;
+
+    const body_var: Var = ModuleEnv.varFrom(branch.body);
+    // The first branch's body is the reference type all other branches must
+    // match in the no-expected pairwise path (`branch_var` in `checkIfElseExpr`).
+    const branch_var: Var = ModuleEnv.varFrom(self.cir.store.getIfBranch(branches[0]).body);
+
+    var error_recovery = st.error_recovery;
+    var last_if_branch = st.last_if_branch;
+
+    if (error_recovery) {
+        // A prior branch's pairwise unify failed; poison this branch's body to
+        // `.err` (mirrors the recursive error-recovery sub-loop). Do NOT update
+        // `last_if_branch` (the recursive loop `break`s before that update).
+        try self.unifyWith(body_var, .err, env);
+    } else if (st.expected_branch_ret) |expected_ret| {
+        const branch_ctx = problem.Context{ .if_branch = .{
+            .branch_index = @intCast(cursor),
+            .num_branches = num_branches,
+            .is_else = false,
+            .parent_if_expr = if_expr_idx,
+            .last_if_branch = last_if_branch,
+        } };
+        try self.checkBranchBodyAgainstExpected(branch.body, expected_ret, st.branch_acc.?, branch_ctx, env);
+        last_if_branch = branches[cursor];
+    } else if (cursor == 0) {
+        // First branch, no expected type: it is the reference (`branch_var`); no
+        // unify. (Recursive sets `last_if_branch = first_branch_idx` here, which
+        // it already is.)
+        last_if_branch = branches[0];
+    } else {
+        const body_result = try self.unifyInContext(branch_var, body_var, env, .{ .if_branch = .{
+            .branch_index = @intCast(cursor),
+            .num_branches = num_branches,
+            .is_else = false,
+            .parent_if_expr = if_expr_idx,
+            .last_if_branch = last_if_branch,
+        } });
+        if (!body_result.isOk()) {
+            // Enter error-recovery: subsequent branch bodies are poisoned to
+            // `.err` when they reach this step. Do NOT update `last_if_branch`
+            // (matches the recursive `break` before the update).
+            error_recovery = true;
+        } else {
+            last_if_branch = branches[cursor];
+        }
+    }
+
+    // Persist loop state (these are field writes into the live `.if_else`
+    // variant; no append has happened yet, so `items[top]` is valid).
+    self.check_frame_stack.items[top].kind_state.if_else.error_recovery = error_recovery;
+    self.check_frame_stack.items[top].kind_state.if_else.last_if_branch = last_if_branch;
+
+    const next_cursor = cursor + 1;
+    if (next_cursor < branches.len) {
+        // Schedule the next branch's condition (NOT suppressed), loop back to
+        // `if_after_cond`.
+        self.check_frame_stack.items[top].kind_state.if_else.cursor = next_cursor;
+        self.check_frame_stack.items[top].step = .if_after_cond;
+        const next_branch = self.cir.store.getIfBranch(branches[next_cursor]);
+        try self.check_frame_stack.append(self.gpa, makeEnterFrame(next_branch.cond, env, child_expected));
+    } else {
+        // All branches consumed; schedule the final-else body (suppressed), then
+        // `.exit` runs the closing unifies.
+        self.hoist_selection_suppressed_depth += 1;
+        self.check_frame_stack.items[top].step = .exit;
+        const body_expected = expected.forBranchBody();
+        try self.check_frame_stack.append(self.gpa, makeEnterFrame(if_.final_else, env, body_expected));
+    }
+}
+
+/// `e_if` `.exit` post-body (extracted from `checkExprIter` to keep its
+/// constraint locals off that function's native stack frame — mirrors
+/// `checkInterpolationPostLoop`).
+///
+/// The final-else body has been checked (under hoist-selection suppression
+/// raised by `if_after_body`). Inlines the tail of `checkIfElseExpr`: lower
+/// suppression, fold the final-else against the expected return type
+/// (accumulator path) or pairwise-unify it with the first branch's body var,
+/// then run the two closing unifies that tie the whole if-expr to the
+/// accumulated/branch type. Uses `ModuleEnv.varFrom(if_expr_idx)` (NOT
+/// `prologue.expr_var`) exactly as the recursive `checkIfElseExpr` does — the
+/// shared epilogue separately reconciles any annotation against this var. No
+/// frame-stack append below, so `items[top]` stays valid throughout.
+fn exitIfExpr(self: *Self, top: usize) Allocator.Error!void {
+    const if_expr_idx = self.check_frame_stack.items[top].expr_idx;
+    const if_ = self.cir.store.getExpr(if_expr_idx).e_if;
+    const env = self.check_frame_stack.items[top].env;
+    const st = self.check_frame_stack.items[top].kind_state.if_else;
+
+    const branches = self.cir.store.sliceIfBranches(if_.branches);
+    const num_branches: u32 = @intCast(branches.len + 1);
+
+    // Lower the suppression raised in `if_after_body` for the final-else subtree.
+    self.hoist_selection_suppressed_depth -= 1;
+
+    const branch_var: Var = ModuleEnv.varFrom(self.cir.store.getIfBranch(branches[0]).body);
+    const if_expr_var: Var = ModuleEnv.varFrom(if_expr_idx);
+
+    if (st.expected_branch_ret) |expected_ret| {
+        const branch_ctx = problem.Context{ .if_branch = .{
+            .branch_index = num_branches - 1,
+            .num_branches = num_branches,
+            .is_else = true,
+            .parent_if_expr = if_expr_idx,
+            .last_if_branch = st.last_if_branch,
+        } };
+        try self.checkBranchBodyAgainstExpected(if_.final_else, expected_ret, st.branch_acc.?, branch_ctx, env);
+        // Tie the whole expr to the accumulated branch meet, then to the shared
+        // expected return type, in the load-bearing `(expr, expected)` operand
+        // order (see the note in `checkIfElseExpr`).
+        _ = try self.unify(if_expr_var, st.branch_acc.?, env);
+        _ = try self.unify(if_expr_var, expected_ret, env);
+    } else {
+        const final_else_var: Var = ModuleEnv.varFrom(if_.final_else);
+        _ = try self.unifyInContext(branch_var, final_else_var, env, .{ .if_branch = .{
+            .branch_index = num_branches - 1,
+            .num_branches = num_branches,
+            .is_else = true,
+            .parent_if_expr = if_expr_idx,
+            .last_if_branch = st.last_if_branch,
+        } });
+        _ = try self.unify(if_expr_var, branch_var, env);
+    }
 }
 
 // match //
