@@ -462,6 +462,12 @@ const ProcBodyBuilder = struct {
             .empty_record => try self.assignZst(target, next),
             .lookup_local => |lookup| try self.assignLocal(target, self.localForPattern(lookup.pattern), next),
             .tuple => |items| try self.lowerTupleInto(target, items, next),
+            .record => |record| blk: {
+                if (record.ext != null) {
+                    boxyLowerInvariant("open record expression reached boxy body lowering before record extension lowering was implemented");
+                }
+                break :blk try self.lowerRecordInto(target, expr.ty, record.fields, next);
+            },
             .block => |block| blk: {
                 try self.reserveBlockBindings(block.statements);
                 var continuation = try self.lowerExprInto(target, block.final_expr, next);
@@ -500,6 +506,77 @@ const ProcBodyBuilder = struct {
         while (index > 0) {
             index -= 1;
             continuation = try self.lowerExprInto(field_locals[index], items[index], continuation);
+        }
+        return continuation;
+    }
+
+    fn lowerRecordInto(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        record_ty: checked.CheckedTypeId,
+        expr_fields: []const checked.CheckedRecordExprField,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const rep_id = self.repForType(record_ty);
+        const rep = self.parent.plan.representations.items[@intFromEnum(rep_id)];
+        switch (rep.kind) {
+            .record,
+            .record_unbound,
+            => {},
+            else => boxyLowerInvariant("record expression checked type did not have a boxy record representation"),
+        }
+
+        const children = self.parent.plan.childSlice(rep.children);
+        var field_count: usize = 0;
+        for (children) |child| {
+            switch (child.role) {
+                .record_field => field_count += 1,
+                .record_ext => self.requireEmptyRecordExtension(child.rep),
+                else => boxyLowerInvariant("record representation had a non-record child role"),
+            }
+        }
+        if (field_count != expr_fields.len) {
+            boxyLowerInvariant("record expression field count disagreed with its checked type representation");
+        }
+
+        const field_locals = try self.parent.allocator.alloc(LIR.LocalId, field_count);
+        defer self.parent.allocator.free(field_locals);
+        const source_field_locals = try self.parent.allocator.alloc(?LIR.LocalId, expr_fields.len);
+        defer self.parent.allocator.free(source_field_locals);
+        @memset(source_field_locals, null);
+
+        var layout_index: usize = 0;
+        for (children) |child| {
+            switch (child.role) {
+                .record_field => |label| {
+                    const source_index = recordExprFieldIndex(expr_fields, label);
+                    if (source_field_locals[source_index] != null) {
+                        boxyLowerInvariant("record expression field was selected more than once by representation order");
+                    }
+                    const local = try self.addFrameLocal(self.parent.layout_plan.rep_layouts[@intFromEnum(child.rep)].worker.layoutIdx());
+                    field_locals[layout_index] = local;
+                    source_field_locals[source_index] = local;
+                    layout_index += 1;
+                },
+                .record_ext => {},
+                else => unreachable,
+            }
+        }
+        for (source_field_locals) |maybe_local| {
+            if (maybe_local == null) {
+                boxyLowerInvariant("record expression had a field outside its checked type representation");
+            }
+        }
+
+        var continuation = try self.parent.result.store.addCFStmt(.{ .assign_struct = .{
+            .target = target,
+            .fields = try self.parent.result.store.addLocalSpan(field_locals),
+            .next = next,
+        } });
+        var source_index = expr_fields.len;
+        while (source_index > 0) {
+            source_index -= 1;
+            continuation = try self.lowerExprInto(source_field_locals[source_index].?, expr_fields[source_index].value, continuation);
         }
         return continuation;
     }
@@ -632,10 +709,35 @@ const ProcBodyBuilder = struct {
         return self.root_layout.worker_value.layoutIdx();
     }
 
-    fn workerRuntimeLayoutForType(self: *const ProcBodyBuilder, ty: checked.CheckedTypeId) Layouts.RuntimeLayout {
-        const rep = self.parent.plan.repForSourceType(ty) orelse
+    fn repForType(self: *const ProcBodyBuilder, ty: checked.CheckedTypeId) Plan.TypeRepId {
+        return self.parent.plan.repForSourceType(ty) orelse
             boxyLowerInvariant("checked body referenced a type missing from the boxy representation plan");
-        return self.parent.layout_plan.rep_layouts[@intFromEnum(rep)].worker;
+    }
+
+    fn workerRuntimeLayoutForType(self: *const ProcBodyBuilder, ty: checked.CheckedTypeId) Layouts.RuntimeLayout {
+        return self.parent.layout_plan.rep_layouts[@intFromEnum(self.repForType(ty))].worker;
+    }
+
+    fn requireEmptyRecordExtension(self: *const ProcBodyBuilder, rep_id: Plan.TypeRepId) void {
+        const rep = self.parent.plan.representations.items[@intFromEnum(rep_id)];
+        if (rep.kind != .empty_record) {
+            boxyLowerInvariant("open record representation reached boxy body lowering without an explicit closed row");
+        }
+    }
+
+    fn recordExprFieldIndex(
+        fields: []const checked.CheckedRecordExprField,
+        label: @TypeOf(@as(checked.CheckedRecordExprField, undefined).label),
+    ) usize {
+        var found: ?usize = null;
+        for (fields, 0..) |field, index| {
+            if (field.label != label) continue;
+            if (found != null) {
+                boxyLowerInvariant("record expression contained the same field label more than once");
+            }
+            found = index;
+        }
+        return found orelse boxyLowerInvariant("record expression was missing a field from its checked type representation");
     }
 };
 
@@ -1315,6 +1417,126 @@ test "boxy lowerer emits tuple construction in element order" {
     try std.testing.expectEqual(@as(usize, 2), fields.len);
     try std.testing.expectEqual(first.target, fields[0]);
     try std.testing.expectEqual(second.target, fields[1]);
+    try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = build.target } }, out.lir_result.store.getCFStmt(build.next));
+}
+
+test "boxy lowerer emits record construction in layout order after source-order evaluation" {
+    const gpa = std.testing.allocator;
+
+    var artifact = minimalCheckedArtifact(gpa);
+    defer artifact.canonical_names.deinit();
+    defer artifact.checked_types.deinit(gpa);
+    defer artifact.checked_bodies.deinit(gpa);
+
+    const field_a: @TypeOf(@as(checked.CheckedRecordField, undefined).name) = @enumFromInt(1);
+    const field_b: @TypeOf(@as(checked.CheckedRecordField, undefined).name) = @enumFromInt(2);
+
+    try artifact.checked_types.payloads.append(gpa, .{
+        .nominal = builtinNominal(.u64, @enumFromInt(0), .{}),
+    });
+    try artifact.checked_types.payloads.append(gpa, .empty_record);
+    try artifact.checked_types.record_field_pool.appendSlice(gpa, &.{
+        .{ .name = field_a, .ty = @as(checked.CheckedTypeId, @enumFromInt(0)) },
+        .{ .name = field_b, .ty = @as(checked.CheckedTypeId, @enumFromInt(0)) },
+    });
+    try artifact.checked_types.payloads.append(gpa, .{
+        .record = .{ .fields = .{ .start = 0, .len = 2 }, .ext = @enumFromInt(1) },
+    });
+    try artifact.checked_types.payloads.append(gpa, .{
+        .function = .{
+            .kind = .pure,
+            .args = .{},
+            .ret = @enumFromInt(2),
+            .needs_instantiation = false,
+        },
+    });
+
+    try artifact.checked_bodies.record_expr_field_pool.appendSlice(gpa, &.{
+        .{ .label = field_b, .value = @as(checked.CheckedExprId, @enumFromInt(2)) },
+        .{ .label = field_a, .value = @as(checked.CheckedExprId, @enumFromInt(3)) },
+    });
+
+    const template_ref = procedureTemplateRef(artifact.key, 0);
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(0),
+        .ty = @enumFromInt(3),
+        .source_region = base.Region.zero(),
+        .data = .{ .lambda = .{ .args = .{}, .body = @enumFromInt(1) } },
+    });
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(1),
+        .ty = @enumFromInt(2),
+        .source_region = base.Region.zero(),
+        .data = .{ .record = .{
+            .fields = .{ .start = 0, .len = 2 },
+            .ext = null,
+        } },
+    });
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(2),
+        .ty = @enumFromInt(0),
+        .source_region = base.Region.zero(),
+        .data = .{ .num = .{ .value = intValue(2), .kind = .u64 } },
+    });
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(3),
+        .ty = @enumFromInt(0),
+        .source_region = base.Region.zero(),
+        .data = .{ .num = .{ .value = intValue(1), .kind = .u64 } },
+    });
+    try artifact.checked_bodies.bodies.append(gpa, .{
+        .id = @enumFromInt(0),
+        .root_expr = @enumFromInt(0),
+        .owner_template = template_ref,
+    });
+    var templates = [_]checked.CheckedProcedureTemplate{
+        checkedTemplate(template_ref, @enumFromInt(3), @enumFromInt(0)),
+    };
+    artifact.checked_procedure_templates = .{ .templates = &templates };
+
+    const root = checked.RootRequest{
+        .order = 0,
+        .module_idx = 0,
+        .kind = .runtime_entrypoint,
+        .source = .{ .def = @enumFromInt(0) },
+        .checked_type = @enumFromInt(3),
+        .abi = .roc,
+        .exposure = .private,
+        .procedure_template = template_ref,
+    };
+    var plan = try Plan.analyzeProgram(gpa, .{
+        .checked_types = artifact.checked_types.view(),
+        .roots = &.{root},
+    }, .{});
+    defer plan.deinit();
+
+    var out = try run(
+        gpa,
+        .{ .root = .{ .module = &artifact, .roots = undefined } },
+        .{},
+        &plan,
+        .{},
+    );
+    defer out.deinit();
+
+    const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
+    try std.testing.expectEqual(@as(usize, 3), out.lir_result.store.getLocalSpan(proc.frame_locals).len);
+
+    const first = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_literal;
+    switch (first.value) {
+        .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 2), literal.value),
+        else => return error.TestUnexpectedResult,
+    }
+    const second = out.lir_result.store.getCFStmt(first.next).assign_literal;
+    switch (second.value) {
+        .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 1), literal.value),
+        else => return error.TestUnexpectedResult,
+    }
+    const build = out.lir_result.store.getCFStmt(second.next).assign_struct;
+    const fields = out.lir_result.store.getLocalSpan(build.fields);
+    try std.testing.expectEqual(@as(usize, 2), fields.len);
+    try std.testing.expectEqual(second.target, fields[0]);
+    try std.testing.expectEqual(first.target, fields[1]);
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = build.target } }, out.lir_result.store.getCFStmt(build.next));
 }
 
