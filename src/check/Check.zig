@@ -9714,7 +9714,21 @@ const CheckStep = enum {
 /// fixed-arity kinds migrated in this phase except where noted.
 const CheckKindState = union(enum) {
     none,
-    // block_loop is added in the e_block task.
+    /// State for `e_block`. The block's statements are checked as a unit in
+    /// `.enter` (their nested `checkExpr` calls already re-enter the iterative
+    /// driver), and the block's `final_expr` is scheduled on the work stack —
+    /// that is the recursion spine this migration flattens. This carries what
+    /// `.exit` needs once the final expr completes.
+    block_loop: struct {
+        hoist_scope: HoistLexicalScope,
+        /// Block diverges (a statement was `return`/`crash`/`break`): the final
+        /// expr is unreachable, so the block's type becomes a fresh flex var.
+        diverges: bool,
+        /// Whether `.enter` raised `hoist_selection_suppressed_depth` for the
+        /// final-expr subtree, mirroring `checkExprWithHoistSelectionSuppressed`;
+        /// lowered in `.exit`.
+        final_expr_hoists_suppressed: bool,
+    },
 };
 
 /// A reified `checkExpr` stack frame. Must be cheap to memcpy (lives in an
@@ -11791,6 +11805,46 @@ fn checkExprIter(self: *Self, root_idx: CIR.Expr.Idx, root_env: *Env, root_expec
                         // values we need above and do not touch `frame` after.
                         try self.check_frame_stack.append(self.gpa, makeEnterFrame(ta.tuple, child_env, child_expected));
                     },
+                    .e_block => |block| {
+                        // Read everything off `frame` BEFORE re-entering the
+                        // driver below. `checkBlockStatements` calls `checkExpr`,
+                        // which appends to `check_frame_stack` and may realloc,
+                        // invalidating `frame`; re-index `items[top]` afterward.
+                        const child_env = frame.env;
+                        const block_expected = frame.expected;
+                        const stmt_region = frame.prologue.expr_region;
+
+                        const hoist_scope = self.beginHoistLexicalScope();
+
+                        // Statements are checked here as a unit. Their nested
+                        // `checkExpr` calls re-enter the iterative driver (each
+                        // subtree on the work stack), so this does not deepen
+                        // native recursion per block. The recursion spine that
+                        // overflows on deeply nested blocks is the `final_expr`,
+                        // which is scheduled on the work stack below.
+                        const stmt_result = try self.checkBlockStatements(block.stmts, child_env, stmt_region, block_expected.forStatement());
+
+                        // Mirror `checkExprWithHoistSelectionSuppressed`: raise
+                        // suppression for the whole final-expr subtree (lowered
+                        // in `.exit`).
+                        const suppressed = stmt_result.blocks_later_hoists;
+                        if (suppressed) self.hoist_selection_suppressed_depth += 1;
+
+                        self.check_frame_stack.items[top].kind_state = .{ .block_loop = .{
+                            .hoist_scope = hoist_scope,
+                            .diverges = stmt_result.diverges,
+                            .final_expr_hoists_suppressed = suppressed,
+                        } };
+                        // Seed the effect accumulator with the statements'
+                        // effects; the final expr's effects are OR'd in when its
+                        // child frame pops (`finishFrameAndPropagate`).
+                        self.check_frame_stack.items[top].does_fx = stmt_result.does_fx;
+                        self.check_frame_stack.items[top].step = .exit;
+
+                        // Schedule the final expr with the block's ORIGINAL
+                        // `expected` (not the statement-expected used above).
+                        try self.check_frame_stack.append(self.gpa, makeEnterFrame(block.final_expr, child_env, block_expected));
+                    },
                     else => unreachable, // gated by isMigratedKind
                 }
             },
@@ -11875,6 +11929,25 @@ fn checkExprIter(self: *Self, root_idx: CIR.Expr.Idx, root_env: *Env, root_expec
                             },
                         }
                     },
+                    .e_block => |block| {
+                        // The final expr has completed; its `does_fx` was OR'd
+                        // into `f.does_fx` by `finishFrameAndPropagate` on pop.
+                        // None of the calls below append to `check_frame_stack`,
+                        // so `f` stays valid through this arm.
+                        const bl = f.kind_state.block_loop;
+                        if (bl.final_expr_hoists_suppressed) self.hoist_selection_suppressed_depth -= 1;
+
+                        if (bl.diverges) {
+                            // The block diverges, so the final expression is
+                            // unreachable; give the block a fresh flex var.
+                            try self.unifyWith(f.prologue.expr_var, .{ .flex = Flex.init() }, f.env);
+                        } else {
+                            // Link the root expr with the final expr.
+                            _ = try self.unify(f.prologue.expr_var, ModuleEnv.varFrom(block.final_expr), f.env);
+                        }
+
+                        self.endHoistLexicalScope(bl.hoist_scope);
+                    },
                     else => unreachable, // gated by isMigratedKind
                 }
                 const does_fx = try self.checkExitEpilogue(
@@ -11908,6 +11981,7 @@ fn finishFrameAndPropagate(self: *Self, top: usize, frame_base: usize, fx: bool,
 fn isMigratedKind(expr: CIR.Expr) bool {
     return switch (expr) {
         .e_tuple_access => true,
+        .e_block => true,
         else => false,
     };
 }

@@ -1,14 +1,15 @@
 //! Deep-nesting stack-safety stress test for the iterative checker conversion.
 //!
-//! This test is RED BY DESIGN until the e_block migration lands. The checker
-//! still recurses natively for `e_block`, so a program with thousands of nested
-//! blocks drives deep native recursion and overflows the native stack (SIGSEGV
-//! via the compiler-rt stack probe) — it overflows long before the interim
-//! depth guard (`MAX_CHECK_RECURSION_DEPTH = 8192`) can convert it into a
-//! returned `error.OutOfMemory`. After the block migration flattens the e_block
-//! spine onto the work stack, this test will PASS. Do NOT weaken this test or
-//! the depth guard to make it pass early — its failure today is the executable
-//! definition of "block migration not yet done".
+//! This test PASSES as of the e_block migration, which flattened the block
+//! `final_expr` spine onto the work stack. Before that migration the checker
+//! recursed natively for `e_block`, so a program with thousands of nested blocks
+//! drove deep native recursion and overflowed the native stack (SIGSEGV via the
+//! compiler-rt stack probe) — long before the interim depth guard
+//! (`MAX_CHECK_RECURSION_DEPTH = 8192`) could convert it into a returned
+//! `error.OutOfMemory`. It now serves as a regression guard: a future change
+//! that reintroduces native recursion on the e_block spine would make it
+//! SIGSEGV again. Do NOT weaken this test or the depth guard to "fix" such a
+//! regression — its job is to fail loudly if the spine stops being iterative.
 //!
 //! Depth note: empirically on this codebase, parse+canonicalization (which still
 //! recurse for nested blocks despite the work-stack front end) themselves

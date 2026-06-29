@@ -56,3 +56,38 @@ test "differential: tuple access matches across recursive/iterative" {
         \\}
     );
 }
+
+test "differential: deeply nested blocks match across recursive/iterative" {
+    // The block `final_expr` spine — the recursion flattened by the e_block
+    // migration. Statement lists are empty, so only nesting via final_expr.
+    try expectIterMatchesRecursive(
+        \\main! = |_args| {
+        \\    {
+        \\        {
+        \\            {
+        \\                42
+        \\            }
+        \\        }
+        \\    }
+        \\}
+    );
+}
+
+test "differential: blocks with statements and nested-block bindings match" {
+    // Exercises the statement loop (s_decl with a block RHS) plus a final-expr
+    // block, so both the statement path and the spine are covered.
+    try expectIterMatchesRecursive(
+        \\main! = |_args| {
+        \\    x = {
+        \\        y = 1
+        \\        z = (y, y)
+        \\        z.1
+        \\    }
+        \\    w = x + 1
+        \\    {
+        \\        a = w
+        \\        a
+        \\    }
+        \\}
+    );
+}
