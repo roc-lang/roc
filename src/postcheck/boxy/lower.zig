@@ -7,6 +7,7 @@ const std = @import("std");
 const base = @import("base");
 const can = @import("can");
 const check = @import("check");
+const layout = @import("layout");
 const lir_core = @import("lir_core");
 
 const Common = @import("../common.zig");
@@ -67,6 +68,7 @@ pub fn run(
 
 const ProcedureModuleView = struct {
     key: checked.CheckedModuleArtifactKey,
+    canonical_names: *const names.CanonicalNameStore,
     checked_types: checked.CheckedTypeStoreView,
     checked_bodies: checked.CheckedBodyStoreView,
     checked_procedure_templates: *const checked.CheckedProcedureTemplateTable,
@@ -186,6 +188,7 @@ fn rootProcedureModule(modules: Common.CheckedModules) ProcedureModuleView {
     const artifact = modules.root.module;
     return .{
         .key = artifact.key,
+        .canonical_names = &artifact.canonical_names,
         .checked_types = artifact.checked_types.view(),
         .checked_bodies = artifact.checked_bodies.view(),
         .checked_procedure_templates = &artifact.checked_procedure_templates,
@@ -196,6 +199,7 @@ fn rootProcedureModule(modules: Common.CheckedModules) ProcedureModuleView {
 fn procedureModuleFromImport(import: checked.ImportedModuleView) ProcedureModuleView {
     return .{
         .key = import.key,
+        .canonical_names = import.canonical_names,
         .checked_types = import.checked_types,
         .checked_bodies = import.checked_bodies,
         .checked_procedure_templates = import.checked_procedure_templates,
@@ -464,6 +468,8 @@ const ProcBodyBuilder = struct {
             .field_access => |access| try self.lowerFieldAccessInto(target, access.receiver, access.field_name, next),
             .tuple_access => |access| try self.lowerTupleAccessInto(target, access.tuple, access.elem_index, next),
             .tuple => |items| try self.lowerTupleInto(target, items, next),
+            .tag => |tag| try self.lowerTagInto(target, expr.ty, tag.name, tag.args, next),
+            .zero_argument_tag => |tag| try self.lowerTagInto(target, expr.ty, tag.name, &.{}, next),
             .record => |record| blk: {
                 if (record.ext != null) {
                     boxyLowerInvariant("open record expression reached boxy body lowering before record extension lowering was implemented");
@@ -492,6 +498,15 @@ const ProcBodyBuilder = struct {
         items: []const checked.CheckedExprId,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
+        return try self.lowerExprsAsStructInto(target, items, next);
+    }
+
+    fn lowerExprsAsStructInto(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        items: []const checked.CheckedExprId,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
         const field_locals = try self.parent.allocator.alloc(LIR.LocalId, items.len);
         defer self.parent.allocator.free(field_locals);
 
@@ -511,6 +526,105 @@ const ProcBodyBuilder = struct {
             continuation = try self.lowerExprInto(field_locals[index], items[index], continuation);
         }
         return continuation;
+    }
+
+    fn lowerTagInto(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        tag_ty: checked.CheckedTypeId,
+        name: names.TagNameId,
+        args: []const checked.CheckedExprId,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const rep_id = self.repForType(tag_ty);
+        const rep = self.parent.plan.representations.items[@intFromEnum(rep_id)];
+        return switch (rep.kind) {
+            .tag_union => try self.lowerPlannedTagInto(target, rep, name, args, next),
+            .bool_tag_union => try self.lowerBoolTagInto(target, name, args, next),
+            .empty_tag_union => boxyLowerInvariant("empty tag union expression reached boxy body lowering"),
+            else => boxyLowerInvariant("tag expression checked type did not have a boxy tag-union representation"),
+        };
+    }
+
+    fn lowerBoolTagInto(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        name: names.TagNameId,
+        args: []const checked.CheckedExprId,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        if (args.len != 0) {
+            boxyLowerInvariant("builtin Bool tag expression carried a payload");
+        }
+        const variant_index = self.boolVariantIndex(name);
+        return try self.parent.result.store.addCFStmt(.{ .assign_tag = .{
+            .target = target,
+            .variant_index = variant_index,
+            .discriminant = variant_index,
+            .payload = null,
+            .next = next,
+        } });
+    }
+
+    fn lowerPlannedTagInto(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        rep: Plan.TypeRepresentation,
+        name: names.TagNameId,
+        args: []const checked.CheckedExprId,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const variant = self.tagVariant(rep, name);
+        const payload_children = self.parent.plan.childSlice(variant.payloads);
+        if (payload_children.len != args.len) {
+            boxyLowerInvariant("tag expression payload count disagreed with its checked type representation");
+        }
+        for (payload_children, 0..) |child, index| {
+            switch (child.role) {
+                .tag_payload => |payload| {
+                    if (payload.tag != name or payload.index != index) {
+                        boxyLowerInvariant("tag variant payload span did not match its payload child roles");
+                    }
+                },
+                else => boxyLowerInvariant("tag variant payload span included a non-payload child"),
+            }
+        }
+
+        if (args.len == 0) {
+            if (self.isZstLocal(target)) return try self.assignZst(target, next);
+            return try self.parent.result.store.addCFStmt(.{ .assign_tag = .{
+                .target = target,
+                .variant_index = variant.index,
+                .discriminant = variant.index,
+                .payload = null,
+                .next = next,
+            } });
+        }
+
+        const payload_layout = if (self.isZstLocal(target))
+            layout.Idx.zst
+        else
+            self.tagUnionPayloadLayout(self.parent.result.store.getLocal(target).layout_idx, variant.index);
+        const payload_local = try self.addFrameLocal(payload_layout);
+        if (self.isZstLocal(target) and !self.isZstLocal(payload_local)) {
+            boxyLowerInvariant("zero-sized tag-union layout had a non-zero-sized payload");
+        }
+
+        const assign_tag = if (self.isZstLocal(target))
+            try self.assignZst(target, next)
+        else
+            try self.parent.result.store.addCFStmt(.{ .assign_tag = .{
+                .target = target,
+                .variant_index = variant.index,
+                .discriminant = variant.index,
+                .payload = payload_local,
+                .next = next,
+            } });
+
+        if (args.len == 1) {
+            return try self.lowerExprInto(payload_local, args[0], assign_tag);
+        }
+        return try self.lowerExprsAsStructInto(payload_local, args, assign_tag);
     }
 
     fn lowerNominalInto(
@@ -832,6 +946,59 @@ const ProcBodyBuilder = struct {
             }
         }
         boxyLowerInvariant("record field access referenced a field outside its checked type representation");
+    }
+
+    const TagVariantLookup = struct {
+        index: u16,
+        payloads: Plan.Span,
+    };
+
+    fn tagVariant(
+        self: *const ProcBodyBuilder,
+        rep: Plan.TypeRepresentation,
+        name: names.TagNameId,
+    ) TagVariantLookup {
+        const variants = self.parent.plan.tagVariantSlice(rep.tag_variants);
+        for (variants, 0..) |variant, index| {
+            if (variant.name != name) continue;
+            if (index > std.math.maxInt(u16)) {
+                boxyLowerInvariant("tag variant index exceeded LIR variant range");
+            }
+            return .{
+                .index = @intCast(index),
+                .payloads = variant.payloads,
+            };
+        }
+        boxyLowerInvariant("tag expression referenced a variant outside its checked type representation");
+    }
+
+    fn boolVariantIndex(self: *const ProcBodyBuilder, name: names.TagNameId) u16 {
+        const tag_name = self.module.canonical_names.tagLabelText(name);
+        if (std.mem.eql(u8, tag_name, "False")) return 0;
+        if (std.mem.eql(u8, tag_name, "True")) return 1;
+        boxyLowerInvariant("builtin Bool tag expression referenced a non-Bool tag");
+    }
+
+    fn tagUnionPayloadLayout(self: *const ProcBodyBuilder, tag_union_layout_idx: layout.Idx, variant_index: u16) layout.Idx {
+        const tag_union_layout = self.parent.result.layouts.getLayout(tag_union_layout_idx);
+        return switch (tag_union_layout.tag) {
+            .tag_union => blk: {
+                const data = self.parent.result.layouts.getTagUnionData(tag_union_layout.getTagUnion().idx);
+                const variants = self.parent.result.layouts.getTagUnionVariants(data);
+                if (variant_index >= variants.len) {
+                    boxyLowerInvariant("tag payload variant exceeded committed tag-union layout");
+                }
+                break :blk variants.get(@intCast(variant_index)).payload_layout;
+            },
+            .zst, .scalar => .zst,
+            else => boxyLowerInvariant("tag payload operation expected tag-union layout"),
+        };
+    }
+
+    fn isZstLocal(self: *const ProcBodyBuilder, local: LIR.LocalId) bool {
+        return self.parent.result.layouts.isZeroSized(
+            self.parent.result.layouts.getLayout(self.parent.result.store.getLocal(local).layout_idx),
+        );
     }
 };
 
@@ -1979,6 +2146,207 @@ test "boxy lowerer emits nominal construction for representation-equivalent back
     const copy = out.lir_result.store.getCFStmt(literal.next).assign_ref;
     try std.testing.expectEqual(literal.target, copy.op.local);
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = copy.target } }, out.lir_result.store.getCFStmt(copy.next));
+}
+
+test "boxy lowerer emits builtin Bool tags by checked Bool names" {
+    const gpa = std.testing.allocator;
+
+    var artifact = minimalCheckedArtifact(gpa);
+    defer artifact.canonical_names.deinit();
+    defer artifact.checked_types.deinit(gpa);
+    defer artifact.checked_bodies.deinit(gpa);
+
+    const true_tag = try artifact.canonical_names.internTagLabel("True");
+
+    try artifact.checked_types.payloads.append(gpa, .{
+        .nominal = builtinNominal(.bool, @enumFromInt(0), .{}),
+    });
+    try artifact.checked_types.payloads.append(gpa, .{
+        .function = .{
+            .kind = .pure,
+            .args = .{},
+            .ret = @enumFromInt(0),
+            .needs_instantiation = false,
+        },
+    });
+
+    const template_ref = procedureTemplateRef(artifact.key, 0);
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(0),
+        .ty = @enumFromInt(1),
+        .source_region = base.Region.zero(),
+        .data = .{ .lambda = .{ .args = .{}, .body = @enumFromInt(1) } },
+    });
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(1),
+        .ty = @enumFromInt(0),
+        .source_region = base.Region.zero(),
+        .data = .{ .zero_argument_tag = .{
+            .closure_name = true_tag,
+            .name = true_tag,
+        } },
+    });
+    try artifact.checked_bodies.bodies.append(gpa, .{
+        .id = @enumFromInt(0),
+        .root_expr = @enumFromInt(0),
+        .owner_template = template_ref,
+    });
+    var templates = [_]checked.CheckedProcedureTemplate{
+        checkedTemplate(template_ref, @enumFromInt(1), @enumFromInt(0)),
+    };
+    artifact.checked_procedure_templates = .{ .templates = &templates };
+
+    const root = checked.RootRequest{
+        .order = 0,
+        .module_idx = 0,
+        .kind = .runtime_entrypoint,
+        .source = .{ .def = @enumFromInt(0) },
+        .checked_type = @enumFromInt(1),
+        .abi = .roc,
+        .exposure = .private,
+        .procedure_template = template_ref,
+    };
+    var plan = try Plan.analyzeProgram(gpa, .{
+        .root_module = .{ .module = &artifact, .roots = undefined },
+        .roots = &.{root},
+    }, .{});
+    defer plan.deinit();
+
+    var out = try run(
+        gpa,
+        .{ .root = .{ .module = &artifact, .roots = undefined } },
+        .{},
+        &plan,
+        .{},
+    );
+    defer out.deinit();
+
+    const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
+    const tag = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_tag;
+    try std.testing.expectEqual(@as(u16, 1), tag.variant_index);
+    try std.testing.expectEqual(@as(u16, 1), tag.discriminant);
+    try std.testing.expect(tag.payload == null);
+    try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = tag.target } }, out.lir_result.store.getCFStmt(tag.next));
+}
+
+test "boxy lowerer emits payload tag construction using planned variant payload layout" {
+    const gpa = std.testing.allocator;
+
+    var artifact = minimalCheckedArtifact(gpa);
+    defer artifact.canonical_names.deinit();
+    defer artifact.checked_types.deinit(gpa);
+    defer artifact.checked_bodies.deinit(gpa);
+
+    const tag_a = try artifact.canonical_names.internTagLabel("A");
+    const tag_b = try artifact.canonical_names.internTagLabel("B");
+
+    try artifact.checked_types.type_id_pool.append(gpa, @enumFromInt(0));
+    try artifact.checked_types.type_id_pool.append(gpa, @enumFromInt(0));
+    try artifact.checked_types.tag_pool.append(gpa, .{ .name = tag_a, .args_start = 0, .args_len = 2 });
+    try artifact.checked_types.tag_pool.append(gpa, .{ .name = tag_b, .args_start = 2, .args_len = 0 });
+    try artifact.checked_types.payloads.append(gpa, .{
+        .nominal = builtinNominal(.u64, @enumFromInt(0), .{}),
+    });
+    try artifact.checked_types.payloads.append(gpa, .empty_tag_union);
+    try artifact.checked_types.payloads.append(gpa, .{
+        .tag_union = .{ .tags = .{ .start = 0, .len = 2 }, .ext = @enumFromInt(1) },
+    });
+    try artifact.checked_types.payloads.append(gpa, .{
+        .function = .{
+            .kind = .pure,
+            .args = .{},
+            .ret = @enumFromInt(2),
+            .needs_instantiation = false,
+        },
+    });
+
+    try artifact.checked_bodies.expr_id_pool.appendSlice(gpa, &.{
+        @as(checked.CheckedExprId, @enumFromInt(2)),
+        @as(checked.CheckedExprId, @enumFromInt(3)),
+    });
+
+    const template_ref = procedureTemplateRef(artifact.key, 0);
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(0),
+        .ty = @enumFromInt(3),
+        .source_region = base.Region.zero(),
+        .data = .{ .lambda = .{ .args = .{}, .body = @enumFromInt(1) } },
+    });
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(1),
+        .ty = @enumFromInt(2),
+        .source_region = base.Region.zero(),
+        .data = .{ .tag = .{
+            .name = tag_a,
+            .args = .{ .start = 0, .len = 2 },
+        } },
+    });
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(2),
+        .ty = @enumFromInt(0),
+        .source_region = base.Region.zero(),
+        .data = .{ .num = .{ .value = intValue(3), .kind = .u64 } },
+    });
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(3),
+        .ty = @enumFromInt(0),
+        .source_region = base.Region.zero(),
+        .data = .{ .num = .{ .value = intValue(4), .kind = .u64 } },
+    });
+    try artifact.checked_bodies.bodies.append(gpa, .{
+        .id = @enumFromInt(0),
+        .root_expr = @enumFromInt(0),
+        .owner_template = template_ref,
+    });
+    var templates = [_]checked.CheckedProcedureTemplate{
+        checkedTemplate(template_ref, @enumFromInt(3), @enumFromInt(0)),
+    };
+    artifact.checked_procedure_templates = .{ .templates = &templates };
+
+    const root = checked.RootRequest{
+        .order = 0,
+        .module_idx = 0,
+        .kind = .runtime_entrypoint,
+        .source = .{ .def = @enumFromInt(0) },
+        .checked_type = @enumFromInt(3),
+        .abi = .roc,
+        .exposure = .private,
+        .procedure_template = template_ref,
+    };
+    var plan = try Plan.analyzeProgram(gpa, .{
+        .root_module = .{ .module = &artifact, .roots = undefined },
+        .roots = &.{root},
+    }, .{});
+    defer plan.deinit();
+
+    var out = try run(
+        gpa,
+        .{ .root = .{ .module = &artifact, .roots = undefined } },
+        .{},
+        &plan,
+        .{},
+    );
+    defer out.deinit();
+
+    const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
+    const first = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_literal;
+    const second = out.lir_result.store.getCFStmt(first.next).assign_literal;
+    const payload = out.lir_result.store.getCFStmt(second.next).assign_struct;
+    const tag = out.lir_result.store.getCFStmt(payload.next).assign_tag;
+    switch (first.value) {
+        .i128_literal => |value| try std.testing.expectEqual(@as(i128, 3), value.value),
+        else => return error.TestUnexpectedResult,
+    }
+    switch (second.value) {
+        .i128_literal => |value| try std.testing.expectEqual(@as(i128, 4), value.value),
+        else => return error.TestUnexpectedResult,
+    }
+    try std.testing.expectEqual(first.target, out.lir_result.store.getLocalSpan(payload.fields)[0]);
+    try std.testing.expectEqual(second.target, out.lir_result.store.getLocalSpan(payload.fields)[1]);
+    try std.testing.expectEqual(@as(u16, 0), tag.variant_index);
+    try std.testing.expectEqual(@as(u16, 0), tag.discriminant);
+    try std.testing.expectEqual(payload.target, tag.payload.?);
+    try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = tag.target } }, out.lir_result.store.getCFStmt(tag.next));
 }
 
 test "boxy lowerer publishes host wrapper proc for exported roots" {

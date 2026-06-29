@@ -3260,6 +3260,17 @@ Record field access translates the checked field label to a numeric field index
 through the representation plan's ordered field roles; it never derives field
 indexes from source text, expression field order, or backend layout inspection.
 
+Tag construction consumes the representation plan's tag-variant table. The
+checked tag label selects the variant index and discriminant, and the variant's
+payload span defines the expected payload arity and argument order. A nullary
+tag emits an `assign_tag` with no payload unless the committed union layout is
+zero-sized, in which case it emits the ordinary zst assignment. A payload tag
+first lowers the payload expressions in source order into either the single
+payload local or a payload struct local whose layout comes from the committed
+tag-union layout, then emits `assign_tag`. Builtin `Bool` uses the explicit
+builtin order `False = 0`, `True = 1`; that mapping is a checked builtin rule,
+not a backend layout query.
+
 For every checked function value expression, the boxy lowerer emits an
 `assign_packed_erased_fn`-style LIR statement that creates an erased callable
 payload. The payload stores the function entry and capture bytes. Capture bytes
