@@ -11356,18 +11356,26 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
         }
 
-        /// Copy a value location to a stack slot.
+        /// Compare a general register against an immediate bit pattern.
         fn emitCmpImm(self: *Self, reg: GeneralReg, value: i64) Allocator.Error!void {
             if (comptime target.toCpuArch() == .aarch64) {
-                // CMP reg, #imm12
-                try self.codegen.emit.cmpRegImm12(.w64, reg, @intCast(value));
+                if (value >= 0 and value <= std.math.maxInt(u12)) {
+                    try self.codegen.emit.cmpRegImm12(.w64, reg, @intCast(value));
+                } else {
+                    const temp = try self.allocTempGeneral();
+                    try self.codegen.emitLoadImm(temp, value);
+                    try self.codegen.emit.cmpRegReg(.w64, reg, temp);
+                    self.codegen.freeGeneral(temp);
+                }
             } else {
-                // x86_64: CMP reg, imm32
-                // Load immediate into temporary register and compare
-                const temp = try self.allocTempGeneral();
-                try self.codegen.emitLoadImm(temp, value);
-                try self.codegen.emit.cmpRegReg(.w64, reg, temp);
-                self.codegen.freeGeneral(temp);
+                if (value >= std.math.minInt(i32) and value <= std.math.maxInt(i32)) {
+                    try self.codegen.emit.cmpRegImm32(.w64, reg, @intCast(value));
+                } else {
+                    const temp = try self.allocTempGeneral();
+                    try self.codegen.emitLoadImm(temp, value);
+                    try self.codegen.emit.cmpRegReg(.w64, reg, temp);
+                    self.codegen.freeGeneral(temp);
+                }
             }
         }
 
@@ -15108,11 +15116,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             if (branches.len == 1) {
                                 // Single branch (bool switch): compare and branch
                                 const branch = branches[0];
-                                if (comptime target.toCpuArch() == .aarch64) {
-                                    try self.codegen.emit.cmpRegImm12(.w64, cond_reg, @intCast(branch.value));
-                                } else {
-                                    try self.codegen.emit.cmpRegImm32(.w64, cond_reg, @intCast(branch.value));
-                                }
+                                try self.emitCmpImm(cond_reg, @bitCast(branch.value));
                                 const else_patch = try self.emitJumpIfNotEqual();
                                 self.codegen.freeGeneral(cond_reg);
                                 try self.restoreStmtEnv(&switch_env);
@@ -15316,7 +15320,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .switch_branch => |state| {
                     self.current_stmt_id = state.owner;
                     const branch = state.branches[state.index];
-                    try self.emitCmpImm(state.cond_reg, @intCast(branch.value));
+                    try self.emitCmpImm(state.cond_reg, @bitCast(branch.value));
                     const skip_patch = try self.emitJumpIfNotEqual();
                     try self.restoreStmtEnv(&state.switch_env);
                     try work.append(wa, .{ .switch_branch_after = .{ .state = state, .skip_patch = skip_patch } });
@@ -17429,6 +17433,21 @@ test "AArch64 internal proc ABI uses caller stack arg base for stack arguments" 
     try std.testing.expect((codegen.codegen.callee_saved_available & x28_bit) == 0);
     _ = codegen.local_locations.get(@intFromEnum(stack_arg)) orelse return error.TestUnexpectedResult;
     try std.testing.expect(codegen.codegen.getCode().len > 0);
+}
+
+test "AArch64 compare immediate accepts large bit masks" {
+    const allocator = std.testing.allocator;
+    var store = LirStore.init(allocator);
+    defer store.deinit();
+    var test_state = try TestLayoutState.init(allocator);
+    defer test_state.deinit();
+
+    const ArmCodeGen = LirCodeGen(.arm64mac);
+    var codegen = try ArmCodeGen.init(allocator, &store, &test_state.layout_store, &.{});
+    defer codegen.deinit();
+
+    try codegen.emitCmpImm(aarch64.GeneralReg.X0, @bitCast(@as(u64, 1) << 63));
+    try std.testing.expect(codegen.codegen.getCode().len > 4);
 }
 
 test "two-arg proc list join loop returns full length" {
