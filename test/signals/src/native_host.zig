@@ -322,9 +322,6 @@ fn failHostValueRegistryError(err: anyerror) noreturn {
     }
 }
 
-const RocAllocation = roc_alloc_ledger.Allocation;
-const FreedRocAllocation = roc_alloc_ledger.FreedAllocation;
-
 const TestHostValueKind = enum {
     unit,
     i64,
@@ -1189,115 +1186,45 @@ fn currentRocHost() *abi.RocHost {
     return current_roc_host orelse @panic("signals RocHost is not initialized");
 }
 
-fn allocatedSizeForRocRequest(length: usize) usize {
-    return if (length == 0) 1 else length;
-}
-
-fn findRocAllocationIndex(host: *HostEnv, ptr: *anyopaque) ?usize {
-    return host.roc_allocations.findContainingIndex(ptr);
-}
-
 fn findExactRocAllocationIndex(host: *HostEnv, ptr: *anyopaque) ?usize {
     return host.roc_allocations.findExactIndex(ptr);
 }
 
-fn removeRocAllocationAt(host: *HostEnv, index: usize) RocAllocation {
-    return host.roc_allocations.removeAt(host.hostAllocator(), index) orelse failHost("Roc allocation ledger index is out of bounds");
-}
-
-fn recordFreedRocAllocation(host: *HostEnv, alloc: RocAllocation) void {
-    host.roc_allocations.recordFreed(alloc);
-}
-
-fn findRecentlyFreedRocAllocation(host: *HostEnv, ptr: *anyopaque) ?FreedRocAllocation {
+fn findRecentlyFreedRocAllocation(host: *HostEnv, ptr: *anyopaque) ?roc_alloc_ledger.FreedAllocation {
     return host.roc_allocations.findRecentlyFreed(ptr);
 }
 
-fn rocAlignmentFromAbi(alignment: usize) std.mem.Alignment {
-    const min_alignment: usize = @max(alignment, @alignOf(usize));
-    return std.mem.Alignment.fromByteUnits(min_alignment);
+fn failRocDeallocError(err: roc_alloc_ledger.DeallocError) noreturn {
+    failHost(roc_alloc_ledger.deallocErrorMessage(err));
 }
 
-fn recordRocAllocation(host: *HostEnv, user_ptr: [*]u8, requested_size: usize, allocated_size: usize, alignment: std.mem.Alignment) void {
-    host.roc_allocations.record(host.hostAllocator(), user_ptr, requested_size, allocated_size, alignment);
-}
-
-fn allocRocMemory(host: *HostEnv, length: usize, alignment_arg: usize) ?*anyopaque {
-    const allocator = host.backingAllocator();
-    const alignment = rocAlignmentFromAbi(alignment_arg);
-    const allocated_size = allocatedSizeForRocRequest(length);
-    const user_ptr = allocator.rawAlloc(allocated_size, alignment, @returnAddress()) orelse std.process.exit(1);
-    host.recordHostAlloc(allocated_size);
-    recordRocAllocation(host, user_ptr, length, allocated_size, alignment);
-    host.recordRocAllocMetric();
-    return @ptrCast(user_ptr);
-}
-
-fn freeRocAllocation(host: *HostEnv, ptr: *anyopaque, alignment_arg: usize) RocAllocation {
-    const alignment = rocAlignmentFromAbi(alignment_arg);
-    const index = findExactRocAllocationIndex(host, ptr) orelse {
-        if (findRocAllocationIndex(host, ptr) != null) {
-            failHost("roc_dealloc received an interior pointer instead of the pointer returned by roc_alloc");
-        }
-        if (findRecentlyFreedRocAllocation(host, ptr)) |freed| {
-            if (freed.alignment != alignment) {
-                failHost("roc_dealloc received an already freed pointer with a different alignment");
-            }
-            failHost("roc_dealloc received a pointer that was already freed");
-        }
-        failHost("roc_dealloc received an unknown pointer");
-    };
-    if (host.roc_allocations.allocations.items[index].alignment != alignment) {
-        failHost("roc_dealloc alignment did not match the tracked allocation");
-    }
-    const alloc = removeRocAllocationAt(host, index);
-    recordFreedRocAllocation(host, alloc);
-    host.recordRocFreeMetric();
-    host.recordHostFree(alloc.allocated_size);
-    host.backingAllocator().rawFree(alloc.user_ptr[0..alloc.allocated_size], alloc.alignment, @returnAddress());
-    return alloc;
+fn failRocReallocError(err: roc_alloc_ledger.ReallocError) noreturn {
+    failHost(roc_alloc_ledger.reallocErrorMessage(err));
 }
 
 fn rocAllocFn(roc_host: *abi.RocHost, length: usize, alignment: usize) callconv(.c) ?*anyopaque {
-    return allocRocMemory(hostFromRocHost(roc_host), length, alignment);
+    const host = hostFromRocHost(roc_host);
+    const result = host.roc_allocations.allocate(host.hostAllocator(), host.backingAllocator(), length, alignment, @returnAddress()) orelse return null;
+    host.recordHostAlloc(result.allocated_size);
+    host.recordRocAllocMetric();
+    return result.ptr;
 }
 
 fn rocDeallocFn(roc_host: *abi.RocHost, ptr: *anyopaque, alignment: usize) callconv(.c) void {
-    _ = freeRocAllocation(hostFromRocHost(roc_host), ptr, alignment);
+    const host = hostFromRocHost(roc_host);
+    const alloc = host.roc_allocations.deallocate(host.hostAllocator(), host.backingAllocator(), ptr, alignment, @returnAddress()) catch |err| failRocDeallocError(err);
+    host.recordRocFreeMetric();
+    host.recordHostFree(alloc.allocated_size);
 }
 
 fn rocReallocFn(roc_host: *abi.RocHost, ptr: *anyopaque, new_length: usize, alignment_arg: usize) callconv(.c) ?*anyopaque {
     const host = hostFromRocHost(roc_host);
-    const old_index = findExactRocAllocationIndex(host, ptr) orelse {
-        if (findRocAllocationIndex(host, ptr) != null) {
-            failHost("roc_realloc received an interior pointer instead of the pointer returned by roc_alloc");
-        }
-        if (findRecentlyFreedRocAllocation(host, ptr)) |freed| {
-            const alignment = rocAlignmentFromAbi(alignment_arg);
-            if (freed.alignment != alignment) {
-                failHost("roc_realloc received an already freed pointer with a different alignment");
-            }
-            failHost("roc_realloc received a pointer that was already freed");
-        }
-        failHost("roc_realloc received an unknown pointer");
-    };
-    const old_alloc = host.roc_allocations.allocations.items[old_index];
-    const alignment = rocAlignmentFromAbi(alignment_arg);
-    if (old_alloc.alignment != alignment) {
-        failHost("roc_realloc alignment did not match the tracked allocation");
-    }
-
-    const new_allocation_ptr = allocRocMemory(host, new_length, alignment_arg) orelse return null;
-    const new_user_ptr: [*]u8 = @ptrCast(new_allocation_ptr);
-    const old_user_ptr: [*]const u8 = @ptrCast(ptr);
-    const copy_size = @min(old_alloc.requested_size, new_length);
-    @memcpy(new_user_ptr[0..copy_size], old_user_ptr[0..copy_size]);
-    const freed = removeRocAllocationAt(host, old_index);
-    recordFreedRocAllocation(host, freed);
+    const result = host.roc_allocations.reallocate(host.hostAllocator(), host.backingAllocator(), ptr, new_length, alignment_arg, @returnAddress()) catch |err| failRocReallocError(err);
+    host.recordHostAlloc(result.allocated_size);
+    host.recordRocAllocMetric();
     host.recordRocFreeMetric();
-    host.recordHostFree(freed.allocated_size);
-    host.backingAllocator().rawFree(freed.user_ptr[0..freed.allocated_size], freed.alignment, @returnAddress());
-    return @ptrCast(new_user_ptr);
+    host.recordHostFree(result.freed.allocated_size);
+    return result.ptr;
 }
 
 fn rocDbgFn(roc_host: *abi.RocHost, bytes: [*]const u8, len: usize) callconv(.c) void {
