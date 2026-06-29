@@ -491,6 +491,7 @@ const ProcBodyBuilder = struct {
             .unary_not => |child| try self.lowerUnaryLowLevelInto(target, .bool_not, child, next),
             .binop => |binop| try self.lowerBoolBinopInto(target, binop.op, binop.lhs, binop.rhs, next),
             .structural_eq => |eq| try self.lowerStructuralEqInto(target, eq.lhs, eq.rhs, eq.negated, next),
+            .structural_hash => |hash| try self.lowerStructuralHashInto(target, hash.value, hash.hasher, next),
             .record => |record| blk: {
                 if (record.ext != null) {
                     boxyLowerInvariant("open record expression reached boxy body lowering before record extension lowering was implemented");
@@ -2280,6 +2281,346 @@ const ProcBodyBuilder = struct {
         return current;
     }
 
+    fn lowerStructuralHashInto(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        value_id: checked.CheckedExprId,
+        hasher_id: checked.CheckedExprId,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const value_expr = self.module.checked_bodies.expr(value_id);
+        const hasher_expr = self.module.checked_bodies.expr(hasher_id);
+        const value = try self.addFrameLocal(self.workerRuntimeLayoutForType(value_expr.ty).layoutIdx());
+        const hasher = try self.addFrameLocal(self.workerRuntimeLayoutForType(hasher_expr.ty).layoutIdx());
+        if (self.parent.result.store.getLocal(target).layout_idx != self.parent.result.store.getLocal(hasher).layout_idx) {
+            boxyLowerInvariant("checked structural hash target layout differed from input hasher layout");
+        }
+        var continuation = try self.lowerHashRepLocalsInto(target, value, hasher, self.repForType(value_expr.ty), next);
+        continuation = try self.lowerExprInto(hasher, hasher_id, continuation);
+        return try self.lowerExprInto(value, value_id, continuation);
+    }
+
+    fn lowerHashRepLocalsInto(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        value: LIR.LocalId,
+        hasher: LIR.LocalId,
+        rep_id: Plan.TypeRepId,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const rep = self.parent.plan.representations.items[@intFromEnum(rep_id)];
+        return switch (rep.kind) {
+            .in_progress => boxyLowerInvariant("in-progress boxy representation reached structural hash lowering"),
+            .dynamic => boxyLowerInvariant("dynamic structural hash reached boxy lowering before descriptor hash support"),
+            .erased_callable => boxyLowerInvariant("erased callable structural hash reached boxy lowering"),
+            .list,
+            .box,
+            => boxyLowerInvariant("owned structural hash reached boxy lowering before dictionary hash support"),
+            .primitive => |primitive| try self.lowerPrimitiveHashLocalsInto(target, value, hasher, primitive, next),
+            .bool_tag_union => try self.lowerPrimitiveHashLocalsInto(target, value, hasher, .bool, next),
+            .empty_record,
+            .empty_tag_union,
+            => try self.assignLocal(target, hasher, next),
+            .alias => try self.lowerHashRepLocalsInto(target, value, hasher, self.requiredSingleChild(rep_id, .alias_backing).rep, next),
+            .nominal => |kind| switch (kind) {
+                .transparent => if (rep.declared_fields.len != 0)
+                    try self.lowerDeclaredFieldHashLocalsInto(target, value, hasher, rep, next)
+                else
+                    try self.lowerHashRepLocalsInto(target, value, hasher, self.requiredSingleChild(rep_id, .nominal_backing).rep, next),
+                .opaque_nominal => boxyLowerInvariant("opaque nominal structural hash reached boxy lowering before descriptor hash support"),
+                .builtin_other => try self.lowerHashRepLocalsInto(target, value, hasher, self.requiredSingleChild(rep_id, .nominal_backing).rep, next),
+            },
+            .record,
+            .record_unbound,
+            => try self.lowerRecordHashLocalsInto(target, value, hasher, rep, next),
+            .tuple => try self.lowerTupleHashLocalsInto(target, value, hasher, rep, next),
+            .tag_union => try self.lowerTagUnionHashLocalsInto(target, value, hasher, rep, next),
+        };
+    }
+
+    fn lowerPrimitiveHashLocalsInto(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        value: LIR.LocalId,
+        hasher: LIR.LocalId,
+        primitive: checked.CheckedPrimitive,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const op = hasherWriteOp(primitive);
+        return try self.parent.result.store.addCFStmt(.{ .assign_low_level = .{
+            .target = target,
+            .op = op,
+            .rc_effect = op.rcEffect(),
+            .args = try self.parent.result.store.addLocalSpan(&[_]LIR.LocalId{ hasher, value }),
+            .next = next,
+        } });
+    }
+
+    const HashComponent = struct {
+        rep: Plan.TypeRepId,
+        field_index: u16,
+    };
+
+    fn lowerRecordHashLocalsInto(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        value: LIR.LocalId,
+        hasher: LIR.LocalId,
+        rep: Plan.TypeRepresentation,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const children = self.parent.plan.childSlice(rep.children);
+        const components = try self.parent.allocator.alloc(HashComponent, recordEqualityFieldCount(children));
+        defer self.parent.allocator.free(components);
+        var field_index: u16 = 0;
+        for (children) |child| {
+            switch (child.role) {
+                .record_field => {
+                    components[field_index] = .{
+                        .rep = child.rep,
+                        .field_index = field_index,
+                    };
+                    field_index += 1;
+                },
+                .record_ext => self.requireEmptyRecordExtension(child.rep),
+                else => boxyLowerInvariant("record hash representation had a non-record child role"),
+            }
+        }
+        return try self.lowerFieldHashComponentsInto(target, value, hasher, components, next);
+    }
+
+    fn lowerTupleHashLocalsInto(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        value: LIR.LocalId,
+        hasher: LIR.LocalId,
+        rep: Plan.TypeRepresentation,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const children = self.parent.plan.childSlice(rep.children);
+        const components = try self.parent.allocator.alloc(HashComponent, children.len);
+        defer self.parent.allocator.free(components);
+        for (children, components) |child, *component| {
+            switch (child.role) {
+                .tuple_elem => |index| {
+                    if (index > std.math.maxInt(u16)) {
+                        boxyLowerInvariant("tuple hash element index exceeded LIR field index range");
+                    }
+                    component.* = .{
+                        .rep = child.rep,
+                        .field_index = @intCast(index),
+                    };
+                },
+                else => boxyLowerInvariant("tuple hash representation had a non-tuple child role"),
+            }
+        }
+        return try self.lowerFieldHashComponentsInto(target, value, hasher, components, next);
+    }
+
+    fn lowerDeclaredFieldHashLocalsInto(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        value: LIR.LocalId,
+        hasher: LIR.LocalId,
+        rep: Plan.TypeRepresentation,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const fields = self.parent.plan.declaredFieldSlice(rep.declared_fields);
+        const components = try self.parent.allocator.alloc(HashComponent, fields.len);
+        defer self.parent.allocator.free(components);
+        for (fields, components) |field, *component| {
+            component.* = .{
+                .rep = field.rep,
+                .field_index = field.index,
+            };
+        }
+        return try self.lowerFieldHashComponentsInto(target, value, hasher, components, next);
+    }
+
+    fn lowerFieldHashComponentsInto(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        value: LIR.LocalId,
+        hasher: LIR.LocalId,
+        components: []const HashComponent,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        if (components.len == 0) return try self.assignLocal(target, hasher, next);
+
+        const hasher_layout = self.parent.result.store.getLocal(hasher).layout_idx;
+        if (self.parent.result.store.getLocal(target).layout_idx != hasher_layout) {
+            boxyLowerInvariant("structural hash target layout differed from input hasher layout");
+        }
+
+        const intermediate_count = components.len - 1;
+        const intermediate_hashers = try self.parent.allocator.alloc(LIR.LocalId, intermediate_count);
+        defer self.parent.allocator.free(intermediate_hashers);
+        for (intermediate_hashers) |*local| {
+            local.* = try self.addFrameLocal(hasher_layout);
+        }
+
+        var current = next;
+        var i = components.len;
+        while (i > 0) {
+            i -= 1;
+            const input_hasher = if (i == 0) hasher else intermediate_hashers[i - 1];
+            const output_hasher = if (i == components.len - 1) target else intermediate_hashers[i];
+            const component = components[i];
+            const field = try self.addFrameLocal(self.workerRuntimeLayoutForRep(component.rep).layoutIdx());
+            current = try self.lowerHashRepLocalsInto(output_hasher, field, input_hasher, component.rep, current);
+            if (!self.isZstLocal(field)) {
+                current = try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
+                    .target = field,
+                    .op = .{ .field = .{
+                        .source = value,
+                        .field_idx = component.field_index,
+                    } },
+                    .next = current,
+                } });
+            }
+        }
+        return current;
+    }
+
+    fn lowerTagUnionHashLocalsInto(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        value: LIR.LocalId,
+        hasher: LIR.LocalId,
+        rep: Plan.TypeRepresentation,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const variants = self.parent.plan.tagVariantSlice(rep.tag_variants);
+        if (variants.len == 1 and self.isZstLocal(value)) {
+            return try self.lowerTagPayloadHashVariant(target, value, hasher, variants[0], 0, next);
+        }
+
+        const discriminant = try self.addFrameLocal(.u16);
+        const branches = try self.parent.allocator.alloc(LIR.CFSwitchBranch, variants.len);
+        defer self.parent.allocator.free(branches);
+        for (variants, branches, 0..) |variant, *branch, index| {
+            if (index > std.math.maxInt(u16)) {
+                boxyLowerInvariant("tag-union hash variant index exceeded LIR variant range");
+            }
+            branch.* = .{
+                .value = @intCast(index),
+                .body = try self.lowerTagPayloadHashVariant(target, value, hasher, variant, @intCast(index), next),
+            };
+        }
+        const bad_discriminant = try self.parent.result.store.addCFStmt(.runtime_error);
+        const switch_stmt = try self.parent.result.store.addCFStmt(.{ .switch_stmt = .{
+            .cond = discriminant,
+            .branches = try self.parent.result.store.addCFSwitchBranches(branches),
+            .default_branch = bad_discriminant,
+            .continuation = null,
+        } });
+        return try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
+            .target = discriminant,
+            .op = .{ .discriminant = .{ .source = value } },
+            .next = switch_stmt,
+        } });
+    }
+
+    fn lowerTagPayloadHashVariant(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        value: LIR.LocalId,
+        hasher: LIR.LocalId,
+        variant: Plan.TagVariant,
+        variant_index: u16,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const payloads = self.parent.plan.childSlice(variant.payloads);
+        const hasher_layout = self.parent.result.store.getLocal(hasher).layout_idx;
+        const after_discriminant = if (payloads.len == 0) target else try self.addFrameLocal(hasher_layout);
+
+        const components = try self.parent.allocator.alloc(Plan.RepChild, payloads.len);
+        defer self.parent.allocator.free(components);
+        for (payloads, components, 0..) |child, *component, index| {
+            switch (child.role) {
+                .tag_payload => |payload| {
+                    if (payload.tag != variant.name or payload.index != index) {
+                        boxyLowerInvariant("tag hash payload span did not match its payload child roles");
+                    }
+                },
+                else => boxyLowerInvariant("tag hash variant payload span included a non-payload child"),
+            }
+            component.* = child;
+        }
+
+        var current = if (payloads.len == 0)
+            next
+        else
+            try self.lowerTagPayloadHashComponentsInto(target, value, after_discriminant, components, variant_index, next);
+
+        const discriminant_value = try self.addFrameLocal(.u64);
+        current = try self.parent.result.store.addCFStmt(.{ .assign_low_level = .{
+            .target = after_discriminant,
+            .op = .hasher_write_u64,
+            .rc_effect = LIR.LowLevel.hasher_write_u64.rcEffect(),
+            .args = try self.parent.result.store.addLocalSpan(&[_]LIR.LocalId{ hasher, discriminant_value }),
+            .next = current,
+        } });
+        return try self.parent.result.store.addCFStmt(.{ .assign_literal = .{
+            .target = discriminant_value,
+            .value = .{ .i128_literal = .{
+                .value = variant_index,
+                .layout_idx = .u64,
+            } },
+            .next = current,
+        } });
+    }
+
+    fn lowerTagPayloadHashComponentsInto(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        value: LIR.LocalId,
+        hasher: LIR.LocalId,
+        payloads: []const Plan.RepChild,
+        variant_index: u16,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const hasher_layout = self.parent.result.store.getLocal(hasher).layout_idx;
+        const intermediate_count = payloads.len - 1;
+        const intermediate_hashers = try self.parent.allocator.alloc(LIR.LocalId, intermediate_count);
+        defer self.parent.allocator.free(intermediate_hashers);
+        for (intermediate_hashers) |*local| {
+            local.* = try self.addFrameLocal(hasher_layout);
+        }
+
+        var current = next;
+        var i = payloads.len;
+        while (i > 0) {
+            i -= 1;
+            const input_hasher = if (i == 0) hasher else intermediate_hashers[i - 1];
+            const output_hasher = if (i == payloads.len - 1) target else intermediate_hashers[i];
+            const payload = payloads[i];
+            const payload_local = try self.addFrameLocal(self.workerRuntimeLayoutForRep(payload.rep).layoutIdx());
+            current = try self.lowerHashRepLocalsInto(output_hasher, payload_local, input_hasher, payload.rep, current);
+            if (!self.isZstLocal(payload_local)) {
+                if (i > std.math.maxInt(u16)) {
+                    boxyLowerInvariant("tag hash payload index exceeded LIR payload index range");
+                }
+                const payload_idx: ?u16 = if (payloads.len == 1) null else @as(u16, @intCast(i));
+                current = try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
+                    .target = payload_local,
+                    .op = if (payload_idx) |index| .{ .tag_payload = .{
+                        .source = value,
+                        .payload_idx = index,
+                        .variant_index = variant_index,
+                        .tag_discriminant = variant_index,
+                    } } else .{ .tag_payload_struct = .{
+                        .source = value,
+                        .variant_index = variant_index,
+                        .tag_discriminant = variant_index,
+                    } },
+                    .next = current,
+                } });
+            }
+        }
+        return current;
+    }
+
     fn lowerUnaryLowLevelInto(
         self: *ProcBodyBuilder,
         target: LIR.LocalId,
@@ -2630,6 +2971,26 @@ const ProcBodyBuilder = struct {
             boxyLowerInvariant("record equality field count exceeded LIR field index range");
         }
         return @intCast(count);
+    }
+
+    fn hasherWriteOp(primitive: checked.CheckedPrimitive) LIR.LowLevel {
+        return switch (primitive) {
+            .bool => .hasher_write_bool,
+            .str => .hasher_write_str,
+            .u8 => .hasher_write_u8,
+            .i8 => .hasher_write_i8,
+            .u16 => .hasher_write_u16,
+            .i16 => .hasher_write_i16,
+            .u32 => .hasher_write_u32,
+            .i32 => .hasher_write_i32,
+            .u64 => .hasher_write_u64,
+            .i64 => .hasher_write_i64,
+            .u128 => .hasher_write_u128,
+            .i128 => .hasher_write_i128,
+            .f32 => .hasher_write_f32,
+            .f64 => .hasher_write_f64,
+            .dec => .hasher_write_dec,
+        };
     }
 
     fn recordFieldLayoutIndex(
@@ -4192,6 +4553,242 @@ test "boxy lowerer emits tuple structural equality with field short-circuiting" 
     const read_lhs_field1 = out.lir_result.store.getCFStmt(branches[0].body).assign_ref;
     try std.testing.expectEqual(lhs_tuple.target, read_lhs_field1.op.field.source);
     try std.testing.expectEqual(@as(u16, 1), read_lhs_field1.op.field.field_idx);
+}
+
+test "boxy lowerer emits primitive structural hash as hasher low-level" {
+    const gpa = std.testing.allocator;
+
+    var artifact = minimalCheckedArtifact(gpa);
+    defer artifact.canonical_names.deinit();
+    defer artifact.checked_types.deinit(gpa);
+    defer artifact.checked_bodies.deinit(gpa);
+
+    try artifact.checked_types.payloads.append(gpa, .{
+        .nominal = builtinNominal(.u64, @enumFromInt(0), .{}),
+    });
+    try artifact.checked_types.payloads.append(gpa, .{
+        .function = .{
+            .kind = .pure,
+            .args = .{},
+            .ret = @enumFromInt(0),
+            .needs_instantiation = false,
+        },
+    });
+
+    const template_ref = procedureTemplateRef(artifact.key, 0);
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(0),
+        .ty = @enumFromInt(1),
+        .source_region = base.Region.zero(),
+        .data = .{ .lambda = .{ .args = .{}, .body = @enumFromInt(1) } },
+    });
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(1),
+        .ty = @enumFromInt(0),
+        .source_region = base.Region.zero(),
+        .data = .{ .structural_hash = .{
+            .value = @enumFromInt(2),
+            .hasher = @enumFromInt(3),
+        } },
+    });
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(2),
+        .ty = @enumFromInt(0),
+        .source_region = base.Region.zero(),
+        .data = .{ .num = .{ .value = intValue(5), .kind = .u64 } },
+    });
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(3),
+        .ty = @enumFromInt(0),
+        .source_region = base.Region.zero(),
+        .data = .{ .num = .{ .value = intValue(99), .kind = .u64 } },
+    });
+    try artifact.checked_bodies.bodies.append(gpa, .{
+        .id = @enumFromInt(0),
+        .root_expr = @enumFromInt(0),
+        .owner_template = template_ref,
+    });
+    var templates = [_]checked.CheckedProcedureTemplate{
+        checkedTemplate(template_ref, @enumFromInt(1), @enumFromInt(0)),
+    };
+    artifact.checked_procedure_templates = .{ .templates = &templates };
+
+    const root = checked.RootRequest{
+        .order = 0,
+        .module_idx = 0,
+        .kind = .runtime_entrypoint,
+        .source = .{ .def = @enumFromInt(0) },
+        .checked_type = @enumFromInt(1),
+        .abi = .roc,
+        .exposure = .private,
+        .procedure_template = template_ref,
+    };
+    var plan = try Plan.analyzeProgram(gpa, .{
+        .root_module = .{ .module = &artifact, .roots = undefined },
+        .roots = &.{root},
+    }, .{});
+    defer plan.deinit();
+
+    var out = try run(
+        gpa,
+        .{ .root = .{ .module = &artifact, .roots = undefined } },
+        .{},
+        &plan,
+        .{},
+    );
+    defer out.deinit();
+
+    const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
+    const value = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_literal;
+    switch (value.value) {
+        .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 5), literal.value),
+        else => return error.TestUnexpectedResult,
+    }
+    const seed = out.lir_result.store.getCFStmt(value.next).assign_literal;
+    switch (seed.value) {
+        .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 99), literal.value),
+        else => return error.TestUnexpectedResult,
+    }
+    const hash = out.lir_result.store.getCFStmt(seed.next).assign_low_level;
+    try std.testing.expectEqual(@as(LIR.LowLevel, .hasher_write_u64), hash.op);
+    const args = out.lir_result.store.getLocalSpan(hash.args);
+    try std.testing.expectEqual(@as(usize, 2), args.len);
+    try std.testing.expectEqual(seed.target, args[0]);
+    try std.testing.expectEqual(value.target, args[1]);
+    try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = hash.target } }, out.lir_result.store.getCFStmt(hash.next));
+}
+
+test "boxy lowerer emits tuple structural hash by threading hasher through fields" {
+    const gpa = std.testing.allocator;
+
+    var artifact = minimalCheckedArtifact(gpa);
+    defer artifact.canonical_names.deinit();
+    defer artifact.checked_types.deinit(gpa);
+    defer artifact.checked_bodies.deinit(gpa);
+
+    try artifact.checked_types.type_id_pool.appendSlice(gpa, &.{
+        @as(checked.CheckedTypeId, @enumFromInt(0)),
+        @as(checked.CheckedTypeId, @enumFromInt(0)),
+    });
+    try artifact.checked_types.payloads.append(gpa, .{
+        .nominal = builtinNominal(.u64, @enumFromInt(0), .{}),
+    });
+    try artifact.checked_types.payloads.append(gpa, .{
+        .tuple = .{ .start = 0, .len = 2 },
+    });
+    try artifact.checked_types.payloads.append(gpa, .{
+        .function = .{
+            .kind = .pure,
+            .args = .{},
+            .ret = @enumFromInt(0),
+            .needs_instantiation = false,
+        },
+    });
+
+    try artifact.checked_bodies.expr_id_pool.appendSlice(gpa, &.{
+        @as(checked.CheckedExprId, @enumFromInt(3)),
+        @as(checked.CheckedExprId, @enumFromInt(4)),
+    });
+
+    const template_ref = procedureTemplateRef(artifact.key, 0);
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(0),
+        .ty = @enumFromInt(2),
+        .source_region = base.Region.zero(),
+        .data = .{ .lambda = .{ .args = .{}, .body = @enumFromInt(1) } },
+    });
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(1),
+        .ty = @enumFromInt(0),
+        .source_region = base.Region.zero(),
+        .data = .{ .structural_hash = .{
+            .value = @enumFromInt(2),
+            .hasher = @enumFromInt(5),
+        } },
+    });
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(2),
+        .ty = @enumFromInt(1),
+        .source_region = base.Region.zero(),
+        .data = .{ .tuple = .{ .start = 0, .len = 2 } },
+    });
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(3),
+        .ty = @enumFromInt(0),
+        .source_region = base.Region.zero(),
+        .data = .{ .num = .{ .value = intValue(1), .kind = .u64 } },
+    });
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(4),
+        .ty = @enumFromInt(0),
+        .source_region = base.Region.zero(),
+        .data = .{ .num = .{ .value = intValue(2), .kind = .u64 } },
+    });
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(5),
+        .ty = @enumFromInt(0),
+        .source_region = base.Region.zero(),
+        .data = .{ .num = .{ .value = intValue(99), .kind = .u64 } },
+    });
+    try artifact.checked_bodies.bodies.append(gpa, .{
+        .id = @enumFromInt(0),
+        .root_expr = @enumFromInt(0),
+        .owner_template = template_ref,
+    });
+    var templates = [_]checked.CheckedProcedureTemplate{
+        checkedTemplate(template_ref, @enumFromInt(2), @enumFromInt(0)),
+    };
+    artifact.checked_procedure_templates = .{ .templates = &templates };
+
+    const root = checked.RootRequest{
+        .order = 0,
+        .module_idx = 0,
+        .kind = .runtime_entrypoint,
+        .source = .{ .def = @enumFromInt(0) },
+        .checked_type = @enumFromInt(2),
+        .abi = .roc,
+        .exposure = .private,
+        .procedure_template = template_ref,
+    };
+    var plan = try Plan.analyzeProgram(gpa, .{
+        .root_module = .{ .module = &artifact, .roots = undefined },
+        .roots = &.{root},
+    }, .{});
+    defer plan.deinit();
+
+    var out = try run(
+        gpa,
+        .{ .root = .{ .module = &artifact, .roots = undefined } },
+        .{},
+        &plan,
+        .{},
+    );
+    defer out.deinit();
+
+    const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
+    const first = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_literal;
+    const second = out.lir_result.store.getCFStmt(first.next).assign_literal;
+    const tuple = out.lir_result.store.getCFStmt(second.next).assign_struct;
+    const seed = out.lir_result.store.getCFStmt(tuple.next).assign_literal;
+
+    const read_field0 = out.lir_result.store.getCFStmt(seed.next).assign_ref;
+    try std.testing.expectEqual(tuple.target, read_field0.op.field.source);
+    try std.testing.expectEqual(@as(u16, 0), read_field0.op.field.field_idx);
+    const hash_field0 = out.lir_result.store.getCFStmt(read_field0.next).assign_low_level;
+    try std.testing.expectEqual(@as(LIR.LowLevel, .hasher_write_u64), hash_field0.op);
+    const first_args = out.lir_result.store.getLocalSpan(hash_field0.args);
+    try std.testing.expectEqual(seed.target, first_args[0]);
+    try std.testing.expectEqual(read_field0.target, first_args[1]);
+
+    const read_field1 = out.lir_result.store.getCFStmt(hash_field0.next).assign_ref;
+    try std.testing.expectEqual(tuple.target, read_field1.op.field.source);
+    try std.testing.expectEqual(@as(u16, 1), read_field1.op.field.field_idx);
+    const hash_field1 = out.lir_result.store.getCFStmt(read_field1.next).assign_low_level;
+    try std.testing.expectEqual(@as(LIR.LowLevel, .hasher_write_u64), hash_field1.op);
+    const second_args = out.lir_result.store.getLocalSpan(hash_field1.args);
+    try std.testing.expectEqual(hash_field0.target, second_args[0]);
+    try std.testing.expectEqual(read_field1.target, second_args[1]);
+    try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = hash_field1.target } }, out.lir_result.store.getCFStmt(hash_field1.next));
 }
 
 test "boxy lowerer emits checked string segment literals" {
