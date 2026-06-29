@@ -17,6 +17,7 @@ const StaticDispatchOrigin = @TypeOf(@as(checked.CheckedStaticDispatchConstraint
 const NumeralInfo = std.meta.Child(@TypeOf(@as(checked.CheckedStaticDispatchConstraint, undefined).num_literal));
 
 pub const TypeRepId = enum(u32) { _ };
+pub const RootPlanId = enum(u32) { _ };
 pub const DescriptorRequirementId = enum(u32) { _ };
 pub const DictionaryRequirementId = enum(u32) { _ };
 
@@ -116,8 +117,23 @@ pub const DictionaryRequirement = struct {
     num_literal: ?NumeralInfo,
 };
 
+pub const RootWrapperKind = enum {
+    private_worker_only,
+    host_shaped_wrapper,
+};
+
+pub const RootPlan = struct {
+    id: RootPlanId,
+    request: checked.RootRequest,
+    wrapper_kind: RootWrapperKind,
+    host_type: checked.CheckedTypeId,
+    host_rep: TypeRepId,
+    worker_rep: TypeRepId,
+};
+
 pub const ProgramPlan = struct {
     allocator: Allocator,
+    roots: std.ArrayList(RootPlan),
     root_reps: std.ArrayList(TypeRepId),
     representations: std.ArrayList(TypeRepresentation),
     children: std.ArrayList(RepChild),
@@ -127,6 +143,7 @@ pub const ProgramPlan = struct {
     pub fn init(allocator: Allocator) ProgramPlan {
         return .{
             .allocator = allocator,
+            .roots = .empty,
             .root_reps = .empty,
             .representations = .empty,
             .children = .empty,
@@ -141,6 +158,7 @@ pub const ProgramPlan = struct {
         self.children.deinit(self.allocator);
         self.representations.deinit(self.allocator);
         self.root_reps.deinit(self.allocator);
+        self.roots.deinit(self.allocator);
         self.* = ProgramPlan.init(self.allocator);
     }
 
@@ -155,17 +173,25 @@ pub const ProgramPlan = struct {
 
 pub const AnalyzeOptions = struct {};
 
-pub fn analyzeCheckedTypes(
-    allocator: Allocator,
+pub const ProgramInput = struct {
     checked_types: checked.CheckedTypeStoreView,
-    roots: []const checked.CheckedTypeId,
+    roots: []const checked.RootRequest = &.{},
+    layout_requests: []const checked.CheckedTypeId = &.{},
+};
+
+pub fn analyzeProgram(
+    allocator: Allocator,
+    input: ProgramInput,
     _: AnalyzeOptions,
 ) Allocator.Error!ProgramPlan {
-    var builder = Builder.init(allocator, checked_types);
+    var builder = Builder.init(allocator, input.checked_types);
     defer builder.deinit();
 
-    for (roots) |root| {
-        try builder.plan.root_reps.append(allocator, try builder.analyzeType(root));
+    for (input.roots) |root| {
+        try builder.analyzeRoot(root);
+    }
+    for (input.layout_requests) |layout_request| {
+        try builder.plan.root_reps.append(allocator, try builder.analyzeType(layout_request));
     }
 
     builder.propagateDynamicRequirements();
@@ -174,6 +200,18 @@ pub fn analyzeCheckedTypes(
     const out = builder.plan;
     builder.plan = ProgramPlan.init(allocator);
     return out;
+}
+
+pub fn analyzeCheckedTypes(
+    allocator: Allocator,
+    checked_types: checked.CheckedTypeStoreView,
+    roots: []const checked.CheckedTypeId,
+    options: AnalyzeOptions,
+) Allocator.Error!ProgramPlan {
+    return analyzeProgram(allocator, .{
+        .checked_types = checked_types,
+        .layout_requests = roots,
+    }, options);
 }
 
 const Builder = struct {
@@ -194,6 +232,20 @@ const Builder = struct {
     fn deinit(self: *Builder) void {
         self.by_type.deinit();
         self.plan.deinit();
+    }
+
+    fn analyzeRoot(self: *Builder, root: checked.RootRequest) Allocator.Error!void {
+        const rep = try self.analyzeType(root.checked_type);
+        const id: RootPlanId = @enumFromInt(@as(u32, @intCast(self.plan.roots.items.len)));
+        try self.plan.roots.append(self.allocator, .{
+            .id = id,
+            .request = root,
+            .wrapper_kind = if (rootRequiresHostWrapper(root)) .host_shaped_wrapper else .private_worker_only,
+            .host_type = root.checked_type,
+            .host_rep = rep,
+            .worker_rep = rep,
+        });
+        try self.plan.root_reps.append(self.allocator, rep);
     }
 
     fn analyzeType(self: *Builder, ty: checked.CheckedTypeId) Allocator.Error!TypeRepId {
@@ -477,6 +529,10 @@ const Builder = struct {
     }
 };
 
+fn rootRequiresHostWrapper(root: checked.RootRequest) bool {
+    return root.abi != .roc or root.exposure != .private;
+}
+
 fn descriptorReason(kind: RepresentationKind) ?DescriptorReason {
     return switch (kind) {
         .dynamic => .dynamic_payload,
@@ -497,6 +553,35 @@ fn boxyPlanInvariant(comptime message: []const u8) noreturn {
         std.debug.panic("boxy plan invariant violated: {s}", .{message});
     }
     unreachable;
+}
+
+test "boxy planner records root wrapper plans from checked root metadata" {
+    const gpa = std.testing.allocator;
+
+    const payloads = [_]checked.StoredCheckedTypePayload{
+        .{ .nominal = builtinNominal(.u64, @enumFromInt(0), .{}) },
+    };
+    const view = checked.CheckedTypeStoreView{ .stored_payloads = &payloads };
+    const roots = [_]checked.RootRequest{
+        .{
+            .order = 3,
+            .module_idx = 0,
+            .kind = .provided_export,
+            .source = .{ .def = @enumFromInt(4) },
+            .checked_type = @enumFromInt(0),
+            .abi = .roc,
+            .exposure = .exported,
+        },
+    };
+
+    var plan = try analyzeProgram(gpa, .{ .checked_types = view, .roots = &roots }, .{});
+    defer plan.deinit();
+
+    try std.testing.expectEqual(@as(usize, 1), plan.roots.items.len);
+    try std.testing.expectEqual(RootWrapperKind.host_shaped_wrapper, plan.roots.items[0].wrapper_kind);
+    try std.testing.expectEqual(@as(u32, 3), plan.roots.items[0].request.order);
+    try std.testing.expectEqual(plan.roots.items[0].host_rep, plan.roots.items[0].worker_rep);
+    try std.testing.expectEqual(@as(usize, 1), plan.root_reps.items.len);
 }
 
 test "boxy planner classifies constrained variables as dynamic with descriptor and dictionary requirements" {
