@@ -3398,16 +3398,20 @@ The `.lss` builder components are:
 The `.boxy` builder components are:
 
 - the boxy representation planner consumes checked types and checked root
-  metadata, then emits internal boxy layouts, host adapter plans, and hidden
-  descriptor/dictionary requirements
+  metadata, then emits internal boxy layouts, private-worker plans, host
+  adapter plans, and hidden descriptor/dictionary requirements. Each root plan
+  points at a worker plan whose source is exactly one checked procedure
+  authority: a procedure template, top-level procedure binding, or procedure
+  use template. A root without such a source is rejected during planning.
 - the descriptor builder consumes checked types, committed payload layouts, and
   nested descriptor references, then emits LIR-owned `TypeDesc` entries
 - the dictionary builder consumes checked dispatch plans and checked method
   registry entries, then emits LIR-owned dictionary/vtable entries
 - the adapter builder consumes checked host ABI roots and committed host
   layouts, then emits host-shaped root procs and private boxy worker calls
-- the procedure builder consumes checked procedure templates, boxy hidden
-  parameter plans, and committed layouts, then emits private LIR procedure ids
+- the procedure builder consumes worker plans, checked procedure templates,
+  boxy hidden parameter plans, and committed layouts, then emits private LIR
+  procedure ids
   plus root metadata for host-shaped wrappers
 - the local builder consumes checked binder ids, boxy representation plans, and
   committed layouts, then emits LIR locals

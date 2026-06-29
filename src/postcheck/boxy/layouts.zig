@@ -718,6 +718,7 @@ test "boxy layout planner records private worker function arg and return layouts
             .checked_type = @enumFromInt(2),
             .abi = .roc,
             .exposure = .private,
+            .procedure_binding = @enumFromInt(0),
         },
     };
 

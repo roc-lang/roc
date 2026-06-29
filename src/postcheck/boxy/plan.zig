@@ -21,6 +21,7 @@ const empty_interface_capabilities = checked.ModuleInterfaceCapabilities{};
 
 pub const TypeRepId = enum(u32) { _ };
 pub const RootPlanId = enum(u32) { _ };
+pub const WorkerPlanId = enum(u32) { _ };
 pub const DescriptorRequirementId = enum(u32) { _ };
 pub const DictionaryRequirementId = enum(u32) { _ };
 
@@ -133,9 +134,24 @@ pub const RootWrapperKind = enum {
     host_shaped_wrapper,
 };
 
+pub const WorkerSource = union(enum) {
+    procedure_template: canonical.ProcedureTemplateRef,
+    procedure_binding: checked.TopLevelProcedureBindingRef,
+    procedure_use: checked.ProcedureUseTemplate,
+};
+
+pub const WorkerPlan = struct {
+    id: WorkerPlanId,
+    request: checked.RootRequest,
+    source: WorkerSource,
+    checked_type: checked.CheckedTypeId,
+    rep: TypeRepId,
+};
+
 pub const RootPlan = struct {
     id: RootPlanId,
     request: checked.RootRequest,
+    worker: WorkerPlanId,
     wrapper_kind: RootWrapperKind,
     host_type: checked.CheckedTypeId,
     host_rep: TypeRepId,
@@ -145,6 +161,7 @@ pub const RootPlan = struct {
 pub const ProgramPlan = struct {
     allocator: Allocator,
     roots: std.ArrayList(RootPlan),
+    workers: std.ArrayList(WorkerPlan),
     root_reps: std.ArrayList(TypeRepId),
     representations: std.ArrayList(TypeRepresentation),
     children: std.ArrayList(RepChild),
@@ -156,6 +173,7 @@ pub const ProgramPlan = struct {
         return .{
             .allocator = allocator,
             .roots = .empty,
+            .workers = .empty,
             .root_reps = .empty,
             .representations = .empty,
             .children = .empty,
@@ -172,6 +190,7 @@ pub const ProgramPlan = struct {
         self.children.deinit(self.allocator);
         self.representations.deinit(self.allocator);
         self.root_reps.deinit(self.allocator);
+        self.workers.deinit(self.allocator);
         self.roots.deinit(self.allocator);
         self.* = ProgramPlan.init(self.allocator);
     }
@@ -302,10 +321,22 @@ const Builder = struct {
 
     fn analyzeRoot(self: *Builder, root: checked.RootRequest) Allocator.Error!void {
         const rep = try self.analyzeType(root.checked_type);
+        const source = workerSourceForRoot(root) orelse
+            boxyPlanInvariant("boxy root request had no checked procedure worker source");
+        const worker_id: WorkerPlanId = @enumFromInt(@as(u32, @intCast(self.plan.workers.items.len)));
+        try self.plan.workers.append(self.allocator, .{
+            .id = worker_id,
+            .request = root,
+            .source = source,
+            .checked_type = root.checked_type,
+            .rep = rep,
+        });
+
         const id: RootPlanId = @enumFromInt(@as(u32, @intCast(self.plan.roots.items.len)));
         try self.plan.roots.append(self.allocator, .{
             .id = id,
             .request = root,
+            .worker = worker_id,
             .wrapper_kind = if (rootRequiresHostWrapper(root)) .host_shaped_wrapper else .private_worker_only,
             .host_type = root.checked_type,
             .host_rep = rep,
@@ -815,6 +846,13 @@ fn rootRequiresHostWrapper(root: checked.RootRequest) bool {
     return root.abi != .roc or root.exposure != .private;
 }
 
+fn workerSourceForRoot(root: checked.RootRequest) ?WorkerSource {
+    if (root.procedure_template) |template| return .{ .procedure_template = template };
+    if (root.procedure_binding) |binding| return .{ .procedure_binding = binding };
+    if (root.procedure_use) |procedure| return .{ .procedure_use = procedure };
+    return null;
+}
+
 fn moduleViewFromImported(imported: checked.ImportedModuleView) ModuleView {
     return .{
         .key = imported.key,
@@ -866,6 +904,7 @@ test "boxy planner records root wrapper plans from checked root metadata" {
             .checked_type = @enumFromInt(0),
             .abi = .roc,
             .exposure = .exported,
+            .procedure_template = dummyProcedureTemplate(),
         },
     };
 
@@ -873,6 +912,9 @@ test "boxy planner records root wrapper plans from checked root metadata" {
     defer plan.deinit();
 
     try std.testing.expectEqual(@as(usize, 1), plan.roots.items.len);
+    try std.testing.expectEqual(@as(usize, 1), plan.workers.items.len);
+    try std.testing.expectEqual(WorkerSource{ .procedure_template = dummyProcedureTemplate() }, plan.workers.items[0].source);
+    try std.testing.expectEqual(plan.workers.items[0].id, plan.roots.items[0].worker);
     try std.testing.expectEqual(RootWrapperKind.host_shaped_wrapper, plan.roots.items[0].wrapper_kind);
     try std.testing.expectEqual(@as(u32, 3), plan.roots.items[0].request.order);
     try std.testing.expectEqual(plan.roots.items[0].host_rep, plan.roots.items[0].worker_rep);
@@ -1313,4 +1355,11 @@ fn typeKey(byte: u8) canonical.CanonicalTypeKey {
     var key = canonical.CanonicalTypeKey{};
     key.bytes[0] = byte;
     return key;
+}
+
+fn dummyProcedureTemplate() canonical.ProcedureTemplateRef {
+    return .{
+        .proc_base = @enumFromInt(0),
+        .template = @enumFromInt(0),
+    };
 }
