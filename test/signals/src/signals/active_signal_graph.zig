@@ -10,6 +10,36 @@ pub fn RouteTable(comptime Route: type) type {
     return std.ArrayListUnmanaged(std.ArrayListUnmanaged(Route));
 }
 
+pub const SignalKind = enum(u64) {
+    source = 1,
+    map = 2,
+    map2 = 3,
+};
+
+pub const EventRoute = struct {
+    event_id: u64,
+    signal_ids: []u64,
+};
+
+pub const Descriptor = struct {
+    signal_id: u64,
+    kind: SignalKind,
+    source_state_ids: []u64,
+    source_event_ids: []u64,
+    input_signal_ids: []u64,
+    rank: u64,
+};
+
+pub const StateRoute = struct {
+    state_id: u64,
+    signal_ids: []u64,
+};
+
+pub const DependentsRoute = struct {
+    signal_id: u64,
+    signal_ids: []u64,
+};
+
 pub const TextSinkKind = enum {
     text_node,
     text_attr,

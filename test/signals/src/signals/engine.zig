@@ -156,11 +156,7 @@ const HostEachRowSite = each_runtime.Site;
 // Markup carries no identity of its own; dynamic descriptors reference shared
 // signal records and event reducers by retained thunk.
 
-pub const SignalKind = enum(u64) {
-    source = 1,
-    map = 2,
-    map2 = 3,
-};
+pub const SignalKind = active_graph.SignalKind;
 
 pub const HostEventDescriptor = struct {
     event_id: u64,
@@ -180,10 +176,7 @@ pub const HostActiveInterval = effects_runtime.ActiveInterval;
 pub const HostCleanupEvents = effects_runtime.CleanupEvents;
 pub const deinitCleanupEvents = effects_runtime.deinitCleanupEvents;
 
-pub const HostSignalEventRoute = struct {
-    event_id: u64,
-    signal_ids: []u64,
-};
+pub const HostSignalEventRoute = active_graph.EventRoute;
 
 pub const HostState = struct {
     state_id: u64,
@@ -192,24 +185,11 @@ pub const HostState = struct {
     active: bool,
 };
 
-pub const HostSignalDescriptor = struct {
-    signal_id: u64,
-    kind: SignalKind,
-    source_state_ids: []u64,
-    source_event_ids: []u64,
-    input_signal_ids: []u64,
-    rank: u64,
-};
+pub const HostSignalDescriptor = active_graph.Descriptor;
 
-pub const HostSignalRoute = struct {
-    state_id: u64,
-    signal_ids: []u64,
-};
+pub const HostSignalRoute = active_graph.StateRoute;
 
-pub const HostSignalDependentsRoute = struct {
-    signal_id: u64,
-    signal_ids: []u64,
-};
+pub const HostSignalDependentsRoute = active_graph.DependentsRoute;
 
 pub const HostActiveSignalGraphNode = active_graph.Node(HostSignalRecord);
 pub const HostNodeIdentity = identity_table.NodeIdentity;
