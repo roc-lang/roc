@@ -997,7 +997,7 @@ const Builder = struct {
         source_fn_key: names.TypeDigest,
         fn_ty: Type.TypeId,
     ) Allocator.Error!Ast.DefId {
-        return try self.lowerTemplateWithMonoFor(template_ref, source_ty_view, source_fn_ty, source_fn_key, fn_ty, null);
+        return try self.lowerTemplateWithMonoFor(template_ref, source_ty_view, source_fn_ty, source_fn_key, fn_ty, null, null, null);
     }
 
     /// Specializations of one template family are deduplicated by structural
@@ -1014,6 +1014,8 @@ const Builder = struct {
         source_fn_key: names.TypeDigest,
         fn_ty: Type.TypeId,
         requester: ?*InstGraph,
+        source_region_override: ?base.Region,
+        current_entry_root: ?checked.ComptimeRootId,
     ) Allocator.Error!Ast.DefId {
         const family = TemplateFamily.from(template_ref, source_fn_key);
         const family_entry = try self.lowered_templates.getOrPut(family);
@@ -1137,6 +1139,8 @@ const Builder = struct {
         self.active_graph = graph;
         defer self.active_graph = saved_graph;
         var body_ctx = try BodyContext.init(self.allocator, self, view, template_ref, graph);
+        body_ctx.source_region_override = source_region_override;
+        body_ctx.current_entry_root = current_entry_root;
         const root_fn_key = Ast.fnTemplateDigest(fn_template, &self.program.types, &self.program.names);
         body_ctx.owner_context_fn_key = root_fn_key;
         body_ctx.current_fn_key = root_fn_key;
@@ -2033,6 +2037,8 @@ const Builder = struct {
                         .source_fn_ty = fn_template.source_fn_ty,
                         .source_fn_key = fn_template.source_fn_key,
                         .fn_ty = fn_template.mono_fn_ty,
+                        .source_region_override = null,
+                        .current_entry_root = null,
                     });
                 }
                 return reserved.fn_id;
@@ -2089,6 +2095,8 @@ const Builder = struct {
                 .source_fn_ty = fn_template.source_fn_ty,
                 .source_fn_key = fn_template.source_fn_key,
                 .fn_ty = fn_template.mono_fn_ty,
+                .source_region_override = source_ctx.source_region_override,
+                .current_entry_root = source_ctx.current_entry_root,
             });
         }
         return reserved.fn_id;
@@ -2247,6 +2255,8 @@ const Builder = struct {
                 request.source_fn_key,
                 request.fn_ty,
                 graph,
+                request.source_region_override,
+                request.current_entry_root,
             );
         }
     }
@@ -3271,6 +3281,10 @@ const BodyContext = struct {
     /// The template body can be lowered from a lookup site, but diagnostics
     /// must point at the original const root.
     source_region_override: ?base.Region = null,
+    /// The specific compile-time entry root currently being lowered. Hoisted
+    /// constants only count as "own" roots for this exact entry, not for every
+    /// specialization of the same procedure template.
+    current_entry_root: ?checked.ComptimeRootId = null,
 
     const PatternLiteralGuard = struct {
         local: Ast.LocalId,
@@ -3419,6 +3433,8 @@ const BodyContext = struct {
         child.owner_context_fn_key = self.owner_context_fn_key;
         child.current_fn_key = current_fn_key;
         child.comptime_exhaustiveness_depth = self.comptime_exhaustiveness_depth;
+        child.source_region_override = self.source_region_override;
+        child.current_entry_root = self.current_entry_root;
 
         var binder_iter = self.binders.iterator();
         while (binder_iter.next()) |entry| {
@@ -3785,11 +3801,14 @@ const BodyContext = struct {
             .entry_wrapper => |wrapper_id| {
                 const wrapper = self.view.entry_wrappers.get(wrapper_id);
                 const root = self.view.compile_time_roots.root(wrapper.root);
+                const saved_entry_root = self.current_entry_root;
+                defer self.current_entry_root = saved_entry_root;
+                self.current_entry_root = wrapper.root;
                 const saved_source_region_override = self.source_region_override;
                 defer self.source_region_override = saved_source_region_override;
                 self.source_region_override = switch (root.kind) {
-                    .hoisted_constant => self.view.bodies.expr(root.expr).source_region,
                     .constant,
+                    .hoisted_constant,
                     .callable_binding,
                     .expect,
                     .numeral_conversion,
@@ -4065,9 +4084,7 @@ const BodyContext = struct {
     }
 
     fn loweringOwnHoistedConstRoot(self: *BodyContext, entry: checked.HoistedConstEntry) bool {
-        const wrapper = self.view.entry_wrappers.lookupByRoot(entry.root) orelse
-            Common.invariant("hoisted const root had no checked entry wrapper");
-        return names.procedureTemplateRefEql(wrapper.template, self.owner_template);
+        return self.current_entry_root != null and entry.root == self.current_entry_root.?;
     }
 
     fn restoredHoistedConstAtType(
@@ -4077,9 +4094,18 @@ const BodyContext = struct {
     ) Allocator.Error!Ast.ExprId {
         try self.constrainTypeToMono(entry.checked_type, ty);
         const template = self.view.const_templates.get(entry.const_ref);
+        const source_region = self.hoistedConstSourceRegion(entry);
         return switch (template.state) {
-            .stored_const => |stored| try self.restoreConstNodeAtType(self.view, self.view, stored.node, ty),
-            .eval_template => |eval| try self.lowerConstEvalTemplateUse(self.view, eval, ty, self.hoistedConstSourceRegion(entry)),
+            .stored_const => |stored| blk: {
+                const saved_loc = self.builder.program.current_loc;
+                defer self.builder.program.current_loc = saved_loc;
+                const saved_region = self.builder.program.current_region;
+                defer self.builder.program.current_region = saved_region;
+                self.builder.program.current_loc = try self.sourceLocFor(source_region);
+                self.builder.program.current_region = source_region;
+                break :blk try self.restoreConstNodeAtType(self.view, self.view, stored.node, ty);
+            },
+            .eval_template => |eval| try self.lowerConstEvalTemplateUse(self.view, eval, ty, source_region, entry.root),
             .reserved => Common.invariant("reserved hoisted const template reached Monotype"),
         };
     }
@@ -8190,6 +8216,8 @@ const BodyContext = struct {
             defer call_ctx.deinit();
             call_ctx.owner_context_fn_key = self.owner_context_fn_key;
             call_ctx.current_fn_key = self.current_fn_key;
+            call_ctx.source_region_override = self.source_region_override;
+            call_ctx.current_entry_root = self.current_entry_root;
 
             const source_fn_ty = self.directCallInstantiationSourceFnType(target, call.source_fn_ty_payload);
             const mono_fn_ty = try call_ctx.instantiateCallTypeFromCallerAtType(source_fn_ty, self, checked_ret_ty, call.args, expected_ret_ty);
@@ -8216,6 +8244,8 @@ const BodyContext = struct {
             defer call_ctx.deinit();
             call_ctx.owner_context_fn_key = self.owner_context_fn_key;
             call_ctx.current_fn_key = self.current_fn_key;
+            call_ctx.source_region_override = self.source_region_override;
+            call_ctx.current_entry_root = self.current_entry_root;
 
             break :fn_ty try call_ctx.instantiateCallTypeFromCallerAtType(call.source_fn_ty_payload, self, checked_ret_ty, call.args, expected_ret_ty);
         };
@@ -8642,6 +8672,8 @@ const BodyContext = struct {
             defer call_ctx.deinit();
             call_ctx.owner_context_fn_key = self.owner_context_fn_key;
             call_ctx.current_fn_key = self.current_fn_key;
+            call_ctx.source_region_override = self.source_region_override;
+            call_ctx.current_entry_root = self.current_entry_root;
 
             const mono_fn_ty = try call_ctx.instantiateCallTypeFromCallerAtType(call.source_fn_ty_payload, self, checked_ret_ty, call.args, expected_ret_ty);
             return call_ctx.functionReturnType(mono_fn_ty);
@@ -8651,6 +8683,8 @@ const BodyContext = struct {
         defer call_ctx.deinit();
         call_ctx.owner_context_fn_key = self.owner_context_fn_key;
         call_ctx.current_fn_key = self.current_fn_key;
+        call_ctx.source_region_override = self.source_region_override;
+        call_ctx.current_entry_root = self.current_entry_root;
 
         const source_fn_ty = self.directCallInstantiationSourceFnType(call.direct_target.?, call.source_fn_ty_payload);
         const mono_fn_ty = try call_ctx.instantiateCallTypeFromCallerAtType(source_fn_ty, self, checked_ret_ty, call.args, expected_ret_ty);
@@ -8953,7 +8987,7 @@ const BodyContext = struct {
         return switch (template.state) {
             .stored_const => |stored| try self.restoreConstNodeAtType(store_view, self.view, stored.node, ty),
             .reserved => Common.invariant("reserved checked const template reached Monotype"),
-            .eval_template => |eval| try self.lowerConstEvalTemplateUse(store_view, eval, ty, null),
+            .eval_template => |eval| try self.lowerConstEvalTemplateUse(store_view, eval, ty, null, null),
         };
     }
 
@@ -8963,6 +8997,7 @@ const BodyContext = struct {
         eval: checked.ConstEvalTemplate,
         ty: Type.TypeId,
         source_region_override: ?base.Region,
+        current_entry_root: ?checked.ComptimeRootId,
     ) Allocator.Error!Ast.ExprId {
         const body = store_view.checked_const_bodies.get(eval.body);
         const entry_template = store_view.templates.get(eval.entry_template.template);
@@ -8988,6 +9023,7 @@ const BodyContext = struct {
         var body_ctx = try BodyContext.init(self.allocator, self.builder, store_view, eval.entry_template, graph);
         defer body_ctx.deinit();
         body_ctx.source_region_override = source_region_override;
+        body_ctx.current_entry_root = current_entry_root;
         const root_fn_key = Ast.fnTemplateDigest(wrapper_template, &self.builder.program.types, &self.builder.program.names);
         body_ctx.owner_context_fn_key = root_fn_key;
         body_ctx.current_fn_key = root_fn_key;
@@ -9944,6 +9980,8 @@ const BodyContext = struct {
         defer call_ctx.deinit();
         call_ctx.owner_context_fn_key = self.owner_context_fn_key;
         call_ctx.current_fn_key = self.current_fn_key;
+        call_ctx.source_region_override = self.source_region_override;
+        call_ctx.current_entry_root = self.current_entry_root;
 
         const callable_mono_ty = try call_ctx.instantiateDispatchPlanCallTypeFromCaller(plan.callable_ty, self, checked_ret_ty, plan_args, expected_ret_ty);
         const plan_fn_data = self.builder.functionShape(callable_mono_ty, "checked dispatch plan had a non-function type");
@@ -10068,6 +10106,8 @@ const BodyContext = struct {
         defer call_ctx.deinit();
         call_ctx.owner_context_fn_key = self.owner_context_fn_key;
         call_ctx.current_fn_key = self.current_fn_key;
+        call_ctx.source_region_override = self.source_region_override;
+        call_ctx.current_entry_root = self.current_entry_root;
 
         const callable_mono_ty = try call_ctx.instantiateNumeralPlanCallType(plan.callable_ty, self, checked_ret_ty, target_ty, plan_args);
         const plan_fn_data = self.builder.functionShape(callable_mono_ty, "checked from_numeral plan had a non-function type");
@@ -10354,6 +10394,8 @@ const BodyContext = struct {
         defer call_ctx.deinit();
         call_ctx.owner_context_fn_key = self.owner_context_fn_key;
         call_ctx.current_fn_key = self.current_fn_key;
+        call_ctx.source_region_override = self.source_region_override;
+        call_ctx.current_entry_root = self.current_entry_root;
 
         const plan_args = plan.argsSlice(self.view.static_dispatch_plans);
         const callable_mono_ty = try call_ctx.instantiateDispatchPlanCallTypeFromCaller(plan.callable_ty, self, checked_ret_ty, plan_args, expected_ret_ty);
@@ -13899,6 +13941,8 @@ const BodyContext = struct {
         defer call_ctx.deinit();
         call_ctx.owner_context_fn_key = self.owner_context_fn_key;
         call_ctx.current_fn_key = self.current_fn_key;
+        call_ctx.source_region_override = self.source_region_override;
+        call_ctx.current_entry_root = self.current_entry_root;
 
         const callable_mono_ty = try call_ctx.instantiateIteratorPlanCallTypeFromCaller(plan.callable_ty, self, plan_args, loop_iterator, expected_ret_ty);
         const plan_fn_data = self.builder.functionShape(callable_mono_ty, "checked iterator dispatch plan had a non-function type");

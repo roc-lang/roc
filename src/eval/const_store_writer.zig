@@ -23,6 +23,18 @@ const RuntimeValueAddress = struct {
     layout: u32,
 };
 
+/// Runtime erased-callable identity decoded into the LIR proc and capture data.
+pub const ErasedCallableResolution = struct {
+    proc: lir.LIR.LirProcSpecId,
+    capture_ptr: [*]u8,
+};
+
+/// Resolves erased-callable runtime data for the active evaluator.
+pub const ErasedCallableResolver = struct {
+    context: ?*anyopaque = null,
+    resolve: *const fn (?*anyopaque, [*]u8) ErasedCallableResolution = interpreterErasedCallable,
+};
+
 const TagBase = struct {
     value: Value,
     layout_idx: layout.Idx,
@@ -40,6 +52,7 @@ pub const Writer = struct {
     program: *const LirProgram.Result,
     stored_values: std.AutoHashMap(RuntimeValueAddress, checked.ConstNodeId),
     str_backings: std.AutoHashMap(usize, StrBacking),
+    erased_callable_resolver: ErasedCallableResolver,
 
     pub fn init(
         allocator: Allocator,
@@ -52,7 +65,12 @@ pub const Writer = struct {
             .program = program,
             .stored_values = std.AutoHashMap(RuntimeValueAddress, checked.ConstNodeId).init(allocator),
             .str_backings = std.AutoHashMap(usize, StrBacking).init(allocator),
+            .erased_callable_resolver = .{},
         };
+    }
+
+    pub fn setErasedCallableResolver(self: *Writer, resolver: ErasedCallableResolver) void {
+        self.erased_callable_resolver = resolver;
     }
 
     pub fn deinit(self: *Writer) void {
@@ -379,11 +397,10 @@ pub const Writer = struct {
     ) Allocator.Error!checked.ConstFnId {
         const set = self.program.erased_fns.items[@intFromEnum(set_id)];
         const data_ptr = self.readErasedCallablePointer(value);
-        const proc = Interpreter.erasedCallableInterpreterProcId(data_ptr);
+        const resolved = self.erased_callable_resolver.resolve(self.erased_callable_resolver.context, data_ptr);
         for (set.entries) |entry| {
-            if (entry.entry != proc) continue;
-            const capture_ptr = Interpreter.erasedCallableInterpreterCaptureValuePtr(data_ptr);
-            const captures = try self.storeCaptures(entry.captures, entry.capture_layout, .{ .ptr = capture_ptr });
+            if (entry.entry != resolved.proc) continue;
+            const captures = try self.storeCaptures(entry.captures, entry.capture_layout, .{ .ptr = resolved.capture_ptr });
             defer self.module.const_store.allocator.free(captures);
             return try self.module.const_store.appendFn(.{
                 .fn_def = entry.template.fn_def,
@@ -599,11 +616,10 @@ pub const Writer = struct {
     ) Allocator.Error!void {
         const set = self.program.erased_fns.items[@intFromEnum(set_id)];
         const data_ptr = self.readErasedCallablePointer(value);
-        const proc = Interpreter.erasedCallableInterpreterProcId(data_ptr);
+        const resolved = self.erased_callable_resolver.resolve(self.erased_callable_resolver.context, data_ptr);
         for (set.entries) |entry| {
-            if (entry.entry != proc) continue;
-            const capture_ptr = Interpreter.erasedCallableInterpreterCaptureValuePtr(data_ptr);
-            try self.collectCaptureStrBackings(entry.captures, entry.capture_layout, .{ .ptr = capture_ptr });
+            if (entry.entry != resolved.proc) continue;
+            try self.collectCaptureStrBackings(entry.captures, entry.capture_layout, .{ .ptr = resolved.capture_ptr });
             return;
         }
         writerInvariant("erased callable result did not match an explicit erased function entry");
@@ -753,6 +769,13 @@ pub const Writer = struct {
         return self.program.const_plans.items[raw];
     }
 };
+
+fn interpreterErasedCallable(_: ?*anyopaque, data_ptr: [*]u8) ErasedCallableResolution {
+    return .{
+        .proc = Interpreter.erasedCallableInterpreterProcId(data_ptr),
+        .capture_ptr = Interpreter.erasedCallableInterpreterCaptureValuePtr(data_ptr),
+    };
+}
 
 fn checkedU32(value: usize, comptime message: []const u8) u32 {
     if (value > std.math.maxInt(u32)) writerInvariant(message);

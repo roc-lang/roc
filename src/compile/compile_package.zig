@@ -77,6 +77,23 @@ const stage_timers_supported = !threading.is_freestanding;
 
 const StageTimer = if (stage_timers_supported) std.Io.Timestamp else void;
 
+/// Build CTFE finalization options from the package compiler context.
+pub fn compileTimeFinalizationOptions(max_threads: usize, roc_ctx: *CoreCtx) eval.CompileTimeFinalization.Options {
+    return .{
+        .max_threads = max_threads,
+        .std_io = roc_ctx.std_io,
+        .stderr = .{
+            .context = @ptrCast(roc_ctx),
+            .write = writeCtfeStderr,
+        },
+    };
+}
+
+fn writeCtfeStderr(raw: ?*anyopaque, bytes: []const u8) void {
+    const roc_ctx: *CoreCtx = @ptrCast(@alignCast(raw.?));
+    roc_ctx.writeStderr(bytes) catch {};
+}
+
 fn startStageTimer(io: std.Io) ?StageTimer {
     if (comptime !stage_timers_supported) return null;
     return std.Io.Timestamp.now(io, .awake);
@@ -346,6 +363,7 @@ pub const ArtifactPublicationInputs = struct {
     explicit_roots: []const CheckedArtifact.ExplicitRootRequestInput = &.{},
     hoisted_roots: []const check.HoistRoots.SelectedHoistedRoot = &.{},
     problem_store: ?*check.problem.Store = null,
+    ctfe_options: eval.CompileTimeFinalization.Options = .{},
 };
 
 fn problemBlocksCheckedArtifact(problem: check.problem.Problem) bool {
@@ -1748,6 +1766,7 @@ pub const PackageEnv = struct {
         imported_artifacts: []const CheckedArtifact.PublishImportArtifact,
         available_artifacts: []const CheckedArtifact.ImportedModuleView,
         explicit_roots: []const CheckedArtifact.ExplicitRootRequestInput,
+        ctfe_options: eval.CompileTimeFinalization.Options,
     ) TypeCheckModuleError!TypeCheckOutput {
         // Load builtin indices from the binary data generated at build time
         const builtin_indices = try builtin_loading.deserializeBuiltinIndices(check_alloc, compiled_builtins.builtin_indices_bin);
@@ -1825,6 +1844,7 @@ pub const PackageEnv = struct {
                 .hoisted_roots = checker.selectedHoistedRoots(),
                 .available_artifacts = available_artifacts,
                 .problem_store = &checker.problems,
+                .ctfe_options = ctfe_options,
             },
         ) catch |err| switch (err) {
             error.CompileTimeProblem => {
@@ -1888,6 +1908,7 @@ pub const PackageEnv = struct {
         imported_artifacts: []const CheckedArtifact.PublishImportArtifact,
         publication: ArtifactPublicationInputs,
     ) PublishError!CheckedArtifact.CheckedModuleArtifact {
+        var ctfe_options = publication.ctfe_options;
         return try CheckedArtifact.publishFromTypedModule(
             gpa,
             modules,
@@ -1902,7 +1923,7 @@ pub const PackageEnv = struct {
                 .platform_app_relation = publication.platform_app_relation,
                 .explicit_roots = publication.explicit_roots,
                 .hoisted_roots = publication.hoisted_roots,
-                .compile_time_finalizer = eval.CompileTimeFinalization.finalizer(),
+                .compile_time_finalizer = eval.CompileTimeFinalization.finalizerWithOptions(&ctfe_options),
                 .problem_store = publication.problem_store,
             },
         );
@@ -1985,6 +2006,7 @@ pub const PackageEnv = struct {
             imported_artifacts.items,
             available_artifacts,
             &.{},
+            compileTimeFinalizationOptions(self.max_threads, &self.roc_ctx),
         );
         defer typecheck_output.deinit();
         if (typecheck_output.checked_artifact != null) {

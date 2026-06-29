@@ -471,8 +471,10 @@ const Lowerer = struct {
         defer self.program.current_loc = saved_loc;
         const saved_region = self.program.current_region;
         defer self.program.current_region = saved_region;
-        self.program.current_loc = self.solved.lifted.exprLoc(expr_id);
-        self.program.current_region = self.solved.lifted.exprRegion(expr_id);
+        const expr_loc = self.solved.lifted.exprLoc(expr_id);
+        if (expr_loc.hasLocation()) self.program.current_loc = expr_loc;
+        const expr_region = self.solved.lifted.exprRegion(expr_id);
+        if (!expr_region.isEmpty()) self.program.current_region = expr_region;
         const ty = try self.lowerExprTy(expr_id);
         const data: Ast.ExprData = switch (expr.data) {
             .local => |local| try self.lowerLocalExpr(local, ty),
@@ -899,8 +901,10 @@ const Lowerer = struct {
         defer self.program.current_loc = saved_loc;
         const saved_region = self.program.current_region;
         defer self.program.current_region = saved_region;
-        self.program.current_loc = self.solved.lifted.stmtLoc(stmt_id);
-        self.program.current_region = self.solved.lifted.stmtRegion(stmt_id);
+        const stmt_loc = self.solved.lifted.stmtLoc(stmt_id);
+        if (stmt_loc.hasLocation()) self.program.current_loc = stmt_loc;
+        const stmt_region = self.solved.lifted.stmtRegion(stmt_id);
+        if (!stmt_region.isEmpty()) self.program.current_region = stmt_region;
         const lowered_stmt: Ast.Stmt = switch (self.solved.lifted.stmts.items[index]) {
             .uninitialized => |pat| .{ .uninitialized = try self.lowerPat(pat) },
             .let_ => |let_| .{ .let_ = .{

@@ -3,7 +3,7 @@
 //! For each block:
 //!   * It must pass `roc check` (driven by `parseAndCheckProgramForProblems`).
 //!   * If the block contains only top-level `expect` statements, those expects
-//!     are executed via the LIR interpreter.
+//!     are executed through checked-artifact compile-time evaluation.
 //!   * Otherwise, the block is evaluated through `compileInspectedProgram`.
 //!
 //! When a block fails, the source is written to a debug file under
@@ -511,92 +511,20 @@ fn runCheck(
     return null;
 }
 
-/// Run an expect-only block by rewriting each `expect EXPR` as a named binding
-/// and adding a `main` that ANDs them together, then evaluating through
-/// `compileInspectedProgram`. This goes through the same path the REPL uses,
-/// which correctly hooks up precompiled builtin implementations (e.g.
-/// `U8.from_str`) — unlike `parseAndCanonicalizeProgramPublishedRoots`, which
-/// currently trips a `mono body lowering reached annotation-only procedure
-/// body` invariant for some of these references.
+/// Run an expect-only block through checked-artifact compile-time evaluation.
+/// This matches the path used by `roc test` for top-level expects.
 fn runExpects(allocator: Allocator, source: []const u8) BuiltinDocTestError!?[]u8 {
-    const wrapped = try rewriteExpectsAsModule(allocator, source);
-    defer allocator.free(wrapped);
-    if (wrapped.len == 0) {
-        return try dupeErr(allocator, "expect-only block had no expect statements", .{});
-    }
+    const outcome = (if (prePublishedBuiltin()) |ppb|
+        test_helpers.publishProgramForComptimeProblemsWithBuiltin(allocator, .module, source, &.{}, ppb)
+    else
+        test_helpers.publishProgramForComptimeProblems(allocator, .module, source, &.{})) catch |err| {
+        return try dupeErr(allocator, "publishProgramForComptimeProblems: {s}", .{@errorName(err)});
+    };
 
-    var compiled = compileNative(allocator, .module, wrapped) catch |err|
-        return try dupeErr(allocator, "compileInspectedProgram: {s}", .{@errorName(err)});
-    defer compiled.deinit(allocator);
-
-    const inspected = test_helpers.lirInterpreterInspectedStr(allocator, &compiled.lowered) catch |err|
-        return try dupeErr(allocator, "lirInterpreterInspectedStr: {s}", .{@errorName(err)});
-    defer allocator.free(inspected);
-
-    if (!std.mem.eql(u8, inspected, "True")) {
-        return try std.fmt.allocPrint(
-            allocator,
-            "at least one expect evaluated to {s} (expected True)",
-            .{inspected},
-        );
-    }
-    return null;
-}
-
-/// Rewrite an expect-only block into a module: helper definitions in the
-/// block are kept verbatim, then a `main` is generated that ANDs the body of
-/// every `expect EXPR` inline. Returns the empty string if the block has no
-/// expect statements. Inlining (rather than binding each expect to its own
-/// name) avoids a separate compiler invariant that fires when constant
-/// definitions reuse rich payload types.
-fn rewriteExpectsAsModule(allocator: Allocator, source: []const u8) BuiltinDocTestError![]u8 {
-    const statements = try splitTopLevelStatements(allocator, source);
-    defer allocator.free(statements);
-
-    var helpers = std.ArrayList(u8).empty;
-    errdefer helpers.deinit(allocator);
-    var expect_bodies = std.ArrayList([]const u8).empty;
-    defer expect_bodies.deinit(allocator);
-
-    for (statements) |stmt| {
-        if (stripExpectKeyword(stmt)) |body| {
-            try expect_bodies.append(allocator, body);
-        } else {
-            try helpers.appendSlice(allocator, stmt);
-            try helpers.append(allocator, '\n');
-        }
-    }
-
-    if (expect_bodies.items.len == 0) {
-        helpers.deinit(allocator);
-        return allocator.dupe(u8, "");
-    }
-
-    var buf = std.ArrayList(u8).empty;
-    errdefer buf.deinit(allocator);
-    try buf.appendSlice(allocator, helpers.items);
-    helpers.deinit(allocator);
-
-    try buf.appendSlice(allocator, "\nmain =");
-    for (expect_bodies.items, 0..) |body, i| {
-        if (i == 0) {
-            try buf.print(allocator, " ({s})", .{body});
-        } else {
-            try buf.print(allocator, " and ({s})", .{body});
-        }
-    }
-    try buf.append(allocator, '\n');
-    return buf.toOwnedSlice(allocator);
-}
-
-/// If `stmt` starts with the `expect` keyword, return the body that follows;
-/// otherwise return null. The body may span multiple lines.
-fn stripExpectKeyword(stmt: []const u8) ?[]const u8 {
-    if (!startsWithKeyword(stmt, "expect")) return null;
-    var rest = stmt[6..];
-    while (rest.len > 0 and (rest[0] == ' ' or rest[0] == '\t' or rest[0] == '\n')) rest = rest[1..];
-    if (rest.len == 0) return null;
-    return rest;
+    return switch (outcome) {
+        .no_problems => null,
+        .comptime_problems => try dupeErr(allocator, "at least one expect failed", .{}),
+    };
 }
 
 fn runEval(

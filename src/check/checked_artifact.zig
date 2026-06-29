@@ -449,7 +449,15 @@ pub const PublishInputs = struct {
 
 /// Public `CompileTimeFinalizer` declaration.
 pub const CompileTimeFinalizer = struct {
-    pub const Error = Allocator.Error || error{CompileTimeProblem};
+    pub const Error = Allocator.Error || std.Thread.SpawnError || error{
+        CompileTimeProblem,
+        EmptyCode,
+        MmapFailed,
+        MprotectFailed,
+        UnsupportedPlatform,
+        VirtualAllocFailed,
+        VirtualProtectFailed,
+    };
 
     context: ?*anyopaque = null,
     finalize: *const fn (

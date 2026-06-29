@@ -680,8 +680,10 @@ const Lifter = struct {
         defer self.output.current_loc = saved_loc;
         const saved_region = self.output.current_region;
         defer self.output.current_region = saved_region;
-        self.output.current_loc = self.output.exprLoc(call_expr);
-        self.output.current_region = self.output.exprRegion(call_expr);
+        const call_loc = self.output.exprLoc(call_expr);
+        if (call_loc.hasLocation()) self.output.current_loc = call_loc;
+        const call_region = self.output.exprRegion(call_expr);
+        if (!call_region.isEmpty()) self.output.current_region = call_region;
 
         const exprs = try self.allocator.alloc(Ast.ExprId, captures.len);
         defer self.allocator.free(exprs);
@@ -709,8 +711,10 @@ const Lifter = struct {
         defer self.output.current_loc = saved_loc;
         const saved_region = self.output.current_region;
         defer self.output.current_region = saved_region;
-        self.output.current_loc = self.output.exprLoc(call_expr);
-        self.output.current_region = self.output.exprRegion(call_expr);
+        const call_loc = self.output.exprLoc(call_expr);
+        if (call_loc.hasLocation()) self.output.current_loc = call_loc;
+        const call_region = self.output.exprRegion(call_expr);
+        if (!call_region.isEmpty()) self.output.current_region = call_region;
 
         const explicit = self.output.fnDefCaptureSpan(explicit_span);
         const exprs = try self.allocator.alloc(Ast.ExprId, captures.len);
