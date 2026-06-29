@@ -4235,39 +4235,15 @@ pub fn Engine(comptime Ctx: type) type {
 
         pub fn spliceActiveStreamReplacingTarget(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, target: HostStructuralReplacementTarget, render_insert_index: usize, replacement: *HostNodeDescriptorStream) HostStructuralSplice {
             const allocator = Ctx.allocator(ctx);
-            if (render_insert_index > self.active_stream.render_nodes.items.len) @panic("structural replacement render insertion point is outside the active stream");
-
             const target_scopes = self.buildReplacementTargetScopeSet(ctx, target);
             defer self.scratch.replacement_target_scopes.clearRetainingCapacity();
 
-            var removed_elem_ids: std.ArrayListUnmanaged(u64) = .empty;
-            errdefer removed_elem_ids.deinit(allocator);
-            var touched_parent_ids: std.ArrayListUnmanaged(u64) = .empty;
-            errdefer touched_parent_ids.deinit(allocator);
-
-            var removed_render_count: usize = 0;
-            var target_scan_count: usize = 0;
-            var render_index = render_insert_index;
-            while (render_index < self.active_stream.render_nodes.items.len) : (render_index += 1) {
-                const node = self.active_stream.render_nodes.items[render_index];
-                target_scan_count += 1;
-                if (!self.renderNodeInReplacementTargetSet(&self.active_stream, node, target_scopes)) break;
-                removed_render_count += 1;
-                removed_elem_ids.append(allocator, node.elem_id) catch @panic("out of memory");
-                appendUniqueU64(allocator, &touched_parent_ids, renderNodeParentElemId(&self.active_stream, node));
-            }
-            self.recordStreamNodesScannedBy(.stream_nodes_scanned_splice, target_scan_count);
-
-            var touched_parent_write_index: usize = 0;
-            for (touched_parent_ids.items) |parent_elem_id| {
-                if (u64SliceContains(removed_elem_ids.items, parent_elem_id)) continue;
-                touched_parent_ids.items[touched_parent_write_index] = parent_elem_id;
-                touched_parent_write_index += 1;
-            }
-            touched_parent_ids.items.len = touched_parent_write_index;
+            const removal_scan = structural_splice.collectRenderRemovalScan(HostNodeDescriptorStream, allocator, &self.active_stream, render_insert_index, target_scopes);
+            errdefer removal_scan.deinit(allocator);
+            self.recordStreamNodesScannedBy(.stream_nodes_scanned_splice, removal_scan.target_scan_count);
 
             const render_start = render_insert_index;
-            const removed_render_nodes = self.active_stream.render_nodes.items[render_start..][0..removed_render_count];
+            const removed_render_nodes = self.active_stream.render_nodes.items[render_start..][0..removal_scan.removed_render_count];
             const replacement_render_count = replacement.render_nodes.items.len;
             const on_change_count = replacement.on_changes.items.len;
             const mount_count = replacement.mounts.items.len;
@@ -4278,8 +4254,8 @@ pub fn Engine(comptime Ctx: type) type {
             }
 
             self.active_stream.replaceRenderRangeWithStream(allocator, render_start, removed_render_nodes, replacement, &self.pending_roc_metrics);
-            self.removeActiveNonRenderDescriptorsInTarget(ctx, roc_host, target_scopes, removed_elem_ids.items);
-            self.adjustActiveScopeSiteRenderInsertIndices(render_insert_index, removed_render_count, replacement_render_count);
+            self.removeActiveNonRenderDescriptorsInTarget(ctx, roc_host, target_scopes, removal_scan.removed_elem_ids);
+            self.adjustActiveScopeSiteRenderInsertIndices(render_insert_index, removal_scan.removed_render_count, replacement_render_count);
             const on_change_start = self.active_stream.on_changes.items.len;
             const replacement_on_change_indices = allocator.alloc(usize, on_change_count) catch @panic("out of memory");
             errdefer allocator.free(replacement_on_change_indices);
@@ -4296,8 +4272,8 @@ pub fn Engine(comptime Ctx: type) type {
             self.validateActiveRenderDescriptorIntegrity();
 
             return .{
-                .removed_elem_ids = removed_elem_ids.toOwnedSlice(allocator) catch @panic("out of memory"),
-                .touched_parent_ids = touched_parent_ids.toOwnedSlice(allocator) catch @panic("out of memory"),
+                .removed_elem_ids = removal_scan.removed_elem_ids,
+                .touched_parent_ids = removal_scan.touched_parent_ids,
                 .replacement_elem_ids = replacement_elem_ids,
                 .replacement_on_change_indices = replacement_on_change_indices,
                 .replacement_mount_indices = replacement_mount_indices,
