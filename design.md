@@ -3266,6 +3266,16 @@ switch on the Bool runtime discriminant (`True` is value 1 by the checked Bool
 builtin rule). The lowerer consumes the checked if-branch list directly; it does
 not recover branch order or condition/body relationships from source syntax.
 
+Checked `and` and `or` binop nodes lower as short-circuit Bool switches. `and`
+lowers the left operand into a condition local, evaluates the right operand only
+on the true branch, and assigns `False` directly on the default branch. `or`
+evaluates the right operand only on the false/default branch and assigns `True`
+directly on the true branch. Other checked binop source operators are not
+lowered by inspecting the surface operator here: checking rewrites equality to
+structural equality or method equality and rewrites arithmetic/comparison
+operators to checked dispatch calls, and boxy consumes those explicit checked
+plans.
+
 Irrefutable declaration patterns lower as value binding plus explicit
 destructuring reads. Assignment patterns bind the RHS value directly. Tuple
 patterns read fields by checked tuple index. Record destructuring patterns read

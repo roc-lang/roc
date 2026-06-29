@@ -484,6 +484,7 @@ const ProcBodyBuilder = struct {
             .if_ => |if_| try self.lowerIfInto(target, if_.branches, if_.final_else, next),
             .unary_minus => |child| try self.lowerUnaryLowLevelInto(target, .num_negate, child, next),
             .unary_not => |child| try self.lowerUnaryLowLevelInto(target, .bool_not, child, next),
+            .binop => |binop| try self.lowerBoolBinopInto(target, binop.op, binop.lhs, binop.rhs, next),
             .record => |record| blk: {
                 if (record.ext != null) {
                     boxyLowerInvariant("open record expression reached boxy body lowering before record extension lowering was implemented");
@@ -1553,6 +1554,32 @@ const ProcBodyBuilder = struct {
         return try self.lowerExprInto(cond, child, expect_stmt);
     }
 
+    fn lowerBoolBinopInto(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        op: can.CIR.Expr.Binop.Op,
+        lhs: checked.CheckedExprId,
+        rhs: checked.CheckedExprId,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const true_body, const false_body = switch (op) {
+            .@"and" => .{
+                try self.lowerExprInto(target, rhs, next),
+                try self.assignBoolLiteral(target, false, next),
+            },
+            .@"or" => .{
+                try self.assignBoolLiteral(target, true, next),
+                try self.lowerExprInto(target, rhs, next),
+            },
+            else => boxyLowerInvariant("non-short-circuit checked binop reached boxy binop lowering before dispatch lowering"),
+        };
+
+        const lhs_expr = self.module.checked_bodies.expr(lhs);
+        const cond = try self.addFrameLocal(self.workerRuntimeLayoutForType(lhs_expr.ty).layoutIdx());
+        const switch_stmt = try self.boolSwitchNoContinuation(cond, true_body, false_body);
+        return try self.lowerExprInto(cond, lhs, switch_stmt);
+    }
+
     fn lowerUnaryLowLevelInto(
         self: *ProcBodyBuilder,
         target: LIR.LocalId,
@@ -1595,6 +1622,22 @@ const ProcBodyBuilder = struct {
         return try self.parent.result.store.addCFStmt(.{ .assign_literal = .{
             .target = target,
             .value = .{ .str_literal = try self.parent.result.store.insertStringView(text, 0, @intCast(text.len)) },
+            .next = next,
+        } });
+    }
+
+    fn assignBoolLiteral(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        value: bool,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const variant: u16 = if (value) 1 else 0;
+        return try self.parent.result.store.addCFStmt(.{ .assign_tag = .{
+            .target = target,
+            .variant_index = variant,
+            .discriminant = variant,
+            .payload = null,
             .next = next,
         } });
     }
@@ -2601,6 +2644,118 @@ test "boxy lowerer emits checked unary not as bool low-level call" {
     try std.testing.expectEqual(@as(usize, 1), args.len);
     try std.testing.expectEqual(literal.target, args[0]);
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = not.target } }, out.lir_result.store.getCFStmt(not.next));
+}
+
+test "boxy lowerer emits short-circuit checked boolean and" {
+    const gpa = std.testing.allocator;
+
+    var artifact = minimalCheckedArtifact(gpa);
+    defer artifact.canonical_names.deinit();
+    defer artifact.checked_types.deinit(gpa);
+    defer artifact.checked_bodies.deinit(gpa);
+
+    const false_tag = try artifact.canonical_names.internTagLabel("False");
+    const true_tag = try artifact.canonical_names.internTagLabel("True");
+
+    try artifact.checked_types.payloads.append(gpa, .{
+        .nominal = builtinNominal(.bool, @enumFromInt(0), .{}),
+    });
+    try artifact.checked_types.payloads.append(gpa, .{
+        .function = .{
+            .kind = .pure,
+            .args = .{},
+            .ret = @enumFromInt(0),
+            .needs_instantiation = false,
+        },
+    });
+
+    const template_ref = procedureTemplateRef(artifact.key, 0);
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(0),
+        .ty = @enumFromInt(1),
+        .source_region = base.Region.zero(),
+        .data = .{ .lambda = .{ .args = .{}, .body = @enumFromInt(1) } },
+    });
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(1),
+        .ty = @enumFromInt(0),
+        .source_region = base.Region.zero(),
+        .data = .{ .binop = .{
+            .op = .@"and",
+            .lhs = @enumFromInt(2),
+            .rhs = @enumFromInt(3),
+        } },
+    });
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(2),
+        .ty = @enumFromInt(0),
+        .source_region = base.Region.zero(),
+        .data = .{ .zero_argument_tag = .{
+            .closure_name = false_tag,
+            .name = false_tag,
+        } },
+    });
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(3),
+        .ty = @enumFromInt(0),
+        .source_region = base.Region.zero(),
+        .data = .{ .zero_argument_tag = .{
+            .closure_name = true_tag,
+            .name = true_tag,
+        } },
+    });
+    try artifact.checked_bodies.bodies.append(gpa, .{
+        .id = @enumFromInt(0),
+        .root_expr = @enumFromInt(0),
+        .owner_template = template_ref,
+    });
+    var templates = [_]checked.CheckedProcedureTemplate{
+        checkedTemplate(template_ref, @enumFromInt(1), @enumFromInt(0)),
+    };
+    artifact.checked_procedure_templates = .{ .templates = &templates };
+
+    const root = checked.RootRequest{
+        .order = 0,
+        .module_idx = 0,
+        .kind = .runtime_entrypoint,
+        .source = .{ .def = @enumFromInt(0) },
+        .checked_type = @enumFromInt(1),
+        .abi = .roc,
+        .exposure = .private,
+        .procedure_template = template_ref,
+    };
+    var plan = try Plan.analyzeProgram(gpa, .{
+        .root_module = .{ .module = &artifact, .roots = undefined },
+        .roots = &.{root},
+    }, .{});
+    defer plan.deinit();
+
+    var out = try run(
+        gpa,
+        .{ .root = .{ .module = &artifact, .roots = undefined } },
+        .{},
+        &plan,
+        .{},
+    );
+    defer out.deinit();
+
+    const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
+    const lhs = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_tag;
+    try std.testing.expectEqual(@as(u16, 0), lhs.variant_index);
+
+    const switch_stmt = out.lir_result.store.getCFStmt(lhs.next).switch_stmt;
+    try std.testing.expectEqual(lhs.target, switch_stmt.cond);
+    const branches = out.lir_result.store.getCFSwitchBranches(switch_stmt.branches);
+    try std.testing.expectEqual(@as(usize, 1), branches.len);
+    try std.testing.expectEqual(@as(u64, 1), branches[0].value);
+
+    const true_branch = out.lir_result.store.getCFStmt(branches[0].body).assign_tag;
+    try std.testing.expectEqual(@as(u16, 1), true_branch.variant_index);
+    try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = true_branch.target } }, out.lir_result.store.getCFStmt(true_branch.next));
+
+    const false_branch = out.lir_result.store.getCFStmt(switch_stmt.default_branch).assign_tag;
+    try std.testing.expectEqual(@as(u16, 0), false_branch.variant_index);
+    try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = false_branch.target } }, out.lir_result.store.getCFStmt(false_branch.next));
 }
 
 test "boxy lowerer emits checked string segment literals" {
