@@ -102,6 +102,7 @@ const Pass = struct {
         for (self.result.requested_layouts.items) |request| {
             try self.markConstPlan(request.plan);
         }
+        try self.markBoxyTableProcs();
 
         try self.drainProcQueue();
         self.assignCompactProcIds();
@@ -111,6 +112,7 @@ const Pass = struct {
         self.remapRootProcs();
         self.remapConstRoots();
         try self.remapErasedFns();
+        self.remapBoxyTableProcs();
         self.remapComptimeSites();
         self.remapProcDebugNames();
         self.compactProcSpecs();
@@ -163,7 +165,7 @@ const Pass = struct {
                     try self.markProc(s.proc);
                     try self.pushStmt(s.next);
                 },
-                .assign_low_level => |s| try self.pushStmt(s.next),
+                inline .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_call_dict, .assign_low_level => |s| try self.pushStmt(s.next),
                 .assign_list => |s| try self.pushStmt(s.next),
                 .assign_struct => |s| try self.pushStmt(s.next),
                 .assign_tag => |s| try self.pushStmt(s.next),
@@ -215,6 +217,12 @@ const Pass = struct {
 
     fn pushStmt(self: *Pass, stmt: LIR.CFStmtId) Allocator.Error!void {
         try self.stmt_stack.append(self.allocator, stmt);
+    }
+
+    fn markBoxyTableProcs(self: *Pass) Allocator.Error!void {
+        for (self.result.boxy_method_slots.items) |slot| {
+            try self.markProc(slot.proc);
+        }
     }
 
     fn markConstPlan(self: *Pass, plan_id: LirProgram.ConstPlanId) Allocator.Error!void {
@@ -364,6 +372,13 @@ const Pass = struct {
                 inline .init_uninitialized,
                 .assign_ref,
                 .assign_call_erased,
+                .assign_boxy_desc_ref,
+                .assign_boxy_dict_ref,
+                .assign_boxy_box,
+                .assign_boxy_reuse_box,
+                .assign_boxy_unbox,
+                .assign_boxy_adapt,
+                .assign_call_dict,
                 .assign_low_level,
                 .assign_list,
                 .assign_struct,
@@ -446,6 +461,12 @@ const Pass = struct {
             }
             if (old_entries.len > 0) self.allocator.free(old_entries);
             set.entries = new_entries;
+        }
+    }
+
+    fn remapBoxyTableProcs(self: *Pass) void {
+        for (self.result.boxy_method_slots.items) |*slot| {
+            slot.proc = self.remapProc(slot.proc);
         }
     }
 
@@ -557,6 +578,13 @@ const Pass = struct {
             inline .init_uninitialized,
             .assign_ref,
             .assign_call_erased,
+            .assign_boxy_desc_ref,
+            .assign_boxy_dict_ref,
+            .assign_boxy_box,
+            .assign_boxy_reuse_box,
+            .assign_boxy_unbox,
+            .assign_boxy_adapt,
+            .assign_call_dict,
             .assign_low_level,
             .assign_list,
             .assign_struct,

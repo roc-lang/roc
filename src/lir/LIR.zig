@@ -65,16 +65,33 @@ pub const BoxyTypeDescId = enum(u32) { _ };
 /// Identifier for one boxy runtime dictionary owned by a LIR program.
 pub const BoxyDictId = enum(u32) { _ };
 
+/// Identifier for one explicit boxy representation adapter plan.
+pub const BoxyAdapterId = enum(u32) { _ };
+
 /// Reference to type-descriptor data available to boxy LIR.
 pub const BoxyDescRef = union(enum) {
     static: BoxyTypeDescId,
     local: LocalId,
+
+    pub fn localOrNull(self: BoxyDescRef) ?LocalId {
+        return switch (self) {
+            .static => null,
+            .local => |local| local,
+        };
+    }
 };
 
 /// Reference to dictionary data available to boxy LIR.
 pub const BoxyDictRef = union(enum) {
     static: BoxyDictId,
     local: LocalId,
+
+    pub fn localOrNull(self: BoxyDictRef) ?LocalId {
+        return switch (self) {
+            .static => null,
+            .local => |local| local,
+        };
+    }
 };
 
 /// Identifier of a stored statement/control-flow node.
@@ -155,6 +172,35 @@ pub const BoxySpan = extern struct {
     pub fn empty() BoxySpan {
         return .{};
     }
+};
+
+/// How a boxy operation observes or transfers its source value.
+pub const BoxyTransferMode = enum {
+    borrow,
+    copy,
+    move,
+};
+
+/// One explicit step in a boxy representation adapter plan.
+pub const BoxyAdaptStep = union(enum) {
+    copy_bytes: struct {
+        source_offset: u32,
+        target_offset: u32,
+        layout_idx: layout.Idx,
+    },
+    dynamic_payload: struct {
+        source_offset: u32,
+        target_offset: u32,
+        source_desc: ?BoxyDescRef = null,
+        target_desc: ?BoxyDescRef = null,
+        mode: BoxyTransferMode,
+    },
+    nested_adapter: struct {
+        source_offset: u32,
+        target_offset: u32,
+        adapter: BoxyAdapterId,
+        mode: BoxyTransferMode,
+    },
 };
 
 /// Explicit runtime operation needed for a dynamic boxy payload.
@@ -513,6 +559,54 @@ pub const CFStmt = union(enum) {
         capture: ?LocalId,
         capture_layout: ?layout.Idx,
         on_drop: ErasedCallableOnDrop,
+        next: CFStmtId,
+    },
+    assign_boxy_desc_ref: struct {
+        target: LocalId,
+        desc: BoxyDescRef,
+        next: CFStmtId,
+    },
+    assign_boxy_dict_ref: struct {
+        target: LocalId,
+        dict: BoxyDictRef,
+        next: CFStmtId,
+    },
+    assign_boxy_box: struct {
+        target: LocalId,
+        payload: LocalId,
+        payload_layout: layout.Idx,
+        payload_desc: ?BoxyDescRef = null,
+        payload_mode: BoxyTransferMode = .move,
+        next: CFStmtId,
+    },
+    assign_boxy_reuse_box: struct {
+        target: LocalId,
+        source: LocalId,
+        desc: BoxyDescRef,
+        next: CFStmtId,
+    },
+    assign_boxy_unbox: struct {
+        target: LocalId,
+        source: LocalId,
+        source_desc: BoxyDescRef,
+        target_layout: layout.Idx,
+        source_mode: BoxyTransferMode = .borrow,
+        next: CFStmtId,
+    },
+    assign_boxy_adapt: struct {
+        target: LocalId,
+        source: LocalId,
+        adapter: BoxyAdapterId,
+        source_mode: BoxyTransferMode,
+        next: CFStmtId,
+    },
+    assign_call_dict: struct {
+        target: LocalId,
+        dict: BoxyDictRef,
+        method_slot: u32,
+        args: LocalSpan,
+        hidden_args: LocalSpan = .empty(),
+        is_cold: bool = false,
         next: CFStmtId,
     },
     assign_low_level: struct {

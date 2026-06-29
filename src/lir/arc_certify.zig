@@ -250,7 +250,7 @@ fn certifyUniqueArgs(
                     try stack.append(allocator, j.body);
                     try stack.append(allocator, j.remainder);
                 },
-                inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |s| {
+                inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_call_dict, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |s| {
                     try stack.append(allocator, s.next);
                 },
                 .ret, .jump, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
@@ -390,7 +390,7 @@ fn writeFailureContext(
                     walk.append(store.allocator, j.body) catch return;
                     walk.append(store.allocator, j.remainder) catch return;
                 },
-                inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .incref, .decref, .decref_if_initialized, .free => |s| {
+                inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .incref, .decref, .decref_if_initialized, .free => |s| {
                     walk.append(store.allocator, s.next) catch return;
                 },
             }
@@ -450,6 +450,13 @@ fn writeFailureContext(
                 appendLocalSpan(context, store, a.args);
                 context.append(" next={d}", .{@intFromEnum(a.next)});
             },
+            .assign_call_dict => |a| {
+                context.append(" target={d} slot={d} args=", .{ @intFromEnum(a.target), a.method_slot });
+                appendLocalSpan(context, store, a.args);
+                context.append(" hidden=", .{});
+                appendLocalSpan(context, store, a.hidden_args);
+                context.append(" next={d}", .{@intFromEnum(a.next)});
+            },
             .str_match => |a| context.append(" source={d} match={d} miss={d}", .{
                 @intFromEnum(a.source), @intFromEnum(a.on_match), @intFromEnum(a.on_miss),
             }),
@@ -481,7 +488,7 @@ fn writeFailureContext(
                 appendLocalSpan(context, store, a.fields);
                 context.append(" next={d}", .{@intFromEnum(a.next)});
             },
-            inline .assign_literal, .assign_tag, .assign_call_erased, .assign_packed_erased_fn => |a| context.append(" target={d} next={d}", .{ @intFromEnum(a.target), @intFromEnum(a.next) }),
+            inline .assign_literal, .assign_tag, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt => |a| context.append(" target={d} next={d}", .{ @intFromEnum(a.target), @intFromEnum(a.next) }),
             else => {},
         }
         context.append("\n", .{});
@@ -504,6 +511,13 @@ fn stmtMentionsLocal(store: *const LirStore, stmt: LIR.CFStmt, needle: LIR.Local
         .assign_call => |a| a.target == needle or spanHasLocal(store, a.args, needle),
         .assign_call_erased => |a| a.target == needle or a.closure == needle or spanHasLocal(store, a.args, needle),
         .assign_packed_erased_fn => |a| a.target == needle or (a.capture != null and a.capture.? == needle),
+        .assign_boxy_desc_ref => |a| a.target == needle or boxyDescRefReadsLocal(a.desc, needle),
+        .assign_boxy_dict_ref => |a| a.target == needle or boxyDictRefReadsLocal(a.dict, needle),
+        .assign_boxy_box => |a| a.target == needle or a.payload == needle or (a.payload_desc != null and boxyDescRefReadsLocal(a.payload_desc.?, needle)),
+        .assign_boxy_reuse_box => |a| a.target == needle or a.source == needle or boxyDescRefReadsLocal(a.desc, needle),
+        .assign_boxy_unbox => |a| a.target == needle or a.source == needle or boxyDescRefReadsLocal(a.source_desc, needle),
+        .assign_boxy_adapt => |a| a.target == needle or a.source == needle,
+        .assign_call_dict => |a| a.target == needle or boxyDictRefReadsLocal(a.dict, needle) or spanHasLocal(store, a.args, needle) or spanHasLocal(store, a.hidden_args, needle),
         .assign_low_level => |a| a.target == needle or spanHasLocal(store, a.args, needle),
         .assign_list => |a| a.target == needle or spanHasLocal(store, a.elems, needle),
         .assign_struct => |a| a.target == needle or spanHasLocal(store, a.fields, needle),
@@ -551,6 +565,14 @@ fn spanHasLocal(store: *const LirStore, span: LIR.LocalSpan, needle: LIR.LocalId
         if (local == needle) return true;
     }
     return false;
+}
+
+fn boxyDescRefReadsLocal(desc: LIR.BoxyDescRef, needle: LIR.LocalId) bool {
+    return if (desc.localOrNull()) |local| local == needle else false;
+}
+
+fn boxyDictRefReadsLocal(dict: LIR.BoxyDictRef, needle: LIR.LocalId) bool {
+    return if (dict.localOrNull()) |local| local == needle else false;
 }
 
 const ValueId = u32;
@@ -1199,6 +1221,46 @@ const Certifier = struct {
                     if (assign.capture) |capture| try self.noteProcLocal(capture);
                     try stack.append(self.allocator, assign.next);
                 },
+                .assign_boxy_desc_ref => |assign| {
+                    try self.noteProcLocal(assign.target);
+                    if (assign.desc.localOrNull()) |local| try self.noteProcLocal(local);
+                    try stack.append(self.allocator, assign.next);
+                },
+                .assign_boxy_dict_ref => |assign| {
+                    try self.noteProcLocal(assign.target);
+                    if (assign.dict.localOrNull()) |local| try self.noteProcLocal(local);
+                    try stack.append(self.allocator, assign.next);
+                },
+                .assign_boxy_box => |assign| {
+                    try self.noteProcLocal(assign.target);
+                    try self.noteProcLocal(assign.payload);
+                    if (assign.payload_desc) |desc| if (desc.localOrNull()) |local| try self.noteProcLocal(local);
+                    try stack.append(self.allocator, assign.next);
+                },
+                .assign_boxy_reuse_box => |assign| {
+                    try self.noteProcLocal(assign.target);
+                    try self.noteProcLocal(assign.source);
+                    if (assign.desc.localOrNull()) |local| try self.noteProcLocal(local);
+                    try stack.append(self.allocator, assign.next);
+                },
+                .assign_boxy_unbox => |assign| {
+                    try self.noteProcLocal(assign.target);
+                    try self.noteProcLocal(assign.source);
+                    if (assign.source_desc.localOrNull()) |local| try self.noteProcLocal(local);
+                    try stack.append(self.allocator, assign.next);
+                },
+                .assign_boxy_adapt => |assign| {
+                    try self.noteProcLocal(assign.target);
+                    try self.noteProcLocal(assign.source);
+                    try stack.append(self.allocator, assign.next);
+                },
+                .assign_call_dict => |assign| {
+                    try self.noteProcLocal(assign.target);
+                    if (assign.dict.localOrNull()) |local| try self.noteProcLocal(local);
+                    try self.noteProcLocalSpan(assign.args);
+                    try self.noteProcLocalSpan(assign.hidden_args);
+                    try stack.append(self.allocator, assign.next);
+                },
                 .assign_low_level => |assign| {
                     try self.noteProcLocal(assign.target);
                     try self.noteProcLocalSpan(assign.args);
@@ -1466,6 +1528,46 @@ const Certifier = struct {
                 },
                 .assign_packed_erased_fn => |assign| {
                     if (assign.capture) |capture| self.noteExposedReadLocal(&graph.nodes.items[node_index].reads, capture);
+                    self.setReadBeforeRebindDef(&graph, node_index, assign.target);
+                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
+                },
+                .assign_boxy_desc_ref => |assign| {
+                    if (assign.desc.localOrNull()) |local| self.noteExposedReadLocal(&graph.nodes.items[node_index].reads, local);
+                    self.setReadBeforeRebindDef(&graph, node_index, assign.target);
+                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
+                },
+                .assign_boxy_dict_ref => |assign| {
+                    if (assign.dict.localOrNull()) |local| self.noteExposedReadLocal(&graph.nodes.items[node_index].reads, local);
+                    self.setReadBeforeRebindDef(&graph, node_index, assign.target);
+                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
+                },
+                .assign_boxy_box => |assign| {
+                    self.noteExposedReadLocal(&graph.nodes.items[node_index].reads, assign.payload);
+                    if (assign.payload_desc) |desc| if (desc.localOrNull()) |local| self.noteExposedReadLocal(&graph.nodes.items[node_index].reads, local);
+                    self.setReadBeforeRebindDef(&graph, node_index, assign.target);
+                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
+                },
+                .assign_boxy_reuse_box => |assign| {
+                    self.noteExposedReadLocal(&graph.nodes.items[node_index].reads, assign.source);
+                    if (assign.desc.localOrNull()) |local| self.noteExposedReadLocal(&graph.nodes.items[node_index].reads, local);
+                    self.setReadBeforeRebindDef(&graph, node_index, assign.target);
+                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
+                },
+                .assign_boxy_unbox => |assign| {
+                    self.noteExposedReadLocal(&graph.nodes.items[node_index].reads, assign.source);
+                    if (assign.source_desc.localOrNull()) |local| self.noteExposedReadLocal(&graph.nodes.items[node_index].reads, local);
+                    self.setReadBeforeRebindDef(&graph, node_index, assign.target);
+                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
+                },
+                .assign_boxy_adapt => |assign| {
+                    self.noteExposedReadLocal(&graph.nodes.items[node_index].reads, assign.source);
+                    self.setReadBeforeRebindDef(&graph, node_index, assign.target);
+                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
+                },
+                .assign_call_dict => |assign| {
+                    if (assign.dict.localOrNull()) |local| self.noteExposedReadLocal(&graph.nodes.items[node_index].reads, local);
+                    self.noteExposedReadSpan(&graph.nodes.items[node_index].reads, assign.args);
+                    self.noteExposedReadSpan(&graph.nodes.items[node_index].reads, assign.hidden_args);
                     self.setReadBeforeRebindDef(&graph, node_index, assign.target);
                     try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
                 },
@@ -2007,6 +2109,14 @@ const Certifier = struct {
                     }
                     cursor = assign.next;
                 },
+                .assign_boxy_desc_ref,
+                .assign_boxy_dict_ref,
+                .assign_boxy_box,
+                .assign_boxy_reuse_box,
+                .assign_boxy_unbox,
+                .assign_boxy_adapt,
+                .assign_call_dict,
+                => return self.fail("boxy LIR statement reached ARC certifier before boxy certification rules are implemented", .{}),
                 .assign_low_level => |assign| {
                     try self.applyLowLevel(&state, assign);
                     cursor = assign.next;

@@ -29,7 +29,8 @@ pub const MAGIC: u32 = 0x52494c52; // "RLIR" in little-endian bytes.
 /// v10: LIR proc specs carry explicit native stack-probe requirements.
 /// v11: LIR images carry reachable boxy descriptor/dictionary tables.
 /// v12: LIR RC statements carry explicit concrete-or-boxy helper metadata.
-pub const FORMAT_VERSION: u32 = 12;
+/// v13: LIR images carry boxy adapter plan tables.
+pub const FORMAT_VERSION: u32 = 13;
 
 /// Public `ImageError` declaration.
 pub const ImageError = error{
@@ -82,8 +83,10 @@ pub const ProgramView = struct {
     platform_entrypoints: []PlatformEntrypoint,
     boxy_type_descs: []Program.BoxyTypeDesc,
     boxy_dicts: []Program.BoxyDict,
+    boxy_adapters: []Program.BoxyAdapter,
     boxy_desc_refs: []Program.BoxyDescRef,
     boxy_dict_refs: []Program.BoxyDictRef,
+    boxy_adapt_steps: []Program.BoxyAdaptStep,
     boxy_payload_steps: []Program.BoxyPayloadStep,
     boxy_method_slots: []Program.BoxyMethodSlot,
     boxy_method_arg_layouts: []layout_mod.Idx,
@@ -229,8 +232,10 @@ pub const LayoutStoreImage = extern struct {
 pub const BoxyTablesImage = extern struct {
     type_descs: ArrayRef,
     dicts: ArrayRef,
+    adapters: ArrayRef,
     desc_refs: ArrayRef,
     dict_refs: ArrayRef,
+    adapt_steps: ArrayRef,
     payload_steps: ArrayRef,
     method_slots: ArrayRef,
     method_arg_layouts: ArrayRef,
@@ -239,8 +244,10 @@ pub const BoxyTablesImage = extern struct {
         return .{
             .type_descs = try arrayRef(base_ptr, image_size, lowered.boxy_type_descs.items),
             .dicts = try arrayRef(base_ptr, image_size, lowered.boxy_dicts.items),
+            .adapters = try arrayRef(base_ptr, image_size, lowered.boxy_adapters.items),
             .desc_refs = try arrayRef(base_ptr, image_size, lowered.boxy_desc_refs.items),
             .dict_refs = try arrayRef(base_ptr, image_size, lowered.boxy_dict_refs.items),
+            .adapt_steps = try arrayRef(base_ptr, image_size, lowered.boxy_adapt_steps.items),
             .payload_steps = try arrayRef(base_ptr, image_size, lowered.boxy_payload_steps.items),
             .method_slots = try arrayRef(base_ptr, image_size, lowered.boxy_method_slots.items),
             .method_arg_layouts = try arrayRef(base_ptr, image_size, lowered.boxy_method_arg_layouts.items),
@@ -251,8 +258,10 @@ pub const BoxyTablesImage = extern struct {
         return .{
             .type_descs = try sliceFromRef(Program.BoxyTypeDesc, base_ptr, image_size, self.type_descs),
             .dicts = try sliceFromRef(Program.BoxyDict, base_ptr, image_size, self.dicts),
+            .adapters = try sliceFromRef(Program.BoxyAdapter, base_ptr, image_size, self.adapters),
             .desc_refs = try sliceFromRef(Program.BoxyDescRef, base_ptr, image_size, self.desc_refs),
             .dict_refs = try sliceFromRef(Program.BoxyDictRef, base_ptr, image_size, self.dict_refs),
+            .adapt_steps = try sliceFromRef(Program.BoxyAdaptStep, base_ptr, image_size, self.adapt_steps),
             .payload_steps = try sliceFromRef(Program.BoxyPayloadStep, base_ptr, image_size, self.payload_steps),
             .method_slots = try sliceFromRef(Program.BoxyMethodSlot, base_ptr, image_size, self.method_slots),
             .method_arg_layouts = try sliceFromRef(layout_mod.Idx, base_ptr, image_size, self.method_arg_layouts),
@@ -263,8 +272,10 @@ pub const BoxyTablesImage = extern struct {
 const BoxyTablesView = struct {
     type_descs: []Program.BoxyTypeDesc,
     dicts: []Program.BoxyDict,
+    adapters: []Program.BoxyAdapter,
     desc_refs: []Program.BoxyDescRef,
     dict_refs: []Program.BoxyDictRef,
+    adapt_steps: []Program.BoxyAdaptStep,
     payload_steps: []Program.BoxyPayloadStep,
     method_slots: []Program.BoxyMethodSlot,
     method_arg_layouts: []layout_mod.Idx,
@@ -360,8 +371,10 @@ pub fn viewMappedImageWithAllocator(
         .platform_entrypoints = try sliceFromRef(PlatformEntrypoint, mutable_base, @intCast(header.image_size), header.platform_entrypoints),
         .boxy_type_descs = boxy_tables.type_descs,
         .boxy_dicts = boxy_tables.dicts,
+        .boxy_adapters = boxy_tables.adapters,
         .boxy_desc_refs = boxy_tables.desc_refs,
         .boxy_dict_refs = boxy_tables.dict_refs,
+        .boxy_adapt_steps = boxy_tables.adapt_steps,
         .boxy_payload_steps = boxy_tables.payload_steps,
         .boxy_method_slots = boxy_tables.method_slots,
         .boxy_method_arg_layouts = boxy_tables.method_arg_layouts,
@@ -509,8 +522,10 @@ test "LIR image views empty and populated boxy tables" {
     const empty_view = try viewMappedImageWithAllocator(header, buffer[0..].ptr, buffer.len, .u64, allocator);
     try std.testing.expectEqual(@as(usize, 0), empty_view.boxy_type_descs.len);
     try std.testing.expectEqual(@as(usize, 0), empty_view.boxy_dicts.len);
+    try std.testing.expectEqual(@as(usize, 0), empty_view.boxy_adapters.len);
     try std.testing.expectEqual(@as(usize, 0), empty_view.boxy_desc_refs.len);
     try std.testing.expectEqual(@as(usize, 0), empty_view.boxy_dict_refs.len);
+    try std.testing.expectEqual(@as(usize, 0), empty_view.boxy_adapt_steps.len);
     try std.testing.expectEqual(@as(usize, 0), empty_view.boxy_payload_steps.len);
     try std.testing.expectEqual(@as(usize, 0), empty_view.boxy_method_slots.len);
     try std.testing.expectEqual(@as(usize, 0), empty_view.boxy_method_arg_layouts.len);
@@ -542,17 +557,34 @@ test "LIR image views empty and populated boxy tables" {
         .hidden_descs = .{ .start = 0, .len = 1 },
         .nested_dicts = .{ .start = 0, .len = 1 },
     });
+    try lowered.boxy_adapt_steps.append(allocator, .{ .copy_bytes = .{
+        .source_offset = 0,
+        .target_offset = 8,
+        .layout_idx = .str,
+    } });
+    try lowered.boxy_adapters.append(allocator, .{
+        .kind = .host_to_boxy,
+        .source_layout = .str,
+        .target_layout = .str,
+        .steps = .{ .start = 0, .len = 1 },
+        .consumes_source = false,
+        .produces_owned_result = true,
+    });
 
     try fillHeaderInBuffer(header, buffer[0..].ptr, buffer.len, &lowered, &.{});
     const populated_view = try viewMappedImageWithAllocator(header, buffer[0..].ptr, buffer.len, .u64, allocator);
     try std.testing.expectEqual(@as(usize, 1), populated_view.boxy_type_descs.len);
     try std.testing.expectEqual(@as(usize, 1), populated_view.boxy_dicts.len);
+    try std.testing.expectEqual(@as(usize, 1), populated_view.boxy_adapters.len);
     try std.testing.expectEqual(@as(usize, 1), populated_view.boxy_desc_refs.len);
     try std.testing.expectEqual(@as(usize, 1), populated_view.boxy_dict_refs.len);
+    try std.testing.expectEqual(@as(usize, 1), populated_view.boxy_adapt_steps.len);
     try std.testing.expectEqual(@as(usize, 1), populated_view.boxy_payload_steps.len);
     try std.testing.expectEqual(@as(usize, 1), populated_view.boxy_method_slots.len);
     try std.testing.expectEqual(@as(usize, 1), populated_view.boxy_method_arg_layouts.len);
     try std.testing.expect(populated_view.boxy_type_descs[0].contains_refcounted);
+    try std.testing.expectEqual(Program.BoxyAdapterKind.host_to_boxy, populated_view.boxy_adapters[0].kind);
+    try std.testing.expectEqual(layout_mod.Idx.str, populated_view.boxy_adapt_steps[0].copy_bytes.layout_idx);
     try std.testing.expectEqual(Program.BoxyPayloadOp.copy, populated_view.boxy_payload_steps[0].dynamic.op);
     try std.testing.expectEqual(layout_mod.Idx.zst, populated_view.boxy_method_arg_layouts[0]);
 }

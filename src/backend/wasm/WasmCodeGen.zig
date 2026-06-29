@@ -3289,6 +3289,48 @@ fn collectProcLocals(
                 if (assign.capture) |capture| try recordProcLocal(locals, capture);
                 try work.append(wa, assign.next);
             },
+            .assign_boxy_desc_ref => |assign| {
+                try recordProcLocal(locals, assign.target);
+                if (assign.desc.localOrNull()) |local| try recordProcLocal(locals, local);
+                try work.append(wa, assign.next);
+            },
+            .assign_boxy_dict_ref => |assign| {
+                try recordProcLocal(locals, assign.target);
+                if (assign.dict.localOrNull()) |local| try recordProcLocal(locals, local);
+                try work.append(wa, assign.next);
+            },
+            .assign_boxy_box => |assign| {
+                try recordProcLocal(locals, assign.target);
+                try recordProcLocal(locals, assign.payload);
+                if (assign.payload_desc) |desc| {
+                    if (desc.localOrNull()) |local| try recordProcLocal(locals, local);
+                }
+                try work.append(wa, assign.next);
+            },
+            .assign_boxy_reuse_box => |assign| {
+                try recordProcLocal(locals, assign.target);
+                try recordProcLocal(locals, assign.source);
+                if (assign.desc.localOrNull()) |local| try recordProcLocal(locals, local);
+                try work.append(wa, assign.next);
+            },
+            .assign_boxy_unbox => |assign| {
+                try recordProcLocal(locals, assign.target);
+                try recordProcLocal(locals, assign.source);
+                if (assign.source_desc.localOrNull()) |local| try recordProcLocal(locals, local);
+                try work.append(wa, assign.next);
+            },
+            .assign_boxy_adapt => |assign| {
+                try recordProcLocal(locals, assign.target);
+                try recordProcLocal(locals, assign.source);
+                try work.append(wa, assign.next);
+            },
+            .assign_call_dict => |assign| {
+                try recordProcLocal(locals, assign.target);
+                if (assign.dict.localOrNull()) |local| try recordProcLocal(locals, local);
+                for (self.store.getLocalSpan(assign.args)) |arg| try recordProcLocal(locals, arg);
+                for (self.store.getLocalSpan(assign.hidden_args)) |arg| try recordProcLocal(locals, arg);
+                try work.append(wa, assign.next);
+            },
             .assign_low_level => |assign| {
                 try recordProcLocal(locals, assign.target);
                 for (self.store.getLocalSpan(assign.args)) |arg| try recordProcLocal(locals, arg);
@@ -7392,6 +7434,17 @@ fn generateCFStmtNode(self: *Self, work: *std.ArrayList(StmtWork), wa: Allocator
             try self.bindAssignedLocal(assign.target);
             try work.append(wa, .{ .node = .{ .stmt_id = assign.next, .stop = stop } });
         },
+        .assign_boxy_desc_ref,
+        .assign_boxy_dict_ref,
+        .assign_boxy_box,
+        .assign_boxy_reuse_box,
+        .assign_boxy_unbox,
+        .assign_boxy_adapt,
+        .assign_call_dict,
+        => std.debug.panic(
+            "Wasm/codegen invariant violated: boxy LIR statement reached wasm codegen before boxy codegen is implemented",
+            .{},
+        ),
         .assign_low_level => |assign| {
             try self.generateLowLevel(.{
                 .op = assign.op,

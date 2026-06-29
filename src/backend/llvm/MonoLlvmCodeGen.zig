@@ -1977,6 +1977,13 @@ pub const MonoLlvmCodeGen = struct {
                 .assign_call,
                 .assign_call_erased,
                 .assign_packed_erased_fn,
+                .assign_boxy_desc_ref,
+                .assign_boxy_dict_ref,
+                .assign_boxy_box,
+                .assign_boxy_reuse_box,
+                .assign_boxy_unbox,
+                .assign_boxy_adapt,
+                .assign_call_dict,
                 .assign_low_level,
                 .assign_list,
                 .assign_struct,
@@ -2155,6 +2162,14 @@ pub const MonoLlvmCodeGen = struct {
                 try self.emitPackedErasedFn(assign.target, assign.proc, assign.capture, assign.capture_layout, assign.on_drop);
                 try work.append(wa, .{ .node = assign.next });
             },
+            .assign_boxy_desc_ref,
+            .assign_boxy_dict_ref,
+            .assign_boxy_box,
+            .assign_boxy_reuse_box,
+            .assign_boxy_unbox,
+            .assign_boxy_adapt,
+            .assign_call_dict,
+            => return error.CompilationFailed,
             .assign_low_level => |assign| {
                 try self.emitLowLevel(assign.target, assign.op, assign.args, assign.unique_args, assign.interchangeable);
                 try work.append(wa, .{ .node = assign.next });

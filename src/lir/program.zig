@@ -86,11 +86,38 @@ pub const ConstPlanId = enum(u32) { _ };
 
 pub const BoxyTypeDescId = LIR.BoxyTypeDescId;
 pub const BoxyDictId = LIR.BoxyDictId;
+pub const BoxyAdapterId = LIR.BoxyAdapterId;
 pub const BoxyDescRef = LIR.BoxyDescRef;
 pub const BoxyDictRef = LIR.BoxyDictRef;
 pub const BoxySpan = LIR.BoxySpan;
+pub const BoxyTransferMode = LIR.BoxyTransferMode;
+pub const BoxyAdaptStep = LIR.BoxyAdaptStep;
 pub const BoxyPayloadOp = LIR.BoxyPayloadOp;
 pub const BoxyPayloadStep = LIR.BoxyPayloadStep;
+
+/// Purpose of one explicit boxy representation adapter.
+pub const BoxyAdapterKind = enum {
+    host_to_boxy,
+    boxy_to_host,
+    boxy_to_boxy,
+    hosted_arg,
+    hosted_ret,
+    container_element,
+    method_arg,
+    method_ret,
+};
+
+/// Explicit representation adaptation plan used by boxy LIR statements.
+pub const BoxyAdapter = struct {
+    kind: BoxyAdapterKind,
+    source_layout: layout.Idx,
+    target_layout: layout.Idx,
+    source_desc: ?BoxyDescRef = null,
+    target_desc: ?BoxyDescRef = null,
+    steps: BoxySpan = .{},
+    consumes_source: bool,
+    produces_owned_result: bool,
+};
 
 /// Runtime data for representation and structural operations on a boxy value.
 pub const BoxyTypeDesc = struct {
@@ -175,8 +202,10 @@ pub const Result = struct {
     erased_fns: std.ArrayList(ErasedFns),
     boxy_type_descs: std.ArrayList(BoxyTypeDesc),
     boxy_dicts: std.ArrayList(BoxyDict),
+    boxy_adapters: std.ArrayList(BoxyAdapter),
     boxy_desc_refs: std.ArrayList(BoxyDescRef),
     boxy_dict_refs: std.ArrayList(BoxyDictRef),
+    boxy_adapt_steps: std.ArrayList(BoxyAdaptStep),
     boxy_payload_steps: std.ArrayList(BoxyPayloadStep),
     boxy_method_slots: std.ArrayList(BoxyMethodSlot),
     boxy_method_arg_layouts: std.ArrayList(layout.Idx),
@@ -195,8 +224,10 @@ pub const Result = struct {
             .erased_fns = .empty,
             .boxy_type_descs = .empty,
             .boxy_dicts = .empty,
+            .boxy_adapters = .empty,
             .boxy_desc_refs = .empty,
             .boxy_dict_refs = .empty,
+            .boxy_adapt_steps = .empty,
             .boxy_payload_steps = .empty,
             .boxy_method_slots = .empty,
             .boxy_method_arg_layouts = .empty,
@@ -220,8 +251,10 @@ pub const Result = struct {
         self.boxy_method_arg_layouts.deinit(allocator);
         self.boxy_method_slots.deinit(allocator);
         self.boxy_payload_steps.deinit(allocator);
+        self.boxy_adapt_steps.deinit(allocator);
         self.boxy_dict_refs.deinit(allocator);
         self.boxy_desc_refs.deinit(allocator);
+        self.boxy_adapters.deinit(allocator);
         self.boxy_dicts.deinit(allocator);
         self.boxy_type_descs.deinit(allocator);
         self.erased_fns.deinit(allocator);
@@ -317,8 +350,10 @@ test "boxy side tables initialize empty and use flat pools" {
 
     try std.testing.expectEqual(@as(usize, 0), result.boxy_type_descs.items.len);
     try std.testing.expectEqual(@as(usize, 0), result.boxy_dicts.items.len);
+    try std.testing.expectEqual(@as(usize, 0), result.boxy_adapters.items.len);
     try std.testing.expectEqual(@as(usize, 0), result.boxy_desc_refs.items.len);
     try std.testing.expectEqual(@as(usize, 0), result.boxy_dict_refs.items.len);
+    try std.testing.expectEqual(@as(usize, 0), result.boxy_adapt_steps.items.len);
     try std.testing.expectEqual(@as(usize, 0), result.boxy_payload_steps.items.len);
     try std.testing.expectEqual(@as(usize, 0), result.boxy_method_slots.items.len);
     try std.testing.expectEqual(@as(usize, 0), result.boxy_method_arg_layouts.items.len);
@@ -382,10 +417,33 @@ test "boxy side tables initialize empty and use flat pools" {
         .hidden_descs = hidden_descs,
     });
 
+    const adapt_steps_start = result.boxy_adapt_steps.items.len;
+    try result.boxy_adapt_steps.append(allocator, .{ .dynamic_payload = .{
+        .source_offset = 0,
+        .target_offset = 8,
+        .source_desc = .{ .static = @enumFromInt(0) },
+        .target_desc = .{ .static = @enumFromInt(0) },
+        .mode = .copy,
+    } });
+    const adapt_steps = BoxySpan{ .start = @intCast(adapt_steps_start), .len = 1 };
+
+    try result.boxy_adapters.append(allocator, .{
+        .kind = .boxy_to_host,
+        .source_layout = .str,
+        .target_layout = .str,
+        .source_desc = .{ .static = @enumFromInt(0) },
+        .target_desc = .{ .static = @enumFromInt(0) },
+        .steps = adapt_steps,
+        .consumes_source = false,
+        .produces_owned_result = true,
+    });
+
     try std.testing.expectEqual(@as(usize, 1), result.boxy_type_descs.items.len);
     try std.testing.expectEqual(@as(usize, 1), result.boxy_dicts.items.len);
+    try std.testing.expectEqual(@as(usize, 1), result.boxy_adapters.items.len);
     try std.testing.expectEqual(@as(usize, 3), result.boxy_desc_refs.items.len);
     try std.testing.expectEqual(@as(usize, 1), result.boxy_dict_refs.items.len);
+    try std.testing.expectEqual(@as(usize, 1), result.boxy_adapt_steps.items.len);
     try std.testing.expectEqual(@as(usize, 2), result.boxy_payload_steps.items.len);
     try std.testing.expectEqual(@as(usize, 1), result.boxy_method_slots.items.len);
     try std.testing.expectEqual(@as(usize, 1), result.boxy_method_arg_layouts.items.len);

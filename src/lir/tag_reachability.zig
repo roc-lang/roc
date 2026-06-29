@@ -304,7 +304,7 @@ const Pass = struct {
                 if (self.localInfoMut(s.target).markAll(self.allocator)) changed = true;
                 try self.pushStmt(s.next);
             },
-            .assign_low_level => |s| {
+            inline .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_call_dict, .assign_low_level => |s| {
                 if (self.localInfoMut(s.target).markAll(self.allocator)) changed = true;
                 try self.pushStmt(s.next);
             },
@@ -444,6 +444,30 @@ const Pass = struct {
                 for (self.store.getLocalSpan(s.args)) |arg| self.noteUse(arg);
             },
             .assign_packed_erased_fn => |s| if (s.capture) |capture| self.noteUse(capture),
+            .assign_boxy_desc_ref => |s| {
+                if (s.desc.localOrNull()) |local| self.noteUse(local);
+            },
+            .assign_boxy_dict_ref => |s| {
+                if (s.dict.localOrNull()) |local| self.noteUse(local);
+            },
+            .assign_boxy_box => |s| {
+                self.noteUse(s.payload);
+                if (s.payload_desc) |desc| if (desc.localOrNull()) |local| self.noteUse(local);
+            },
+            .assign_boxy_reuse_box => |s| {
+                self.noteUse(s.source);
+                if (s.desc.localOrNull()) |local| self.noteUse(local);
+            },
+            .assign_boxy_unbox => |s| {
+                self.noteUse(s.source);
+                if (s.source_desc.localOrNull()) |local| self.noteUse(local);
+            },
+            .assign_boxy_adapt => |s| self.noteUse(s.source),
+            .assign_call_dict => |s| {
+                if (s.dict.localOrNull()) |local| self.noteUse(local);
+                for (self.store.getLocalSpan(s.args)) |arg| self.noteUse(arg);
+                for (self.store.getLocalSpan(s.hidden_args)) |arg| self.noteUse(arg);
+            },
             .assign_low_level => |s| for (self.store.getLocalSpan(s.args)) |arg| self.noteUse(arg),
             .assign_list => |s| for (self.store.getLocalSpan(s.elems)) |elem| self.noteUse(elem),
             .assign_struct => |s| for (self.store.getLocalSpan(s.fields)) |field| self.noteUse(field),
@@ -573,6 +597,13 @@ const Pass = struct {
                 .assign_call => |*s| s.next = self.resolveRedirect(s.next),
                 .assign_call_erased => |*s| s.next = self.resolveRedirect(s.next),
                 .assign_packed_erased_fn => |*s| s.next = self.resolveRedirect(s.next),
+                .assign_boxy_desc_ref => |*s| s.next = self.resolveRedirect(s.next),
+                .assign_boxy_dict_ref => |*s| s.next = self.resolveRedirect(s.next),
+                .assign_boxy_box => |*s| s.next = self.resolveRedirect(s.next),
+                .assign_boxy_reuse_box => |*s| s.next = self.resolveRedirect(s.next),
+                .assign_boxy_unbox => |*s| s.next = self.resolveRedirect(s.next),
+                .assign_boxy_adapt => |*s| s.next = self.resolveRedirect(s.next),
+                .assign_call_dict => |*s| s.next = self.resolveRedirect(s.next),
                 .assign_low_level => |*s| s.next = self.resolveRedirect(s.next),
                 .assign_list => |*s| s.next = self.resolveRedirect(s.next),
                 .assign_struct => |*s| s.next = self.resolveRedirect(s.next),

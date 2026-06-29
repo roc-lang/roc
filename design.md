@@ -3197,28 +3197,73 @@ calls selected by the lowerer:
 
 ### Boxy LIR Data
 
-The LIR program contains descriptor and dictionary tables when `.boxy` emits
-statements that reference them:
+The LIR program contains descriptor, dictionary, and adapter tables when `.boxy`
+emits statements that reference them:
 
 ```zig
 const BoxyTypeDescId = enum(u32) { _ };
 const BoxyDictId = enum(u32) { _ };
+const BoxyAdapterId = enum(u32) { _ };
 
 const BoxyDescRef = union(enum) {
-    static_desc: BoxyTypeDescId,
+    static: BoxyTypeDescId,
     local: LirLocalId,
 };
 
 const BoxyDictRef = union(enum) {
-    static_dict: BoxyDictId,
+    static: BoxyDictId,
     local: LirLocalId,
+};
+
+const BoxyTransferMode = enum {
+    borrow,
+    copy,
+    move,
+};
+
+const BoxyAdaptStep = union(enum) {
+    copy_bytes: struct {
+        source_offset: u32,
+        target_offset: u32,
+        layout_idx: layout.Idx,
+    },
+    dynamic_payload: struct {
+        source_offset: u32,
+        target_offset: u32,
+        source_desc: ?BoxyDescRef,
+        target_desc: ?BoxyDescRef,
+        mode: BoxyTransferMode,
+    },
+    nested_adapter: struct {
+        source_offset: u32,
+        target_offset: u32,
+        adapter: BoxyAdapterId,
+        mode: BoxyTransferMode,
+    },
 };
 ```
 
-The exact descriptor and dictionary payload structs are owned by LIR, not by a
-backend. Their contents are serialized into LirImage when any reachable LIR
-statement references them. A backend may cache lowered helper code for a
-descriptor or dictionary, but it must not change the descriptor's meaning.
+The exact descriptor, dictionary, and adapter payload structs are owned by LIR,
+not by a backend. Their contents are serialized into LirImage when any reachable
+LIR statement references them. A backend may cache lowered helper code for a
+descriptor, dictionary, or adapter, but it must not change that data's meaning.
+
+`BoxyDescRef` and `BoxyDictRef` are intentionally split into static side-table
+references and local references. A `.static` reference names immutable LIR-owned
+metadata. A `.local` reference names a runtime value that already has the
+host-compatible representation required for explicit `Box(...)` ABI positions.
+Lowering must preserve that distinction. In particular, a local descriptor or
+dictionary reference is a normal local read for liveness, ARC, TRMC, backend
+stable-location collection, and debug inspection; a static reference is not a
+hidden local and must not be rediscovered by scanning local layouts.
+
+Adapters are explicit plans, not backend heuristics. `copy_bytes` copies a
+concrete representation segment whose layout is known. `dynamic_payload` moves,
+copies, or borrows one descriptor-governed payload segment, optionally changing
+from one descriptor to another. `nested_adapter` delegates a subrange to another
+adapter plan. Adapters are reusable LIR side-table entries so host wrappers,
+container element conversions, method arguments, and method returns can all name
+the exact same conversion plan when they need the same representation change.
 
 Dynamic RC in boxy LIR is explicit. A local whose layout is a boxy dynamic value
 is pointer-sized, but its nested payload drop/copy behavior is not recoverable
@@ -3227,23 +3272,48 @@ contains the relevant `BoxyDescRef`:
 
 ```zig
 const RcHelper = union(enum) {
-    static_layout: layout.RcHelperKey,
-    boxy_dynamic: struct {
-        op: RcOp,
-        desc: BoxyDescRef,
-    },
+    concrete: layout.RcHelperKey,
+    boxy: BoxyDescRef,
 };
 ```
 
-Backends and the interpreter lower that helper mechanically. They do not inspect
-the dynamic value, synthesize descriptors, or choose a shallower drop because a
-descriptor is missing. A missing descriptor at a statement that requires one is
-a lowering invariant failure.
+The RC operation itself is the LIR statement tag (`incref`, `decref`,
+`decref_if_initialized`, or `free`); the helper names only how to perform the
+operation for the value. Backends and the interpreter lower that helper
+mechanically. They do not inspect the dynamic value, synthesize descriptors, or
+choose a shallower drop because a descriptor is missing. A missing descriptor at
+a statement that requires one is a lowering invariant failure.
 
 Boxy indirect calls are also explicit. A dictionary-call statement names the
 dictionary, method slot, argument span, result target, and hidden argument span.
 The backend lowers it as an indirect call with an explicit call shape. It does
 not know the checked method name or perform vtable lookup logic.
+
+The boxy statement surface is:
+
+- `assign_boxy_desc_ref`: materializes a descriptor reference into a local when a
+  later host-compatible value or hidden argument needs an addressable descriptor
+  value
+- `assign_boxy_dict_ref`: materializes a dictionary reference into a local under
+  the same rules for dictionary values
+- `assign_boxy_box`: creates a boxy top-level box from a payload local, payload
+  layout, optional payload descriptor, and explicit transfer mode
+- `assign_boxy_reuse_box`: reuses an existing box pointer when the source is
+  already in the compiler-internal boxy type-variable representation
+- `assign_boxy_unbox`: extracts or projects a concrete target layout from a boxy
+  value using the statement's descriptor and source transfer mode
+- `assign_boxy_adapt`: applies a named adapter plan to a source local with an
+  explicit transfer mode
+- `assign_call_dict`: performs a dictionary/vtable indirect call through a
+  method slot with ordinary and hidden argument spans
+
+These statements are ordinary LIR control-flow statements. Passes that only need
+successor traversal treat them as straight-line `next` statements. Passes that
+reason about local uses must account for their explicit source, descriptor,
+dictionary, argument, and hidden-argument locals. Backends must not infer any
+missing behavior from target layout shape; if codegen has not implemented a
+boxy statement's semantics, reaching that statement is an invariant failure in
+that backend.
 
 ### Debug Lambda Mono Verification
 

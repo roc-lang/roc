@@ -1517,6 +1517,13 @@ pub const Interpreter = struct {
                 .assign_call => |assign| assign.next,
                 .assign_call_erased => |assign| assign.next,
                 .assign_packed_erased_fn => |assign| assign.next,
+                .assign_boxy_desc_ref => |assign| assign.next,
+                .assign_boxy_dict_ref => |assign| assign.next,
+                .assign_boxy_box => |assign| assign.next,
+                .assign_boxy_reuse_box => |assign| assign.next,
+                .assign_boxy_unbox => |assign| assign.next,
+                .assign_boxy_adapt => |assign| assign.next,
+                .assign_call_dict => |assign| assign.next,
                 .assign_low_level => |assign| assign.next,
                 .assign_list => |assign| assign.next,
                 .assign_struct => |assign| assign.next,
@@ -1864,6 +1871,17 @@ pub const Interpreter = struct {
                     );
                     current = assign.next;
                 },
+                .assign_boxy_desc_ref,
+                .assign_boxy_dict_ref,
+                .assign_boxy_box,
+                .assign_boxy_reuse_box,
+                .assign_boxy_unbox,
+                .assign_boxy_adapt,
+                .assign_call_dict,
+                => return self.invariantFailedError(
+                    "LIR/interpreter invariant violated: boxy LIR statement reached interpreter execution before boxy interpreter semantics are implemented at stmt {d}",
+                    .{@intFromEnum(current)},
+                ),
                 .assign_low_level => |assign| {
                     const arg_locals = self.store.getLocalSpan(assign.args);
                     const arg_values = try self.collectLocalValues(frame, arg_locals);
@@ -2242,6 +2260,17 @@ pub const Interpreter = struct {
                         @intFromEnum(assign.target),
                         @intFromEnum(assign.next),
                     });
+                    stack.append(self.evalAllocator(), assign.next) catch return;
+                },
+                inline .assign_boxy_desc_ref,
+                .assign_boxy_dict_ref,
+                .assign_boxy_box,
+                .assign_boxy_reuse_box,
+                .assign_boxy_unbox,
+                .assign_boxy_adapt,
+                .assign_call_dict,
+                => |assign| {
+                    debugPrint("    {d}: {any}\n", .{ @intFromEnum(stmt_id), stmt });
                     stack.append(self.evalAllocator(), assign.next) catch return;
                 },
                 .assign_low_level => |assign| {
