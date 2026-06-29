@@ -1,7 +1,8 @@
 const std = @import("std");
 
-const engine = @import("../engine.zig");
-const render = @import("../render_commands.zig");
+const signals = @import("signals");
+const engine = signals.engine;
+const render = signals.render;
 const spec_parser = @import("../spec/spec_parser.zig");
 
 pub const Stats = struct {
@@ -146,7 +147,6 @@ pub fn Runner(comptime Ctx: type) type {
     return struct {
         const Host = Ctx.Host;
         const RocHost = Ctx.RocHost;
-        const DomElement = Ctx.DomElement;
         const SpecCommand = spec_parser.SpecCommand;
 
         pub fn runAppBenchmarks(spec_file: []const u8, case_name: []const u8, iterations: usize, samples: usize, verbose: bool) error{}!c_int {

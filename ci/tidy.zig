@@ -1121,7 +1121,7 @@ const DeadFilesDetector = struct {
     }
 };
 
-/// Lists all files in the repository using git ls-files.
+/// Lists all existing tracked and untracked files in the repository using git ls-files.
 fn listFilePaths(allocator: Allocator, io: std.Io) ![][]const u8 {
     var result: std.ArrayList([]const u8) = .empty;
     errdefer {
@@ -1132,7 +1132,7 @@ fn listFilePaths(allocator: Allocator, io: std.Io) ![][]const u8 {
     }
 
     const run_result = try std.process.run(allocator, io, .{
-        .argv = &.{ "git", "ls-files", "-z" },
+        .argv = &.{ "git", "ls-files", "-z", "--cached", "--others", "--exclude-standard" },
     });
     defer allocator.free(run_result.stdout);
     defer allocator.free(run_result.stderr);
@@ -1147,6 +1147,7 @@ fn listFilePaths(allocator: Allocator, io: std.Io) ![][]const u8 {
     while (lines.next()) |line| {
         if (line.len == 0) continue;
         if (shouldSkipListedFile(line)) continue;
+        _ = std.Io.Dir.cwd().statFile(io, line, .{}) catch continue;
         try result.append(allocator, try allocator.dupe(u8, line));
     }
 

@@ -79,7 +79,6 @@ pub const HostSignalToken = retained_values.HostSignalToken;
 pub const HostValueCell = retained_values.HostValueCell;
 pub const retainHostCallable = retained_values.retainHostCallable;
 pub const retainHostSignalToken = retained_values.retainHostSignalToken;
-const releaseHostSignalToken = retained_values.releaseHostSignalToken;
 const retainHostValueCapability = retained_values.retainHostValueCapability;
 const releaseHostValueCapability = retained_values.releaseHostValueCapability;
 const assertHostValueCapabilitiesMatch = retained_values.assertHostValueCapabilitiesMatch;

@@ -1774,6 +1774,9 @@ fn createTestPlatformHostLib(
     }
     lib.root_module.addImport("builtins", roc_modules.builtins);
     lib.root_module.addImport("build_options", roc_modules.build_options);
+    if (std.mem.eql(u8, host_path, "test/signals/src/native_host.zig")) {
+        lib.root_module.addImport("signals", createSignalsModule(b, host_target, optimize, roc_modules.build_options));
+    }
     lib.root_module.addImport("vendor_parse_float", roc_modules.vendor_parse_float);
     lib.root_module.addImport("vendor_ryu", roc_modules.vendor_ryu);
     lib.root_module.addImport("shim_io", b.addModule("shim_io", .{
@@ -1938,6 +1941,7 @@ fn buildAndCopySignalsWasmHostObject(
     });
     configureBackend(obj, target);
     obj.root_module.addImport("build_options", roc_modules.build_options);
+    obj.root_module.addImport("signals", createSignalsModule(b, target, optimize, roc_modules.build_options));
     obj.link_function_sections = true;
     obj.link_data_sections = true;
 
@@ -4165,6 +4169,23 @@ pub fn build(b: *std.Build) void {
         tests_summary.addRun(&module_test.run_step.step);
     }
 
+    const signals_shared_test = b.addTest(.{
+        .name = "signals_shared",
+        .root_module = createSignalsModule(b, target, optimize, roc_modules.build_options),
+        .filters = test_filters,
+    });
+    const run_signals_shared_test = b.addRunArtifact(signals_shared_test);
+    if (run_args.len != 0) {
+        run_signals_shared_test.addArgs(run_args);
+    }
+    const run_signals_shared_test_step = b.step(
+        "run-test-zig-module-signals_shared",
+        "Run signals_shared Zig module tests",
+    );
+    run_signals_shared_test_step.dependOn(&run_signals_shared_test.step);
+    build_test_zig_step.dependOn(&signals_shared_test.step);
+    tests_summary.addRun(&run_signals_shared_test.step);
+
     const signals_host_test = b.addTest(.{
         .name = "signals_host",
         .root_module = b.createModule(.{
@@ -4176,11 +4197,17 @@ pub fn build(b: *std.Build) void {
     });
     signals_host_test.root_module.addImport("base", roc_modules.base);
     signals_host_test.root_module.addImport("build_options", roc_modules.build_options);
+    signals_host_test.root_module.addImport("signals", createSignalsModule(b, target, optimize, roc_modules.build_options));
     roc_modules.addModuleDependencies(signals_host_test, .base);
     const run_signals_host_test = b.addRunArtifact(signals_host_test);
     if (run_args.len != 0) {
         run_signals_host_test.addArgs(run_args);
     }
+    const run_signals_host_test_step = b.step(
+        "run-test-zig-module-signals_host",
+        "Run signals_host Zig module tests",
+    );
+    run_signals_host_test_step.dependOn(&run_signals_host_test.step);
     build_test_zig_step.dependOn(&signals_host_test.step);
     tests_summary.addRun(&run_signals_host_test.step);
 
@@ -5859,6 +5886,22 @@ fn createTestHarnessModule(b: *std.Build, roc_modules: modules.RocModules) *std.
         .imports = &.{
             .{ .name = "collections", .module = roc_modules.collections },
             .{ .name = "build_options", .module = roc_modules.build_options },
+        },
+    });
+}
+
+fn createSignalsModule(
+    b: *std.Build,
+    target: ResolvedTarget,
+    optimize: OptimizeMode,
+    build_options: *std.Build.Module,
+) *std.Build.Module {
+    return b.createModule(.{
+        .root_source_file = b.path("test/signals/src/signals/mod.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "build_options", .module = build_options },
         },
     });
 }

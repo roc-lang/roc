@@ -28,21 +28,29 @@ pub fn main(init: std.process.Init) !void {
     var stdout_state = std.Io.File.stdout().writer(io, &stdout_buffer);
     const stdout = &stdout_state.interface;
 
-    try stdout.print("Checking test wiring in src/ directory...\n\n", .{});
+    const checked_roots = [_][]const u8{
+        "src",
+        "test/signals/src",
+    };
+
+    try stdout.print("Checking test wiring in configured source roots...\n\n", .{});
 
     try stdout.print("Step 1: Finding all potential test files...\n", .{});
-    var test_files : PathList = .empty;
+    var test_files: PathList = .empty;
     defer freePathList(&test_files, gpa);
 
-    var mod_files : PathList = .empty;
+    var mod_files: PathList = .empty;
     defer freePathList(&mod_files, gpa);
 
-    try walkTree(gpa, io, "src", &test_files, &mod_files);
+    for (checked_roots) |root| {
+        if (!fileExists(io, root)) continue;
+        try walkTree(gpa, io, root, &test_files, &mod_files);
+    }
     try stdout.print("Found {d} potential test files\n\n", .{test_files.items.len});
 
-    // Some tests are wired through build.zig rather than mod.zig files.
-    // For example, the CLI tests are driven via src/cli/main.zig and
-    // src/cli/test/roc_subcommands.zig test roots.
+    // Some tests are wired through build.zig or explicit test roots rather than
+    // ordinary mod.zig files. For example, the CLI tests are driven via
+    // src/cli/main.zig and src/cli/test/roc_subcommands.zig test roots.
     //
     // To avoid false positives, we:
     // - Treat src/cli/main.zig as an additional aggregator when scanning @import()
@@ -95,7 +103,7 @@ pub fn main(init: std.process.Init) !void {
     );
 
     try stdout.print("Step 3: Checking if all test files are properly wired...\n\n", .{});
-    var unwired : PathList = .empty;
+    var unwired: PathList = .empty;
     defer freePathList(&unwired, gpa);
 
     for (test_files.items) |test_path| {
@@ -108,7 +116,7 @@ pub fn main(init: std.process.Init) !void {
     if (unwired.items.len > 0) {
         std.mem.sort([]u8, unwired.items, {}, lessThanPath);
         try stdout.print(
-            "{s}[ERR]{s} Found {d} test file(s) that are NOT wired through mod.zig:\n\n",
+            "{s}[ERR]{s} Found {d} test file(s) that are NOT wired through a test root:\n\n",
             .{ TermColor.red, TermColor.reset, unwired.items.len },
         );
 
@@ -124,7 +132,7 @@ pub fn main(init: std.process.Init) !void {
             TermColor.reset,
         });
         try stdout.print("To fix:\n", .{});
-        try stdout.print("1. Add missing std.testing.refAllDecls() calls to the appropriate mod.zig files\n", .{});
+        try stdout.print("1. Add missing std.testing.refAllDecls() calls to the appropriate mod.zig files, signals/mod.zig, or native_host.zig\n", .{});
         try stdout.print("2. Ensure all modules with tests are listed in src/build/modules.zig test_configs\n\n", .{});
     } else {
         try stdout.print("{s}[OK]{s} All tests are properly wired!\n\n", .{ TermColor.green, TermColor.reset });
@@ -330,6 +338,17 @@ fn markBuildRootsAsReferenced(
         if (!fileExists(std_io, build_path)) continue;
         try markBuildRootsFromFile(allocator, std_io, build_path, referenced);
     }
+
+    const explicit_build_roots = [_][]const u8{
+        "test/signals/src/signals/mod.zig",
+        "test/signals/src/native_host.zig",
+        "test/signals/src/wasm_host.zig",
+    };
+    for (explicit_build_roots) |root_path| {
+        if (!fileExists(std_io, root_path)) continue;
+        try markReferenced(allocator, referenced, root_path);
+        try collectModImports(allocator, std_io, root_path, referenced);
+    }
 }
 
 fn markBuildRootsFromFile(
@@ -351,7 +370,7 @@ fn markBuildRootsFromFile(
         search_index = literal_end + 1;
 
         if (!std.mem.endsWith(u8, rel_path, ".zig")) continue;
-        if (!std.mem.startsWith(u8, rel_path, "src/")) continue;
+        if (!isCheckedBuildRoot(rel_path)) continue;
         if (!fileExists(std_io, rel_path)) continue;
 
         try markReferenced(allocator, referenced, rel_path);
@@ -372,6 +391,11 @@ fn markReferenced(
     }
 }
 
+fn isCheckedBuildRoot(path: []const u8) bool {
+    return std.mem.startsWith(u8, path, "src/") or
+        std.mem.startsWith(u8, path, "test/signals/src/");
+}
+
 fn lessThanPath(_: void, lhs: []u8, rhs: []u8) bool {
     const l: []const u8 = lhs;
     const r: []const u8 = rhs;
@@ -384,6 +408,42 @@ fn printSuggestion(
     writer: anytype,
     test_path: []const u8,
 ) !void {
+    if (std.mem.startsWith(u8, test_path, "test/signals/src/signals/")) {
+        const root_path = "test/signals/src/signals/mod.zig";
+        const root_dir = std.fs.path.dirname(root_path) orelse ".";
+        const relative = try std.fs.path.relativePosix(allocator, ".", root_dir, test_path);
+        defer allocator.free(relative);
+
+        try writer.print("    {s}[HINT]{s} Should be added to {s}\n", .{
+            TermColor.yellow,
+            TermColor.reset,
+            root_path,
+        });
+        try writer.print(
+            "    {s}[HINT]{s} Add: _ = @import(\"{s}\");\n",
+            .{ TermColor.yellow, TermColor.reset, relative },
+        );
+        return;
+    }
+
+    if (std.mem.startsWith(u8, test_path, "test/signals/src/")) {
+        const root_path = "test/signals/src/native_host.zig";
+        const root_dir = std.fs.path.dirname(root_path) orelse ".";
+        const relative = try std.fs.path.relativePosix(allocator, ".", root_dir, test_path);
+        defer allocator.free(relative);
+
+        try writer.print("    {s}[HINT]{s} Should be added to {s}\n", .{
+            TermColor.yellow,
+            TermColor.reset,
+            root_path,
+        });
+        try writer.print(
+            "    {s}[HINT]{s} Add: _ = @import(\"{s}\");\n",
+            .{ TermColor.yellow, TermColor.reset, relative },
+        );
+        return;
+    }
+
     const maybe_mod = try findNearestMod(allocator, std_io, test_path);
     if (maybe_mod) |mod_path| {
         defer allocator.free(mod_path);

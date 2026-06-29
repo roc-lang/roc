@@ -265,7 +265,8 @@ test "structural splice allocates replacement metadata snapshots" {
     };
     const allocator = std.testing.allocator;
 
-    const elem_ids = renderElemIds(allocator, &.{ RenderNode{ .elem_id = 8 }, RenderNode{ .elem_id = 13 } });
+    const render_nodes = [_]RenderNode{ .{ .elem_id = 8 }, .{ .elem_id = 13 } };
+    const elem_ids = renderElemIds(allocator, render_nodes[0..]);
     defer allocator.free(elem_ids);
     try std.testing.expectEqualSlices(u64, &.{ 8, 13 }, elem_ids);
 

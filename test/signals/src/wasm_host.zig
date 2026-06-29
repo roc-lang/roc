@@ -10,12 +10,13 @@
 //! It deliberately holds no reactive or structural logic of its own.
 
 const std = @import("std");
-const abi = @import("roc_platform_abi.zig");
-const render = @import("render_commands.zig");
-const host_value_registry = @import("host_value_registry.zig");
-const erased_calls = @import("erased_calls.zig");
-const hv = @import("host_values.zig");
-const engine = @import("engine.zig");
+const signals = @import("signals");
+const abi = signals.abi;
+const render = signals.render;
+const host_value_registry = signals.host_value_registry;
+const erased_calls = signals.erased_calls;
+const hv = signals.host_values;
+const engine = signals.engine;
 
 const HostValue = u64;
 const HostValueCapability = hv.HostValueCapabilityHandle;

@@ -1,6 +1,7 @@
 const std = @import("std");
 
-const render = @import("render_commands.zig");
+const signals = @import("signals");
+const render = signals.render;
 const spec_parser = @import("spec/spec_parser.zig");
 
 pub const Element = struct {
