@@ -211,6 +211,7 @@ fn buildBuiltinIndices(gpa: Allocator, env: *const ModuleEnv) !BuiltinIndices {
     const fields_type_idx = try findTypeDeclarationByQualifiedName(env, "Builtin.Encoding.FieldName.FieldNames");
     const field_type_idx = try findTypeDeclarationByQualifiedName(env, "Builtin.Encoding.FieldName");
     const json_state_type_idx = try findTypeDeclarationByQualifiedName(env, "Builtin.Encoding.JsonState");
+    const json_encode_state_type_idx = try findTypeDeclarationByQualifiedName(env, "Builtin.Encoding.JsonEncodeState");
     const json_encoding_type_idx = try findTypeDeclarationByQualifiedName(env, "Builtin.Encoding.JsonEncoding");
     const json_type_idx = try findNestedTypeDeclaration(gpa, env, "Encoding", "Json");
     const http_header_state_type_idx = try findTypeDeclarationByQualifiedName(env, "Builtin.Encoding.HttpHeaderState");
@@ -258,6 +259,7 @@ fn buildBuiltinIndices(gpa: Allocator, env: *const ModuleEnv) !BuiltinIndices {
         .fields_type = fields_type_idx,
         .field_type = field_type_idx,
         .json_state_type = json_state_type_idx,
+        .json_encode_state_type = json_encode_state_type_idx,
         .json_encoding_type = json_encoding_type_idx,
         .json_type = json_type_idx,
         .http_header_state_type = http_header_state_type_idx,
@@ -283,6 +285,7 @@ fn buildBuiltinIndices(gpa: Allocator, env: *const ModuleEnv) !BuiltinIndices {
         .fields_ident = expectBuiltinIdent(env, "Builtin.Encoding.FieldName.FieldNames"),
         .field_ident = expectBuiltinIdent(env, "Builtin.Encoding.FieldName"),
         .json_state_ident = expectBuiltinIdent(env, "Builtin.Encoding.JsonState"),
+        .json_encode_state_ident = expectBuiltinIdent(env, "Builtin.Encoding.JsonEncodeState"),
         .json_encoding_ident = expectBuiltinIdent(env, "Builtin.Encoding.JsonEncoding"),
         .json_ident = expectBuiltinIdent(env, "Builtin.Encoding.Json"),
         .http_header_state_ident = expectBuiltinIdent(env, "Builtin.Encoding.HttpHeaderState"),
@@ -336,6 +339,7 @@ fn installBuiltinNodeIndices(gpa: Allocator, env: *ModuleEnv, indices: BuiltinIn
     try env.common.setTypeNodeIndexById(gpa, indices.fields_ident, @intCast(@intFromEnum(indices.fields_type)));
     try env.common.setTypeNodeIndexById(gpa, indices.field_ident, @intCast(@intFromEnum(indices.field_type)));
     try env.common.setTypeNodeIndexById(gpa, indices.json_state_ident, @intCast(@intFromEnum(indices.json_state_type)));
+    try env.common.setTypeNodeIndexById(gpa, indices.json_encode_state_ident, @intCast(@intFromEnum(indices.json_encode_state_type)));
     try env.common.setTypeNodeIndexById(gpa, indices.json_encoding_ident, @intCast(@intFromEnum(indices.json_encoding_type)));
     try env.common.setTypeNodeIndexById(gpa, indices.json_ident, @intCast(@intFromEnum(indices.json_type)));
     try env.common.setTypeNodeIndexById(gpa, indices.http_header_state_ident, @intCast(@intFromEnum(indices.http_header_state_type)));

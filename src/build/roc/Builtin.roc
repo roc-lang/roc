@@ -23,6 +23,7 @@ Builtin :: [].{
 		}
 
 		JsonState :: [Input(Str)]
+		JsonEncodeState :: { output : List(U8), record_commas : List(Bool) }
 
 		JsonEncoding :: [Default, CamelCase, TrailingCommas].{
 			rename_field : JsonEncoding, Str -> Str
@@ -110,6 +111,59 @@ Builtin :: [].{
 				match state {
 					Input(value) => Json.parse_tag_union_from_json(value, encoding, spec)
 				}
+
+			begin_record : JsonEncodeState -> Try(JsonEncodeState, [])
+			begin_record = |state|
+				Ok(
+					JsonEncodeState.{
+						output: u8_append(state.output, 123),
+						record_commas: state.record_commas.append(False),
+					},
+				)
+
+			encode_record_field : Str, JsonEncodeState -> Try(JsonEncodeState, [])
+			encode_record_field = |field, state| {
+				with_comma = if Json.record_needs_comma(state) {
+					u8_append(state.output, 44)
+				} else {
+					state.output
+				}
+				output = u8_append(Json.append_json_quoted_string(with_comma, field), 58)
+
+				Ok(
+					JsonEncodeState.{
+						output,
+						record_commas: Json.mark_record_has_field(state.record_commas),
+					},
+				)
+			}
+
+			end_record : JsonEncodeState -> Try(JsonEncodeState, [])
+			end_record = |state|
+				Ok(
+					JsonEncodeState.{
+						output: u8_append(state.output, 125),
+						record_commas: List.drop_last(state.record_commas, 1),
+					},
+				)
+
+			encode_str : Str, JsonEncodeState -> Try(JsonEncodeState, [])
+			encode_str = |value, state|
+				Ok(
+					JsonEncodeState.{
+						output: Json.append_json_quoted_string(state.output, value),
+						record_commas: state.record_commas,
+					},
+				)
+
+			encode_u64 : U64, JsonEncodeState -> Try(JsonEncodeState, [])
+			encode_u64 = |value, state|
+				Ok(
+					JsonEncodeState.{
+						output: Json.append_json_string_bytes(state.output, json_u64_to_str(value)),
+						record_commas: state.record_commas,
+					},
+				)
 		}
 
 		HttpHeaderState :: { raw : Str }
@@ -168,6 +222,23 @@ Builtin :: [].{
 
 			parse_u64 : JsonEncoding, JsonState -> Try({ value : U64, rest : JsonState }, Json)
 			parse_u64 = |encoding, state| JsonEncoding.parse_u64(encoding, state)
+
+			encode_str : JsonEncoding, Str, JsonEncodeState -> Try(JsonEncodeState, [])
+			encode_str = |_, value, state| JsonEncoding.encode_str(value, state)
+
+			encode_u64 : JsonEncoding, U64, JsonEncodeState -> Try(JsonEncodeState, [])
+			encode_u64 = |_, value, state| JsonEncoding.encode_u64(value, state)
+
+			encode : a -> Try(Str, [])
+				where [
+					a.encode_to : a, JsonEncoding -> (JsonEncodeState -> Try(JsonEncodeState, [])),
+				]
+			encode = |value| {
+				encode_shape = value.encode_to(JsonEncoding.Default)
+				encoded = encode_shape(JsonEncodeState.{ output: u8_list_with_capacity(64), record_commas: [] })?
+
+				Ok(Str.from_utf8_lossy(encoded.output))
+			}
 
 			parse : Str -> Try(a, Json)
 				where [
@@ -231,6 +302,106 @@ Builtin :: [].{
 
 			invalid_json : Json
 			invalid_json = Json.InvalidJson
+
+			record_needs_comma : JsonEncodeState -> Bool
+			record_needs_comma = |state|
+				match List.last(state.record_commas) {
+					Ok(needs_comma) => needs_comma
+					Err(ListWasEmpty) => {
+						crash "json encoder record stack underflow"
+					}
+				}
+
+			mark_record_has_field : List(Bool) -> List(Bool)
+			mark_record_has_field = |record_commas|
+				List.drop_last(record_commas, 1).append(True)
+
+			append_json_string_bytes : List(U8), Str -> List(U8)
+			append_json_string_bytes = |out, value| {
+				bytes = Str.to_utf8(value)
+				len = List.len(bytes)
+				var $out = u8_list_reserve(out, len)
+				var $index = 0
+
+				while $index < len {
+					$out = u8_append($out, list_get_unsafe(bytes, $index))
+					$index = $index + 1
+				}
+
+				$out
+			}
+
+			append_json_quoted_string : List(U8), Str -> List(U8)
+			append_json_quoted_string = |out, value| {
+				bytes = Str.to_utf8(value)
+				len = List.len(bytes)
+				var $out = u8_list_reserve(out, len + 2)
+				var $index = 0
+
+				$out = u8_append($out, 34)
+
+				while $index < len {
+					byte = list_get_unsafe(bytes, $index)
+					$out = Json.append_json_string_byte($out, byte)
+					$index = $index + 1
+				}
+
+				$out = u8_append($out, 34)
+				$out
+			}
+
+			append_json_string_byte : List(U8), U8 -> List(U8)
+			append_json_string_byte = |bytes, byte|
+				if byte == 34 {
+					u8_append(u8_append(bytes, 92), 34)
+				} else if byte == 92 {
+					u8_append(u8_append(bytes, 92), 92)
+				} else if byte == 8 {
+					u8_append(u8_append(bytes, 92), 98)
+				} else if byte == 9 {
+					u8_append(u8_append(bytes, 92), 116)
+				} else if byte == 10 {
+					u8_append(u8_append(bytes, 92), 110)
+				} else if byte == 12 {
+					u8_append(u8_append(bytes, 92), 102)
+				} else if byte == 13 {
+					u8_append(u8_append(bytes, 92), 114)
+				} else if byte < 32 {
+					Json.append_json_unicode_escape(bytes, byte)
+				} else {
+					u8_append(bytes, byte)
+				}
+
+			append_json_unicode_escape : List(U8), U8 -> List(U8)
+			append_json_unicode_escape = |bytes, byte| {
+				high = byte / 16
+				low = byte % 16
+
+				u8_append(
+					u8_append(
+						u8_append(
+							u8_append(
+								u8_append(
+									u8_append(bytes, 92),
+									117,
+								),
+								48,
+							),
+							48,
+						),
+						Json.hex_digit_byte(high),
+					),
+					Json.hex_digit_byte(low),
+				)
+			}
+
+			hex_digit_byte : U8 -> U8
+			hex_digit_byte = |value|
+				if value < 10 {
+					value + 48
+				} else {
+					value + 87
+				}
 
 			parse_record_field_from_object : JsonEncoding,
 			Str -> Try(
@@ -14246,6 +14417,9 @@ f64_from_int_digits = |digits| int_from_digits(digits, |str| f64_from_str(str))
 
 f64_from_dec_digits : (List(U8), List(U8)) -> Try(F64, [OutOfRange])
 f64_from_dec_digits = |digits| dec_from_digits(digits, |str| f64_from_str(str))
+
+json_u64_to_str : U64 -> Str
+json_u64_to_str = |value| U64.to_str(value)
 
 from_numeral_with : Num.Numeral, (Str -> Try(item, err)) -> Try(item, [InvalidNumeral(Str)])
 from_numeral_with = |numeral, parse|

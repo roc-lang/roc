@@ -6075,7 +6075,14 @@ const BodyContext = struct {
             .record, .zst => {
                 try self.buildEncodeConstructionRecordPrecomputedPlan(plan, shape_ty, encoding_expr, encoding_ty, str_ty);
                 for (self.recordFieldsForShape(shape_ty)) |field| {
-                    try self.buildEncodeConstructionPrecomputedPlan(plan, field.ty, encoding_expr, encoding_ty, str_ty);
+                    try self.buildEncodeConstructionPrecomputedPlan(plan, self.encodeRecordFieldPayloadType(field.ty), encoding_expr, encoding_ty, str_ty);
+                }
+            },
+            .tag_union => |span| {
+                for (self.builder.program.types.tagSpan(span)) |tag| {
+                    for (self.builder.program.types.span(tag.payloads)) |payload_ty| {
+                        try self.buildEncodeConstructionPrecomputedPlan(plan, payload_ty, encoding_expr, encoding_ty, str_ty);
+                    }
                 }
             },
             else => {},
@@ -6098,7 +6105,14 @@ const BodyContext = struct {
             .record, .zst => {
                 try self.buildEncodeRestoredRecordPrecomputedPlan(plan, fn_value, store_view, fn_view, shape_ty, str_ty);
                 for (self.recordFieldsForShape(shape_ty)) |field| {
-                    try self.buildEncodeRestoredPrecomputedPlan(plan, fn_value, store_view, fn_view, field.ty, str_ty);
+                    try self.buildEncodeRestoredPrecomputedPlan(plan, fn_value, store_view, fn_view, self.encodeRecordFieldPayloadType(field.ty), str_ty);
+                }
+            },
+            .tag_union => |span| {
+                for (self.builder.program.types.tagSpan(span)) |tag| {
+                    for (self.builder.program.types.span(tag.payloads)) |payload_ty| {
+                        try self.buildEncodeRestoredPrecomputedPlan(plan, fn_value, store_view, fn_view, payload_ty, str_ty);
+                    }
                 }
             },
             else => {},
@@ -10927,6 +10941,7 @@ const BodyContext = struct {
         }
         return switch (self.builder.shapeContent(shape_ty)) {
             .record, .zst => try self.lowerEncodeRecordToState(shape_ty, value_expr, encoding_expr, encoding_ty, state_expr, state_ty, ret_ty, precomputed_plan),
+            .tag_union => |tags_span| try self.lowerEncodeTagUnionToState(tags_span, value_expr, encoding_expr, encoding_ty, state_expr, state_ty, ret_ty, precomputed_plan),
             else => Common.invariant("encode_to selected an unsupported shape"),
         };
     }
@@ -11019,11 +11034,6 @@ const BodyContext = struct {
         }
 
         const field = record_fields[field_index];
-        const str_ty = try self.builder.primitiveType(.str);
-        const renamed_field_expr = try self.builder.localExpr(renamed_field_locals[field_index], str_ty);
-        const field_name_try = try self.lowerEncodeFormatMethod("encode_record_field", &.{ renamed_field_expr, state_expr }, &.{ str_ty, state_ty }, encoding_ty, ret_ty);
-        const after_name_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), state_ty);
-
         const field_value_expr = try self.builder.program.addExpr(.{
             .ty = field.ty,
             .data = .{ .field_access = .{
@@ -11031,8 +11041,65 @@ const BodyContext = struct {
                 .field = field.name,
             } },
         });
-        const value_try = try self.lowerEncodeShapeToState(
+
+        if (self.tryOptionalInfo(field.ty)) |optional_info| {
+            return try self.lowerEncodeOptionalRecordFieldFrom(
+                shape_ty,
+                value_expr,
+                encoding_expr,
+                encoding_ty,
+                state_expr,
+                state_ty,
+                ret_ty,
+                precomputed_plan,
+                record_fields,
+                renamed_field_locals,
+                field_index,
+                field_value_expr,
+                optional_info,
+            );
+        }
+
+        return try self.lowerEncodePresentRecordFieldFrom(
+            shape_ty,
+            value_expr,
+            encoding_expr,
+            encoding_ty,
+            state_expr,
+            state_ty,
+            ret_ty,
+            precomputed_plan,
+            record_fields,
+            renamed_field_locals,
+            field_index,
             field.ty,
+            field_value_expr,
+        );
+    }
+
+    fn lowerEncodePresentRecordFieldFrom(
+        self: *BodyContext,
+        shape_ty: Type.TypeId,
+        value_expr: Ast.ExprId,
+        encoding_expr: Ast.ExprId,
+        encoding_ty: Type.TypeId,
+        state_expr: Ast.ExprId,
+        state_ty: Type.TypeId,
+        ret_ty: Type.TypeId,
+        precomputed_plan: ?*const ParserPrecomputedPlan,
+        record_fields: []const Type.Field,
+        renamed_field_locals: []const Ast.LocalId,
+        field_index: usize,
+        field_value_ty: Type.TypeId,
+        field_value_expr: Ast.ExprId,
+    ) Allocator.Error!Ast.ExprId {
+        const str_ty = try self.builder.primitiveType(.str);
+        const renamed_field_expr = try self.builder.localExpr(renamed_field_locals[field_index], str_ty);
+        const field_name_try = try self.lowerEncodeFormatMethod("encode_record_field", &.{ renamed_field_expr, state_expr }, &.{ str_ty, state_ty }, encoding_ty, ret_ty);
+        const after_name_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), state_ty);
+
+        const value_try = try self.lowerEncodeShapeToState(
+            field_value_ty,
             field_value_expr,
             encoding_expr,
             encoding_ty,
@@ -11057,6 +11124,246 @@ const BodyContext = struct {
         );
         const value_body = try self.sequenceTry(value_try, ret_ty, after_value_local, rest_body, ret_ty);
         return try self.sequenceTry(field_name_try, ret_ty, after_name_local, value_body, ret_ty);
+    }
+
+    fn lowerEncodeOptionalRecordFieldFrom(
+        self: *BodyContext,
+        shape_ty: Type.TypeId,
+        value_expr: Ast.ExprId,
+        encoding_expr: Ast.ExprId,
+        encoding_ty: Type.TypeId,
+        state_expr: Ast.ExprId,
+        state_ty: Type.TypeId,
+        ret_ty: Type.TypeId,
+        precomputed_plan: ?*const ParserPrecomputedPlan,
+        record_fields: []const Type.Field,
+        renamed_field_locals: []const Ast.LocalId,
+        field_index: usize,
+        field_value_expr: Ast.ExprId,
+        optional_info: TryOptionalInfo,
+    ) Allocator.Error!Ast.ExprId {
+        const field_ty = record_fields[field_index].ty;
+        const try_info = self.tryInfo(field_ty);
+        if (!self.sameType(try_info.ok_ty, optional_info.ok_payload_ty)) Common.invariant("optional encode_to field Ok payload differed from optional info");
+        if (!self.sameType(try_info.err_ty, optional_info.err_ty)) Common.invariant("optional encode_to field Err payload differed from optional info");
+
+        const ok_payload_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), optional_info.ok_payload_ty);
+        const ok_payload_pat = try self.builder.bindPat(ok_payload_local, optional_info.ok_payload_ty);
+        const ok_backing_pat = try self.builder.program.addPat(.{ .ty = optional_info.backing_ty, .data = .{ .tag = .{
+            .name = try_info.ok_tag.name,
+            .payloads = try self.builder.program.addPatSpan(&[_]Ast.PatId{ok_payload_pat}),
+        } } });
+        const ok_pat = try self.builder.program.addPat(.{
+            .ty = field_ty,
+            .data = .{ .nominal = ok_backing_pat },
+        });
+        const ok_body = try self.lowerEncodePresentRecordFieldFrom(
+            shape_ty,
+            value_expr,
+            encoding_expr,
+            encoding_ty,
+            state_expr,
+            state_ty,
+            ret_ty,
+            precomputed_plan,
+            record_fields,
+            renamed_field_locals,
+            field_index,
+            optional_info.ok_payload_ty,
+            try self.builder.localExpr(ok_payload_local, optional_info.ok_payload_ty),
+        );
+
+        const err_payload_pat = try self.builder.program.addPat(.{ .ty = optional_info.err_ty, .data = .wildcard });
+        const err_backing_pat = try self.builder.program.addPat(.{ .ty = optional_info.backing_ty, .data = .{ .tag = .{
+            .name = try_info.err_tag.name,
+            .payloads = try self.builder.program.addPatSpan(&[_]Ast.PatId{err_payload_pat}),
+        } } });
+        const err_pat = try self.builder.program.addPat(.{
+            .ty = field_ty,
+            .data = .{ .nominal = err_backing_pat },
+        });
+        const err_body = try self.lowerEncodeRecordFieldNamesFrom(
+            shape_ty,
+            value_expr,
+            encoding_expr,
+            encoding_ty,
+            state_expr,
+            state_ty,
+            ret_ty,
+            precomputed_plan,
+            record_fields,
+            renamed_field_locals,
+            field_index + 1,
+        );
+
+        const branches = [_]Ast.Branch{
+            .{ .pat = ok_pat, .body = ok_body },
+            .{ .pat = err_pat, .body = err_body },
+        };
+        return try self.builder.program.addExpr(.{ .ty = ret_ty, .data = .{ .match_ = .{
+            .scrutinee = field_value_expr,
+            .branches = try self.builder.program.addBranchSpan(&branches),
+        } } });
+    }
+
+    fn lowerEncodeTagUnionToState(
+        self: *BodyContext,
+        tags_span: Type.Span,
+        value_expr: Ast.ExprId,
+        encoding_expr: Ast.ExprId,
+        encoding_ty: Type.TypeId,
+        state_expr: Ast.ExprId,
+        state_ty: Type.TypeId,
+        ret_ty: Type.TypeId,
+        precomputed_plan: ?*const ParserPrecomputedPlan,
+    ) Allocator.Error!Ast.ExprId {
+        const tags = try self.allocator.dupe(Type.Tag, self.builder.program.types.tagSpan(tags_span));
+        defer self.allocator.free(tags);
+        if (tags.len == 0) Common.invariant("encode_to selected an empty tag union");
+
+        const value_ty = self.builder.program.exprs.items[@intFromEnum(value_expr)].ty;
+        const branches = try self.allocator.alloc(Ast.Branch, tags.len);
+        defer self.allocator.free(branches);
+
+        for (tags, 0..) |tag, tag_index| {
+            const payload_tys = try self.allocator.dupe(Type.TypeId, self.builder.program.types.span(tag.payloads));
+            defer self.allocator.free(payload_tys);
+            if (payload_tys.len > 1) Common.invariant("encode_to selected a multi-payload tag union");
+
+            const payload_pats = try self.allocator.alloc(Ast.PatId, payload_tys.len);
+            defer self.allocator.free(payload_pats);
+            const payload_exprs = try self.allocator.alloc(Ast.ExprId, payload_tys.len);
+            defer self.allocator.free(payload_exprs);
+
+            for (payload_tys, 0..) |payload_ty, payload_index| {
+                const payload_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), payload_ty);
+                payload_pats[payload_index] = try self.builder.bindPat(payload_local, payload_ty);
+                payload_exprs[payload_index] = try self.builder.localExpr(payload_local, payload_ty);
+            }
+
+            const pat = try self.builder.program.addPat(.{ .ty = value_ty, .data = .{ .tag = .{
+                .name = tag.name,
+                .payloads = try self.builder.program.addPatSpan(payload_pats),
+            } } });
+            branches[tag_index] = .{
+                .pat = pat,
+                .body = try self.lowerEncodeTagUnionBranchToState(
+                    tag,
+                    payload_exprs,
+                    payload_tys,
+                    encoding_expr,
+                    encoding_ty,
+                    state_expr,
+                    state_ty,
+                    ret_ty,
+                    precomputed_plan,
+                ),
+            };
+        }
+
+        return try self.builder.program.addExpr(.{ .ty = ret_ty, .data = .{ .match_ = .{
+            .scrutinee = value_expr,
+            .branches = try self.builder.program.addBranchSpan(branches),
+        } } });
+    }
+
+    fn lowerEncodeTagUnionBranchToState(
+        self: *BodyContext,
+        tag: Type.Tag,
+        payload_exprs: []const Ast.ExprId,
+        payload_tys: []const Type.TypeId,
+        encoding_expr: Ast.ExprId,
+        encoding_ty: Type.TypeId,
+        state_expr: Ast.ExprId,
+        state_ty: Type.TypeId,
+        ret_ty: Type.TypeId,
+        precomputed_plan: ?*const ParserPrecomputedPlan,
+    ) Allocator.Error!Ast.ExprId {
+        if (payload_tys.len > 1) Common.invariant("encode_to selected a multi-payload tag union");
+        if (payload_exprs.len != payload_tys.len) Common.invariant("tag union encode payload arity mismatch");
+
+        const begin_outer_try = try self.lowerEncodeFormatMethod("begin_record", &.{state_expr}, &.{state_ty}, encoding_ty, ret_ty);
+        const outer_state_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), state_ty);
+        const tag_name_expr = try self.builder.stringExpr(self.builder.program.names.tagLabelText(tag.name), try self.builder.primitiveType(.str));
+        const tag_name_try = try self.lowerEncodeFormatMethod(
+            "encode_record_field",
+            &.{ tag_name_expr, try self.builder.localExpr(outer_state_local, state_ty) },
+            &.{ try self.builder.primitiveType(.str), state_ty },
+            encoding_ty,
+            ret_ty,
+        );
+        const after_name_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), state_ty);
+
+        const payload_try = if (payload_tys.len == 0)
+            try self.lowerEncodeEmptyTagPayloadToState(
+                encoding_ty,
+                try self.builder.localExpr(after_name_local, state_ty),
+                state_ty,
+                ret_ty,
+            )
+        else
+            try self.lowerEncodeShapeToState(
+                payload_tys[0],
+                payload_exprs[0],
+                encoding_expr,
+                encoding_ty,
+                try self.builder.localExpr(after_name_local, state_ty),
+                state_ty,
+                ret_ty,
+                precomputed_plan,
+            );
+        const after_payload_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), state_ty);
+        const end_outer_try = try self.lowerEncodeFormatMethod(
+            "end_record",
+            &.{try self.builder.localExpr(after_payload_local, state_ty)},
+            &.{state_ty},
+            encoding_ty,
+            ret_ty,
+        );
+        const payload_body = try self.sequenceTry(payload_try, ret_ty, after_payload_local, end_outer_try, ret_ty);
+        const tag_body = try self.sequenceTry(tag_name_try, ret_ty, after_name_local, payload_body, ret_ty);
+        return try self.sequenceTry(begin_outer_try, ret_ty, outer_state_local, tag_body, ret_ty);
+    }
+
+    fn lowerEncodeEmptyTagPayloadToState(
+        self: *BodyContext,
+        encoding_ty: Type.TypeId,
+        state_expr: Ast.ExprId,
+        state_ty: Type.TypeId,
+        ret_ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        const begin_try = try self.lowerEncodeFormatMethod("begin_record", &.{state_expr}, &.{state_ty}, encoding_ty, ret_ty);
+        const inner_state_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), state_ty);
+        const end_try = try self.lowerEncodeFormatMethod(
+            "end_record",
+            &.{try self.builder.localExpr(inner_state_local, state_ty)},
+            &.{state_ty},
+            encoding_ty,
+            ret_ty,
+        );
+        return try self.sequenceTry(begin_try, ret_ty, inner_state_local, end_try, ret_ty);
+    }
+
+    fn encodeRecordFieldPayloadType(self: *BodyContext, field_ty: Type.TypeId) Type.TypeId {
+        if (self.tryOptionalInfo(field_ty)) |optional_info| return optional_info.ok_payload_ty;
+        return field_ty;
+    }
+
+    fn encodeRecordFieldTypeIsSupported(self: *BodyContext, field_ty: Type.TypeId) bool {
+        return self.encodeFieldTypeIsSupported(self.encodeRecordFieldPayloadType(field_ty));
+    }
+
+    fn encodeTagUnionTypeIsSupported(self: *BodyContext, tags_span: Type.Span) bool {
+        const tags = self.builder.program.types.tagSpan(tags_span);
+        if (tags.len == 0) return false;
+        for (tags) |tag| {
+            const payloads = self.builder.program.types.span(tag.payloads);
+            if (payloads.len > 1) return false;
+            for (payloads) |payload_ty| {
+                if (!self.encodeFieldTypeIsSupported(payload_ty)) return false;
+            }
+        }
+        return true;
     }
 
     fn lowerCustomEncodeToState(
@@ -11432,10 +11739,11 @@ const BodyContext = struct {
         return switch (self.builder.shapeContent(ty)) {
             .record => |fields_span| blk: {
                 for (self.builder.program.types.fieldSpan(fields_span)) |field| {
-                    if (!self.encodeFieldTypeIsSupported(field.ty)) break :blk false;
+                    if (!self.encodeRecordFieldTypeIsSupported(field.ty)) break :blk false;
                 }
                 break :blk true;
             },
+            .tag_union => |tags_span| self.encodeTagUnionTypeIsSupported(tags_span),
             .zst => true,
             else => false,
         };

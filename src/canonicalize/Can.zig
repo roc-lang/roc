@@ -18838,6 +18838,7 @@ fn isHiddenAutoImportedNestedType(
 fn isHiddenEncodingNestedType(nested_suffix: []const u8) bool {
     const hidden_names = [_][]const u8{
         "JsonState",
+        "JsonEncodeState",
         "JsonEncoding",
         "HttpHeaderState",
         "HttpHeaderEncoding",
