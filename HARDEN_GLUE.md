@@ -64,6 +64,13 @@ underneath that normal platform/app workflow.
    helper code is fine, but the Roc source in each platform directory should
    remain a plausible local platform.
 
+9. Generate idiomatic helper APIs for C, Zig, and Rust so platform authors do
+   not need to know Roc compiler internals. The generated interface should be
+   sufficient for ordinary platform code to construct, retain, release, inspect,
+   pass, return, and call Roc ABI values correctly. This is also the ABI
+   upgrade path: platform consumers should depend on regenerated glue instead
+   of hand-rolled bindings.
+
 ## Non-Goals
 
 1. Do not delete existing snapshot or compile-only glue tests blindly in the
@@ -380,6 +387,44 @@ scenario, assert:
 - live allocation count is zero, unless the scenario intentionally returns
   ownership to Roc or tests static data
 - all retained values were balanced by decrefs
+
+## Durable ABI Risk Register
+
+The enduring ABI risk register and Roc glue runtime-control definitions live in
+`src/glue/README.md`. This hardening document is a temporary implementation
+plan, so it must not be the only place that records long-term glue risks or the
+controls that enforce them.
+
+During this work, every `TBA` runtime-control slot in the README must be
+replaced with the concrete glue test-harness scenario, platform shape, language
+matrix cell, compile-fail check, or source-shape assertion that enforces the
+contract.
+
+## Generated Helper Requirements
+
+The glue generators must make the platform-facing API complete enough that
+ordinary platform code does not need to hand-roll Roc runtime knowledge.
+
+Required helper families:
+
+- layout assertions for every exported/hosted ABI type, including target pointer
+  width differences
+- constructors and views for `RocStr`, `RocList`, boxes, records, tag unions,
+  and erased callables
+- retain/release/drop helpers for every refcounted public type, including
+  recursively refcounted fields and active tag payloads
+- explicit owned-value operations for hosted arguments, provided returns, stored
+  values, and values returned back to Roc
+- allocation helpers that account for Roc headers, static data, list element
+  metadata, alignment, overflow, and wasm32 pointer width
+- erased-callable invocation helpers that build the args buffer, receive the
+  result buffer, and balance ownership of captures, arguments, and returns
+- unsafe or ownership-typed APIs where the host language cannot make invalid
+  states impossible
+
+C, Zig, and Rust may expose these helpers differently, but each generated API
+must cover the same ABI requirements. A language-specific helper may be more
+idiomatic than the others; it must not make a weaker contract.
 
 ## Contract Categories
 
@@ -924,9 +969,19 @@ Add scenarios for:
 - static data
 - seamless slices
 
+Add or tighten generated helpers for CGlue, ZigGlue, and RustGlue as needed so
+these scenarios can be written as ordinary platform code. Host code should call
+generated APIs for retain, release, recursive teardown, list allocation,
+string/list views, tag payload access, box payload cleanup, and erased callable
+invocation rather than duplicating Roc ABI internals.
+
 Acceptance:
 
 - every known failure class listed above has a red-green test
+- every `TBA` control in the ABI risk register has either a named runtime
+  scenario, named compile-fail/API check, or named source-shape assertion
+- each helper required by the covered risks exists for every glue language where
+  that operation is part of the public platform surface
 
 ### Phase 4: Wasm Runtime Matrix
 
@@ -1059,3 +1114,7 @@ Glue hardening is complete when:
   and leak failures.
 - Known failure classes have red-green coverage.
 - CI preserves enough artifacts to debug failures without re-running locally.
+- Every row in the ABI risk register names its enforcing glue control.
+- CGlue, ZigGlue, and RustGlue generate idiomatic helper APIs for all supported
+  host-visible Roc ABI operations, so platform authors do not need to hand-roll
+  layout, ownership, or refcount logic.
