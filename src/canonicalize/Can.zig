@@ -1020,7 +1020,7 @@ pub fn setupAutoImportedBuiltinTypes(
     const builtin_ident = try env.insertIdent(base.Ident.for_text("Builtin"));
     const builtin_import_idx = try self.env.imports.getOrPutWithIdent(
         gpa,
-        self.env.common.getStringStore(),
+        &self.env.common,
         CIR.Import.compiler_builtin_import_name,
         builtin_ident,
     );
@@ -5539,7 +5539,7 @@ fn importAliased(
     // 1. Get or create Import.Idx for this module (with ident for index-based lookups)
     const module_import_idx = try self.env.imports.getOrPutWithIdent(
         self.env.gpa,
-        self.env.common.getStringStore(),
+        &self.env.common,
         module_name_text,
         module_name,
     );
@@ -5613,7 +5613,7 @@ fn importUnaliased(
     // 1. Get or create Import.Idx for this module (with ident for index-based lookups)
     const module_import_idx = try self.env.imports.getOrPutWithIdent(
         self.env.gpa,
-        self.env.common.getStringStore(),
+        &self.env.common,
         module_name_text,
         module_name,
     );
@@ -12890,7 +12890,7 @@ fn addBoolTagExpr(self: *Self, tag_name: Ident.Idx, region: Region) std.mem.Allo
         const builtin_ident = try self.env.insertIdent(base.Ident.for_text("Builtin"));
         const import_idx = try self.env.imports.getOrPutWithIdent(
             self.env.gpa,
-            self.env.common.getStringStore(),
+            &self.env.common,
             CIR.Import.compiler_builtin_import_name,
             builtin_ident,
         );
@@ -19902,7 +19902,7 @@ fn getOrCreateCompilerBuiltinAutoImport(self: *Self) std.mem.Allocator.Error!Imp
     const builtin_ident = try self.env.insertIdent(base.Ident.for_text("Builtin"));
     return try self.env.imports.getOrPutWithIdent(
         self.env.gpa,
-        self.env.common.getStringStore(),
+        &self.env.common,
         CIR.Import.compiler_builtin_import_name,
         builtin_ident,
     );
@@ -19919,7 +19919,7 @@ fn getOrCreateAutoImportIdent(self: *Self, module_ident: Ident.Idx) std.mem.Allo
     // Create a new import using the imports map (with ident for index-based lookups)
     const new_import_idx = try self.env.imports.getOrPutWithIdent(
         self.env.gpa,
-        self.env.common.getStringStore(),
+        &self.env.common,
         module_name_text,
         module_ident,
     );

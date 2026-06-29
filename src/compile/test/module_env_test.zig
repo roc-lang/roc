@@ -32,9 +32,9 @@ test "ModuleEnv.Serialized roundtrip" {
 
     try original.common.calcLineStarts(gpa);
 
-    const import_json = try original.imports.getOrPut(gpa, &original.common.strings, "json.Json");
-    try std.testing.expectEqual(@as(u32, 1), @intFromEnum(try original.imports.getOrPut(gpa, &original.common.strings, "core.List")));
-    const import_json_duplicate = try original.imports.getOrPut(gpa, &original.common.strings, "json.Json");
+    const import_json = try original.imports.getOrPut(gpa, &original.common, "json.Json");
+    try std.testing.expectEqual(@as(u32, 1), @intFromEnum(try original.imports.getOrPut(gpa, &original.common, "core.List")));
+    const import_json_duplicate = try original.imports.getOrPut(gpa, &original.common, "json.Json");
     try std.testing.expectEqual(import_json, import_json_duplicate);
     try std.testing.expectEqual(@as(usize, 2), original.imports.imports.len());
 
@@ -159,7 +159,7 @@ test "ModuleEnv.Serialized roundtrip" {
     defer test_arena.deinit();
     const test_alloc = test_arena.allocator();
 
-    const import4 = try env.imports.getOrPut(test_alloc, &env.common.strings, "json.Json");
+    const import4 = try env.imports.getOrPut(test_alloc, &env.common, "json.Json");
 
     // Should find existing json.Json (deduplication)
     try testing.expectEqual(@as(u32, 0), @intFromEnum(import4));
