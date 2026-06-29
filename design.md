@@ -1944,19 +1944,23 @@ sets, callable-flow specialization queue, or Monotype/Lambda Mono syntax
 pipeline is constructed for runtime roots.
 
 The boxy representation plan records every checked type it analyzes in an
-explicit checked-type-to-representation table. Later boxy stages use that table
-to select worker layouts for expression results, pattern bindings, local
-storage, adapters, descriptors, dictionaries, and layout-only requests. They do
-not recover the representation for a checked expression by scanning body shapes,
-matching source names, recomputing type structure, or relying on incidental
-representation list order.
+explicit module-qualified checked-type-to-representation table. Later boxy
+stages use that table to select worker layouts for expression results, pattern
+bindings, local storage, adapters, descriptors, dictionaries, and layout-only
+requests. They do not recover the representation for a checked expression by
+scanning body shapes, matching source names, recomputing type structure, or
+relying on incidental representation list order.
 
-For runtime roots whose worker source resolves to a checked body in the root
-module, representation planning walks the reachable checked expressions,
-statements, and patterns in that body and records their checked types before
-layout planning runs. A type that appears only in a local aggregate, temporary
-receiver, nested expression, or destructuring pattern is therefore still present
-in the explicit representation table consumed by lowering.
+For runtime roots whose worker source resolves to a checked body in any checked
+module view available to post-check lowering, representation planning walks the
+reachable checked expressions, statements, and patterns in that body and records
+their checked types with that body's checked module id before layout planning
+runs. Imported direct calls therefore keep imported type ids attached to the
+imported artifact that owns them; they are not projected into root-module type
+ids and they are not recovered by name. A type that appears only in a local
+aggregate, temporary receiver, nested expression, or destructuring pattern is
+therefore still present in the explicit representation table consumed by
+lowering.
 
 `.boxy` represents an unknown type-variable value as one ordinary Roc box
 payload pointer. This is the same runtime shape as `Box(T)`: a nullable or
