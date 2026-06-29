@@ -490,6 +490,7 @@ const ProcBodyBuilder = struct {
             .unary_minus => |child| try self.lowerUnaryLowLevelInto(target, .num_negate, child, next),
             .unary_not => |child| try self.lowerUnaryLowLevelInto(target, .bool_not, child, next),
             .binop => |binop| try self.lowerBoolBinopInto(target, binop.op, binop.lhs, binop.rhs, next),
+            .structural_eq => |eq| try self.lowerStructuralEqInto(target, eq.lhs, eq.rhs, eq.negated, next),
             .record => |record| blk: {
                 if (record.ext != null) {
                     boxyLowerInvariant("open record expression reached boxy body lowering before record extension lowering was implemented");
@@ -1885,6 +1886,400 @@ const ProcBodyBuilder = struct {
         return try self.lowerExprInto(cond, lhs, switch_stmt);
     }
 
+    fn lowerStructuralEqInto(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        lhs_id: checked.CheckedExprId,
+        rhs_id: checked.CheckedExprId,
+        negated: bool,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const lhs_expr = self.module.checked_bodies.expr(lhs_id);
+        const rhs_expr = self.module.checked_bodies.expr(rhs_id);
+        if (lhs_expr.ty != rhs_expr.ty) {
+            boxyLowerInvariant("checked structural equality operands had different checked types");
+        }
+
+        const rep_id = self.repForType(lhs_expr.ty);
+        const operand_layout = self.workerRuntimeLayoutForType(lhs_expr.ty).layoutIdx();
+        if (self.workerRuntimeLayoutForType(rhs_expr.ty).layoutIdx() != operand_layout) {
+            boxyLowerInvariant("checked structural equality operand layouts disagreed");
+        }
+
+        const lhs = try self.addFrameLocal(operand_layout);
+        const rhs = try self.addFrameLocal(operand_layout);
+        var continuation = try self.lowerEqRepLocalsInto(target, lhs, rhs, rep_id, negated, next);
+        continuation = try self.lowerExprInto(rhs, rhs_id, continuation);
+        return try self.lowerExprInto(lhs, lhs_id, continuation);
+    }
+
+    fn lowerEqRepLocalsInto(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        lhs: LIR.LocalId,
+        rhs: LIR.LocalId,
+        rep_id: Plan.TypeRepId,
+        negated: bool,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const rep = self.parent.plan.representations.items[@intFromEnum(rep_id)];
+        return switch (rep.kind) {
+            .in_progress => boxyLowerInvariant("in-progress boxy representation reached structural equality lowering"),
+            .dynamic => boxyLowerInvariant("dynamic structural equality reached boxy lowering before descriptor equality support"),
+            .erased_callable => boxyLowerInvariant("erased callable structural equality reached boxy lowering"),
+            .list,
+            .box,
+            => boxyLowerInvariant("owned structural equality reached boxy lowering before dictionary equality support"),
+            .primitive => |primitive| try self.lowerPrimitiveEqLocalsInto(target, lhs, rhs, primitive, negated, next),
+            .bool_tag_union => try self.lowerBoolEqLocalsInto(target, lhs, rhs, negated, next),
+            .empty_record,
+            .empty_tag_union,
+            => try self.assignBoolLiteral(target, !negated, next),
+            .alias => try self.lowerEqRepLocalsInto(target, lhs, rhs, self.requiredSingleChild(rep_id, .alias_backing).rep, negated, next),
+            .nominal => |kind| switch (kind) {
+                .transparent => if (rep.declared_fields.len != 0)
+                    try self.lowerDeclaredFieldEqLocalsInto(target, lhs, rhs, rep, negated, next)
+                else
+                    try self.lowerEqRepLocalsInto(target, lhs, rhs, self.requiredSingleChild(rep_id, .nominal_backing).rep, negated, next),
+                .opaque_nominal => boxyLowerInvariant("opaque nominal structural equality reached boxy lowering before descriptor equality support"),
+                .builtin_other => try self.lowerEqRepLocalsInto(target, lhs, rhs, self.requiredSingleChild(rep_id, .nominal_backing).rep, negated, next),
+            },
+            .record,
+            .record_unbound,
+            => try self.lowerRecordEqLocalsInto(target, lhs, rhs, rep, negated, next),
+            .tuple => try self.lowerTupleEqLocalsInto(target, lhs, rhs, rep, negated, next),
+            .tag_union => try self.lowerTagUnionEqLocalsInto(target, lhs, rhs, rep, negated, next),
+        };
+    }
+
+    fn lowerPrimitiveEqLocalsInto(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        lhs: LIR.LocalId,
+        rhs: LIR.LocalId,
+        primitive: checked.CheckedPrimitive,
+        negated: bool,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        if (primitive == .bool) {
+            return try self.lowerBoolEqLocalsInto(target, lhs, rhs, negated, next);
+        }
+
+        const eq_op: LIR.LowLevel = switch (primitive) {
+            .str => .str_is_eq,
+            .u8,
+            .i8,
+            .u16,
+            .i16,
+            .u32,
+            .i32,
+            .u64,
+            .i64,
+            .u128,
+            .i128,
+            .f32,
+            .f64,
+            .dec,
+            => .num_is_eq,
+            .bool => unreachable,
+        };
+        const args = [_]LIR.LocalId{ lhs, rhs };
+        if (!negated) {
+            return try self.parent.result.store.addCFStmt(.{ .assign_low_level = .{
+                .target = target,
+                .op = eq_op,
+                .rc_effect = eq_op.rcEffect(),
+                .args = try self.parent.result.store.addLocalSpan(&args),
+                .next = next,
+            } });
+        }
+
+        const raw = try self.addFrameLocal(.bool);
+        const not_stmt = try self.parent.result.store.addCFStmt(.{ .assign_low_level = .{
+            .target = target,
+            .op = .bool_not,
+            .rc_effect = LIR.LowLevel.bool_not.rcEffect(),
+            .args = try self.parent.result.store.addLocalSpan(&[_]LIR.LocalId{raw}),
+            .next = next,
+        } });
+        return try self.parent.result.store.addCFStmt(.{ .assign_low_level = .{
+            .target = raw,
+            .op = eq_op,
+            .rc_effect = eq_op.rcEffect(),
+            .args = try self.parent.result.store.addLocalSpan(&args),
+            .next = not_stmt,
+        } });
+    }
+
+    fn lowerBoolEqLocalsInto(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        lhs: LIR.LocalId,
+        rhs: LIR.LocalId,
+        negated: bool,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const lhs_disc = try self.addFrameLocal(.u16);
+        const rhs_disc = try self.addFrameLocal(.u16);
+        const compare = try self.lowerPrimitiveEqLocalsInto(target, lhs_disc, rhs_disc, .u16, negated, next);
+        const read_rhs = try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
+            .target = rhs_disc,
+            .op = .{ .discriminant = .{ .source = rhs } },
+            .next = compare,
+        } });
+        return try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
+            .target = lhs_disc,
+            .op = .{ .discriminant = .{ .source = lhs } },
+            .next = read_rhs,
+        } });
+    }
+
+    fn lowerRecordEqLocalsInto(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        lhs: LIR.LocalId,
+        rhs: LIR.LocalId,
+        rep: Plan.TypeRepresentation,
+        negated: bool,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        var current = try self.assignBoolLiteral(target, !negated, next);
+        const failed = try self.assignBoolLiteral(target, negated, next);
+        const children = self.parent.plan.childSlice(rep.children);
+        var field_index = recordEqualityFieldCount(children);
+        var i = children.len;
+        while (i > 0) {
+            i -= 1;
+            const child = children[i];
+            switch (child.role) {
+                .record_field => {
+                    field_index -= 1;
+                    current = try self.lowerFieldEqStep(lhs, rhs, child.rep, field_index, current, failed);
+                },
+                .record_ext => self.requireEmptyRecordExtension(child.rep),
+                else => boxyLowerInvariant("record equality representation had a non-record child role"),
+            }
+        }
+        return current;
+    }
+
+    fn lowerTupleEqLocalsInto(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        lhs: LIR.LocalId,
+        rhs: LIR.LocalId,
+        rep: Plan.TypeRepresentation,
+        negated: bool,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        var current = try self.assignBoolLiteral(target, !negated, next);
+        const failed = try self.assignBoolLiteral(target, negated, next);
+        const children = self.parent.plan.childSlice(rep.children);
+        var i = children.len;
+        while (i > 0) {
+            i -= 1;
+            const child = children[i];
+            switch (child.role) {
+                .tuple_elem => |index| {
+                    if (index > std.math.maxInt(u16)) {
+                        boxyLowerInvariant("tuple equality element index exceeded LIR field index range");
+                    }
+                    current = try self.lowerFieldEqStep(lhs, rhs, child.rep, @intCast(index), current, failed);
+                },
+                else => boxyLowerInvariant("tuple equality representation had a non-tuple child role"),
+            }
+        }
+        return current;
+    }
+
+    fn lowerDeclaredFieldEqLocalsInto(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        lhs: LIR.LocalId,
+        rhs: LIR.LocalId,
+        rep: Plan.TypeRepresentation,
+        negated: bool,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        var current = try self.assignBoolLiteral(target, !negated, next);
+        const failed = try self.assignBoolLiteral(target, negated, next);
+        const fields = self.parent.plan.declaredFieldSlice(rep.declared_fields);
+        var i = fields.len;
+        while (i > 0) {
+            i -= 1;
+            const field = fields[i];
+            current = try self.lowerFieldEqStep(lhs, rhs, field.rep, field.index, current, failed);
+        }
+        return current;
+    }
+
+    fn lowerFieldEqStep(
+        self: *ProcBodyBuilder,
+        lhs: LIR.LocalId,
+        rhs: LIR.LocalId,
+        field_rep: Plan.TypeRepId,
+        field_index: u16,
+        on_equal: LIR.CFStmtId,
+        on_not_equal: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const field_layout = self.workerRuntimeLayoutForRep(field_rep).layoutIdx();
+        const lhs_field = try self.addFrameLocal(field_layout);
+        const rhs_field = try self.addFrameLocal(field_layout);
+        const eq = try self.addFrameLocal(.bool);
+        var current = try self.boolSwitchNoContinuation(eq, on_equal, on_not_equal);
+        current = try self.lowerEqRepLocalsInto(eq, lhs_field, rhs_field, field_rep, false, current);
+        if (!self.isZstLocal(rhs_field)) {
+            current = try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
+                .target = rhs_field,
+                .op = .{ .field = .{
+                    .source = rhs,
+                    .field_idx = field_index,
+                } },
+                .next = current,
+            } });
+        }
+        if (!self.isZstLocal(lhs_field)) {
+            current = try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
+                .target = lhs_field,
+                .op = .{ .field = .{
+                    .source = lhs,
+                    .field_idx = field_index,
+                } },
+                .next = current,
+            } });
+        }
+        return current;
+    }
+
+    fn lowerTagUnionEqLocalsInto(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        lhs: LIR.LocalId,
+        rhs: LIR.LocalId,
+        rep: Plan.TypeRepresentation,
+        negated: bool,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        if (self.isZstLocal(lhs) and self.isZstLocal(rhs)) {
+            return try self.assignBoolLiteral(target, !negated, next);
+        }
+
+        const success = try self.assignBoolLiteral(target, !negated, next);
+        const failed = try self.assignBoolLiteral(target, negated, next);
+
+        const lhs_disc = try self.addFrameLocal(.u16);
+        const rhs_disc = try self.addFrameLocal(.u16);
+        const same_disc = try self.addFrameLocal(.bool);
+
+        const variants = self.parent.plan.tagVariantSlice(rep.tag_variants);
+        const branches = try self.parent.allocator.alloc(LIR.CFSwitchBranch, variants.len);
+        defer self.parent.allocator.free(branches);
+        for (variants, branches, 0..) |variant, *branch, index| {
+            if (index > std.math.maxInt(u16)) {
+                boxyLowerInvariant("tag-union equality variant index exceeded LIR variant range");
+            }
+            branch.* = .{
+                .value = @intCast(index),
+                .body = try self.lowerTagPayloadEqVariant(lhs, rhs, variant, @intCast(index), success, failed),
+            };
+        }
+
+        const payload_switch = try self.parent.result.store.addCFStmt(.{ .switch_stmt = .{
+            .cond = lhs_disc,
+            .branches = try self.parent.result.store.addCFSwitchBranches(branches),
+            .default_branch = failed,
+            .continuation = null,
+        } });
+        const disc_switch = try self.boolSwitchNoContinuation(same_disc, payload_switch, failed);
+        const compare_disc = try self.parent.result.store.addCFStmt(.{ .assign_low_level = .{
+            .target = same_disc,
+            .op = .num_is_eq,
+            .rc_effect = LIR.LowLevel.num_is_eq.rcEffect(),
+            .args = try self.parent.result.store.addLocalSpan(&[_]LIR.LocalId{ lhs_disc, rhs_disc }),
+            .next = disc_switch,
+        } });
+        const read_rhs = try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
+            .target = rhs_disc,
+            .op = .{ .discriminant = .{ .source = rhs } },
+            .next = compare_disc,
+        } });
+        return try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
+            .target = lhs_disc,
+            .op = .{ .discriminant = .{ .source = lhs } },
+            .next = read_rhs,
+        } });
+    }
+
+    fn lowerTagPayloadEqVariant(
+        self: *ProcBodyBuilder,
+        lhs: LIR.LocalId,
+        rhs: LIR.LocalId,
+        variant: Plan.TagVariant,
+        variant_index: u16,
+        on_equal: LIR.CFStmtId,
+        on_not_equal: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        var current = on_equal;
+        const payloads = self.parent.plan.childSlice(variant.payloads);
+        var i = payloads.len;
+        while (i > 0) {
+            i -= 1;
+            const child = payloads[i];
+            switch (child.role) {
+                .tag_payload => |payload| {
+                    if (payload.tag != variant.name or payload.index != @as(u32, @intCast(i))) {
+                        boxyLowerInvariant("tag equality payload span did not match its payload child roles");
+                    }
+                },
+                else => boxyLowerInvariant("tag equality variant payload span included a non-payload child"),
+            }
+            const payload_layout = self.workerRuntimeLayoutForRep(child.rep).layoutIdx();
+            const lhs_payload = try self.addFrameLocal(payload_layout);
+            const rhs_payload = try self.addFrameLocal(payload_layout);
+            const eq = try self.addFrameLocal(.bool);
+            current = try self.boolSwitchNoContinuation(eq, current, on_not_equal);
+            current = try self.lowerEqRepLocalsInto(eq, lhs_payload, rhs_payload, child.rep, false, current);
+
+            if (i > std.math.maxInt(u16)) {
+                boxyLowerInvariant("tag equality payload index exceeded LIR payload index range");
+            }
+            const payload_idx: ?u16 = if (payloads.len == 1) null else @as(u16, @intCast(i));
+            if (!self.isZstLocal(rhs_payload)) {
+                current = try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
+                    .target = rhs_payload,
+                    .op = if (payload_idx) |index| .{ .tag_payload = .{
+                        .source = rhs,
+                        .payload_idx = index,
+                        .variant_index = variant_index,
+                        .tag_discriminant = variant_index,
+                    } } else .{ .tag_payload_struct = .{
+                        .source = rhs,
+                        .variant_index = variant_index,
+                        .tag_discriminant = variant_index,
+                    } },
+                    .next = current,
+                } });
+            }
+            if (!self.isZstLocal(lhs_payload)) {
+                current = try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
+                    .target = lhs_payload,
+                    .op = if (payload_idx) |index| .{ .tag_payload = .{
+                        .source = lhs,
+                        .payload_idx = index,
+                        .variant_index = variant_index,
+                        .tag_discriminant = variant_index,
+                    } } else .{ .tag_payload_struct = .{
+                        .source = lhs,
+                        .variant_index = variant_index,
+                        .tag_discriminant = variant_index,
+                    } },
+                    .next = current,
+                } });
+            }
+        }
+        return current;
+    }
+
     fn lowerUnaryLowLevelInto(
         self: *ProcBodyBuilder,
         target: LIR.LocalId,
@@ -2184,6 +2579,22 @@ const ProcBodyBuilder = struct {
         return self.parent.layout_plan.rep_layouts[@intFromEnum(self.repForType(ty))].worker;
     }
 
+    fn workerRuntimeLayoutForRep(self: *const ProcBodyBuilder, rep_id: Plan.TypeRepId) Layouts.RuntimeLayout {
+        return self.parent.layout_plan.rep_layouts[@intFromEnum(rep_id)].worker;
+    }
+
+    fn requiredSingleChild(self: *const ProcBodyBuilder, rep_id: Plan.TypeRepId, role: Plan.ChildRole) Plan.RepChild {
+        var found: ?Plan.RepChild = null;
+        const rep = self.parent.plan.representations.items[@intFromEnum(rep_id)];
+        for (self.parent.plan.childSlice(rep.children)) |child| {
+            if (sameChildRole(child.role, role)) {
+                if (found != null) boxyLowerInvariant("representation had duplicate required child role");
+                found = child;
+            }
+        }
+        return found orelse boxyLowerInvariant("representation was missing required child role");
+    }
+
     fn requireEmptyRecordExtension(self: *const ProcBodyBuilder, rep_id: Plan.TypeRepId) void {
         const rep = self.parent.plan.representations.items[@intFromEnum(rep_id)];
         if (rep.kind != .empty_record) {
@@ -2204,6 +2615,21 @@ const ProcBodyBuilder = struct {
             found = index;
         }
         return found orelse boxyLowerInvariant("record expression was missing a field from its checked type representation");
+    }
+
+    fn recordEqualityFieldCount(children: []const Plan.RepChild) u16 {
+        var count: usize = 0;
+        for (children) |child| {
+            switch (child.role) {
+                .record_field => count += 1,
+                .record_ext => {},
+                else => boxyLowerInvariant("record equality representation had a non-record child role"),
+            }
+        }
+        if (count > std.math.maxInt(u16)) {
+            boxyLowerInvariant("record equality field count exceeded LIR field index range");
+        }
+        return @intCast(count);
     }
 
     fn recordFieldLayoutIndex(
@@ -3502,6 +3928,270 @@ test "boxy lowerer emits short-circuit checked boolean and" {
     const false_branch = out.lir_result.store.getCFStmt(switch_stmt.default_branch).assign_tag;
     try std.testing.expectEqual(@as(u16, 0), false_branch.variant_index);
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = false_branch.target } }, out.lir_result.store.getCFStmt(false_branch.next));
+}
+
+test "boxy lowerer emits primitive structural equality as low-level equality" {
+    const gpa = std.testing.allocator;
+
+    var artifact = minimalCheckedArtifact(gpa);
+    defer artifact.canonical_names.deinit();
+    defer artifact.checked_types.deinit(gpa);
+    defer artifact.checked_bodies.deinit(gpa);
+
+    try artifact.checked_types.payloads.append(gpa, .{
+        .nominal = builtinNominal(.u64, @enumFromInt(0), .{}),
+    });
+    try artifact.checked_types.payloads.append(gpa, .{
+        .nominal = builtinNominal(.bool, @enumFromInt(0), .{}),
+    });
+    try artifact.checked_types.payloads.append(gpa, .{
+        .function = .{
+            .kind = .pure,
+            .args = .{},
+            .ret = @enumFromInt(1),
+            .needs_instantiation = false,
+        },
+    });
+
+    const template_ref = procedureTemplateRef(artifact.key, 0);
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(0),
+        .ty = @enumFromInt(2),
+        .source_region = base.Region.zero(),
+        .data = .{ .lambda = .{ .args = .{}, .body = @enumFromInt(1) } },
+    });
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(1),
+        .ty = @enumFromInt(1),
+        .source_region = base.Region.zero(),
+        .data = .{ .structural_eq = .{
+            .lhs = @enumFromInt(2),
+            .rhs = @enumFromInt(3),
+            .negated = false,
+        } },
+    });
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(2),
+        .ty = @enumFromInt(0),
+        .source_region = base.Region.zero(),
+        .data = .{ .num = .{ .value = intValue(42), .kind = .u64 } },
+    });
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(3),
+        .ty = @enumFromInt(0),
+        .source_region = base.Region.zero(),
+        .data = .{ .num = .{ .value = intValue(42), .kind = .u64 } },
+    });
+    try artifact.checked_bodies.bodies.append(gpa, .{
+        .id = @enumFromInt(0),
+        .root_expr = @enumFromInt(0),
+        .owner_template = template_ref,
+    });
+    var templates = [_]checked.CheckedProcedureTemplate{
+        checkedTemplate(template_ref, @enumFromInt(2), @enumFromInt(0)),
+    };
+    artifact.checked_procedure_templates = .{ .templates = &templates };
+
+    const root = checked.RootRequest{
+        .order = 0,
+        .module_idx = 0,
+        .kind = .runtime_entrypoint,
+        .source = .{ .def = @enumFromInt(0) },
+        .checked_type = @enumFromInt(2),
+        .abi = .roc,
+        .exposure = .private,
+        .procedure_template = template_ref,
+    };
+    var plan = try Plan.analyzeProgram(gpa, .{
+        .root_module = .{ .module = &artifact, .roots = undefined },
+        .roots = &.{root},
+    }, .{});
+    defer plan.deinit();
+
+    var out = try run(
+        gpa,
+        .{ .root = .{ .module = &artifact, .roots = undefined } },
+        .{},
+        &plan,
+        .{},
+    );
+    defer out.deinit();
+
+    const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
+    const lhs = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_literal;
+    switch (lhs.value) {
+        .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 42), literal.value),
+        else => return error.TestUnexpectedResult,
+    }
+    const rhs = out.lir_result.store.getCFStmt(lhs.next).assign_literal;
+    switch (rhs.value) {
+        .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 42), literal.value),
+        else => return error.TestUnexpectedResult,
+    }
+    const eq = out.lir_result.store.getCFStmt(rhs.next).assign_low_level;
+    try std.testing.expectEqual(@as(LIR.LowLevel, .num_is_eq), eq.op);
+    const args = out.lir_result.store.getLocalSpan(eq.args);
+    try std.testing.expectEqual(@as(usize, 2), args.len);
+    try std.testing.expectEqual(lhs.target, args[0]);
+    try std.testing.expectEqual(rhs.target, args[1]);
+    try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = eq.target } }, out.lir_result.store.getCFStmt(eq.next));
+}
+
+test "boxy lowerer emits tuple structural equality with field short-circuiting" {
+    const gpa = std.testing.allocator;
+
+    var artifact = minimalCheckedArtifact(gpa);
+    defer artifact.canonical_names.deinit();
+    defer artifact.checked_types.deinit(gpa);
+    defer artifact.checked_bodies.deinit(gpa);
+
+    try artifact.checked_types.type_id_pool.appendSlice(gpa, &.{
+        @as(checked.CheckedTypeId, @enumFromInt(0)),
+        @as(checked.CheckedTypeId, @enumFromInt(0)),
+    });
+    try artifact.checked_types.payloads.append(gpa, .{
+        .nominal = builtinNominal(.u64, @enumFromInt(0), .{}),
+    });
+    try artifact.checked_types.payloads.append(gpa, .{
+        .tuple = .{ .start = 0, .len = 2 },
+    });
+    try artifact.checked_types.payloads.append(gpa, .{
+        .nominal = builtinNominal(.bool, @enumFromInt(0), .{}),
+    });
+    try artifact.checked_types.payloads.append(gpa, .{
+        .function = .{
+            .kind = .pure,
+            .args = .{},
+            .ret = @enumFromInt(2),
+            .needs_instantiation = false,
+        },
+    });
+
+    try artifact.checked_bodies.expr_id_pool.appendSlice(gpa, &.{
+        @as(checked.CheckedExprId, @enumFromInt(3)),
+        @as(checked.CheckedExprId, @enumFromInt(4)),
+        @as(checked.CheckedExprId, @enumFromInt(6)),
+        @as(checked.CheckedExprId, @enumFromInt(7)),
+    });
+
+    const template_ref = procedureTemplateRef(artifact.key, 0);
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(0),
+        .ty = @enumFromInt(3),
+        .source_region = base.Region.zero(),
+        .data = .{ .lambda = .{ .args = .{}, .body = @enumFromInt(1) } },
+    });
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(1),
+        .ty = @enumFromInt(2),
+        .source_region = base.Region.zero(),
+        .data = .{ .structural_eq = .{
+            .lhs = @enumFromInt(2),
+            .rhs = @enumFromInt(5),
+            .negated = false,
+        } },
+    });
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(2),
+        .ty = @enumFromInt(1),
+        .source_region = base.Region.zero(),
+        .data = .{ .tuple = .{ .start = 0, .len = 2 } },
+    });
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(3),
+        .ty = @enumFromInt(0),
+        .source_region = base.Region.zero(),
+        .data = .{ .num = .{ .value = intValue(1), .kind = .u64 } },
+    });
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(4),
+        .ty = @enumFromInt(0),
+        .source_region = base.Region.zero(),
+        .data = .{ .num = .{ .value = intValue(2), .kind = .u64 } },
+    });
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(5),
+        .ty = @enumFromInt(1),
+        .source_region = base.Region.zero(),
+        .data = .{ .tuple = .{ .start = 2, .len = 2 } },
+    });
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(6),
+        .ty = @enumFromInt(0),
+        .source_region = base.Region.zero(),
+        .data = .{ .num = .{ .value = intValue(1), .kind = .u64 } },
+    });
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(7),
+        .ty = @enumFromInt(0),
+        .source_region = base.Region.zero(),
+        .data = .{ .num = .{ .value = intValue(3), .kind = .u64 } },
+    });
+    try artifact.checked_bodies.bodies.append(gpa, .{
+        .id = @enumFromInt(0),
+        .root_expr = @enumFromInt(0),
+        .owner_template = template_ref,
+    });
+    var templates = [_]checked.CheckedProcedureTemplate{
+        checkedTemplate(template_ref, @enumFromInt(3), @enumFromInt(0)),
+    };
+    artifact.checked_procedure_templates = .{ .templates = &templates };
+
+    const root = checked.RootRequest{
+        .order = 0,
+        .module_idx = 0,
+        .kind = .runtime_entrypoint,
+        .source = .{ .def = @enumFromInt(0) },
+        .checked_type = @enumFromInt(3),
+        .abi = .roc,
+        .exposure = .private,
+        .procedure_template = template_ref,
+    };
+    var plan = try Plan.analyzeProgram(gpa, .{
+        .root_module = .{ .module = &artifact, .roots = undefined },
+        .roots = &.{root},
+    }, .{});
+    defer plan.deinit();
+
+    var out = try run(
+        gpa,
+        .{ .root = .{ .module = &artifact, .roots = undefined } },
+        .{},
+        &plan,
+        .{},
+    );
+    defer out.deinit();
+
+    const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
+    const lhs_first = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_literal;
+    const lhs_second = out.lir_result.store.getCFStmt(lhs_first.next).assign_literal;
+    const lhs_tuple = out.lir_result.store.getCFStmt(lhs_second.next).assign_struct;
+    const rhs_first = out.lir_result.store.getCFStmt(lhs_tuple.next).assign_literal;
+    const rhs_second = out.lir_result.store.getCFStmt(rhs_first.next).assign_literal;
+    const rhs_tuple = out.lir_result.store.getCFStmt(rhs_second.next).assign_struct;
+
+    const read_lhs_field0 = out.lir_result.store.getCFStmt(rhs_tuple.next).assign_ref;
+    try std.testing.expectEqual(lhs_tuple.target, read_lhs_field0.op.field.source);
+    try std.testing.expectEqual(@as(u16, 0), read_lhs_field0.op.field.field_idx);
+    const read_rhs_field0 = out.lir_result.store.getCFStmt(read_lhs_field0.next).assign_ref;
+    try std.testing.expectEqual(rhs_tuple.target, read_rhs_field0.op.field.source);
+    try std.testing.expectEqual(@as(u16, 0), read_rhs_field0.op.field.field_idx);
+
+    const compare_field0 = out.lir_result.store.getCFStmt(read_rhs_field0.next).assign_low_level;
+    try std.testing.expectEqual(@as(LIR.LowLevel, .num_is_eq), compare_field0.op);
+    const switch_field0 = out.lir_result.store.getCFStmt(compare_field0.next).switch_stmt;
+    try std.testing.expectEqual(compare_field0.target, switch_field0.cond);
+    const branches = out.lir_result.store.getCFSwitchBranches(switch_field0.branches);
+    try std.testing.expectEqual(@as(usize, 1), branches.len);
+    try std.testing.expectEqual(@as(u64, 1), branches[0].value);
+
+    const failed = out.lir_result.store.getCFStmt(switch_field0.default_branch).assign_tag;
+    try std.testing.expectEqual(@as(u16, 0), failed.variant_index);
+    try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = failed.target } }, out.lir_result.store.getCFStmt(failed.next));
+
+    const read_lhs_field1 = out.lir_result.store.getCFStmt(branches[0].body).assign_ref;
+    try std.testing.expectEqual(lhs_tuple.target, read_lhs_field1.op.field.source);
+    try std.testing.expectEqual(@as(u16, 1), read_lhs_field1.op.field.field_idx);
 }
 
 test "boxy lowerer emits checked string segment literals" {
