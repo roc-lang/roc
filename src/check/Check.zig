@@ -6713,7 +6713,7 @@ fn checkExpectBody(
     self.current_expect_region = expect_region;
     defer self.current_expect_region = saved_expect_region;
 
-    return try self.checkExpr(body, env, expected);
+    return try self.checkExprWithHoistSelectionSuppressed(body, env, expected);
 }
 
 fn varIsFunctionType(self: *Self, var_: Var) bool {
