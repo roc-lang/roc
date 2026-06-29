@@ -461,6 +461,8 @@ const ProcBodyBuilder = struct {
             } }),
             .empty_record => try self.assignZst(target, next),
             .lookup_local => |lookup| try self.assignLocal(target, self.localForPattern(lookup.pattern), next),
+            .field_access => |access| try self.lowerFieldAccessInto(target, access.receiver, access.field_name, next),
+            .tuple_access => |access| try self.lowerTupleAccessInto(target, access.tuple, access.elem_index, next),
             .tuple => |items| try self.lowerTupleInto(target, items, next),
             .record => |record| blk: {
                 if (record.ext != null) {
@@ -508,6 +510,49 @@ const ProcBodyBuilder = struct {
             continuation = try self.lowerExprInto(field_locals[index], items[index], continuation);
         }
         return continuation;
+    }
+
+    fn lowerFieldAccessInto(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        receiver_id: checked.CheckedExprId,
+        field_name: @TypeOf(@as(checked.CheckedRecordExprField, undefined).label),
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const receiver = self.module.checked_bodies.expr(receiver_id);
+        const receiver_local = try self.addFrameLocal(self.workerRuntimeLayoutForType(receiver.ty).layoutIdx());
+        const read = try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
+            .target = target,
+            .op = .{ .field = .{
+                .source = receiver_local,
+                .field_idx = self.recordFieldLayoutIndex(receiver.ty, field_name),
+            } },
+            .next = next,
+        } });
+        return try self.lowerExprInto(receiver_local, receiver_id, read);
+    }
+
+    fn lowerTupleAccessInto(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        tuple_id: checked.CheckedExprId,
+        elem_index: u32,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        if (elem_index > std.math.maxInt(u16)) {
+            boxyLowerInvariant("tuple access element index exceeded LIR field index range");
+        }
+        const tuple = self.module.checked_bodies.expr(tuple_id);
+        const tuple_local = try self.addFrameLocal(self.workerRuntimeLayoutForType(tuple.ty).layoutIdx());
+        const read = try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
+            .target = target,
+            .op = .{ .field = .{
+                .source = tuple_local,
+                .field_idx = @intCast(elem_index),
+            } },
+            .next = next,
+        } });
+        return try self.lowerExprInto(tuple_local, tuple_id, read);
     }
 
     fn lowerRecordInto(
@@ -738,6 +783,33 @@ const ProcBodyBuilder = struct {
             found = index;
         }
         return found orelse boxyLowerInvariant("record expression was missing a field from its checked type representation");
+    }
+
+    fn recordFieldLayoutIndex(
+        self: *const ProcBodyBuilder,
+        record_ty: checked.CheckedTypeId,
+        field_name: @TypeOf(@as(checked.CheckedRecordExprField, undefined).label),
+    ) u16 {
+        const rep = self.parent.plan.representations.items[@intFromEnum(self.repForType(record_ty))];
+        switch (rep.kind) {
+            .record,
+            .record_unbound,
+            => {},
+            else => boxyLowerInvariant("record field access receiver did not have a boxy record representation"),
+        }
+
+        var index: u16 = 0;
+        for (self.parent.plan.childSlice(rep.children)) |child| {
+            switch (child.role) {
+                .record_field => |label| {
+                    if (label == field_name) return index;
+                    index += 1;
+                },
+                .record_ext => self.requireEmptyRecordExtension(child.rep),
+                else => boxyLowerInvariant("record field access representation had a non-record child role"),
+            }
+        }
+        boxyLowerInvariant("record field access referenced a field outside its checked type representation");
     }
 };
 
@@ -1153,7 +1225,7 @@ test "boxy lowerer emits private worker proc for zero-arg numeric lambda root" {
         .procedure_template = template_ref,
     };
     var plan = try Plan.analyzeProgram(gpa, .{
-        .checked_types = artifact.checked_types.view(),
+        .root_module = .{ .module = &artifact, .roots = undefined },
         .roots = &.{root},
     }, .{});
     defer plan.deinit();
@@ -1276,7 +1348,7 @@ test "boxy lowerer emits block declaration bindings with checked type layouts" {
         .procedure_template = template_ref,
     };
     var plan = try Plan.analyzeProgram(gpa, .{
-        .checked_types = artifact.checked_types.view(),
+        .root_module = .{ .module = &artifact, .roots = undefined },
         .roots = &.{root},
     }, .{});
     defer plan.deinit();
@@ -1385,7 +1457,7 @@ test "boxy lowerer emits tuple construction in element order" {
         .procedure_template = template_ref,
     };
     var plan = try Plan.analyzeProgram(gpa, .{
-        .checked_types = artifact.checked_types.view(),
+        .root_module = .{ .module = &artifact, .roots = undefined },
         .roots = &.{root},
     }, .{});
     defer plan.deinit();
@@ -1418,6 +1490,119 @@ test "boxy lowerer emits tuple construction in element order" {
     try std.testing.expectEqual(first.target, fields[0]);
     try std.testing.expectEqual(second.target, fields[1]);
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = build.target } }, out.lir_result.store.getCFStmt(build.next));
+}
+
+test "boxy lowerer emits tuple access as field read" {
+    const gpa = std.testing.allocator;
+
+    var artifact = minimalCheckedArtifact(gpa);
+    defer artifact.canonical_names.deinit();
+    defer artifact.checked_types.deinit(gpa);
+    defer artifact.checked_bodies.deinit(gpa);
+
+    try artifact.checked_types.type_id_pool.appendSlice(gpa, &.{
+        @as(checked.CheckedTypeId, @enumFromInt(0)),
+        @as(checked.CheckedTypeId, @enumFromInt(0)),
+    });
+    try artifact.checked_types.payloads.append(gpa, .{
+        .nominal = builtinNominal(.u64, @enumFromInt(0), .{}),
+    });
+    try artifact.checked_types.payloads.append(gpa, .{
+        .tuple = .{ .start = 0, .len = 2 },
+    });
+    try artifact.checked_types.payloads.append(gpa, .{
+        .function = .{
+            .kind = .pure,
+            .args = .{},
+            .ret = @enumFromInt(0),
+            .needs_instantiation = false,
+        },
+    });
+
+    try artifact.checked_bodies.expr_id_pool.appendSlice(gpa, &.{
+        @as(checked.CheckedExprId, @enumFromInt(3)),
+        @as(checked.CheckedExprId, @enumFromInt(4)),
+    });
+
+    const template_ref = procedureTemplateRef(artifact.key, 0);
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(0),
+        .ty = @enumFromInt(2),
+        .source_region = base.Region.zero(),
+        .data = .{ .lambda = .{ .args = .{}, .body = @enumFromInt(1) } },
+    });
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(1),
+        .ty = @enumFromInt(0),
+        .source_region = base.Region.zero(),
+        .data = .{ .tuple_access = .{ .tuple = @enumFromInt(2), .elem_index = 1 } },
+    });
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(2),
+        .ty = @enumFromInt(1),
+        .source_region = base.Region.zero(),
+        .data = .{ .tuple = .{ .start = 0, .len = 2 } },
+    });
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(3),
+        .ty = @enumFromInt(0),
+        .source_region = base.Region.zero(),
+        .data = .{ .num = .{ .value = intValue(1), .kind = .u64 } },
+    });
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(4),
+        .ty = @enumFromInt(0),
+        .source_region = base.Region.zero(),
+        .data = .{ .num = .{ .value = intValue(2), .kind = .u64 } },
+    });
+    try artifact.checked_bodies.bodies.append(gpa, .{
+        .id = @enumFromInt(0),
+        .root_expr = @enumFromInt(0),
+        .owner_template = template_ref,
+    });
+    var templates = [_]checked.CheckedProcedureTemplate{
+        checkedTemplate(template_ref, @enumFromInt(2), @enumFromInt(0)),
+    };
+    artifact.checked_procedure_templates = .{ .templates = &templates };
+
+    const root = checked.RootRequest{
+        .order = 0,
+        .module_idx = 0,
+        .kind = .runtime_entrypoint,
+        .source = .{ .def = @enumFromInt(0) },
+        .checked_type = @enumFromInt(2),
+        .abi = .roc,
+        .exposure = .private,
+        .procedure_template = template_ref,
+    };
+    var plan = try Plan.analyzeProgram(gpa, .{
+        .root_module = .{ .module = &artifact, .roots = undefined },
+        .roots = &.{root},
+    }, .{});
+    defer plan.deinit();
+
+    var out = try run(
+        gpa,
+        .{ .root = .{ .module = &artifact, .roots = undefined } },
+        .{},
+        &plan,
+        .{},
+    );
+    defer out.deinit();
+
+    const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
+    const first = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_literal;
+    const second = out.lir_result.store.getCFStmt(first.next).assign_literal;
+    const build = out.lir_result.store.getCFStmt(second.next).assign_struct;
+    const read = out.lir_result.store.getCFStmt(build.next).assign_ref;
+    switch (read.op) {
+        .field => |field| {
+            try std.testing.expectEqual(build.target, field.source);
+            try std.testing.expectEqual(@as(u16, 1), field.field_idx);
+        },
+        else => return error.TestUnexpectedResult,
+    }
+    try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = read.target } }, out.lir_result.store.getCFStmt(read.next));
 }
 
 test "boxy lowerer emits record construction in layout order after source-order evaluation" {
@@ -1505,7 +1690,7 @@ test "boxy lowerer emits record construction in layout order after source-order 
         .procedure_template = template_ref,
     };
     var plan = try Plan.analyzeProgram(gpa, .{
-        .checked_types = artifact.checked_types.view(),
+        .root_module = .{ .module = &artifact, .roots = undefined },
         .roots = &.{root},
     }, .{});
     defer plan.deinit();
@@ -1538,6 +1723,126 @@ test "boxy lowerer emits record construction in layout order after source-order 
     try std.testing.expectEqual(second.target, fields[0]);
     try std.testing.expectEqual(first.target, fields[1]);
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = build.target } }, out.lir_result.store.getCFStmt(build.next));
+}
+
+test "boxy lowerer emits record field access using layout field index" {
+    const gpa = std.testing.allocator;
+
+    var artifact = minimalCheckedArtifact(gpa);
+    defer artifact.canonical_names.deinit();
+    defer artifact.checked_types.deinit(gpa);
+    defer artifact.checked_bodies.deinit(gpa);
+
+    const field_a: @TypeOf(@as(checked.CheckedRecordField, undefined).name) = @enumFromInt(1);
+    const field_b: @TypeOf(@as(checked.CheckedRecordField, undefined).name) = @enumFromInt(2);
+
+    try artifact.checked_types.payloads.append(gpa, .{
+        .nominal = builtinNominal(.u64, @enumFromInt(0), .{}),
+    });
+    try artifact.checked_types.payloads.append(gpa, .empty_record);
+    try artifact.checked_types.record_field_pool.appendSlice(gpa, &.{
+        .{ .name = field_a, .ty = @as(checked.CheckedTypeId, @enumFromInt(0)) },
+        .{ .name = field_b, .ty = @as(checked.CheckedTypeId, @enumFromInt(0)) },
+    });
+    try artifact.checked_types.payloads.append(gpa, .{
+        .record = .{ .fields = .{ .start = 0, .len = 2 }, .ext = @enumFromInt(1) },
+    });
+    try artifact.checked_types.payloads.append(gpa, .{
+        .function = .{
+            .kind = .pure,
+            .args = .{},
+            .ret = @enumFromInt(0),
+            .needs_instantiation = false,
+        },
+    });
+
+    try artifact.checked_bodies.record_expr_field_pool.appendSlice(gpa, &.{
+        .{ .label = field_b, .value = @as(checked.CheckedExprId, @enumFromInt(3)) },
+        .{ .label = field_a, .value = @as(checked.CheckedExprId, @enumFromInt(4)) },
+    });
+
+    const template_ref = procedureTemplateRef(artifact.key, 0);
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(0),
+        .ty = @enumFromInt(3),
+        .source_region = base.Region.zero(),
+        .data = .{ .lambda = .{ .args = .{}, .body = @enumFromInt(1) } },
+    });
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(1),
+        .ty = @enumFromInt(0),
+        .source_region = base.Region.zero(),
+        .data = .{ .field_access = .{ .receiver = @enumFromInt(2), .field_name = field_b } },
+    });
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(2),
+        .ty = @enumFromInt(2),
+        .source_region = base.Region.zero(),
+        .data = .{ .record = .{
+            .fields = .{ .start = 0, .len = 2 },
+            .ext = null,
+        } },
+    });
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(3),
+        .ty = @enumFromInt(0),
+        .source_region = base.Region.zero(),
+        .data = .{ .num = .{ .value = intValue(2), .kind = .u64 } },
+    });
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(4),
+        .ty = @enumFromInt(0),
+        .source_region = base.Region.zero(),
+        .data = .{ .num = .{ .value = intValue(1), .kind = .u64 } },
+    });
+    try artifact.checked_bodies.bodies.append(gpa, .{
+        .id = @enumFromInt(0),
+        .root_expr = @enumFromInt(0),
+        .owner_template = template_ref,
+    });
+    var templates = [_]checked.CheckedProcedureTemplate{
+        checkedTemplate(template_ref, @enumFromInt(3), @enumFromInt(0)),
+    };
+    artifact.checked_procedure_templates = .{ .templates = &templates };
+
+    const root = checked.RootRequest{
+        .order = 0,
+        .module_idx = 0,
+        .kind = .runtime_entrypoint,
+        .source = .{ .def = @enumFromInt(0) },
+        .checked_type = @enumFromInt(3),
+        .abi = .roc,
+        .exposure = .private,
+        .procedure_template = template_ref,
+    };
+    var plan = try Plan.analyzeProgram(gpa, .{
+        .root_module = .{ .module = &artifact, .roots = undefined },
+        .roots = &.{root},
+    }, .{});
+    defer plan.deinit();
+
+    var out = try run(
+        gpa,
+        .{ .root = .{ .module = &artifact, .roots = undefined } },
+        .{},
+        &plan,
+        .{},
+    );
+    defer out.deinit();
+
+    const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
+    const first = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_literal;
+    const second = out.lir_result.store.getCFStmt(first.next).assign_literal;
+    const build = out.lir_result.store.getCFStmt(second.next).assign_struct;
+    const read = out.lir_result.store.getCFStmt(build.next).assign_ref;
+    switch (read.op) {
+        .field => |field| {
+            try std.testing.expectEqual(build.target, field.source);
+            try std.testing.expectEqual(@as(u16, 1), field.field_idx);
+        },
+        else => return error.TestUnexpectedResult,
+    }
+    try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = read.target } }, out.lir_result.store.getCFStmt(read.next));
 }
 
 test "boxy lowerer publishes host wrapper proc for exported roots" {

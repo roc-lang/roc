@@ -292,33 +292,44 @@ pub fn analyzeCheckedTypes(
 
 const Builder = struct {
     allocator: Allocator,
+    root_module: ?checked.LoweringModuleView,
     root_view: ModuleView,
     extra_module_views: []const ModuleView,
     imports: []const checked.ImportedModuleView,
     relation_modules: []const checked.ImportedModuleView,
     plan: ProgramPlan,
     by_type: std.AutoHashMap(checked.CheckedTypeId, TypeRepId),
+    body_exprs_seen: std.AutoHashMap(checked.CheckedExprId, void),
+    body_patterns_seen: std.AutoHashMap(checked.CheckedPatternId, void),
+    body_statements_seen: std.AutoHashMap(checked.CheckedStatementId, void),
 
     fn init(allocator: Allocator, input: ProgramInput) Builder {
         const root_view = if (input.root_view) |root_view|
             root_view
         else if (input.root_module) |root_module|
-            moduleViewFromImported(checked.importedView(root_module.module))
+            moduleViewFromArtifact(root_module.module)
         else
             ModuleView{ .checked_types = input.checked_types };
 
         return .{
             .allocator = allocator,
+            .root_module = input.root_module,
             .root_view = root_view,
             .extra_module_views = input.extra_module_views,
             .imports = if (input.root_module != null) input.imports else &.{},
             .relation_modules = if (input.root_module) |root_module| root_module.relation_modules else &.{},
             .plan = ProgramPlan.init(allocator),
             .by_type = std.AutoHashMap(checked.CheckedTypeId, TypeRepId).init(allocator),
+            .body_exprs_seen = std.AutoHashMap(checked.CheckedExprId, void).init(allocator),
+            .body_patterns_seen = std.AutoHashMap(checked.CheckedPatternId, void).init(allocator),
+            .body_statements_seen = std.AutoHashMap(checked.CheckedStatementId, void).init(allocator),
         };
     }
 
     fn deinit(self: *Builder) void {
+        self.body_statements_seen.deinit();
+        self.body_patterns_seen.deinit();
+        self.body_exprs_seen.deinit();
         self.by_type.deinit();
         self.plan.deinit();
     }
@@ -371,6 +382,10 @@ const Builder = struct {
             .worker_rep = rep,
         });
         try self.plan.root_reps.append(self.allocator, rep);
+
+        if (self.root_module != null) {
+            try self.analyzeWorkerBodyTypes(source);
+        }
     }
 
     fn analyzeType(self: *Builder, ty: checked.CheckedTypeId) Allocator.Error!TypeRepId {
@@ -885,6 +900,283 @@ const Builder = struct {
             rep.descriptor = id;
         }
     }
+
+    fn analyzeWorkerBodyTypes(self: *Builder, source: WorkerSource) Allocator.Error!void {
+        const body = self.rootWorkerBody(source);
+        try self.analyzeExprTypes(body.root_expr);
+    }
+
+    fn rootWorkerBody(self: *Builder, source: WorkerSource) checked.CheckedBody {
+        return switch (source) {
+            .procedure_template => |template| self.rootProcedureTemplateBody(template),
+            .procedure_binding => |binding| self.rootProcedureBindingBody(binding),
+            .procedure_use => |use| switch (use.binding) {
+                .top_level => |top_level| blk: {
+                    self.requireRootArtifact(top_level.artifact);
+                    break :blk self.rootProcedureBindingBody(top_level.binding);
+                },
+                .platform_required => |required| blk: {
+                    self.requireRootArtifact(required.app_value.artifact);
+                    break :blk self.rootProcedureBindingBody(required.procedure_binding);
+                },
+                .imported => boxyPlanInvariant("imported procedure use reached boxy body type planning before imported body planning is implemented"),
+                .hosted => boxyPlanInvariant("hosted procedure use reached boxy body type planning before hosted wrapper planning is implemented"),
+            },
+        };
+    }
+
+    fn rootProcedureBindingBody(self: *Builder, binding_ref: checked.TopLevelProcedureBindingRef) checked.CheckedBody {
+        const artifact = self.root_module.?.module;
+        const binding = artifact.top_level_procedure_bindings.get(binding_ref);
+        return switch (binding.body) {
+            .direct_template => |direct| switch (direct.template) {
+                .checked => |template| self.rootProcedureTemplateBody(template),
+                .lifted,
+                .synthetic,
+                => boxyPlanInvariant("non-checked procedure template reached boxy body type planning"),
+            },
+            .callable_eval_template => boxyPlanInvariant("callable eval procedure binding reached runtime boxy body type planning"),
+        };
+    }
+
+    fn rootProcedureTemplateBody(self: *Builder, template_ref: canonical.ProcedureTemplateRef) checked.CheckedBody {
+        const artifact = self.root_module.?.module;
+        self.requireRootArtifact(template_ref.artifact);
+        const template = artifact.checked_procedure_templates.get(template_ref.template);
+        const body_id = switch (template.body) {
+            .checked_body => |body| body,
+            .intrinsic_wrapper => boxyPlanInvariant("intrinsic wrapper reached boxy body type planning"),
+            .entry_wrapper => boxyPlanInvariant("compile-time entry wrapper reached runtime boxy body type planning"),
+        };
+        return artifact.checked_bodies.body(body_id);
+    }
+
+    fn requireRootArtifact(self: *Builder, artifact: anytype) void {
+        if (!std.mem.eql(u8, artifact.bytes[0..], self.root_module.?.module.key.bytes[0..])) {
+            boxyPlanInvariant("boxy body type planner referenced a non-root checked artifact before imported body planning is implemented");
+        }
+    }
+
+    fn analyzeExprTypes(self: *Builder, expr_id: checked.CheckedExprId) Allocator.Error!void {
+        const entry = try self.body_exprs_seen.getOrPut(expr_id);
+        if (entry.found_existing) return;
+
+        const bodies = self.root_module.?.module.checked_bodies.view();
+        const expr = bodies.expr(expr_id);
+        _ = try self.analyzeType(expr.ty);
+
+        switch (expr.data) {
+            .pending => boxyPlanInvariant("pending checked expression reached boxy body type planning"),
+            .num,
+            .frac_f32,
+            .frac_f64,
+            .dec,
+            .dec_small,
+            .num_from_numeral,
+            .typed_int,
+            .typed_frac,
+            .typed_num_from_numeral,
+            .str_from_quote,
+            .str_segment,
+            .bytes_literal,
+            .lookup_local,
+            .lookup_external,
+            .lookup_required,
+            .empty_list,
+            .empty_record,
+            .zero_argument_tag,
+            .dispatch_call,
+            .method_eq,
+            .type_dispatch_call,
+            .runtime_error,
+            .crash,
+            .ellipsis,
+            .anno_only,
+            .break_,
+            => {},
+            .str,
+            .list,
+            .tuple,
+            => |items| try self.analyzeExprSliceTypes(items),
+            .match_ => |match| {
+                try self.analyzeExprTypes(match.cond);
+                for (match.branches) |branch| {
+                    for (branch.patternsSlice(bodies)) |branch_pattern| {
+                        try self.analyzePatternTypes(branch_pattern.pattern);
+                    }
+                    if (branch.guard) |guard| try self.analyzeExprTypes(guard);
+                    try self.analyzeExprTypes(branch.value);
+                }
+            },
+            .if_ => |if_| {
+                for (if_.branches) |branch| {
+                    try self.analyzeExprTypes(branch.cond);
+                    try self.analyzeExprTypes(branch.body);
+                }
+                try self.analyzeExprTypes(if_.final_else);
+            },
+            .call => |call| {
+                try self.analyzeExprTypes(call.func);
+                try self.analyzeExprSliceTypes(call.args);
+                _ = try self.analyzeType(call.source_fn_ty_payload);
+            },
+            .record => |record| {
+                if (record.ext) |ext| try self.analyzeExprTypes(ext);
+                for (record.fields) |field| try self.analyzeExprTypes(field.value);
+            },
+            .block => |block| {
+                for (block.statements) |statement| try self.analyzeStatementTypes(statement);
+                try self.analyzeExprTypes(block.final_expr);
+            },
+            .tag => |tag| try self.analyzeExprSliceTypes(tag.args),
+            .nominal => |nominal| try self.analyzeExprTypes(nominal.backing_expr),
+            .closure => |closure| {
+                try self.analyzeExprTypes(closure.lambda);
+                for (closure.captures) |capture| try self.analyzePatternTypes(capture.pattern);
+            },
+            .lambda => |lambda| {
+                for (lambda.args) |arg| try self.analyzePatternTypes(arg);
+                try self.analyzeExprTypes(lambda.body);
+            },
+            .binop => |binop| {
+                try self.analyzeExprTypes(binop.lhs);
+                try self.analyzeExprTypes(binop.rhs);
+            },
+            .unary_minus,
+            .unary_not,
+            .dbg,
+            .expect,
+            => |child| try self.analyzeExprTypes(child),
+            .field_access => |access| try self.analyzeExprTypes(access.receiver),
+            .interpolation => |interpolation| {
+                try self.analyzeExprTypes(interpolation.first);
+                for (interpolation.parts) |part| {
+                    try self.analyzeExprTypes(part.value);
+                    try self.analyzeExprTypes(part.following_segment);
+                }
+                _ = try self.analyzeType(interpolation.step_fn_ty);
+            },
+            .structural_eq => |eq| {
+                try self.analyzeExprTypes(eq.lhs);
+                try self.analyzeExprTypes(eq.rhs);
+            },
+            .structural_hash => |hash| {
+                try self.analyzeExprTypes(hash.value);
+                try self.analyzeExprTypes(hash.hasher);
+            },
+            .tuple_access => |access| try self.analyzeExprTypes(access.tuple),
+            .expect_err => |expect_err| try self.analyzeExprTypes(expect_err.expr),
+            .return_ => |ret| try self.analyzeExprTypes(ret.expr),
+            .for_ => |for_| {
+                try self.analyzePatternTypes(for_.pattern);
+                try self.analyzeExprTypes(for_.expr);
+                try self.analyzeExprTypes(for_.body);
+            },
+            .hosted_lambda => |hosted| for (hosted.args) |arg| try self.analyzePatternTypes(arg),
+            .run_low_level => |run| try self.analyzeExprSliceTypes(run.args),
+        }
+    }
+
+    fn analyzeExprSliceTypes(self: *Builder, exprs: []const checked.CheckedExprId) Allocator.Error!void {
+        for (exprs) |expr| try self.analyzeExprTypes(expr);
+    }
+
+    fn analyzeStatementTypes(self: *Builder, statement_id: checked.CheckedStatementId) Allocator.Error!void {
+        const entry = try self.body_statements_seen.getOrPut(statement_id);
+        if (entry.found_existing) return;
+
+        const statement = self.root_module.?.module.checked_bodies.view().statement(statement_id);
+        switch (statement.data) {
+            .pending => boxyPlanInvariant("pending checked statement reached boxy body type planning"),
+            .decl => |decl| {
+                try self.analyzePatternTypes(decl.pattern);
+                try self.analyzeExprTypes(decl.expr);
+            },
+            .var_ => |decl| {
+                try self.analyzePatternTypes(decl.pattern);
+                try self.analyzeExprTypes(decl.expr);
+            },
+            .var_uninitialized => |decl| try self.analyzePatternTypes(decl.pattern),
+            .reassign => |reassign| {
+                try self.analyzePatternTypes(reassign.pattern);
+                try self.analyzeExprTypes(reassign.expr);
+            },
+            .crash,
+            .break_,
+            .import_,
+            .alias_decl,
+            .nominal_decl,
+            .type_anno,
+            .type_var_alias,
+            .runtime_error,
+            => {},
+            .dbg,
+            .expr,
+            .expect,
+            => |expr| try self.analyzeExprTypes(expr),
+            .for_ => |for_| {
+                try self.analyzePatternTypes(for_.pattern);
+                try self.analyzeExprTypes(for_.expr);
+                try self.analyzeExprTypes(for_.body);
+            },
+            .while_ => |loop| {
+                try self.analyzeExprTypes(loop.cond);
+                try self.analyzeExprTypes(loop.body);
+            },
+            .infinite_loop => |loop| {
+                try self.analyzeExprTypes(loop.cond);
+                try self.analyzeExprTypes(loop.body);
+            },
+            .breakable_loop => |loop| {
+                try self.analyzeExprTypes(loop.cond);
+                try self.analyzeExprTypes(loop.body);
+            },
+            .return_ => |ret| try self.analyzeExprTypes(ret.expr),
+        }
+    }
+
+    fn analyzePatternTypes(self: *Builder, pattern_id: checked.CheckedPatternId) Allocator.Error!void {
+        const entry = try self.body_patterns_seen.getOrPut(pattern_id);
+        if (entry.found_existing) return;
+
+        const pattern = self.root_module.?.module.checked_bodies.view().pattern(pattern_id);
+        _ = try self.analyzeType(pattern.ty);
+        switch (pattern.data) {
+            .pending => boxyPlanInvariant("pending checked pattern reached boxy body type planning"),
+            .assign,
+            .underscore,
+            .runtime_error,
+            => {},
+            .as => |as| try self.analyzePatternTypes(as.pattern),
+            .applied_tag => |tag| for (tag.args) |arg| try self.analyzePatternTypes(arg),
+            .nominal => |nominal| try self.analyzePatternTypes(nominal.backing_pattern),
+            .record_destructure => |fields| for (fields) |field| {
+                switch (field.kind) {
+                    .required,
+                    .sub_pattern,
+                    .rest,
+                    => |child| try self.analyzePatternTypes(child),
+                }
+            },
+            .list => |list| {
+                for (list.patterns) |child| try self.analyzePatternTypes(child);
+                if (list.rest) |rest| if (rest.pattern) |child| try self.analyzePatternTypes(child);
+            },
+            .tuple => |items| for (items) |child| try self.analyzePatternTypes(child),
+            .num_literal => |literal| if (literal.conversion) |conversion| try self.analyzeExprTypes(conversion),
+            .small_dec_literal => |literal| if (literal.conversion) |conversion| try self.analyzeExprTypes(conversion),
+            .dec_literal => |literal| if (literal.conversion) |conversion| try self.analyzeExprTypes(conversion),
+            .frac_f32_literal,
+            .frac_f64_literal,
+            => {},
+            .str_literal => |literal| if (literal.conversion) |conversion| try self.analyzeExprTypes(conversion),
+            .str_interpolation => |interpolation| {
+                for (interpolation.steps) |step| {
+                    if (step.capture) |capture| try self.analyzePatternTypes(capture);
+                }
+            },
+        }
+    }
 };
 
 fn rootRequiresHostWrapper(root: checked.RootRequest) bool {
@@ -904,6 +1196,15 @@ fn moduleViewFromImported(imported: checked.ImportedModuleView) ModuleView {
         .canonical_names = imported.canonical_names,
         .checked_types = imported.checked_types,
         .interface_capabilities = imported.interface_capabilities,
+    };
+}
+
+fn moduleViewFromArtifact(artifact: *const checked.CheckedModuleArtifact) ModuleView {
+    return .{
+        .key = artifact.key,
+        .canonical_names = &artifact.canonical_names,
+        .checked_types = artifact.checked_types.view(),
+        .interface_capabilities = &artifact.interface_capabilities,
     };
 }
 

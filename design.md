@@ -1951,6 +1951,13 @@ not recover the representation for a checked expression by scanning body shapes,
 matching source names, recomputing type structure, or relying on incidental
 representation list order.
 
+For runtime roots whose worker source resolves to a checked body in the root
+module, representation planning walks the reachable checked expressions,
+statements, and patterns in that body and records their checked types before
+layout planning runs. A type that appears only in a local aggregate, temporary
+receiver, nested expression, or destructuring pattern is therefore still present
+in the explicit representation table consumed by lowering.
+
 `.boxy` represents an unknown type-variable value as one ordinary Roc box
 payload pointer. This is the same runtime shape as `Box(T)`: a nullable or
 non-null pointer-sized Roc value whose allocation stores the payload bytes and
@@ -3234,6 +3241,13 @@ source evaluation order, then emits the aggregate-building statement with a
 local span ordered by the committed boxy layout. Tuple construction is a direct
 `assign_struct` over element locals; record and nominal construction use the
 same rule with field-order data from the representation plan.
+
+Aggregate access lowering first lowers the receiver into a temporary whose
+layout comes from the receiver's checked type representation, then emits an
+`assign_ref` field read. Tuple access uses the checked tuple element index.
+Record field access translates the checked field label to a numeric field index
+through the representation plan's ordered field roles; it never derives field
+indexes from source text, expression field order, or backend layout inspection.
 
 For every checked function value expression, the boxy lowerer emits an
 `assign_packed_erased_fn`-style LIR statement that creates an erased callable
