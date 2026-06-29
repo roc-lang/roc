@@ -159,11 +159,7 @@ const HostEachRowSite = each_runtime.Site;
 
 pub const SignalKind = active_graph.SignalKind;
 
-pub const HostEventDescriptor = struct {
-    event_id: u64,
-    payload_kind: EventPayloadKind,
-    payload_accessor: EventPayloadAccessor,
-};
+pub const HostEventDescriptor = active_graph.EventDescriptor;
 
 pub const HostActiveEventDesc = struct {
     target_node_id: u64,
@@ -400,21 +396,8 @@ pub fn Engine(comptime Ctx: type) type {
         pub const HostValueRegistry = host_value_registry.Registry(HostValueCapability);
         pub const ActiveEventDesc = HostActiveEventDesc;
         pub const IdentityInternError = scope_tree.Error || identity_table.Error;
-        pub const EventLookupError = error{
-            EventIdZero,
-            MissingSignalEventRoute,
-            SignalEventRouteIndexMismatch,
-            MissingEventDescriptor,
-            EventDescriptorIndexMismatch,
-        };
-        pub const SignalLookupError = error{
-            MissingSignalRoute,
-            SignalRouteIndexMismatch,
-            MissingSignalDependentRoute,
-            SignalDependentRouteIndexMismatch,
-            MissingSignalDescriptor,
-            SignalDescriptorIndexMismatch,
-        };
+        pub const EventLookupError = active_graph.EventLookupError;
+        pub const SignalLookupError = active_graph.SignalLookupError;
         pub const ActiveEventLookupError = error{
             MissingActiveEvent,
         };
@@ -1045,49 +1028,23 @@ pub fn Engine(comptime Ctx: type) type {
         }
 
         pub fn sourceSignalIdsForEvent(self: *Self, event_id: u64) EventLookupError![]const u64 {
-            if (event_id == 0) return EventLookupError.EventIdZero;
-
-            const route_index = event_id - 1;
-            if (route_index >= self.signal_event_routes.items.len) return EventLookupError.MissingSignalEventRoute;
-
-            const route = self.signal_event_routes.items[@intCast(route_index)];
-            if (route.event_id != event_id) return EventLookupError.SignalEventRouteIndexMismatch;
-            return route.signal_ids;
+            return active_graph.sourceSignalIdsForEvent(self.signal_event_routes.items, event_id);
         }
 
         pub fn eventPayloadKind(self: *Self, event_id: u64) EventLookupError!EventPayloadKind {
-            if (event_id == 0) return EventLookupError.EventIdZero;
-
-            const event_index = event_id - 1;
-            if (event_index >= self.event_descriptors.items.len) return EventLookupError.MissingEventDescriptor;
-
-            const descriptor = self.event_descriptors.items[@intCast(event_index)];
-            if (descriptor.event_id != event_id) return EventLookupError.EventDescriptorIndexMismatch;
-            return descriptor.payload_kind;
+            return active_graph.eventPayloadKind(self.event_descriptors.items, event_id);
         }
 
         pub fn signalIdsForState(self: *Self, state_id: u64) SignalLookupError![]const u64 {
-            if (state_id >= self.signal_routes.items.len) return SignalLookupError.MissingSignalRoute;
-
-            const route = self.signal_routes.items[@intCast(state_id)];
-            if (route.state_id != state_id) return SignalLookupError.SignalRouteIndexMismatch;
-            return route.signal_ids;
+            return active_graph.signalIdsForState(self.signal_routes.items, state_id);
         }
 
         pub fn dependentSignalIdsForSignal(self: *Self, signal_id: u64) SignalLookupError![]const u64 {
-            if (signal_id >= self.signal_dependents.items.len) return SignalLookupError.MissingSignalDependentRoute;
-
-            const route = self.signal_dependents.items[@intCast(signal_id)];
-            if (route.signal_id != signal_id) return SignalLookupError.SignalDependentRouteIndexMismatch;
-            return route.signal_ids;
+            return active_graph.dependentSignalIdsForSignal(self.signal_dependents.items, signal_id);
         }
 
         pub fn signalRank(self: *Self, signal_id: u64) SignalLookupError!u64 {
-            if (signal_id >= self.signal_descriptors.items.len) return SignalLookupError.MissingSignalDescriptor;
-
-            const descriptor = self.signal_descriptors.items[@intCast(signal_id)];
-            if (descriptor.signal_id != signal_id) return SignalLookupError.SignalDescriptorIndexMismatch;
-            return descriptor.rank;
+            return active_graph.signalRank(self.signal_descriptors.items, signal_id);
         }
 
         pub fn nextDirtySignalGeneration(self: *Self) u64 {
@@ -1099,51 +1056,15 @@ pub fn Engine(comptime Ctx: type) type {
         }
 
         pub fn appendSignalAndDependents(self: *Self, allocator: std.mem.Allocator, signal_ids: *std.ArrayListUnmanaged(u64), signal_id: u64) void {
-            if (!u64SliceContains(signal_ids.items, signal_id)) {
-                signal_ids.append(allocator, signal_id) catch @panic("out of memory");
-            }
-
-            var index: usize = 0;
-            while (index < signal_ids.items.len) : (index += 1) {
-                const current_signal_id = signal_ids.items[index];
-                const dependents = self.dependentSignalIdsForSignal(current_signal_id) catch @panic("host signal dependent route table is invalid");
-                for (dependents) |dependent_signal_id| {
-                    if (!u64SliceContains(signal_ids.items, dependent_signal_id)) {
-                        signal_ids.append(allocator, dependent_signal_id) catch @panic("out of memory");
-                    }
-                }
-            }
+            active_graph.appendSignalAndDependents(allocator, self.signal_dependents.items, signal_ids, signal_id);
         }
 
         pub fn sortSignalIdsByRank(self: *Self, signal_ids: []u64) void {
-            var index: usize = 1;
-            while (index < signal_ids.len) : (index += 1) {
-                const value = signal_ids[index];
-                const value_rank = self.signalRank(value) catch @panic("host signal rank table is invalid");
-                var insert_index = index;
-                while (insert_index > 0) {
-                    const previous = signal_ids[insert_index - 1];
-                    const previous_rank = self.signalRank(previous) catch @panic("host signal rank table is invalid");
-                    if (previous_rank < value_rank or (previous_rank == value_rank and previous < value)) break;
-                    signal_ids[insert_index] = previous;
-                    insert_index -= 1;
-                }
-                signal_ids[insert_index] = value;
-            }
+            active_graph.sortSignalIdsByRank(self.signal_descriptors.items, signal_ids);
         }
 
         pub fn dirtySignalIdsForEvent(self: *Self, allocator: std.mem.Allocator, event_id: u64) []u64 {
-            var dirty_signal_ids: std.ArrayListUnmanaged(u64) = .empty;
-            errdefer dirty_signal_ids.deinit(allocator);
-
-            const source_signal_ids = self.sourceSignalIdsForEvent(event_id) catch @panic("event id has no host source signal route descriptor");
-            for (source_signal_ids) |signal_id| {
-                self.appendSignalAndDependents(allocator, &dirty_signal_ids, signal_id);
-            }
-
-            const signal_ids = dirty_signal_ids.toOwnedSlice(allocator) catch @panic("out of memory");
-            self.sortSignalIdsByRank(signal_ids);
-            return signal_ids;
+            return active_graph.dirtySignalIdsForEvent(allocator, self.signal_event_routes.items, self.signal_dependents.items, self.signal_descriptors.items, event_id);
         }
 
         pub fn activeSignalRank(self: *Self, record_id: u64) u64 {
