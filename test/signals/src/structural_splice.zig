@@ -136,6 +136,28 @@ pub fn collectRenderRemovalScan(comptime Stream: type, allocator: std.mem.Alloca
     };
 }
 
+pub fn renderElemIds(allocator: std.mem.Allocator, render_nodes: anytype) []u64 {
+    const elem_ids = allocator.alloc(u64, render_nodes.len) catch @panic("out of memory");
+    for (render_nodes, 0..) |node, index| {
+        elem_ids[index] = node.elem_id;
+    }
+    return elem_ids;
+}
+
+pub fn indexRange(allocator: std.mem.Allocator, start: usize, count: usize) []usize {
+    const indexes = allocator.alloc(usize, count) catch @panic("out of memory");
+    for (indexes, 0..) |*index, offset| {
+        index.* = start + offset;
+    }
+    return indexes;
+}
+
+pub fn adjustScopeSiteRenderInsertIndices(scope_sites: anytype, replace_index: usize, removed_render_count: usize, replacement_render_count: usize) void {
+    for (scope_sites) |*desc| {
+        desc.render_insert_index = descriptor_stream.adjustedRenderInsertIndex(desc.render_insert_index, replace_index, removed_render_count, replacement_render_count);
+    }
+}
+
 test "structural splice owns replacement slices" {
     const allocator = std.testing.allocator;
     const splice = Splice{
@@ -146,6 +168,32 @@ test "structural splice owns replacement slices" {
         .replacement_mount_indices = try allocator.dupe(usize, &.{7}),
     };
     splice.deinit(allocator);
+}
+
+test "structural splice allocates replacement metadata snapshots" {
+    const RenderNode = struct {
+        elem_id: u64,
+    };
+    const ScopeSite = struct {
+        render_insert_index: usize,
+    };
+    const allocator = std.testing.allocator;
+
+    const elem_ids = renderElemIds(allocator, &.{ RenderNode{ .elem_id = 8 }, RenderNode{ .elem_id = 13 } });
+    defer allocator.free(elem_ids);
+    try std.testing.expectEqualSlices(u64, &.{ 8, 13 }, elem_ids);
+
+    const indexes = indexRange(allocator, 4, 3);
+    defer allocator.free(indexes);
+    try std.testing.expectEqualSlices(usize, &.{ 4, 5, 6 }, indexes);
+
+    var scope_sites = [_]ScopeSite{
+        .{ .render_insert_index = 2 },
+        .{ .render_insert_index = 9 },
+    };
+    adjustScopeSiteRenderInsertIndices(scope_sites[0..], 4, 2, 5);
+    try std.testing.expectEqual(@as(usize, 2), scope_sites[0].render_insert_index);
+    try std.testing.expectEqual(@as(usize, 12), scope_sites[1].render_insert_index);
 }
 
 test "structural splice collects removal indexes" {

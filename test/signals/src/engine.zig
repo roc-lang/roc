@@ -4007,9 +4007,7 @@ pub fn Engine(comptime Ctx: type) type {
         }
 
         fn adjustActiveScopeSiteRenderInsertIndices(self: *Self, replace_index: usize, removed_render_count: usize, replacement_render_count: usize) void {
-            for (self.active_stream.scope_sites.items) |*desc| {
-                desc.render_insert_index = adjustedRenderInsertIndex(desc.render_insert_index, replace_index, removed_render_count, replacement_render_count);
-            }
+            structural_splice.adjustScopeSiteRenderInsertIndices(self.active_stream.scope_sites.items, replace_index, removed_render_count, replacement_render_count);
         }
 
         fn appendReplacementEventsMoved(self: *Self, ctx: Ctx.Handle, replacement: *HostNodeDescriptorStream) void {
@@ -4247,27 +4245,18 @@ pub fn Engine(comptime Ctx: type) type {
             const replacement_render_count = replacement.render_nodes.items.len;
             const on_change_count = replacement.on_changes.items.len;
             const mount_count = replacement.mounts.items.len;
-            const replacement_elem_ids = allocator.alloc(u64, replacement_render_count) catch @panic("out of memory");
+            const replacement_elem_ids = structural_splice.renderElemIds(allocator, replacement.render_nodes.items);
             errdefer allocator.free(replacement_elem_ids);
-            for (replacement.render_nodes.items, 0..) |node, index| {
-                replacement_elem_ids[index] = node.elem_id;
-            }
 
             self.active_stream.replaceRenderRangeWithStream(allocator, render_start, removed_render_nodes, replacement, &self.pending_roc_metrics);
             self.removeActiveNonRenderDescriptorsInTarget(ctx, roc_host, target_scopes, removal_scan.removed_elem_ids);
             self.adjustActiveScopeSiteRenderInsertIndices(render_insert_index, removal_scan.removed_render_count, replacement_render_count);
             const on_change_start = self.active_stream.on_changes.items.len;
-            const replacement_on_change_indices = allocator.alloc(usize, on_change_count) catch @panic("out of memory");
+            const replacement_on_change_indices = structural_splice.indexRange(allocator, on_change_start, on_change_count);
             errdefer allocator.free(replacement_on_change_indices);
-            for (replacement_on_change_indices, 0..) |*index, offset| {
-                index.* = on_change_start + offset;
-            }
             const mount_start = self.active_stream.mounts.items.len;
-            const replacement_mount_indices = allocator.alloc(usize, mount_count) catch @panic("out of memory");
+            const replacement_mount_indices = structural_splice.indexRange(allocator, mount_start, mount_count);
             errdefer allocator.free(replacement_mount_indices);
-            for (replacement_mount_indices, 0..) |*index, offset| {
-                index.* = mount_start + offset;
-            }
             self.appendReplacementNonRenderDescriptorsMoved(ctx, replacement, render_insert_index);
             self.validateActiveRenderDescriptorIntegrity();
 
