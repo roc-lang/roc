@@ -1593,18 +1593,8 @@ fn setElementDisabled(elem: *DomElement, disabled: bool) void {
 }
 
 fn resetSimulatedDom(host: *HostEnv) void {
-    const allocator = host.hostAllocator();
-    for (host.dom_elements.items) |*elem| {
-        elem.deinit(allocator);
-    }
-    host.dom_elements.items.len = 0;
+    sim_dom.reset(host.hostAllocator(), &host.dom_elements);
     host.engine.next_elem_id = 1;
-
-    const root_tag = allocator.dupe(u8, "root") catch std.process.exit(1);
-    host.dom_elements.append(allocator, DomElement.init(0, root_tag)) catch {
-        allocator.free(root_tag);
-        std.process.exit(1);
-    };
 }
 
 fn domElementById(host: *HostEnv, id: u64) *DomElement {
@@ -1668,23 +1658,15 @@ fn clearRenderBoolField(host: *HostEnv, elem_id: u64, field: RenderBoolField) vo
 
 fn appendDetachedDomNode(host: *HostEnv, elem_id: u64, tag: []const u8) void {
     if (elem_id != host.dom_elements.items.len) failHost("descriptor stream elements must be dense and ordered by elem id");
-
-    const allocator = host.hostAllocator();
-    const tag_copy = allocator.dupe(u8, tag) catch std.process.exit(1);
-    host.dom_elements.append(allocator, DomElement.init(elem_id, tag_copy)) catch {
-        allocator.free(tag_copy);
-        std.process.exit(1);
-    };
+    sim_dom.appendDetached(host.hostAllocator(), &host.dom_elements, elem_id, tag);
     host.engine.next_elem_id = elem_id + 1;
 }
 
 fn appendDomNode(host: *HostEnv, elem_id: u64, parent_elem_id: u64, tag: []const u8) void {
     appendDetachedDomNode(host, elem_id, tag);
-    const allocator = host.hostAllocator();
     const parent = domElementById(host, parent_elem_id);
     const child = domElementById(host, elem_id);
-    child.parent_id = parent.id;
-    parent.children.append(allocator, child.id) catch std.process.exit(1);
+    sim_dom.appendChild(host.hostAllocator(), parent, child);
 }
 
 fn findDomChildIndex(elem: *const DomElement, child_id: u64) ?usize {

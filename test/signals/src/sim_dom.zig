@@ -334,6 +334,32 @@ pub fn clearEventName(allocator: std.mem.Allocator, elem: *Element, name: []cons
     removed.deinit(allocator);
 }
 
+pub fn reset(allocator: std.mem.Allocator, elements: *std.ArrayListUnmanaged(Element)) void {
+    for (elements.items) |*elem| {
+        elem.deinit(allocator);
+    }
+    elements.items.len = 0;
+
+    const root_tag = allocator.dupe(u8, "root") catch std.process.exit(1);
+    elements.append(allocator, Element.init(0, root_tag)) catch {
+        allocator.free(root_tag);
+        std.process.exit(1);
+    };
+}
+
+pub fn appendDetached(allocator: std.mem.Allocator, elements: *std.ArrayListUnmanaged(Element), elem_id: u64, tag: []const u8) void {
+    const tag_copy = allocator.dupe(u8, tag) catch std.process.exit(1);
+    elements.append(allocator, Element.init(elem_id, tag_copy)) catch {
+        allocator.free(tag_copy);
+        std.process.exit(1);
+    };
+}
+
+pub fn appendChild(allocator: std.mem.Allocator, parent: *Element, child: *Element) void {
+    child.parent_id = parent.id;
+    parent.children.append(allocator, child.id) catch std.process.exit(1);
+}
+
 test "simulated DOM element indexes attrs and named events" {
     const allocator = std.testing.allocator;
     const tag = try allocator.dupe(u8, "button");
@@ -433,4 +459,24 @@ test "simulated DOM binds and clears events" {
     try std.testing.expectEqual(render.EventPayloadAccessor.record_key_shift, updated.payload_accessor);
     clearEventName(allocator, &elem, "submit");
     try std.testing.expect(namedEvent(&elem, "submit") == null);
+}
+
+test "simulated DOM resets and appends children" {
+    const allocator = std.testing.allocator;
+    var elements: std.ArrayListUnmanaged(Element) = .empty;
+    defer {
+        for (elements.items) |*elem| {
+            elem.deinit(allocator);
+        }
+        elements.deinit(allocator);
+    }
+
+    reset(allocator, &elements);
+    try std.testing.expectEqual(@as(usize, 1), elements.items.len);
+    try std.testing.expectEqualStrings("root", elements.items[0].tag);
+
+    appendDetached(allocator, &elements, 1, "section");
+    appendChild(allocator, &elements.items[0], &elements.items[1]);
+    try std.testing.expectEqual(@as(?u64, 0), elements.items[1].parent_id);
+    try std.testing.expectEqualSlices(u64, &.{1}, elements.items[0].children.items);
 }
