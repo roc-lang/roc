@@ -19,6 +19,7 @@ const engine = @import("engine.zig");
 const spec_parser = @import("spec/spec_parser.zig");
 const benchmark = @import("bench/benchmark.zig");
 const sim_dom = @import("sim_dom.zig");
+const roc_alloc_ledger = @import("roc_alloc_ledger.zig");
 
 const enable_runtime_metrics = builtin.is_test or build_options.metrics;
 
@@ -321,21 +322,8 @@ fn failHostValueRegistryError(err: anyerror) noreturn {
     }
 }
 
-const RocAllocation = struct {
-    user_ptr: [*]u8,
-    requested_size: usize,
-    allocated_size: usize,
-    alignment: std.mem.Alignment,
-};
-
-const FreedRocAllocation = struct {
-    user_ptr_addr: usize,
-    requested_size: usize,
-    allocated_size: usize,
-    alignment: std.mem.Alignment,
-};
-
-const recent_freed_roc_allocation_capacity = 4096;
+const RocAllocation = roc_alloc_ledger.Allocation;
+const FreedRocAllocation = roc_alloc_ledger.FreedAllocation;
 
 const TestHostValueKind = enum {
     unit,
@@ -390,10 +378,7 @@ const HostEnv = struct {
     gpa: std.heap.DebugAllocator(.{ .safety = true }),
     engine: HostEngine = .{},
     test_state: TestState,
-    roc_allocations: std.ArrayListUnmanaged(RocAllocation) = .empty,
-    recent_freed_roc_allocations: [recent_freed_roc_allocation_capacity]FreedRocAllocation = undefined,
-    recent_freed_roc_allocation_len: usize = 0,
-    recent_freed_roc_allocation_next: usize = 0,
+    roc_allocations: roc_alloc_ledger.Ledger = .{},
     test_host_value_kinds: std.ArrayListUnmanaged(?TestHostValueKind) = .empty,
     alloc_count: usize = 0,
     dealloc_count: usize = 0,
@@ -1133,7 +1118,7 @@ const HostEnv = struct {
         self.test_host_value_kinds.deinit(allocator);
 
         const roc_allocator = self.backingAllocator();
-        for (self.roc_allocations.items) |alloc| {
+        for (self.roc_allocations.allocations.items) |alloc| {
             self.recordHostFree(alloc.allocated_size);
             roc_allocator.rawFree(alloc.user_ptr[0..alloc.allocated_size], alloc.alignment, @returnAddress());
         }
@@ -1209,45 +1194,23 @@ fn allocatedSizeForRocRequest(length: usize) usize {
 }
 
 fn findRocAllocationIndex(host: *HostEnv, ptr: *anyopaque) ?usize {
-    const ptr_addr = @intFromPtr(ptr);
-    for (host.roc_allocations.items, 0..) |alloc, index| {
-        const user_addr = @intFromPtr(alloc.user_ptr);
-        const end_addr = user_addr + alloc.allocated_size;
-        if (ptr_addr >= user_addr and ptr_addr < end_addr) return index;
-    }
-    return null;
+    return host.roc_allocations.findContainingIndex(ptr);
 }
 
 fn findExactRocAllocationIndex(host: *HostEnv, ptr: *anyopaque) ?usize {
-    const ptr_addr = @intFromPtr(ptr);
-    for (host.roc_allocations.items, 0..) |alloc, index| {
-        if (ptr_addr == @intFromPtr(alloc.user_ptr)) return index;
-    }
-    return null;
+    return host.roc_allocations.findExactIndex(ptr);
 }
 
 fn removeRocAllocationAt(host: *HostEnv, index: usize) RocAllocation {
-    if (index >= host.roc_allocations.items.len) failHost("Roc allocation ledger index is out of bounds");
-    return host.roc_allocations.swapRemove(index);
+    return host.roc_allocations.removeAt(index) orelse failHost("Roc allocation ledger index is out of bounds");
 }
 
 fn recordFreedRocAllocation(host: *HostEnv, alloc: RocAllocation) void {
-    host.recent_freed_roc_allocations[host.recent_freed_roc_allocation_next] = .{
-        .user_ptr_addr = @intFromPtr(alloc.user_ptr),
-        .requested_size = alloc.requested_size,
-        .allocated_size = alloc.allocated_size,
-        .alignment = alloc.alignment,
-    };
-    host.recent_freed_roc_allocation_next = (host.recent_freed_roc_allocation_next + 1) % recent_freed_roc_allocation_capacity;
-    host.recent_freed_roc_allocation_len = @min(host.recent_freed_roc_allocation_len + 1, recent_freed_roc_allocation_capacity);
+    host.roc_allocations.recordFreed(alloc);
 }
 
 fn findRecentlyFreedRocAllocation(host: *HostEnv, ptr: *anyopaque) ?FreedRocAllocation {
-    const ptr_addr = @intFromPtr(ptr);
-    for (host.recent_freed_roc_allocations[0..host.recent_freed_roc_allocation_len]) |alloc| {
-        if (alloc.user_ptr_addr == ptr_addr) return alloc;
-    }
-    return null;
+    return host.roc_allocations.findRecentlyFreed(ptr);
 }
 
 fn rocAlignmentFromAbi(alignment: usize) std.mem.Alignment {
@@ -1256,12 +1219,7 @@ fn rocAlignmentFromAbi(alignment: usize) std.mem.Alignment {
 }
 
 fn recordRocAllocation(host: *HostEnv, user_ptr: [*]u8, requested_size: usize, allocated_size: usize, alignment: std.mem.Alignment) void {
-    host.roc_allocations.append(host.hostAllocator(), .{
-        .user_ptr = user_ptr,
-        .requested_size = requested_size,
-        .allocated_size = allocated_size,
-        .alignment = alignment,
-    }) catch std.process.exit(1);
+    host.roc_allocations.record(host.hostAllocator(), user_ptr, requested_size, allocated_size, alignment);
 }
 
 fn allocRocMemory(host: *HostEnv, length: usize, alignment_arg: usize) ?*anyopaque {
@@ -1289,7 +1247,7 @@ fn freeRocAllocation(host: *HostEnv, ptr: *anyopaque, alignment_arg: usize) RocA
         }
         failHost("roc_dealloc received an unknown pointer");
     };
-    if (host.roc_allocations.items[index].alignment != alignment) {
+    if (host.roc_allocations.allocations.items[index].alignment != alignment) {
         failHost("roc_dealloc alignment did not match the tracked allocation");
     }
     const alloc = removeRocAllocationAt(host, index);
@@ -1323,7 +1281,7 @@ fn rocReallocFn(roc_host: *abi.RocHost, ptr: *anyopaque, new_length: usize, alig
         }
         failHost("roc_realloc received an unknown pointer");
     };
-    const old_alloc = host.roc_allocations.items[old_index];
+    const old_alloc = host.roc_allocations.allocations.items[old_index];
     const alignment = rocAlignmentFromAbi(alignment_arg);
     if (old_alloc.alignment != alignment) {
         failHost("roc_realloc alignment did not match the tracked allocation");
@@ -3085,14 +3043,14 @@ test "signals host allocation ledger tracks exact returned pointers" {
     const middle = rocAllocFn(&roc_host, 16, 8) orelse return error.OutOfMemory;
     const last = rocAllocFn(&roc_host, 24, 8) orelse return error.OutOfMemory;
 
-    try std.testing.expectEqual(@as(usize, 3), host.roc_allocations.items.len);
+    try std.testing.expectEqual(@as(usize, 3), host.roc_allocations.allocations.items.len);
     try std.testing.expect(findExactRocAllocationIndex(&host, first) != null);
     try std.testing.expect(findExactRocAllocationIndex(&host, middle) != null);
     try std.testing.expect(findExactRocAllocationIndex(&host, last) != null);
 
     rocDeallocFn(&roc_host, middle, 8);
 
-    try std.testing.expectEqual(@as(usize, 2), host.roc_allocations.items.len);
+    try std.testing.expectEqual(@as(usize, 2), host.roc_allocations.allocations.items.len);
     try std.testing.expect(findExactRocAllocationIndex(&host, first) != null);
     try std.testing.expectEqual(@as(?usize, null), findExactRocAllocationIndex(&host, middle));
     try std.testing.expect(findExactRocAllocationIndex(&host, last) != null);
@@ -3102,7 +3060,7 @@ test "signals host allocation ledger tracks exact returned pointers" {
 
     const grown = rocReallocFn(&roc_host, first, 32, 8) orelse return error.OutOfMemory;
 
-    try std.testing.expectEqual(@as(usize, 2), host.roc_allocations.items.len);
+    try std.testing.expectEqual(@as(usize, 2), host.roc_allocations.allocations.items.len);
     try std.testing.expectEqual(@as(?usize, null), findExactRocAllocationIndex(&host, first));
     try std.testing.expect(findExactRocAllocationIndex(&host, grown) != null);
     try std.testing.expect(findExactRocAllocationIndex(&host, last) != null);
@@ -3115,7 +3073,7 @@ test "signals host allocation ledger tracks exact returned pointers" {
     rocDeallocFn(&roc_host, last, 8);
     rocDeallocFn(&roc_host, grown, 8);
 
-    try std.testing.expectEqual(@as(usize, 0), host.roc_allocations.items.len);
+    try std.testing.expectEqual(@as(usize, 0), host.roc_allocations.allocations.items.len);
     try std.testing.expectEqual(@as(u64, 4), host.alloc_count);
     try std.testing.expectEqual(@as(u64, 4), host.dealloc_count);
     try std.testing.expectEqual(@as(u64, 4), host.engine.pending_roc_metrics.allocs_this_event);
