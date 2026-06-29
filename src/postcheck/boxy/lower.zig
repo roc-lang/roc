@@ -267,10 +267,12 @@ const ProcedureBuilder = struct {
 
         for (self.plan.roots.items, self.layout_plan.roots.items) |root, root_layout| {
             if (root.id != root_layout.root) boxyLowerInvariant("boxy root layout table disagreed with root plan order");
-            const worker_proc = try self.emitWorker(root.worker, root_layout);
+            if (root.worker != root_layout.worker) boxyLowerInvariant("boxy root layout table disagreed with root worker plan");
+            const worker_layout = self.layout_plan.workerLayoutFor(root.worker);
+            const worker_proc = try self.emitWorker(root.worker);
             const root_proc = switch (root.wrapper_kind) {
                 .private_worker_only => worker_proc,
-                .host_shaped_wrapper => try self.emitHostWrapper(root_layout, worker_proc),
+                .host_shaped_wrapper => try self.emitHostWrapper(root_layout, worker_layout, worker_proc),
             };
             try self.result.root_procs.append(self.allocator, root_proc);
             try self.result.root_metadata.append(self.allocator, RootMetadata.fromCheckedRoot(root.request));
@@ -280,7 +282,6 @@ const ProcedureBuilder = struct {
     fn emitWorker(
         self: *ProcedureBuilder,
         worker_id: Plan.WorkerPlanId,
-        root_layout: Layouts.RootLayouts,
     ) Allocator.Error!LIR.LirProcSpecId {
         const index = @intFromEnum(worker_id);
         if (index >= self.worker_procs.len) boxyLowerInvariant("boxy root referenced a missing worker proc");
@@ -291,7 +292,7 @@ const ProcedureBuilder = struct {
             boxyLowerInvariant("non-root checked body reached boxy body lowering before imported body lowering is implemented");
         }
 
-        var proc = ProcBodyBuilder.init(self, resolved.module, root_layout);
+        var proc = ProcBodyBuilder.init(self, resolved.module, self.layout_plan.workerLayoutFor(worker_id));
         defer proc.deinit();
 
         const body_expr = try self.bodyExprForWorker(resolved, &proc);
@@ -321,7 +322,7 @@ const ProcedureBuilder = struct {
         const root_expr = resolved.module.checked_bodies.expr(resolved.body.root_expr);
         return switch (root_expr.data) {
             .lambda => |lambda| blk: {
-                const worker_args = self.layout_plan.rootLayoutSlice(proc.root_layout.worker_args);
+                const worker_args = self.layout_plan.workerLayoutSlice(proc.worker_layout.args);
                 if (lambda.args.len != worker_args.len) {
                     boxyLowerInvariant("boxy worker lambda arity disagreed with worker root layout");
                 }
@@ -336,10 +337,11 @@ const ProcedureBuilder = struct {
     fn emitHostWrapper(
         self: *ProcedureBuilder,
         root_layout: Layouts.RootLayouts,
+        worker_layout: Layouts.WorkerLayouts,
         worker_proc: LIR.LirProcSpecId,
     ) Allocator.Error!LIR.LirProcSpecId {
         const host_args = self.layout_plan.rootLayoutSlice(root_layout.host_args);
-        const worker_args = self.layout_plan.rootLayoutSlice(root_layout.worker_args);
+        const worker_args = self.layout_plan.workerLayoutSlice(worker_layout.args);
         if (host_args.len != worker_args.len) {
             boxyLowerInvariant("boxy host wrapper needed argument adaptation before adapters were emitted");
         }
@@ -355,7 +357,7 @@ const ProcedureBuilder = struct {
 
         const host_ret = root_layout.host_ret orelse root_layout.host_value orelse
             boxyLowerInvariant("boxy host wrapper had no host return layout");
-        const worker_ret = root_layout.worker_ret orelse root_layout.worker_value;
+        const worker_ret = worker_layout.ret orelse worker_layout.value;
         if (host_ret.layoutIdx() != worker_ret.layoutIdx()) {
             boxyLowerInvariant("boxy host wrapper needed return layout adaptation before adapters were emitted");
         }
@@ -400,7 +402,7 @@ const ProcedureBuilder = struct {
 const ProcBodyBuilder = struct {
     parent: *ProcedureBuilder,
     module: ProcedureModuleView,
-    root_layout: Layouts.RootLayouts,
+    worker_layout: Layouts.WorkerLayouts,
     arg_locals: std.ArrayList(LIR.LocalId),
     frame_locals: std.ArrayList(LIR.LocalId),
     loop_stack: std.ArrayList(LoopContext),
@@ -426,11 +428,11 @@ const ProcBodyBuilder = struct {
         str: checked.CheckedStringLiteralId,
     };
 
-    fn init(parent: *ProcedureBuilder, module: ProcedureModuleView, root_layout: Layouts.RootLayouts) ProcBodyBuilder {
+    fn init(parent: *ProcedureBuilder, module: ProcedureModuleView, worker_layout: Layouts.WorkerLayouts) ProcBodyBuilder {
         return .{
             .parent = parent,
             .module = module,
-            .root_layout = root_layout,
+            .worker_layout = worker_layout,
             .arg_locals = .empty,
             .frame_locals = .empty,
             .loop_stack = .empty,
@@ -451,7 +453,7 @@ const ProcBodyBuilder = struct {
     fn bindLambdaArgs(self: *ProcBodyBuilder, args: []const checked.CheckedPatternId) Allocator.Error!void {
         try self.ensureBinderLocals();
 
-        const worker_args = self.parent.layout_plan.rootLayoutSlice(self.root_layout.worker_args);
+        const worker_args = self.parent.layout_plan.workerLayoutSlice(self.worker_layout.args);
         for (args, worker_args) |pattern_id, arg_layout| {
             const local = try self.addArgLocal(arg_layout.layoutIdx());
             if (self.workerRuntimeLayoutForType(self.module.checked_bodies.pattern(pattern_id).ty).layoutIdx() != arg_layout.layoutIdx()) {
@@ -3569,8 +3571,8 @@ const ProcBodyBuilder = struct {
     }
 
     fn workerReturnLayout(self: *const ProcBodyBuilder) @import("layout").Idx {
-        if (self.root_layout.worker_ret) |ret| return ret.layoutIdx();
-        return self.root_layout.worker_value.layoutIdx();
+        if (self.worker_layout.ret) |ret| return ret.layoutIdx();
+        return self.worker_layout.value.layoutIdx();
     }
 
     fn repForType(self: *const ProcBodyBuilder, ty: checked.CheckedTypeId) Plan.TypeRepId {

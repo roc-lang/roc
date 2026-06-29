@@ -47,19 +47,26 @@ pub const RepLayouts = struct {
     descriptor_payload_layout: ?layout.Idx = null,
 };
 
+pub const WorkerLayouts = struct {
+    worker: Plan.WorkerPlanId,
+    args: Plan.Span = .{},
+    ret: ?RuntimeLayout = null,
+    value: RuntimeLayout,
+};
+
 pub const RootLayouts = struct {
     root: Plan.RootPlanId,
+    worker: Plan.WorkerPlanId,
     host_args: Plan.Span = .{},
     host_ret: ?RuntimeLayout = null,
     host_value: ?RuntimeLayout = null,
-    worker_args: Plan.Span = .{},
-    worker_ret: ?RuntimeLayout = null,
-    worker_value: RuntimeLayout,
 };
 
 pub const LayoutPlan = struct {
     allocator: Allocator,
     rep_layouts: []RepLayouts,
+    worker_layouts: []WorkerLayouts,
+    worker_layout_values: std.ArrayList(RuntimeLayout),
     roots: std.ArrayList(RootLayouts),
     root_layout_values: std.ArrayList(RuntimeLayout),
     dynamic_storage_layout: layout.Idx,
@@ -67,8 +74,22 @@ pub const LayoutPlan = struct {
     pub fn deinit(self: *LayoutPlan) void {
         self.root_layout_values.deinit(self.allocator);
         self.roots.deinit(self.allocator);
+        self.worker_layout_values.deinit(self.allocator);
+        self.allocator.free(self.worker_layouts);
         self.allocator.free(self.rep_layouts);
         self.* = undefined;
+    }
+
+    pub fn workerLayoutFor(self: *const LayoutPlan, worker: Plan.WorkerPlanId) WorkerLayouts {
+        const index = @intFromEnum(worker);
+        if (index >= self.worker_layouts.len) boxyLayoutInvariant("worker layout id exceeded worker layout table");
+        const layouts = self.worker_layouts[index];
+        if (layouts.worker != worker) boxyLayoutInvariant("worker layout table disagreed with worker plan order");
+        return layouts;
+    }
+
+    pub fn workerLayoutSlice(self: *const LayoutPlan, span: Plan.Span) []const RuntimeLayout {
+        return self.worker_layout_values.items[span.start .. span.start + span.len];
     }
 
     pub fn rootLayoutSlice(self: *const LayoutPlan, span: Plan.Span) []const RuntimeLayout {
@@ -118,6 +139,7 @@ const Builder = struct {
     program: *const Plan.ProgramPlan,
     store: *layout.Store,
     caches: []RepLayoutCache,
+    worker_layout_values: std.ArrayList(RuntimeLayout),
     root_layouts: std.ArrayList(RootLayouts),
     root_layout_values: std.ArrayList(RuntimeLayout),
     dynamic_storage_layout: ?layout.Idx = null,
@@ -128,6 +150,7 @@ const Builder = struct {
             .program = program,
             .store = store,
             .caches = &.{},
+            .worker_layout_values = .empty,
             .root_layouts = .empty,
             .root_layout_values = .empty,
         };
@@ -136,6 +159,7 @@ const Builder = struct {
     fn deinit(self: *Builder) void {
         self.root_layout_values.deinit(self.allocator);
         self.root_layouts.deinit(self.allocator);
+        self.worker_layout_values.deinit(self.allocator);
         self.allocator.free(self.caches);
     }
 
@@ -164,38 +188,59 @@ const Builder = struct {
             };
         }
 
+        const worker_layouts = try self.allocator.alloc(WorkerLayouts, self.program.workers.items.len);
+        errdefer self.allocator.free(worker_layouts);
+        for (self.program.workers.items, worker_layouts) |worker, *out| {
+            out.* = try self.layoutForWorker(worker);
+        }
+
         const dynamic_storage_layout = try self.dynamicStorageLayout();
+        const worker_layout_values = self.worker_layout_values;
         const roots = self.root_layouts;
         const root_layout_values = self.root_layout_values;
+        self.worker_layout_values = .empty;
         self.root_layouts = .empty;
         self.root_layout_values = .empty;
 
         return .{
             .allocator = self.allocator,
             .rep_layouts = rep_layouts,
+            .worker_layouts = worker_layouts,
+            .worker_layout_values = worker_layout_values,
             .roots = roots,
             .root_layout_values = root_layout_values,
             .dynamic_storage_layout = dynamic_storage_layout,
         };
     }
 
+    fn layoutForWorker(self: *Builder, worker: Plan.WorkerPlan) Allocator.Error!WorkerLayouts {
+        const worker_value = try self.runtimeLayoutForRep(.worker, worker.rep);
+        var worker_layout: WorkerLayouts = .{
+            .worker = worker.id,
+            .value = worker_value,
+        };
+
+        if (try self.functionChildren(worker.rep)) |function| {
+            const start = self.layoutValueStart(&self.worker_layout_values);
+            try self.appendFunctionLayouts(&self.worker_layout_values, .worker, function);
+            worker_layout.args = self.layoutSpanFrom(start, function.arg_count);
+            worker_layout.ret = self.worker_layout_values.items[start + function.arg_count];
+        }
+
+        return worker_layout;
+    }
+
     fn appendRoot(self: *Builder, root: Plan.RootPlan) Allocator.Error!void {
-        const worker_value = try self.runtimeLayoutForRep(.worker, root.worker_rep);
         var root_layout: RootLayouts = .{
             .root = root.id,
-            .worker_value = worker_value,
+            .worker = root.worker,
         };
 
         if (try self.functionChildren(root.host_rep)) |function| {
-            const worker_start = self.rootLayoutStart();
-            try self.appendFunctionLayouts(.worker, function);
-            root_layout.worker_args = self.rootLayoutSpanFrom(worker_start, function.arg_count);
-            root_layout.worker_ret = self.root_layout_values.items[worker_start + function.arg_count];
-
             if (root.wrapper_kind == .host_shaped_wrapper) {
-                const host_start = self.rootLayoutStart();
-                try self.appendFunctionLayouts(.host, function);
-                root_layout.host_args = self.rootLayoutSpanFrom(host_start, function.arg_count);
+                const host_start = self.layoutValueStart(&self.root_layout_values);
+                try self.appendFunctionLayouts(&self.root_layout_values, .host, function);
+                root_layout.host_args = self.layoutSpanFrom(host_start, function.arg_count);
                 root_layout.host_ret = self.root_layout_values.items[host_start + function.arg_count];
             }
         } else if (root.wrapper_kind == .host_shaped_wrapper) {
@@ -261,19 +306,24 @@ const Builder = struct {
         }
     }
 
-    fn appendFunctionLayouts(self: *Builder, mode: LayoutMode, function: FunctionChildren) Allocator.Error!void {
+    fn appendFunctionLayouts(
+        self: *Builder,
+        values: *std.ArrayList(RuntimeLayout),
+        mode: LayoutMode,
+        function: FunctionChildren,
+    ) Allocator.Error!void {
         const canonical_children = self.program.childSlice(self.program.representations.items[@intFromEnum(function.rep)].children);
         for (canonical_children[function.args_start..][0..function.arg_count]) |child| {
-            try self.root_layout_values.append(self.allocator, try self.runtimeLayoutForRep(mode, child.rep));
+            try values.append(self.allocator, try self.runtimeLayoutForRep(mode, child.rep));
         }
-        try self.root_layout_values.append(self.allocator, try self.runtimeLayoutForRep(mode, function.ret));
+        try values.append(self.allocator, try self.runtimeLayoutForRep(mode, function.ret));
     }
 
-    fn rootLayoutStart(self: *const Builder) u32 {
-        return @intCast(self.root_layout_values.items.len);
+    fn layoutValueStart(_: *const Builder, values: *const std.ArrayList(RuntimeLayout)) u32 {
+        return @intCast(values.items.len);
     }
 
-    fn rootLayoutSpanFrom(_: *const Builder, start: u32, len: u32) Plan.Span {
+    fn layoutSpanFrom(_: *const Builder, start: u32, len: u32) Plan.Span {
         return .{ .start = start, .len = len };
     }
 
@@ -761,6 +811,15 @@ test "boxy layout planner records private worker function arg and return layouts
 
     var program = try Plan.analyzeProgram(gpa, .{ .checked_types = view, .roots = &roots }, .{});
     defer program.deinit();
+    const extra_source = program.workers.items[0].source;
+    const extra_rep = program.root_reps.items[0];
+    try program.workers.append(gpa, .{
+        .id = @enumFromInt(1),
+        .request = roots[0],
+        .source = extra_source,
+        .checked_type = @enumFromInt(2),
+        .rep = extra_rep,
+    });
 
     var store = try layout.Store.init(gpa, .u64);
     defer store.deinit();
@@ -769,17 +828,25 @@ test "boxy layout planner records private worker function arg and return layouts
     defer layouts.deinit();
 
     try std.testing.expectEqual(@as(usize, 1), layouts.roots.items.len);
+    try std.testing.expectEqual(@as(usize, 2), layouts.worker_layouts.len);
     const root = layouts.roots.items[0];
-    const worker_args = layouts.rootLayoutSlice(root.worker_args);
+    try std.testing.expectEqual(program.workers.items[0].id, root.worker);
+
+    const root_worker = layouts.workerLayoutFor(root.worker);
+    const worker_args = layouts.workerLayoutSlice(root_worker.args);
     try std.testing.expectEqual(@as(usize, 1), worker_args.len);
     try std.testing.expectEqual(std.meta.Tag(RuntimeLayout).dynamic_box, std.meta.activeTag(worker_args[0]));
 
-    const ret = root.worker_ret orelse return error.TestUnexpectedResult;
+    const ret = root_worker.ret orelse return error.TestUnexpectedResult;
     const ret_layout = store.getLayout(ret.layoutIdx());
     try std.testing.expectEqual(layout.LayoutTag.list, ret_layout.tag);
     try std.testing.expectEqual(layouts.dynamic_storage_layout, ret_layout.getIdx());
     try std.testing.expectEqual(@as(usize, 0), layouts.rootLayoutSlice(root.host_args).len);
     try std.testing.expect(root.host_ret == null);
+
+    const extra_worker = layouts.workerLayoutFor(@enumFromInt(1));
+    try std.testing.expectEqual(@as(usize, 1), layouts.workerLayoutSlice(extra_worker.args).len);
+    try std.testing.expect(extra_worker.ret != null);
 }
 
 test "boxy layout planner commits nominal declared fields through shared layout store" {
