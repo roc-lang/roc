@@ -526,11 +526,8 @@ const ProcBodyBuilder = struct {
                 .value = .{ .f64_literal = frac.value },
                 .next = next,
             } }),
-            .dec => |dec| try self.parent.result.store.addCFStmt(.{ .assign_literal = .{
-                .target = target,
-                .value = .{ .dec_literal = dec.value.num },
-                .next = next,
-            } }),
+            .dec => |dec| try self.assignDecLiteral(target, dec.value, next),
+            .dec_small => |dec| try self.assignDecLiteral(target, dec.value.toRocDec(), next),
             .str_segment => |literal| try self.assignStringLiteral(target, literal, next),
             .bytes_literal => |literal| try self.assignStringLiteral(target, literal, next),
             .str => |segments| try self.lowerStrInto(target, segments, next),
@@ -1220,11 +1217,11 @@ const ProcBodyBuilder = struct {
                 }
                 break :blk try self.lowerLiteralPatternThen(pattern.ty, source, .{ .int = literal.value }, on_match, miss);
             },
-            .small_dec_literal => |literal| {
+            .small_dec_literal => |literal| blk: {
                 if (literal.conversion != null) {
                     boxyLowerInvariant("non-builtin small decimal pattern reached boxy match lowering before dictionary conversion lowering");
                 }
-                boxyLowerInvariant("small decimal pattern reached boxy match lowering before numeric finalization");
+                break :blk try self.lowerLiteralPatternThen(pattern.ty, source, .{ .dec = literal.value.toRocDec() }, on_match, miss);
             },
             .dec_literal => |literal| blk: {
                 if (literal.conversion != null) {
@@ -1646,11 +1643,7 @@ const ProcBodyBuilder = struct {
     ) Allocator.Error!LIR.CFStmtId {
         return switch (literal) {
             .int => |value| try self.assignIntLiteral(target, value.toI128(), next),
-            .dec => |value| try self.parent.result.store.addCFStmt(.{ .assign_literal = .{
-                .target = target,
-                .value = .{ .dec_literal = value.num },
-                .next = next,
-            } }),
+            .dec => |value| try self.assignDecLiteral(target, value, next),
             .frac_f32 => |value| try self.parent.result.store.addCFStmt(.{ .assign_literal = .{
                 .target = target,
                 .value = .{ .f32_literal = value },
@@ -1679,6 +1672,19 @@ const ProcBodyBuilder = struct {
         return try self.parent.result.store.addCFStmt(.{ .assign_literal = .{
             .target = target,
             .value = .{ .i64_literal = .{ .value = value, .layout_idx = .u64 } },
+            .next = next,
+        } });
+    }
+
+    fn assignDecLiteral(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        value: builtins.dec.RocDec,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        return try self.parent.result.store.addCFStmt(.{ .assign_literal = .{
+            .target = target,
+            .value = .{ .dec_literal = value.num },
             .next = next,
         } });
     }
@@ -5467,6 +5473,85 @@ test "boxy lowerer emits private worker proc for zero-arg numeric lambda root" {
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = assign.target } }, out.lir_result.store.getCFStmt(assign.next));
 }
 
+test "boxy lowerer emits small decimal expressions as Dec literals" {
+    const gpa = std.testing.allocator;
+
+    var artifact = minimalCheckedArtifact(gpa);
+    defer artifact.canonical_names.deinit();
+    defer artifact.checked_types.deinit(gpa);
+    defer artifact.checked_bodies.deinit(gpa);
+
+    const value = can.CIR.SmallDecValue{ .numerator = 314, .denominator_power_of_ten = 2 };
+
+    try artifact.checked_types.payloads.append(gpa, .{
+        .nominal = builtinNominal(.dec, @enumFromInt(0), .{}),
+    });
+    try artifact.checked_types.payloads.append(gpa, .{
+        .function = .{
+            .kind = .pure,
+            .args = .{},
+            .ret = @enumFromInt(0),
+            .needs_instantiation = false,
+        },
+    });
+
+    const template_ref = procedureTemplateRef(artifact.key, 0);
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(0),
+        .ty = @enumFromInt(1),
+        .source_region = base.Region.zero(),
+        .data = .{ .lambda = .{ .args = .{}, .body = @enumFromInt(1) } },
+    });
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(1),
+        .ty = @enumFromInt(0),
+        .source_region = base.Region.zero(),
+        .data = .{ .dec_small = .{ .value = value, .has_suffix = false } },
+    });
+    try artifact.checked_bodies.bodies.append(gpa, .{
+        .id = @enumFromInt(0),
+        .root_expr = @enumFromInt(0),
+        .owner_template = template_ref,
+    });
+    var templates = [_]checked.CheckedProcedureTemplate{
+        checkedTemplate(template_ref, @enumFromInt(1), @enumFromInt(0)),
+    };
+    artifact.checked_procedure_templates = .{ .templates = &templates };
+
+    const root = checked.RootRequest{
+        .order = 0,
+        .module_idx = 0,
+        .kind = .runtime_entrypoint,
+        .source = .{ .def = @enumFromInt(0) },
+        .checked_type = @enumFromInt(1),
+        .abi = .roc,
+        .exposure = .private,
+        .procedure_template = template_ref,
+    };
+    var plan = try Plan.analyzeProgram(gpa, .{
+        .root_module = .{ .module = &artifact, .roots = undefined },
+        .roots = &.{root},
+    }, .{});
+    defer plan.deinit();
+
+    var out = try run(
+        gpa,
+        .{ .root = .{ .module = &artifact, .roots = undefined } },
+        .{},
+        &plan,
+        .{},
+    );
+    defer out.deinit();
+
+    const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
+    const literal = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_literal;
+    switch (literal.value) {
+        .dec_literal => |dec| try std.testing.expectEqual(value.toRocDec().num, dec),
+        else => return error.TestUnexpectedResult,
+    }
+    try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = literal.target } }, out.lir_result.store.getCFStmt(literal.next));
+}
+
 test "boxy lowerer emits direct calls to planned private workers" {
     const gpa = std.testing.allocator;
 
@@ -7715,6 +7800,164 @@ test "boxy lowerer emits checked numeric literal match patterns as equality test
     const cond_literal = out.lir_result.store.getCFStmt(outer_join.remainder).assign_literal;
     const first_join = out.lir_result.store.getCFStmt(cond_literal.next).join;
     const pattern_literal = out.lir_result.store.getCFStmt(first_join.remainder).assign_literal;
+    const compare = out.lir_result.store.getCFStmt(pattern_literal.next).assign_low_level;
+    try std.testing.expectEqual(LIR.LowLevel.num_is_eq, compare.op);
+    const args = out.lir_result.store.getLocalSpan(compare.args);
+    try std.testing.expectEqual(@as(usize, 2), args.len);
+    try std.testing.expectEqual(cond_literal.target, args[0]);
+    try std.testing.expectEqual(pattern_literal.target, args[1]);
+
+    const switch_stmt = out.lir_result.store.getCFStmt(compare.next).switch_stmt;
+    try std.testing.expectEqual(compare.target, switch_stmt.cond);
+    const branches = out.lir_result.store.getCFSwitchBranches(switch_stmt.branches);
+    try std.testing.expectEqual(@as(usize, 1), branches.len);
+    try std.testing.expectEqual(@as(u64, 1), branches[0].value);
+    const matched_value = out.lir_result.store.getCFStmt(branches[0].body).assign_literal;
+    switch (matched_value.value) {
+        .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 11), literal.value),
+        else => return error.TestUnexpectedResult,
+    }
+}
+
+test "boxy lowerer emits checked small decimal match patterns as Dec equality tests" {
+    const gpa = std.testing.allocator;
+
+    var artifact = minimalCheckedArtifact(gpa);
+    defer artifact.canonical_names.deinit();
+    defer artifact.checked_types.deinit(gpa);
+    defer artifact.checked_bodies.deinit(gpa);
+
+    const value = can.CIR.SmallDecValue{ .numerator = 314, .denominator_power_of_ten = 2 };
+    const expected_dec = value.toRocDec().num;
+
+    try artifact.checked_types.payloads.append(gpa, .{
+        .nominal = builtinNominal(.dec, @enumFromInt(0), .{}),
+    });
+    try artifact.checked_types.payloads.append(gpa, .{
+        .nominal = builtinNominal(.u64, @enumFromInt(1), .{}),
+    });
+    try artifact.checked_types.payloads.append(gpa, .{
+        .function = .{
+            .kind = .pure,
+            .args = .{},
+            .ret = @enumFromInt(1),
+            .needs_instantiation = false,
+        },
+    });
+
+    try artifact.checked_bodies.pattern_binder_by_pattern.appendSlice(gpa, &.{ null, null });
+    try artifact.checked_bodies.stored_patterns.append(gpa, .{
+        .id = @enumFromInt(0),
+        .ty = @enumFromInt(0),
+        .source_region = base.Region.zero(),
+        .data = .{ .small_dec_literal = .{
+            .value = value,
+            .has_suffix = false,
+            .conversion = null,
+        } },
+    });
+    try artifact.checked_bodies.stored_patterns.append(gpa, .{
+        .id = @enumFromInt(1),
+        .ty = @enumFromInt(0),
+        .source_region = base.Region.zero(),
+        .data = .underscore,
+    });
+    try artifact.checked_bodies.match_branch_pattern_pool.appendSlice(gpa, &.{
+        .{ .pattern = @enumFromInt(0), .degenerate = false },
+        .{ .pattern = @enumFromInt(1), .degenerate = false },
+    });
+    try artifact.checked_bodies.match_branch_pool.appendSlice(gpa, &.{
+        .{ .pt_start = 0, .pt_len = 1, .value = @enumFromInt(3), .guard = null },
+        .{ .pt_start = 1, .pt_len = 1, .value = @enumFromInt(4), .guard = null },
+    });
+
+    const template_ref = procedureTemplateRef(artifact.key, 0);
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(0),
+        .ty = @enumFromInt(2),
+        .source_region = base.Region.zero(),
+        .data = .{ .lambda = .{ .args = .{}, .body = @enumFromInt(1) } },
+    });
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(1),
+        .ty = @enumFromInt(1),
+        .source_region = base.Region.zero(),
+        .data = .{ .match_ = .{
+            .cond = @enumFromInt(2),
+            .branches = .{ .start = 0, .len = 2 },
+            .is_try_suffix = false,
+            .skip_exhaustiveness = false,
+            .comptime_site_kind = .match,
+        } },
+    });
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(2),
+        .ty = @enumFromInt(0),
+        .source_region = base.Region.zero(),
+        .data = .{ .dec_small = .{ .value = value, .has_suffix = false } },
+    });
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(3),
+        .ty = @enumFromInt(1),
+        .source_region = base.Region.zero(),
+        .data = .{ .num = .{ .value = intValue(11), .kind = .u64 } },
+    });
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(4),
+        .ty = @enumFromInt(1),
+        .source_region = base.Region.zero(),
+        .data = .{ .num = .{ .value = intValue(22), .kind = .u64 } },
+    });
+    try artifact.checked_bodies.bodies.append(gpa, .{
+        .id = @enumFromInt(0),
+        .root_expr = @enumFromInt(0),
+        .owner_template = template_ref,
+    });
+    var templates = [_]checked.CheckedProcedureTemplate{
+        checkedTemplate(template_ref, @enumFromInt(2), @enumFromInt(0)),
+    };
+    artifact.checked_procedure_templates = .{ .templates = &templates };
+
+    const root = checked.RootRequest{
+        .order = 0,
+        .module_idx = 0,
+        .kind = .runtime_entrypoint,
+        .source = .{ .def = @enumFromInt(0) },
+        .checked_type = @enumFromInt(2),
+        .abi = .roc,
+        .exposure = .private,
+        .procedure_template = template_ref,
+    };
+    var plan = try Plan.analyzeProgram(gpa, .{
+        .root_module = .{ .module = &artifact, .roots = undefined },
+        .roots = &.{root},
+    }, .{});
+    defer plan.deinit();
+
+    var out = try run(
+        gpa,
+        .{ .root = .{ .module = &artifact, .roots = undefined } },
+        .{},
+        &plan,
+        .{},
+    );
+    defer out.deinit();
+
+    const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
+    const outer_join = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).join;
+    const cond_literal = out.lir_result.store.getCFStmt(outer_join.remainder).assign_literal;
+    switch (cond_literal.value) {
+        .dec_literal => |literal| try std.testing.expectEqual(expected_dec, literal),
+        else => return error.TestUnexpectedResult,
+    }
+
+    const first_join = out.lir_result.store.getCFStmt(cond_literal.next).join;
+    const pattern_literal = out.lir_result.store.getCFStmt(first_join.remainder).assign_literal;
+    switch (pattern_literal.value) {
+        .dec_literal => |literal| try std.testing.expectEqual(expected_dec, literal),
+        else => return error.TestUnexpectedResult,
+    }
+
     const compare = out.lir_result.store.getCFStmt(pattern_literal.next).assign_low_level;
     try std.testing.expectEqual(LIR.LowLevel.num_is_eq, compare.op);
     const args = out.lir_result.store.getLocalSpan(compare.args);
