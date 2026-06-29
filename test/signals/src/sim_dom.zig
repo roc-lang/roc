@@ -165,6 +165,122 @@ pub fn matchesLocator(elem: *const Element, locator: spec_parser.Locator) bool {
     };
 }
 
+fn replaceOwnedString(allocator: std.mem.Allocator, field: *?[]const u8, value: []const u8) bool {
+    if (field.*) |existing| {
+        if (std.mem.eql(u8, existing, value)) return false;
+        allocator.free(existing);
+    }
+    field.* = allocator.dupe(u8, value) catch std.process.exit(1);
+    return true;
+}
+
+pub fn setOwnedString(allocator: std.mem.Allocator, field: *?[]const u8, value: []const u8) void {
+    if (field.*) |existing| {
+        allocator.free(existing);
+    }
+    field.* = allocator.dupe(u8, value) catch std.process.exit(1);
+}
+
+pub fn clearOwnedString(allocator: std.mem.Allocator, field: *?[]const u8) void {
+    if (field.*) |existing| {
+        allocator.free(existing);
+    }
+    field.* = null;
+}
+
+pub fn setText(allocator: std.mem.Allocator, elem: *Element, text: []const u8) void {
+    setOwnedString(allocator, &elem.text, text);
+    elem.text_update_count += 1;
+}
+
+pub fn setValueIfChanged(allocator: std.mem.Allocator, elem: *Element, value: []const u8) bool {
+    if (replaceOwnedString(allocator, &elem.value, value)) {
+        elem.value_update_count += 1;
+        return true;
+    }
+    return false;
+}
+
+pub fn setValue(allocator: std.mem.Allocator, elem: *Element, value: []const u8) void {
+    setOwnedString(allocator, &elem.value, value);
+    elem.value_update_count += 1;
+}
+
+pub fn clearText(allocator: std.mem.Allocator, elem: *Element) void {
+    clearOwnedString(allocator, &elem.text);
+    elem.text_update_count += 1;
+}
+
+pub fn clearValue(allocator: std.mem.Allocator, elem: *Element) void {
+    clearOwnedString(allocator, &elem.value);
+    elem.value_update_count += 1;
+}
+
+pub fn setTextAttr(allocator: std.mem.Allocator, elem: *Element, name: []const u8, value: []const u8) void {
+    if (elem.textAttrIndex(name)) |index| {
+        const attr = &elem.attrs.items[index];
+        allocator.free(attr.value);
+        attr.value = allocator.dupe(u8, value) catch std.process.exit(1);
+        return;
+    }
+
+    const name_copy = allocator.dupe(u8, name) catch std.process.exit(1);
+    const value_copy = allocator.dupe(u8, value) catch {
+        allocator.free(name_copy);
+        std.process.exit(1);
+    };
+    elem.attrs.append(allocator, .{
+        .name = name_copy,
+        .value = value_copy,
+    }) catch {
+        allocator.free(name_copy);
+        allocator.free(value_copy);
+        std.process.exit(1);
+    };
+}
+
+pub fn clearTextAttr(allocator: std.mem.Allocator, elem: *Element, name: []const u8) void {
+    const index = elem.textAttrIndex(name) orelse return;
+    const removed = elem.attrs.orderedRemove(index);
+    removed.deinit(allocator);
+}
+
+pub fn textAttr(elem: *const Element, name: []const u8) ?[]const u8 {
+    const index = elem.textAttrIndex(name) orelse return null;
+    return elem.attrs.items[index].value;
+}
+
+pub fn setCheckedIfChanged(elem: *Element, checked: bool) bool {
+    if (elem.checked != checked) {
+        elem.checked = checked;
+        elem.checked_update_count += 1;
+        return true;
+    }
+    return false;
+}
+
+pub fn setChecked(elem: *Element, checked: bool) void {
+    elem.checked = checked;
+    elem.checked_update_count += 1;
+}
+
+pub fn setDisabled(elem: *Element, disabled: bool) void {
+    elem.disabled = disabled;
+    elem.disabled_update_count += 1;
+}
+
+pub fn childIndex(elem: *const Element, child_id: u64) ?usize {
+    for (elem.children.items, 0..) |id, index| {
+        if (id == child_id) return index;
+    }
+    return null;
+}
+
+pub fn namedEvent(elem: *const Element, name: []const u8) ?NamedEvent {
+    const index = elem.namedEventIndex(name) orelse return null;
+    return elem.named_events.items[index];
+}
+
 test "simulated DOM element indexes attrs and named events" {
     const allocator = std.testing.allocator;
     const tag = try allocator.dupe(u8, "button");
@@ -211,4 +327,34 @@ test "simulated DOM matches spec locators" {
         .kind = .text,
         .text = "Cancel",
     }));
+}
+
+test "simulated DOM mutation helpers update owned fields and counters" {
+    const allocator = std.testing.allocator;
+    const tag = try allocator.dupe(u8, "input");
+    var elem = Element.init(2, tag);
+    defer elem.deinit(allocator);
+
+    setText(allocator, &elem, "Name");
+    setValue(allocator, &elem, "Ada");
+    try std.testing.expectEqualStrings("Name", elem.text.?);
+    try std.testing.expectEqualStrings("Ada", elem.value.?);
+    try std.testing.expectEqual(@as(u64, 1), elem.text_update_count);
+    try std.testing.expectEqual(@as(u64, 1), elem.value_update_count);
+
+    try std.testing.expect(!setValueIfChanged(allocator, &elem, "Ada"));
+    try std.testing.expect(setValueIfChanged(allocator, &elem, "Grace"));
+    try std.testing.expectEqual(@as(u64, 2), elem.value_update_count);
+
+    setTextAttr(allocator, &elem, "data-state", "ready");
+    try std.testing.expectEqualStrings("ready", textAttr(&elem, "data-state").?);
+    setTextAttr(allocator, &elem, "data-state", "done");
+    try std.testing.expectEqualStrings("done", textAttr(&elem, "data-state").?);
+    clearTextAttr(allocator, &elem, "data-state");
+    try std.testing.expect(textAttr(&elem, "data-state") == null);
+
+    try std.testing.expect(setCheckedIfChanged(&elem, true));
+    setDisabled(&elem, true);
+    try std.testing.expect(elem.checked);
+    try std.testing.expect(elem.disabled);
 }

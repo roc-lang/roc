@@ -1427,29 +1427,6 @@ fn failHost(message: []const u8) noreturn {
     std.process.exit(1);
 }
 
-fn replaceOwnedString(allocator: std.mem.Allocator, field: *?[]const u8, value: []const u8) bool {
-    if (field.*) |existing| {
-        if (std.mem.eql(u8, existing, value)) return false;
-        allocator.free(existing);
-    }
-    field.* = allocator.dupe(u8, value) catch std.process.exit(1);
-    return true;
-}
-
-fn setOwnedString(allocator: std.mem.Allocator, field: *?[]const u8, value: []const u8) void {
-    if (field.*) |existing| {
-        allocator.free(existing);
-    }
-    field.* = allocator.dupe(u8, value) catch std.process.exit(1);
-}
-
-fn clearOwnedString(allocator: std.mem.Allocator, field: *?[]const u8) void {
-    if (field.*) |existing| {
-        allocator.free(existing);
-    }
-    field.* = null;
-}
-
 fn addRuntimeMetrics(left: RuntimeMetrics, right: RuntimeMetrics) RuntimeMetrics {
     return .{
         .active_graph_records_rebuilt = left.active_graph_records_rebuilt + right.active_graph_records_rebuilt,
@@ -1572,85 +1549,47 @@ fn runtimeMetricValue(metrics: RuntimeMetrics, name: []const u8) ?i64 {
 }
 
 fn setElementText(host: *HostEnv, elem: *DomElement, text: []const u8) void {
-    setOwnedString(host.hostAllocator(), &elem.text, text);
-    elem.text_update_count += 1;
+    sim_dom.setText(host.hostAllocator(), elem, text);
 }
 
 fn setElementValueIfChanged(host: *HostEnv, elem: *DomElement, value: []const u8) bool {
-    if (replaceOwnedString(host.hostAllocator(), &elem.value, value)) {
-        elem.value_update_count += 1;
-        return true;
-    }
-    return false;
+    return sim_dom.setValueIfChanged(host.hostAllocator(), elem, value);
 }
 
 fn setElementValue(host: *HostEnv, elem: *DomElement, value: []const u8) void {
-    setOwnedString(host.hostAllocator(), &elem.value, value);
-    elem.value_update_count += 1;
+    sim_dom.setValue(host.hostAllocator(), elem, value);
 }
 
 fn clearElementText(host: *HostEnv, elem: *DomElement) void {
-    clearOwnedString(host.hostAllocator(), &elem.text);
-    elem.text_update_count += 1;
+    sim_dom.clearText(host.hostAllocator(), elem);
 }
 
 fn clearElementValue(host: *HostEnv, elem: *DomElement) void {
-    clearOwnedString(host.hostAllocator(), &elem.value);
-    elem.value_update_count += 1;
+    sim_dom.clearValue(host.hostAllocator(), elem);
 }
 
 fn setElementTextAttr(host: *HostEnv, elem: *DomElement, name: []const u8, value: []const u8) void {
-    const allocator = host.hostAllocator();
-    if (elem.textAttrIndex(name)) |index| {
-        const attr = &elem.attrs.items[index];
-        allocator.free(attr.value);
-        attr.value = allocator.dupe(u8, value) catch std.process.exit(1);
-        return;
-    }
-
-    const name_copy = allocator.dupe(u8, name) catch std.process.exit(1);
-    const value_copy = allocator.dupe(u8, value) catch {
-        allocator.free(name_copy);
-        std.process.exit(1);
-    };
-    elem.attrs.append(allocator, .{
-        .name = name_copy,
-        .value = value_copy,
-    }) catch {
-        allocator.free(name_copy);
-        allocator.free(value_copy);
-        std.process.exit(1);
-    };
+    sim_dom.setTextAttr(host.hostAllocator(), elem, name, value);
 }
 
 fn clearElementTextAttr(host: *HostEnv, elem: *DomElement, name: []const u8) void {
-    const index = elem.textAttrIndex(name) orelse return;
-    const removed = elem.attrs.orderedRemove(index);
-    removed.deinit(host.hostAllocator());
+    sim_dom.clearTextAttr(host.hostAllocator(), elem, name);
 }
 
 fn elementTextAttr(elem: *const DomElement, name: []const u8) ?[]const u8 {
-    const index = elem.textAttrIndex(name) orelse return null;
-    return elem.attrs.items[index].value;
+    return sim_dom.textAttr(elem, name);
 }
 
 fn setElementCheckedIfChanged(elem: *DomElement, checked: bool) bool {
-    if (elem.checked != checked) {
-        elem.checked = checked;
-        elem.checked_update_count += 1;
-        return true;
-    }
-    return false;
+    return sim_dom.setCheckedIfChanged(elem, checked);
 }
 
 fn setElementChecked(elem: *DomElement, checked: bool) void {
-    elem.checked = checked;
-    elem.checked_update_count += 1;
+    sim_dom.setChecked(elem, checked);
 }
 
 fn setElementDisabled(elem: *DomElement, disabled: bool) void {
-    elem.disabled = disabled;
-    elem.disabled_update_count += 1;
+    sim_dom.setDisabled(elem, disabled);
 }
 
 fn resetSimulatedDom(host: *HostEnv) void {
@@ -1683,11 +1622,11 @@ fn setRenderTextField(host: *HostEnv, elem_id: u64, field: RenderTextField, valu
     const elem = domElementById(host, elem_id);
     switch (field) {
         .text => setElementText(host, elem, value),
-        .role => setOwnedString(host.hostAllocator(), &elem.role, value),
-        .label => setOwnedString(host.hostAllocator(), &elem.label, value),
-        .test_id => setOwnedString(host.hostAllocator(), &elem.test_id, value),
+        .role => sim_dom.setOwnedString(host.hostAllocator(), &elem.role, value),
+        .label => sim_dom.setOwnedString(host.hostAllocator(), &elem.label, value),
+        .test_id => sim_dom.setOwnedString(host.hostAllocator(), &elem.test_id, value),
         .value => setElementValue(host, elem, value),
-        .class => setOwnedString(host.hostAllocator(), &elem.class, value),
+        .class => sim_dom.setOwnedString(host.hostAllocator(), &elem.class, value),
     }
 }
 
@@ -1707,11 +1646,11 @@ fn clearRenderTextField(host: *HostEnv, elem_id: u64, field: RenderTextField) vo
     const elem = domElementById(host, elem_id);
     switch (field) {
         .text => clearElementText(host, elem),
-        .role => clearOwnedString(host.hostAllocator(), &elem.role),
-        .label => clearOwnedString(host.hostAllocator(), &elem.label),
-        .test_id => clearOwnedString(host.hostAllocator(), &elem.test_id),
+        .role => sim_dom.clearOwnedString(host.hostAllocator(), &elem.role),
+        .label => sim_dom.clearOwnedString(host.hostAllocator(), &elem.label),
+        .test_id => sim_dom.clearOwnedString(host.hostAllocator(), &elem.test_id),
         .value => clearElementValue(host, elem),
-        .class => clearOwnedString(host.hostAllocator(), &elem.class),
+        .class => sim_dom.clearOwnedString(host.hostAllocator(), &elem.class),
     }
 }
 
@@ -1749,10 +1688,7 @@ fn appendDomNode(host: *HostEnv, elem_id: u64, parent_elem_id: u64, tag: []const
 }
 
 fn findDomChildIndex(elem: *const DomElement, child_id: u64) ?usize {
-    for (elem.children.items, 0..) |id, index| {
-        if (id == child_id) return index;
-    }
-    return null;
+    return sim_dom.childIndex(elem, child_id);
 }
 
 fn ensureDomNode(host: *HostEnv, elem_id: u64, tag: []const u8) void {
@@ -1873,8 +1809,7 @@ fn clearNodeEventName(host: *HostEnv, elem_id: u64, name: []const u8) void {
 }
 
 fn nodeEventName(elem: *const DomElement, name: []const u8) ?DomNamedEvent {
-    const index = elem.namedEventIndex(name) orelse return null;
-    return elem.named_events.items[index];
+    return sim_dom.namedEvent(elem, name);
 }
 
 fn replaceDomChildrenForStructuralParentMoves(host: *HostEnv, parent_elem_id: u64, next_child_ids: []const u64) void {
