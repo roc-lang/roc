@@ -244,17 +244,8 @@ pub const EachRowValues = struct {
     item: HostValue,
 };
 
-pub const HostEachRowRenderSegment = struct {
-    scope_id: u64,
-    start: usize,
-    len: usize,
-};
-
-pub const HostEachRowRenderMove = struct {
-    old_start: usize,
-    new_start: usize,
-    len: usize,
-};
+pub const HostEachRowRenderSegment = each_runtime.RenderSegment;
+pub const HostEachRowRenderMove = each_runtime.RenderMove;
 
 pub const HostRequiredEventBinding = struct {
     event_id: u64,
@@ -3690,17 +3681,7 @@ pub fn Engine(comptime Ctx: type) type {
         }
 
         pub fn eachDiffPreservesSurvivorRenderOrder(old_render_rows: []const u64, next_scope_ids: []const u64) bool {
-            var old_index: usize = 0;
-            for (next_scope_ids) |next_scope_id| {
-                if (!u64SliceContains(old_render_rows, next_scope_id)) continue;
-                while (old_index < old_render_rows.len and !u64SliceContains(next_scope_ids, old_render_rows[old_index])) {
-                    old_index += 1;
-                }
-                if (old_index >= old_render_rows.len) return false;
-                if (old_render_rows[old_index] != next_scope_id) return false;
-                old_index += 1;
-            }
-            return true;
+            return each_runtime.diffPreservesSurvivorRenderOrder(old_render_rows, next_scope_ids);
         }
 
         pub fn activeEachRowRenderSegmentsInRenderOrder(self: *Self, allocator: std.mem.Allocator, site: HostEachSite) []HostEachRowRenderSegment {
@@ -3742,11 +3723,7 @@ pub fn Engine(comptime Ctx: type) type {
         }
 
         pub fn eachRenderSegmentScopeIds(allocator: std.mem.Allocator, segments: []const HostEachRowRenderSegment) []u64 {
-            const ids = allocator.alloc(u64, segments.len) catch @panic("out of memory");
-            for (segments, ids) |segment, *id| {
-                id.* = segment.scope_id;
-            }
-            return ids;
+            return each_runtime.renderSegmentScopeIds(allocator, segments);
         }
 
         pub fn eachDiffIsPurePermutation(self: *Self, old_render_rows: []const u64, diff: HostKeyedRowDiffResult, dirty_source_node_ids: []const u64) bool {
@@ -3882,49 +3859,15 @@ pub fn Engine(comptime Ctx: type) type {
         }
 
         pub fn renderInsertIndexForEachRowRanges(site: HostNodeScopeSiteDesc, row_ranges: *const std.AutoHashMapUnmanaged(u64, HostEachRowRenderSegment), next_scope_ids: []const u64, row_index: usize) usize {
-            if (row_index >= next_scope_ids.len) @panic("each row insertion index was requested outside the next row order");
-
-            if (row_ranges.get(next_scope_ids[row_index])) |existing| {
-                return existing.start;
-            }
-
-            var next_index = row_index + 1;
-            while (next_index < next_scope_ids.len) : (next_index += 1) {
-                if (row_ranges.get(next_scope_ids[next_index])) |next| {
-                    return next.start;
-                }
-            }
-
-            var previous_index = row_index;
-            while (previous_index > 0) {
-                previous_index -= 1;
-                if (row_ranges.get(next_scope_ids[previous_index])) |previous| {
-                    return previous.start + previous.len;
-                }
-            }
-
-            return site.render_insert_index;
+            return each_runtime.renderInsertIndexForRowRanges(site.render_insert_index, row_ranges, next_scope_ids, row_index);
         }
 
         pub fn adjustEachRowRenderRanges(row_ranges: *std.AutoHashMapUnmanaged(u64, HostEachRowRenderSegment), replace_index: usize, removed_count: usize, replacement_count: usize) void {
-            var range_iterator = row_ranges.iterator();
-            while (range_iterator.next()) |entry| {
-                entry.value_ptr.start = adjustedRenderInsertIndex(entry.value_ptr.start, replace_index, removed_count, replacement_count);
-            }
+            each_runtime.adjustRenderRanges(row_ranges, replace_index, removed_count, replacement_count);
         }
 
         pub fn updateEachRowRenderRange(row_ranges: *std.AutoHashMapUnmanaged(u64, HostEachRowRenderSegment), allocator: std.mem.Allocator, scope_id: u64, render_insert_index: usize, removed_count: usize, replacement_count: usize) void {
-            const removed_range = row_ranges.fetchRemove(scope_id);
-            const old_len = if (removed_range) |entry| entry.value.len else 0;
-            if (old_len != removed_count) @panic("each row render range length did not match splice removal count");
-            adjustEachRowRenderRanges(row_ranges, render_insert_index, old_len, replacement_count);
-            if (replacement_count != 0) {
-                row_ranges.put(allocator, scope_id, .{
-                    .scope_id = scope_id,
-                    .start = render_insert_index,
-                    .len = replacement_count,
-                }) catch @panic("out of memory");
-            }
+            each_runtime.updateRenderRange(row_ranges, allocator, scope_id, render_insert_index, removed_count, replacement_count);
         }
 
         pub fn applyDirtyEachRowScopeSplices(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, site: HostNodeScopeSiteDesc, each: HostNodeEachDesc, old_render_segments: []const HostEachRowRenderSegment, diff: HostKeyedRowDiffResult, dirty_source_node_ids: []const u64, dirty_generation: u64) render.Counts {

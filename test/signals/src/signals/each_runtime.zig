@@ -60,6 +60,18 @@ pub const DiffResult = struct {
     }
 };
 
+pub const RenderSegment = struct {
+    scope_id: u64,
+    start: usize,
+    len: usize,
+};
+
+pub const RenderMove = struct {
+    old_start: usize,
+    new_start: usize,
+    len: usize,
+};
+
 const NextKeyIndexError = error{
     OutOfMemory,
     DuplicateKey,
@@ -104,6 +116,91 @@ pub fn activeSiteIndex(site_indexes: *const SiteIndexMap, parent_scope_id: u64, 
         .parent_scope_id = parent_scope_id,
         .site_ordinal = site_ordinal,
     });
+}
+
+fn u64SliceContains(items: []const u64, target: u64) bool {
+    for (items) |item| {
+        if (item == target) return true;
+    }
+    return false;
+}
+
+pub fn diffPreservesSurvivorRenderOrder(old_render_rows: []const u64, next_scope_ids: []const u64) bool {
+    var old_index: usize = 0;
+    for (next_scope_ids) |next_scope_id| {
+        if (!u64SliceContains(old_render_rows, next_scope_id)) continue;
+        while (old_index < old_render_rows.len and !u64SliceContains(next_scope_ids, old_render_rows[old_index])) {
+            old_index += 1;
+        }
+        if (old_index >= old_render_rows.len) return false;
+        if (old_render_rows[old_index] != next_scope_id) return false;
+        old_index += 1;
+    }
+    return true;
+}
+
+pub fn renderSegmentScopeIds(allocator: std.mem.Allocator, segments: []const RenderSegment) []u64 {
+    const ids = allocator.alloc(u64, segments.len) catch @panic("out of memory");
+    for (segments, ids) |segment, *id| {
+        id.* = segment.scope_id;
+    }
+    return ids;
+}
+
+pub fn renderInsertIndexForRowRanges(site_render_insert_index: usize, row_ranges: *const std.AutoHashMapUnmanaged(u64, RenderSegment), next_scope_ids: []const u64, row_index: usize) usize {
+    if (row_index >= next_scope_ids.len) @panic("each row insertion index was requested outside the next row order");
+
+    if (row_ranges.get(next_scope_ids[row_index])) |existing| {
+        return existing.start;
+    }
+
+    var next_index = row_index + 1;
+    while (next_index < next_scope_ids.len) : (next_index += 1) {
+        if (row_ranges.get(next_scope_ids[next_index])) |next| {
+            return next.start;
+        }
+    }
+
+    var previous_index = row_index;
+    while (previous_index > 0) {
+        previous_index -= 1;
+        if (row_ranges.get(next_scope_ids[previous_index])) |previous| {
+            return previous.start + previous.len;
+        }
+    }
+
+    return site_render_insert_index;
+}
+
+fn adjustedRenderInsertIndex(old_index: usize, replace_index: usize, removed_count: usize, replacement_count: usize) usize {
+    if (removed_count == 0) {
+        if (old_index < replace_index) return old_index;
+        return old_index + replacement_count;
+    }
+    if (old_index <= replace_index) return old_index;
+    if (old_index < replace_index + removed_count) @panic("scope site inside replaced scope was not removed");
+    return old_index - removed_count + replacement_count;
+}
+
+pub fn adjustRenderRanges(row_ranges: *std.AutoHashMapUnmanaged(u64, RenderSegment), replace_index: usize, removed_count: usize, replacement_count: usize) void {
+    var range_iterator = row_ranges.iterator();
+    while (range_iterator.next()) |entry| {
+        entry.value_ptr.start = adjustedRenderInsertIndex(entry.value_ptr.start, replace_index, removed_count, replacement_count);
+    }
+}
+
+pub fn updateRenderRange(row_ranges: *std.AutoHashMapUnmanaged(u64, RenderSegment), allocator: std.mem.Allocator, scope_id: u64, render_insert_index: usize, removed_count: usize, replacement_count: usize) void {
+    const removed_range = row_ranges.fetchRemove(scope_id);
+    const old_len = if (removed_range) |entry| entry.value.len else 0;
+    if (old_len != removed_count) @panic("each row render range length did not match splice removal count");
+    adjustRenderRanges(row_ranges, render_insert_index, old_len, replacement_count);
+    if (replacement_count != 0) {
+        row_ranges.put(allocator, scope_id, .{
+            .scope_id = scope_id,
+            .start = render_insert_index,
+            .len = replacement_count,
+        }) catch @panic("out of memory");
+    }
 }
 
 pub fn appendRowToSiteIndex(allocator: std.mem.Allocator, sites: *std.ArrayListUnmanaged(Site), memberships: *std.ArrayListUnmanaged(?Membership), site_index: usize, scope_id: u64, key_hash: u64) void {
@@ -666,4 +763,39 @@ test "each runtime replaces row order and rebuilds indexes" {
     try std.testing.expectEqual(Membership{ .site_index = site_index, .row_index = 1 }, memberships.items[10].?);
     try std.testing.expectEqual(@as(usize, 1), sites.items[site_index].hash_heads.get(5).?);
     try std.testing.expectEqual(@as(usize, 0), sites.items[site_index].hash_links.items[1]);
+}
+
+test "each runtime render segments expose scope order" {
+    const segments = [_]RenderSegment{
+        .{ .scope_id = 10, .start = 2, .len = 3 },
+        .{ .scope_id = 11, .start = 5, .len = 1 },
+    };
+    const scope_ids = renderSegmentScopeIds(std.testing.allocator, &segments);
+    defer std.testing.allocator.free(scope_ids);
+
+    try std.testing.expectEqualSlices(u64, &.{ 10, 11 }, scope_ids);
+    try std.testing.expect(diffPreservesSurvivorRenderOrder(&.{ 10, 11, 12 }, &.{ 10, 12 }));
+    try std.testing.expect(!diffPreservesSurvivorRenderOrder(&.{ 10, 11, 12 }, &.{ 12, 10 }));
+}
+
+test "each runtime render range helpers choose insertion points and adjust ranges" {
+    var ranges: std.AutoHashMapUnmanaged(u64, RenderSegment) = .{};
+    defer ranges.deinit(std.testing.allocator);
+
+    ranges.put(std.testing.allocator, 10, .{ .scope_id = 10, .start = 4, .len = 2 }) catch @panic("out of memory");
+    ranges.put(std.testing.allocator, 12, .{ .scope_id = 12, .start = 9, .len = 1 }) catch @panic("out of memory");
+
+    try std.testing.expectEqual(@as(usize, 4), renderInsertIndexForRowRanges(3, &ranges, &.{ 10, 11, 12 }, 0));
+    try std.testing.expectEqual(@as(usize, 9), renderInsertIndexForRowRanges(3, &ranges, &.{ 10, 11, 12 }, 1));
+    try std.testing.expectEqual(@as(usize, 10), renderInsertIndexForRowRanges(3, &ranges, &.{ 10, 12, 11 }, 2));
+    try std.testing.expectEqual(@as(usize, 4), renderInsertIndexForRowRanges(3, &ranges, &.{ 11, 10, 12 }, 0));
+    try std.testing.expectEqual(@as(usize, 3), renderInsertIndexForRowRanges(3, &ranges, &.{11}, 0));
+
+    updateRenderRange(&ranges, std.testing.allocator, 10, 4, 2, 3);
+    try std.testing.expectEqual(RenderSegment{ .scope_id = 10, .start = 4, .len = 3 }, ranges.get(10).?);
+    try std.testing.expectEqual(RenderSegment{ .scope_id = 12, .start = 10, .len = 1 }, ranges.get(12).?);
+
+    updateRenderRange(&ranges, std.testing.allocator, 10, 4, 3, 0);
+    try std.testing.expectEqual(@as(?RenderSegment, null), ranges.get(10));
+    try std.testing.expectEqual(RenderSegment{ .scope_id = 12, .start = 7, .len = 1 }, ranges.get(12).?);
 }
