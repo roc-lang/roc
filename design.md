@@ -3243,6 +3243,17 @@ statements in front of the continuation. This lets `lookup_local` consume the
 same checked binder ids that checking produced; the lowerer never reconstructs
 lexical scope from source syntax or declaration names.
 
+Mutable checked block statements use the same checked binder metadata, with
+explicit LIR writes for the places where mutability matters. `var` declarations
+reserve locals from their checked patterns and initialize them through the
+ordinary declaration binding path. `var` declarations without an initializer
+emit `init_uninitialized` for each non-zst binder local named by the checked
+pattern. Reassignment statements consume the checked `reassigned_binders` list:
+binders in that list lower to `set_local.replace_existing`, while fresh binders
+inside the same destructuring pattern are initialized with ordinary local
+binding. The lowerer does not infer reassignment by comparing names or source
+spans; the checked statement tells it exactly which binders are mutable writes.
+
 Checked `crash` expressions lower to terminal LIR `crash` statements carrying
 the checked string literal bytes copied into the LIR string store. The target
 local for the surrounding expression is not initialized on that path because the
