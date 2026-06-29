@@ -3490,18 +3490,13 @@ pub fn Engine(comptime Ctx: type) type {
             return target_scopes;
         }
 
-        fn scopeIsInReplacementTargetSet(target_scopes: []const bool, scope_id: u64) bool {
-            if (scope_id >= target_scopes.len) @panic("descriptor referenced scope outside replacement target set");
-            return target_scopes[@intCast(scope_id)];
-        }
-
         pub fn renderNodeInReplacementTarget(self: *Self, stream: *const HostNodeDescriptorStream, node: HostRenderNode, target: HostStructuralReplacementTarget) bool {
             return self.scopeIsInReplacementTarget(renderNodeScopeId(stream, node), target);
         }
 
         pub fn renderNodeInReplacementTargetSet(self: *Self, stream: *const HostNodeDescriptorStream, node: HostRenderNode, target_scopes: []const bool) bool {
             _ = self;
-            return scopeIsInReplacementTargetSet(target_scopes, renderNodeScopeId(stream, node));
+            return structural_splice.scopeIsInTargetSet(target_scopes, renderNodeScopeId(stream, node));
         }
 
         pub fn elemIdInReplacementTarget(self: *Self, stream: *const HostNodeDescriptorStream, elem_id: u64, target: HostStructuralReplacementTarget) bool {
@@ -3512,7 +3507,7 @@ pub fn Engine(comptime Ctx: type) type {
         pub fn elemIdInReplacementTargetSet(self: *Self, stream: *const HostNodeDescriptorStream, elem_id: u64, target_scopes: []const bool) bool {
             _ = self;
             const scope_id = elemScopeId(stream, elem_id) orelse @panic("descriptor referenced an element outside the render stream");
-            return scopeIsInReplacementTargetSet(target_scopes, scope_id);
+            return structural_splice.scopeIsInTargetSet(target_scopes, scope_id);
         }
 
         pub fn streamNodeIdInReplacementTarget(self: *Self, previous: *const HostNodeDescriptorStream, node_id: u64, kind: HostNodeScopeSiteKind, target: HostStructuralReplacementTarget) bool {
@@ -3531,43 +3526,7 @@ pub fn Engine(comptime Ctx: type) type {
             if (site_index >= previous.scope_sites.items.len) @panic("scope site descriptor index exceeded descriptor table");
             const site = previous.scope_sites.items[site_index];
             if (site.node_id != node_id or site.kind != kind) @panic("scope site descriptor index pointed at the wrong node");
-            return scopeIsInReplacementTargetSet(target_scopes, site.scope_id);
-        }
-
-        fn removalIndexDesc(_: void, lhs: usize, rhs: usize) bool {
-            return lhs > rhs;
-        }
-
-        fn sortRemovalIndexesDescending(indexes: []usize) void {
-            std.mem.sort(usize, indexes, {}, removalIndexDesc);
-        }
-
-        fn appendRemovalIndex(ctx: Ctx.Handle, indexes: *std.ArrayListUnmanaged(usize), index: ?usize) void {
-            indexes.append(Ctx.allocator(ctx), index orelse return) catch @panic("out of memory");
-        }
-
-        fn appendTextFieldRemovalIndexes(ctx: Ctx.Handle, indexes: *std.ArrayListUnmanaged(usize), fields: HostTextFieldDescriptorIndexes) void {
-            appendRemovalIndex(ctx, indexes, fields.text);
-            appendRemovalIndex(ctx, indexes, fields.role);
-            appendRemovalIndex(ctx, indexes, fields.label);
-            appendRemovalIndex(ctx, indexes, fields.test_id);
-            appendRemovalIndex(ctx, indexes, fields.value);
-            appendRemovalIndex(ctx, indexes, fields.class);
-        }
-
-        fn appendBoolFieldRemovalIndexes(ctx: Ctx.Handle, indexes: *std.ArrayListUnmanaged(usize), fields: HostBoolFieldDescriptorIndexes) void {
-            appendRemovalIndex(ctx, indexes, fields.checked);
-            appendRemovalIndex(ctx, indexes, fields.disabled);
-        }
-
-        fn appendEventRemovalIndexes(ctx: Ctx.Handle, indexes: *std.ArrayListUnmanaged(usize), events: HostEventDescriptorIndexes) void {
-            appendRemovalIndex(ctx, indexes, events.click);
-            appendRemovalIndex(ctx, indexes, events.input);
-            appendRemovalIndex(ctx, indexes, events.check);
-            appendRemovalIndex(ctx, indexes, events.pointer_down);
-            appendRemovalIndex(ctx, indexes, events.pointer_up);
-            appendRemovalIndex(ctx, indexes, events.pointer_enter);
-            appendRemovalIndex(ctx, indexes, events.pointer_leave);
+            return structural_splice.scopeIsInTargetSet(target_scopes, site.scope_id);
         }
 
         fn appendNamedEventRemovalIndexes(self: *Self, ctx: Ctx.Handle, indexes: *std.ArrayListUnmanaged(usize), elem_id: u64) void {
@@ -3757,7 +3716,7 @@ pub fn Engine(comptime Ctx: type) type {
             var write_index: usize = 0;
             self.recordStreamNodesScannedBy(.stream_nodes_scanned_remove_target, self.active_stream.on_changes.items.len);
             for (self.active_stream.on_changes.items, 0..) |desc, read_index| {
-                if (scopeIsInReplacementTargetSet(target_scopes, desc.scope_id)) {
+                if (structural_splice.scopeIsInTargetSet(target_scopes, desc.scope_id)) {
                     var removed = desc;
                     const record_id = self.requireActiveSignalRecordId(removed.signal.record);
                     self.removeActiveChangeSignalRoute(record_id, read_index);
@@ -3778,7 +3737,7 @@ pub fn Engine(comptime Ctx: type) type {
             var write_index: usize = 0;
             self.recordStreamNodesScannedBy(.stream_nodes_scanned_remove_target, self.active_stream.mounts.items.len);
             for (self.active_stream.mounts.items) |desc| {
-                if (scopeIsInReplacementTargetSet(target_scopes, desc.scope_id)) {
+                if (structural_splice.scopeIsInTargetSet(target_scopes, desc.scope_id)) {
                     var removed = desc;
                     self.deinitActiveMountDesc(roc_host, &removed);
                     continue;
@@ -3794,7 +3753,7 @@ pub fn Engine(comptime Ctx: type) type {
             var write_index: usize = 0;
             self.recordStreamNodesScannedBy(.stream_nodes_scanned_remove_target, self.active_stream.cleanups.items.len);
             for (self.active_stream.cleanups.items) |desc| {
-                if (scopeIsInReplacementTargetSet(target_scopes, desc.scope_id)) {
+                if (structural_splice.scopeIsInTargetSet(target_scopes, desc.scope_id)) {
                     allocator.free(desc.name);
                     continue;
                 }
@@ -3873,6 +3832,7 @@ pub fn Engine(comptime Ctx: type) type {
         }
 
         fn collectElemOwnedRemovalIndexes(self: *Self, ctx: Ctx.Handle, removed_elem_ids: []const u64) void {
+            const allocator = Ctx.allocator(ctx);
             if (self.scratch.remove_element_indexes.items.len != 0 or
                 self.scratch.remove_text_node_indexes.items.len != 0 or
                 self.scratch.remove_signal_text_node_indexes.items.len != 0 or
@@ -3891,26 +3851,26 @@ pub fn Engine(comptime Ctx: type) type {
                 const has_render_descriptor = descriptor_index.element != null or descriptor_index.text_node != null or descriptor_index.signal_text_node != null;
                 if (!has_render_descriptor) @panic("removed rendered elem id had no render-owned descriptor");
 
-                appendRemovalIndex(ctx, &self.scratch.remove_element_indexes, descriptor_index.element);
-                appendRemovalIndex(ctx, &self.scratch.remove_text_node_indexes, descriptor_index.text_node);
-                appendRemovalIndex(ctx, &self.scratch.remove_signal_text_node_indexes, descriptor_index.signal_text_node);
-                appendTextFieldRemovalIndexes(ctx, &self.scratch.remove_static_text_attr_indexes, descriptor_index.static_text_attrs);
-                appendTextFieldRemovalIndexes(ctx, &self.scratch.remove_signal_text_attr_indexes, descriptor_index.signal_text_attrs);
-                appendBoolFieldRemovalIndexes(ctx, &self.scratch.remove_static_bool_attr_indexes, descriptor_index.static_bool_attrs);
-                appendBoolFieldRemovalIndexes(ctx, &self.scratch.remove_signal_bool_attr_indexes, descriptor_index.signal_bool_attrs);
-                appendEventRemovalIndexes(ctx, &self.scratch.remove_event_indexes, descriptor_index.events);
+                structural_splice.appendRemovalIndex(allocator, &self.scratch.remove_element_indexes, descriptor_index.element);
+                structural_splice.appendRemovalIndex(allocator, &self.scratch.remove_text_node_indexes, descriptor_index.text_node);
+                structural_splice.appendRemovalIndex(allocator, &self.scratch.remove_signal_text_node_indexes, descriptor_index.signal_text_node);
+                structural_splice.appendTextFieldRemovalIndexes(allocator, &self.scratch.remove_static_text_attr_indexes, descriptor_index.static_text_attrs);
+                structural_splice.appendTextFieldRemovalIndexes(allocator, &self.scratch.remove_signal_text_attr_indexes, descriptor_index.signal_text_attrs);
+                structural_splice.appendBoolFieldRemovalIndexes(allocator, &self.scratch.remove_static_bool_attr_indexes, descriptor_index.static_bool_attrs);
+                structural_splice.appendBoolFieldRemovalIndexes(allocator, &self.scratch.remove_signal_bool_attr_indexes, descriptor_index.signal_bool_attrs);
+                structural_splice.appendEventRemovalIndexes(allocator, &self.scratch.remove_event_indexes, descriptor_index.events);
                 self.appendNamedEventRemovalIndexes(ctx, &self.scratch.remove_named_event_indexes, elem_id);
             }
 
-            sortRemovalIndexesDescending(self.scratch.remove_element_indexes.items);
-            sortRemovalIndexesDescending(self.scratch.remove_text_node_indexes.items);
-            sortRemovalIndexesDescending(self.scratch.remove_signal_text_node_indexes.items);
-            sortRemovalIndexesDescending(self.scratch.remove_static_text_attr_indexes.items);
-            sortRemovalIndexesDescending(self.scratch.remove_signal_text_attr_indexes.items);
-            sortRemovalIndexesDescending(self.scratch.remove_static_bool_attr_indexes.items);
-            sortRemovalIndexesDescending(self.scratch.remove_signal_bool_attr_indexes.items);
-            sortRemovalIndexesDescending(self.scratch.remove_event_indexes.items);
-            sortRemovalIndexesDescending(self.scratch.remove_named_event_indexes.items);
+            structural_splice.sortRemovalIndexesDescending(self.scratch.remove_element_indexes.items);
+            structural_splice.sortRemovalIndexesDescending(self.scratch.remove_text_node_indexes.items);
+            structural_splice.sortRemovalIndexesDescending(self.scratch.remove_signal_text_node_indexes.items);
+            structural_splice.sortRemovalIndexesDescending(self.scratch.remove_static_text_attr_indexes.items);
+            structural_splice.sortRemovalIndexesDescending(self.scratch.remove_signal_text_attr_indexes.items);
+            structural_splice.sortRemovalIndexesDescending(self.scratch.remove_static_bool_attr_indexes.items);
+            structural_splice.sortRemovalIndexesDescending(self.scratch.remove_signal_bool_attr_indexes.items);
+            structural_splice.sortRemovalIndexesDescending(self.scratch.remove_event_indexes.items);
+            structural_splice.sortRemovalIndexesDescending(self.scratch.remove_named_event_indexes.items);
         }
 
         fn removeActiveElemOwnedDescriptorsForRemovedElems(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, removed_elem_ids: []const u64) void {
@@ -3951,7 +3911,7 @@ pub fn Engine(comptime Ctx: type) type {
             var write_index: usize = 0;
             self.recordStreamNodesScannedBy(.stream_nodes_scanned_remove_target, self.active_stream.scope_sites.items.len);
             for (self.active_stream.scope_sites.items, 0..) |desc, read_index| {
-                if (scopeIsInReplacementTargetSet(target_scopes, desc.scope_id)) {
+                if (structural_splice.scopeIsInTargetSet(target_scopes, desc.scope_id)) {
                     self.active_stream.clearScopeSiteIndex(desc.node_id, desc.kind, read_index);
                     allocator.free(desc.binder_bindings);
                     continue;
