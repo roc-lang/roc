@@ -1,0 +1,64 @@
+//! Deep-nesting stack-safety stress test for the iterative checker conversion.
+//!
+//! This test is RED BY DESIGN until the e_block migration lands. The checker
+//! still recurses natively for `e_block`, so a program with thousands of nested
+//! blocks drives deep native recursion and overflows the native stack (SIGSEGV
+//! via the compiler-rt stack probe) — it overflows long before the interim
+//! depth guard (`MAX_CHECK_RECURSION_DEPTH = 8192`) can convert it into a
+//! returned `error.OutOfMemory`. After the block migration flattens the e_block
+//! spine onto the work stack, this test will PASS. Do NOT weaken this test or
+//! the depth guard to make it pass early — its failure today is the executable
+//! definition of "block migration not yet done".
+//!
+//! Depth note: empirically on this codebase, parse+canonicalization (which still
+//! recurse for nested blocks despite the work-stack front end) themselves
+//! overflow the native stack around ~8.5k nested blocks, while the type checker
+//! overflows far shallower (already by ~1.5k). The depth below is chosen to sit
+//! comfortably in the window where parse+canon succeed but the checker overflows:
+//! large enough that the checker reliably fails today, small enough that it will
+//! genuinely complete once the checker is made iterative (parse+canon have ~2x
+//! headroom at this depth). See the task report for the threshold sweep.
+
+const std = @import("std");
+const TestEnv = @import("TestEnv.zig");
+
+/// Nesting depth for the stress program. Sits in the window between the checker's
+/// native-overflow point (~1.5k) and parse+canon's (~8.5k): deep enough to fail
+/// reliably today, shallow enough to pass once the checker is iterative.
+///
+/// CI fragility: those ceilings depend on the native stack size. A runner with a
+/// smaller stack could push canon's ceiling below this value, making the test
+/// SIGSEGV in canon even AFTER the block migration (unwinnable). If that happens,
+/// lower this depth (it only needs to clear the checker's ~1.5k ceiling), or raise
+/// it once parse+canon are also made iterative.
+const NESTING_DEPTH: usize = 4_000;
+
+/// Build `main! = |_args| { { { ... { 0 } ... } } }` nested `depth` deep, purely
+/// via nested blocks — the e_block spine this phase makes stack-safe.
+fn nestedBlocks(gpa: std.mem.Allocator, depth: usize) ![]u8 {
+    var buf = std.ArrayList(u8).empty;
+    errdefer buf.deinit(gpa);
+    try buf.appendSlice(gpa, "main! = |_args| {\n");
+    var i: usize = 0;
+    while (i < depth) : (i += 1) try buf.appendSlice(gpa, "{\n");
+    try buf.appendSlice(gpa, "0\n");
+    i = 0;
+    while (i < depth) : (i += 1) try buf.appendSlice(gpa, "}\n");
+    try buf.appendSlice(gpa, "}\n");
+    return buf.toOwnedSlice(gpa);
+}
+
+test "deep nesting: nested blocks type-check without native stack overflow" {
+    const gpa = std.testing.allocator;
+    const src = try nestedBlocks(gpa, NESTING_DEPTH);
+    defer gpa.free(src);
+
+    var test_env = try TestEnv.init("Deep", src);
+    defer test_env.deinit();
+    // Success criterion: checking completes (no crash, no error). We don't assert
+    // a specific type — only that the pipeline finishes. Before block migration
+    // the checker overflows the native stack here (SIGSEGV); after migration it
+    // completes.
+    const diags = try test_env.module_env.getDiagnostics();
+    defer test_env.gpa.free(diags);
+}
