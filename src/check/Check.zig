@@ -200,6 +200,14 @@ defer_generalize: bool = false,
 /// This prevents rank pollution where inner lambda generalization pulls outer
 /// scope vars to rank 0 via Rank.min in merge.
 checking_call_arg: bool = false,
+/// True while checking the direct callee expression of an ordinary call.
+/// A lambda in this position is immediately executed by the call, so references
+/// in its body remain strict dependencies of the surrounding value.
+checking_immediate_callee: bool = false,
+/// Nonzero while checking code reached only through a closure body that is not
+/// the immediate callee of the current call expression. Recursive references
+/// reached under this depth are delayed dependencies, not strict value cycles.
+delayed_dependency_depth: u32 = 0,
 /// True when checking the right-hand side of an immutable binding (a top-level
 /// def or a block-local `s_decl`). Used to generalize a binding whose RHS is a
 /// bare reference to an already-generalized scheme (e.g. `shorthand = Foo.bar`).
@@ -6708,7 +6716,7 @@ fn checkExpectBody(
     self.current_expect_region = expect_region;
     defer self.current_expect_region = saved_expect_region;
 
-    return try self.checkExpr(body, env, expected.suppressComptimeConditionWarnings());
+    return try self.checkExprWithHoistSelectionSuppressed(body, env, expected.suppressComptimeConditionWarnings());
 }
 
 fn varIsFunctionType(self: *Self, var_: Var) bool {
@@ -9516,6 +9524,9 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
     const is_call_arg = self.checking_call_arg;
     self.checking_call_arg = false;
 
+    const is_immediate_callee = self.checking_immediate_callee;
+    self.checking_immediate_callee = false;
+
     // Consume the binding-RHS flag: it applies only to this immediate checkExpr
     // call and must not propagate into subexpressions.
     const is_binding_rhs = self.checking_binding_rhs;
@@ -10215,7 +10226,11 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     },
                     .processing => {
                         if (!isFunctionDef(&self.cir.store, self.cir.store.getExpr(referenced_def.expr))) {
-                            try self.poisonRecursiveNonFunctionProcessingDef(processing_def, expr_idx, env);
+                            if (self.delayed_dependency_depth == 0) {
+                                try self.poisonRecursiveNonFunctionProcessingDef(processing_def, expr_idx, env);
+                            } else {
+                                _ = try self.unify(expr_var, ModuleEnv.varFrom(referenced_def.expr), env);
+                            }
                             break :blk;
                         }
 
@@ -10545,6 +10560,12 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             self.empirical_exhaustiveness_depth = 0;
             defer self.empirical_exhaustiveness_depth = saved_empirical_exhaustiveness_depth;
 
+            const body_is_delayed_dependency = !is_immediate_callee;
+            if (body_is_delayed_dependency) self.delayed_dependency_depth += 1;
+            defer {
+                if (body_is_delayed_dependency) self.delayed_dependency_depth -= 1;
+            }
+
             const body_does_fx = if (mb_anno_func) |expected_func| blk: {
                 const lambda_body_does_fx = try self.checkExpr(lambda.body, env, Expected.none().withBranchResult(expected_func.ret));
                 try self.closeAbsentConstructedPayloadVars(lambda.body, body_var);
@@ -10591,8 +10612,11 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             // would be quantified before the caller pins the parameter types,
             // leaving the original (un-instantiated) dispatch nodes unresolved.
             const saved_checking_call_arg = self.checking_call_arg;
+            const saved_checking_immediate_callee = self.checking_immediate_callee;
             self.checking_call_arg = is_call_arg;
+            self.checking_immediate_callee = is_immediate_callee;
             defer self.checking_call_arg = saved_checking_call_arg;
+            defer self.checking_immediate_callee = saved_checking_immediate_callee;
             does_fx = try self.checkExpr(closure.lambda_idx, env, expected) or does_fx;
             const lambda_var = ModuleEnv.varFrom(closure.lambda_idx);
 
@@ -10623,6 +10647,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     // First, check the function being called
                     // It could be effectful, e.g. `(mk_fn!())(arg)`
                     self.checking_call_arg = true;
+                    self.checking_immediate_callee = true;
                     does_fx = try self.checkExpr(call.func, env, child_expected) or does_fx;
                     const call_func_expr_var = ModuleEnv.varFrom(call.func);
 
@@ -10652,6 +10677,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     const call_arg_expr_idxs = self.cir.store.sliceExpr(call.args);
                     for (call_arg_expr_idxs) |call_arg_idx| {
                         self.checking_call_arg = true;
+                        self.checking_immediate_callee = false;
                         does_fx = try self.checkExpr(call_arg_idx, env, child_expected) or does_fx;
 
                         // Check if this arg errored
@@ -16362,17 +16388,21 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                                 },
                                 .processing => {
                                     if (!isFunctionDef(&self.cir.store, self.cir.store.getExpr(def.expr))) {
-                                        try self.poisonRecursiveNonFunctionProcessingDef(processing_def, null, env);
-                                        try self.unifyWith(deferred_constraint.var_, .err, env);
-                                        continue;
+                                        if (self.delayed_dependency_depth == 0) {
+                                            try self.poisonRecursiveNonFunctionProcessingDef(processing_def, null, env);
+                                            try self.unifyWith(deferred_constraint.var_, .err, env);
+                                            continue;
+                                        } else {
+                                            cycle_method_expr_var = ModuleEnv.varFrom(def.expr);
+                                        }
+                                    } else {
+                                        // Create a fresh flex var at the current rank for
+                                        // the method type, and validate it against the
+                                        // binding at the recursion boundary. Using the
+                                        // binding var directly here would pull body vars
+                                        // to a lower rank and prevent generalization.
+                                        cycle_method_expr_var = try self.freshRecursiveMethodPlaceholder(processing_def, def, env, region);
                                     }
-
-                                    // Create a fresh flex var at the current rank for
-                                    // the method type, and validate it against the
-                                    // binding at the recursion boundary. Using the
-                                    // binding var directly here would pull body vars
-                                    // to a lower rank and prevent generalization.
-                                    cycle_method_expr_var = try self.freshRecursiveMethodPlaceholder(processing_def, def, env, region);
 
                                     // Check if this is mutual recursion through dispatch.
                                     if (self.current_processing_def) |current_def| {
@@ -16623,12 +16653,16 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                                 },
                                 .processing => {
                                     if (!isFunctionDef(&self.cir.store, self.cir.store.getExpr(def.expr))) {
-                                        try self.poisonRecursiveNonFunctionProcessingDef(processing_def, null, env);
-                                        try self.unifyWith(deferred_constraint.var_, .err, env);
-                                        continue;
+                                        if (self.delayed_dependency_depth == 0) {
+                                            try self.poisonRecursiveNonFunctionProcessingDef(processing_def, null, env);
+                                            try self.unifyWith(deferred_constraint.var_, .err, env);
+                                            continue;
+                                        } else {
+                                            cycle_method_expr_var = ModuleEnv.varFrom(def.expr);
+                                        }
+                                    } else {
+                                        cycle_method_expr_var = try self.freshRecursiveMethodPlaceholder(processing_def, def, env, region);
                                     }
-
-                                    cycle_method_expr_var = try self.freshRecursiveMethodPlaceholder(processing_def, def, env, region);
 
                                     if (self.current_processing_def) |current_def| {
                                         if (current_def != processing_def.def_idx) {

@@ -864,6 +864,22 @@ test "hoist roots are not selected inside ordinary top-level constants" {
     try std.testing.expectEqual(@as(usize, 0), test_env.checker.selectedHoistedRoots().len);
 }
 
+test "hoist roots are not selected inside top-level expects" {
+    var test_env = try TestEnv.init("Test",
+        \\expensive = |n| n + 1.I64
+        \\
+        \\expect {
+        \\    result = expensive(41.I64)
+        \\    result == 42.I64
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    // repro for https://github.com/roc-lang/roc/issues/9747
+    try std.testing.expectEqual(@as(usize, 0), test_env.checker.selectedHoistedRoots().len);
+}
+
 test "hoist roots are not selected for runtime-controlled branch bodies" {
     var test_env = try TestEnv.init("Test",
         \\main = |arg| {

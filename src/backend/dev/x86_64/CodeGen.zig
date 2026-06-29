@@ -671,24 +671,16 @@ pub fn CodeGen(comptime target: RocTarget) type {
         /// Emit float64 negation: dst = -src
         /// Uses XOR with sign bit mask to properly handle -0.0
         pub fn emitNegF64(self: *Self, dst: FloatReg, src: FloatReg) Allocator.Error!void {
-            // Load sign bit mask (0x8000_0000_0000_0000) into dst
-            // Then XOR with src to flip the sign bit
-            const sign_bit_mask: i64 = @bitCast(@as(u64, 0x8000_0000_0000_0000));
-            const stack_offset: i32 = -16; // Temporary stack location
-            try self.emit.movRegImm64(.R11, sign_bit_mask);
-            try self.emit.movMemReg(.w64, .RBP, stack_offset, .R11);
-            try self.emit.movsdRegMem(dst, .RBP, stack_offset);
+            // Build the sign-bit mask in XMM space; no frame scratch slot.
+            try self.emit.pcmpeqdRegReg(dst, dst);
+            try self.emit.psllqRegImm8(dst, 63);
             try self.emit.xorpdRegReg(dst, src);
         }
 
         pub fn emitAbsF64(self: *Self, dst: FloatReg, src: FloatReg) Allocator.Error!void {
-            // Load abs mask (0x7FFF_FFFF_FFFF_FFFF) into dst
-            // Then AND with src to clear the sign bit
-            const abs_mask: i64 = @bitCast(@as(u64, 0x7FFF_FFFF_FFFF_FFFF));
-            const stack_offset: i32 = -16; // Temporary stack location
-            try self.emit.movRegImm64(.R11, abs_mask);
-            try self.emit.movMemReg(.w64, .RBP, stack_offset, .R11);
-            try self.emit.movsdRegMem(dst, .RBP, stack_offset);
+            // Build the abs mask in XMM space; no frame scratch slot.
+            try self.emit.pcmpeqdRegReg(dst, dst);
+            try self.emit.psrlqRegImm8(dst, 1);
             try self.emit.andpdRegReg(dst, src);
         }
 
@@ -727,13 +719,9 @@ pub fn CodeGen(comptime target: RocTarget) type {
         /// Emit float32 negation: dst = -src
         /// Uses XOR with sign bit mask to properly handle -0.0
         pub fn emitNegF32(self: *Self, dst: FloatReg, src: FloatReg) Allocator.Error!void {
-            // Load sign bit mask (0x80000000) into dst
-            // Then XOR with src to flip the sign bit
-            const sign_bit_mask: i32 = @bitCast(@as(u32, 0x80000000));
-            const stack_offset: i32 = -16; // Temporary stack location
-            try self.emit.movRegImm32(.w32, .R11, sign_bit_mask);
-            try self.emit.movMemReg(.w32, .RBP, stack_offset, .R11);
-            try self.emit.movssRegMem(dst, .RBP, stack_offset);
+            // Build the sign-bit mask in XMM space; no frame scratch slot.
+            try self.emit.pcmpeqdRegReg(dst, dst);
+            try self.emit.pslldRegImm8(dst, 31);
             try self.emit.xorpsRegReg(dst, src);
         }
 
