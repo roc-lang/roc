@@ -470,6 +470,7 @@ const ProcBodyBuilder = struct {
                 }
                 break :blk try self.lowerRecordInto(target, expr.ty, record.fields, next);
             },
+            .nominal => |nominal| try self.lowerNominalInto(target, nominal.backing_expr, next),
             .block => |block| blk: {
                 try self.reserveBlockBindings(block.statements);
                 var continuation = try self.lowerExprInto(target, block.final_expr, next);
@@ -510,6 +511,27 @@ const ProcBodyBuilder = struct {
             continuation = try self.lowerExprInto(field_locals[index], items[index], continuation);
         }
         return continuation;
+    }
+
+    fn lowerNominalInto(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        backing_id: checked.CheckedExprId,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const backing = self.module.checked_bodies.expr(backing_id);
+        const backing_local = try self.addFrameLocal(self.workerRuntimeLayoutForType(backing.ty).layoutIdx());
+        const backing_layout = self.parent.result.store.getLocal(backing_local).layout_idx;
+        const target_layout = self.parent.result.store.getLocal(target).layout_idx;
+        const assign = if (target_layout == backing_layout)
+            try self.assignLocal(target, backing_local, next)
+        else
+            try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
+                .target = target,
+                .op = .{ .nominal = .{ .backing_ref = backing_local } },
+                .next = next,
+            } });
+        return try self.lowerExprInto(backing_local, backing_id, assign);
     }
 
     fn lowerFieldAccessInto(
@@ -1843,6 +1865,120 @@ test "boxy lowerer emits record field access using layout field index" {
         else => return error.TestUnexpectedResult,
     }
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = read.target } }, out.lir_result.store.getCFStmt(read.next));
+}
+
+test "boxy lowerer emits nominal construction for representation-equivalent backing" {
+    const gpa = std.testing.allocator;
+
+    var artifact = minimalCheckedArtifact(gpa);
+    defer artifact.canonical_names.deinit();
+    defer artifact.checked_types.deinit(gpa);
+    defer artifact.checked_bodies.deinit(gpa);
+
+    const nominal_key = names.NominalTypeKey{
+        .module_name = @enumFromInt(1),
+        .type_name = @enumFromInt(2),
+        .source_decl = 3,
+    };
+
+    try artifact.checked_types.payloads.append(gpa, .{
+        .nominal = builtinNominal(.u64, @enumFromInt(0), .{}),
+    });
+    try artifact.checked_types.nominal_declarations.append(gpa, .{
+        .id = @enumFromInt(0),
+        .nominal = nominal_key,
+        .declaration_root = @enumFromInt(1),
+        .backing = @enumFromInt(0),
+        .pf_start = 0,
+        .pf_len = 0,
+        .df_start = 0,
+        .df_len = 0,
+    });
+    try artifact.checked_types.payloads.append(gpa, .{
+        .nominal = .{
+            .name = nominal_key.type_name,
+            .origin_module = nominal_key.module_name,
+            .source_decl = nominal_key.source_decl,
+            .is_opaque = false,
+            .backing = @enumFromInt(0),
+            .representation = .{ .local_declaration = @enumFromInt(0) },
+        },
+    });
+    try artifact.checked_types.payloads.append(gpa, .{
+        .function = .{
+            .kind = .pure,
+            .args = .{},
+            .ret = @enumFromInt(1),
+            .needs_instantiation = false,
+        },
+    });
+
+    const template_ref = procedureTemplateRef(artifact.key, 0);
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(0),
+        .ty = @enumFromInt(2),
+        .source_region = base.Region.zero(),
+        .data = .{ .lambda = .{ .args = .{}, .body = @enumFromInt(1) } },
+    });
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(1),
+        .ty = @enumFromInt(1),
+        .source_region = base.Region.zero(),
+        .data = .{ .nominal = .{
+            .backing_expr = @enumFromInt(2),
+            .backing_type = .value,
+        } },
+    });
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(2),
+        .ty = @enumFromInt(0),
+        .source_region = base.Region.zero(),
+        .data = .{ .num = .{ .value = intValue(5), .kind = .u64 } },
+    });
+    try artifact.checked_bodies.bodies.append(gpa, .{
+        .id = @enumFromInt(0),
+        .root_expr = @enumFromInt(0),
+        .owner_template = template_ref,
+    });
+    var templates = [_]checked.CheckedProcedureTemplate{
+        checkedTemplate(template_ref, @enumFromInt(2), @enumFromInt(0)),
+    };
+    artifact.checked_procedure_templates = .{ .templates = &templates };
+
+    const root = checked.RootRequest{
+        .order = 0,
+        .module_idx = 0,
+        .kind = .runtime_entrypoint,
+        .source = .{ .def = @enumFromInt(0) },
+        .checked_type = @enumFromInt(2),
+        .abi = .roc,
+        .exposure = .private,
+        .procedure_template = template_ref,
+    };
+    var plan = try Plan.analyzeProgram(gpa, .{
+        .root_module = .{ .module = &artifact, .roots = undefined },
+        .roots = &.{root},
+    }, .{});
+    defer plan.deinit();
+
+    var out = try run(
+        gpa,
+        .{ .root = .{ .module = &artifact, .roots = undefined } },
+        .{},
+        &plan,
+        .{},
+    );
+    defer out.deinit();
+
+    const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
+    const literal = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_literal;
+    switch (literal.value) {
+        .i128_literal => |value| try std.testing.expectEqual(@as(i128, 5), value.value),
+        else => return error.TestUnexpectedResult,
+    }
+    const copy = out.lir_result.store.getCFStmt(literal.next).assign_ref;
+    try std.testing.expectEqual(literal.target, copy.op.local);
+    try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = copy.target } }, out.lir_result.store.getCFStmt(copy.next));
 }
 
 test "boxy lowerer publishes host wrapper proc for exported roots" {

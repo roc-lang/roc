@@ -3239,8 +3239,19 @@ Aggregate expression lowering allocates temporary LIR locals from each checked
 element or field type through the representation table, lowers children in
 source evaluation order, then emits the aggregate-building statement with a
 local span ordered by the committed boxy layout. Tuple construction is a direct
-`assign_struct` over element locals; record and nominal construction use the
-same rule with field-order data from the representation plan.
+`assign_struct` over element locals. Record construction uses the same rule with
+field-order data from the representation plan.
+
+Nominal construction lowers the checked backing expression into a temporary local
+whose layout is selected from the backing checked type. If the backing and
+nominal worker layouts are representation-equivalent, construction is pure value
+flow and lowers to the same LIR local-alias operation used for ordinary local
+copies. If the layouts differ, construction lowers to an explicit
+`assign_ref.nominal` from the backing temporary into the nominal target. The
+lowerer does not inspect backend layouts or recover nominal backing structure
+from names; any tuple, record, or tag field ordering is handled by lowering the
+checked backing expression through its own representation plan before the
+nominal boundary is emitted.
 
 Aggregate access lowering first lowers the receiver into a temporary whose
 layout comes from the receiver's checked type representation, then emits an
