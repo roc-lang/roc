@@ -6,6 +6,7 @@
 //! arguments. It only consumes checked type data.
 
 const std = @import("std");
+const can = @import("can");
 const check = @import("check");
 
 const Allocator = std.mem.Allocator;
@@ -1815,6 +1816,8 @@ const Builder = struct {
         const target = call.direct_target orelse return;
         const source = self.workerSourceForDirectTarget(view, target);
         const checked_type = self.workerCheckedTypeForSource(source, typeRef(view, call.source_fn_ty_payload));
+        const source_fn_type = self.directCallInstantiationSourceFnType(view, target, call.source_fn_ty_payload);
+        _ = try self.analyzeType(self.moduleForId(source_fn_type.module), source_fn_type.ty);
         const worker = try self.ensureWorker(source, checked_type, null);
         const call_ref = ExprRef{ .module = view.key, .expr = call_expr };
         if (self.plan.directWorkerForCall(call_ref)) |existing| {
@@ -1826,8 +1829,25 @@ const Builder = struct {
         try self.plan.direct_calls.append(self.allocator, .{
             .call = call_ref,
             .worker = worker,
-            .source_fn_type = typeRef(view, call.source_fn_ty_payload),
+            .source_fn_type = source_fn_type,
         });
+    }
+
+    fn directCallInstantiationSourceFnType(
+        self: *Builder,
+        view: ModuleView,
+        target: checked.ResolvedValueId,
+        fallback: checked.CheckedTypeId,
+    ) TypeRef {
+        const record = self.resolvedValueRecord(view, target);
+        return switch (record.ref) {
+            .platform_required_proc => |required| .{
+                .module = view.key,
+                .ty = required.procedure.source_fn_ty_payload orelse
+                    boxyPlanInvariant("platform-required procedure call missing relation-owned source function type"),
+            },
+            else => typeRef(view, fallback),
+        };
     }
 
     fn workerSourceForDirectTarget(self: *Builder, view: ModuleView, target: checked.ResolvedValueId) WorkerSource {
@@ -2469,6 +2489,213 @@ test "boxy planner does not add hidden descriptor params to imported hosted work
     try std.testing.expectEqual(@as(usize, 0), plan.directCallHiddenDescriptorArgSlice(direct.hidden_desc_args).len);
 }
 
+test "boxy planner records relation-owned source type for platform-required direct calls" {
+    const gpa = std.testing.allocator;
+
+    var platform_artifact = minimalCheckedArtifact(gpa);
+    defer platform_artifact.canonical_names.deinit();
+    defer platform_artifact.checked_types.deinit(gpa);
+    defer platform_artifact.checked_bodies.deinit(gpa);
+
+    var app_artifact = minimalCheckedArtifact(gpa);
+    app_artifact.key = moduleKey(3);
+    defer app_artifact.canonical_names.deinit();
+    defer app_artifact.checked_types.deinit(gpa);
+    defer app_artifact.checked_bodies.deinit(gpa);
+
+    try app_artifact.checked_types.payloads.append(gpa, .{
+        .nominal = builtinNominal(.u64, @enumFromInt(0), .{}),
+    });
+    try app_artifact.checked_types.payloads.append(gpa, .{
+        .function = .{
+            .kind = .pure,
+            .args = .{},
+            .ret = @enumFromInt(0),
+            .needs_instantiation = false,
+        },
+    });
+    const app_template = procedureTemplateRef(app_artifact.key, 0);
+    try app_artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(0),
+        .ty = @enumFromInt(1),
+        .source_region = .zero(),
+        .data = .{ .lambda = .{ .args = .{}, .body = @enumFromInt(1) } },
+    });
+    try app_artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(1),
+        .ty = @enumFromInt(0),
+        .source_region = .zero(),
+        .data = .{ .num = .{ .value = intValue(1), .kind = .u64 } },
+    });
+    try app_artifact.checked_bodies.bodies.append(gpa, .{
+        .id = @enumFromInt(0),
+        .root_expr = @enumFromInt(0),
+        .owner_template = app_template,
+    });
+    var app_templates = [_]checked.CheckedProcedureTemplate{
+        checkedTemplate(app_template, @enumFromInt(1), @enumFromInt(0), .roc),
+    };
+    app_artifact.checked_procedure_templates = .{ .templates = &app_templates };
+    var app_bindings = [_]checked.TopLevelProcedureBinding{
+        .{
+            .source_scheme = typeSchemeKey(4),
+            .body = .{ .direct_template = .{
+                .proc_value = procedureValueRef(app_template),
+                .template = .{ .checked = app_template },
+            } },
+        },
+    };
+    app_artifact.top_level_procedure_bindings = .{ .bindings = &app_bindings };
+
+    try platform_artifact.checked_types.payloads.append(gpa, .{
+        .nominal = builtinNominal(.u64, @enumFromInt(0), .{}),
+    });
+    try platform_artifact.checked_types.payloads.append(gpa, .{
+        .function = .{
+            .kind = .pure,
+            .args = .{},
+            .ret = @enumFromInt(0),
+            .needs_instantiation = false,
+        },
+    });
+    try platform_artifact.checked_types.payloads.append(gpa, .{
+        .function = .{
+            .kind = .pure,
+            .args = .{},
+            .ret = @enumFromInt(0),
+            .needs_instantiation = false,
+        },
+    });
+
+    const platform_template = procedureTemplateRef(platform_artifact.key, 0);
+    try platform_artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(0),
+        .ty = @enumFromInt(1),
+        .source_region = .zero(),
+        .data = .{ .lambda = .{ .args = .{}, .body = @enumFromInt(1) } },
+    });
+    try platform_artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(1),
+        .ty = @enumFromInt(0),
+        .source_region = .zero(),
+        .data = .{ .call = .{
+            .func = @enumFromInt(2),
+            .args = .{},
+            .called_via = .apply,
+            .source_fn_ty_payload = @enumFromInt(1),
+            .direct_target = @enumFromInt(0),
+        } },
+    });
+    try platform_artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(2),
+        .ty = @enumFromInt(1),
+        .source_region = .zero(),
+        .data = .{ .lookup_required = @as(?checked.ResolvedValueRefId, @enumFromInt(0)) },
+    });
+    try platform_artifact.checked_bodies.bodies.append(gpa, .{
+        .id = @enumFromInt(0),
+        .root_expr = @enumFromInt(0),
+        .owner_template = platform_template,
+    });
+    var platform_templates = [_]checked.CheckedProcedureTemplate{
+        checkedTemplate(platform_template, @enumFromInt(1), @enumFromInt(0), .roc),
+    };
+    platform_artifact.checked_procedure_templates = .{ .templates = &platform_templates };
+
+    const required = checked.RequiredAppProcedureRef{
+        .artifact = app_artifact.key,
+        .app_value = .{
+            .artifact = app_artifact.key,
+            .pattern = @enumFromInt(0),
+        },
+        .procedure_binding = @enumFromInt(0),
+    };
+    const required_use = checked.ProcedureUseTemplate{
+        .binding = .{ .platform_required = required },
+        .source_fn_ty_template = typeKey(5),
+        .source_fn_ty_payload = @enumFromInt(2),
+    };
+    var resolved_records = [_]checked.ResolvedValueRefRecord{
+        .{
+            .expr = @enumFromInt(2),
+            .ref = .{ .platform_required_proc = .{
+                .binding = @enumFromInt(0),
+                .procedure = required_use,
+            } },
+            .checked_ty = @enumFromInt(1),
+            .scope_depth = 0,
+        },
+    };
+    var refs_by_expr = [_]?checked.ResolvedValueRefId{
+        null,
+        null,
+        @as(checked.ResolvedValueRefId, @enumFromInt(0)),
+    };
+    platform_artifact.resolved_value_refs = .{
+        .records = &resolved_records,
+        .by_checked_expr = &refs_by_expr,
+    };
+
+    const imports = [_]checked.ImportedModuleView{
+        .{
+            .key = app_artifact.key,
+            .module_env = undefined,
+            .canonical_names = &app_artifact.canonical_names,
+            .module_identity = undefined,
+            .exports = .{},
+            .checked_types = app_artifact.checked_types.view(),
+            .checked_bodies = app_artifact.checked_bodies.view(),
+            .exhaustiveness_sites = undefined,
+            .checked_const_bodies = undefined,
+            .checked_procedure_templates = &app_artifact.checked_procedure_templates,
+            .compile_time_roots = undefined,
+            .entry_wrappers = undefined,
+            .intrinsic_wrappers = undefined,
+            .resolved_value_refs = &app_artifact.resolved_value_refs,
+            .nested_proc_sites = undefined,
+            .static_dispatch_plans = undefined,
+            .hosted_procs = &app_artifact.hosted_procs,
+            .exported_procedure_templates = .{},
+            .exported_procedure_bindings = app_artifact.exported_procedure_bindings.view(),
+            .exported_const_templates = .{},
+            .provided_exports = undefined,
+            .top_level_procedure_bindings = &app_artifact.top_level_procedure_bindings,
+            .platform_required_declarations = undefined,
+            .platform_required_bindings = undefined,
+            .callable_eval_templates = .{},
+            .hoisted_constants = undefined,
+            .const_templates = undefined,
+            .method_registry = undefined,
+            .interface_capabilities = &app_artifact.interface_capabilities,
+            .const_store = undefined,
+        },
+    };
+
+    const root = checked.RootRequest{
+        .order = 0,
+        .module_idx = 0,
+        .kind = .runtime_entrypoint,
+        .source = .{ .def = @enumFromInt(0) },
+        .checked_type = @enumFromInt(1),
+        .abi = .roc,
+        .exposure = .private,
+        .procedure_template = platform_template,
+    };
+    var plan = try analyzeProgram(gpa, .{
+        .root_module = .{ .module = &platform_artifact, .roots = undefined },
+        .imports = &imports,
+        .roots = &.{root},
+    }, .{});
+    defer plan.deinit();
+
+    const direct = plan.directCallPlanForCall(.{
+        .module = platform_artifact.key,
+        .expr = @enumFromInt(1),
+    }) orelse return error.TestUnexpectedResult;
+    try expectTypeRef(platform_artifact.key, @enumFromInt(2), direct.source_fn_type);
+    try std.testing.expect(plan.repForSourceType(.{ .module = platform_artifact.key, .ty = @enumFromInt(2) }) != null);
+}
+
 test "boxy planner records explicit source type representation bindings" {
     const gpa = std.testing.allocator;
 
@@ -3054,6 +3281,13 @@ fn checkedTemplate(
         .top_level_value_uses = .{},
         .nested_proc_sites = .{},
         .target = target,
+    };
+}
+
+fn intValue(value: i128) can.CIR.IntValue {
+    return .{
+        .bytes = @bitCast(value),
+        .kind = .i128,
     };
 }
 
