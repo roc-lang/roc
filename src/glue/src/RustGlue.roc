@@ -461,22 +461,7 @@ compare_str_bytes : Str, Str -> [LT, EQ, GT]
 compare_str_bytes = |left, right| compare_utf8_lists(Str.to_utf8(left), Str.to_utf8(right))
 
 record_fields_for_wasm32 : List(TypeRepr), List(RecordField) -> List(RecordField)
-record_fields_for_wasm32 = |type_table, fields| {
-	List.sort_with(
-		fields,
-		|left, right| {
-			left_layout = record_field_layout_32(type_table, left)
-			right_layout = record_field_layout_32(type_table, right)
-			if left_layout.alignment > right_layout.alignment {
-				LT
-			} else if left_layout.alignment < right_layout.alignment {
-				GT
-			} else {
-				compare_str_bytes(left.name, right.name)
-			}
-		},
-	)
-}
+record_fields_for_wasm32 = |_, fields| fields
 
 # =============================================================================
 # String Utilities

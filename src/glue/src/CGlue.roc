@@ -189,6 +189,267 @@ disc_type_for_count = |count| {
 	}
 }
 
+align_forward_u64 = |offset, alignment| {
+	if alignment == 0 {
+		offset
+	} else {
+		remainder = U64.rem_by(offset, alignment)
+		if remainder == 0 {
+			offset
+		} else {
+			offset + alignment - remainder
+		}
+	}
+}
+
+type_layout_64 : List(TypeRepr), U64 -> { size : U64, alignment : U64 }
+type_layout_64 = |type_table, type_id| {
+	type_repr = TypeTable.get(TypeTable.from_list(type_table), type_id)
+	repr_layout_64(type_table, type_repr)
+}
+
+repr_layout_64 : List(TypeRepr), TypeRepr -> { size : U64, alignment : U64 }
+repr_layout_64 = |type_table, type_repr| {
+	match type_repr {
+		RocBool => { size: 1, alignment: 1 }
+		RocBox(_) => { size: 8, alignment: 8 }
+		RocDec => { size: 8, alignment: 8 }
+		RocF32 => { size: 4, alignment: 4 }
+		RocF64 => { size: 8, alignment: 8 }
+		RocFunction(_) => { size: 8, alignment: 8 }
+		RocI128 => { size: 16, alignment: 16 }
+		RocI16 => { size: 2, alignment: 2 }
+		RocI32 => { size: 4, alignment: 4 }
+		RocI64 => { size: 8, alignment: 8 }
+		RocI8 => { size: 1, alignment: 1 }
+		RocList(_) => { size: 24, alignment: 8 }
+		RocRecord(rec) => record_layout_from_fields(type_table, rec.fields)
+		RocStr => { size: 24, alignment: 8 }
+		RocTagUnion(tu) =>
+			match TypeTable.single_variant_payload(tu) {
+				SinglePayload(payload_id) => type_layout_64(type_table, payload_id)
+				SingleNoPayload => { size: 0, alignment: 1 }
+				NotSingleVariant => tag_union_layout_64(type_table, tu)
+			}
+		RocU128 => { size: 16, alignment: 16 }
+		RocU16 => { size: 2, alignment: 2 }
+		RocU32 => { size: 4, alignment: 4 }
+		RocU64 => { size: 8, alignment: 8 }
+		RocU8 => { size: 1, alignment: 1 }
+		RocUnit => { size: 0, alignment: 1 }
+		RocUnknown(_) => { size: 8, alignment: 8 }
+	}
+}
+
+type_layout_32 : List(TypeRepr), U64 -> { size : U64, alignment : U64 }
+type_layout_32 = |type_table, type_id| {
+	type_repr = TypeTable.get(TypeTable.from_list(type_table), type_id)
+	repr_layout_32(type_table, type_repr)
+}
+
+repr_layout_32 : List(TypeRepr), TypeRepr -> { size : U64, alignment : U64 }
+repr_layout_32 = |type_table, type_repr| {
+	match type_repr {
+		RocBool => { size: 1, alignment: 1 }
+		RocBox(_) => { size: 4, alignment: 4 }
+		RocDec => { size: 8, alignment: 8 }
+		RocF32 => { size: 4, alignment: 4 }
+		RocF64 => { size: 8, alignment: 8 }
+		RocFunction(_) => { size: 4, alignment: 4 }
+		RocI128 => { size: 16, alignment: 16 }
+		RocI16 => { size: 2, alignment: 2 }
+		RocI32 => { size: 4, alignment: 4 }
+		RocI64 => { size: 8, alignment: 8 }
+		RocI8 => { size: 1, alignment: 1 }
+		RocList(_) => { size: 12, alignment: 4 }
+		RocRecord(rec) =>
+			record_layout_from_fields_32(
+				type_table,
+				if rec.anonymous {
+					record_fields_for_wasm32(type_table, rec.fields)
+				} else {
+					rec.fields
+				},
+			)
+		RocStr => { size: 12, alignment: 4 }
+		RocTagUnion(tu) => tag_union_layout_32(type_table, tu)
+		RocU128 => { size: 16, alignment: 16 }
+		RocU16 => { size: 2, alignment: 2 }
+		RocU32 => { size: 4, alignment: 4 }
+		RocU64 => { size: 8, alignment: 8 }
+		RocU8 => { size: 1, alignment: 1 }
+		RocUnit => { size: 0, alignment: 1 }
+		RocUnknown(_) => { size: 4, alignment: 4 }
+	}
+}
+
+record_layout_from_fields : List(TypeRepr), List(RecordField) -> { size : U64, alignment : U64 }
+record_layout_from_fields = |type_table, fields| {
+	var $offset = 0
+	var $alignment = 1
+
+	for field in fields {
+		field_layout = record_field_layout_64(type_table, field)
+		if field_layout.alignment > $alignment {
+			$alignment = field_layout.alignment
+		}
+		$offset = align_forward_u64($offset, field_layout.alignment)
+		$offset = $offset + field_layout.size
+	}
+
+	{ size: align_forward_u64($offset, $alignment), alignment: $alignment }
+}
+
+record_field_layout_64 : List(TypeRepr), RecordField -> { size : U64, alignment : U64 }
+record_field_layout_64 = |type_table, field| {
+	if field.is_padding {
+		{ size: field.size, alignment: 1 }
+	} else {
+		type_layout_64(type_table, field.type_id)
+	}
+}
+
+record_layout_from_fields_32 : List(TypeRepr), List(RecordField) -> { size : U64, alignment : U64 }
+record_layout_from_fields_32 = |type_table, fields| {
+	var $offset = 0
+	var $alignment = 1
+
+	for field in fields {
+		field_layout = record_field_layout_32(type_table, field)
+		if field_layout.alignment > $alignment {
+			$alignment = field_layout.alignment
+		}
+		$offset = align_forward_u64($offset, field_layout.alignment)
+		$offset = $offset + field_layout.size
+	}
+
+	{ size: align_forward_u64($offset, $alignment), alignment: $alignment }
+}
+
+record_field_layout_32 : List(TypeRepr), RecordField -> { size : U64, alignment : U64 }
+record_field_layout_32 = |type_table, field| {
+	if field.is_padding {
+		{ size: field.size, alignment: 1 }
+	} else {
+		type_layout_32(type_table, field.type_id)
+	}
+}
+
+tag_union_layout_64 : List(TypeRepr), TagUnionRepr -> { size : U64, alignment : U64 }
+tag_union_layout_64 = |type_table, tu| {
+	match TypeTable.single_variant_payload(tu) {
+		SinglePayload(payload_id) => type_layout_64(type_table, payload_id)
+		SingleNoPayload => { size: 0, alignment: 1 }
+		NotSingleVariant => {
+			layout = tag_union_layout_from_payloads(type_table, tu, Bool.False)
+			{ size: layout.size, alignment: layout.alignment }
+		}
+	}
+}
+
+tag_union_layout_32 : List(TypeRepr), TagUnionRepr -> { size : U64, alignment : U64 }
+tag_union_layout_32 = |type_table, tu| {
+	match TypeTable.single_variant_payload(tu) {
+		SinglePayload(payload_id) => type_layout_32(type_table, payload_id)
+		SingleNoPayload => { size: 0, alignment: 1 }
+		NotSingleVariant => {
+			layout = tag_union_layout_from_payloads(type_table, tu, Bool.True)
+			{ size: layout.size, alignment: layout.alignment }
+		}
+	}
+}
+
+tag_union_layout_from_payloads : List(TypeRepr), TagUnionRepr, Bool -> { size : U64, alignment : U64 }
+tag_union_layout_from_payloads = |type_table, tu, wasm32| {
+	var $max_payload_size = 0
+	var $max_payload_alignment = 1
+
+	for tag in tu.tags {
+		payload_layout = if tag.payload_size == 0 {
+			{ size: 0, alignment: 1 }
+		} else if wasm32 {
+			tag_payload_layout_32(type_table, tag.payload)
+		} else {
+			{ size: tag.payload_size, alignment: tag.payload_alignment }
+		}
+		if payload_layout.size > $max_payload_size {
+			$max_payload_size = payload_layout.size
+		}
+		if payload_layout.alignment > $max_payload_alignment {
+			$max_payload_alignment = payload_layout.alignment
+		}
+	}
+
+	disc = disc_layout_for_count(List.len(tu.tags))
+	disc_offset = align_forward_u64($max_payload_size, disc.alignment)
+	total_alignment = if $max_payload_alignment > disc.alignment {
+		$max_payload_alignment
+	} else {
+		disc.alignment
+	}
+	total_size = align_forward_u64(disc_offset + disc.size, total_alignment)
+	{ size: total_size, alignment: total_alignment }
+}
+
+tag_payload_layout_32 : List(TypeRepr), List(U64) -> { size : U64, alignment : U64 }
+tag_payload_layout_32 = |type_table, payload| {
+	var $offset = 0
+	var $alignment = 1
+
+	for payload_id in payload {
+		payload_layout = type_layout_32(type_table, payload_id)
+		if payload_layout.alignment > $alignment {
+			$alignment = payload_layout.alignment
+		}
+		$offset = align_forward_u64($offset, payload_layout.alignment)
+		$offset = $offset + payload_layout.size
+	}
+
+	{ size: align_forward_u64($offset, $alignment), alignment: $alignment }
+}
+
+disc_layout_for_count = |count| {
+	if count <= 1 {
+		{ size: 0, alignment: 1 }
+	} else if count <= 256 {
+		{ size: 1, alignment: 1 }
+	} else if count <= 65536 {
+		{ size: 2, alignment: 2 }
+	} else {
+		{ size: 4, alignment: 4 }
+	}
+}
+
+compare_utf8_lists : List(U8), List(U8) -> [LT, EQ, GT]
+compare_utf8_lists = |left, right| {
+	match List.first(left) {
+		Ok(left_byte) =>
+			match List.first(right) {
+				Ok(right_byte) =>
+					if left_byte < right_byte {
+						LT
+					} else if left_byte > right_byte {
+						GT
+					} else {
+						compare_utf8_lists(List.drop_first(left, 1), List.drop_first(right, 1))
+					}
+				Err(_) => GT
+			}
+		Err(_) =>
+			if List.is_empty(right) {
+				EQ
+			} else {
+				LT
+			}
+	}
+}
+
+compare_str_bytes : Str, Str -> [LT, EQ, GT]
+compare_str_bytes = |left, right| compare_utf8_lists(Str.to_utf8(left), Str.to_utf8(right))
+
+record_fields_for_wasm32 : List(TypeRepr), List(RecordField) -> List(RecordField)
+record_fields_for_wasm32 = |_, fields| fields
+
 # =============================================================================
 # Name Conversion
 # =============================================================================
@@ -388,7 +649,16 @@ generate_opaque_type_decls = |type_table, duplicate_records, duplicate_tags| {
 					type_name = record_struct_name(duplicate_records, $type_id, rec)
 					if !(List.contains($seen_names, type_name)) {
 						$seen_names = $seen_names.append(type_name)
-						$decls = Str.concat($decls, generate_opaque_type_decl(type_name, rec.size, rec.alignment))
+						native_layout = record_layout_from_fields(type_table, rec.fields)
+						wasm32_layout = record_layout_from_fields_32(
+							type_table,
+							if rec.anonymous {
+								record_fields_for_wasm32(type_table, rec.fields)
+							} else {
+								rec.fields
+							},
+						)
+						$decls = Str.concat($decls, generate_opaque_type_decl(type_name, native_layout.size, native_layout.alignment, wasm32_layout.size, wasm32_layout.alignment))
 					}
 				}
 			RocTagUnion(tu) =>
@@ -396,7 +666,9 @@ generate_opaque_type_decls = |type_table, duplicate_records, duplicate_tags| {
 					type_name = tag_union_struct_name(duplicate_tags, $type_id, tu)
 					if !(List.contains($seen_names, type_name)) {
 						$seen_names = $seen_names.append(type_name)
-						$decls = Str.concat($decls, generate_opaque_type_decl(type_name, tu.size, tu.alignment))
+						native_layout = tag_union_layout_64(type_table, tu)
+						wasm32_layout = tag_union_layout_32(type_table, tu)
+						$decls = Str.concat($decls, generate_opaque_type_decl(type_name, native_layout.size, native_layout.alignment, wasm32_layout.size, wasm32_layout.alignment))
 					}
 				}
 			_ => {}
@@ -407,25 +679,45 @@ generate_opaque_type_decls = |type_table, duplicate_records, duplicate_tags| {
 	$decls
 }
 
-generate_opaque_type_decl = |type_name, size, alignment| {
-	byte_count = if size == 0 {
+generate_opaque_type_decl = |type_name, native_size, native_alignment, wasm32_size, wasm32_alignment| {
+	native_byte_count = if native_size == 0 {
 		1
 	} else {
-		size
+		native_size
 	}
 
-	type_alignment = if alignment == 0 {
+	native_type_alignment = if native_alignment == 0 {
 		1
 	} else {
-		alignment
+		native_alignment
 	}
 
-	"typedef struct {\n    ROC_ALIGNAS(${U64.to_str(type_alignment)}) uint8_t bytes[${U64.to_str(byte_count)}];\n} ${type_name};\n${native_64_static_asserts(type_name, size, alignment)}"
+	wasm32_byte_count = if wasm32_size == 0 {
+		1
+	} else {
+		wasm32_size
+	}
+
+	wasm32_type_alignment = if wasm32_alignment == 0 {
+		1
+	} else {
+		wasm32_alignment
+	}
+
+	"#if UINTPTR_MAX == UINT64_MAX\ntypedef struct {\n    ROC_ALIGNAS(${U64.to_str(native_type_alignment)}) uint8_t bytes[${U64.to_str(native_byte_count)}];\n} ${type_name};\n${static_asserts(type_name, native_size, native_alignment)}#else\ntypedef struct {\n    ROC_ALIGNAS(${U64.to_str(wasm32_type_alignment)}) uint8_t bytes[${U64.to_str(wasm32_byte_count)}];\n} ${type_name};\n${static_asserts(type_name, wasm32_size, wasm32_alignment)}#endif\n\n"
+}
+
+static_asserts = |type_name, size, alignment| {
+	if size > 0 {
+		"ROC_STATIC_ASSERT(sizeof(${type_name}) == ${U64.to_str(size)}, \"${type_name} size mismatch\");\nROC_STATIC_ASSERT(ROC_ALIGNOF(${type_name}) == ${U64.to_str(alignment)}, \"${type_name} alignment mismatch\");\n"
+	} else {
+		""
+	}
 }
 
 native_64_static_asserts = |type_name, size, alignment| {
 	if size > 0 {
-		"#if UINTPTR_MAX == UINT64_MAX\nROC_STATIC_ASSERT(sizeof(${type_name}) == ${U64.to_str(size)}, \"${type_name} size mismatch\");\nROC_STATIC_ASSERT(ROC_ALIGNOF(${type_name}) == ${U64.to_str(alignment)}, \"${type_name} alignment mismatch\");\n#endif\n\n"
+		"#if UINTPTR_MAX == UINT64_MAX\n${static_asserts(type_name, size, alignment)}#endif\n\n"
 	} else {
 		""
 	}

@@ -9,7 +9,9 @@ platform ""
         "roc_probe_roundtrip": Probe.roundtrip!,
     }
     targets: {
-        inputs_dir: "../../wasm/platform/targets/",
+        inputs_dir: "targets/",
+        x64musl: { inputs: ["crt1.o", "libhost.a", app, "libunwind.a", "libc.a"], output: Exe },
+        arm64musl: { inputs: ["crt1.o", "libhost.a", app, "libunwind.a", "libc.a"], output: Exe },
         wasm32: { inputs: ["host.wasm", app], output: Shared },
     }
 

@@ -2769,6 +2769,7 @@ pub fn build(b: *std.Build) void {
                 .imports = &.{
                     .{ .name = "test_harness", .module = createTestHarnessModule(b, roc_modules) },
                     .{ .name = "collections", .module = roc_modules.collections },
+                    .{ .name = "bytebox", .module = bytebox.module("bytebox") },
                 },
             }),
         });

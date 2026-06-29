@@ -1317,8 +1317,8 @@ const TypeTable = struct {
         return switch (backing_repr) {
             .record => |rec| blk: {
                 // The backing record `rec.fields` is in the structural (sorted)
-                // order. A nominal record must instead lay out in DECLARED source
-                // order, with unnamed `_` fields reinstated as padding spacers.
+                // order. A nominal record keeps DECLARED source order only when
+                // it opts in with an unnamed `_` padding field.
                 const declared = try self.nominalRecordInDeclaredOrder(artifact, nominal, rec) orelse
                     break :blk .{ .record = .{
                         .name = try self.gpa.dupe(u8, display_name),
