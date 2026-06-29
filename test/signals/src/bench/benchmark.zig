@@ -134,6 +134,163 @@ pub fn printRow(case_name: []const u8, sample: usize, iterations: usize, stats: 
     );
 }
 
+fn writeStderr(bytes: []const u8) void {
+    std.Io.File.stderr().writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), bytes) catch {};
+}
+
+fn metricAsI64(comptime Ctx: type, value: u64) i64 {
+    return std.math.cast(i64, value) orelse Ctx.fail("runtime metric exceeded signed assertion range");
+}
+
+pub fn Runner(comptime Ctx: type) type {
+    return struct {
+        const Host = Ctx.Host;
+        const RocHost = Ctx.RocHost;
+        const DomElement = Ctx.DomElement;
+        const SpecCommand = spec_parser.SpecCommand;
+
+        pub fn runAppBenchmarks(spec_file: []const u8, case_name: []const u8, iterations: usize, samples: usize, verbose: bool) error{}!c_int {
+            var bench_gpa = std.heap.DebugAllocator(.{ .safety = true }){};
+            defer _ = bench_gpa.deinit();
+            const allocator = bench_gpa.allocator();
+            const commands = spec_parser.parseTestSpecFile(allocator, spec_file) catch |err| {
+                switch (err) {
+                    spec_parser.ParseError.FileNotFound => writeStderr("Error: Test spec file not found\n"),
+                    spec_parser.ParseError.InvalidFormat => writeStderr("Error: Invalid test spec format\n"),
+                    else => writeStderr("Error: Failed to parse test spec\n"),
+                }
+                return 1;
+            };
+            defer spec_parser.freeSpecCommands(allocator, commands);
+
+            printHeader();
+            for (0..samples) |sample| {
+                var stats: Stats = .{};
+                for (0..iterations) |_| {
+                    runBenchmarkIteration(commands, verbose, &stats);
+                }
+                printRow(case_name, sample, iterations, stats);
+            }
+
+            return 0;
+        }
+
+        fn runBenchmarkIteration(commands: []const SpecCommand, verbose: bool, stats: *Stats) void {
+            var host = Ctx.initHost();
+            Ctx.setVerbose(&host, verbose);
+
+            var roc_host = Ctx.makeRocHost(&host);
+            Ctx.attachRocHost(&host, &roc_host);
+            Ctx.enterCurrent(&host, &roc_host);
+            defer Ctx.leaveCurrent();
+            defer Ctx.deinitHost(&host);
+
+            const init_start_ns = nowNs();
+            const init_result = Ctx.initRocUi();
+            stats.init_roc_ns += nowNs() - init_start_ns;
+            Ctx.acceptInitElemMeasured(&host, &roc_host, init_result, &stats.init_apply_ns, &stats.commands);
+
+            for (commands) |cmd| {
+                if (commandIsAction(cmd)) {
+                    runActionCommandMeasured(&host, &roc_host, cmd, stats);
+                }
+            }
+
+            const retained_delta = @as(i64, @intCast(Ctx.allocCount(&host))) - @as(i64, @intCast(Ctx.deallocCount(&host)));
+            var iteration_metrics = Ctx.lastRuntimeMetrics(&host);
+            iteration_metrics.retained_alloc_delta = retained_delta;
+            iteration_metrics.host_retained_alloc_delta = metricAsI64(Ctx, Ctx.hostAllocCount(&host)) - metricAsI64(Ctx, Ctx.hostDeallocCount(&host));
+            iteration_metrics.host_retained_bytes_delta = metricAsI64(Ctx, Ctx.hostAllocBytes(&host)) - metricAsI64(Ctx, Ctx.hostDeallocBytes(&host));
+            stats.metrics = Ctx.addRuntimeMetrics(stats.metrics, iteration_metrics);
+            stats.allocs += @intCast(Ctx.allocCount(&host));
+            stats.deallocs += @intCast(Ctx.deallocCount(&host));
+            stats.retained_alloc_delta += retained_delta;
+        }
+
+        fn runActionCommandMeasured(host: *Host, roc_host: *RocHost, cmd: SpecCommand, stats: *Stats) void {
+            switch (cmd.cmd_type) {
+                .click => {
+                    const elem = Ctx.findElementByLocator(host, cmd.locator, cmd.line_num) orelse Ctx.fail("benchmark click locator did not resolve");
+                    if (Ctx.elementDisabled(elem)) Ctx.fail("benchmark click target is disabled");
+                    const event_id = Ctx.clickEventId(elem) orelse Ctx.fail("benchmark click target has no binding");
+                    Ctx.dispatchRocEventMeasured(host, roc_host, event_id, .unit, Ctx.hostValueUnit(host, roc_host), stats);
+                },
+
+                .pointer_down, .pointer_up, .pointer_enter, .pointer_leave => {
+                    const elem = Ctx.findElementByLocator(host, cmd.locator, cmd.line_num) orelse Ctx.fail("benchmark pointer locator did not resolve");
+                    if (Ctx.elementDisabled(elem)) Ctx.fail("benchmark pointer target is disabled");
+                    const event_id = Ctx.pointerEventId(elem, cmd.cmd_type) orelse Ctx.fail("benchmark pointer target has no binding");
+                    Ctx.dispatchRocEventMeasured(host, roc_host, event_id, .unit, Ctx.hostValueUnit(host, roc_host), stats);
+                },
+
+                .key_down => {
+                    const elem = Ctx.findElementByLocator(host, cmd.locator, cmd.line_num) orelse Ctx.fail("benchmark key_down locator did not resolve");
+                    if (Ctx.elementDisabled(elem)) Ctx.fail("benchmark key_down target is disabled");
+                    Ctx.dispatchKeyDownMeasured(
+                        host,
+                        roc_host,
+                        elem,
+                        cmd.expected_text orelse Ctx.fail("benchmark key_down command is missing key text"),
+                        cmd.expected_bool orelse Ctx.fail("benchmark key_down command is missing shift flag"),
+                        stats,
+                    );
+                },
+
+                .submit => {
+                    const elem = Ctx.findElementByLocator(host, cmd.locator, cmd.line_num) orelse Ctx.fail("benchmark submit locator did not resolve");
+                    if (Ctx.elementDisabled(elem)) Ctx.fail("benchmark submit target is disabled");
+                    Ctx.dispatchSubmitMeasured(host, roc_host, elem, stats);
+                },
+
+                .fill => {
+                    const value = cmd.expected_text orelse "";
+                    const elem = Ctx.findElementByLocator(host, cmd.locator, cmd.line_num) orelse Ctx.fail("benchmark fill locator did not resolve");
+                    if (Ctx.elementDisabled(elem)) Ctx.fail("benchmark fill target is disabled");
+                    if (Ctx.inputEventId(elem)) |event_id| {
+                        Ctx.dispatchRocEventMeasured(host, roc_host, event_id, .str, Ctx.hostValueStr(host, roc_host, value), stats);
+                    } else {
+                        _ = Ctx.setElementValueIfChanged(host, elem, value);
+                    }
+                },
+
+                .check, .uncheck => {
+                    const checked = cmd.cmd_type == .check;
+                    const elem = Ctx.findElementByLocator(host, cmd.locator, cmd.line_num) orelse Ctx.fail("benchmark check locator did not resolve");
+                    if (Ctx.elementDisabled(elem)) Ctx.fail("benchmark check target is disabled");
+                    if (Ctx.checkEventId(elem)) |event_id| {
+                        Ctx.dispatchRocEventMeasured(host, roc_host, event_id, .bool, Ctx.hostValueBool(host, roc_host, checked), stats);
+                    } else {
+                        _ = Ctx.setElementCheckedIfChanged(elem, checked);
+                    }
+                },
+
+                .resolve_task, .reject_task => {
+                    const task_name = cmd.task_name orelse Ctx.fail("benchmark task command had no task name");
+                    const payload = cmd.expected_text orelse "";
+                    const start_ns = nowNs();
+                    const counts = Ctx.resolvePendingTask(host, roc_host, task_name, payload, cmd.cmd_type == .reject_task);
+                    stats.dispatch_apply_ns += nowNs() - start_ns;
+                    stats.commands.addAll(counts);
+                    Ctx.finishHostMetrics(host);
+                    stats.actions += 1;
+                },
+
+                .tick_interval => {
+                    const period_ms = cmd.interval_ms orelse Ctx.fail("benchmark interval command had no period");
+                    const start_ns = nowNs();
+                    const counts = Ctx.tickIntervalSource(host, roc_host, period_ms);
+                    stats.dispatch_apply_ns += nowNs() - start_ns;
+                    stats.commands.addAll(counts);
+                    Ctx.finishHostMetrics(host);
+                    stats.actions += 1;
+                },
+
+                else => {},
+            }
+        }
+    };
+}
+
 test "commandIsAction recognizes only mutating commands" {
     try std.testing.expect(commandIsAction(.{
         .cmd_type = .click,

@@ -2217,7 +2217,7 @@ fn applyDirtyWhenStructuralSignals(host: *HostEnv, roc_host: *abi.RocHost, dirty
     return host.engine.applyDirtyWhenStructuralSignals(host, roc_host, dirty_source_node_ids, dirty_generation, changes);
 }
 
-fn renderActiveRootMeasured(host: *HostEnv, roc_host: *abi.RocHost, dirty_source_node_ids: []const u64, apply_ns: ?*u64, command_counts: ?*CommandCounts) void {
+fn renderActiveRootWithStats(host: *HostEnv, roc_host: *abi.RocHost, dirty_source_node_ids: []const u64, apply_ns: ?*u64, command_counts: ?*CommandCounts) void {
     const root = host.engine.root_elem orelse failHost("host render requested before Roc root Elem was initialized");
 
     var next_stream: HostNodeDescriptorStream = .{};
@@ -2242,19 +2242,19 @@ fn renderActiveRootMeasured(host: *HostEnv, roc_host: *abi.RocHost, dirty_source
     finishHostMetrics(host);
 }
 
-fn acceptInitElemMeasured(host: *HostEnv, roc_host: *abi.RocHost, root_box: ElemBox, apply_ns: ?*u64, command_counts: ?*CommandCounts) void {
+fn acceptInitElemWithStats(host: *HostEnv, roc_host: *abi.RocHost, root_box: ElemBox, apply_ns: ?*u64, command_counts: ?*CommandCounts) void {
     if (host.engine.root_elem != null) failHost("Roc root Elem initialized more than once");
     const root = root_box.*;
     host.engine.root_elem = root;
     abi.decrefBoxWith(@ptrCast(root_box), @alignOf(abi.Elem), true, &dropMovedElemPayload, roc_host);
-    renderActiveRootMeasured(host, roc_host, &.{}, apply_ns, command_counts);
+    renderActiveRootWithStats(host, roc_host, &.{}, apply_ns, command_counts);
 }
 
 fn acceptInitElem(host: *HostEnv, roc_host: *abi.RocHost, root_box: ElemBox) void {
-    acceptInitElemMeasured(host, roc_host, root_box, null, null);
+    acceptInitElemWithStats(host, roc_host, root_box, null, null);
 }
 
-fn dispatchRocEventMeasured(host: *HostEnv, roc_host: *abi.RocHost, event_id: u64, payload_kind: EventPayloadKind, payload: HostValue, stats: ?*BenchmarkStats) void {
+fn dispatchRocEventWithStats(host: *HostEnv, roc_host: *abi.RocHost, event_id: u64, payload_kind: EventPayloadKind, payload: HostValue, stats: ?*BenchmarkStats) void {
     const desc = hostEventById(host, event_id);
     validateEventPayloadKind(desc, payload_kind);
     const payload_cap = desc.payload_reducer.capability;
@@ -2327,7 +2327,7 @@ fn dispatchRocEventMeasured(host: *HostEnv, roc_host: *abi.RocHost, event_id: u6
 }
 
 fn dispatchRocEvent(host: *HostEnv, roc_host: *abi.RocHost, event_id: u64, payload_kind: EventPayloadKind, payload: HostValue) void {
-    dispatchRocEventMeasured(host, roc_host, event_id, payload_kind, payload, null);
+    dispatchRocEventWithStats(host, roc_host, event_id, payload_kind, payload, null);
 }
 
 fn encodeKeyShiftPayload(allocator: std.mem.Allocator, key: []const u8, shift_key: bool) []u8 {
@@ -2342,17 +2342,17 @@ fn requireNamedEvent(elem: *const DomElement, name: []const u8, message: []const
     return nodeEventName(elem, name) orelse failHost(message);
 }
 
-fn dispatchKeyDownMeasured(host: *HostEnv, roc_host: *abi.RocHost, elem: *const DomElement, key: []const u8, shift_key: bool, stats: ?*BenchmarkStats) void {
+fn dispatchKeyDownWithStats(host: *HostEnv, roc_host: *abi.RocHost, elem: *const DomElement, key: []const u8, shift_key: bool, stats: ?*BenchmarkStats) void {
     const event = requireNamedEvent(elem, "keydown", "keydown target has no named keydown binding");
     if (event.payload_kind != .bytes or event.payload_accessor != .record_key_shift) {
         failHost("keydown binding does not request the key/shift payload descriptor");
     }
     const payload_bytes = encodeKeyShiftPayload(host.hostAllocator(), key, shift_key);
     defer host.hostAllocator().free(payload_bytes);
-    dispatchRocEventMeasured(host, roc_host, event.event_id, .bytes, hostValueU8List(host, roc_host, payload_bytes), stats);
+    dispatchRocEventWithStats(host, roc_host, event.event_id, .bytes, hostValueU8List(host, roc_host, payload_bytes), stats);
 }
 
-fn dispatchSubmitMeasured(host: *HostEnv, roc_host: *abi.RocHost, elem: *const DomElement, stats: ?*BenchmarkStats) void {
+fn dispatchSubmitWithStats(host: *HostEnv, roc_host: *abi.RocHost, elem: *const DomElement, stats: ?*BenchmarkStats) void {
     const event = requireNamedEvent(elem, "submit", "submit target has no named submit binding");
     if (event.payload_kind != .unit or event.payload_accessor != .none) {
         failHost("submit binding does not use a unit payload descriptor");
@@ -2360,7 +2360,7 @@ fn dispatchSubmitMeasured(host: *HostEnv, roc_host: *abi.RocHost, elem: *const D
     if ((event.options & render.listener_option_prevent_default) == 0) {
         failHost("submit binding is missing the static prevent-default listener policy");
     }
-    dispatchRocEventMeasured(host, roc_host, event.event_id, .unit, hostValueUnit(host, roc_host), stats);
+    dispatchRocEventWithStats(host, roc_host, event.event_id, .unit, hostValueUnit(host, roc_host), stats);
 }
 
 fn makeSignalsRocHost(host: *HostEnv) abi.RocHost {
@@ -2386,141 +2386,194 @@ fn pointerEventIdForCommand(elem: *const DomElement, cmd_type: SpecCommandType) 
     };
 }
 
-fn runActionCommandMeasured(host: *HostEnv, roc_host: *abi.RocHost, cmd: SpecCommand, stats: *BenchmarkStats) void {
-    switch (cmd.cmd_type) {
-        .click => {
-            const elem = host.findElementByLocator(cmd.locator, cmd.line_num) orelse failHost("benchmark click locator did not resolve");
-            if (elem.disabled) failHost("benchmark click target is disabled");
-            const event_id = elem.bound_click_event orelse failHost("benchmark click target has no binding");
-            dispatchRocEventMeasured(host, roc_host, event_id, .unit, hostValueUnit(host, roc_host), stats);
-        },
+const BenchmarkDomElement = DomElement;
 
-        .pointer_down, .pointer_up, .pointer_enter, .pointer_leave => {
-            const elem = host.findElementByLocator(cmd.locator, cmd.line_num) orelse failHost("benchmark pointer locator did not resolve");
-            if (elem.disabled) failHost("benchmark pointer target is disabled");
-            const event_id = pointerEventIdForCommand(elem, cmd.cmd_type) orelse failHost("benchmark pointer target has no binding");
-            dispatchRocEventMeasured(host, roc_host, event_id, .unit, hostValueUnit(host, roc_host), stats);
-        },
-
-        .key_down => {
-            const elem = host.findElementByLocator(cmd.locator, cmd.line_num) orelse failHost("benchmark key_down locator did not resolve");
-            if (elem.disabled) failHost("benchmark key_down target is disabled");
-            dispatchKeyDownMeasured(host, roc_host, elem, cmd.expected_text orelse failHost("benchmark key_down command is missing key text"), cmd.expected_bool orelse failHost("benchmark key_down command is missing shift flag"), stats);
-        },
-
-        .submit => {
-            const elem = host.findElementByLocator(cmd.locator, cmd.line_num) orelse failHost("benchmark submit locator did not resolve");
-            if (elem.disabled) failHost("benchmark submit target is disabled");
-            dispatchSubmitMeasured(host, roc_host, elem, stats);
-        },
-
-        .fill => {
-            const value = cmd.expected_text orelse "";
-            const elem = host.findElementByLocator(cmd.locator, cmd.line_num) orelse failHost("benchmark fill locator did not resolve");
-            if (elem.disabled) failHost("benchmark fill target is disabled");
-            if (elem.bound_input_event) |event_id| {
-                dispatchRocEventMeasured(host, roc_host, event_id, .str, hostValueStr(host, roc_host, value), stats);
-            } else {
-                _ = setElementValueIfChanged(host, elem, value);
-            }
-        },
-
-        .check, .uncheck => {
-            const checked = cmd.cmd_type == .check;
-            const elem = host.findElementByLocator(cmd.locator, cmd.line_num) orelse failHost("benchmark check locator did not resolve");
-            if (elem.disabled) failHost("benchmark check target is disabled");
-            if (elem.bound_check_event) |event_id| {
-                dispatchRocEventMeasured(host, roc_host, event_id, .bool, hostValueBool(host, roc_host, checked), stats);
-            } else {
-                _ = setElementCheckedIfChanged(elem, checked);
-            }
-        },
-
-        .resolve_task, .reject_task => {
-            const task_name = cmd.task_name orelse failHost("benchmark task command had no task name");
-            const payload = cmd.expected_text orelse "";
-            const start_ns = benchmark.nowNs();
-            const counts = resolvePendingTask(host, roc_host, task_name, payload, cmd.cmd_type == .reject_task);
-            stats.dispatch_apply_ns += benchmark.nowNs() - start_ns;
-            stats.commands.addAll(counts);
-            finishHostMetrics(host);
-            stats.actions += 1;
-        },
-
-        .tick_interval => {
-            const period_ms = cmd.interval_ms orelse failHost("benchmark interval command had no period");
-            const start_ns = benchmark.nowNs();
-            const counts = tickIntervalSource(host, roc_host, period_ms);
-            stats.dispatch_apply_ns += benchmark.nowNs() - start_ns;
-            stats.commands.addAll(counts);
-            finishHostMetrics(host);
-            stats.actions += 1;
-        },
-
-        else => {},
-    }
+fn hostValueUnitForBenchmark(host: *HostEnv, roc_host: *abi.RocHost) HostValue {
+    return hostValueUnit(host, roc_host);
 }
 
-fn runBenchmarkIteration(commands: []const SpecCommand, verbose: bool, stats: *BenchmarkStats) void {
-    var host_env = HostEnv.init();
-    host_env.test_state.verbose = verbose;
-
-    var roc_host = makeSignalsRocHost(&host_env);
-    host_env.engine.roc_host = &roc_host;
-    current_host = &host_env;
-    current_roc_host = &roc_host;
-
-    const init_start_ns = benchmark.nowNs();
-    const init_result = abi.roc_ui_init();
-    stats.init_roc_ns += benchmark.nowNs() - init_start_ns;
-    acceptInitElemMeasured(&host_env, &roc_host, init_result, &stats.init_apply_ns, &stats.commands);
-
-    for (commands) |cmd| {
-        if (benchmark.commandIsAction(cmd)) {
-            runActionCommandMeasured(&host_env, &roc_host, cmd, stats);
-        }
-    }
-
-    const retained_delta = @as(i64, @intCast(host_env.alloc_count)) - @as(i64, @intCast(host_env.dealloc_count));
-    var iteration_metrics = host_env.engine.last_runtime_metrics;
-    iteration_metrics.retained_alloc_delta = retained_delta;
-    iteration_metrics.host_retained_alloc_delta = u64MetricAsI64(host_env.host_alloc_count) - u64MetricAsI64(host_env.host_dealloc_count);
-    iteration_metrics.host_retained_bytes_delta = u64MetricAsI64(host_env.host_alloc_bytes) - u64MetricAsI64(host_env.host_dealloc_bytes);
-    stats.metrics = addRuntimeMetrics(stats.metrics, iteration_metrics);
-    stats.allocs += @intCast(host_env.alloc_count);
-    stats.deallocs += @intCast(host_env.dealloc_count);
-    stats.retained_alloc_delta += retained_delta;
-
-    host_env.deinit();
-    current_host = null;
-    current_roc_host = null;
+fn hostValueStrForBenchmark(host: *HostEnv, roc_host: *abi.RocHost, value: []const u8) HostValue {
+    return hostValueStr(host, roc_host, value);
 }
 
-fn runAppBenchmarks(spec_file: []const u8, case_name: []const u8, iterations: usize, samples: usize, verbose: bool) error{}!c_int {
-    var bench_gpa = std.heap.DebugAllocator(.{ .safety = true }){};
-    defer _ = bench_gpa.deinit();
-    const allocator = bench_gpa.allocator();
-    const commands = parseTestSpecFile(allocator, spec_file) catch |err| {
-        switch (err) {
-            ParseError.FileNotFound => writeStderr("Error: Test spec file not found\n"),
-            ParseError.InvalidFormat => writeStderr("Error: Invalid test spec format\n"),
-            else => writeStderr("Error: Failed to parse test spec\n"),
-        }
-        return 1;
-    };
-    defer freeSpecCommands(allocator, commands);
+fn hostValueBoolForBenchmark(host: *HostEnv, roc_host: *abi.RocHost, value: bool) HostValue {
+    return hostValueBool(host, roc_host, value);
+}
 
-    benchmark.printHeader();
-    for (0..samples) |sample| {
-        var stats: BenchmarkStats = .{};
-        for (0..iterations) |_| {
-            runBenchmarkIteration(commands, verbose, &stats);
-        }
-        benchmark.printRow(case_name, sample, iterations, stats);
+fn setElementValueForBenchmark(host: *HostEnv, elem: *DomElement, value: []const u8) bool {
+    return setElementValueIfChanged(host, elem, value);
+}
+
+fn setElementCheckedForBenchmark(elem: *DomElement, checked: bool) bool {
+    return setElementCheckedIfChanged(elem, checked);
+}
+
+fn resolvePendingTaskForBenchmark(host: *HostEnv, roc_host: *abi.RocHost, name: []const u8, payload_text: []const u8, failed: bool) CommandCounts {
+    return resolvePendingTask(host, roc_host, name, payload_text, failed);
+}
+
+fn tickIntervalSourceForBenchmark(host: *HostEnv, roc_host: *abi.RocHost, period_ms: u64) CommandCounts {
+    return tickIntervalSource(host, roc_host, period_ms);
+}
+
+fn finishHostMetricsForBenchmark(host: *HostEnv) void {
+    finishHostMetrics(host);
+}
+
+fn addRuntimeMetricsForBenchmark(left: RuntimeMetrics, right: RuntimeMetrics) RuntimeMetrics {
+    return addRuntimeMetrics(left, right);
+}
+
+const BenchmarkCtx = struct {
+    pub const Host = HostEnv;
+    pub const RocHost = abi.RocHost;
+    pub const DomElement = BenchmarkDomElement;
+
+    pub fn fail(message: []const u8) noreturn {
+        failHost(message);
     }
 
-    return 0;
-}
+    pub fn initHost() Host {
+        return Host.init();
+    }
+
+    pub fn deinitHost(host: *Host) void {
+        host.deinit();
+    }
+
+    pub fn setVerbose(host: *Host, verbose: bool) void {
+        host.test_state.verbose = verbose;
+    }
+
+    pub fn makeRocHost(host: *Host) RocHost {
+        return makeSignalsRocHost(host);
+    }
+
+    pub fn attachRocHost(host: *Host, roc_host: *RocHost) void {
+        host.engine.roc_host = roc_host;
+    }
+
+    pub fn enterCurrent(host: *Host, roc_host: *RocHost) void {
+        current_host = host;
+        current_roc_host = roc_host;
+    }
+
+    pub fn leaveCurrent() void {
+        current_host = null;
+        current_roc_host = null;
+    }
+
+    pub fn initRocUi() ElemBox {
+        return abi.roc_ui_init();
+    }
+
+    pub fn acceptInitElemMeasured(host: *Host, roc_host: *RocHost, root_box: ElemBox, apply_ns: ?*u64, command_counts: ?*CommandCounts) void {
+        acceptInitElemWithStats(host, roc_host, root_box, apply_ns, command_counts);
+    }
+
+    pub fn findElementByLocator(host: *Host, locator: Locator, line_num: usize) ?*BenchmarkDomElement {
+        return host.findElementByLocator(locator, line_num);
+    }
+
+    pub fn elementDisabled(elem: *const BenchmarkDomElement) bool {
+        return elem.disabled;
+    }
+
+    pub fn clickEventId(elem: *const BenchmarkDomElement) ?u64 {
+        return elem.bound_click_event;
+    }
+
+    pub fn pointerEventId(elem: *const BenchmarkDomElement, cmd_type: SpecCommandType) ?u64 {
+        return pointerEventIdForCommand(elem, cmd_type);
+    }
+
+    pub fn inputEventId(elem: *const BenchmarkDomElement) ?u64 {
+        return elem.bound_input_event;
+    }
+
+    pub fn checkEventId(elem: *const BenchmarkDomElement) ?u64 {
+        return elem.bound_check_event;
+    }
+
+    pub fn dispatchRocEventMeasured(host: *Host, roc_host: *RocHost, event_id: u64, payload_kind: EventPayloadKind, payload: HostValue, stats: ?*BenchmarkStats) void {
+        dispatchRocEventWithStats(host, roc_host, event_id, payload_kind, payload, stats);
+    }
+
+    pub fn hostValueUnit(host: *Host, roc_host: *RocHost) HostValue {
+        return hostValueUnitForBenchmark(host, roc_host);
+    }
+
+    pub fn hostValueStr(host: *Host, roc_host: *RocHost, value: []const u8) HostValue {
+        return hostValueStrForBenchmark(host, roc_host, value);
+    }
+
+    pub fn hostValueBool(host: *Host, roc_host: *RocHost, value: bool) HostValue {
+        return hostValueBoolForBenchmark(host, roc_host, value);
+    }
+
+    pub fn dispatchKeyDownMeasured(host: *Host, roc_host: *RocHost, elem: *const BenchmarkDomElement, key: []const u8, shift_key: bool, stats: ?*BenchmarkStats) void {
+        dispatchKeyDownWithStats(host, roc_host, elem, key, shift_key, stats);
+    }
+
+    pub fn dispatchSubmitMeasured(host: *Host, roc_host: *RocHost, elem: *const BenchmarkDomElement, stats: ?*BenchmarkStats) void {
+        dispatchSubmitWithStats(host, roc_host, elem, stats);
+    }
+
+    pub fn setElementValueIfChanged(host: *Host, elem: *BenchmarkDomElement, value: []const u8) bool {
+        return setElementValueForBenchmark(host, elem, value);
+    }
+
+    pub fn setElementCheckedIfChanged(elem: *BenchmarkDomElement, checked: bool) bool {
+        return setElementCheckedForBenchmark(elem, checked);
+    }
+
+    pub fn resolvePendingTask(host: *Host, roc_host: *RocHost, name: []const u8, payload_text: []const u8, failed: bool) CommandCounts {
+        return resolvePendingTaskForBenchmark(host, roc_host, name, payload_text, failed);
+    }
+
+    pub fn tickIntervalSource(host: *Host, roc_host: *RocHost, period_ms: u64) CommandCounts {
+        return tickIntervalSourceForBenchmark(host, roc_host, period_ms);
+    }
+
+    pub fn finishHostMetrics(host: *Host) void {
+        finishHostMetricsForBenchmark(host);
+    }
+
+    pub fn allocCount(host: *const Host) usize {
+        return host.alloc_count;
+    }
+
+    pub fn deallocCount(host: *const Host) usize {
+        return host.dealloc_count;
+    }
+
+    pub fn hostAllocCount(host: *const Host) u64 {
+        return host.host_alloc_count;
+    }
+
+    pub fn hostDeallocCount(host: *const Host) u64 {
+        return host.host_dealloc_count;
+    }
+
+    pub fn hostAllocBytes(host: *const Host) u64 {
+        return host.host_alloc_bytes;
+    }
+
+    pub fn hostDeallocBytes(host: *const Host) u64 {
+        return host.host_dealloc_bytes;
+    }
+
+    pub fn lastRuntimeMetrics(host: *const Host) RuntimeMetrics {
+        return host.engine.last_runtime_metrics;
+    }
+
+    pub fn addRuntimeMetrics(left: RuntimeMetrics, right: RuntimeMetrics) RuntimeMetrics {
+        return addRuntimeMetricsForBenchmark(left, right);
+    }
+};
+
+const BenchmarkRunner = benchmark.Runner(BenchmarkCtx);
+const runAppBenchmarks = BenchmarkRunner.runAppBenchmarks;
 
 comptime {
     if (!builtin.is_test) {
