@@ -1,0 +1,47 @@
+//! Two-pass differential harness for the iterative checker conversion.
+//!
+//! Type-checks the same module twice in independent `Check` instances — once
+//! forced fully-recursive (`force_recursive = true`), once with the iterative
+//! driver (`force_recursive = false`) — and asserts the inferred def types are
+//! identical and the diagnostic COUNT is unchanged. Per the fidelity rule,
+//! inferred types must be preserved exactly while diagnostics may reorder, so
+//! we compare types exactly but diagnostics by count (catching added/dropped
+//! diagnostics without flagging pure reordering). The snapshot suite remains
+//! the primary oracle for full diagnostic content/ordering. This is the
+//! REQUIRED results-preservation guarantee for the recursion-to-work-stack
+//! migration.
+
+const std = @import("std");
+const TestEnv = @import("TestEnv.zig");
+
+/// Type-check `source` twice — once forced fully-recursive, once with the
+/// iterative driver — and assert identical rendered def types and an unchanged
+/// diagnostic count (reordering is allowed per the fidelity rule).
+pub fn expectIterMatchesRecursive(source: []const u8) !void {
+    var rec = try TestEnv.initWithMode("Diff", source, true);
+    defer rec.deinit();
+    var itr = try TestEnv.initWithMode("Diff", source, false);
+    defer itr.deinit();
+
+    const rec_types = try rec.renderAllDefTypes();
+    defer rec.gpa.free(rec_types);
+    const itr_types = try itr.renderAllDefTypes();
+    defer itr.gpa.free(itr_types);
+    try std.testing.expectEqualStrings(rec_types, itr_types);
+
+    const rec_diags = try rec.module_env.getDiagnostics();
+    defer rec.gpa.free(rec_diags);
+    const itr_diags = try itr.module_env.getDiagnostics();
+    defer itr.gpa.free(itr_diags);
+    try std.testing.expectEqual(rec_diags.len, itr_diags.len);
+}
+
+test "differential: simple module matches across recursive/iterative" {
+    try expectIterMatchesRecursive(
+        \\main! = |_args| {
+        \\    x = 1
+        \\    y = (x, 2)
+        \\    y.0
+        \\}
+    );
+}
