@@ -1027,6 +1027,16 @@ const Unifier = struct {
         try self.merge(vars, vars.b.desc.content);
     }
 
+    /// After a structural value successfully unifies with a nominal's backing,
+    /// merge the result to the nominal side — the nominal "wins" over the
+    /// anonymous record/tag it lifted from.
+    fn mergeToNominal(self: *Self, vars: *const ResolvedVarDescs, direction: NominalDirection) Error!void {
+        switch (direction) {
+            .a_is_nominal => try self.merge(vars, vars.a.desc.content),
+            .b_is_nominal => try self.merge(vars, vars.b.desc.content),
+        }
+    }
+
     fn unifyTagUnionWithNominal(
         self: *Self,
         vars: *const ResolvedVarDescs,
@@ -1060,11 +1070,7 @@ const Unifier = struct {
                 // Both are empty - unify the extension variables
                 try self.unifyGuarded(anon_tag_union.ext, nominal_backing_var);
 
-                // Merge to the NOMINAL type (not the tag union)
-                switch (direction) {
-                    .a_is_nominal => try self.merge(vars, vars.a.desc.content),
-                    .b_is_nominal => try self.merge(vars, vars.b.desc.content),
-                }
+                try self.mergeToNominal(vars, direction);
                 return;
             } else {
                 // Anon has tags but nominal is empty
@@ -1112,19 +1118,8 @@ const Unifier = struct {
         // Now safe to proceed with full unification.
         try self.unifyTwoTagUnions(vars, anon_tag_union, nominal_backing_tag_union);
 
-        // If we get here, unification succeeded!
-        // Merge to the NOMINAL type (not the tag union)
-        // This is the key: the nominal type "wins"
-        switch (direction) {
-            .a_is_nominal => {
-                // Merge to a (which is the nominal)
-                try self.merge(vars, vars.a.desc.content);
-            },
-            .b_is_nominal => {
-                // Merge to b (which is the nominal)
-                try self.merge(vars, vars.b.desc.content);
-            },
-        }
+        // Unification succeeded — the nominal type wins.
+        try self.mergeToNominal(vars, direction);
     }
 
     fn unifyRecordWithNominal(
@@ -1158,11 +1153,8 @@ const Unifier = struct {
             // The nominal's backing is an empty record {}
             // The anon record should also be empty for unification to succeed
             if (anon_record_fields.len() == 0) {
-                // Both are empty - merge to the NOMINAL type
-                switch (direction) {
-                    .a_is_nominal => try self.merge(vars, vars.a.desc.content),
-                    .b_is_nominal => try self.merge(vars, vars.b.desc.content),
-                }
+                // Both are empty — merge to the NOMINAL type.
+                try self.mergeToNominal(vars, direction);
                 return;
             } else {
                 // Anon has fields but nominal is empty
@@ -1187,19 +1179,8 @@ const Unifier = struct {
             .{ .ext = nominal_backing_record.ext },
         );
 
-        // If we get here, unification succeeded!
-        // Merge to the NOMINAL type (not the record)
-        // This is the key: the nominal type "wins"
-        switch (direction) {
-            .a_is_nominal => {
-                // Merge to a (which is the nominal)
-                try self.merge(vars, vars.a.desc.content);
-            },
-            .b_is_nominal => {
-                // Merge to b (which is the nominal)
-                try self.merge(vars, vars.b.desc.content);
-            },
-        }
+        // Unification succeeded — the nominal type wins.
+        try self.mergeToNominal(vars, direction);
     }
 
     /// unify func

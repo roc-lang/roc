@@ -1110,7 +1110,7 @@ const Builder = struct {
                 const fn_id = try self.lowerFnTemplateDef(view, fn_template);
                 break :blk try self.program.addExpr(.{
                     .ty = self.program.fnSource(fn_id).mono_fn_ty,
-                    .data = .{ .fn_def = fn_id },
+                    .data = .{ .fn_def = .{ .fn_id = fn_id } },
                 });
             },
             .callable_eval_template => |template_id| try self.lowerCallableEvalBindingValue(view, template_id, mono_fn_ty),
@@ -3060,7 +3060,7 @@ const Builder = struct {
             const mono_fn_id = try self.lowerRestoredConstFnTemplate(type_view, template);
             return try self.program.addExpr(.{
                 .ty = self.program.fnSource(mono_fn_id).mono_fn_ty,
-                .data = .{ .fn_def = mono_fn_id },
+                .data = .{ .fn_def = .{ .fn_id = mono_fn_id } },
             });
         }
 
@@ -3082,9 +3082,9 @@ const Builder = struct {
 
         const captures = try self.allocator.alloc(struct {
             binder: checked.PatternBinderId,
+            local: DraftLocalId,
             previous: ?DraftLocalId,
             value: DraftExprId,
-            pat: DraftPatId,
         }, fn_value.captures.len);
         var initialized: usize = 0;
         errdefer {
@@ -3111,14 +3111,13 @@ const Builder = struct {
             const value_expr = try fn_ctx.restoreConstNodeAtTypeCell(store_view, fn_view, capture.value, capture_cell, capture_shape_ty);
             const local = try fn_ctx.addLocalWithBinderCell(self.symbols.fresh(), capture_cell, binder);
             try fn_ctx.bindLocalName(local, binder);
-            const pat = try fn_ctx.addPatWithTypeCell(capture_cell, .{ .bind = local });
             const previous = fn_ctx.binders.get(binder);
             try fn_ctx.binders.put(binder, local);
             captures[index] = .{
                 .binder = binder,
+                .local = local,
                 .previous = previous,
                 .value = value_expr,
-                .pat = pat,
             };
             initialized += 1;
         }
@@ -3136,25 +3135,22 @@ const Builder = struct {
             }
         }
 
-        var expr = try fn_ctx.addExpr(.{
+        const capture_values = try self.allocator.alloc(DraftFnDefCapture, captures.len);
+        defer self.allocator.free(capture_values);
+        for (captures, 0..) |capture, index| {
+            capture_values[index] = .{ .local = capture.local, .value = capture.value };
+        }
+
+        const expr = try fn_ctx.addExpr(.{
             .ty = ty,
             .data = switch (lambda_expr.data) {
-                .lambda => try fn_ctx.lowerLambdaExpr(lambda_expr_id, template),
+                .lambda => .{ .fn_def = .{
+                    .fn_id = draftFinalFn(try self.lowerNestedFnFromContext(&fn_ctx, lambda_expr_id, template)),
+                    .captures = try fn_ctx.addFnDefCaptureSpan(capture_values),
+                } },
                 else => Common.invariant("stored capturing function did not reference a checked lambda"),
             },
         });
-        var index = captures.len;
-        while (index > 0) {
-            index -= 1;
-            expr = try fn_ctx.addExpr(.{
-                .ty = ty,
-                .data = .{ .let_ = .{
-                    .bind = captures[index].pat,
-                    .value = captures[index].value,
-                    .rest = expr,
-                } },
-            });
-        }
         const draft_end = draft.end(self);
         try self.drainSpecRequests(graph);
         const sealed = try self.sealActiveBodyDraft(graph, &body_draft, draft, draft_end, null, null);
@@ -4102,7 +4098,18 @@ const DraftProcCallee = union(enum(u8)) {
 const DraftCallProc = struct {
     callee: DraftProcCallee,
     args: DraftSpan(DraftExprId),
+    captures: DraftSpan(DraftExprId) = DraftSpan(DraftExprId).empty(),
     is_cold: bool = false,
+};
+
+const DraftFnDefCapture = struct {
+    local: DraftLocalId,
+    value: DraftExprId,
+};
+
+const DraftMonotypeFunctionValue = struct {
+    fn_id: DraftFnTarget,
+    captures: DraftSpan(DraftFnDefCapture) = DraftSpan(DraftFnDefCapture).empty(),
 };
 
 fn draftFinalFn(id: Ast.FnId) DraftFnTarget {
@@ -4225,8 +4232,8 @@ const DraftExprData = union(enum(u8)) {
     },
     lambda: DraftLambdaExpr,
     def_ref: DraftDefTarget,
-    fn_def: DraftFnTarget,
-    fn_ref: Ast.LiftedFnId,
+    fn_def: DraftMonotypeFunctionValue,
+    fn_ref: Ast.LiftedFunctionValue,
     call_value: DraftCallValue,
     call_proc: DraftCallProc,
     low_level: DraftLowLevelCall,
@@ -4428,6 +4435,7 @@ const BodyDraftStore = struct {
     typed_locals: std.ArrayList(DraftTypedLocal),
     stmt_ids: std.ArrayList(DraftStmtId),
     field_exprs: std.ArrayList(DraftFieldExpr),
+    fn_def_captures: std.ArrayList(DraftFnDefCapture),
     record_destructs: std.ArrayList(DraftRecordDestruct),
     str_pattern_steps: std.ArrayList(DraftStrPatternStep),
     declared_fields: std.ArrayList(DraftDeclaredField),
@@ -4465,6 +4473,7 @@ const BodyDraftStore = struct {
             .typed_locals = .empty,
             .stmt_ids = .empty,
             .field_exprs = .empty,
+            .fn_def_captures = .empty,
             .record_destructs = .empty,
             .str_pattern_steps = .empty,
             .declared_fields = .empty,
@@ -4511,6 +4520,7 @@ const BodyDraftStore = struct {
         self.declared_fields.deinit(self.allocator);
         self.str_pattern_steps.deinit(self.allocator);
         self.record_destructs.deinit(self.allocator);
+        self.fn_def_captures.deinit(self.allocator);
         self.field_exprs.deinit(self.allocator);
         self.stmt_ids.deinit(self.allocator);
         self.typed_locals.deinit(self.allocator);
@@ -4632,6 +4642,12 @@ const BodyDraftStore = struct {
     fn addFieldExprSpan(self: *BodyDraftStore, values: []const DraftFieldExpr) Allocator.Error!DraftSpan(DraftFieldExpr) {
         const start: u32 = @intCast(self.field_exprs.items.len);
         try self.field_exprs.appendSlice(self.allocator, values);
+        return .{ .start = start, .len = @intCast(values.len) };
+    }
+
+    fn addFnDefCaptureSpan(self: *BodyDraftStore, values: []const DraftFnDefCapture) Allocator.Error!DraftSpan(DraftFnDefCapture) {
+        const start: u32 = @intCast(self.fn_def_captures.items.len);
+        try self.fn_def_captures.appendSlice(self.allocator, values);
         return .{ .start = start, .len = @intCast(values.len) };
     }
 
@@ -4770,6 +4786,7 @@ const BodyDraftStore = struct {
             .typed_locals_start = @intCast(program.typed_locals.items.len),
             .stmt_ids_start = @intCast(program.stmt_ids.items.len),
             .field_expr_start = @intCast(program.field_exprs.items.len),
+            .fn_def_capture_start = @intCast(program.fn_def_captures.items.len),
             .record_destruct_start = @intCast(program.record_destructs.items.len),
             .str_pattern_step_start = @intCast(program.str_pattern_steps.items.len),
             .branch_start = @intCast(program.branches.items.len),
@@ -4821,6 +4838,14 @@ const BodyDraftStore = struct {
             program.field_exprs.appendAssumeCapacity(.{
                 .name = field.name,
                 .value = ids.expr(field.value),
+            });
+        }
+
+        try program.fn_def_captures.ensureUnusedCapacity(program.allocator, self.fn_def_captures.items.len);
+        for (self.fn_def_captures.items) |capture| {
+            program.fn_def_captures.appendAssumeCapacity(.{
+                .local = ids.local(capture.local),
+                .value = ids.expr(capture.value),
             });
         }
 
@@ -5092,7 +5117,10 @@ const BodyDraftStore = struct {
                 .body = ids.expr(lambda.body),
             } },
             .def_ref => |def| .{ .def_ref = ids.defTarget(def) },
-            .fn_def => |fn_id| .{ .fn_def = ids.fnTarget(fn_id) },
+            .fn_def => |fn_def| .{ .fn_def = .{
+                .fn_id = ids.fnTarget(fn_def.fn_id),
+                .captures = ids.fnDefCaptureSpan(fn_def.captures),
+            } },
             .fn_ref => |fn_ref| .{ .fn_ref = fn_ref },
             .call_value => |call| .{ .call_value = .{
                 .callee = ids.expr(call.callee),
@@ -5101,6 +5129,7 @@ const BodyDraftStore = struct {
             .call_proc => |call| .{ .call_proc = .{
                 .callee = ids.procCallee(call.callee),
                 .args = ids.exprSpan(call.args),
+                .captures = ids.exprSpan(call.captures),
                 .is_cold = call.is_cold,
             } },
             .low_level => |call| .{ .low_level = .{
@@ -5228,6 +5257,7 @@ const FinalIdOffsets = struct {
     typed_locals_start: u32,
     stmt_ids_start: u32,
     field_expr_start: u32,
+    fn_def_capture_start: u32,
     record_destruct_start: u32,
     str_pattern_step_start: u32,
     branch_start: u32,
@@ -5298,6 +5328,10 @@ const FinalIdOffsets = struct {
 
     fn fieldExprSpan(self: FinalIdOffsets, span: DraftSpan(DraftFieldExpr)) Ast.Span(Ast.FieldExpr) {
         return .{ .start = self.field_expr_start + span.start, .len = span.len };
+    }
+
+    fn fnDefCaptureSpan(self: FinalIdOffsets, span: DraftSpan(DraftFnDefCapture)) Ast.Span(Ast.FnDefCapture) {
+        return .{ .start = self.fn_def_capture_start + span.start, .len = span.len };
     }
 
     fn recordDestructSpan(self: FinalIdOffsets, span: DraftSpan(DraftRecordDestruct)) Ast.Span(Ast.RecordDestruct) {
@@ -5729,6 +5763,10 @@ const BodyContext = struct {
 
     fn addFieldExprSpan(self: *BodyContext, fields: []const DraftFieldExpr) Allocator.Error!DraftSpan(DraftFieldExpr) {
         return try self.draft.addFieldExprSpan(fields);
+    }
+
+    fn addFnDefCaptureSpan(self: *BodyContext, captures: []const DraftFnDefCapture) Allocator.Error!DraftSpan(DraftFnDefCapture) {
+        return try self.draft.addFnDefCaptureSpan(captures);
     }
 
     fn addRecordDestructSpan(self: *BodyContext, fields: []const DraftRecordDestruct) Allocator.Error!DraftSpan(DraftRecordDestruct) {
@@ -7362,7 +7400,7 @@ const BodyContext = struct {
             switch (record.ref) {
                 .local_proc => |local| return try self.addExpr(.{
                     .ty = ty,
-                    .data = .{ .fn_def = draftFinalFn(try self.fnTemplateForLocalProcWithMono(local, expr.ty, self.view.types.rootKey(expr.ty), ty)) },
+                    .data = .{ .fn_def = .{ .fn_id = draftFinalFn(try self.fnTemplateForLocalProcWithMono(local, expr.ty, self.view.types.rootKey(expr.ty), ty)) } },
                 }),
                 .top_level_proc,
                 .imported_proc,
@@ -7396,7 +7434,7 @@ const BodyContext = struct {
                         const fn_id = try self.builder.lowerFnTemplateDef(view, fn_template);
                         break :blk try self.addExpr(.{
                             .ty = mono_fn_ty,
-                            .data = .{ .fn_def = draftFinalFn(fn_id) },
+                            .data = .{ .fn_def = .{ .fn_id = draftFinalFn(fn_id) } },
                         });
                     }
                 }
@@ -7413,7 +7451,7 @@ const BodyContext = struct {
                     mono_fn_ty,
                 );
                 const fn_id = try self.builder.lowerFnTemplateDefFromContext(self, fn_template);
-                break :blk try self.addExpr(.{ .ty = mono_fn_ty, .data = .{ .fn_def = draftFinalFn(fn_id) } });
+                break :blk try self.addExpr(.{ .ty = mono_fn_ty, .data = .{ .fn_def = .{ .fn_id = draftFinalFn(fn_id) } } });
             },
             .platform_required => Common.invariant("platform required procedure reached parse intrinsic callback lowering"),
         };
@@ -7438,7 +7476,7 @@ const BodyContext = struct {
                 const fn_id = try self.builder.lowerFnTemplateDef(view, fn_template);
                 break :blk try self.addExpr(.{
                     .ty = self.builder.program.fnSource(fn_id).mono_fn_ty,
-                    .data = .{ .fn_def = draftFinalFn(fn_id) },
+                    .data = .{ .fn_def = .{ .fn_id = draftFinalFn(fn_id) } },
                 });
             },
             .callable_eval_template => |template_id| try self.lowerCallableEvalBindingValue(view, template_id, mono_fn_ty),
@@ -11912,7 +11950,7 @@ const BodyContext = struct {
             .pattern_binder,
             .selected_hoisted_const,
             => Common.invariant("local lookup reached Monotype without a current local binding"),
-            .local_proc => |local| .{ .fn_def = draftFinalFn(try self.fnTemplateForLocalProcWithMono(local, checked_ty, self.view.types.rootKey(checked_ty), ty)) },
+            .local_proc => |local| .{ .fn_def = .{ .fn_id = draftFinalFn(try self.fnTemplateForLocalProcWithMono(local, checked_ty, self.view.types.rootKey(checked_ty), ty)) } },
             .top_level_proc,
             .imported_proc,
             .hosted_proc,
@@ -11967,7 +12005,7 @@ const BodyContext = struct {
                     mono_fn_ty,
                 );
                 const fn_id = try self.builder.lowerFnTemplateDefFromContext(self, fn_template);
-                break :blk try self.addExpr(.{ .ty = mono_fn_ty, .data = .{ .fn_def = draftFinalFn(fn_id) } });
+                break :blk try self.addExpr(.{ .ty = mono_fn_ty, .data = .{ .fn_def = .{ .fn_id = draftFinalFn(fn_id) } } });
             },
             .platform_required => |required| blk: {
                 const view = self.builder.moduleForId(checked.requiredProcedureModuleId(required));
@@ -12244,7 +12282,7 @@ const BodyContext = struct {
         const mono_fn_id = try self.restoreConstFnTemplate(fn_value, template);
         return try self.addExpr(.{
             .ty = self.builder.program.fnSource(mono_fn_id).mono_fn_ty,
-            .data = .{ .fn_def = draftFinalFn(mono_fn_id) },
+            .data = .{ .fn_def = .{ .fn_id = draftFinalFn(mono_fn_id) } },
         });
     }
 
@@ -13221,10 +13259,37 @@ const BodyContext = struct {
         return switch (lambda.data) {
             .lambda => blk: {
                 const nested = try self.builder.fnTemplateForNestedExprWithMono(self.view, self.owner_template, expr_id, lambda.ty, self.view.types.rootKey(lambda.ty), closure_ty, self.current_fn_key);
-                break :blk try self.lowerLambdaExpr(expr_id, nested);
+                switch (nested.fn_def) {
+                    .nested => {},
+                    else => Common.invariant("closure expression was not assigned a nested function identity"),
+                }
+                break :blk .{ .fn_def = .{
+                    .fn_id = draftFinalFn(try self.builder.lowerNestedFnFromContext(self, expr_id, nested)),
+                    .captures = try self.lowerClosureCaptureExprSpan(closure.captures),
+                } };
             },
             else => Common.invariant("checked closure did not point at a lambda expression"),
         };
+    }
+
+    fn lowerClosureCaptureExprSpan(self: *BodyContext, captures: []const checked.CheckedCapture) Allocator.Error!DraftSpan(DraftFnDefCapture) {
+        if (captures.len == 0) return DraftSpan(DraftFnDefCapture).empty();
+
+        var capture_values = std.ArrayList(DraftFnDefCapture).empty;
+        defer capture_values.deinit(self.allocator);
+
+        for (captures) |capture| {
+            const binder = checkedCaptureBinder(self.view, capture.pattern);
+            const local = self.binders.get(binder) orelse continue;
+            const ty = try self.localType(local);
+            const value = try self.addExpr(.{
+                .ty = ty,
+                .data = .{ .local = local },
+            });
+            try capture_values.append(self.allocator, .{ .local = local, .value = value });
+        }
+
+        return try self.addFnDefCaptureSpan(capture_values.items);
     }
 
     fn closureFunctionType(self: *BodyContext, closure: anytype) Allocator.Error!Type.TypeId {
@@ -13268,7 +13333,7 @@ const BodyContext = struct {
             .nested => {},
             else => Common.invariant("expression-position lambda was not assigned a nested function identity"),
         }
-        return .{ .fn_def = draftFinalFn(try self.builder.lowerNestedFnFromContext(self, expr_id, nested)) };
+        return .{ .fn_def = .{ .fn_id = draftFinalFn(try self.builder.lowerNestedFnFromContext(self, expr_id, nested)) } };
     }
 
     fn lowerDispatchExpr(
@@ -19283,6 +19348,13 @@ fn checkedBinderType(view: ModuleView, binder: checked.PatternBinderId) checked.
     const pattern_raw = @intFromEnum(pattern);
     if (pattern_raw >= view.bodies.patternCount()) Common.invariant("stored function capture pattern is outside checked body store");
     return view.bodies.pattern(@enumFromInt(pattern_raw)).ty;
+}
+
+fn checkedCaptureBinder(view: ModuleView, pattern: checked.CheckedPatternId) checked.PatternBinderId {
+    const raw = @intFromEnum(pattern);
+    if (raw >= view.bodies.pattern_binder_by_pattern.len) Common.invariant("checked closure capture pattern was outside the binder index");
+    return view.bodies.pattern_binder_by_pattern[raw] orelse
+        Common.invariant("checked closure capture pattern had no binder");
 }
 
 fn constCaptureBinder(id: check.ConstStore.CaptureId) checked.PatternBinderId {

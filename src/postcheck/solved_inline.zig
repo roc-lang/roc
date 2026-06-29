@@ -210,8 +210,8 @@ const WrapperAnalyzer = struct {
             .dec_lit,
             .str_lit,
             .def_ref,
-            .fn_ref,
             => true,
+            .fn_ref => |fn_ref| self.exprSpanReadsOnlyArgs(fn_ref.captures, args),
             .list,
             .tuple,
             => |items| self.exprSpanReadsOnlyArgs(items, args),
@@ -230,7 +230,9 @@ const WrapperAnalyzer = struct {
             .expect_err => |expect_err| self.exprReadsOnlyArgs(expect_err.msg, args),
             .comptime_branch_taken => |taken| self.exprReadsOnlyArgs(taken.body, args),
             .call_value => |call| self.exprReadsOnlyArgs(call.callee, args) and self.exprSpanReadsOnlyArgs(call.args, args),
-            .call_proc => |call| !call.is_cold and self.exprSpanReadsOnlyArgs(call.args, args),
+            .call_proc => |call| !call.is_cold and
+                self.exprSpanReadsOnlyArgs(call.args, args) and
+                self.exprSpanReadsOnlyArgs(call.captures, args),
             .low_level => |call| self.exprSpanReadsOnlyArgs(call.args, args),
             .field_access => |field| self.exprReadsOnlyArgs(field.receiver, args),
             .tuple_access => |access| self.exprReadsOnlyArgs(access.tuple, args),
@@ -295,8 +297,8 @@ const WrapperAnalyzer = struct {
             .dec_lit,
             .str_lit,
             .def_ref,
-            .fn_ref,
             => {},
+            .fn_ref => |fn_ref| try self.visitSpanCallees(fn_ref.captures),
             .list,
             .tuple,
             => |items| try self.visitSpanCallees(items),
@@ -322,6 +324,7 @@ const WrapperAnalyzer = struct {
                     _ = try self.inlineBody(callee);
                 }
                 try self.visitSpanCallees(call.args);
+                try self.visitSpanCallees(call.captures);
             },
             .low_level => |call| try self.visitSpanCallees(call.args),
             .field_access => |field| try self.visitBodyCallees(field.receiver),

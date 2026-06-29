@@ -1950,6 +1950,11 @@ const Formatter = struct {
                 }
 
                 try fmt.pushTokenText(t.tag_tok);
+                if (t.backing_value) {
+                    // Nominal-value destructure renders as `Type.(args)` (the `.`
+                    // distinguishes it from an ordinary applied-tag `Tag(args)`).
+                    try fmt.push('.');
+                }
                 if (t.args.span.len > 0) {
                     try fmt.formatCollection(region, .round, AST.Pattern.Idx, fmt.ast.store.patternSlice(t.args), Formatter.formatPattern);
                 }

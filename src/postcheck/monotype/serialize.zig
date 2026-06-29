@@ -22,9 +22,9 @@ const TestCompareError = error{
 /// Magic bytes at the start of a specialization cache file.
 pub const MAGIC: [8]u8 = .{ 'R', 'O', 'C', 'S', 'P', 'E', 'C', 0 };
 /// Serialization format version for specialization cache files.
-pub const FORMAT_VERSION: u32 = 1;
+pub const FORMAT_VERSION: u32 = 2;
 
-const SECTION_COUNT = 38;
+const SECTION_COUNT = 39;
 /// Required byte alignment for every section payload. This covers all typed
 /// Monotype cache sections so mapping can produce process slices directly.
 pub const SECTION_ALIGNMENT: u64 = 16;
@@ -59,6 +59,7 @@ pub const SectionId = enum(u8) {
     typed_locals,
     stmt_ids,
     field_exprs,
+    fn_def_captures,
     record_destructs,
     str_pattern_steps,
     branches,
@@ -194,6 +195,7 @@ pub const SpecializationCacheHeader = extern struct {
     typed_locals: FileSlice = .{},
     stmt_ids: FileSlice = .{},
     field_exprs: FileSlice = .{},
+    fn_def_captures: FileSlice = .{},
     record_destructs: FileSlice = .{},
     str_pattern_steps: FileSlice = .{},
     branches: FileSlice = .{},
@@ -255,6 +257,7 @@ pub const MappedView = struct {
             .typed_locals = try self.sectionTyped(Ast.TypedLocal, header.typed_locals),
             .stmt_ids = try self.sectionTyped(Ast.StmtId, header.stmt_ids),
             .field_exprs = try self.sectionTyped(Ast.FieldExpr, header.field_exprs),
+            .fn_def_captures = try self.sectionTyped(Ast.FnDefCapture, header.fn_def_captures),
             .record_destructs = try self.sectionTyped(Ast.RecordDestruct, header.record_destructs),
             .str_pattern_steps = try self.sectionTyped(Ast.StrPatternStep, header.str_pattern_steps),
             .branches = try self.sectionTyped(Ast.Branch, header.branches),
@@ -299,6 +302,7 @@ pub const MappedSections = struct {
     typed_locals: []const Ast.TypedLocal,
     stmt_ids: []const Ast.StmtId,
     field_exprs: []const Ast.FieldExpr,
+    fn_def_captures: []const Ast.FnDefCapture,
     record_destructs: []const Ast.RecordDestruct,
     str_pattern_steps: []const Ast.StrPatternStep,
     branches: []const Ast.Branch,
@@ -347,6 +351,7 @@ pub const MappedProgramView = struct {
     typed_locals: []const Ast.TypedLocal,
     stmt_ids: []const Ast.StmtId,
     field_exprs: []const Ast.FieldExpr,
+    fn_def_captures: []const Ast.FnDefCapture,
     record_destructs: []const Ast.RecordDestruct,
     str_pattern_steps: []const Ast.StrPatternStep,
     branches: []const Ast.Branch,
@@ -423,6 +428,10 @@ pub const MappedProgramView = struct {
         }
         for (self.field_exprs) |field| {
             if (!self.exprRefInBounds(field.value)) return false;
+        }
+        for (self.fn_def_captures) |capture| {
+            if (!self.localRefInBounds(capture.local)) return false;
+            if (!self.exprRefInBounds(capture.value)) return false;
         }
         for (self.record_destructs) |destruct| {
             if (!self.patRefInBounds(destruct.pattern)) return false;
@@ -512,10 +521,10 @@ pub const MappedProgramView = struct {
                 self.typedLocalSpanInBounds(lambda.args) and
                 self.exprRefInBounds(lambda.body),
             .def_ref => |def| self.defRefInBounds(def),
-            .fn_def => |fn_id| self.fnRefInBounds(fn_id),
+            .fn_def => |fn_def| self.fnRefInBounds(fn_def.fn_id) and self.fnDefCaptureSpanInBounds(fn_def.captures),
             .fn_ref => true,
             .call_value => |call| self.exprRefInBounds(call.callee) and self.exprIdSpanInBounds(call.args),
-            .call_proc => |call| self.exprIdSpanInBounds(call.args),
+            .call_proc => |call| self.exprIdSpanInBounds(call.args) and self.exprIdSpanInBounds(call.captures),
             .low_level => |call| self.exprIdSpanInBounds(call.args),
             .field_access => |field| self.exprRefInBounds(field.receiver),
             .tuple_access => |tuple| self.exprRefInBounds(tuple.tuple),
@@ -640,6 +649,10 @@ pub const MappedProgramView = struct {
 
     fn fieldExprSpanInBounds(self: MappedProgramView, span: Ast.Span(Ast.FieldExpr)) bool {
         return spanInBounds(self.field_exprs.len, span.start, span.len);
+    }
+
+    fn fnDefCaptureSpanInBounds(self: MappedProgramView, span: Ast.Span(Ast.FnDefCapture)) bool {
+        return spanInBounds(self.fn_def_captures.len, span.start, span.len);
     }
 
     fn recordDestructSpanInBounds(self: MappedProgramView, span: Ast.Span(Ast.RecordDestruct)) bool {
@@ -787,6 +800,7 @@ pub fn mappedProgramView(view: MappedView) CacheError!MappedProgramView {
         .typed_locals = sections_.typed_locals,
         .stmt_ids = sections_.stmt_ids,
         .field_exprs = sections_.field_exprs,
+        .fn_def_captures = sections_.fn_def_captures,
         .record_destructs = sections_.record_destructs,
         .str_pattern_steps = sections_.str_pattern_steps,
         .branches = sections_.branches,
@@ -1061,6 +1075,7 @@ fn sections(header: *const SpecializationCacheHeader) [SECTION_COUNT]FileSlice {
         header.typed_locals,
         header.stmt_ids,
         header.field_exprs,
+        header.fn_def_captures,
         header.record_destructs,
         header.str_pattern_steps,
         header.branches,
@@ -1103,6 +1118,7 @@ const section_order = [_]SectionId{
     .typed_locals,
     .stmt_ids,
     .field_exprs,
+    .fn_def_captures,
     .record_destructs,
     .str_pattern_steps,
     .branches,
@@ -1145,23 +1161,24 @@ fn sectionIndex(id: SectionId) usize {
         .typed_locals => 18,
         .stmt_ids => 19,
         .field_exprs => 20,
-        .record_destructs => 21,
-        .str_pattern_steps => 22,
-        .branches => 23,
-        .if_branches => 24,
-        .string_literals => 25,
-        .imports => 26,
-        .roots => 27,
-        .layout_requests => 28,
-        .runtime_schema_requests => 29,
-        .comptime_sites => 30,
-        .source_files => 31,
-        .expr_locs => 32,
-        .expr_regions => 33,
-        .stmt_locs => 34,
-        .stmt_regions => 35,
-        .local_names => 36,
-        .debug_names => 37,
+        .fn_def_captures => 21,
+        .record_destructs => 22,
+        .str_pattern_steps => 23,
+        .branches => 24,
+        .if_branches => 25,
+        .string_literals => 26,
+        .imports => 27,
+        .roots => 28,
+        .layout_requests => 29,
+        .runtime_schema_requests => 30,
+        .comptime_sites => 31,
+        .source_files => 32,
+        .expr_locs => 33,
+        .expr_regions => 34,
+        .stmt_locs => 35,
+        .stmt_regions => 36,
+        .local_names => 37,
+        .debug_names => 38,
     };
 }
 
@@ -1211,6 +1228,7 @@ fn setSection(header: *SpecializationCacheHeader, id: SectionId, slice: FileSlic
         .typed_locals => header.typed_locals = slice,
         .stmt_ids => header.stmt_ids = slice,
         .field_exprs => header.field_exprs = slice,
+        .fn_def_captures => header.fn_def_captures = slice,
         .record_destructs => header.record_destructs = slice,
         .str_pattern_steps => header.str_pattern_steps = slice,
         .branches => header.branches = slice,
@@ -2113,6 +2131,7 @@ test "monotype specialization cache maps fresh single-shard program view equival
         .{ .id = .typed_locals, .bytes = std.mem.sliceAsBytes(fresh.typed_locals) },
         .{ .id = .stmt_ids, .bytes = std.mem.sliceAsBytes(fresh.stmt_ids) },
         .{ .id = .field_exprs, .bytes = std.mem.sliceAsBytes(fresh.field_exprs) },
+        .{ .id = .fn_def_captures, .bytes = std.mem.sliceAsBytes(fresh.fn_def_captures) },
         .{ .id = .record_destructs, .bytes = std.mem.sliceAsBytes(fresh.record_destructs) },
         .{ .id = .str_pattern_steps, .bytes = std.mem.sliceAsBytes(fresh.str_pattern_steps) },
         .{ .id = .branches, .bytes = std.mem.sliceAsBytes(fresh.branches) },
@@ -2449,6 +2468,7 @@ fn expectEquivalentProgramViews(
     try std.testing.expectEqualSlices(Ast.TypedLocal, fresh.typed_locals, mapped.typed_locals);
     try std.testing.expectEqualSlices(Ast.StmtId, fresh.stmt_ids, mapped.stmt_ids);
     try std.testing.expectEqualSlices(Ast.FieldExpr, fresh.field_exprs, mapped.field_exprs);
+    try std.testing.expectEqualSlices(Ast.FnDefCapture, fresh.fn_def_captures, mapped.fn_def_captures);
     try std.testing.expectEqualSlices(Ast.RecordDestruct, fresh.record_destructs, mapped.record_destructs);
     try std.testing.expectEqualSlices(Ast.StrPatternStep, fresh.str_pattern_steps, mapped.str_pattern_steps);
     try std.testing.expectEqualSlices(Ast.Branch, fresh.branches, mapped.branches);

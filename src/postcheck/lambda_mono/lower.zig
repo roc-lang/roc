@@ -551,13 +551,13 @@ const Lowerer = struct {
             .def_ref,
             .fn_def,
             => Common.invariant("pre-lift function expression reached Lambda Mono"),
-            .fn_ref => |target| try self.lowerCallableValue(expr_id, target, ty),
+            .fn_ref => |fn_ref| try self.lowerCallableValue(expr_id, fn_ref.fn_id, fn_ref.captures, ty),
             .call_value => |call| try self.lowerValueCall(ty, call),
             .call_proc => |call| blk: {
                 break :blk switch (Lifted.directCallee(call)) {
                     .local => |callee| .{ .direct_call = .{
                         .target = .{ .local = try self.ensureOwnFnSpec(callee, .finite) },
-                        .args = try self.lowerDirectCallArgs(callee, call.args),
+                        .args = try self.lowerDirectCallArgs(callee, call.args, call.captures),
                         .is_cold = call.is_cold,
                     } },
                     .imported => |imported| .{ .direct_call = .{
@@ -683,8 +683,18 @@ const Lowerer = struct {
         return lowered;
     }
 
-    fn lowerCallableValue(self: *Lowerer, expr_id: Lifted.ExprId, fn_id: Lifted.FnId, ty: Type.TypeId) Allocator.Error!Ast.ExprData {
+    fn lowerCallableValue(
+        self: *Lowerer,
+        expr_id: Lifted.ExprId,
+        fn_id: Lifted.FnId,
+        captures_span: Lifted.Span(Lifted.ExprId),
+        ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprData {
         const captures = self.memberCapturesForExpr(expr_id, fn_id);
+        const capture_exprs = self.solved.lifted.exprSpan(captures_span);
+        if (self.solved.lifted.typedLocalSpan(self.solved.lifted.fns[@intFromEnum(fn_id)].captures).len != capture_exprs.len) {
+            Common.invariant("function reference capture operand count differed from lifted function captures");
+        }
         return switch (self.program.types.get(ty)) {
             .callable => |variants| blk: {
                 const fn_symbol = self.solved.lifted.fns[@intFromEnum(fn_id)].symbol;
@@ -693,7 +703,7 @@ const Lowerer = struct {
                     break :blk .{ .callable = .{
                         .ty = ty,
                         .variant = variant.id,
-                        .payload = if (variant.capture_ty) |capture_ty| try self.buildCaptureRecord(captures, capture_ty) else null,
+                        .payload = if (variant.capture_ty) |capture_ty| try self.buildCaptureRecordFromExprs(fn_id, captures, capture_exprs, capture_ty) else null,
                     } };
                 }
                 Common.invariant("finite callable type did not contain referenced function");
@@ -704,7 +714,7 @@ const Lowerer = struct {
                     if (variant.source != fn_symbol) continue;
                     break :blk .{ .packed_erased_fn = .{
                         .target = variant.target,
-                        .capture = if (variant.capture_ty) |capture_ty| try self.buildCaptureRecord(captures, capture_ty) else null,
+                        .capture = if (variant.capture_ty) |capture_ty| try self.buildCaptureRecordFromExprs(fn_id, captures, capture_exprs, capture_ty) else null,
                     } };
                 }
                 Common.invariant("erased callable type did not contain referenced function");
@@ -732,18 +742,28 @@ const Lowerer = struct {
         Common.invariant("function reference callable slot did not contain referenced function");
     }
 
-    fn lowerDirectCallArgs(self: *Lowerer, fn_id: Lifted.FnId, args_span: Lifted.Span(Lifted.ExprId)) Allocator.Error!Ast.Span(Ast.ExprId) {
+    fn lowerDirectCallArgs(
+        self: *Lowerer,
+        fn_id: Lifted.FnId,
+        args_span: Lifted.Span(Lifted.ExprId),
+        capture_exprs_span: Lifted.Span(Lifted.ExprId),
+    ) Allocator.Error!Ast.Span(Ast.ExprId) {
         const args = try self.lowerExprSlice(self.solved.lifted.exprSpan(args_span));
         defer self.allocator.free(args);
 
         const captures = self.capturesForFn(fn_id);
         if (captures.len != 0) {
+            const capture_exprs = self.solved.lifted.exprSpan(capture_exprs_span);
+            if (capture_exprs.len != captures.len) Common.invariant("direct call capture operand count differed from callee capture count");
             const capture_ty = try self.captureRecordType(captures);
             const call_args = try self.allocator.alloc(Ast.ExprId, args.len + 1);
             defer self.allocator.free(call_args);
             @memcpy(call_args[0..args.len], args);
-            call_args[args.len] = try self.buildCaptureRecord(captures, capture_ty);
+            call_args[args.len] = try self.buildCaptureRecordFromExprs(fn_id, captures, capture_exprs, capture_ty);
             return try self.program.addExprSpan(call_args);
+        }
+        if (self.solved.lifted.exprSpan(capture_exprs_span).len != 0) {
+            Common.invariant("direct call carried capture operands for a capture-free callee");
         }
 
         return try self.program.addExprSpan(args);
@@ -819,13 +839,22 @@ const Lowerer = struct {
         };
     }
 
-    fn buildCaptureRecord(self: *Lowerer, capture_span: SolvedType.Span, capture_ty: Type.TypeId) Allocator.Error!Ast.ExprId {
+    fn buildCaptureRecordFromExprs(
+        self: *Lowerer,
+        fn_id: Lifted.FnId,
+        capture_span: SolvedType.Span,
+        capture_exprs: []const Lifted.ExprId,
+        capture_ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
         const captures = self.solved.types.captureSpan(capture_span);
         const fields = switch (self.program.types.get(capture_ty)) {
             .capture_record => |fields| self.program.types.captureFieldSpan(fields),
             else => Common.invariant("callable capture payload was not a capture record"),
         };
         if (captures.len != fields.len) Common.invariant("callable capture payload arity differed from captured locals");
+        if (self.solved.lifted.typedLocalSpan(self.solved.lifted.fns[@intFromEnum(fn_id)].captures).len != capture_exprs.len) {
+            Common.invariant("function reference capture operand count differed from lifted function captures");
+        }
 
         const values = try self.allocator.alloc(Ast.ExprId, captures.len);
         defer self.allocator.free(values);
@@ -833,7 +862,10 @@ const Lowerer = struct {
             if (capture.symbol != field.symbol or capture.binder != field.binder or capture.capture_id != field.capture_id) {
                 Common.invariant("callable capture payload fields differed from captured locals");
             }
-            values[i] = try self.lowerCapturedValue(capture.local, field.ty);
+            values[i] = if (self.captureExprForMemberCapture(fn_id, capture_exprs, capture)) |capture_expr_id|
+                try self.lowerExpr(capture_expr_id)
+            else
+                try self.lowerLocalValue(capture.local, field.ty);
         }
         return try self.program.addExpr(.{
             .ty = capture_ty,
@@ -841,7 +873,22 @@ const Lowerer = struct {
         });
     }
 
-    fn lowerCapturedValue(self: *Lowerer, local: Lifted.LocalId, ty: Type.TypeId) Allocator.Error!Ast.ExprId {
+    fn captureExprForMemberCapture(
+        self: *Lowerer,
+        fn_id: Lifted.FnId,
+        capture_exprs: []const Lifted.ExprId,
+        member_capture: SolvedType.Capture,
+    ) ?Lifted.ExprId {
+        const fn_captures = self.solved.lifted.typedLocalSpan(self.solved.lifted.fns[@intFromEnum(fn_id)].captures);
+        for (fn_captures, capture_exprs) |fn_capture, capture_expr| {
+            if (fn_capture.local == member_capture.local) return capture_expr;
+            const fn_binder = self.solved.lifted.locals[@intFromEnum(fn_capture.local)].binder;
+            if (fn_binder != null and member_capture.binder != null and fn_binder.? == member_capture.binder.?) return capture_expr;
+        }
+        return null;
+    }
+
+    fn lowerLocalValue(self: *Lowerer, local: Lifted.LocalId, ty: Type.TypeId) Allocator.Error!Ast.ExprId {
         const data = try self.lowerLocalExpr(local, ty);
         return try self.program.addExpr(.{ .ty = ty, .data = data });
     }
