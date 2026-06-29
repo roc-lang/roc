@@ -17,6 +17,7 @@ const erased_calls = @import("erased_calls.zig");
 const hv = @import("host_values.zig");
 const engine = @import("engine.zig");
 const spec_parser = @import("spec/spec_parser.zig");
+const benchmark = @import("bench/benchmark.zig");
 
 const enable_runtime_metrics = builtin.is_test or build_options.metrics;
 
@@ -130,21 +131,6 @@ pub const panic = std.debug.FullPanic(panicImpl);
 
 fn writeStderr(bytes: []const u8) void {
     std.Io.File.stderr().writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), bytes) catch {};
-}
-
-fn writeStdout(bytes: []const u8) void {
-    std.Io.File.stdout().writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), bytes) catch {};
-}
-
-fn printStdout(comptime fmt: []const u8, args: anytype) void {
-    var buf: [2048]u8 = undefined;
-    const out = std.fmt.bufPrint(&buf, fmt, args) catch return;
-    writeStdout(out);
-}
-
-fn benchmarkNowNs() u64 {
-    const ns = std.Io.Clock.awake.now(std.Io.Threaded.global_single_threaded.io()).nanoseconds;
-    return @intCast(@max(ns, 0));
 }
 
 fn panicImpl(msg: []const u8, addr: ?usize) noreturn {
@@ -365,6 +351,7 @@ const SpecCommand = spec_parser.SpecCommand;
 const ParseError = spec_parser.ParseError;
 const parseTestSpecFile = spec_parser.parseTestSpecFile;
 const freeSpecCommands = spec_parser.freeSpecCommands;
+const BenchmarkStats = benchmark.Stats;
 
 const TestState = struct {
     verbose: bool,
@@ -1622,19 +1609,6 @@ fn clearOwnedString(allocator: std.mem.Allocator, field: *?[]const u8) void {
     field.* = null;
 }
 
-const BenchmarkStats = struct {
-    init_roc_ns: u64 = 0,
-    init_apply_ns: u64 = 0,
-    dispatch_roc_ns: u64 = 0,
-    dispatch_apply_ns: u64 = 0,
-    actions: u64 = 0,
-    allocs: u64 = 0,
-    deallocs: u64 = 0,
-    retained_alloc_delta: i64 = 0,
-    commands: CommandCounts = .{},
-    metrics: RuntimeMetrics = zeroRuntimeMetrics(),
-};
-
 fn addRuntimeMetrics(left: RuntimeMetrics, right: RuntimeMetrics) RuntimeMetrics {
     return .{
         .active_graph_records_rebuilt = left.active_graph_records_rebuilt + right.active_graph_records_rebuilt,
@@ -2250,12 +2224,12 @@ fn renderActiveRootMeasured(host: *HostEnv, roc_host: *abi.RocHost, dirty_source
     errdefer next_stream.deinit(host.hostAllocator(), host, roc_host, &host.engine.pending_roc_metrics);
     host.collectActiveElemRootDescriptors(roc_host, &next_stream, root, dirty_source_node_ids);
 
-    const start_ns = benchmarkNowNs();
+    const start_ns = benchmark.nowNs();
     const counts = if (!host.engine.hasRenderRoot())
         applyNodeDescriptorStream(host, roc_host, &next_stream)
     else
         applyStructuralNodeDescriptorStream(host, roc_host, &next_stream);
-    const elapsed = benchmarkNowNs() - start_ns;
+    const elapsed = benchmark.nowNs() - start_ns;
     if (apply_ns) |ns| ns.* += elapsed;
     if (command_counts) |total| total.addAll(counts);
 
@@ -2294,12 +2268,12 @@ fn dispatchRocEventMeasured(host: *HostEnv, roc_host: *abi.RocHost, event_id: u6
     metrics.bump(.derived_calls_into_roc, 1);
     host.engine.pending_roc_metrics = metrics;
 
-    const start_ns = benchmarkNowNs();
+    const start_ns = benchmark.nowNs();
     const current = host.stateValueByNodeId(desc.target_node_id);
     const state_cap = host.stateCapability(desc.target_node_id);
     defer callHostValueToUnitWithCapability(host, roc_host, state_cap, hv.hostValueCapabilityDrop(state_cap), current);
     const next = callHostValueHostValueToHostValueWithCapabilities(host, roc_host, state_cap, payload_cap, desc.payload_reducer.transform, current, payload);
-    if (stats) |s| s.dispatch_roc_ns += benchmarkNowNs() - start_ns;
+    if (stats) |s| s.dispatch_roc_ns += benchmark.nowNs() - start_ns;
 
     const changed = host.updateStateValue(roc_host, desc.target_node_id, next);
     if (!changed) {
@@ -2319,17 +2293,17 @@ fn dispatchRocEventMeasured(host: *HostEnv, roc_host: *abi.RocHost, event_id: u6
         const dirty_structural_signals = collectDirtyStructuralSignals(host, roc_host, host.hostAllocator(), &dirty_source_node_ids, changed_record_ids, dirty_generation);
         defer host.hostAllocator().free(dirty_structural_signals);
         if (dirty_structural_signals.len != 0) {
-            const apply_start_ns = benchmarkNowNs();
+            const apply_start_ns = benchmark.nowNs();
             const sink_counts = applyDirtyRenderSinks(host, roc_host, &dirty_source_node_ids, changed_record_ids, dirty_generation);
             const counts = applyDirtyStructuralSignalsLocally(host, roc_host, &dirty_source_node_ids, dirty_generation, dirty_structural_signals);
-            s.dispatch_apply_ns += benchmarkNowNs() - apply_start_ns;
+            s.dispatch_apply_ns += benchmark.nowNs() - apply_start_ns;
             s.commands.addAll(sink_counts);
             s.commands.addAll(counts);
             finishHostMetrics(host);
         } else {
-            const apply_start_ns = benchmarkNowNs();
+            const apply_start_ns = benchmark.nowNs();
             const counts = applyDirtyRenderSinks(host, roc_host, &dirty_source_node_ids, changed_record_ids, dirty_generation);
-            s.dispatch_apply_ns += benchmarkNowNs() - apply_start_ns;
+            s.dispatch_apply_ns += benchmark.nowNs() - apply_start_ns;
             s.commands.addAll(counts);
             finishHostMetrics(host);
         }
@@ -2412,13 +2386,6 @@ fn pointerEventIdForCommand(elem: *const DomElement, cmd_type: SpecCommandType) 
     };
 }
 
-fn commandIsAction(cmd: SpecCommand) bool {
-    return switch (cmd.cmd_type) {
-        .click, .pointer_down, .pointer_up, .pointer_enter, .pointer_leave, .key_down, .submit, .fill, .check, .uncheck, .resolve_task, .reject_task, .tick_interval => true,
-        else => false,
-    };
-}
-
 fn runActionCommandMeasured(host: *HostEnv, roc_host: *abi.RocHost, cmd: SpecCommand, stats: *BenchmarkStats) void {
     switch (cmd.cmd_type) {
         .click => {
@@ -2472,9 +2439,9 @@ fn runActionCommandMeasured(host: *HostEnv, roc_host: *abi.RocHost, cmd: SpecCom
         .resolve_task, .reject_task => {
             const task_name = cmd.task_name orelse failHost("benchmark task command had no task name");
             const payload = cmd.expected_text orelse "";
-            const start_ns = benchmarkNowNs();
+            const start_ns = benchmark.nowNs();
             const counts = resolvePendingTask(host, roc_host, task_name, payload, cmd.cmd_type == .reject_task);
-            stats.dispatch_apply_ns += benchmarkNowNs() - start_ns;
+            stats.dispatch_apply_ns += benchmark.nowNs() - start_ns;
             stats.commands.addAll(counts);
             finishHostMetrics(host);
             stats.actions += 1;
@@ -2482,9 +2449,9 @@ fn runActionCommandMeasured(host: *HostEnv, roc_host: *abi.RocHost, cmd: SpecCom
 
         .tick_interval => {
             const period_ms = cmd.interval_ms orelse failHost("benchmark interval command had no period");
-            const start_ns = benchmarkNowNs();
+            const start_ns = benchmark.nowNs();
             const counts = tickIntervalSource(host, roc_host, period_ms);
-            stats.dispatch_apply_ns += benchmarkNowNs() - start_ns;
+            stats.dispatch_apply_ns += benchmark.nowNs() - start_ns;
             stats.commands.addAll(counts);
             finishHostMetrics(host);
             stats.actions += 1;
@@ -2503,13 +2470,13 @@ fn runBenchmarkIteration(commands: []const SpecCommand, verbose: bool, stats: *B
     current_host = &host_env;
     current_roc_host = &roc_host;
 
-    const init_start_ns = benchmarkNowNs();
+    const init_start_ns = benchmark.nowNs();
     const init_result = abi.roc_ui_init();
-    stats.init_roc_ns += benchmarkNowNs() - init_start_ns;
+    stats.init_roc_ns += benchmark.nowNs() - init_start_ns;
     acceptInitElemMeasured(&host_env, &roc_host, init_result, &stats.init_apply_ns, &stats.commands);
 
     for (commands) |cmd| {
-        if (commandIsAction(cmd)) {
+        if (benchmark.commandIsAction(cmd)) {
             runActionCommandMeasured(&host_env, &roc_host, cmd, stats);
         }
     }
@@ -2529,101 +2496,6 @@ fn runBenchmarkIteration(commands: []const SpecCommand, verbose: bool, stats: *B
     current_roc_host = null;
 }
 
-fn printBenchmarkHeader() void {
-    writeStdout("case,sample,iterations,actions,init_roc_ns,init_apply_ns,dispatch_roc_ns,dispatch_apply_ns,total_ns,allocs,deallocs,retained_alloc_delta,commands,reset_dom,create_element,append_child,remove_node,move_before,set_text,set_value,set_checked,set_disabled,set_metadata,bind_event,active_graph_records_rebuilt,stream_nodes_scanned,stream_nodes_scanned_apply,stream_nodes_scanned_children,stream_nodes_scanned_dirty_scope,stream_nodes_scanned_events,stream_nodes_scanned_mounts,stream_nodes_scanned_remove_target,stream_nodes_scanned_render_scope,stream_nodes_scanned_splice,signal_record_table_rebuilt,active_intervals_synced,render_indexes_refreshed,each_key_compares,each_key_hashes,each_key_reuse_compares,each_key_duplicate_compares,each_item_compares,each_syncs,each_sync_keys,each_sync_existing_rows,allocs_this_event,deallocs_this_event,host_allocs_this_event,host_deallocs_this_event,host_alloc_bytes_this_event,host_dealloc_bytes_this_event,events_processed,nodes_recomputed,propagation_prunes,derived_calls_into_roc,recompute_batches,patches_emitted,scopes_created,scopes_disposed,rows_reused,rows_created,rows_removed,closure_retains,closure_releases,metrics_retained_alloc_delta,host_retained_alloc_delta,host_retained_bytes_delta\n");
-}
-
-fn printBenchmarkRow(case_name: []const u8, sample: usize, iterations: usize, stats: BenchmarkStats) void {
-    const total_ns = stats.init_roc_ns + stats.init_apply_ns + stats.dispatch_roc_ns + stats.dispatch_apply_ns;
-    printStdout(
-        "{s},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},",
-        .{
-            case_name,
-            sample,
-            iterations,
-            stats.actions,
-            stats.init_roc_ns,
-            stats.init_apply_ns,
-            stats.dispatch_roc_ns,
-            stats.dispatch_apply_ns,
-            total_ns,
-            stats.allocs,
-            stats.deallocs,
-            stats.retained_alloc_delta,
-        },
-    );
-    printStdout(
-        "{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},",
-        .{
-            stats.commands.total,
-            stats.commands.reset_dom,
-            stats.commands.create_element,
-            stats.commands.append_child,
-            stats.commands.remove_node,
-            stats.commands.move_before,
-            stats.commands.set_text,
-            stats.commands.set_value,
-            stats.commands.set_checked,
-            stats.commands.set_disabled,
-            stats.commands.set_metadata,
-            stats.commands.bind_event,
-        },
-    );
-    printStdout(
-        "{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},",
-        .{
-            stats.metrics.active_graph_records_rebuilt,
-            stats.metrics.stream_nodes_scanned,
-            stats.metrics.stream_nodes_scanned_apply,
-            stats.metrics.stream_nodes_scanned_children,
-            stats.metrics.stream_nodes_scanned_dirty_scope,
-            stats.metrics.stream_nodes_scanned_events,
-            stats.metrics.stream_nodes_scanned_mounts,
-            stats.metrics.stream_nodes_scanned_remove_target,
-            stats.metrics.stream_nodes_scanned_render_scope,
-            stats.metrics.stream_nodes_scanned_splice,
-            stats.metrics.signal_record_table_rebuilt,
-            stats.metrics.active_intervals_synced,
-            stats.metrics.render_indexes_refreshed,
-            stats.metrics.each_key_compares,
-            stats.metrics.each_key_hashes,
-            stats.metrics.each_key_reuse_compares,
-            stats.metrics.each_key_duplicate_compares,
-            stats.metrics.each_item_compares,
-            stats.metrics.each_syncs,
-            stats.metrics.each_sync_keys,
-            stats.metrics.each_sync_existing_rows,
-        },
-    );
-    printStdout(
-        "{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d}\n",
-        .{
-            stats.metrics.allocs_this_event,
-            stats.metrics.deallocs_this_event,
-            stats.metrics.host_allocs_this_event,
-            stats.metrics.host_deallocs_this_event,
-            stats.metrics.host_alloc_bytes_this_event,
-            stats.metrics.host_dealloc_bytes_this_event,
-            stats.metrics.events_processed,
-            stats.metrics.nodes_recomputed,
-            stats.metrics.propagation_prunes,
-            stats.metrics.derived_calls_into_roc,
-            stats.metrics.recompute_batches,
-            stats.metrics.patches_emitted,
-            stats.metrics.scopes_created,
-            stats.metrics.scopes_disposed,
-            stats.metrics.rows_reused,
-            stats.metrics.rows_created,
-            stats.metrics.rows_removed,
-            stats.metrics.closure_retains,
-            stats.metrics.closure_releases,
-            stats.metrics.retained_alloc_delta,
-            stats.metrics.host_retained_alloc_delta,
-            stats.metrics.host_retained_bytes_delta,
-        },
-    );
-}
-
 fn runAppBenchmarks(spec_file: []const u8, case_name: []const u8, iterations: usize, samples: usize, verbose: bool) error{}!c_int {
     var bench_gpa = std.heap.DebugAllocator(.{ .safety = true }){};
     defer _ = bench_gpa.deinit();
@@ -2638,13 +2510,13 @@ fn runAppBenchmarks(spec_file: []const u8, case_name: []const u8, iterations: us
     };
     defer freeSpecCommands(allocator, commands);
 
-    printBenchmarkHeader();
+    benchmark.printHeader();
     for (0..samples) |sample| {
         var stats: BenchmarkStats = .{};
         for (0..iterations) |_| {
             runBenchmarkIteration(commands, verbose, &stats);
         }
-        printBenchmarkRow(case_name, sample, iterations, stats);
+        benchmark.printRow(case_name, sample, iterations, stats);
     }
 
     return 0;
