@@ -9724,24 +9724,17 @@ const CheckFrame = struct {
     env: *Env,
     expected: Expected,
     step: CheckStep,
-
-    // Captured by the shared prologue (.enter), reused by the shared epilogue (.exit):
-    expr_var: Var,
-    expr_var_raw: Var,
-    mb_anno_vars: ?AnnoVars,
-    should_generalize: bool,
-    hoist_guard: HoistFrameGuard,
-    prev_instantiation_source: ?CIR.Expr.Idx,
-    prev_discarded_binding_rhs_expr: ?CIR.Expr.Idx,
-    is_binding_rhs: bool,
-    binding_rhs_pattern: ?CIR.Pattern.Idx,
-    child_expected: Expected,
-
-    // Accumulated across children:
     does_fx: bool,
-
     kind_state: CheckKindState = .none,
+    // Filled in `.enter` by `checkEnterPrologue`, consumed in `.exit`:
+    prologue: ExprPrologue = undefined,
 };
+
+/// Construct a fresh `.enter` frame for `expr_idx`. Used for the root push and
+/// for scheduling each child of a migrated kind.
+fn makeEnterFrame(expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected) CheckFrame {
+    return .{ .expr_idx = expr_idx, .env = env, .expected = expected, .step = .enter, .does_fx = false };
+}
 
 /// Values produced by `checkEnterPrologue` that the expression switch body and
 /// `checkExitEpilogue` need. This struct exists solely to let the prologue and
@@ -11762,23 +11755,13 @@ fn checkExprIter(self: *Self, root_idx: CIR.Expr.Idx, root_env: *Env, root_expec
     const frame_base = self.check_frame_stack.items.len;
     var root_does_fx = false;
 
-    try self.check_frame_stack.append(self.gpa, .{
-        .expr_idx = root_idx,
-        .env = root_env,
-        .expected = root_expected,
-        .step = .enter,
-        .expr_var = undefined,
-        .expr_var_raw = undefined,
-        .mb_anno_vars = null,
-        .should_generalize = undefined,
-        .hoist_guard = undefined,
-        .prev_instantiation_source = undefined,
-        .prev_discarded_binding_rhs_expr = undefined,
-        .is_binding_rhs = undefined,
-        .binding_rhs_pattern = undefined,
-        .child_expected = undefined,
-        .does_fx = false,
-    });
+    // Re-entrancy safety: the frame stack is shared across nested checkExpr
+    // invocations and must return to `frame_base` on every exit. If any `try`
+    // below errors out, restore the high-water mark so a re-entrant caller sees
+    // a clean stack.
+    errdefer self.check_frame_stack.items.len = frame_base;
+
+    try self.check_frame_stack.append(self.gpa, makeEnterFrame(root_idx, root_env, root_expected));
 
     while (self.check_frame_stack.items.len > frame_base) {
         const top = self.check_frame_stack.items.len - 1;
@@ -11793,9 +11776,115 @@ fn checkExprIter(self: *Self, root_idx: CIR.Expr.Idx, root_env: *Env, root_expec
             continue;
         }
 
-        // Migrated kinds: dispatched by step. No kinds are migrated yet, so this
-        // is unreachable until the warm-up task adds the first one.
-        unreachable;
+        // Migrated kinds: dispatched by step.
+        switch (self.check_frame_stack.items[top].step) {
+            .enter => {
+                const frame = &self.check_frame_stack.items[top];
+                frame.prologue = try self.checkEnterPrologue(frame.expr_idx, frame.env, frame.expected);
+                switch (frame.prologue.expr) {
+                    .e_tuple_access => |ta| {
+                        frame.step = .exit;
+                        const child_expected = frame.prologue.child_expected;
+                        const child_env = frame.env;
+                        // Schedule the single child. NOTE: `append` may realloc
+                        // the backing array, invalidating `frame`; read the
+                        // values we need above and do not touch `frame` after.
+                        try self.check_frame_stack.append(self.gpa, makeEnterFrame(ta.tuple, child_env, child_expected));
+                    },
+                    else => unreachable, // gated by isMigratedKind
+                }
+            },
+            .exit => {
+                const f = &self.check_frame_stack.items[top];
+                switch (self.cir.store.getExpr(f.expr_idx)) {
+                    .e_tuple_access => |ta| {
+                        // POST-CHILD body, copied verbatim from the recursive
+                        // arm. The child's does_fx was already OR'd into
+                        // f.does_fx when the child frame popped.
+                        const tuple_var = ModuleEnv.varFrom(ta.tuple);
+                        const resolved = self.types.resolveVar(tuple_var);
+
+                        switch (resolved.desc.content) {
+                            .structure => |s| switch (s) {
+                                .tuple => |t| {
+                                    // Access the element at the given index
+                                    const elem_index = ta.elem_index;
+                                    const elems = self.types.sliceVars(t.elems);
+                                    if (elem_index < elems.len) {
+                                        const elem_var = elems[elem_index];
+                                        _ = try self.unify(f.prologue.expr_var, elem_var, f.env);
+                                    } else {
+                                        const min_elems = elem_index + 1;
+                                        const scratch_vars_top = self.scratch_vars.top();
+                                        defer self.scratch_vars.clearFrom(scratch_vars_top);
+
+                                        for (0..min_elems) |_| {
+                                            const fresh_var = try self.fresh(f.env, f.prologue.expr_region);
+                                            try self.scratch_vars.append(fresh_var);
+                                        }
+                                        const expected_elems = try self.types.appendVars(self.scratch_vars.sliceFromStart(scratch_vars_top));
+                                        const expected_tuple_var = try self.freshFromContent(.{ .structure = .{
+                                            .tuple = .{ .elems = expected_elems },
+                                        } }, f.env, f.prologue.expr_region);
+
+                                        _ = try self.unify(expected_tuple_var, tuple_var, f.env);
+                                        try self.unifyWith(f.prologue.expr_var, .err, f.env);
+                                    }
+                                },
+                                else => {
+                                    // Not a tuple - create a flex var with expected tuple constraint
+                                    // The elem_index + 1 gives us the minimum tuple size needed
+                                    const min_elems = ta.elem_index + 1;
+                                    const scratch_vars_top = self.scratch_vars.top();
+                                    defer self.scratch_vars.clearFrom(scratch_vars_top);
+
+                                    for (0..min_elems) |_| {
+                                        const fresh_var = try self.fresh(f.env, f.prologue.expr_region);
+                                        try self.scratch_vars.append(fresh_var);
+                                    }
+                                    const elem_vars = try self.types.appendVars(self.scratch_vars.sliceFromStart(scratch_vars_top));
+
+                                    const expected_tuple_var = try self.freshFromContent(.{ .structure = .{
+                                        .tuple = .{ .elems = elem_vars },
+                                    } }, f.env, f.prologue.expr_region);
+
+                                    // A non-tuple structure can never satisfy a tuple access,
+                                    // so this unify reports the mismatch. Poison the result to
+                                    // `.err` (like the out-of-bounds branch above) rather than
+                                    // leaving it a fresh flex var, so conflicting downstream
+                                    // uses of the result don't produce cascading errors.
+                                    _ = try self.unify(tuple_var, expected_tuple_var, f.env);
+                                    try self.unifyWith(f.prologue.expr_var, .err, f.env);
+                                },
+                            },
+                            .flex => {
+                                try self.pending_tuple_accesses.append(self.gpa, .{
+                                    .tuple_var = resolved.var_,
+                                    .result_var = f.prologue.expr_var,
+                                    .elem_index = ta.elem_index,
+                                    .region = f.prologue.expr_region,
+                                });
+                            },
+                            .err => {
+                                // Propagate error
+                                try self.unifyWith(f.prologue.expr_var, .err, f.env);
+                            },
+                            else => {
+                                // Not a tuple
+                                try self.unifyWith(f.prologue.expr_var, .err, f.env);
+                            },
+                        }
+                    },
+                    else => unreachable, // gated by isMigratedKind
+                }
+                const does_fx = try self.checkExitEpilogue(
+                    &self.check_frame_stack.items[top].prologue,
+                    self.check_frame_stack.items[top].env,
+                    self.check_frame_stack.items[top].does_fx,
+                );
+                self.finishFrameAndPropagate(top, frame_base, does_fx, &root_does_fx);
+            },
+        }
     }
 
     return root_does_fx;
@@ -11815,9 +11904,10 @@ fn finishFrameAndPropagate(self: *Self, top: usize, frame_base: usize, fx: bool,
 }
 
 /// True for expr kinds handled by the iterative driver. Grows as kinds migrate.
-/// Empty in this task → every kind passes through to checkExprRecursive.
+/// Unmigrated kinds pass through to checkExprRecursive via the escape hatch.
 fn isMigratedKind(expr: CIR.Expr) bool {
     return switch (expr) {
+        .e_tuple_access => true,
         else => false,
     };
 }

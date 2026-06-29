@@ -45,3 +45,14 @@ test "differential: simple module matches across recursive/iterative" {
         \\}
     );
 }
+
+test "differential: tuple access matches across recursive/iterative" {
+    try expectIterMatchesRecursive(
+        \\main! = |_args| {
+        \\    t = (1, "two", 3)
+        \\    a = t.0
+        \\    b = t.1
+        \\    (a, b)
+        \\}
+    );
+}
