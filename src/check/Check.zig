@@ -9743,20 +9743,40 @@ const CheckFrame = struct {
     kind_state: CheckKindState = .none,
 };
 
-fn checkExprRecursive(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected) std.mem.Allocator.Error!bool {
-    self.check_recursion_depth += 1;
-    defer self.check_recursion_depth -= 1;
-    if (self.check_recursion_depth > MAX_CHECK_RECURSION_DEPTH) return error.OutOfMemory;
+/// Values produced by `checkEnterPrologue` that the expression switch body and
+/// `checkExitEpilogue` need. This struct exists solely to let the prologue and
+/// epilogue live in their own functions while keeping the giant switch body
+/// byte-for-byte unchanged (it reads locals unpacked from this struct).
+const ExprPrologue = struct {
+    expr_idx: CIR.Expr.Idx,
+    expr: CIR.Expr,
+    expr_region: Region,
+    expr_var: Var,
+    expr_var_raw: Var,
+    mb_anno_vars: ?AnnoVars,
+    should_generalize: bool,
+    is_call_arg: bool,
+    is_immediate_callee: bool,
+    child_expected: Expected,
+    hoist_frame: HoistFrameGuard,
+    prev_instantiation_source: ?CIR.Expr.Idx,
+    prev_discarded_binding_rhs_expr: ?CIR.Expr.Idx,
+};
 
-    const trace = tracy.trace(@src());
-    defer trace.end();
-
+/// Prologue of `checkExprRecursive`: computes per-expression locals, sets the
+/// transient `self.*` checking flags, pushes the generalization rank, and begins
+/// the hoist frame. The three function-end `defer`s of the original prologue
+/// (restore `instantiation_source_expr`, restore `discarded_binding_rhs_expr`,
+/// the cycle-aware `popRank`) and the `hoist_frame.deinit()` defer are NOT
+/// installed here — they are run explicitly at the end of `checkExitEpilogue`.
+/// This is behavior-equivalent because `checkExprRecursive` has a single
+/// success exit and its only error is OOM (which aborts compilation).
+fn checkEnterPrologue(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected) std.mem.Allocator.Error!ExprPrologue {
     // Attribute any dispatcher instantiated while checking this expression to it,
     // so the ambiguity sweep can pinpoint the source of an unsatisfiable
     // body-forced where-clause. Restored on exit to track the innermost expr.
     const prev_instantiation_source = self.instantiation_source_expr;
     self.instantiation_source_expr = expr_idx;
-    defer self.instantiation_source_expr = prev_instantiation_source;
 
     const expr = self.cir.store.getExpr(expr_idx);
     const expr_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(expr_idx));
@@ -9789,32 +9809,14 @@ fn checkExprRecursive(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: 
             }
         }
     }
-    defer self.discarded_binding_rhs_expr = prev_discarded_binding_rhs_expr;
 
     // Decide whether this binding generalizes — see `shouldGeneralize` for the
     // three qualifying paths and why each is sound.
     const should_generalize = self.shouldGeneralize(expr, expected.annotation, is_binding_rhs, is_call_arg);
 
-    // Push/pop ranks based on if we should generalize
+    // Push the rank if we should generalize. The matching pop runs in
+    // `checkExitEpilogue`.
     if (should_generalize) try env.var_pool.pushRank();
-    defer if (should_generalize) {
-        // For an intermediate cycle participant's top-level lambda,
-        // don't pop: rank and vars are preserved for the caller to
-        // store and merge at the cycle root before generalization.
-        // Inner lambdas (rank > outermost+1) always pop normally.
-        const at_def_top_level = env.rank() == Rank.outermost.next();
-        const is_cycle_root = if (self.cycle_root_def) |root_def|
-            self.current_processing_def != null and root_def == self.current_processing_def.?
-        else
-            false;
-        const is_intermediate = self.cycle_root_def != null and !is_cycle_root;
-
-        if (is_intermediate and at_def_top_level) {
-            // Don't pop — vars will be merged by cycle root.
-        } else {
-            env.var_pool.popRank();
-        }
-    };
 
     try self.setVarRank(expr_var_raw, env);
 
@@ -9854,13 +9856,196 @@ fn checkExprRecursive(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: 
         }
     };
 
-    var does_fx = false; // Does this expression potentially perform any side effects?
     const child_expected = expected.forStatement();
     self.checking_binding_rhs_pattern = binding_rhs_pattern;
     errdefer self.checking_binding_rhs_pattern = null;
-    var hoist_frame = try self.beginHoistFrame(expr_idx, is_binding_rhs);
+    const hoist_frame = try self.beginHoistFrame(expr_idx, is_binding_rhs);
     self.checking_binding_rhs_pattern = null;
-    defer hoist_frame.deinit();
+
+    return .{
+        .expr_idx = expr_idx,
+        .expr = expr,
+        .expr_region = expr_region,
+        .expr_var = expr_var,
+        .expr_var_raw = expr_var_raw,
+        .mb_anno_vars = mb_anno_vars,
+        .should_generalize = should_generalize,
+        .is_call_arg = is_call_arg,
+        .is_immediate_callee = is_immediate_callee,
+        .child_expected = child_expected,
+        .hoist_frame = hoist_frame,
+        .prev_instantiation_source = prev_instantiation_source,
+        .prev_discarded_binding_rhs_expr = prev_discarded_binding_rhs_expr,
+    };
+}
+
+/// Epilogue of `checkExprRecursive`: annotation reconciliation, error tracking,
+/// static-dispatch constraints, cycle-aware generalization, and finishing the
+/// hoist frame. After the epilogue body it runs the prologue's deferred cleanups
+/// explicitly, in REVERSE declaration order (hoist-frame deinit, generalization
+/// `popRank`, restore `discarded_binding_rhs_expr`, restore
+/// `instantiation_source_expr`).
+fn checkExitEpilogue(self: *Self, p: *ExprPrologue, env: *Env, does_fx: bool) std.mem.Allocator.Error!bool {
+    const expr_idx = p.expr_idx;
+    const expr_var = p.expr_var;
+    const expr_var_raw = p.expr_var_raw;
+    const mb_anno_vars = p.mb_anno_vars;
+    const should_generalize = p.should_generalize;
+
+    // Check if we have an annotation
+    if (mb_anno_vars) |anno_vars| {
+        // Unify the anno with the expr var
+        _ = try self.unifyInContext(anno_vars.anno_var, expr_var, env, .type_annotation);
+
+        // Check if the expression type contains any errors anywhere in its
+        // structure. If it does and we have an annotation, use the annotation
+        // type for the pattern instead of the expression type. This preserves
+        // the annotation type for other code that references this identifier,
+        // even when the expression has errors.
+        //
+        // For example, if the annotation is `I64 -> Str` and the expression has
+        // an error in the return type (making it `I64 -> Error`), the pattern
+        // should still get `I64 -> Str` from the annotation.
+        self.var_set.clearRetainingCapacity();
+        if (try self.varContainsError(expr_var, &self.var_set)) {
+            // If there was an annotation AND the expr contains errors, then unify the
+            // raw expr var against the annotation
+            _ = try self.unify(expr_var_raw, anno_vars.anno_var_backup, env);
+        } else {
+            // Otherwise, make the explicit annotation the checked root for
+            // this expression. The body has already constrained the
+            // annotation's backing and any underscore variables above.
+            _ = try self.unify(expr_var_raw, anno_vars.anno_var, env);
+        }
+    }
+
+    self.var_set.clearRetainingCapacity();
+    if (mb_anno_vars == null) {
+        if (try self.varContainsError(expr_var, &self.var_set)) {
+            try self.erroneous_value_exprs.put(self.gpa, expr_idx, {});
+        }
+    }
+
+    // Check any accumulated static dispatch constraints
+    try self.checkStaticDispatchConstraints(env, false);
+
+    // If this type of expr should be generalized, generalize it!
+    if (should_generalize) {
+        const at_def_top_level = env.rank() == Rank.outermost.next();
+        const is_cycle_root = if (self.cycle_root_def) |root_def|
+            self.current_processing_def != null and root_def == self.current_processing_def.?
+        else
+            false;
+        const is_intermediate = self.cycle_root_def != null and !is_cycle_root;
+
+        if (is_cycle_root and at_def_top_level) {
+            // Cycle root's top-level lambda: merge all stored cycle envs,
+            // generalize, then run deferred unifications.
+            for (self.deferred_cycle_envs.items) |*deferred_env| {
+                std.debug.assert(deferred_env.rank() == Rank.outermost.next());
+                try env.var_pool.mergeFrom(&deferred_env.var_pool);
+            }
+
+            // Boundary defaulting must see the merged cycle vars but run
+            // BEFORE ranks are promoted to generalized.
+            try self.defaultLiteralsAtGeneralizationBoundary(expr_var, env);
+
+            try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank());
+
+            // Execute deferred def-level unifications (now safe since
+            // expr_vars are generalized and won't be lowered by Rank.min)
+            for (self.deferred_def_unifications.items) |u| {
+                _ = try self.unify(u.ptrn_var, u.expr_var, env);
+                _ = try self.unify(u.def_var, u.ptrn_var, env);
+            }
+            self.deferred_def_unifications.clearRetainingCapacity();
+
+            // Resolve eql constraints accumulated during cycle body checks
+            // (from .processing handlers). This must happen now — before
+            // subsequent defs use the generalized types — so that cross-
+            // function constraints are propagated into the generalized vars
+            // before instantiation creates independent copies.
+            try self.checkConstraints(env);
+
+            // Release stored envs back to pool
+            for (self.deferred_cycle_envs.items) |deferred_env| {
+                self.env_pool.release(deferred_env);
+            }
+            self.deferred_cycle_envs.clearRetainingCapacity();
+
+            self.cycle_root_def = null;
+            self.defer_generalize = false;
+        } else if (is_intermediate and at_def_top_level) {
+            // Intermediate's top-level lambda: skip generalization.
+            // Vars are preserved and will be merged by the cycle root.
+        } else {
+            // Normal generalization (no cycle, or inner lambda within a cycle participant).
+            // Boundary defaulting runs first: it must see ranks BEFORE they
+            // are promoted to generalized.
+            try self.defaultLiteralsAtGeneralizationBoundary(expr_var, env);
+            try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank());
+        }
+    }
+
+    try p.hoist_frame.finish(does_fx);
+
+    // Run the prologue's deferred cleanups explicitly, in reverse declaration
+    // order. (Original: these were function-end `defer`s that fired here.)
+    //
+    // 1) hoist-frame deinit (was `defer hoist_frame.deinit();`)
+    p.hoist_frame.deinit();
+
+    // 2) generalization rank pop (was the cycle-aware `defer if (should_generalize) {...}`)
+    if (should_generalize) {
+        // For an intermediate cycle participant's top-level lambda,
+        // don't pop: rank and vars are preserved for the caller to
+        // store and merge at the cycle root before generalization.
+        // Inner lambdas (rank > outermost+1) always pop normally.
+        const at_def_top_level = env.rank() == Rank.outermost.next();
+        const is_cycle_root = if (self.cycle_root_def) |root_def|
+            self.current_processing_def != null and root_def == self.current_processing_def.?
+        else
+            false;
+        const is_intermediate = self.cycle_root_def != null and !is_cycle_root;
+
+        if (is_intermediate and at_def_top_level) {
+            // Don't pop — vars will be merged by cycle root.
+        } else {
+            env.var_pool.popRank();
+        }
+    }
+
+    // 3) restore discarded-binding-rhs tracking (was `defer self.discarded_binding_rhs_expr = ...;`)
+    self.discarded_binding_rhs_expr = p.prev_discarded_binding_rhs_expr;
+
+    // 4) restore instantiation-source tracking (was `defer self.instantiation_source_expr = ...;`)
+    self.instantiation_source_expr = p.prev_instantiation_source;
+
+    return does_fx;
+}
+
+fn checkExprRecursive(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected) std.mem.Allocator.Error!bool {
+    self.check_recursion_depth += 1;
+    defer self.check_recursion_depth -= 1;
+    if (self.check_recursion_depth > MAX_CHECK_RECURSION_DEPTH) return error.OutOfMemory;
+
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
+    var p = try self.checkEnterPrologue(expr_idx, env, expected);
+    // Re-bind the locals the switch body uses below, preserving the exact names
+    // and const/var-ness they had before this extraction so the switch body is
+    // byte-for-byte unchanged. (`expr_var_raw`, `mb_anno_vars`'s backup,
+    // `should_generalize`, `hoist_frame`, and the restore-locals are read by
+    // `checkExitEpilogue` straight from `p`.)
+    const expr = p.expr;
+    const expr_region = p.expr_region;
+    const expr_var = p.expr_var;
+    const mb_anno_vars = p.mb_anno_vars;
+    const is_call_arg = p.is_call_arg;
+    const is_immediate_callee = p.is_immediate_callee;
+    const child_expected = p.child_expected;
+    var does_fx = false; // Does this expression potentially perform any side effects?
 
     switch (expr) {
         // str //
@@ -11564,103 +11749,7 @@ fn checkExprRecursive(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: 
         },
     }
 
-    // Check if we have an annotation
-    if (mb_anno_vars) |anno_vars| {
-        // Unify the anno with the expr var
-        _ = try self.unifyInContext(anno_vars.anno_var, expr_var, env, .type_annotation);
-
-        // Check if the expression type contains any errors anywhere in its
-        // structure. If it does and we have an annotation, use the annotation
-        // type for the pattern instead of the expression type. This preserves
-        // the annotation type for other code that references this identifier,
-        // even when the expression has errors.
-        //
-        // For example, if the annotation is `I64 -> Str` and the expression has
-        // an error in the return type (making it `I64 -> Error`), the pattern
-        // should still get `I64 -> Str` from the annotation.
-        self.var_set.clearRetainingCapacity();
-        if (try self.varContainsError(expr_var, &self.var_set)) {
-            // If there was an annotation AND the expr contains errors, then unify the
-            // raw expr var against the annotation
-            _ = try self.unify(expr_var_raw, anno_vars.anno_var_backup, env);
-        } else {
-            // Otherwise, make the explicit annotation the checked root for
-            // this expression. The body has already constrained the
-            // annotation's backing and any underscore variables above.
-            _ = try self.unify(expr_var_raw, anno_vars.anno_var, env);
-        }
-    }
-
-    self.var_set.clearRetainingCapacity();
-    if (mb_anno_vars == null) {
-        if (try self.varContainsError(expr_var, &self.var_set)) {
-            try self.erroneous_value_exprs.put(self.gpa, expr_idx, {});
-        }
-    }
-
-    // Check any accumulated static dispatch constraints
-    try self.checkStaticDispatchConstraints(env, false);
-
-    // If this type of expr should be generalized, generalize it!
-    if (should_generalize) {
-        const at_def_top_level = env.rank() == Rank.outermost.next();
-        const is_cycle_root = if (self.cycle_root_def) |root_def|
-            self.current_processing_def != null and root_def == self.current_processing_def.?
-        else
-            false;
-        const is_intermediate = self.cycle_root_def != null and !is_cycle_root;
-
-        if (is_cycle_root and at_def_top_level) {
-            // Cycle root's top-level lambda: merge all stored cycle envs,
-            // generalize, then run deferred unifications.
-            for (self.deferred_cycle_envs.items) |*deferred_env| {
-                std.debug.assert(deferred_env.rank() == Rank.outermost.next());
-                try env.var_pool.mergeFrom(&deferred_env.var_pool);
-            }
-
-            // Boundary defaulting must see the merged cycle vars but run
-            // BEFORE ranks are promoted to generalized.
-            try self.defaultLiteralsAtGeneralizationBoundary(expr_var, env);
-
-            try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank());
-
-            // Execute deferred def-level unifications (now safe since
-            // expr_vars are generalized and won't be lowered by Rank.min)
-            for (self.deferred_def_unifications.items) |u| {
-                _ = try self.unify(u.ptrn_var, u.expr_var, env);
-                _ = try self.unify(u.def_var, u.ptrn_var, env);
-            }
-            self.deferred_def_unifications.clearRetainingCapacity();
-
-            // Resolve eql constraints accumulated during cycle body checks
-            // (from .processing handlers). This must happen now — before
-            // subsequent defs use the generalized types — so that cross-
-            // function constraints are propagated into the generalized vars
-            // before instantiation creates independent copies.
-            try self.checkConstraints(env);
-
-            // Release stored envs back to pool
-            for (self.deferred_cycle_envs.items) |deferred_env| {
-                self.env_pool.release(deferred_env);
-            }
-            self.deferred_cycle_envs.clearRetainingCapacity();
-
-            self.cycle_root_def = null;
-            self.defer_generalize = false;
-        } else if (is_intermediate and at_def_top_level) {
-            // Intermediate's top-level lambda: skip generalization.
-            // Vars are preserved and will be merged by the cycle root.
-        } else {
-            // Normal generalization (no cycle, or inner lambda within a cycle participant).
-            // Boundary defaulting runs first: it must see ranks BEFORE they
-            // are promoted to generalized.
-            try self.defaultLiteralsAtGeneralizationBoundary(expr_var, env);
-            try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank());
-        }
-    }
-
-    try hoist_frame.finish(does_fx);
-    return does_fx;
+    return try self.checkExitEpilogue(&p, env, does_fx);
 }
 
 fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected) std.mem.Allocator.Error!bool {
