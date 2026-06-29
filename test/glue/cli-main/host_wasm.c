@@ -399,7 +399,7 @@ TryType2 roc_cli_many(
     __int128 arg9,
     float arg10,
     double arg11,
-    double arg12,
+    RocDec arg12,
     bool arg13,
     RocStr arg14) {
     (void)arg0;
@@ -428,7 +428,7 @@ CliHostNamedRecord roc_cli_shape(CircleOrEmptyOrRect arg0, AnonStruct22 arg1) {
     return (CliHostNamedRecord){{0}};
 }
 
-AnonStruct25 roc_cli_wide(double arg0, __int128 arg1, unsigned __int128 arg2) {
+AnonStruct25 roc_cli_wide(RocDec arg0, __int128 arg1, unsigned __int128 arg2) {
     (void)arg0;
     (void)arg1;
     (void)arg2;

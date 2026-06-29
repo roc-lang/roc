@@ -149,7 +149,8 @@ fn run_contract() {
     }
     expect_str(&err.message, b"bravo", "B.Result message mismatch");
 
-    if unsafe { abi::roc_dec(12.5) } != 12.5 {
+    let dec = abi::RocDec { num: 1_250_000_000_000_000_000i128 };
+    if unsafe { abi::roc_dec(dec) }.num != dec.num {
         fail("Dec identity mismatch");
     }
     if unsafe { abi::roc_i128(-123456789) } != -123456789 {

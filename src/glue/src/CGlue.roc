@@ -63,7 +63,7 @@ type_repr_to_c = |type_table, duplicate_record_names, duplicate_tag_names, type_
 		RocI128 => "__int128"
 		RocF32 => "float"
 		RocF64 => "double"
-		RocDec => "double"
+		RocDec => "RocDec"
 		RocList(_) => "RocList"
 		RocRecord(rec) =>
 			if rec.name == "" {
@@ -603,6 +603,8 @@ header_guard_bottom =
 
 core_types_section : Str
 core_types_section = {
+	roc_dec_def = "typedef struct {\n    __int128 num;\n} RocDec;\n\nROC_STATIC_ASSERT(sizeof(RocDec) == 16, \"RocDec must be sixteen bytes\");\nROC_STATIC_ASSERT(ROC_ALIGNOF(RocDec) == 16, \"RocDec must be 16-byte aligned\");\n\n"
+
 	roc_str_def = "typedef struct {\n    uint8_t* bytes;\n    size_t capacity_or_alloc_ptr;\n    size_t length;\n} RocStr;\n\nROC_STATIC_ASSERT(sizeof(RocStr) == 3 * sizeof(size_t), \"RocStr must be three pointer-sized words\");\nROC_STATIC_ASSERT(ROC_ALIGNOF(RocStr) == ROC_ALIGNOF(size_t), \"RocStr must be pointer-word aligned\");\n\n"
 
 	roc_list_def = "typedef struct {\n    void* elements;\n    size_t length;\n    size_t capacity_or_alloc_ptr;\n} RocList;\n\nROC_STATIC_ASSERT(sizeof(RocList) == 3 * sizeof(size_t), \"RocList must be three pointer-sized words\");\nROC_STATIC_ASSERT(ROC_ALIGNOF(RocList) == ROC_ALIGNOF(size_t), \"RocList must be pointer-word aligned\");\n\n"
@@ -622,7 +624,7 @@ core_types_section = {
 			.concat("static inline RocErasedCallablePayload* roc_erased_callable_payload_ptr(RocErasedCallable callable) {\n    return (RocErasedCallablePayload*)callable;\n}\n")
 			.concat("static inline uint8_t* roc_erased_callable_capture_ptr(RocErasedCallable callable) {\n    return callable == 0 ? 0 : callable + ROC_ERASED_CALLABLE_CAPTURE_OFFSET;\n}\n\n")
 
-	section("Core Roc Types", "${roc_str_def}${roc_list_def}${roc_box_def}${erased_callable_def}")
+	section("Core Roc Types", "${roc_dec_def}${roc_str_def}${roc_list_def}${roc_box_def}${erased_callable_def}")
 }
 
 hosted_fn_infrastructure : Str

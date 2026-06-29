@@ -102,7 +102,7 @@ type_repr_to_rust = |type_table, duplicate_names, preferred_names, type_id, type
 		RocI128 => "i128"
 		RocF32 => "f32"
 		RocF64 => "f64"
-		RocDec => "f64"
+		RocDec => "RocDec"
 		RocList(elem_id) =>
 			if is_type_refcounted(type_table, elem_id) {
 				"RocList<${type_id_to_rust(type_table, duplicate_names, preferred_names, elem_id)}>"
@@ -599,6 +599,18 @@ generate_rust_imports =
 ## Generate self-contained host ABI type definitions (matching roc_ops.rs)
 generate_host_abi_types_rust : Str
 generate_host_abi_types_rust =
+	\\/// Runtime representation of Roc's fixed-point `Dec` value.
+	\\///
+	\\/// `num` stores the decimal value scaled by 10^18.
+	\\#[repr(C)]
+	\\#[derive(Clone, Copy)]
+	\\pub struct RocDec {
+	\\    pub num: i128,
+	\\}
+	\\
+	\\const _: [(); 16] = [(); core::mem::size_of::<RocDec>()];
+	\\const _: [(); 16] = [(); core::mem::align_of::<RocDec>()];
+	\\
 	\\/// Runtime representation of an opaque `Box(T)` value.
 	\\pub type RocBox = *mut c_void;
 	\\

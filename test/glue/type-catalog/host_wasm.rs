@@ -152,9 +152,16 @@ fn run_contract() {
         fail("B.Result code mismatch");
     }
     expect_str(&err.message, b"bravo", "B.Result message mismatch");
-    // TODO(HARDEN_GLUE): Restore Dec/I128/U128 provided calls when wasm
-    // shared-output linking supports those scalar natural ABI roots. Native
-    // type-catalog runtime still executes them through main.roc.
+    let dec = abi::RocDec { num: 1_250_000_000_000_000_000i128 };
+    if unsafe { abi::roc_dec(dec) }.num != dec.num {
+        fail("Dec identity mismatch");
+    }
+    if unsafe { abi::roc_i128(-123456789) } != -123456789 {
+        fail("I128 identity mismatch");
+    }
+    if unsafe { abi::roc_u128(123456789) } != 123456789 {
+        fail("U128 identity mismatch");
+    }
 }
 
 #[no_mangle]

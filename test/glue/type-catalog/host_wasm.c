@@ -213,9 +213,16 @@ static void run_contract(void) {
         record_failure("B.Result message mismatch");
     }
 
-    /* TODO(HARDEN_GLUE): Restore Dec/I128/U128 provided calls when wasm
-       shared-output linking supports those scalar natural ABI roots. Native
-       type-catalog runtime still executes them through main.roc. */
+    RocDec dec = { .num = (__int128)1250000000000000000LL };
+    if (roc_dec(dec).num != dec.num) {
+        record_failure("Dec identity mismatch");
+    }
+    if (roc_i128((__int128)-123456789) != (__int128)-123456789) {
+        record_failure("I128 identity mismatch");
+    }
+    if (roc_u128((unsigned __int128)123456789u) != (unsigned __int128)123456789u) {
+        record_failure("U128 identity mismatch");
+    }
 }
 
 WASM_EXPORT("wasm_main")

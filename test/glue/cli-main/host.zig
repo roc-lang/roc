@@ -295,7 +295,7 @@ export fn roc_cli_many(
     arg9: i128,
     arg10: f32,
     arg11: f64,
-    arg12: f64,
+    arg12: abi.RocDec,
     arg13: bool,
     arg14: abi.RocStr,
 ) callconv(.c) abi.CliHostManyResult {
@@ -312,7 +312,7 @@ export fn roc_cli_shape(arg0: abi.CircleOrEmptyOrRect, arg1: abi.__AnonStruct22)
     return std.mem.zeroes(abi.CliHostNamedRecord);
 }
 
-export fn roc_cli_wide(arg0: f64, arg1: i128, arg2: u128) callconv(.c) abi.CliHostWide {
+export fn roc_cli_wide(arg0: abi.RocDec, arg1: i128, arg2: u128) callconv(.c) abi.CliHostWide {
     _ = .{ arg0, arg1, arg2 };
     contract_env.fail("roc_cli_wide was called", .{});
     return std.mem.zeroes(abi.CliHostWide);

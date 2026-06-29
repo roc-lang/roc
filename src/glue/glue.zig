@@ -1290,8 +1290,8 @@ const TypeTable = struct {
             .u8_, .i8_ => .{ .size = 1, .alignment = 1 },
             .u16_, .i16_ => .{ .size = 2, .alignment = 2 },
             .u32_, .i32_, .f32_ => .{ .size = 4, .alignment = 4 },
-            .u64_, .i64_, .f64_, .dec => .{ .size = 8, .alignment = 8 },
-            .u128_, .i128_ => .{ .size = 16, .alignment = 16 },
+            .u64_, .i64_, .f64_ => .{ .size = 8, .alignment = 8 },
+            .u128_, .i128_, .dec => .{ .size = 16, .alignment = 16 },
             .str_ => .{ .size = ptr_size * 3, .alignment = ptr_alignment },
             .list => .{ .size = ptr_size * 3, .alignment = ptr_alignment },
             .unit => .{ .size = 0, .alignment = 0 },
@@ -1318,8 +1318,8 @@ const TypeTable = struct {
             .bool_, .u8_, .i8_, .unit, .unknown => .align_1,
             .u16_, .i16_ => .align_2,
             .u32_, .i32_, .f32_ => .align_4,
-            .u64_, .i64_, .f64_, .dec => .align_8,
-            .u128_, .i128_ => .align_16,
+            .u64_, .i64_, .f64_ => .align_8,
+            .u128_, .i128_, .dec => .align_16,
             .box, .str_, .list, .function => .pointer,
             .record => |rec| blk: {
                 var key: layout.SortKey = .align_1;

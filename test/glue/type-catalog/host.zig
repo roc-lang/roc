@@ -148,7 +148,8 @@ fn runContract() void {
     if (b_payload.@"code" != 5) fail("B.Result code mismatch", .{});
     expectStr(&b_payload.@"message", "bravo", "B.Result message");
 
-    if (abi.roc_dec(12.5) != 12.5) fail("Dec identity mismatch", .{});
+    const dec = abi.RocDec{ .num = 1_250_000_000_000_000_000 };
+    if (abi.roc_dec(dec).num != dec.num) fail("Dec identity mismatch", .{});
     if (abi.roc_i128(-123456789) != -123456789) fail("I128 identity mismatch", .{});
     if (abi.roc_u128(123456789) != 123456789) fail("U128 identity mismatch", .{});
 

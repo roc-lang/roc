@@ -273,7 +273,6 @@ const GlueRuntimePlatform = struct {
     name: []const u8,
     dir_path: []const u8,
     platform_file: []const u8,
-    wasm_platform_file: ?[]const u8 = null,
     app_file: []const u8,
     module_files: []const []const u8,
 };
@@ -297,7 +296,6 @@ const glue_runtime_platforms = [_]GlueRuntimePlatform{
         .name = "type-catalog",
         .dir_path = "test/glue/type-catalog",
         .platform_file = "main.roc",
-        .wasm_platform_file = "main_wasm.roc",
         .app_file = "contract.roc",
         .module_files = &.{ "A.roc", "B.roc", "Catalog.roc", "CatalogHost.roc" },
     },
@@ -4698,10 +4696,7 @@ fn runGlueRuntimeCase(
         .wasm32 => "wasm32",
     };
     const host_file_name = glueRuntimeHostFileName(runtime.language, runtime.target);
-    const platform_source_file = switch (runtime.target) {
-        .native => runtime.platform.platform_file,
-        .wasm32 => runtime.platform.wasm_platform_file orelse runtime.platform.platform_file,
-    };
+    const platform_source_file = runtime.platform.platform_file;
 
     var env = buildCaseEnv(io, allocator) catch
         return .{ .status = .infra_error, .phase = .setup, .duration_ns = timer.read(), .message = "failed to create test environment" };

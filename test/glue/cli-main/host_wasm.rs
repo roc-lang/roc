@@ -374,7 +374,7 @@ pub extern "C" fn roc_cli_many(
     arg9: i128,
     arg10: f32,
     arg11: f64,
-    arg12: f64,
+    arg12: abi::RocDec,
     arg13: bool,
     arg14: abi::RocStr,
 ) -> abi::CliHostManyResult {
@@ -394,7 +394,7 @@ pub extern "C" fn roc_cli_shape(arg0: abi::CircleOrEmptyOrRect, arg1: abi::AnonS
 }
 
 #[no_mangle]
-pub extern "C" fn roc_cli_wide(arg0: f64, arg1: i128, arg2: u128) -> abi::CliHostWideRetRecord {
+pub extern "C" fn roc_cli_wide(arg0: abi::RocDec, arg1: i128, arg2: u128) -> abi::CliHostWideRetRecord {
     let _ = (arg0, arg1, arg2);
     env_mut().fail(format_args!("roc_cli_wide was called"));
     unsafe { core::mem::zeroed() }

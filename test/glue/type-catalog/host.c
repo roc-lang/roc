@@ -168,7 +168,8 @@ static void run_contract(void) {
         record_failure("B.Result message mismatch");
     }
 
-    if (roc_dec(12.5) != 12.5) {
+    RocDec dec = { .num = (__int128)1250000000000000000LL };
+    if (roc_dec(dec).num != dec.num) {
         record_failure("Dec identity mismatch");
     }
     if (roc_i128((__int128)-123456789) != (__int128)-123456789) {

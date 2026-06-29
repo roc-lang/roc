@@ -34,6 +34,13 @@ extern "C" {
 // Core Roc Types
 
 typedef struct {
+    __int128 num;
+} RocDec;
+
+ROC_STATIC_ASSERT(sizeof(RocDec) == 16, "RocDec must be sixteen bytes");
+ROC_STATIC_ASSERT(ROC_ALIGNOF(RocDec) == 16, "RocDec must be 16-byte aligned");
+
+typedef struct {
     uint8_t* bytes;
     size_t capacity_or_alloc_ptr;
     size_t length;

@@ -116,9 +116,10 @@ fn runContract() void {
     const b_payload = result_b.payload_err();
     if (b_payload.@"code" != 5) fail("B.Result code mismatch", .{});
     expectStr(&b_payload.@"message", "bravo", "B.Result message");
-    // TODO(HARDEN_GLUE): Restore Dec/I128/U128 provided calls when wasm
-    // shared-output linking supports those scalar natural ABI roots. Native
-    // type-catalog runtime still executes them through main.roc.
+    const dec = abi.RocDec{ .num = 1_250_000_000_000_000_000 };
+    if (abi.roc_dec(dec).num != dec.num) fail("Dec identity mismatch", .{});
+    if (abi.roc_i128(-123456789) != -123456789) fail("I128 identity mismatch", .{});
+    if (abi.roc_u128(123456789) != 123456789) fail("U128 identity mismatch", .{});
     result_a.decref(&roc_host);
     result_b.decref(&roc_host);
     structural.decref(&roc_host);

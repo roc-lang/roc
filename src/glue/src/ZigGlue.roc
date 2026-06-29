@@ -211,7 +211,7 @@ type_repr_to_zig = |type_table, duplicate_tag_names, preferred_names, type_id, t
 		RocI128 => "i128"
 		RocF32 => "f32"
 		RocF64 => "f64"
-		RocDec => "f64"
+		RocDec => "RocDec"
 		RocList(elem_id) =>
 			if is_type_refcounted(type_table, elem_id) {
 				"RocList(${type_id_to_zig(type_table, duplicate_tag_names, preferred_names, elem_id)})"
@@ -1233,6 +1233,18 @@ generate_imports =
 ## Generate self-contained host ABI type definitions
 generate_host_abi_types : Str
 generate_host_abi_types =
+	\\/// Runtime representation of Roc's fixed-point `Dec` value.
+	\\///
+	\\/// `num` stores the decimal value scaled by 10^18.
+	\\pub const RocDec = extern struct {
+	\\    num: i128,
+	\\};
+	\\
+	\\comptime {
+	\\    if (@sizeOf(RocDec) != 16) @compileError("RocDec size mismatch");
+	\\    if (@alignOf(RocDec) != 16) @compileError("RocDec alignment mismatch");
+	\\}
+	\\
 	\\/// Runtime representation of an opaque `Box(T)` value.
 	\\pub const RocBox = ?*anyopaque;
 	\\
