@@ -3479,15 +3479,15 @@ pub fn Engine(comptime Ctx: type) type {
         }
 
         fn buildReplacementTargetScopeSet(self: *Self, ctx: Ctx.Handle, target: HostStructuralReplacementTarget) []const bool {
-            if (self.scratch.replacement_target_scopes.items.len != 0) @panic("replacement target scope scratch was already active");
-            const allocator = Ctx.allocator(ctx);
-            self.scratch.replacement_target_scopes.resize(allocator, self.scopes.items.len) catch @panic("out of memory");
-            const target_scopes = self.scratch.replacement_target_scopes.items;
-            for (self.scopes.items) |scope| {
-                if (scope.scope_id >= target_scopes.len) @panic("scope descriptor id exceeded replacement target set");
-                target_scopes[@intCast(scope.scope_id)] = self.scopeIsInReplacementTarget(scope.scope_id, target);
-            }
-            return target_scopes;
+            const TargetLookup = struct {
+                engine: *Self,
+
+                pub fn scopeIsInTarget(self_lookup: *@This(), scope_id: u64, replacement_target: HostStructuralReplacementTarget) bool {
+                    return self_lookup.engine.scopeIsInReplacementTarget(scope_id, replacement_target);
+                }
+            };
+            var lookup = TargetLookup{ .engine = self };
+            return structural_splice.buildTargetScopeSet(HostScope, Ctx.allocator(ctx), &self.scratch.replacement_target_scopes, self.scopes.items, target, &lookup);
         }
 
         pub fn renderNodeInReplacementTarget(self: *Self, stream: *const HostNodeDescriptorStream, node: HostRenderNode, target: HostStructuralReplacementTarget) bool {

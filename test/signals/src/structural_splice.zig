@@ -100,6 +100,17 @@ pub fn appendEventRemovalIndexes(allocator: std.mem.Allocator, indexes: *std.Arr
     appendRemovalIndex(allocator, indexes, events.pointer_leave);
 }
 
+pub fn buildTargetScopeSet(comptime Scope: type, allocator: std.mem.Allocator, scratch: *std.ArrayListUnmanaged(bool), scopes: []const Scope, target: ReplacementTarget, lookup: anytype) []const bool {
+    if (scratch.items.len != 0) @panic("replacement target scope scratch was already active");
+    scratch.resize(allocator, scopes.len) catch @panic("out of memory");
+    const target_scopes = scratch.items;
+    for (scopes) |scope| {
+        if (scope.scope_id >= target_scopes.len) @panic("scope descriptor id exceeded replacement target set");
+        target_scopes[@intCast(scope.scope_id)] = lookup.scopeIsInTarget(scope.scope_id, target);
+    }
+    return target_scopes;
+}
+
 pub fn collectRenderRemovalScan(comptime Stream: type, allocator: std.mem.Allocator, stream: *const Stream, render_insert_index: usize, target_scopes: []const bool) RenderRemovalScan {
     if (render_insert_index > stream.render_nodes.items.len) @panic("structural replacement render insertion point is outside the active stream");
 
@@ -214,6 +225,27 @@ test "structural splice collects removal indexes" {
 
     try std.testing.expectEqualSlices(usize, &.{ 7, 3, 1 }, indexes.items);
     try std.testing.expect(scopeIsInTargetSet(&.{ false, true, false }, 1));
+}
+
+test "structural splice builds target scope set through explicit lookup" {
+    const TestScope = struct {
+        scope_id: u64,
+    };
+    const Lookup = struct {
+        pub fn scopeIsInTarget(_: @This(), scope_id: u64, target: ReplacementTarget) bool {
+            return switch (target) {
+                .scope => |root_scope_id| scope_id >= root_scope_id,
+                .each_site => false,
+            };
+        }
+    };
+
+    var scratch: std.ArrayListUnmanaged(bool) = .empty;
+    defer scratch.deinit(std.testing.allocator);
+    const scopes = [_]TestScope{ .{ .scope_id = 0 }, .{ .scope_id = 1 }, .{ .scope_id = 2 } };
+
+    const target_scopes = buildTargetScopeSet(TestScope, std.testing.allocator, &scratch, scopes[0..], .{ .scope = 1 }, Lookup{});
+    try std.testing.expectEqualSlices(bool, &.{ false, true, true }, target_scopes);
 }
 
 const TestStream = struct {
