@@ -1669,6 +1669,47 @@ pub fn Engine(comptime Ctx: type) type {
             }
         };
 
+        const ScopeDisposal = struct {
+            engine: *Self,
+            ctx: Ctx.Handle,
+            roc_host: *abi.RocHost,
+
+            pub fn deactivateNodeIdentities(self: *@This(), scope_id: u64) void {
+                var identity_deactivation = ScopeIdentityDeactivation{ .engine = self.engine, .ctx = self.ctx, .roc_host = self.roc_host };
+                identity_table.deactivateNodesInScope(&self.engine.node_identities, scope_id, &identity_deactivation);
+            }
+
+            pub fn appendCleanupEvents(self: *@This(), scope_id: u64) void {
+                for (self.engine.active_stream.cleanups.items) |cleanup| {
+                    if (cleanup.scope_id == scope_id) {
+                        self.engine.appendCleanupEvent(self.ctx, cleanup.name);
+                    }
+                }
+            }
+
+            pub fn cancelPendingTasks(self: *@This(), scope_id: u64) void {
+                self.engine.cancelPendingTasksInScopeSubtree(self.ctx, scope_id);
+            }
+
+            pub fn deactivateDomIdentities(self: *@This(), scope_id: u64) void {
+                identity_table.deactivateDomsInScope(&self.engine.dom_identities, scope_id);
+            }
+
+            pub fn removeEachRow(self: *@This(), scope_id: u64, key_hash: u64) void {
+                self.engine.removeEachRowFromSiteIndex(scope_id, key_hash);
+            }
+
+            pub fn deinitScopeStep(self: *@This(), step: *HostScopeStep) void {
+                deinitHostScopeStep(step, self.ctx, self.roc_host, &self.engine.pending_roc_metrics);
+            }
+
+            pub fn recordScopeDisposed(self: *@This()) void {
+                var metrics = self.engine.pending_roc_metrics;
+                metrics.bump(.scopes_disposed, 1);
+                self.engine.pending_roc_metrics = metrics;
+            }
+        };
+
         pub fn init() Self {
             return .{};
         }
@@ -2871,40 +2912,8 @@ pub fn Engine(comptime Ctx: type) type {
         }
 
         pub fn disposeScopeSubtree(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, scope_id: u64) void {
-            self.validateScopeId(scope_id) catch @panic("scope id has no host scope descriptor");
-
-            var child_index: usize = 0;
-            while (child_index < self.scopes.items.len) : (child_index += 1) {
-                const child = self.scopes.items[child_index];
-                if (!child.active) continue;
-                if (child.parent_scope_id == scope_id) {
-                    self.disposeScopeSubtree(ctx, roc_host, child.scope_id);
-                }
-            }
-
-            var identity_deactivation = ScopeIdentityDeactivation{ .engine = self, .ctx = ctx, .roc_host = roc_host };
-            identity_table.deactivateNodesInScope(&self.node_identities, scope_id, &identity_deactivation);
-
-            for (self.active_stream.cleanups.items) |cleanup| {
-                if (cleanup.scope_id == scope_id) {
-                    self.appendCleanupEvent(ctx, cleanup.name);
-                }
-            }
-
-            self.cancelPendingTasksInScopeSubtree(ctx, scope_id);
-
-            identity_table.deactivateDomsInScope(&self.dom_identities, scope_id);
-
-            const scope = &self.scopes.items[@intCast(scope_id)];
-            switch (scope.step) {
-                .each_row => |row| self.removeEachRowFromSiteIndex(scope.scope_id, row.key_hash),
-                .root, .component, .when_branch => {},
-            }
-            deinitHostScopeStep(&scope.step, ctx, roc_host, &self.pending_roc_metrics);
-            scope.active = false;
-            var metrics = self.pending_roc_metrics;
-            metrics.bump(.scopes_disposed, 1);
-            self.pending_roc_metrics = metrics;
+            var disposal = ScopeDisposal{ .engine = self, .ctx = ctx, .roc_host = roc_host };
+            scope_runtime.disposeSubtree(HostEachRowScopeStep, self.scopes.items, scope_id, &disposal);
         }
 
         pub fn createEachRowScope(self: *Self, ctx: Ctx.Handle, parent_scope_id: u64, site_ordinal: u64, key_hash: u64, key: HostValue, item: HostValue, key_cap: HostValueCapability, item_cap: HostValueCapability) u64 {
