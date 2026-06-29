@@ -30,6 +30,7 @@ const active_graph = @import("active_signal_graph.zig");
 const scope_runtime = @import("scope_runtime.zig");
 const each_runtime = @import("each_runtime.zig");
 const effects_runtime = @import("effects_runtime.zig");
+const structural_splice = @import("structural_splice.zig");
 
 const enable_runtime_metrics = engine_metrics.enable_runtime_metrics;
 
@@ -214,37 +215,10 @@ pub const HostActiveStructuralSignal = active_graph.StructuralSink;
 pub const HostDirtyStructuralSignal = active_graph.DirtyStructuralSignal;
 
 pub const HostEachSite = scope_runtime.EachSite;
-
-pub const HostStructuralReplacementTarget = union(enum) {
-    scope: u64,
-    each_site: HostEachSite,
-};
-
-pub const HostStructuralPatchTargets = struct {
-    removed: HostStructuralReplacementTarget,
-    replacement: HostStructuralReplacementTarget,
-};
-
-pub const HostStructuralSplice = struct {
-    removed_elem_ids: []u64,
-    touched_parent_ids: []u64,
-    replacement_elem_ids: []u64,
-    replacement_on_change_indices: []usize,
-    replacement_mount_indices: []usize,
-
-    pub fn deinit(self: HostStructuralSplice, allocator: std.mem.Allocator) void {
-        allocator.free(self.removed_elem_ids);
-        allocator.free(self.touched_parent_ids);
-        allocator.free(self.replacement_elem_ids);
-        allocator.free(self.replacement_on_change_indices);
-        allocator.free(self.replacement_mount_indices);
-    }
-};
-
-pub const HostStructuralSpliceAndTargets = struct {
-    splice: HostStructuralSplice,
-    targets: HostStructuralPatchTargets,
-};
+pub const HostStructuralReplacementTarget = structural_splice.ReplacementTarget;
+pub const HostStructuralPatchTargets = structural_splice.PatchTargets;
+pub const HostStructuralSplice = structural_splice.Splice;
+pub const HostStructuralSpliceAndTargets = structural_splice.SpliceAndTargets;
 
 pub const RecomputeApplyOutcome = struct {
     structural_render_required: bool,
