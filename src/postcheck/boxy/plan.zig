@@ -18,12 +18,35 @@ const StaticDispatchOrigin = @TypeOf(@as(checked.CheckedStaticDispatchConstraint
 const NumeralInfo = std.meta.Child(@TypeOf(@as(checked.CheckedStaticDispatchConstraint, undefined).num_literal));
 
 const empty_interface_capabilities = checked.ModuleInterfaceCapabilities{};
+const empty_resolved_value_refs = checked.ResolvedValueRefTable{};
+const empty_checked_procedure_templates = checked.CheckedProcedureTemplateTable{};
+const empty_top_level_procedure_bindings = checked.TopLevelProcedureBindingTable{};
 
 pub const TypeRepId = enum(u32) { _ };
 pub const RootPlanId = enum(u32) { _ };
 pub const WorkerPlanId = enum(u32) { _ };
 pub const DescriptorRequirementId = enum(u32) { _ };
 pub const DictionaryRequirementId = enum(u32) { _ };
+
+pub const TypeRef = struct {
+    module: checked.ModuleId = .{},
+    ty: checked.CheckedTypeId,
+};
+
+pub const ExprRef = struct {
+    module: checked.ModuleId = .{},
+    expr: checked.CheckedExprId,
+};
+
+const PatternRef = struct {
+    module: checked.ModuleId = .{},
+    pattern: checked.CheckedPatternId,
+};
+
+const StatementRef = struct {
+    module: checked.ModuleId = .{},
+    statement: checked.CheckedStatementId,
+};
 
 pub const Span = extern struct {
     start: u32 = 0,
@@ -85,7 +108,7 @@ pub const ChildRole = union(enum) {
 
 pub const RepChild = struct {
     role: ChildRole,
-    source_type: checked.CheckedTypeId,
+    source_type: TypeRef,
     rep: TypeRepId,
 };
 
@@ -96,18 +119,18 @@ pub const TagVariant = struct {
 
 pub const DeclaredField = struct {
     index: u16,
-    source_type: checked.CheckedTypeId,
+    source_type: TypeRef,
     rep: TypeRepId,
     is_padding: bool = false,
 };
 
 pub const TypeRepBinding = struct {
-    source_type: checked.CheckedTypeId,
+    source_type: TypeRef,
     rep: TypeRepId,
 };
 
 pub const TypeRepresentation = struct {
-    source_type: checked.CheckedTypeId,
+    source_type: TypeRef,
     kind: RepresentationKind,
     children: Span = .{},
     tag_variants: Span = .{},
@@ -125,16 +148,16 @@ pub const DescriptorReason = enum {
 };
 
 pub const DescriptorRequirement = struct {
-    source_type: checked.CheckedTypeId,
+    source_type: TypeRef,
     rep: TypeRepId,
     reason: DescriptorReason,
 };
 
 pub const DictionaryRequirement = struct {
-    source_type: checked.CheckedTypeId,
+    source_type: TypeRef,
     constraint_index: u32,
     fn_name: MethodNameId,
-    fn_ty: checked.CheckedTypeId,
+    fn_ty: TypeRef,
     origin: StaticDispatchOrigin,
     binop_negated: bool,
     num_literal: ?NumeralInfo,
@@ -147,7 +170,7 @@ pub const RootWrapperKind = enum {
 
 pub const WorkerSource = union(enum) {
     procedure_template: canonical.ProcedureTemplateRef,
-    procedure_binding: checked.TopLevelProcedureBindingRef,
+    procedure_binding: checked.ArtifactTopLevelProcedureBindingRef,
     procedure_use: checked.ProcedureUseTemplate,
 };
 
@@ -155,12 +178,12 @@ pub const WorkerPlan = struct {
     id: WorkerPlanId,
     root_request: ?checked.RootRequest = null,
     source: WorkerSource,
-    checked_type: checked.CheckedTypeId,
+    checked_type: TypeRef,
     rep: TypeRepId,
 };
 
 pub const DirectCallPlan = struct {
-    call: checked.CheckedExprId,
+    call: ExprRef,
     worker: WorkerPlanId,
 };
 
@@ -169,7 +192,7 @@ pub const RootPlan = struct {
     request: checked.RootRequest,
     worker: WorkerPlanId,
     wrapper_kind: RootWrapperKind,
-    host_type: checked.CheckedTypeId,
+    host_type: TypeRef,
     host_rep: TypeRepId,
     worker_rep: TypeRepId,
 };
@@ -236,16 +259,16 @@ pub const ProgramPlan = struct {
         return self.dictionaries.items[span.start .. span.start + span.len];
     }
 
-    pub fn directWorkerForCall(self: *const ProgramPlan, call: checked.CheckedExprId) ?WorkerPlanId {
+    pub fn directWorkerForCall(self: *const ProgramPlan, call: ExprRef) ?WorkerPlanId {
         for (self.direct_calls.items) |direct| {
-            if (direct.call == call) return direct.worker;
+            if (exprRefEql(direct.call, call)) return direct.worker;
         }
         return null;
     }
 
-    pub fn repForSourceType(self: *const ProgramPlan, source_type: checked.CheckedTypeId) ?TypeRepId {
+    pub fn repForSourceType(self: *const ProgramPlan, source_type: TypeRef) ?TypeRepId {
         for (self.type_reps.items) |binding| {
-            if (binding.source_type == source_type) return binding.rep;
+            if (typeRefEql(binding.source_type, source_type)) return binding.rep;
         }
         return null;
     }
@@ -257,6 +280,11 @@ pub const ModuleView = struct {
     key: checked.ModuleId = .{},
     canonical_names: ?*const canonical.CanonicalNameStore = null,
     checked_types: checked.CheckedTypeStoreView,
+    checked_bodies: checked.CheckedBodyStoreView = .{},
+    resolved_value_refs: *const checked.ResolvedValueRefTable = &empty_resolved_value_refs,
+    checked_procedure_templates: *const checked.CheckedProcedureTemplateTable = &empty_checked_procedure_templates,
+    top_level_procedure_bindings: *const checked.TopLevelProcedureBindingTable = &empty_top_level_procedure_bindings,
+    exported_procedure_bindings: checked.ExportedProcedureBindingView = .{},
     interface_capabilities: *const checked.ModuleInterfaceCapabilities = &empty_interface_capabilities,
 };
 
@@ -282,7 +310,7 @@ pub fn analyzeProgram(
         try builder.analyzeRoot(root);
     }
     for (input.layout_requests) |layout_request| {
-        try builder.plan.root_reps.append(allocator, try builder.analyzeType(layout_request));
+        try builder.plan.root_reps.append(allocator, try builder.analyzeType(builder.root_view, layout_request));
     }
 
     builder.propagateDynamicRequirements();
@@ -313,10 +341,10 @@ const Builder = struct {
     imports: []const checked.ImportedModuleView,
     relation_modules: []const checked.ImportedModuleView,
     plan: ProgramPlan,
-    by_type: std.AutoHashMap(checked.CheckedTypeId, TypeRepId),
-    body_exprs_seen: std.AutoHashMap(checked.CheckedExprId, void),
-    body_patterns_seen: std.AutoHashMap(checked.CheckedPatternId, void),
-    body_statements_seen: std.AutoHashMap(checked.CheckedStatementId, void),
+    by_type: std.AutoHashMap(TypeRef, TypeRepId),
+    body_exprs_seen: std.AutoHashMap(ExprRef, void),
+    body_patterns_seen: std.AutoHashMap(PatternRef, void),
+    body_statements_seen: std.AutoHashMap(StatementRef, void),
 
     fn init(allocator: Allocator, input: ProgramInput) Builder {
         const root_view = if (input.root_view) |root_view|
@@ -334,10 +362,10 @@ const Builder = struct {
             .imports = if (input.root_module != null) input.imports else &.{},
             .relation_modules = if (input.root_module) |root_module| root_module.relation_modules else &.{},
             .plan = ProgramPlan.init(allocator),
-            .by_type = std.AutoHashMap(checked.CheckedTypeId, TypeRepId).init(allocator),
-            .body_exprs_seen = std.AutoHashMap(checked.CheckedExprId, void).init(allocator),
-            .body_patterns_seen = std.AutoHashMap(checked.CheckedPatternId, void).init(allocator),
-            .body_statements_seen = std.AutoHashMap(checked.CheckedStatementId, void).init(allocator),
+            .by_type = std.AutoHashMap(TypeRef, TypeRepId).init(allocator),
+            .body_exprs_seen = std.AutoHashMap(ExprRef, void).init(allocator),
+            .body_patterns_seen = std.AutoHashMap(PatternRef, void).init(allocator),
+            .body_statements_seen = std.AutoHashMap(StatementRef, void).init(allocator),
         };
     }
 
@@ -363,21 +391,16 @@ const Builder = struct {
         boxyPlanInvariant("checked nominal representation referenced a module outside boxy planner input");
     }
 
-    fn typeInRootView(
-        self: *Builder,
-        source_view: ModuleView,
-        source_ty: checked.CheckedTypeId,
-    ) Allocator.Error!checked.CheckedTypeId {
-        if (moduleKeyEqual(source_view.key, self.root_view.key)) return source_ty;
-        return self.root_view.checked_types.rootForKey(source_view.checked_types.rootKey(source_ty)) orelse
-            boxyPlanInvariant("checked capability type was not projected into the root checked type store");
+    fn moduleForArtifactRef(self: *Builder, artifact: anytype) ModuleView {
+        return self.moduleForId(.{ .bytes = artifact.bytes });
     }
 
     fn analyzeRoot(self: *Builder, root: checked.RootRequest) Allocator.Error!void {
-        const rep = try self.analyzeType(root.checked_type);
-        const source = workerSourceForRoot(root) orelse
+        const host_type = typeRef(self.root_view, root.checked_type);
+        const rep = try self.analyzeType(self.root_view, root.checked_type);
+        const source = workerSourceForRoot(root, self.root_view.key) orelse
             boxyPlanInvariant("boxy root request had no checked procedure worker source");
-        const worker_id = try self.ensureWorker(source, root.checked_type, root);
+        const worker_id = try self.ensureWorker(source, host_type, root);
 
         const id: RootPlanId = @enumFromInt(@as(u32, @intCast(self.plan.roots.items.len)));
         try self.plan.roots.append(self.allocator, .{
@@ -385,7 +408,7 @@ const Builder = struct {
             .request = root,
             .worker = worker_id,
             .wrapper_kind = if (rootRequiresHostWrapper(root)) .host_shaped_wrapper else .private_worker_only,
-            .host_type = root.checked_type,
+            .host_type = host_type,
             .host_rep = rep,
             .worker_rep = rep,
         });
@@ -399,12 +422,12 @@ const Builder = struct {
     fn ensureWorker(
         self: *Builder,
         source: WorkerSource,
-        checked_type: checked.CheckedTypeId,
+        checked_type: TypeRef,
         root_request: ?checked.RootRequest,
     ) Allocator.Error!WorkerPlanId {
-        const rep = try self.analyzeType(checked_type);
+        const rep = try self.analyzeType(self.moduleForId(checked_type.module), checked_type.ty);
         for (self.plan.workers.items) |worker| {
-            if (worker.checked_type == checked_type and workerSourceEql(worker.source, source)) {
+            if (typeRefEql(worker.checked_type, checked_type) and workerSourceEql(worker.source, source)) {
                 if (root_request) |request| {
                     if (worker.root_request == null) {
                         self.plan.workers.items[@intFromEnum(worker.id)].root_request = request;
@@ -430,53 +453,55 @@ const Builder = struct {
         return worker_id;
     }
 
-    fn analyzeType(self: *Builder, ty: checked.CheckedTypeId) Allocator.Error!TypeRepId {
-        const entry = try self.by_type.getOrPut(ty);
+    fn analyzeType(self: *Builder, view: ModuleView, ty: checked.CheckedTypeId) Allocator.Error!TypeRepId {
+        const source_type = typeRef(view, ty);
+        const entry = try self.by_type.getOrPut(source_type);
         if (entry.found_existing) return entry.value_ptr.*;
 
         const rep_id: TypeRepId = @enumFromInt(@as(u32, @intCast(self.plan.representations.items.len)));
         entry.value_ptr.* = rep_id;
         try self.plan.representations.append(self.allocator, .{
-            .source_type = ty,
+            .source_type = source_type,
             .kind = .in_progress,
         });
         try self.plan.type_reps.append(self.allocator, .{
-            .source_type = ty,
+            .source_type = source_type,
             .rep = rep_id,
         });
 
-        const rep = try self.buildRepresentation(ty);
+        const rep = try self.buildRepresentation(view, ty);
         self.plan.representations.items[@intFromEnum(rep_id)] = rep;
         return rep_id;
     }
 
-    fn buildRepresentation(self: *Builder, ty: checked.CheckedTypeId) Allocator.Error!TypeRepresentation {
-        const payload = self.root_view.checked_types.payload(ty);
+    fn buildRepresentation(self: *Builder, view: ModuleView, ty: checked.CheckedTypeId) Allocator.Error!TypeRepresentation {
+        const source_type = typeRef(view, ty);
+        const payload = view.checked_types.payload(ty);
         return switch (payload) {
             .pending => boxyPlanInvariant("checked type payload was pending during boxy planning"),
-            .flex => |flex| try self.dynamicRepresentation(ty, .flex, flex.constraints),
-            .rigid => |rigid| try self.dynamicRepresentation(ty, .rigid, rigid.constraints),
-            .alias => |alias| try self.aliasRepresentation(ty, alias),
-            .record => |record| try self.recordRepresentation(ty, .record, record.fields, record.ext),
-            .record_unbound => |fields| try self.recordRepresentation(ty, .record_unbound, fields, null),
-            .tuple => |elems| try self.tupleRepresentation(ty, elems),
-            .nominal => |nominal| try self.nominalRepresentation(ty, nominal),
-            .function => |function| try self.functionRepresentation(ty, function),
-            .empty_record => .{ .source_type = ty, .kind = .empty_record },
-            .tag_union => |tag_union| try self.tagUnionRepresentation(ty, tag_union),
-            .empty_tag_union => .{ .source_type = ty, .kind = .empty_tag_union },
+            .flex => |flex| try self.dynamicRepresentation(source_type, flex.constraints, .flex),
+            .rigid => |rigid| try self.dynamicRepresentation(source_type, rigid.constraints, .rigid),
+            .alias => |alias| try self.aliasRepresentation(view, source_type, alias),
+            .record => |record| try self.recordRepresentation(view, source_type, .record, record.fields, record.ext),
+            .record_unbound => |fields| try self.recordRepresentation(view, source_type, .record_unbound, fields, null),
+            .tuple => |elems| try self.tupleRepresentation(view, source_type, elems),
+            .nominal => |nominal| try self.nominalRepresentation(view, source_type, nominal),
+            .function => |function| try self.functionRepresentation(view, source_type, function),
+            .empty_record => .{ .source_type = source_type, .kind = .empty_record },
+            .tag_union => |tag_union| try self.tagUnionRepresentation(view, source_type, tag_union),
+            .empty_tag_union => .{ .source_type = source_type, .kind = .empty_tag_union },
         };
     }
 
     fn dynamicRepresentation(
         self: *Builder,
-        ty: checked.CheckedTypeId,
-        kind: DynamicKind,
+        source_type: TypeRef,
         constraints: []const checked.CheckedStaticDispatchConstraint,
+        kind: DynamicKind,
     ) Allocator.Error!TypeRepresentation {
-        const dictionaries = try self.appendDictionaryRequirements(ty, constraints);
+        const dictionaries = try self.appendDictionaryRequirements(source_type, constraints);
         return .{
-            .source_type = ty,
+            .source_type = source_type,
             .kind = .{ .dynamic = kind },
             .dictionaries = dictionaries,
             .contains_dynamic = true,
@@ -485,17 +510,18 @@ const Builder = struct {
 
     fn aliasRepresentation(
         self: *Builder,
-        ty: checked.CheckedTypeId,
+        view: ModuleView,
+        source_type: TypeRef,
         alias: checked.CheckedAliasType,
     ) Allocator.Error!TypeRepresentation {
         var children = std.ArrayList(RepChild).empty;
         defer children.deinit(self.allocator);
-        try self.appendPendingChild(&children, .alias_backing, alias.backing);
+        try self.appendPendingChild(&children, view, .alias_backing, alias.backing);
         for (alias.args, 0..) |arg, index| {
-            try self.appendPendingChild(&children, .{ .alias_arg = @intCast(index) }, arg);
+            try self.appendPendingChild(&children, view, .{ .alias_arg = @intCast(index) }, arg);
         }
         return .{
-            .source_type = ty,
+            .source_type = source_type,
             .kind = .alias,
             .children = try self.commitPendingChildren(children.items),
         };
@@ -503,7 +529,8 @@ const Builder = struct {
 
     fn recordRepresentation(
         self: *Builder,
-        ty: checked.CheckedTypeId,
+        view: ModuleView,
+        source_type: TypeRef,
         kind: RepresentationKind,
         fields: []const checked.CheckedRecordField,
         ext: ?checked.CheckedTypeId,
@@ -511,13 +538,13 @@ const Builder = struct {
         var children = std.ArrayList(RepChild).empty;
         defer children.deinit(self.allocator);
         for (fields) |field| {
-            try self.appendPendingChild(&children, .{ .record_field = field.name }, field.ty);
+            try self.appendPendingChild(&children, view, .{ .record_field = field.name }, field.ty);
         }
         if (ext) |ext_ty| {
-            try self.appendPendingChild(&children, .record_ext, ext_ty);
+            try self.appendPendingChild(&children, view, .record_ext, ext_ty);
         }
         return .{
-            .source_type = ty,
+            .source_type = source_type,
             .kind = kind,
             .children = try self.commitPendingChildren(children.items),
         };
@@ -525,16 +552,17 @@ const Builder = struct {
 
     fn tupleRepresentation(
         self: *Builder,
-        ty: checked.CheckedTypeId,
+        view: ModuleView,
+        source_type: TypeRef,
         elems: []const checked.CheckedTypeId,
     ) Allocator.Error!TypeRepresentation {
         var children = std.ArrayList(RepChild).empty;
         defer children.deinit(self.allocator);
         for (elems, 0..) |elem, index| {
-            try self.appendPendingChild(&children, .{ .tuple_elem = @intCast(index) }, elem);
+            try self.appendPendingChild(&children, view, .{ .tuple_elem = @intCast(index) }, elem);
         }
         return .{
-            .source_type = ty,
+            .source_type = source_type,
             .kind = .tuple,
             .children = try self.commitPendingChildren(children.items),
         };
@@ -542,18 +570,19 @@ const Builder = struct {
 
     fn nominalRepresentation(
         self: *Builder,
-        ty: checked.CheckedTypeId,
+        view: ModuleView,
+        source_type: TypeRef,
         nominal: checked.CheckedNominalType,
     ) Allocator.Error!TypeRepresentation {
         if (nominal.builtin) |builtin| {
             switch (checked.builtinRuntimeEncoding(builtin)) {
                 .primitive => |primitive| return .{
-                    .source_type = ty,
+                    .source_type = source_type,
                     .kind = .{ .primitive = primitive },
                 },
-                .bool_tag_union => return .{ .source_type = ty, .kind = .bool_tag_union },
-                .list => return try self.builtinUnaryNominalRepresentation(ty, .list, .list_elem, nominal),
-                .box => return try self.builtinUnaryNominalRepresentation(ty, .box, .box_payload, nominal),
+                .bool_tag_union => return .{ .source_type = source_type, .kind = .bool_tag_union },
+                .list => return try self.builtinUnaryNominalRepresentation(view, source_type, .list, .list_elem, nominal),
+                .box => return try self.builtinUnaryNominalRepresentation(view, source_type, .box, .box_payload, nominal),
                 .parse_tag_union_spec,
                 .fields,
                 .field,
@@ -564,24 +593,26 @@ const Builder = struct {
         var children = std.ArrayList(RepChild).empty;
         defer children.deinit(self.allocator);
         if (nominal.representation != .opaque_without_backing) {
-            try self.appendPendingChild(&children, .nominal_backing, try self.nominalBackingType(nominal));
+            const backing = try self.nominalBackingSource(view, nominal);
+            try self.appendPendingChildFromSource(&children, .nominal_backing, backing);
         }
         for (nominal.args, 0..) |arg, index| {
-            try self.appendPendingChild(&children, .{ .nominal_arg = @intCast(index) }, arg);
+            try self.appendPendingChild(&children, view, .{ .nominal_arg = @intCast(index) }, arg);
         }
-        if (self.nominalPaddingSource(nominal)) |padding_source| {
+        if (self.nominalPaddingSource(view, nominal)) |padding_source| {
             for (padding_source.types, 0..) |padding, index| {
                 try self.appendPendingChild(
                     &children,
+                    padding_source.view,
                     .{ .nominal_padding_field = @intCast(index) },
-                    try self.typeInRootView(padding_source.view, padding),
+                    padding,
                 );
             }
         }
-        const backing_ty = try self.nominalBackingType(nominal);
-        const declared_fields = try self.appendNominalDeclaredFields(nominal, backing_ty);
+        const backing = try self.nominalBackingSource(view, nominal);
+        const declared_fields = try self.appendNominalDeclaredFields(view, nominal, backing);
         return .{
-            .source_type = ty,
+            .source_type = source_type,
             .kind = .{ .nominal = if (nominal.representation == .opaque_without_backing)
                 .opaque_nominal
             else if (nominal.builtin != null)
@@ -598,6 +629,11 @@ const Builder = struct {
         types: []const checked.CheckedTypeId,
     };
 
+    const TypeSource = struct {
+        view: ModuleView,
+        ty: checked.CheckedTypeId,
+    };
+
     const NominalDeclaredSource = struct {
         field_view: ModuleView,
         fields: []const checked.CheckedDeclaredField,
@@ -612,31 +648,35 @@ const Builder = struct {
         padding_types: []const checked.CheckedTypeId,
     };
 
-    fn nominalBackingType(
+    fn nominalBackingSource(
         self: *Builder,
+        view: ModuleView,
         nominal: checked.CheckedNominalType,
-    ) Allocator.Error!checked.CheckedTypeId {
+    ) Allocator.Error!TypeSource {
         return switch (nominal.representation) {
-            .local_box_payload_capability => |capability| self.root_view.interface_capabilities.boxPayloadCapability(capability.capability).backing_ty,
+            .local_box_payload_capability => |capability| .{
+                .view = view,
+                .ty = view.interface_capabilities.boxPayloadCapability(capability.capability).backing_ty,
+            },
             .imported_box_payload_capability => |capability| blk: {
                 const source_view = self.moduleForId(checked.importedBoxPayloadCapabilityModuleId(capability));
                 const source_capability = source_view.interface_capabilities.boxPayloadCapability(capability.capability);
-                break :blk try self.typeInRootView(source_view, source_capability.backing_ty);
+                break :blk .{ .view = source_view, .ty = source_capability.backing_ty };
             },
             .builtin,
             .local_declaration,
             .imported_declaration,
             .opaque_without_backing,
-            => nominal.backing,
+            => .{ .view = view, .ty = nominal.backing },
         };
     }
 
-    fn nominalPaddingSource(self: *Builder, nominal: checked.CheckedNominalType) ?NominalPaddingSource {
+    fn nominalPaddingSource(self: *Builder, view: ModuleView, nominal: checked.CheckedNominalType) ?NominalPaddingSource {
         if (nominal.padding_field_types.len != 0) return .{
-            .view = self.root_view,
+            .view = view,
             .types = nominal.padding_field_types,
         };
-        const lookup = self.nominalDeclarationFor(nominal) orelse return null;
+        const lookup = self.nominalDeclarationFor(view, nominal) orelse return null;
         if (lookup.padding_types.len == 0) return null;
         return .{
             .view = lookup.padding_view,
@@ -644,14 +684,14 @@ const Builder = struct {
         };
     }
 
-    fn nominalDeclaredSource(self: *Builder, nominal: checked.CheckedNominalType) ?NominalDeclaredSource {
+    fn nominalDeclaredSource(self: *Builder, view: ModuleView, nominal: checked.CheckedNominalType) ?NominalDeclaredSource {
         if (nominal.declared_fields.len != 0) return .{
-            .field_view = self.root_view,
+            .field_view = view,
             .fields = nominal.declared_fields,
-            .padding_view = self.root_view,
+            .padding_view = view,
             .padding_types = nominal.padding_field_types,
         };
-        const lookup = self.nominalDeclarationFor(nominal) orelse return null;
+        const lookup = self.nominalDeclarationFor(view, nominal) orelse return null;
         const fields = lookup.declaration.declaredFields(lookup.view.checked_types);
         if (fields.len == 0) return null;
         return .{
@@ -662,15 +702,15 @@ const Builder = struct {
         };
     }
 
-    fn nominalDeclarationFor(self: *Builder, nominal: checked.CheckedNominalType) ?NominalDeclarationLookup {
+    fn nominalDeclarationFor(self: *Builder, view: ModuleView, nominal: checked.CheckedNominalType) ?NominalDeclarationLookup {
         return switch (nominal.representation) {
             .local_declaration => |id| blk: {
-                const declaration = self.root_view.checked_types.nominalDeclarationById(id);
+                const declaration = view.checked_types.nominalDeclarationById(id);
                 break :blk .{
-                    .view = self.root_view,
+                    .view = view,
                     .declaration = declaration,
-                    .padding_view = self.root_view,
-                    .padding_types = declaration.paddingFieldTypes(self.root_view.checked_types),
+                    .padding_view = view,
+                    .padding_types = declaration.paddingFieldTypes(view.checked_types),
                 };
             },
             .imported_declaration => |imported| blk: {
@@ -684,13 +724,13 @@ const Builder = struct {
                 };
             },
             .local_box_payload_capability => |capability_ref| blk: {
-                const capability = self.root_view.interface_capabilities.boxPayloadCapability(capability_ref.capability);
-                const declaration = self.root_view.checked_types.nominalDeclaration(capability.nominal) orelse break :blk null;
+                const capability = view.interface_capabilities.boxPayloadCapability(capability_ref.capability);
+                const declaration = view.checked_types.nominalDeclaration(capability.nominal) orelse break :blk null;
                 break :blk .{
-                    .view = self.root_view,
+                    .view = view,
                     .declaration = declaration,
-                    .padding_view = self.root_view,
-                    .padding_types = capability.paddingFieldTys(self.root_view.interface_capabilities),
+                    .padding_view = view,
+                    .padding_types = capability.paddingFieldTys(view.interface_capabilities),
                 };
             },
             .imported_box_payload_capability => |capability_ref| blk: {
@@ -712,11 +752,12 @@ const Builder = struct {
 
     fn appendNominalDeclaredFields(
         self: *Builder,
+        view: ModuleView,
         nominal: checked.CheckedNominalType,
-        backing_ty: checked.CheckedTypeId,
+        backing: TypeSource,
     ) Allocator.Error!Span {
-        const source = self.nominalDeclaredSource(nominal) orelse return Span.empty();
-        const backing_fields = switch (self.root_view.checked_types.payload(backing_ty)) {
+        const source = self.nominalDeclaredSource(view, nominal) orelse return Span.empty();
+        const backing_fields = switch (backing.view.checked_types.payload(backing.ty)) {
             .record => |record| record.fields,
             else => boxyPlanInvariant("checked nominal declared field order had a non-record backing"),
         };
@@ -727,12 +768,12 @@ const Builder = struct {
         for (source.fields) |declared| {
             switch (declared) {
                 .named => |name| {
-                    const field = self.nominalBackingField(source.field_view, backing_fields, name) orelse
+                    const field = self.nominalBackingField(source.field_view, backing.view, backing_fields, name) orelse
                         boxyPlanInvariant("checked nominal declared named field was missing from backing row");
                     try pending.append(self.allocator, .{
                         .index = field.index,
-                        .source_type = field.ty,
-                        .rep = try self.analyzeType(field.ty),
+                        .source_type = typeRef(backing.view, field.ty),
+                        .rep = try self.analyzeType(backing.view, field.ty),
                     });
                 },
                 .padding => |index| {
@@ -740,11 +781,11 @@ const Builder = struct {
                     if (raw_index >= source.padding_types.len) {
                         boxyPlanInvariant("checked nominal declared padding field index was out of range");
                     }
-                    const padding_ty = try self.typeInRootView(source.padding_view, source.padding_types[raw_index]);
+                    const padding_ty = source.padding_types[raw_index];
                     try pending.append(self.allocator, .{
                         .index = @intCast(backing_fields.len + padding_ordinal),
-                        .source_type = padding_ty,
-                        .rep = try self.analyzeType(padding_ty),
+                        .source_type = typeRef(source.padding_view, padding_ty),
+                        .rep = try self.analyzeType(source.padding_view, padding_ty),
                         .is_padding = true,
                     });
                     padding_ordinal += 1;
@@ -764,11 +805,12 @@ const Builder = struct {
     fn nominalBackingField(
         self: *Builder,
         field_view: ModuleView,
+        backing_view: ModuleView,
         backing_fields: []const checked.CheckedRecordField,
         name: RecordFieldLabelId,
     ) ?NominalBackingField {
         for (backing_fields, 0..) |field, index| {
-            if (self.recordFieldNameMatches(field_view, name, self.root_view, field.name)) return .{
+            if (self.recordFieldNameMatches(field_view, name, backing_view, field.name)) return .{
                 .index = @intCast(index),
                 .ty = field.ty,
             };
@@ -795,7 +837,8 @@ const Builder = struct {
 
     fn builtinUnaryNominalRepresentation(
         self: *Builder,
-        ty: checked.CheckedTypeId,
+        view: ModuleView,
+        source_type: TypeRef,
         kind: RepresentationKind,
         role: ChildRole,
         nominal: checked.CheckedNominalType,
@@ -805,9 +848,9 @@ const Builder = struct {
         }
         var children = std.ArrayList(RepChild).empty;
         defer children.deinit(self.allocator);
-        try self.appendPendingChild(&children, role, nominal.args[0]);
+        try self.appendPendingChild(&children, view, role, nominal.args[0]);
         return .{
-            .source_type = ty,
+            .source_type = source_type,
             .kind = kind,
             .children = try self.commitPendingChildren(children.items),
         };
@@ -815,17 +858,18 @@ const Builder = struct {
 
     fn functionRepresentation(
         self: *Builder,
-        ty: checked.CheckedTypeId,
+        view: ModuleView,
+        source_type: TypeRef,
         function: checked.CheckedFunctionType,
     ) Allocator.Error!TypeRepresentation {
         var children = std.ArrayList(RepChild).empty;
         defer children.deinit(self.allocator);
         for (function.args, 0..) |arg, index| {
-            try self.appendPendingChild(&children, .{ .function_arg = @intCast(index) }, arg);
+            try self.appendPendingChild(&children, view, .{ .function_arg = @intCast(index) }, arg);
         }
-        try self.appendPendingChild(&children, .function_ret, function.ret);
+        try self.appendPendingChild(&children, view, .function_ret, function.ret);
         return .{
-            .source_type = ty,
+            .source_type = source_type,
             .kind = .{ .erased_callable = checked.finalizedFunctionKind(function.kind) },
             .children = try self.commitPendingChildren(children.items),
         };
@@ -833,17 +877,18 @@ const Builder = struct {
 
     fn tagUnionRepresentation(
         self: *Builder,
-        ty: checked.CheckedTypeId,
+        view: ModuleView,
+        source_type: TypeRef,
         tag_union: checked.CheckedTagUnionType,
     ) Allocator.Error!TypeRepresentation {
         var children = std.ArrayList(RepChild).empty;
         defer children.deinit(self.allocator);
         for (tag_union.tags) |tag| {
-            for (tag.argsSlice(self.root_view.checked_types), 0..) |arg, index| {
-                try self.appendPendingChild(&children, .{ .tag_payload = .{ .tag = tag.name, .index = @intCast(index) } }, arg);
+            for (tag.argsSlice(view.checked_types), 0..) |arg, index| {
+                try self.appendPendingChild(&children, view, .{ .tag_payload = .{ .tag = tag.name, .index = @intCast(index) } }, arg);
             }
         }
-        try self.appendPendingChild(&children, .tag_ext, tag_union.ext);
+        try self.appendPendingChild(&children, view, .tag_ext, tag_union.ext);
         const child_span = try self.commitPendingChildren(children.items);
 
         const variant_start: u32 = @intCast(self.plan.tag_variants.items.len);
@@ -857,7 +902,7 @@ const Builder = struct {
         }
 
         return .{
-            .source_type = ty,
+            .source_type = source_type,
             .kind = .tag_union,
             .children = child_span,
             .tag_variants = .{ .start = variant_start, .len = @intCast(tag_union.tags.len) },
@@ -866,16 +911,16 @@ const Builder = struct {
 
     fn appendDictionaryRequirements(
         self: *Builder,
-        ty: checked.CheckedTypeId,
+        source_type: TypeRef,
         constraints: []const checked.CheckedStaticDispatchConstraint,
     ) Allocator.Error!Span {
         const start: u32 = @intCast(self.plan.dictionaries.items.len);
         for (constraints, 0..) |constraint, index| {
             try self.plan.dictionaries.append(self.allocator, .{
-                .source_type = ty,
+                .source_type = source_type,
                 .constraint_index = @intCast(index),
                 .fn_name = constraint.fn_name,
-                .fn_ty = constraint.fn_ty,
+                .fn_ty = .{ .module = source_type.module, .ty = constraint.fn_ty },
                 .origin = constraint.origin,
                 .binop_negated = constraint.binop_negated,
                 .num_literal = constraint.num_literal,
@@ -887,13 +932,23 @@ const Builder = struct {
     fn appendPendingChild(
         self: *Builder,
         pending: *std.ArrayList(RepChild),
+        view: ModuleView,
         role: ChildRole,
         source_type: checked.CheckedTypeId,
     ) Allocator.Error!void {
+        try self.appendPendingChildFromSource(pending, role, .{ .view = view, .ty = source_type });
+    }
+
+    fn appendPendingChildFromSource(
+        self: *Builder,
+        pending: *std.ArrayList(RepChild),
+        role: ChildRole,
+        source: TypeSource,
+    ) Allocator.Error!void {
         try pending.append(self.allocator, .{
             .role = role,
-            .source_type = source_type,
-            .rep = try self.analyzeType(source_type),
+            .source_type = typeRef(source.view, source.ty),
+            .rep = try self.analyzeType(source.view, source.ty),
         });
     }
 
@@ -945,31 +1000,35 @@ const Builder = struct {
 
     fn analyzeWorkerBodyTypes(self: *Builder, source: WorkerSource) Allocator.Error!void {
         const body = self.rootWorkerBody(source);
-        try self.analyzeExprTypes(body.root_expr);
+        try self.analyzeExprTypes(body.view, body.body.root_expr);
     }
 
-    fn rootWorkerBody(self: *Builder, source: WorkerSource) checked.CheckedBody {
+    const WorkerBody = struct {
+        view: ModuleView,
+        body: checked.CheckedBody,
+    };
+
+    fn rootWorkerBody(self: *Builder, source: WorkerSource) WorkerBody {
         return switch (source) {
             .procedure_template => |template| self.rootProcedureTemplateBody(template),
-            .procedure_binding => |binding| self.rootProcedureBindingBody(binding),
+            .procedure_binding => |binding| self.rootProcedureBindingBody(self.moduleForId(binding.artifact), binding.binding),
             .procedure_use => |use| switch (use.binding) {
                 .top_level => |top_level| blk: {
-                    self.requireRootArtifact(top_level.artifact);
-                    break :blk self.rootProcedureBindingBody(top_level.binding);
+                    const view = self.moduleForId(top_level.artifact);
+                    break :blk self.rootProcedureBindingBody(view, top_level.binding);
                 },
                 .platform_required => |required| blk: {
-                    self.requireRootArtifact(required.app_value.artifact);
-                    break :blk self.rootProcedureBindingBody(required.procedure_binding);
+                    const view = self.moduleForId(required.app_value.artifact);
+                    break :blk self.rootProcedureBindingBody(view, required.procedure_binding);
                 },
-                .imported => boxyPlanInvariant("imported procedure use reached boxy body type planning before imported body planning is implemented"),
+                .imported => |imported| self.importedProcedureBindingBody(imported),
                 .hosted => boxyPlanInvariant("hosted procedure use reached boxy body type planning before hosted wrapper planning is implemented"),
             },
         };
     }
 
-    fn rootProcedureBindingBody(self: *Builder, binding_ref: checked.TopLevelProcedureBindingRef) checked.CheckedBody {
-        const artifact = self.root_module.?.module;
-        const binding = artifact.top_level_procedure_bindings.get(binding_ref);
+    fn rootProcedureBindingBody(self: *Builder, view: ModuleView, binding_ref: checked.TopLevelProcedureBindingRef) WorkerBody {
+        const binding = view.top_level_procedure_bindings.get(binding_ref);
         return switch (binding.body) {
             .direct_template => |direct| switch (direct.template) {
                 .checked => |template| self.rootProcedureTemplateBody(template),
@@ -981,31 +1040,57 @@ const Builder = struct {
         };
     }
 
-    fn rootProcedureTemplateBody(self: *Builder, template_ref: canonical.ProcedureTemplateRef) checked.CheckedBody {
-        const artifact = self.root_module.?.module;
-        self.requireRootArtifact(template_ref.artifact);
-        const template = artifact.checked_procedure_templates.get(template_ref.template);
+    fn importedProcedureBindingBody(self: *Builder, binding_ref: checked.ImportedProcedureBindingRef) WorkerBody {
+        const view = self.moduleForId(binding_ref.artifact);
+        const binding = self.importedProcedureBinding(view, binding_ref);
+        return switch (binding.body) {
+            .direct_template => |direct| switch (direct.template) {
+                .checked => |template| self.rootProcedureTemplateBody(template),
+                .lifted,
+                .synthetic,
+                => boxyPlanInvariant("non-checked imported procedure template reached boxy body type planning"),
+            },
+            .callable_eval_template => boxyPlanInvariant("callable eval imported procedure binding reached runtime boxy body type planning"),
+        };
+    }
+
+    fn importedProcedureBinding(
+        _: *Builder,
+        view: ModuleView,
+        binding_ref: checked.ImportedProcedureBindingRef,
+    ) checked.ImportedProcedureBindingView {
+        for (view.exported_procedure_bindings.bindings) |binding| {
+            if (moduleKeyEqual(binding.binding.artifact, binding_ref.artifact) and
+                binding.binding.def == binding_ref.def and
+                binding.binding.pattern == binding_ref.pattern)
+            {
+                return binding;
+            }
+        }
+        boxyPlanInvariant("imported procedure binding was not exported by its checked module");
+    }
+
+    fn rootProcedureTemplateBody(self: *Builder, template_ref: canonical.ProcedureTemplateRef) WorkerBody {
+        const view = self.moduleForArtifactRef(template_ref.artifact);
+        const template = view.checked_procedure_templates.get(template_ref.template);
         const body_id = switch (template.body) {
             .checked_body => |body| body,
             .intrinsic_wrapper => boxyPlanInvariant("intrinsic wrapper reached boxy body type planning"),
             .entry_wrapper => boxyPlanInvariant("compile-time entry wrapper reached runtime boxy body type planning"),
         };
-        return artifact.checked_bodies.body(body_id);
+        return .{
+            .view = view,
+            .body = view.checked_bodies.body(body_id),
+        };
     }
 
-    fn requireRootArtifact(self: *Builder, artifact: anytype) void {
-        if (!std.mem.eql(u8, artifact.bytes[0..], self.root_module.?.module.key.bytes[0..])) {
-            boxyPlanInvariant("boxy body type planner referenced a non-root checked artifact before imported body planning is implemented");
-        }
-    }
-
-    fn analyzeExprTypes(self: *Builder, expr_id: checked.CheckedExprId) Allocator.Error!void {
-        const entry = try self.body_exprs_seen.getOrPut(expr_id);
+    fn analyzeExprTypes(self: *Builder, view: ModuleView, expr_id: checked.CheckedExprId) Allocator.Error!void {
+        const entry = try self.body_exprs_seen.getOrPut(.{ .module = view.key, .expr = expr_id });
         if (entry.found_existing) return;
 
-        const bodies = self.root_module.?.module.checked_bodies.view();
+        const bodies = view.checked_bodies;
         const expr = bodies.expr(expr_id);
-        _ = try self.analyzeType(expr.ty);
+        _ = try self.analyzeType(view, expr.ty);
 
         switch (expr.data) {
             .pending => boxyPlanInvariant("pending checked expression reached boxy body type planning"),
@@ -1039,110 +1124,110 @@ const Builder = struct {
             .str,
             .list,
             .tuple,
-            => |items| try self.analyzeExprSliceTypes(items),
+            => |items| try self.analyzeExprSliceTypes(view, items),
             .match_ => |match| {
-                try self.analyzeExprTypes(match.cond);
+                try self.analyzeExprTypes(view, match.cond);
                 for (match.branches) |branch| {
                     for (branch.patternsSlice(bodies)) |branch_pattern| {
-                        try self.analyzePatternTypes(branch_pattern.pattern);
+                        try self.analyzePatternTypes(view, branch_pattern.pattern);
                     }
-                    if (branch.guard) |guard| try self.analyzeExprTypes(guard);
-                    try self.analyzeExprTypes(branch.value);
+                    if (branch.guard) |guard| try self.analyzeExprTypes(view, guard);
+                    try self.analyzeExprTypes(view, branch.value);
                 }
             },
             .if_ => |if_| {
                 for (if_.branches) |branch| {
-                    try self.analyzeExprTypes(branch.cond);
-                    try self.analyzeExprTypes(branch.body);
+                    try self.analyzeExprTypes(view, branch.cond);
+                    try self.analyzeExprTypes(view, branch.body);
                 }
-                try self.analyzeExprTypes(if_.final_else);
+                try self.analyzeExprTypes(view, if_.final_else);
             },
             .call => |call| {
-                try self.analyzeExprTypes(call.func);
-                try self.analyzeExprSliceTypes(call.args);
-                _ = try self.analyzeType(call.source_fn_ty_payload);
-                try self.analyzeDirectCallTarget(expr_id, call);
+                try self.analyzeExprTypes(view, call.func);
+                try self.analyzeExprSliceTypes(view, call.args);
+                _ = try self.analyzeType(view, call.source_fn_ty_payload);
+                try self.analyzeDirectCallTarget(view, expr_id, call);
             },
             .record => |record| {
-                if (record.ext) |ext| try self.analyzeExprTypes(ext);
-                for (record.fields) |field| try self.analyzeExprTypes(field.value);
+                if (record.ext) |ext| try self.analyzeExprTypes(view, ext);
+                for (record.fields) |field| try self.analyzeExprTypes(view, field.value);
             },
             .block => |block| {
-                for (block.statements) |statement| try self.analyzeStatementTypes(statement);
-                try self.analyzeExprTypes(block.final_expr);
+                for (block.statements) |statement| try self.analyzeStatementTypes(view, statement);
+                try self.analyzeExprTypes(view, block.final_expr);
             },
-            .tag => |tag| try self.analyzeExprSliceTypes(tag.args),
-            .nominal => |nominal| try self.analyzeExprTypes(nominal.backing_expr),
+            .tag => |tag| try self.analyzeExprSliceTypes(view, tag.args),
+            .nominal => |nominal| try self.analyzeExprTypes(view, nominal.backing_expr),
             .closure => |closure| {
-                try self.analyzeExprTypes(closure.lambda);
-                for (closure.captures) |capture| try self.analyzePatternTypes(capture.pattern);
+                try self.analyzeExprTypes(view, closure.lambda);
+                for (closure.captures) |capture| try self.analyzePatternTypes(view, capture.pattern);
             },
             .lambda => |lambda| {
-                for (lambda.args) |arg| try self.analyzePatternTypes(arg);
-                try self.analyzeExprTypes(lambda.body);
+                for (lambda.args) |arg| try self.analyzePatternTypes(view, arg);
+                try self.analyzeExprTypes(view, lambda.body);
             },
             .binop => |binop| {
-                try self.analyzeExprTypes(binop.lhs);
-                try self.analyzeExprTypes(binop.rhs);
+                try self.analyzeExprTypes(view, binop.lhs);
+                try self.analyzeExprTypes(view, binop.rhs);
             },
             .unary_minus,
             .unary_not,
             .dbg,
             .expect,
-            => |child| try self.analyzeExprTypes(child),
-            .field_access => |access| try self.analyzeExprTypes(access.receiver),
+            => |child| try self.analyzeExprTypes(view, child),
+            .field_access => |access| try self.analyzeExprTypes(view, access.receiver),
             .interpolation => |interpolation| {
-                try self.analyzeExprTypes(interpolation.first);
+                try self.analyzeExprTypes(view, interpolation.first);
                 for (interpolation.parts) |part| {
-                    try self.analyzeExprTypes(part.value);
-                    try self.analyzeExprTypes(part.following_segment);
+                    try self.analyzeExprTypes(view, part.value);
+                    try self.analyzeExprTypes(view, part.following_segment);
                 }
-                _ = try self.analyzeType(interpolation.step_fn_ty);
+                _ = try self.analyzeType(view, interpolation.step_fn_ty);
             },
             .structural_eq => |eq| {
-                try self.analyzeExprTypes(eq.lhs);
-                try self.analyzeExprTypes(eq.rhs);
+                try self.analyzeExprTypes(view, eq.lhs);
+                try self.analyzeExprTypes(view, eq.rhs);
             },
             .structural_hash => |hash| {
-                try self.analyzeExprTypes(hash.value);
-                try self.analyzeExprTypes(hash.hasher);
+                try self.analyzeExprTypes(view, hash.value);
+                try self.analyzeExprTypes(view, hash.hasher);
             },
-            .tuple_access => |access| try self.analyzeExprTypes(access.tuple),
-            .expect_err => |expect_err| try self.analyzeExprTypes(expect_err.expr),
-            .return_ => |ret| try self.analyzeExprTypes(ret.expr),
+            .tuple_access => |access| try self.analyzeExprTypes(view, access.tuple),
+            .expect_err => |expect_err| try self.analyzeExprTypes(view, expect_err.expr),
+            .return_ => |ret| try self.analyzeExprTypes(view, ret.expr),
             .for_ => |for_| {
-                try self.analyzePatternTypes(for_.pattern);
-                try self.analyzeExprTypes(for_.expr);
-                try self.analyzeExprTypes(for_.body);
+                try self.analyzePatternTypes(view, for_.pattern);
+                try self.analyzeExprTypes(view, for_.expr);
+                try self.analyzeExprTypes(view, for_.body);
             },
-            .hosted_lambda => |hosted| for (hosted.args) |arg| try self.analyzePatternTypes(arg),
-            .run_low_level => |run| try self.analyzeExprSliceTypes(run.args),
+            .hosted_lambda => |hosted| for (hosted.args) |arg| try self.analyzePatternTypes(view, arg),
+            .run_low_level => |run| try self.analyzeExprSliceTypes(view, run.args),
         }
     }
 
-    fn analyzeExprSliceTypes(self: *Builder, exprs: []const checked.CheckedExprId) Allocator.Error!void {
-        for (exprs) |expr| try self.analyzeExprTypes(expr);
+    fn analyzeExprSliceTypes(self: *Builder, view: ModuleView, exprs: []const checked.CheckedExprId) Allocator.Error!void {
+        for (exprs) |expr| try self.analyzeExprTypes(view, expr);
     }
 
-    fn analyzeStatementTypes(self: *Builder, statement_id: checked.CheckedStatementId) Allocator.Error!void {
-        const entry = try self.body_statements_seen.getOrPut(statement_id);
+    fn analyzeStatementTypes(self: *Builder, view: ModuleView, statement_id: checked.CheckedStatementId) Allocator.Error!void {
+        const entry = try self.body_statements_seen.getOrPut(.{ .module = view.key, .statement = statement_id });
         if (entry.found_existing) return;
 
-        const statement = self.root_module.?.module.checked_bodies.view().statement(statement_id);
+        const statement = view.checked_bodies.statement(statement_id);
         switch (statement.data) {
             .pending => boxyPlanInvariant("pending checked statement reached boxy body type planning"),
             .decl => |decl| {
-                try self.analyzePatternTypes(decl.pattern);
-                try self.analyzeExprTypes(decl.expr);
+                try self.analyzePatternTypes(view, decl.pattern);
+                try self.analyzeExprTypes(view, decl.expr);
             },
             .var_ => |decl| {
-                try self.analyzePatternTypes(decl.pattern);
-                try self.analyzeExprTypes(decl.expr);
+                try self.analyzePatternTypes(view, decl.pattern);
+                try self.analyzeExprTypes(view, decl.expr);
             },
-            .var_uninitialized => |decl| try self.analyzePatternTypes(decl.pattern),
+            .var_uninitialized => |decl| try self.analyzePatternTypes(view, decl.pattern),
             .reassign => |reassign| {
-                try self.analyzePatternTypes(reassign.pattern);
-                try self.analyzeExprTypes(reassign.expr);
+                try self.analyzePatternTypes(view, reassign.pattern);
+                try self.analyzeExprTypes(view, reassign.expr);
             },
             .crash,
             .break_,
@@ -1156,66 +1241,66 @@ const Builder = struct {
             .dbg,
             .expr,
             .expect,
-            => |expr| try self.analyzeExprTypes(expr),
+            => |expr| try self.analyzeExprTypes(view, expr),
             .for_ => |for_| {
-                try self.analyzePatternTypes(for_.pattern);
-                try self.analyzeExprTypes(for_.expr);
-                try self.analyzeExprTypes(for_.body);
+                try self.analyzePatternTypes(view, for_.pattern);
+                try self.analyzeExprTypes(view, for_.expr);
+                try self.analyzeExprTypes(view, for_.body);
             },
             .while_ => |loop| {
-                try self.analyzeExprTypes(loop.cond);
-                try self.analyzeExprTypes(loop.body);
+                try self.analyzeExprTypes(view, loop.cond);
+                try self.analyzeExprTypes(view, loop.body);
             },
             .infinite_loop => |loop| {
-                try self.analyzeExprTypes(loop.cond);
-                try self.analyzeExprTypes(loop.body);
+                try self.analyzeExprTypes(view, loop.cond);
+                try self.analyzeExprTypes(view, loop.body);
             },
             .breakable_loop => |loop| {
-                try self.analyzeExprTypes(loop.cond);
-                try self.analyzeExprTypes(loop.body);
+                try self.analyzeExprTypes(view, loop.cond);
+                try self.analyzeExprTypes(view, loop.body);
             },
-            .return_ => |ret| try self.analyzeExprTypes(ret.expr),
+            .return_ => |ret| try self.analyzeExprTypes(view, ret.expr),
         }
     }
 
-    fn analyzePatternTypes(self: *Builder, pattern_id: checked.CheckedPatternId) Allocator.Error!void {
-        const entry = try self.body_patterns_seen.getOrPut(pattern_id);
+    fn analyzePatternTypes(self: *Builder, view: ModuleView, pattern_id: checked.CheckedPatternId) Allocator.Error!void {
+        const entry = try self.body_patterns_seen.getOrPut(.{ .module = view.key, .pattern = pattern_id });
         if (entry.found_existing) return;
 
-        const pattern = self.root_module.?.module.checked_bodies.view().pattern(pattern_id);
-        _ = try self.analyzeType(pattern.ty);
+        const pattern = view.checked_bodies.pattern(pattern_id);
+        _ = try self.analyzeType(view, pattern.ty);
         switch (pattern.data) {
             .pending => boxyPlanInvariant("pending checked pattern reached boxy body type planning"),
             .assign,
             .underscore,
             .runtime_error,
             => {},
-            .as => |as| try self.analyzePatternTypes(as.pattern),
-            .applied_tag => |tag| for (tag.args) |arg| try self.analyzePatternTypes(arg),
-            .nominal => |nominal| try self.analyzePatternTypes(nominal.backing_pattern),
+            .as => |as| try self.analyzePatternTypes(view, as.pattern),
+            .applied_tag => |tag| for (tag.args) |arg| try self.analyzePatternTypes(view, arg),
+            .nominal => |nominal| try self.analyzePatternTypes(view, nominal.backing_pattern),
             .record_destructure => |fields| for (fields) |field| {
                 switch (field.kind) {
                     .required,
                     .sub_pattern,
                     .rest,
-                    => |child| try self.analyzePatternTypes(child),
+                    => |child| try self.analyzePatternTypes(view, child),
                 }
             },
             .list => |list| {
-                for (list.patterns) |child| try self.analyzePatternTypes(child);
-                if (list.rest) |rest| if (rest.pattern) |child| try self.analyzePatternTypes(child);
+                for (list.patterns) |child| try self.analyzePatternTypes(view, child);
+                if (list.rest) |rest| if (rest.pattern) |child| try self.analyzePatternTypes(view, child);
             },
-            .tuple => |items| for (items) |child| try self.analyzePatternTypes(child),
-            .num_literal => |literal| if (literal.conversion) |conversion| try self.analyzeExprTypes(conversion),
-            .small_dec_literal => |literal| if (literal.conversion) |conversion| try self.analyzeExprTypes(conversion),
-            .dec_literal => |literal| if (literal.conversion) |conversion| try self.analyzeExprTypes(conversion),
+            .tuple => |items| for (items) |child| try self.analyzePatternTypes(view, child),
+            .num_literal => |literal| if (literal.conversion) |conversion| try self.analyzeExprTypes(view, conversion),
+            .small_dec_literal => |literal| if (literal.conversion) |conversion| try self.analyzeExprTypes(view, conversion),
+            .dec_literal => |literal| if (literal.conversion) |conversion| try self.analyzeExprTypes(view, conversion),
             .frac_f32_literal,
             .frac_f64_literal,
             => {},
-            .str_literal => |literal| if (literal.conversion) |conversion| try self.analyzeExprTypes(conversion),
+            .str_literal => |literal| if (literal.conversion) |conversion| try self.analyzeExprTypes(view, conversion),
             .str_interpolation => |interpolation| {
                 for (interpolation.steps) |step| {
-                    if (step.capture) |capture| try self.analyzePatternTypes(capture);
+                    if (step.capture) |capture| try self.analyzePatternTypes(view, capture);
                 }
             },
         }
@@ -1223,34 +1308,36 @@ const Builder = struct {
 
     fn analyzeDirectCallTarget(
         self: *Builder,
+        view: ModuleView,
         call_expr: checked.CheckedExprId,
         call: anytype,
     ) Allocator.Error!void {
         const target = call.direct_target orelse return;
-        const source = self.workerSourceForDirectTarget(target);
-        const checked_type = self.workerCheckedTypeForDirectTarget(target, call.source_fn_ty_payload);
+        const source = self.workerSourceForDirectTarget(view, target);
+        const checked_type = self.workerCheckedTypeForSource(source, typeRef(view, call.source_fn_ty_payload));
         const worker = try self.ensureWorker(source, checked_type, null);
-        if (self.plan.directWorkerForCall(call_expr)) |existing| {
+        const call_ref = ExprRef{ .module = view.key, .expr = call_expr };
+        if (self.plan.directWorkerForCall(call_ref)) |existing| {
             if (existing != worker) {
                 boxyPlanInvariant("boxy direct call plan tried to bind a checked call to two workers");
             }
             return;
         }
         try self.plan.direct_calls.append(self.allocator, .{
-            .call = call_expr,
+            .call = call_ref,
             .worker = worker,
         });
     }
 
-    fn workerSourceForDirectTarget(self: *Builder, target: checked.ResolvedValueId) WorkerSource {
-        const record = self.resolvedValueRecord(target);
+    fn workerSourceForDirectTarget(self: *Builder, view: ModuleView, target: checked.ResolvedValueId) WorkerSource {
+        const record = self.resolvedValueRecord(view, target);
         return switch (record.ref) {
             .top_level_proc,
             .promoted_top_level_proc,
             => |procedure| self.workerSourceForProcedureUse(procedure),
             .platform_required_proc => |required| self.workerSourceForProcedureUse(required.procedure),
             .local_proc => boxyPlanInvariant("local procedure direct call reached boxy planning before nested procedure worker planning"),
-            .imported_proc => boxyPlanInvariant("imported direct call reached boxy planning before imported body planning"),
+            .imported_proc => |procedure| self.workerSourceForProcedureUse(procedure),
             .hosted_proc => boxyPlanInvariant("hosted direct call reached boxy planning before hosted wrapper planning"),
             .local_param,
             .local_value,
@@ -1265,59 +1352,88 @@ const Builder = struct {
         };
     }
 
-    fn workerCheckedTypeForDirectTarget(
-        self: *Builder,
-        target: checked.ResolvedValueId,
-        fallback: checked.CheckedTypeId,
-    ) checked.CheckedTypeId {
-        const record = self.resolvedValueRecord(target);
-        return switch (record.ref) {
-            .top_level_proc,
-            .promoted_top_level_proc,
-            .imported_proc,
-            .hosted_proc,
-            => |procedure| procedure.source_fn_ty_payload orelse fallback,
-            .platform_required_proc => |required| required.procedure.source_fn_ty_payload orelse
-                boxyPlanInvariant("platform-required direct call target had no relation-owned function type"),
-            .local_proc => fallback,
-            .local_param,
-            .local_value,
-            .local_mutable_version,
-            .pattern_binder,
-            .selected_hoisted_const,
-            .top_level_const,
-            .imported_const,
-            .platform_required_declaration,
-            .platform_required_const,
-            => boxyPlanInvariant("checked direct call target did not reference a procedure type"),
+    fn workerCheckedTypeForSource(self: *Builder, source: WorkerSource, fallback: TypeRef) TypeRef {
+        return switch (source) {
+            .procedure_template => |template| self.checkedTypeForTemplate(template),
+            .procedure_binding => |binding| self.checkedTypeForTopLevelBinding(binding),
+            .procedure_use => |use| switch (use.binding) {
+                .top_level => |binding| self.checkedTypeForTopLevelBinding(binding),
+                .platform_required => |required| self.checkedTypeForTopLevelBinding(.{
+                    .artifact = required.app_value.artifact,
+                    .binding = required.procedure_binding,
+                }),
+                .imported => |imported| self.checkedTypeForImportedBinding(imported),
+                .hosted => fallback,
+            },
         };
+    }
+
+    fn checkedTypeForTopLevelBinding(
+        self: *Builder,
+        binding_ref: checked.ArtifactTopLevelProcedureBindingRef,
+    ) TypeRef {
+        const view = self.moduleForId(binding_ref.artifact);
+        const binding = view.top_level_procedure_bindings.get(binding_ref.binding);
+        return switch (binding.body) {
+            .direct_template => |direct| switch (direct.template) {
+                .checked => |template| self.checkedTypeForTemplate(template),
+                .lifted,
+                .synthetic,
+                => boxyPlanInvariant("non-checked procedure template reached boxy worker type planning"),
+            },
+            .callable_eval_template => boxyPlanInvariant("callable eval procedure binding reached runtime boxy worker type planning"),
+        };
+    }
+
+    fn checkedTypeForImportedBinding(
+        self: *Builder,
+        binding_ref: checked.ImportedProcedureBindingRef,
+    ) TypeRef {
+        const view = self.moduleForId(binding_ref.artifact);
+        const binding = self.importedProcedureBinding(view, binding_ref);
+        return switch (binding.body) {
+            .direct_template => |direct| switch (direct.template) {
+                .checked => |template| self.checkedTypeForTemplate(template),
+                .lifted,
+                .synthetic,
+                => boxyPlanInvariant("non-checked imported procedure template reached boxy worker type planning"),
+            },
+            .callable_eval_template => boxyPlanInvariant("callable eval imported procedure binding reached runtime boxy worker type planning"),
+        };
+    }
+
+    fn checkedTypeForTemplate(self: *Builder, template_ref: canonical.ProcedureTemplateRef) TypeRef {
+        const view = self.moduleForArtifactRef(template_ref.artifact);
+        const template = view.checked_procedure_templates.get(template_ref.template);
+        return typeRef(view, template.checked_fn_root);
     }
 
     fn workerSourceForProcedureUse(self: *Builder, procedure: checked.ProcedureUseTemplate) WorkerSource {
         return switch (procedure.binding) {
             .top_level => |top_level| blk: {
-                self.requireRootArtifact(top_level.artifact);
-                _ = self.rootProcedureBindingBody(top_level.binding);
-                break :blk .{ .procedure_binding = top_level.binding };
+                const view = self.moduleForId(top_level.artifact);
+                _ = self.rootProcedureBindingBody(view, top_level.binding);
+                break :blk .{ .procedure_binding = top_level };
             },
             .platform_required => |required| blk: {
-                self.requireRootArtifact(required.app_value.artifact);
-                _ = self.rootProcedureBindingBody(required.procedure_binding);
-                break :blk .{ .procedure_binding = required.procedure_binding };
+                const view = self.moduleForId(required.app_value.artifact);
+                _ = self.rootProcedureBindingBody(view, required.procedure_binding);
+                break :blk .{ .procedure_binding = .{
+                    .artifact = required.app_value.artifact,
+                    .binding = required.procedure_binding,
+                } };
             },
-            .imported => boxyPlanInvariant("imported procedure use reached boxy planning before imported body planning"),
+            .imported => .{ .procedure_use = procedure },
             .hosted => boxyPlanInvariant("hosted procedure use reached boxy planning before hosted wrapper planning"),
         };
     }
 
-    fn resolvedValueRecord(self: *Builder, target: checked.ResolvedValueId) checked.ResolvedValueRefRecord {
-        const root_module = self.root_module orelse
-            boxyPlanInvariant("direct call target planning requires checked body metadata");
+    fn resolvedValueRecord(_: *Builder, view: ModuleView, target: checked.ResolvedValueId) checked.ResolvedValueRefRecord {
         const raw = @intFromEnum(target);
-        if (raw >= root_module.module.resolved_value_refs.records.len) {
+        if (raw >= view.resolved_value_refs.records.len) {
             boxyPlanInvariant("checked direct call target referenced a missing resolved value");
         }
-        return root_module.module.resolved_value_refs.records[raw];
+        return view.resolved_value_refs.records[raw];
     }
 };
 
@@ -1325,8 +1441,8 @@ fn rootRequiresHostWrapper(root: checked.RootRequest) bool {
     return root.abi != .roc or root.exposure != .private;
 }
 
-fn workerSourceForRoot(root: checked.RootRequest) ?WorkerSource {
-    if (root.procedure_binding) |binding| return .{ .procedure_binding = binding };
+fn workerSourceForRoot(root: checked.RootRequest, root_key: checked.CheckedModuleArtifactKey) ?WorkerSource {
+    if (root.procedure_binding) |binding| return .{ .procedure_binding = .{ .artifact = root_key, .binding = binding } };
     if (root.procedure_use) |procedure| return .{ .procedure_use = procedure };
     if (root.procedure_template) |template| return .{ .procedure_template = template };
     return null;
@@ -1341,6 +1457,11 @@ fn moduleViewFromImported(imported: checked.ImportedModuleView) ModuleView {
         .key = imported.key,
         .canonical_names = imported.canonical_names,
         .checked_types = imported.checked_types,
+        .checked_bodies = imported.checked_bodies,
+        .resolved_value_refs = imported.resolved_value_refs,
+        .checked_procedure_templates = imported.checked_procedure_templates,
+        .top_level_procedure_bindings = imported.top_level_procedure_bindings,
+        .exported_procedure_bindings = imported.exported_procedure_bindings,
         .interface_capabilities = imported.interface_capabilities,
     };
 }
@@ -1350,8 +1471,25 @@ fn moduleViewFromArtifact(artifact: *const checked.CheckedModuleArtifact) Module
         .key = artifact.key,
         .canonical_names = &artifact.canonical_names,
         .checked_types = artifact.checked_types.view(),
+        .checked_bodies = artifact.checked_bodies.view(),
+        .resolved_value_refs = &artifact.resolved_value_refs,
+        .checked_procedure_templates = &artifact.checked_procedure_templates,
+        .top_level_procedure_bindings = &artifact.top_level_procedure_bindings,
+        .exported_procedure_bindings = artifact.exported_procedure_bindings.view(),
         .interface_capabilities = &artifact.interface_capabilities,
     };
+}
+
+fn typeRef(view: ModuleView, ty: checked.CheckedTypeId) TypeRef {
+    return .{ .module = view.key, .ty = ty };
+}
+
+fn typeRefEql(a: TypeRef, b: TypeRef) bool {
+    return a.ty == b.ty and moduleKeyEqual(a.module, b.module);
+}
+
+fn exprRefEql(a: ExprRef, b: ExprRef) bool {
+    return a.expr == b.expr and moduleKeyEqual(a.module, b.module);
 }
 
 fn moduleKeyEqual(a: checked.ModuleId, b: checked.ModuleId) bool {
@@ -1436,10 +1574,10 @@ test "boxy planner records explicit source type representation bindings" {
     defer plan.deinit();
 
     try std.testing.expectEqual(@as(usize, 3), plan.type_reps.items.len);
-    try std.testing.expectEqual(plan.root_reps.items[0], plan.repForSourceType(@enumFromInt(2)).?);
-    try std.testing.expect(plan.repForSourceType(@enumFromInt(0)) != null);
-    try std.testing.expect(plan.repForSourceType(@enumFromInt(1)) != null);
-    try std.testing.expect(plan.repForSourceType(@enumFromInt(99)) == null);
+    try std.testing.expectEqual(plan.root_reps.items[0], plan.repForSourceType(rootTypeRef(@enumFromInt(2))).?);
+    try std.testing.expect(plan.repForSourceType(rootTypeRef(@enumFromInt(0))) != null);
+    try std.testing.expect(plan.repForSourceType(rootTypeRef(@enumFromInt(1))) != null);
+    try std.testing.expect(plan.repForSourceType(rootTypeRef(@enumFromInt(99))) == null);
 }
 
 test "boxy planner classifies constrained variables as dynamic with descriptor and dictionary requirements" {
@@ -1714,18 +1852,18 @@ test "boxy planner resolves local nominal declared order from box payload capabi
     try std.testing.expectEqual(@as(usize, 2), children.len);
     try std.testing.expectEqual(ChildRole.nominal_backing, children[0].role);
     try std.testing.expectEqual(ChildRole{ .nominal_padding_field = 0 }, children[1].role);
-    try std.testing.expectEqual(@as(checked.CheckedTypeId, @enumFromInt(0)), children[1].source_type);
+    try expectTypeRef(moduleKey(1), @enumFromInt(0), children[1].source_type);
 
     const fields = plan.declaredFieldSlice(nominal.declared_fields);
     try std.testing.expectEqual(@as(usize, 3), fields.len);
     try std.testing.expectEqual(@as(u16, 0), fields[0].index);
     try std.testing.expectEqual(@as(u16, 2), fields[1].index);
     try std.testing.expect(fields[1].is_padding);
-    try std.testing.expectEqual(@as(checked.CheckedTypeId, @enumFromInt(0)), fields[1].source_type);
+    try expectTypeRef(moduleKey(1), @enumFromInt(0), fields[1].source_type);
     try std.testing.expectEqual(@as(u16, 1), fields[2].index);
 }
 
-test "boxy planner maps imported box payload capability types into the root view" {
+test "boxy planner records imported box payload capability source modules" {
     const gpa = std.testing.allocator;
 
     var root_names = canonical.CanonicalNameStore.init(gpa);
@@ -1875,18 +2013,18 @@ test "boxy planner maps imported box payload capability types into the root view
     const nominal = plan.representations.items[@intFromEnum(plan.root_reps.items[0])];
     const children = plan.childSlice(nominal.children);
     try std.testing.expectEqual(@as(usize, 2), children.len);
-    try std.testing.expectEqual(@as(checked.CheckedTypeId, @enumFromInt(3)), children[0].source_type);
-    try std.testing.expectEqual(@as(checked.CheckedTypeId, @enumFromInt(0)), children[1].source_type);
+    try expectTypeRef(source_key, @enumFromInt(3), children[0].source_type);
+    try expectTypeRef(source_key, @enumFromInt(5), children[1].source_type);
 
     const fields = plan.declaredFieldSlice(nominal.declared_fields);
     try std.testing.expectEqual(@as(usize, 3), fields.len);
     try std.testing.expectEqual(@as(u16, 0), fields[0].index);
-    try std.testing.expectEqual(@as(checked.CheckedTypeId, @enumFromInt(0)), fields[0].source_type);
+    try expectTypeRef(source_key, @enumFromInt(5), fields[0].source_type);
     try std.testing.expectEqual(@as(u16, 2), fields[1].index);
     try std.testing.expect(fields[1].is_padding);
-    try std.testing.expectEqual(@as(checked.CheckedTypeId, @enumFromInt(0)), fields[1].source_type);
+    try expectTypeRef(source_key, @enumFromInt(5), fields[1].source_type);
     try std.testing.expectEqual(@as(u16, 1), fields[2].index);
-    try std.testing.expectEqual(@as(checked.CheckedTypeId, @enumFromInt(1)), fields[2].source_type);
+    try expectTypeRef(source_key, @enumFromInt(1), fields[2].source_type);
 }
 
 fn builtinNominal(
@@ -1909,6 +2047,15 @@ fn moduleKey(byte: u8) checked.ModuleId {
     var key = checked.ModuleId{};
     key.bytes[0] = byte;
     return key;
+}
+
+fn rootTypeRef(ty: checked.CheckedTypeId) TypeRef {
+    return .{ .ty = ty };
+}
+
+fn expectTypeRef(module: checked.ModuleId, ty: checked.CheckedTypeId, actual: TypeRef) !void {
+    try std.testing.expect(moduleKeyEqual(module, actual.module));
+    try std.testing.expectEqual(ty, actual.ty);
 }
 
 fn typeKey(byte: u8) canonical.CanonicalTypeKey {

@@ -817,7 +817,7 @@ test "boxy layout planner records private worker function arg and return layouts
         .id = @enumFromInt(1),
         .root_request = roots[0],
         .source = extra_source,
-        .checked_type = @enumFromInt(2),
+        .checked_type = .{ .ty = @enumFromInt(2) },
         .rep = extra_rep,
     });
 
