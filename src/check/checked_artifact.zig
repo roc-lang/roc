@@ -24118,7 +24118,7 @@ pub const CheckedModuleArtifact = struct {
             // `proc_bases`; `checked_types` includes its `var_names` interner = 3).
             // POD inline `key`/`module_identity` contribute 0. Fixed at compile time,
             // independent of stored data size.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 175);
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 180);
         }
 
         /// Append every sub-store's bytes to `writer` in field order, recording
@@ -28029,8 +28029,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, bump `serialized_layout_version` and replace the golden bytes below with
     // the ones this assertion prints.
     const golden: [32]u8 = .{
-        0xF9, 0x79, 0x2C, 0xDD, 0xB3, 0x0A, 0x26, 0x6E, 0xFB, 0x2B, 0x75, 0x1B, 0x30, 0x66, 0x9E, 0x6F,
-        0x52, 0xDB, 0x49, 0x10, 0x01, 0x6D, 0x33, 0xD7, 0xCD, 0x1D, 0xD3, 0x46, 0xEC, 0xDB, 0x55, 0x7E,
+        0xD7, 0x9C, 0xFE, 0x2D, 0xFA, 0x21, 0x03, 0xFA, 0xED, 0x2E, 0xD6, 0x56, 0x90, 0xDC, 0xBE, 0xD4,
+        0x20, 0x7A, 0x16, 0xB3, 0x60, 0x73, 0x6E, 0x0A, 0xF7, 0xAF, 0xC0, 0x83, 0x13, 0x86, 0xE9, 0x79,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

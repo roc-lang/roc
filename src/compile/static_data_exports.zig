@@ -231,6 +231,16 @@ const StaticDataBuilder = struct {
         plan: lir.Program.ConstPlanId,
         layout_idx: layout.Idx,
     ) MaterializationError!MaterializedValue {
+        return try self.materializeRawValue(node.module, node.module.store.get(node.id), plan, layout_idx);
+    }
+
+    fn materializeRawValue(
+        self: *StaticDataBuilder,
+        source: ConstModule,
+        value: ConstValue,
+        plan: lir.Program.ConstPlanId,
+        layout_idx: layout.Idx,
+    ) MaterializationError!MaterializedValue {
         const layout_value = self.layoutValue(layout_idx);
         const bytes = try self.allocator.alloc(u8, self.layouts().layoutSize(layout_value));
         @memset(bytes, 0);
@@ -241,7 +251,7 @@ const StaticDataBuilder = struct {
             self.allocator.free(bytes);
         }
 
-        try self.writeValue(bytes, &relocations, 0, node.module, node.module.store.get(node.id), plan, layout_idx);
+        try self.writeValue(bytes, &relocations, 0, source, value, plan, layout_idx);
 
         return .{
             .bytes = bytes,
@@ -271,9 +281,9 @@ const StaticDataBuilder = struct {
             .str => try self.writeStr(bytes, relocations, base_offset, source, value),
             .list => |elem_plan| try self.writeList(bytes, relocations, base_offset, source, value, elem_plan, layout_idx),
             .box => |payload_plan| try self.writeBox(bytes, relocations, base_offset, source, value, payload_plan, layout_idx),
-            .tuple => |items| try self.writeTuple(bytes, relocations, base_offset, source, value, items, layout_idx),
-            .record => |fields| try self.writeRecord(bytes, relocations, base_offset, source, value, fields, layout_idx),
-            .tag_union => |variants| try self.writeTagUnion(bytes, relocations, base_offset, source, value, variants, layout_idx),
+            .tuple => |items| try self.writeTuple(bytes, relocations, base_offset, source, value, plan_id, items, layout_idx),
+            .record => |fields| try self.writeRecord(bytes, relocations, base_offset, source, value, plan_id, fields, layout_idx),
+            .tag_union => |variants| try self.writeTagUnion(bytes, relocations, base_offset, source, value, plan_id, variants, layout_idx),
             .named => |named| {
                 const backing = switch (value) {
                     .nominal => |nominal| nominal.backing,
@@ -284,6 +294,40 @@ const StaticDataBuilder = struct {
             .fn_value => staticDataInvariant("provided function-valued data export reached finite callable static materialization"),
             .erased_fn => |set| try self.writeErasedFn(bytes, relocations, base_offset, source, value, set, layout_idx),
         }
+    }
+
+    fn writeBoxedSemanticValue(
+        self: *StaticDataBuilder,
+        bytes: []u8,
+        relocations: *std.ArrayList(StaticDataRelocation),
+        base_offset: u32,
+        source: ConstModule,
+        value: ConstValue,
+        plan_id: lir.Program.ConstPlanId,
+        layout_idx: layout.Idx,
+    ) MaterializationError!bool {
+        const layout_value = self.layoutValue(layout_idx);
+        if (layout_value.tag == .box_of_zst) {
+            self.writeTargetWord(bytes, base_offset, 0);
+            return true;
+        }
+        if (layout_value.tag != .box) return false;
+
+        const abi = self.layouts().builtinBoxAbi(layout_idx);
+        const payload = try self.materializeRawValue(source, value, plan_id, abi.elem_layout_idx orelse layout.Idx.zst);
+        var payload_consumed = false;
+        errdefer if (!payload_consumed) self.deinitMaterialized(payload);
+
+        const target = try self.addStaticAllocationWithRelocs(
+            payload.bytes,
+            abi.elem_alignment,
+            abi.contains_refcounted,
+            null,
+            payload.relocations,
+        );
+        payload_consumed = true;
+        try self.writePointerRelocation(bytes, relocations, base_offset, target.symbol_name, target.addend);
+        return true;
     }
 
     fn writeScalar(self: *StaticDataBuilder, bytes: []u8, base_offset: u32, value: ConstValue, layout_idx: layout.Idx) void {
@@ -511,6 +555,7 @@ const StaticDataBuilder = struct {
         base_offset: u32,
         source: ConstModule,
         value: ConstValue,
+        plan_id: lir.Program.ConstPlanId,
         item_plans: []const lir.Program.ConstPlanId,
         tuple_layout_idx: layout.Idx,
     ) MaterializationError!void {
@@ -519,6 +564,7 @@ const StaticDataBuilder = struct {
             else => staticDataInvariant("tuple const plan received non-tuple ConstStore node"),
         };
         if (item_plans.len != items.len) staticDataInvariant("tuple const plan length differed from ConstStore node");
+        if (try self.writeBoxedSemanticValue(bytes, relocations, base_offset, source, value, plan_id, tuple_layout_idx)) return;
         const tuple_layout = self.layoutValue(tuple_layout_idx);
         if (tuple_layout.tag == .zst) return;
         if (tuple_layout.tag != .struct_) staticDataInvariant("tuple const plan had non-struct layout");
@@ -539,6 +585,7 @@ const StaticDataBuilder = struct {
         base_offset: u32,
         source: ConstModule,
         value: ConstValue,
+        plan_id: lir.Program.ConstPlanId,
         field_plans: []const lir.Program.ConstPlanId,
         record_layout_idx: layout.Idx,
     ) MaterializationError!void {
@@ -547,6 +594,7 @@ const StaticDataBuilder = struct {
             else => staticDataInvariant("record const plan received non-record ConstStore node"),
         };
         if (field_plans.len != fields.len) staticDataInvariant("record const plan length differed from ConstStore node");
+        if (try self.writeBoxedSemanticValue(bytes, relocations, base_offset, source, value, plan_id, record_layout_idx)) return;
         const record_layout = self.layoutValue(record_layout_idx);
         if (record_layout.tag == .zst) return;
         if (record_layout.tag != .struct_) staticDataInvariant("record const plan had non-struct layout");
@@ -567,6 +615,7 @@ const StaticDataBuilder = struct {
         base_offset: u32,
         source: ConstModule,
         value: ConstValue,
+        plan_id: lir.Program.ConstPlanId,
         variants: []const lir.Program.ConstTagVariant,
         tag_union_layout_idx: layout.Idx,
     ) MaterializationError!void {
@@ -577,6 +626,7 @@ const StaticDataBuilder = struct {
         const variant_index = variantIndexForTag(variants, tag.tag_name);
         const variant = variants[variant_index];
         if (variant.payloads.len != tag.payloads.len) staticDataInvariant("tag const plan payload count differed from ConstStore node");
+        if (try self.writeBoxedSemanticValue(bytes, relocations, base_offset, source, value, plan_id, tag_union_layout_idx)) return;
 
         const tag_layout = self.layoutValue(tag_union_layout_idx);
         if (tag_layout.tag == .zst) return;
