@@ -14,6 +14,7 @@ const Allocator = std.mem.Allocator;
 const names = check.CheckedNames;
 const checked = check.CheckedModule;
 const const_store = check.ConstStore;
+const dispatch = check.StaticDispatchRegistry;
 
 /// Layout requested for a checked value type digest.
 pub const RequestedLayout = struct {
@@ -83,6 +84,82 @@ pub const ErasedFns = struct {
 /// Identifier for a constant storage plan emitted with LIR.
 pub const ConstPlanId = enum(u32) { _ };
 
+/// Identifier for one boxy runtime type descriptor owned by a LIR program.
+pub const BoxyTypeDescId = enum(u32) { _ };
+
+/// Identifier for one boxy runtime dictionary owned by a LIR program.
+pub const BoxyDictId = enum(u32) { _ };
+
+/// Reference to type-descriptor data available to boxy LIR.
+pub const BoxyDescRef = union(enum) {
+    static: BoxyTypeDescId,
+    local: LIR.LocalId,
+};
+
+/// Reference to dictionary data available to boxy LIR.
+pub const BoxyDictRef = union(enum) {
+    static: BoxyDictId,
+    local: LIR.LocalId,
+};
+
+/// Explicit runtime operation needed for a dynamic boxy payload.
+pub const BoxyPayloadOp = enum {
+    copy,
+    incref,
+    decref,
+    drop,
+    free,
+};
+
+/// One explicitly planned payload operation. It never asks a backend to infer
+/// reference-counting behavior from a pointer-shaped value.
+pub const BoxyPayloadStep = union(enum) {
+    concrete: struct {
+        op: BoxyPayloadOp,
+        layout_idx: layout.Idx,
+    },
+    dynamic: struct {
+        op: BoxyPayloadOp,
+        desc: BoxyDescRef,
+    },
+};
+
+/// Runtime data for representation and structural operations on a boxy value.
+pub const BoxyTypeDesc = struct {
+    payload_layout: layout.Idx,
+    contains_refcounted: bool,
+    nested_descs: []const BoxyDescRef = &.{},
+    copy_plan: []const BoxyPayloadStep = &.{},
+    drop_plan: []const BoxyPayloadStep = &.{},
+    structural_eq: ?LIR.LirProcSpecId = null,
+    structural_hash: ?LIR.LirProcSpecId = null,
+    debug_checked_type: ?checked.CheckedTypeId = null,
+};
+
+/// Adapter metadata for one dictionary method slot.
+pub const BoxyMethodAdapter = struct {
+    arg_layouts: []const layout.Idx = &.{},
+    ret_layout: ?layout.Idx = null,
+    arg_descs: []const BoxyDescRef = &.{},
+    ret_desc: ?BoxyDescRef = null,
+    nested_dicts: []const BoxyDictRef = &.{},
+};
+
+/// One callable slot in a boxy dictionary.
+pub const BoxyMethodSlot = struct {
+    method: names.MethodNameId,
+    proc: LIR.LirProcSpecId,
+    adapter: BoxyMethodAdapter = .{},
+};
+
+/// Runtime data for polymorphic behavior and static dispatch in boxy LIR.
+pub const BoxyDict = struct {
+    debug_dispatch_plan: ?dispatch.StaticDispatchPlanId = null,
+    method_slots: []const BoxyMethodSlot = &.{},
+    hidden_descs: []const BoxyDescRef = &.{},
+    nested_dicts: []const BoxyDictRef = &.{},
+};
+
 /// Tag variant in a constant storage plan.
 pub const ConstTagVariant = struct {
     name: []const u8,
@@ -128,6 +205,8 @@ pub const Result = struct {
     requested_layouts: std.ArrayList(RequestedLayout),
     fn_sets: std.ArrayList(FnSet),
     erased_fns: std.ArrayList(ErasedFns),
+    boxy_type_descs: std.ArrayList(BoxyTypeDesc),
+    boxy_dicts: std.ArrayList(BoxyDict),
     const_plans: std.ArrayList(ConstPlan),
     const_roots: std.ArrayList(ConstRootPlan),
     comptime_sites: std.ArrayList(LIR.ComptimeSite),
@@ -141,6 +220,8 @@ pub const Result = struct {
             .requested_layouts = .empty,
             .fn_sets = .empty,
             .erased_fns = .empty,
+            .boxy_type_descs = .empty,
+            .boxy_dicts = .empty,
             .const_plans = .empty,
             .const_roots = .empty,
             .comptime_sites = .empty,
@@ -158,6 +239,10 @@ pub const Result = struct {
         self.const_plans.deinit(allocator);
         deinitFnSets(allocator, self.fn_sets.items);
         deinitErasedFns(allocator, self.erased_fns.items);
+        deinitBoxyTypeDescs(allocator, self.boxy_type_descs.items);
+        deinitBoxyDicts(allocator, self.boxy_dicts.items);
+        self.boxy_dicts.deinit(allocator);
+        self.boxy_type_descs.deinit(allocator);
         self.erased_fns.deinit(allocator);
         self.fn_sets.deinit(allocator);
         self.requested_layouts.deinit(allocator);
@@ -242,6 +327,102 @@ pub fn deinitErasedFns(allocator: Allocator, erased_fns: []const ErasedFns) void
         }
         if (set.entries.len > 0) allocator.free(set.entries);
     }
+}
+
+/// Free slices owned by boxy runtime type descriptors.
+pub fn deinitBoxyTypeDescs(allocator: Allocator, descs: []const BoxyTypeDesc) void {
+    for (descs) |desc| {
+        if (desc.nested_descs.len > 0) allocator.free(desc.nested_descs);
+        if (desc.copy_plan.len > 0) allocator.free(desc.copy_plan);
+        if (desc.drop_plan.len > 0) allocator.free(desc.drop_plan);
+    }
+}
+
+/// Free slices owned by boxy runtime dictionaries.
+pub fn deinitBoxyDicts(allocator: Allocator, dicts: []const BoxyDict) void {
+    for (dicts) |dict| {
+        for (dict.method_slots) |slot| {
+            if (slot.adapter.arg_layouts.len > 0) allocator.free(slot.adapter.arg_layouts);
+            if (slot.adapter.arg_descs.len > 0) allocator.free(slot.adapter.arg_descs);
+            if (slot.adapter.nested_dicts.len > 0) allocator.free(slot.adapter.nested_dicts);
+        }
+        if (dict.method_slots.len > 0) allocator.free(dict.method_slots);
+        if (dict.hidden_descs.len > 0) allocator.free(dict.hidden_descs);
+        if (dict.nested_dicts.len > 0) allocator.free(dict.nested_dicts);
+    }
+}
+
+test "boxy side tables initialize empty and own nested slices" {
+    const allocator = std.testing.allocator;
+    var result = try Result.init(allocator, .u64);
+    defer result.deinit();
+
+    try std.testing.expectEqual(@as(usize, 0), result.boxy_type_descs.items.len);
+    try std.testing.expectEqual(@as(usize, 0), result.boxy_dicts.items.len);
+
+    const nested_descs = try allocator.dupe(BoxyDescRef, &[_]BoxyDescRef{.{ .static = @enumFromInt(0) }});
+    var nested_descs_owned = false;
+    errdefer if (!nested_descs_owned) allocator.free(nested_descs);
+    const copy_plan = try allocator.dupe(BoxyPayloadStep, &[_]BoxyPayloadStep{.{ .dynamic = .{
+        .op = .copy,
+        .desc = .{ .static = @enumFromInt(0) },
+    } }});
+    var copy_plan_owned = false;
+    errdefer if (!copy_plan_owned) allocator.free(copy_plan);
+    const drop_plan = try allocator.dupe(BoxyPayloadStep, &[_]BoxyPayloadStep{.{ .concrete = .{
+        .op = .drop,
+        .layout_idx = .zst,
+    } }});
+    var drop_plan_owned = false;
+    errdefer if (!drop_plan_owned) allocator.free(drop_plan);
+
+    try result.boxy_type_descs.append(allocator, .{
+        .payload_layout = .zst,
+        .contains_refcounted = true,
+        .nested_descs = nested_descs,
+        .copy_plan = copy_plan,
+        .drop_plan = drop_plan,
+    });
+    nested_descs_owned = true;
+    copy_plan_owned = true;
+    drop_plan_owned = true;
+
+    const arg_layouts = try allocator.dupe(layout.Idx, &[_]layout.Idx{.zst});
+    var arg_layouts_owned = false;
+    errdefer if (!arg_layouts_owned) allocator.free(arg_layouts);
+    const arg_descs = try allocator.dupe(BoxyDescRef, &[_]BoxyDescRef{.{ .static = @enumFromInt(0) }});
+    var arg_descs_owned = false;
+    errdefer if (!arg_descs_owned) allocator.free(arg_descs);
+    const nested_dicts = try allocator.dupe(BoxyDictRef, &[_]BoxyDictRef{.{ .static = @enumFromInt(0) }});
+    var nested_dicts_owned = false;
+    errdefer if (!nested_dicts_owned) allocator.free(nested_dicts);
+    const method_slots = try allocator.dupe(BoxyMethodSlot, &[_]BoxyMethodSlot{.{
+        .method = @enumFromInt(0),
+        .proc = @enumFromInt(0),
+        .adapter = .{
+            .arg_layouts = arg_layouts,
+            .arg_descs = arg_descs,
+            .nested_dicts = nested_dicts,
+        },
+    }});
+    var method_slots_owned = false;
+    errdefer if (!method_slots_owned) allocator.free(method_slots);
+    const hidden_descs = try allocator.dupe(BoxyDescRef, &[_]BoxyDescRef{.{ .static = @enumFromInt(0) }});
+    var hidden_descs_owned = false;
+    errdefer if (!hidden_descs_owned) allocator.free(hidden_descs);
+
+    try result.boxy_dicts.append(allocator, .{
+        .method_slots = method_slots,
+        .hidden_descs = hidden_descs,
+    });
+    arg_layouts_owned = true;
+    arg_descs_owned = true;
+    nested_dicts_owned = true;
+    method_slots_owned = true;
+    hidden_descs_owned = true;
+
+    try std.testing.expectEqual(@as(usize, 1), result.boxy_type_descs.items.len);
+    try std.testing.expectEqual(@as(usize, 1), result.boxy_dicts.items.len);
 }
 
 test "program declarations are referenced" {
