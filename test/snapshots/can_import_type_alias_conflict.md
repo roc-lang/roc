@@ -13,23 +13,9 @@ JsonValue : U64
 main = 42
 ~~~
 # EXPECTED
-DUPLICATE DEFINITION - can_import_type_alias_conflict.md:1:1:1:38
+NIL
 # PROBLEMS
-
-┌──────────────────────┐
-│ DUPLICATE DEFINITION ├─ The name `Json` is being redeclared here. ──────────┐
-└┬─────────────────────┘                                                      │
- │                                                                            │
- │  import json.Json exposing [JsonValue]                                     │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                     │
- └───────────────────────────────────── can_import_type_alias_conflict.md:1:1 ┘
-
-    In this scope, `Json` was already defined here:
-      ┌───────────────────────────────────────────────────────────────────────┐
-    1 │  import json.Json exposing [JsonValue]                                │
-      │  ‾                                                                    │
-      └──────────────────────────────── can_import_type_alias_conflict.md:1:1 ┘
-
+NIL
 # TOKENS
 ~~~zig
 KwImport,LowerIdent,NoSpaceDotUpperIdent,KwExposing,OpenSquare,UpperIdent,CloseSquare,

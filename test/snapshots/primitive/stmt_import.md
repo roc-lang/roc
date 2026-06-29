@@ -12,7 +12,6 @@ PARSE ERROR - stmt_import.md:1:18:1:19
 PARSE ERROR - stmt_import.md:1:19:1:22
 PARSE ERROR - stmt_import.md:1:22:1:23
 PARSE ERROR - stmt_import.md:1:27:1:28
-DUPLICATE DEFINITION - stmt_import.md:1:1:1:17
 # PROBLEMS
 
 ┌─────────────┐
@@ -69,21 +68,6 @@ DUPLICATE DEFINITION - stmt_import.md:1:1:1:17
         Dict(Str, Num)
         Try(a, Str)
         Maybe(List(U64))
-
-
-┌──────────────────────┐
-│ DUPLICATE DEFINITION ├─ The name `Json` is being redeclared here. ──────────┐
-└┬─────────────────────┘                                                      │
- │                                                                            │
- │  import json.Json [foo, BAR]                                               │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                          │
- └──────────────────────────────────────────────────────── stmt_import.md:1:1 ┘
-
-    In this scope, `Json` was already defined here:
-      ┌───────────────────────────────────────────────────────────────────────┐
-    1 │  import json.Json [foo, BAR]                                          │
-      │  ‾                                                                    │
-      └─────────────────────────────────────────────────── stmt_import.md:1:1 ┘
 
 # TOKENS
 ~~~zig

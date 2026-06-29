@@ -2803,9 +2803,9 @@ pub const Coordinator = struct {
             .bool => "Builtin.Bool",
             .list => "Builtin.List",
             .box => "Builtin.Box",
-            .parse_tag_union_spec => "Builtin.Encoding.ParseTagUnionSpec",
-            .fields => "Builtin.Encoding.FieldName.FieldNames",
-            .field => "Builtin.Encoding.FieldName",
+            .parse_tag_union_spec => "Builtin.ParseTagUnionSpec",
+            .fields => "Builtin.Fields",
+            .field => "Builtin.Field",
         };
     }
 
