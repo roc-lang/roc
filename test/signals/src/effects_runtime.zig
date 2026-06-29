@@ -20,6 +20,32 @@ pub const ActiveInterval = struct {
     active: bool,
 };
 
+pub const CleanupEvents = std.ArrayListUnmanaged([]const u8);
+
+pub fn appendCleanupEvent(allocator: std.mem.Allocator, events: *CleanupEvents, name: []const u8) void {
+    const copy = allocator.dupe(u8, name) catch @panic("out of memory");
+    events.append(allocator, copy) catch {
+        allocator.free(copy);
+        @panic("out of memory");
+    };
+}
+
+pub fn cleanupEventCount(events: []const []const u8, name: []const u8) u64 {
+    var count: u64 = 0;
+    for (events) |event_name| {
+        if (std.mem.eql(u8, event_name, name)) count += 1;
+    }
+    return count;
+}
+
+pub fn deinitCleanupEvents(allocator: std.mem.Allocator, events: *CleanupEvents) void {
+    for (events.items) |name| {
+        allocator.free(name);
+    }
+    events.deinit(allocator);
+    events.* = .empty;
+}
+
 pub fn appendPendingTask(
     allocator: std.mem.Allocator,
     tasks: *std.ArrayListUnmanaged(PendingTask),
@@ -304,6 +330,19 @@ test "effects runtime finds and removes pending tasks" {
     try std.testing.expectEqual(@as(u64, 1), removed.request_id);
     try std.testing.expectEqual(@as(usize, 1), tasks.items.len);
     try std.testing.expectEqual(@as(u64, 2), tasks.items[0].request_id);
+}
+
+test "effects runtime owns cleanup event storage" {
+    var events: CleanupEvents = .empty;
+    defer deinitCleanupEvents(std.testing.allocator, &events);
+
+    appendCleanupEvent(std.testing.allocator, &events, "close");
+    appendCleanupEvent(std.testing.allocator, &events, "close");
+    appendCleanupEvent(std.testing.allocator, &events, "flush");
+
+    try std.testing.expectEqual(@as(u64, 2), cleanupEventCount(events.items, "close"));
+    try std.testing.expectEqual(@as(u64, 1), cleanupEventCount(events.items, "flush"));
+    try std.testing.expectEqual(@as(u64, 0), cleanupEventCount(events.items, "missing"));
 }
 
 test "effects runtime indexes pending tasks" {

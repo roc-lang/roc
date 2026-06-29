@@ -166,6 +166,8 @@ pub const HostActiveEventDesc = struct {
 
 pub const HostPendingTask = effects_runtime.PendingTask;
 pub const HostActiveInterval = effects_runtime.ActiveInterval;
+pub const HostCleanupEvents = effects_runtime.CleanupEvents;
+pub const deinitCleanupEvents = effects_runtime.deinitCleanupEvents;
 
 pub const HostSignalEventRoute = struct {
     event_id: u64,
@@ -1587,7 +1589,7 @@ pub fn Engine(comptime Ctx: type) type {
         render_cache: render_cache_mod.Cache(Ctx) = .{},
         pending_tasks: std.ArrayListUnmanaged(HostPendingTask) = .empty,
         active_intervals: std.ArrayListUnmanaged(HostActiveInterval) = .empty,
-        cleanup_events: std.ArrayListUnmanaged([]const u8) = .empty,
+        cleanup_events: HostCleanupEvents = .empty,
         next_task_request_id: u64 = 1,
         next_interval_token: u64 = 1,
         next_elem_id: u64 = 0,
@@ -2201,11 +2203,7 @@ pub fn Engine(comptime Ctx: type) type {
         }
 
         pub fn cleanupEventCount(self: *const Self, name: []const u8) u64 {
-            var count: u64 = 0;
-            for (self.cleanup_events.items) |event_name| {
-                if (std.mem.eql(u8, event_name, name)) count += 1;
-            }
-            return count;
+            return effects_runtime.cleanupEventCount(self.cleanup_events.items, name);
         }
 
         pub fn activeTaskRecordByToken(self: *Self, token: HostSignalToken) ?*HostSignalRecord {
@@ -2887,12 +2885,7 @@ pub fn Engine(comptime Ctx: type) type {
         }
 
         pub fn appendCleanupEvent(self: *Self, ctx: Ctx.Handle, name: []const u8) void {
-            const allocator = Ctx.allocator(ctx);
-            const copy = allocator.dupe(u8, name) catch @panic("out of memory");
-            self.cleanup_events.append(allocator, copy) catch {
-                allocator.free(copy);
-                @panic("out of memory");
-            };
+            effects_runtime.appendCleanupEvent(Ctx.allocator(ctx), &self.cleanup_events, name);
         }
 
         pub fn disposeScopeSubtree(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, scope_id: u64) void {

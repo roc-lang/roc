@@ -601,11 +601,7 @@ fn clearActiveRuntime() void {
     shared_engine.active_intervals.deinit(a);
     shared_engine.active_intervals = .empty;
 
-    for (shared_engine.cleanup_events.items) |name| {
-        a.free(name);
-    }
-    shared_engine.cleanup_events.deinit(a);
-    shared_engine.cleanup_events = .empty;
+    engine.deinitCleanupEvents(a, &shared_engine.cleanup_events);
 
     if (shared_engine.root_elem) |root| {
         abi.decrefElem(root, &roc_host);

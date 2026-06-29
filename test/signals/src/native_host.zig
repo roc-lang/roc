@@ -1548,10 +1548,7 @@ const HostEnv = struct {
         self.clearPendingTasks();
         self.engine.pending_tasks.deinit(allocator);
 
-        for (self.engine.cleanup_events.items) |name| {
-            allocator.free(name);
-        }
-        self.engine.cleanup_events.deinit(allocator);
+        engine.deinitCleanupEvents(allocator, &self.engine.cleanup_events);
 
         if (self.engine.root_elem) |root| {
             abi.decrefElem(root, self.engine.roc_host.?);
