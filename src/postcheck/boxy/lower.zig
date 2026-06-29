@@ -3002,7 +3002,7 @@ const ProcBodyBuilder = struct {
             .in_progress => boxyLowerInvariant("in-progress boxy representation reached inspect lowering"),
             .dynamic => boxyLowerInvariant("dynamic inspect reached boxy lowering before descriptor inspect support"),
             .erased_callable => try self.assignStringBytesLiteral(target, "<function>", next),
-            .list => boxyLowerInvariant("list inspect reached boxy lowering before list inspect loop lowering"),
+            .list => try self.lowerListInspectLocalsInto(target, source, rep_id, next),
             .box => boxyLowerInvariant("Box inspect reached boxy lowering before descriptor-backed box adaptation lowering"),
             .primitive => |primitive| try self.lowerPrimitiveInspectLocalsInto(target, source, primitive, next),
             .bool_tag_union => try self.lowerBoolInspectLocalsInto(target, source, next),
@@ -3182,6 +3182,103 @@ const ProcBodyBuilder = struct {
             .op = .{ .discriminant = .{ .source = source } },
             .next = switch_stmt,
         } });
+    }
+
+    fn lowerListInspectLocalsInto(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        source: LIR.LocalId,
+        rep_id: Plan.TypeRepId,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const elem_rep = self.requiredSingleChild(rep_id, .list_elem).rep;
+        const len = try self.addFrameLocal(.u64);
+        const index = try self.addFrameLocal(.u64);
+        const out = try self.addFrameLocal(.str);
+        const zero_index = try self.addFrameLocal(.u64);
+        const initial_out = try self.addFrameLocal(.str);
+        const join_id = self.freshJoinPointId();
+
+        const body = try self.lowerListInspectLoopBody(target, source, elem_rep, len, index, out, join_id, next);
+        var initial_jump = try self.parent.result.store.addCFStmt(.{ .jump = .{ .target = join_id } });
+        initial_jump = try self.setLocalInitializeJoinParam(out, initial_out, initial_jump);
+        initial_jump = try self.setLocalInitializeJoinParam(index, zero_index, initial_jump);
+        initial_jump = try self.assignStringBytesLiteral(initial_out, "[", initial_jump);
+        initial_jump = try self.assignIntLiteral(zero_index, 0, initial_jump);
+        initial_jump = try self.assignUnaryLowLevel(len, .list_len, source, initial_jump);
+
+        return try self.parent.result.store.addCFStmt(.{ .join = .{
+            .id = join_id,
+            .params = try self.parent.result.store.addLocalSpan(&[_]LIR.LocalId{ index, out }),
+            .body = body,
+            .remainder = initial_jump,
+        } });
+    }
+
+    fn lowerListInspectLoopBody(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        source: LIR.LocalId,
+        elem_rep: Plan.TypeRepId,
+        len: LIR.LocalId,
+        index: LIR.LocalId,
+        out: LIR.LocalId,
+        join_id: LIR.JoinPointId,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const done = try self.addFrameLocal(.bool);
+        const finish = try self.lowerListInspectFinish(target, out, next);
+        const step = try self.lowerListInspectStep(source, elem_rep, index, out, join_id);
+        const switch_stmt = try self.boolSwitchNoContinuation(done, finish, step);
+        return try self.assignBinaryLowLevel(done, .num_is_eq, index, len, switch_stmt);
+    }
+
+    fn lowerListInspectFinish(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        out: LIR.LocalId,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const close = try self.addFrameLocal(.str);
+        const concat = try self.assignStrConcat(target, out, close, next);
+        return try self.assignStringBytesLiteral(close, "]", concat);
+    }
+
+    fn lowerListInspectStep(
+        self: *ProcBodyBuilder,
+        source: LIR.LocalId,
+        elem_rep: Plan.TypeRepId,
+        index: LIR.LocalId,
+        out: LIR.LocalId,
+        join_id: LIR.JoinPointId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const sep = try self.addFrameLocal(.str);
+        const zero = try self.addFrameLocal(.u64);
+        const is_first = try self.addFrameLocal(.bool);
+        const elem = try self.addFrameLocal(self.workerRuntimeLayoutForRep(elem_rep).layoutIdx());
+        const elem_str = try self.addFrameLocal(.str);
+        const with_sep = try self.addFrameLocal(.str);
+        const next_out = try self.addFrameLocal(.str);
+        const one = try self.addFrameLocal(.u64);
+        const next_index = try self.addFrameLocal(.u64);
+
+        var continuation = try self.parent.result.store.addCFStmt(.{ .jump = .{ .target = join_id } });
+        continuation = try self.setLocalInitializeJoinParam(out, next_out, continuation);
+        continuation = try self.setLocalInitializeJoinParam(index, next_index, continuation);
+        continuation = try self.assignBinaryLowLevel(next_index, .num_plus, index, one, continuation);
+        continuation = try self.assignIntLiteral(one, 1, continuation);
+        continuation = try self.assignStrConcat(next_out, with_sep, elem_str, continuation);
+        continuation = try self.lowerInspectRepLocalInto(elem_str, elem, elem_rep, continuation);
+        if (!self.isZstLocal(elem)) {
+            continuation = try self.assignBinaryLowLevel(elem, .list_get_unsafe, source, index, continuation);
+        }
+        continuation = try self.assignStrConcat(with_sep, out, sep, continuation);
+
+        const empty_sep = try self.assignStringBytesLiteral(sep, "", continuation);
+        const comma_sep = try self.assignStringBytesLiteral(sep, ", ", continuation);
+        const sep_switch = try self.boolSwitchNoContinuation(is_first, empty_sep, comma_sep);
+        const compare_first = try self.assignBinaryLowLevel(is_first, .num_is_eq, index, zero, sep_switch);
+        return try self.assignIntLiteral(zero, 0, compare_first);
     }
 
     fn lowerTagInspectVariant(
@@ -4276,6 +4373,23 @@ const ProcBodyBuilder = struct {
             .target = target,
             .value = source,
             .mode = .replace_existing,
+            .next = next,
+        } });
+    }
+
+    fn setLocalInitializeJoinParam(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        source: LIR.LocalId,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        if (self.parent.result.store.getLocal(target).layout_idx != self.parent.result.store.getLocal(source).layout_idx) {
+            boxyLowerInvariant("boxy join parameter initialization required matching layouts");
+        }
+        return try self.parent.result.store.addCFStmt(.{ .set_local = .{
+            .target = target,
+            .value = source,
+            .mode = .initialize_join_param,
             .next = next,
         } });
     }
@@ -11272,6 +11386,149 @@ test "boxy lowerer emits list construction with committed element layout" {
     try std.testing.expectEqual(first.target, out.lir_result.store.getLocalSpan(list.elems)[0]);
     try std.testing.expectEqual(second.target, out.lir_result.store.getLocalSpan(list.elems)[1]);
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = list.target } }, out.lir_result.store.getCFStmt(list.next));
+}
+
+test "boxy lowerer inspects concrete lists with an index and string accumulator loop" {
+    const gpa = std.testing.allocator;
+
+    var artifact = minimalCheckedArtifact(gpa);
+    defer artifact.canonical_names.deinit();
+    defer artifact.checked_types.deinit(gpa);
+    defer artifact.checked_bodies.deinit(gpa);
+
+    try artifact.checked_types.type_id_pool.append(gpa, @enumFromInt(1));
+    try artifact.checked_types.payloads.append(gpa, .empty_record);
+    try artifact.checked_types.payloads.append(gpa, .{
+        .nominal = builtinNominal(.u64, @enumFromInt(1), .{}),
+    });
+    try artifact.checked_types.payloads.append(gpa, .{
+        .nominal = builtinNominal(.list, @enumFromInt(2), .{ .start = 0, .len = 1 }),
+    });
+    try artifact.checked_types.payloads.append(gpa, .{
+        .function = .{
+            .kind = .pure,
+            .args = .{},
+            .ret = @enumFromInt(0),
+            .needs_instantiation = false,
+        },
+    });
+
+    try artifact.checked_bodies.expr_id_pool.appendSlice(gpa, &.{
+        @as(checked.CheckedExprId, @enumFromInt(3)),
+        @as(checked.CheckedExprId, @enumFromInt(4)),
+    });
+
+    const template_ref = procedureTemplateRef(artifact.key, 0);
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(0),
+        .ty = @enumFromInt(3),
+        .source_region = base.Region.zero(),
+        .data = .{ .lambda = .{ .args = .{}, .body = @enumFromInt(1) } },
+    });
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(1),
+        .ty = @enumFromInt(0),
+        .source_region = base.Region.zero(),
+        .data = .{ .dbg = @enumFromInt(2) },
+    });
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(2),
+        .ty = @enumFromInt(2),
+        .source_region = base.Region.zero(),
+        .data = .{ .list = .{ .start = 0, .len = 2 } },
+    });
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(3),
+        .ty = @enumFromInt(1),
+        .source_region = base.Region.zero(),
+        .data = .{ .num = .{ .value = intValue(8), .kind = .u64 } },
+    });
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(4),
+        .ty = @enumFromInt(1),
+        .source_region = base.Region.zero(),
+        .data = .{ .num = .{ .value = intValue(9), .kind = .u64 } },
+    });
+    try artifact.checked_bodies.bodies.append(gpa, .{
+        .id = @enumFromInt(0),
+        .root_expr = @enumFromInt(0),
+        .owner_template = template_ref,
+    });
+    var templates = [_]checked.CheckedProcedureTemplate{
+        checkedTemplate(template_ref, @enumFromInt(3), @enumFromInt(0)),
+    };
+    artifact.checked_procedure_templates = .{ .templates = &templates };
+
+    const root = checked.RootRequest{
+        .order = 0,
+        .module_idx = 0,
+        .kind = .runtime_entrypoint,
+        .source = .{ .def = @enumFromInt(0) },
+        .checked_type = @enumFromInt(3),
+        .abi = .roc,
+        .exposure = .private,
+        .procedure_template = template_ref,
+    };
+    var plan = try Plan.analyzeProgram(gpa, .{
+        .root_module = .{ .module = &artifact, .roots = undefined },
+        .roots = &.{root},
+    }, .{});
+    defer plan.deinit();
+
+    var out = try run(
+        gpa,
+        .{ .root = .{ .module = &artifact, .roots = undefined } },
+        .{},
+        &plan,
+        .{},
+    );
+    defer out.deinit();
+
+    const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
+    const first = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_literal;
+    const second = out.lir_result.store.getCFStmt(first.next).assign_literal;
+    const list = out.lir_result.store.getCFStmt(second.next).assign_list;
+    const join = out.lir_result.store.getCFStmt(list.next).join;
+    const params = out.lir_result.store.getLocalSpan(join.params);
+    try std.testing.expectEqual(@as(usize, 2), params.len);
+    try std.testing.expectEqual(@as(layout.Idx, .u64), out.lir_result.store.getLocal(params[0]).layout_idx);
+    try std.testing.expectEqual(@as(layout.Idx, .str), out.lir_result.store.getLocal(params[1]).layout_idx);
+
+    const len = out.lir_result.store.getCFStmt(join.remainder).assign_low_level;
+    try std.testing.expectEqual(@as(LIR.LowLevel, .list_len), len.op);
+    const len_args = out.lir_result.store.getLocalSpan(len.args);
+    try std.testing.expectEqual(@as(usize, 1), len_args.len);
+    try std.testing.expectEqual(list.target, len_args[0]);
+
+    const done = out.lir_result.store.getCFStmt(join.body).assign_low_level;
+    try std.testing.expectEqual(@as(LIR.LowLevel, .num_is_eq), done.op);
+    const done_args = out.lir_result.store.getLocalSpan(done.args);
+    try std.testing.expectEqual(@as(usize, 2), done_args.len);
+    try std.testing.expectEqual(params[0], done_args[0]);
+    try std.testing.expectEqual(len.target, done_args[1]);
+
+    const switch_stmt = out.lir_result.store.getCFStmt(done.next).switch_stmt;
+    const branches = out.lir_result.store.getCFSwitchBranches(switch_stmt.branches);
+    try std.testing.expectEqual(@as(usize, 1), branches.len);
+    try std.testing.expectEqual(@as(u128, 1), branches[0].value);
+
+    const close = out.lir_result.store.getCFStmt(branches[0].body).assign_literal;
+    switch (close.value) {
+        .str_literal => |literal| try std.testing.expectEqualStrings("]", out.lir_result.store.getStringLiteral(literal)),
+        else => return error.TestUnexpectedResult,
+    }
+    const finish = out.lir_result.store.getCFStmt(close.next).assign_low_level;
+    try std.testing.expectEqual(@as(LIR.LowLevel, .str_concat), finish.op);
+    const debug = out.lir_result.store.getCFStmt(finish.next).debug;
+    try std.testing.expectEqual(finish.target, debug.message);
+
+    const step_zero = out.lir_result.store.getCFStmt(switch_stmt.default_branch).assign_literal;
+    switch (step_zero.value) {
+        .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 0), literal.value),
+        else => return error.TestUnexpectedResult,
+    }
+    const separator_check = out.lir_result.store.getCFStmt(step_zero.next).assign_low_level;
+    try std.testing.expectEqual(@as(LIR.LowLevel, .num_is_eq), separator_check.op);
 }
 
 test "boxy lowerer emits empty list construction" {
