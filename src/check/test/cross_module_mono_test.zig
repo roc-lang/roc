@@ -19,7 +19,7 @@ const Check = @import("../Check.zig");
 
 const testing = std.testing;
 const compiled_builtins = @import("compiled_builtins");
-const collections = @import("collections");
+const builtin_static = can.BuiltinStatic;
 
 fn findTypeDeclByName(env: *const ModuleEnv, name: base.Ident.Idx) ?CIR.Statement.Idx {
     if (findTypeDeclByNameInSpan(env, env.type_decls, name)) |stmt_idx| return stmt_idx;
@@ -42,86 +42,6 @@ fn findTypeDeclByNameInSpan(env: *const ModuleEnv, span: CIR.Statement.Span, nam
     return null;
 }
 
-/// Wrapper for a loaded compiled module that tracks the buffer
-const LoadedModule = struct {
-    env: *ModuleEnv,
-    buffer: []align(collections.CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()) u8,
-    gpa: std.mem.Allocator,
-
-    fn deinit(self: *LoadedModule) void {
-        self.env.imports.map.deinit(self.gpa);
-        self.gpa.free(self.buffer);
-        self.gpa.destroy(self.env);
-    }
-};
-
-/// Deserialize BuiltinIndices from the binary data generated at build time
-fn deserializeBuiltinIndices(gpa: std.mem.Allocator, bin_data: []const u8) Allocator.Error!CIR.BuiltinIndices {
-    const aligned_buffer = try gpa.alignedAlloc(u8, @enumFromInt(@alignOf(CIR.BuiltinIndices)), bin_data.len);
-    defer gpa.free(aligned_buffer);
-    @memcpy(aligned_buffer, bin_data);
-    const indices_ptr = @as(*const CIR.BuiltinIndices, @ptrCast(aligned_buffer.ptr));
-    return indices_ptr.*;
-}
-
-/// Load a compiled ModuleEnv from embedded binary data
-fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name: []const u8, source: []const u8) Allocator.Error!LoadedModule {
-    const CompactWriter = collections.CompactWriter;
-    const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, bin_data.len);
-    @memcpy(buffer, bin_data);
-
-    const serialized_ptr = @as(*ModuleEnv.Serialized, @ptrCast(@alignCast(buffer.ptr)));
-    const env = try gpa.create(ModuleEnv);
-    errdefer gpa.destroy(env);
-
-    const base_ptr = @intFromPtr(buffer.ptr);
-    const common = serialized_ptr.common.deserializeInto(base_ptr, source);
-
-    env.* = ModuleEnv{
-        .gpa = gpa,
-        .common = common,
-        .types = serialized_ptr.types.deserializeInto(base_ptr, gpa),
-        .module_kind = serialized_ptr.module_kind.decode(),
-        .module_role = serialized_ptr.module_role,
-        .all_defs = serialized_ptr.all_defs,
-        .global_value_defs = serialized_ptr.global_value_defs,
-        .all_statements = serialized_ptr.all_statements,
-        .type_decls = serialized_ptr.type_decls,
-        .forward_type_decls = serialized_ptr.forward_type_decls,
-        .exports = serialized_ptr.exports,
-        .requires_types = serialized_ptr.requires_types.deserializeInto(base_ptr),
-        .for_clause_aliases = serialized_ptr.for_clause_aliases.deserializeInto(base_ptr),
-        .provides_entries = serialized_ptr.provides_entries.deserializeInto(base_ptr),
-        .hosted_entries = serialized_ptr.hosted_entries.deserializeInto(base_ptr),
-        .builtin_statements = serialized_ptr.builtin_statements,
-        .external_decls = serialized_ptr.external_decls.deserializeInto(base_ptr),
-        .imports = try serialized_ptr.imports.deserializeInto(base_ptr, gpa),
-        .module_name = module_name,
-        .display_module_name_idx = base.Ident.Idx.NONE,
-        .qualified_module_ident = base.Ident.Idx.NONE,
-        .diagnostics = serialized_ptr.diagnostics,
-        .store = serialized_ptr.store.deserializeInto(base_ptr, gpa),
-        .evaluation_order = null,
-        .idents = ModuleEnv.CommonIdents.find(&common),
-        .import_mapping = types.import_mapping.ImportMapping.init(gpa),
-        .method_idents = serialized_ptr.method_idents.deserializeInto(base_ptr),
-        .method_defs = serialized_ptr.method_defs.deserializeInto(base_ptr),
-        .for_loop_dispatch_plans = serialized_ptr.for_loop_dispatch_plans.deserializeInto(base_ptr),
-        .file_dependencies = serialized_ptr.file_dependencies.deserializeInto(base_ptr),
-        .numeral_digit_bytes = serialized_ptr.numeral_digit_bytes.deserializeInto(base_ptr),
-        .numeral_literals = serialized_ptr.numeral_literals.deserializeInto(base_ptr),
-        .numeral_dispatch_plans = serialized_ptr.numeral_dispatch_plans.deserializeInto(base_ptr),
-        .quote_dispatch_plans = serialized_ptr.quote_dispatch_plans.deserializeInto(base_ptr),
-        .numeric_suffix_targets = serialized_ptr.numeric_suffix_targets.deserializeInto(base_ptr),
-    };
-
-    return LoadedModule{
-        .env = env,
-        .buffer = buffer,
-        .gpa = gpa,
-    };
-}
-
 /// Test environment for cross-module monomorphization testing
 const MonoTestEnv = struct {
     gpa: std.mem.Allocator,
@@ -130,14 +50,14 @@ const MonoTestEnv = struct {
     can_instance: *Can,
     checker: Check,
     module_envs: std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType),
-    builtin_module: LoadedModule,
+    builtin_module: builtin_static.BuiltinModuleView,
     owns_builtin_module: bool,
     imported_envs_list: std.ArrayList(*const ModuleEnv),
 
     const Self = @This();
 
     /// Initialize a single module test environment
-    pub fn init(module_name: []const u8, source: []const u8) Allocator.Error!Self {
+    pub fn init(module_name: []const u8, source: []const u8) (Allocator.Error || error{CorruptEmbeddedBuiltins})!Self {
         const gpa = testing.allocator;
         const roc_ctx = CoreCtx.testing(gpa, gpa);
 
@@ -149,8 +69,8 @@ const MonoTestEnv = struct {
 
         var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(gpa);
 
-        const builtin_indices = try deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
-        var builtin_module = try loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Builtin", compiled_builtins.builtin_source);
+        const builtin_indices = compiled_builtins.builtin_indices;
+        var builtin_module = try builtin_static.moduleView(gpa, compiled_builtins.builtin_bin[0..], "Builtin", compiled_builtins.builtin_source);
         errdefer builtin_module.deinit();
 
         module_env.* = try ModuleEnv.init(gpa, source);
@@ -235,7 +155,7 @@ const MonoTestEnv = struct {
 
         var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(gpa);
 
-        const builtin_indices = try deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
+        const builtin_indices = compiled_builtins.builtin_indices;
         const builtin_env = other_env.builtin_module.env;
 
         module_env.* = try ModuleEnv.init(gpa, source);
@@ -351,7 +271,7 @@ const MonoTestEnv = struct {
 
         var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(gpa);
 
-        const builtin_indices = try deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
+        const builtin_indices = compiled_builtins.builtin_indices;
         const builtin_env = imports[0].env.builtin_module.env;
 
         module_env.* = try ModuleEnv.init(gpa, source);
@@ -701,8 +621,8 @@ test "type checker catches polymorphic recursion (infinite type)" {
     var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(gpa);
     defer module_envs.deinit();
 
-    const builtin_indices = try deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
-    var builtin_module = try loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Builtin", compiled_builtins.builtin_source);
+    const builtin_indices = compiled_builtins.builtin_indices;
+    var builtin_module = try builtin_static.moduleView(gpa, compiled_builtins.builtin_bin[0..], "Builtin", compiled_builtins.builtin_source);
     defer builtin_module.deinit();
 
     module_env.* = try ModuleEnv.init(gpa, source);

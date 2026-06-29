@@ -1,105 +1,21 @@
 //! Helpers for loading the compiled Builtin module in canonicalize tests.
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const base = @import("base");
-const collections = @import("collections");
 const compiled_builtins = @import("compiled_builtins");
 
 const CIR = @import("../CIR.zig");
 const Can = @import("../Can.zig");
-const ModuleEnv = @import("../ModuleEnv.zig");
-
-const LoadedModule = struct {
-    env: *ModuleEnv,
-    buffer: []align(collections.CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()) u8,
-    gpa: std.mem.Allocator,
-
-    fn deinit(self: *LoadedModule) void {
-        self.env.imports.map.deinit(self.gpa);
-        self.gpa.free(self.buffer);
-        self.gpa.destroy(self.env);
-    }
-};
-
-fn deserializeBuiltinIndices(gpa: std.mem.Allocator, bin_data: []const u8) Allocator.Error!CIR.BuiltinIndices {
-    const aligned_buffer = try gpa.alignedAlloc(u8, @enumFromInt(@alignOf(CIR.BuiltinIndices)), bin_data.len);
-    defer gpa.free(aligned_buffer);
-    @memcpy(aligned_buffer, bin_data);
-
-    const indices_ptr = @as(*const CIR.BuiltinIndices, @ptrCast(aligned_buffer.ptr));
-    return indices_ptr.*;
-}
-
-fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name: []const u8, source: []const u8) Allocator.Error!LoadedModule {
-    const CompactWriter = collections.CompactWriter;
-    const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, bin_data.len);
-    @memcpy(buffer, bin_data);
-
-    const serialized_ptr = @as(
-        *ModuleEnv.Serialized,
-        @ptrCast(@alignCast(buffer.ptr)),
-    );
-
-    const env = try gpa.create(ModuleEnv);
-    errdefer gpa.destroy(env);
-
-    const base_ptr = @intFromPtr(buffer.ptr);
-    const common = serialized_ptr.common.deserializeInto(base_ptr, source);
-
-    env.* = ModuleEnv{
-        .gpa = gpa,
-        .common = common,
-        .types = serialized_ptr.types.deserializeInto(base_ptr, gpa),
-        .module_kind = serialized_ptr.module_kind.decode(),
-        .module_role = serialized_ptr.module_role,
-        .all_defs = serialized_ptr.all_defs,
-        .global_value_defs = serialized_ptr.global_value_defs,
-        .all_statements = serialized_ptr.all_statements,
-        .type_decls = serialized_ptr.type_decls,
-        .forward_type_decls = serialized_ptr.forward_type_decls,
-        .exports = serialized_ptr.exports,
-        .requires_types = serialized_ptr.requires_types.deserializeInto(base_ptr),
-        .for_clause_aliases = serialized_ptr.for_clause_aliases.deserializeInto(base_ptr),
-        .provides_entries = serialized_ptr.provides_entries.deserializeInto(base_ptr),
-        .hosted_entries = serialized_ptr.hosted_entries.deserializeInto(base_ptr),
-        .builtin_statements = serialized_ptr.builtin_statements,
-        .external_decls = serialized_ptr.external_decls.deserializeInto(base_ptr),
-        .imports = try serialized_ptr.imports.deserializeInto(base_ptr, gpa),
-        .module_name = module_name,
-        .display_module_name_idx = base.Ident.Idx.NONE,
-        .qualified_module_ident = base.Ident.Idx.NONE,
-        .diagnostics = serialized_ptr.diagnostics,
-        .store = serialized_ptr.store.deserializeInto(base_ptr, gpa),
-        .evaluation_order = null,
-        .idents = ModuleEnv.CommonIdents.find(&common),
-        .import_mapping = @import("types").import_mapping.ImportMapping.init(gpa),
-        .method_idents = serialized_ptr.method_idents.deserializeInto(base_ptr),
-        .method_defs = serialized_ptr.method_defs.deserializeInto(base_ptr),
-        .for_loop_dispatch_plans = serialized_ptr.for_loop_dispatch_plans.deserializeInto(base_ptr),
-        .numeral_digit_bytes = serialized_ptr.numeral_digit_bytes.deserializeInto(base_ptr),
-        .numeral_literals = serialized_ptr.numeral_literals.deserializeInto(base_ptr),
-        .numeral_dispatch_plans = serialized_ptr.numeral_dispatch_plans.deserializeInto(base_ptr),
-        .quote_dispatch_plans = serialized_ptr.quote_dispatch_plans.deserializeInto(base_ptr),
-        .numeric_suffix_targets = serialized_ptr.numeric_suffix_targets.deserializeInto(base_ptr),
-        .file_dependencies = serialized_ptr.file_dependencies.deserializeInto(base_ptr),
-    };
-
-    return .{
-        .env = env,
-        .buffer = buffer,
-        .gpa = gpa,
-    };
-}
+const builtin_static = @import("can").BuiltinStatic;
 
 /// Loads the compiled Builtin module for canonicalize tests that need real builtin types.
 pub const BuiltinTestContext = struct {
     builtin_indices: CIR.BuiltinIndices,
-    builtin_module: LoadedModule,
+    builtin_module: builtin_static.BuiltinModuleView,
 
-    pub fn init(gpa: std.mem.Allocator) Allocator.Error!BuiltinTestContext {
+    pub fn init(gpa: std.mem.Allocator) (Allocator.Error || error{CorruptEmbeddedBuiltins})!BuiltinTestContext {
         return .{
-            .builtin_indices = try deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin),
-            .builtin_module = try loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Builtin", compiled_builtins.builtin_source),
+            .builtin_indices = compiled_builtins.builtin_indices,
+            .builtin_module = try builtin_static.moduleView(gpa, compiled_builtins.builtin_bin[0..], "Builtin", compiled_builtins.builtin_source),
         };
     }
 

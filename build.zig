@@ -1614,7 +1614,7 @@ const CheckFxStep = struct {
 const BuiltinCompilerRun = struct {
     run: *Step.Run,
     builtin_bin: std.Build.LazyPath,
-    builtin_indices_bin: std.Build.LazyPath,
+    builtin_indices_zig: std.Build.LazyPath,
     builtin_artifact_bin: std.Build.LazyPath,
 };
 
@@ -1654,21 +1654,6 @@ fn createAndRunBuiltinCompiler(
     builtin_compiler_exe.root_module.addImport("check", roc_modules.check);
     builtin_compiler_exe.root_module.addImport("reporting", roc_modules.reporting);
     builtin_compiler_exe.root_module.addImport("builtins", roc_modules.builtins);
-
-    // The builtin compiler reloads the just-written Builtin.bin via the same
-    // loader the runtime uses, so the baked artifact pairs identically with the
-    // env that BuiltinModules.init will load. `builtin_loading` lives in the eval
-    // module, which imports `compiled_builtins` (this compiler's own output), so
-    // it is added here as a standalone module to avoid that import cycle.
-    builtin_compiler_exe.root_module.addImport("builtin_loading", b.createModule(.{
-        .root_source_file = b.path("src/eval/builtin_loading.zig"),
-        .target = b.graph.host,
-        .optimize = .Debug,
-        .imports = &.{
-            .{ .name = "can", .module = roc_modules.can },
-            .{ .name = "collections", .module = roc_modules.collections },
-        },
-    }));
 
     // The builtin compiler publishes the Builtin module to a CheckedModuleArtifact
     // and must run the same compile-time finalizer the runtime uses (Builtin has
@@ -1710,13 +1695,13 @@ fn createAndRunBuiltinCompiler(
     }
 
     const builtin_bin = run_builtin_compiler.addOutputFileArg("Builtin.bin");
-    const builtin_indices_bin = run_builtin_compiler.addOutputFileArg("builtin_indices.bin");
+    const builtin_indices_zig = run_builtin_compiler.addOutputFileArg("builtin_indices.zig");
     const builtin_artifact_bin = run_builtin_compiler.addOutputFileArg("Builtin.artifact.bin");
 
     return .{
         .run = run_builtin_compiler,
         .builtin_bin = builtin_bin,
-        .builtin_indices_bin = builtin_indices_bin,
+        .builtin_indices_zig = builtin_indices_zig,
         .builtin_artifact_bin = builtin_artifact_bin,
     };
 }
@@ -2489,10 +2474,10 @@ pub fn build(b: *std.Build) void {
         "Builtin.roc",
     );
 
-    // Copy builtin_indices.bin
+    // Copy generated typed builtin indices.
     _ = write_compiled_builtins.addCopyFile(
-        builtin_compiler.builtin_indices_bin,
-        "builtin_indices.bin",
+        builtin_compiler.builtin_indices_zig,
+        "builtin_indices.zig",
     );
 
     // Copy the baked CheckedModuleArtifact
@@ -2501,12 +2486,20 @@ pub fn build(b: *std.Build) void {
         "Builtin.artifact.bin",
     );
 
-    // Generate compiled_builtins.zig with hardcoded Builtin module
+    // Generate compiled_builtins.zig with hardcoded Builtin module.
+    // The embedded blobs are copied by Zig at compile time into 16-byte-aligned
+    // static storage, so runtime code can build views over them directly.
     const builtins_source_str =
-        \\pub const builtin_bin = @embedFile("Builtin.bin");
+        \\const generated_indices = @import("builtin_indices.zig");
+        \\
+        \\const builtin_bin_raw = @embedFile("Builtin.bin");
+        \\pub var builtin_bin: [builtin_bin_raw.len]u8 align(16) = builtin_bin_raw.*;
         \\pub const builtin_source = @embedFile("Builtin.roc");
-        \\pub const builtin_indices_bin = @embedFile("builtin_indices.bin");
-        \\pub const builtin_artifact_bin = @embedFile("Builtin.artifact.bin");
+        \\const builtin_artifact_bin_raw = @embedFile("Builtin.artifact.bin");
+        \\pub var builtin_artifact_bin: [builtin_artifact_bin_raw.len]u8 align(16) = builtin_artifact_bin_raw.*;
+        \\pub const builtin_indices = generated_indices.builtin_indices;
+        \\pub const builtin_type_registry_hash = generated_indices.builtin_type_registry_hash;
+        \\pub const builtin_indices_layout_hash = generated_indices.builtin_indices_layout_hash;
         \\
     ;
 
@@ -2518,6 +2511,7 @@ pub fn build(b: *std.Build) void {
     const compiled_builtins_module = b.createModule(.{
         .root_source_file = compiled_builtins_source,
     });
+    compiled_builtins_module.addImport("can", roc_modules.can);
 
     const bytebox = b.dependency("bytebox", .{
         .target = target,

@@ -8,8 +8,8 @@ const parse = @import("parse");
 const CIR = @import("can").CIR;
 const Can = @import("can").Can;
 const ModuleEnv = @import("can").ModuleEnv;
-const collections = @import("collections");
 const CoreCtx = @import("can").CoreCtx;
+const builtin_static = @import("can").BuiltinStatic;
 
 const Check = @import("../Check.zig");
 const TypedCIR = @import("../typed_cir.zig");
@@ -21,106 +21,7 @@ const testing = std.testing;
 const compiled_builtins = @import("compiled_builtins");
 
 /// Errors that can occur while constructing or using a check test environment.
-pub const TestEnvError = Allocator.Error || error{ WriteFailed, TestExpectedEqual, TestUnexpectedResult };
-
-/// Wrapper for a loaded compiled module that tracks the buffer
-const LoadedModule = struct {
-    env: *ModuleEnv,
-    buffer: []align(collections.CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()) u8,
-    gpa: std.mem.Allocator,
-
-    fn deinit(self: *LoadedModule) void {
-        // Only free the hashmap that was allocated during deserialization
-        // Most other data (like the SafeList contents) points into the buffer
-        self.env.imports.map.deinit(self.gpa);
-        // Free any runtime insert buffers allocated after deserialization.
-        self.env.common.idents.interner.deinit(self.gpa);
-
-        // Free the buffer (the env points into this buffer for most data)
-        self.gpa.free(self.buffer);
-        // Free the env struct itself
-        self.gpa.destroy(self.env);
-    }
-};
-
-/// Deserialize BuiltinIndices from the binary data generated at build time
-fn deserializeBuiltinIndices(gpa: std.mem.Allocator, bin_data: []const u8) Allocator.Error!CIR.BuiltinIndices {
-    // Copy to properly aligned memory
-    const aligned_buffer = try gpa.alignedAlloc(u8, @enumFromInt(@alignOf(CIR.BuiltinIndices)), bin_data.len);
-    defer gpa.free(aligned_buffer);
-    @memcpy(aligned_buffer, bin_data);
-
-    const indices_ptr = @as(*const CIR.BuiltinIndices, @ptrCast(aligned_buffer.ptr));
-    return indices_ptr.*;
-}
-
-/// Load a compiled ModuleEnv from embedded binary data
-fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name: []const u8, source: []const u8) Allocator.Error!LoadedModule {
-    // Copy the embedded data to properly aligned memory
-    // CompactWriter requires specific alignment for serialization
-    const CompactWriter = collections.CompactWriter;
-    const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, bin_data.len);
-    @memcpy(buffer, bin_data);
-
-    // Cast to the serialized structure
-    const serialized_ptr = @as(
-        *ModuleEnv.Serialized,
-        @ptrCast(@alignCast(buffer.ptr)),
-    );
-
-    const env = try gpa.create(ModuleEnv);
-    errdefer gpa.destroy(env);
-
-    // Deserialize
-    const base_ptr = @intFromPtr(buffer.ptr);
-
-    // Deserialize common env first so we can look up identifiers
-    const common = serialized_ptr.common.deserializeInto(base_ptr, source);
-
-    env.* = ModuleEnv{
-        .gpa = gpa,
-        .common = common,
-        .types = serialized_ptr.types.deserializeInto(base_ptr, gpa), // Pass gpa to types deserialize
-        .module_kind = serialized_ptr.module_kind.decode(),
-        .module_role = serialized_ptr.module_role,
-        .all_defs = serialized_ptr.all_defs,
-        .global_value_defs = serialized_ptr.global_value_defs,
-        .all_statements = serialized_ptr.all_statements,
-        .type_decls = serialized_ptr.type_decls,
-        .forward_type_decls = serialized_ptr.forward_type_decls,
-        .exports = serialized_ptr.exports,
-        .requires_types = serialized_ptr.requires_types.deserializeInto(base_ptr),
-        .for_clause_aliases = serialized_ptr.for_clause_aliases.deserializeInto(base_ptr),
-        .provides_entries = serialized_ptr.provides_entries.deserializeInto(base_ptr),
-        .hosted_entries = serialized_ptr.hosted_entries.deserializeInto(base_ptr),
-        .builtin_statements = serialized_ptr.builtin_statements,
-        .external_decls = serialized_ptr.external_decls.deserializeInto(base_ptr),
-        .imports = try serialized_ptr.imports.deserializeInto(base_ptr, gpa),
-        .module_name = module_name,
-        .display_module_name_idx = base.Ident.Idx.NONE, // Not used for deserialized modules (only needed during fresh canonicalization)
-        .qualified_module_ident = base.Ident.Idx.NONE,
-        .diagnostics = serialized_ptr.diagnostics,
-        .store = serialized_ptr.store.deserializeInto(base_ptr, gpa),
-        .evaluation_order = null,
-        .idents = ModuleEnv.CommonIdents.find(&common),
-        .import_mapping = types.import_mapping.ImportMapping.init(gpa),
-        .method_idents = serialized_ptr.method_idents.deserializeInto(base_ptr),
-        .method_defs = serialized_ptr.method_defs.deserializeInto(base_ptr),
-        .for_loop_dispatch_plans = serialized_ptr.for_loop_dispatch_plans.deserializeInto(base_ptr),
-        .file_dependencies = serialized_ptr.file_dependencies.deserializeInto(base_ptr),
-        .numeral_digit_bytes = serialized_ptr.numeral_digit_bytes.deserializeInto(base_ptr),
-        .numeral_literals = serialized_ptr.numeral_literals.deserializeInto(base_ptr),
-        .numeral_dispatch_plans = serialized_ptr.numeral_dispatch_plans.deserializeInto(base_ptr),
-        .quote_dispatch_plans = serialized_ptr.quote_dispatch_plans.deserializeInto(base_ptr),
-        .numeric_suffix_targets = serialized_ptr.numeric_suffix_targets.deserializeInto(base_ptr),
-    };
-
-    return LoadedModule{
-        .env = env,
-        .buffer = buffer,
-        .gpa = gpa,
-    };
-}
+pub const TestEnvError = Allocator.Error || error{ WriteFailed, TestExpectedEqual, TestUnexpectedResult, CorruptEmbeddedBuiltins };
 
 gpa: std.mem.Allocator,
 module_env: *ModuleEnv,
@@ -131,8 +32,8 @@ type_writer: types.TypeWriter,
 
 module_envs: std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType),
 
-// Loaded Builtin module (loaded per test, cleaned up in deinit)
-builtin_module: LoadedModule,
+// Static Builtin module view (created per test, cleaned up in deinit)
+builtin_module: builtin_static.BuiltinModuleView,
 // Whether this TestEnv owns the builtin_module and should deinit it
 owns_builtin_module: bool,
 /// Heap-allocated source buffer owned by this TestEnv (if any)
@@ -168,7 +69,7 @@ pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_
 
     // Reuse the Builtin module from the imported module
     // This ensures type variables for auto-imported types (Bool, Try, Str) are shared
-    const builtin_indices = try deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
+    const builtin_indices = compiled_builtins.builtin_indices;
     const builtin_env = other_test_env.builtin_module.env;
 
     // Initialize the module_env so we can use its ident store
@@ -300,7 +201,7 @@ pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_
 }
 
 /// Initialize where the provided source is an entire file
-pub fn init(module_name: []const u8, source: []const u8) Allocator.Error!TestEnv {
+pub fn init(module_name: []const u8, source: []const u8) TestEnvError!TestEnv {
     const gpa = std.testing.allocator;
 
     const roc_ctx = CoreCtx.testing(gpa, gpa);
@@ -317,8 +218,8 @@ pub fn init(module_name: []const u8, source: []const u8) Allocator.Error!TestEnv
     var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(gpa);
 
     // Load Builtin module once - Bool, Try, and Str are all types within this module
-    const builtin_indices = try deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
-    var builtin_module = try loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Builtin", compiled_builtins.builtin_source);
+    const builtin_indices = compiled_builtins.builtin_indices;
+    var builtin_module = try builtin_static.moduleView(gpa, compiled_builtins.builtin_bin[0..], "Builtin", compiled_builtins.builtin_source);
     errdefer builtin_module.deinit();
 
     // Initialize the ModuleEnv with the CommonEnv
@@ -411,7 +312,7 @@ pub fn init(module_name: []const u8, source: []const u8) Allocator.Error!TestEnv
 }
 
 /// Canonicalize a source module without type checking and count module-not-found diagnostics.
-pub fn countModuleNotFoundDiagnosticsAfterCanonicalization(module_name: []const u8, source: []const u8) Allocator.Error!usize {
+pub fn countModuleNotFoundDiagnosticsAfterCanonicalization(module_name: []const u8, source: []const u8) TestEnvError!usize {
     const gpa = std.testing.allocator;
 
     var module_env = try ModuleEnv.init(gpa, source);
@@ -430,8 +331,8 @@ pub fn countModuleNotFoundDiagnosticsAfterCanonicalization(module_name: []const 
     var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(gpa);
     defer module_envs.deinit();
 
-    const builtin_indices = try deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
-    var builtin_module = try loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Builtin", compiled_builtins.builtin_source);
+    const builtin_indices = compiled_builtins.builtin_indices;
+    var builtin_module = try builtin_static.moduleView(gpa, compiled_builtins.builtin_bin[0..], "Builtin", compiled_builtins.builtin_source);
     defer builtin_module.deinit();
 
     try module_env.initCIRFields(module_name);
@@ -462,7 +363,7 @@ pub fn countModuleNotFoundDiagnosticsAfterCanonicalization(module_name: []const 
 }
 
 /// Initialize where the provided source a single expression
-pub fn initExpr(module_name: []const u8, comptime source_expr: []const u8) Allocator.Error!TestEnv {
+pub fn initExpr(module_name: []const u8, comptime source_expr: []const u8) TestEnvError!TestEnv {
     const gpa = std.testing.allocator;
 
     const source_wrapper =

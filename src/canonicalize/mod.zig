@@ -19,6 +19,8 @@ pub const DependencyGraph = @import("DependencyGraph.zig");
 pub const HostedCompiler = @import("HostedCompiler.zig");
 /// Builtin.roc low-level operation transform
 pub const BuiltinLowLevel = @import("BuiltinLowLevel.zig");
+/// Static embedded Builtin module views and validation
+pub const BuiltinStatic = @import("BuiltinStatic.zig");
 /// Roc code emitter - converts CIR to valid Roc source code
 pub const RocEmitter = @import("RocEmitter.zig");
 /// Node storage for CIR nodes (used internally by ModuleEnv)

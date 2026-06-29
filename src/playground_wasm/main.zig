@@ -39,7 +39,7 @@ const Can = can.Can;
 const Check = check.Check;
 const SExprTree = base.SExprTree;
 const ModuleEnv = can.ModuleEnv;
-const LoadedBuiltinModule = eval.builtin_loading.LoadedModule;
+const LoadedBuiltinModule = eval.builtin_static.BuiltinModuleView;
 const Allocator = std.mem.Allocator;
 const AST = parse.AST;
 
@@ -455,16 +455,16 @@ export fn clearDebugLog() void {
     debug_log_oom = false;
 }
 
-fn getCachedBuiltinModule() (Allocator.Error || error{Internal})!*LoadedBuiltinModule {
+fn getCachedBuiltinModule() (Allocator.Error || error{ CorruptEmbeddedBuiltins, Internal })!*LoadedBuiltinModule {
     if (cached_builtin_module == null) {
-        logDebug("compileSource: Loading Builtin module\n", .{});
-        cached_builtin_module = try eval.builtin_loading.loadCompiledModule(
+        logDebug("compileSource: Creating Builtin module view\n", .{});
+        cached_builtin_module = try eval.builtin_static.moduleView(
             allocator,
-            compiled_builtins.builtin_bin,
+            compiled_builtins.builtin_bin[0..],
             "Builtin",
             compiled_builtins.builtin_source,
         );
-        logDebug("compileSource: Builtin module loaded\n", .{});
+        logDebug("compileSource: Builtin module view ready\n", .{});
     } else {
         logDebug("compileSource: Reusing cached Builtin module\n", .{});
     }
@@ -984,10 +984,7 @@ fn compileReplInspectedModule(source: []const u8) PlaygroundCompileError!ReplCom
         &typed_cir_modules,
         1,
         .{
-            .module_env_storage = .{ .compiled_buffer = .{
-                .env = builtin_module.env,
-                .buffer = builtin_module.buffer,
-            } },
+            .module_env_storage = .{ .static_builtin = builtin_module.env },
             .compile_time_finalizer = eval.CompileTimeFinalization.finalizer(),
         },
     );
@@ -1339,7 +1336,7 @@ fn compileSource(source: []const u8, module_name: []const u8) PlaygroundCompileE
     // compile consumes the same explicit Builtin module context.
 
     logDebug("compileSource: Loading builtin indices\n", .{});
-    const builtin_indices = try eval.builtin_loading.deserializeBuiltinIndices(allocator, compiled_builtins.builtin_indices_bin);
+    const builtin_indices = compiled_builtins.builtin_indices;
     logDebug("compileSource: Builtin indices loaded, bool_type={}\n", .{@intFromEnum(builtin_indices.bool_type)});
 
     const builtin_module = try getCachedBuiltinModule();
