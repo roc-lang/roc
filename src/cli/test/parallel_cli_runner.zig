@@ -4861,8 +4861,8 @@ fn customGlueZigCompiles(io: std.Io, allocator: Allocator, env: *const CaseEnv, 
         \\    _ = &builder_args;
         \\    _ = &padded;
         \\    _ = &padded_args;
-        \\    abi.increfHostTree(tree, 1);
-        \\    abi.decrefHostTree(tree, &host);
+        \\    tree.incref(1);
+        \\    tree.decref(&host);
         \\}}
     , .{"roc_platform_abi.zig"}) catch |err|
         return customInfraFailure(allocator, timer, "failed to render test Zig source: {}", .{err});
@@ -4901,7 +4901,8 @@ fn customGlueRustDuplicateTagUnions(io: std.Io, allocator: Allocator, env: *cons
         "pub struct AUnitResult",
         "pub struct AIOErr",
         "pub struct DNestedResult",
-        "pub fn decref_aunit_result",
+        "impl AUnitResult",
+        "pub fn decref(self, roc_host: &RocHost)",
         "pub fn roc_a_nested",
         "pub fn roc_d_nested",
     }) |needle| {
@@ -4912,9 +4913,12 @@ fn customGlueRustDuplicateTagUnions(io: std.Io, allocator: Allocator, env: *cons
     for ([_][]const u8{
         "TryType",
         "IOErrType",
+        "pub fn decref_aunit_result",
+        "pub fn incref_aunit_result",
+        "pub fn decref_aio_err",
     }) |needle| {
         if (std.mem.find(u8, generated, needle) != null) {
-            return customFailure(allocator, timer, "generated Rust duplicate-tag fixture still contains structural name {s}", .{needle});
+            return customFailure(allocator, timer, "generated Rust duplicate-tag fixture still contains obsolete ABI text {s}", .{needle});
         }
     }
 
@@ -4938,7 +4942,8 @@ fn customGlueZigDuplicateTagUnions(io: std.Io, allocator: Allocator, env: *const
         "pub const AUnitResult",
         "pub const AIOErr",
         "pub const DNestedResult",
-        "pub fn decrefAUnitResult",
+        "pub fn decref(self: @This(), roc_host: *RocHost) void",
+        "fn decrefAUnitResult(value: AUnitResult, roc_host: *RocHost) void",
         "pub extern fn roc_a_nested",
         "pub extern fn roc_d_nested",
     }) |needle| {
@@ -4949,9 +4954,11 @@ fn customGlueZigDuplicateTagUnions(io: std.Io, allocator: Allocator, env: *const
     for ([_][]const u8{
         "TryType",
         "IOErrType",
+        "pub fn decrefAUnitResult",
+        "pub fn increfAUnitResult",
     }) |needle| {
         if (std.mem.find(u8, generated, needle) != null) {
-            return customFailure(allocator, timer, "generated Zig duplicate-tag fixture still contains structural name {s}", .{needle});
+            return customFailure(allocator, timer, "generated Zig duplicate-tag fixture still contains obsolete ABI text {s}", .{needle});
         }
     }
 
@@ -5150,7 +5157,8 @@ fn customGlueRust(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: 
         "pub fn decref_box_with",
         "pub fn allocate_box",
         "pub fn decref_erased_callable",
-        "pub fn decref_host_tree(value: HostTree, roc_host: &RocHost)",
+        "impl HostTree",
+        "pub fn decref(self, roc_host: &RocHost)",
         "extern \"C\" fn decref_box_payload_type",
         "pub fn roc_alloc(length: usize, alignment: usize) -> *mut c_void;",
         "pub struct BuilderPrintValueArgs",
@@ -5168,6 +5176,8 @@ fn customGlueRust(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: 
         "HostedFunctions",
         "PlatformHostedFns",
         "pub struct RocAlloc",
+        "pub fn decref_host_tree",
+        "pub fn incref_host_tree",
         "// =============================================================================",
     }) |needle| {
         if (std.mem.find(u8, generated, needle) != null) {
@@ -5208,7 +5218,7 @@ fn customGlueZig(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *
         "pub fn decrefBoxWith",
         "pub fn allocateBox",
         "pub fn decrefErasedCallable",
-        "pub fn decrefHostTree(value: HostTree, roc_host: *RocHost) void",
+        "pub fn decref(self: @This(), roc_host: *RocHost) void",
         "fn decrefBoxPayloadType",
         "pub extern fn roc_alloc(length: usize, alignment: usize) callconv(.c) ?*anyopaque;",
         "pub const BuilderPrint_valueArgs = extern struct",
@@ -5225,6 +5235,8 @@ fn customGlueZig(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *
         "RocOps",
         "HostedFunctions",
         "PlatformHostedFns",
+        "pub fn decrefHostTree",
+        "pub fn increfHostTree",
         "// =============================================================================",
     }) |needle| {
         if (std.mem.find(u8, generated, needle) != null) {

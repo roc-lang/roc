@@ -1787,50 +1787,12 @@ indent_lines = |text, prefix| {
 
 box_payload_decref_name_rust = |inner_id| "decref_box_payload_type${U64.to_str(inner_id)}"
 
-decref_helper_name_for_type_id_rust = |type_table, duplicate_names, preferred_names, type_id| {
-	type_repr = TypeTable.get(TypeTable.from_list(type_table), type_id)
-	match type_repr {
-		RocRecord(rec) =>
-			if rec.name == "" {
-				""
-			} else {
-				"decref_${name_to_rust_fn_suffix(rec.name)}"
-			}
-		RocTagUnion(tu) =>
-			if List.len(tu.tags) >= 2 and tu.name != "" {
-				"decref_${name_to_rust_fn_suffix(tag_union_struct_name(preferred_names, duplicate_names, type_id, tu))}"
-			} else {
-				""
-			}
-		_ => ""
-	}
-}
-
-incref_helper_name_for_type_id_rust = |type_table, duplicate_names, preferred_names, type_id| {
-	type_repr = TypeTable.get(TypeTable.from_list(type_table), type_id)
-	match type_repr {
-		RocRecord(rec) =>
-			if rec.name == "" {
-				""
-			} else {
-				"incref_${name_to_rust_fn_suffix(rec.name)}"
-			}
-		RocTagUnion(tu) =>
-			if List.len(tu.tags) >= 2 and tu.name != "" {
-				"incref_${name_to_rust_fn_suffix(tag_union_struct_name(preferred_names, duplicate_names, type_id, tu))}"
-			} else {
-				""
-			}
-		_ => ""
-	}
-}
-
 decref_stmt_for_type_id_rust = |type_table, duplicate_names, preferred_names, type_id, expr| {
 	type_repr = TypeTable.get(TypeTable.from_list(type_table), type_id)
 	decref_stmt_for_repr_rust(type_table, duplicate_names, preferred_names, type_id, type_repr, expr)
 }
 
-decref_stmt_for_repr_rust = |type_table, duplicate_names, preferred_names, type_id, type_repr, expr| {
+decref_stmt_for_repr_rust = |type_table, duplicate_names, preferred_names, _type_id, type_repr, expr| {
 	match type_repr {
 		RocStr => "    ${expr}.decref(roc_host);\n"
 		RocList(elem_id) => {
@@ -1863,12 +1825,7 @@ decref_stmt_for_repr_rust = |type_table, duplicate_names, preferred_names, type_
 			if rec.name == "" {
 				""
 			} else {
-				helper = decref_helper_name_for_type_id_rust(type_table, duplicate_names, preferred_names, type_id)
-				if helper == "" {
-					""
-				} else {
-					"    ${helper}(${expr}, roc_host);\n"
-				}
+				"    ${expr}.decref(roc_host);\n"
 			}
 		RocTagUnion(tu) =>
 			if List.len(tu.tags) == 1 {
@@ -1881,11 +1838,10 @@ decref_stmt_for_repr_rust = |type_table, duplicate_names, preferred_names, type_
 					_ => ""
 				}
 			} else {
-				helper = decref_helper_name_for_type_id_rust(type_table, duplicate_names, preferred_names, type_id)
-				if helper == "" {
-					""
+				if tu.name != "" {
+					"    ${expr}.decref(roc_host);\n"
 				} else {
-					"    ${helper}(${expr}, roc_host);\n"
+					""
 				}
 			}
 		_ => ""
@@ -1897,7 +1853,7 @@ incref_stmt_for_type_id_rust = |type_table, duplicate_names, preferred_names, ty
 	incref_stmt_for_repr_rust(type_table, duplicate_names, preferred_names, type_id, type_repr, expr)
 }
 
-incref_stmt_for_repr_rust = |type_table, duplicate_names, preferred_names, type_id, type_repr, expr| {
+incref_stmt_for_repr_rust = |type_table, duplicate_names, preferred_names, _type_id, type_repr, expr| {
 	match type_repr {
 		RocStr => "    ${expr}.incref(amount);\n"
 		RocList(_) => "    ${expr}.incref(amount);\n"
@@ -1910,12 +1866,7 @@ incref_stmt_for_repr_rust = |type_table, duplicate_names, preferred_names, type_
 			if rec.name == "" {
 				""
 			} else {
-				helper = incref_helper_name_for_type_id_rust(type_table, duplicate_names, preferred_names, type_id)
-				if helper == "" {
-					""
-				} else {
-					"    ${helper}(${expr}, amount);\n"
-				}
+				"    ${expr}.incref(amount);\n"
 			}
 		RocTagUnion(tu) =>
 			if List.len(tu.tags) == 1 {
@@ -1928,11 +1879,10 @@ incref_stmt_for_repr_rust = |type_table, duplicate_names, preferred_names, type_
 					_ => ""
 				}
 			} else {
-				helper = incref_helper_name_for_type_id_rust(type_table, duplicate_names, preferred_names, type_id)
-				if helper == "" {
-					""
+				if tu.name != "" {
+					"    ${expr}.incref(amount);\n"
 				} else {
-					"    ${helper}(${expr}, amount);\n"
+					""
 				}
 			}
 		_ => ""
@@ -1941,8 +1891,6 @@ incref_stmt_for_repr_rust = |type_table, duplicate_names, preferred_names, type_
 
 generate_record_refcount_helpers_rust = |type_table, duplicate_names, preferred_names, rec| {
 	struct_name = name_to_struct_name(rec.name)
-	decref_name = "decref_${name_to_rust_fn_suffix(struct_name)}"
-	incref_name = "incref_${name_to_rust_fn_suffix(struct_name)}"
 	var $decref_body = ""
 	var $incref_body = ""
 
@@ -1955,13 +1903,17 @@ generate_record_refcount_helpers_rust = |type_table, duplicate_names, preferred_
 	}
 
 	if $decref_body == "" {
-		$decref_body = "    let _ = value;\n    let _ = roc_host;\n"
+		$decref_body = "        let _ = value;\n        let _ = roc_host;\n"
+	} else {
+		$decref_body = indent_lines($decref_body, "    ")
 	}
 	if $incref_body == "" {
-		$incref_body = "    let _ = value;\n    let _ = amount;\n"
+		$incref_body = "        let _ = value;\n        let _ = amount;\n"
+	} else {
+		$incref_body = indent_lines($incref_body, "    ")
 	}
 
-	"/// Recursively decrement Roc-owned fields in ${struct_name}.\npub fn ${decref_name}(value: ${struct_name}, roc_host: &RocHost) {\n${$decref_body}}\n\n/// Increment Roc-owned fields in ${struct_name}.\npub fn ${incref_name}(value: ${struct_name}, amount: isize) {\n${$incref_body}}\n\n"
+	"impl ${struct_name} {\n    /// Recursively decrement Roc-owned fields.\n    pub fn decref(self, roc_host: &RocHost) {\n        let value = self;\n${$decref_body}    }\n\n    /// Increment Roc-owned fields.\n    pub fn incref(self, amount: isize) {\n        let value = self;\n${$incref_body}    }\n}\n\n"
 }
 
 generate_tag_payload_refcount_branch_rust = |type_table, duplicate_names, preferred_names, struct_name, tag, mode| {
@@ -2010,8 +1962,12 @@ generate_tag_payload_refcount_branch_rust = |type_table, duplicate_names, prefer
 
 generate_tag_union_refcount_helpers_rust = |type_table, duplicate_names, preferred_names, type_id, tu| {
 	struct_name = tag_union_struct_name(preferred_names, duplicate_names, type_id, tu)
-	decref_name = "decref_${name_to_rust_fn_suffix(struct_name)}"
-	incref_name = "incref_${name_to_rust_fn_suffix(struct_name)}"
+	is_pure_enum = List.all(tu.tags, |tag| List.is_empty(tag.payload))
+
+	if is_pure_enum {
+		return "impl ${struct_name} {\n    /// Recursively decrement Roc-owned payloads.\n    pub fn decref(self, roc_host: &RocHost) {\n        let _ = self;\n        let _ = roc_host;\n    }\n\n    /// Increment Roc-owned payloads.\n    pub fn incref(self, amount: isize) {\n        let _ = self;\n        let _ = amount;\n    }\n}\n\n"
+	}
+
 	var $decref_branches = ""
 	var $incref_branches = ""
 	for tag in tu.tags {
@@ -2019,7 +1975,7 @@ generate_tag_union_refcount_helpers_rust = |type_table, duplicate_names, preferr
 		$incref_branches = Str.concat($incref_branches, generate_tag_payload_refcount_branch_rust(type_table, duplicate_names, preferred_names, struct_name, tag, "incref"))
 	}
 
-	"/// Recursively decrement Roc-owned payloads in ${struct_name}.\npub fn ${decref_name}(value: ${struct_name}, roc_host: &RocHost) {\n    let _ = roc_host;\n    match value.tag {\n${$decref_branches}    }\n}\n\n/// Increment Roc-owned payloads in ${struct_name}.\npub fn ${incref_name}(value: ${struct_name}, amount: isize) {\n    let _ = amount;\n    match value.tag {\n${$incref_branches}    }\n}\n\n"
+	"impl ${struct_name} {\n    /// Recursively decrement Roc-owned payloads.\n    pub fn decref(self, roc_host: &RocHost) {\n        let value = self;\n        let _ = roc_host;\n        match value.tag {\n${indent_lines($decref_branches, "    ")}        }\n    }\n\n    /// Increment Roc-owned payloads.\n    pub fn incref(self, amount: isize) {\n        let value = self;\n        let _ = amount;\n        match value.tag {\n${indent_lines($incref_branches, "    ")}        }\n    }\n}\n\n"
 }
 
 generate_box_payload_decref_helpers_rust = |type_table, duplicate_names, preferred_names| {

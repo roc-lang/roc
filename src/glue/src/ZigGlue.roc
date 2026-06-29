@@ -926,7 +926,6 @@ generate_element_type_structs = |type_table, duplicate_tag_names, preferred_name
 							rec.fields
 						}
 						wasm32_field_strs = zig_record_fields_decl(type_table, duplicate_tag_names, preferred_names, wasm32_fields)
-
 						# Comptime size/alignment assertions (guarded by pointer width)
 						layout = record_layout_from_fields(type_table, rec.fields)
 						wasm32_layout = record_layout_from_fields_32(type_table, wasm32_fields)
@@ -937,9 +936,12 @@ generate_element_type_structs = |type_table, duplicate_tag_names, preferred_name
 						}
 
 						struct_decl = if rec.anonymous {
-							"/// Element type for ${rec.name}\npub const ${struct_name} = if (@sizeOf(usize) == 4) extern struct {\n${wasm32_field_strs}} else extern struct {\n${native_field_strs}};\n\n"
+							wasm32_method_decls = generate_record_refcount_methods(type_table, duplicate_tag_names, preferred_names, rec)
+							native_method_decls = generate_record_refcount_methods(type_table, duplicate_tag_names, preferred_names, rec)
+							"/// Element type for ${rec.name}\npub const ${struct_name} = if (@sizeOf(usize) == 4) extern struct {\n${wasm32_field_strs}${wasm32_method_decls}} else extern struct {\n${native_field_strs}${native_method_decls}};\n\n"
 						} else {
-							"/// Element type for ${rec.name}\npub const ${struct_name} = extern struct {\n${native_field_strs}};\n\n"
+							method_decls = generate_record_refcount_methods(type_table, duplicate_tag_names, preferred_names, rec)
+							"/// Element type for ${rec.name}\npub const ${struct_name} = extern struct {\n${native_field_strs}${method_decls}};\n\n"
 						}
 
 						$structs = Str.concat(
@@ -1034,6 +1036,7 @@ generate_single_tag_union = |type_table, duplicate_tag_names, preferred_names, t
 
 	if is_pure_enum {
 		# Pure enum: just emit the enum type
+		method_decls = "    /// Recursively decrement Roc-owned payloads.\n    pub fn decref(self: @This(), roc_host: *RocHost) void {\n        _ = self;\n        _ = roc_host;\n    }\n\n    /// Increment Roc-owned payloads.\n    pub fn incref(self: @This(), amount: isize) void {\n        _ = self;\n        _ = amount;\n    }\n"
 		var $variants = ""
 		var $idx = 0
 		for tag in tu.tags {
@@ -1042,7 +1045,7 @@ generate_single_tag_union = |type_table, duplicate_tag_names, preferred_names, t
 			$idx = $idx + 1
 		}
 
-		"/// Tag union: ${tu.name}\npub const ${struct_name} = enum(${disc_type}) {\n${$variants}};\n\n"
+		"/// Tag union: ${tu.name}\npub const ${struct_name} = enum(${disc_type}) {\n${$variants}${method_decls}};\n\n"
 	} else {
 		# Generate tuple structs for any variant with >1 payload
 		var $tuple_structs = ""
@@ -1098,13 +1101,15 @@ generate_single_tag_union = |type_table, duplicate_tag_names, preferred_names, t
 		# Comptime assertions
 		native_layout = tag_union_layout_64(type_table, tu)
 		wasm32_layout = tag_union_layout_32(type_table, tu)
+		wasm32_method_decls = generate_tag_union_refcount_method_delegates(struct_name)
+		native_method_decls = generate_tag_union_refcount_method_delegates(struct_name)
 		assertions = if tu.size > 0 or wasm32_layout.size > 0 {
 			"comptime {\n    if (@sizeOf(usize) == 8) {\n        if (@sizeOf(${struct_name}) != ${U64.to_str(tu.size)}) @compileError(\"${struct_name} size mismatch\");\n        if (@alignOf(${struct_name}) != ${U64.to_str(tu.alignment)}) @compileError(\"${struct_name} alignment mismatch\");\n        if (@offsetOf(${struct_name}, \"tag\") != ${U64.to_str(native_layout.discriminant_offset)}) @compileError(\"${struct_name} tag offset mismatch\");\n    }\n    if (@sizeOf(usize) == 4) {\n        if (@sizeOf(${struct_name}) != ${U64.to_str(wasm32_layout.size)}) @compileError(\"${struct_name} size mismatch\");\n        if (@alignOf(${struct_name}) != ${U64.to_str(wasm32_layout.alignment)}) @compileError(\"${struct_name} alignment mismatch\");\n        if (@offsetOf(${struct_name}, \"tag\") != ${U64.to_str(wasm32_layout.discriminant_offset)}) @compileError(\"${struct_name} tag offset mismatch\");\n    }\n}\n\n"
 		} else {
 			""
 		}
 
-		"${$tuple_structs}/// Tag discriminant for ${tu.name}.\npub const ${struct_name}Tag = enum(${disc_type}) {\n${$enum_variants}};\n\n/// Payload union for ${tu.name}.\npub const ${payload_union_name} = extern union {\n${$union_fields}};\n\n/// Tag union: ${tu.name}\npub const ${struct_name} = if (@sizeOf(usize) == 4) extern struct {\n    payload: [${U64.to_str(wasm32_layout.discriminant_offset)}]u8 align(${U64.to_str(wasm32_layout.alignment)}),\n    tag: ${struct_name}Tag,\n${$wasm32_accessors}} else extern struct {\n    payload: ${payload_union_name},\n    tag: ${struct_name}Tag,\n${$native_accessors}};\n\n${assertions}"
+		"${$tuple_structs}/// Tag discriminant for ${tu.name}.\npub const ${struct_name}Tag = enum(${disc_type}) {\n${$enum_variants}};\n\n/// Payload union for ${tu.name}.\npub const ${payload_union_name} = extern union {\n${$union_fields}};\n\n/// Tag union: ${tu.name}\npub const ${struct_name} = if (@sizeOf(usize) == 4) extern struct {\n    payload: [${U64.to_str(wasm32_layout.discriminant_offset)}]u8 align(${U64.to_str(wasm32_layout.alignment)}),\n    tag: ${struct_name}Tag,\n${$wasm32_accessors}${wasm32_method_decls}} else extern struct {\n    payload: ${payload_union_name},\n    tag: ${struct_name}Tag,\n${$native_accessors}${native_method_decls}};\n\n${assertions}"
 	}
 }
 
@@ -1141,48 +1146,12 @@ indent_lines = |text, prefix| {
 
 box_payload_decref_name = |inner_id| "decrefBoxPayloadType${U64.to_str(inner_id)}"
 
-decref_helper_name_from_repr = |duplicate_tag_names, preferred_names, type_id, type_repr| {
-	match type_repr {
-		RocRecord(rec) =>
-			if rec.name == "" {
-				""
-			} else {
-				"decref${name_to_struct_name(rec.name)}"
-			}
-		RocTagUnion(tu) =>
-			if List.len(tu.tags) >= 2 and tu.name != "" {
-				"decref${tag_union_struct_name(preferred_names, duplicate_tag_names, type_id, tu)}"
-			} else {
-				""
-			}
-		_ => ""
-	}
-}
-
-incref_helper_name_from_repr = |duplicate_tag_names, preferred_names, type_id, type_repr| {
-	match type_repr {
-		RocRecord(rec) =>
-			if rec.name == "" {
-				""
-			} else {
-				"incref${name_to_struct_name(rec.name)}"
-			}
-		RocTagUnion(tu) =>
-			if List.len(tu.tags) >= 2 and tu.name != "" {
-				"incref${tag_union_struct_name(preferred_names, duplicate_tag_names, type_id, tu)}"
-			} else {
-				""
-			}
-		_ => ""
-	}
-}
-
 decref_stmt_for_type_id = |type_table, duplicate_tag_names, preferred_names, type_id, expr| {
 	type_repr = TypeTable.get(TypeTable.from_list(type_table), type_id)
 	decref_stmt_for_repr(type_table, duplicate_tag_names, preferred_names, type_id, type_repr, expr)
 }
 
-decref_stmt_for_repr = |type_table, duplicate_tag_names, preferred_names, type_id, type_repr, expr| {
+decref_stmt_for_repr = |type_table, duplicate_tag_names, preferred_names, _type_id, type_repr, expr| {
 	match type_repr {
 		RocStr => "    ${expr}.decref(roc_host);\n"
 		RocList(elem_id) => {
@@ -1211,12 +1180,11 @@ decref_stmt_for_repr = |type_table, duplicate_tag_names, preferred_names, type_i
 					}
 				}
 		}
-		RocRecord(_) => {
-			helper = decref_helper_name_from_repr(duplicate_tag_names, preferred_names, type_id, type_repr)
-			if helper == "" {
+		RocRecord(rec) => {
+			if rec.name == "" {
 				""
 			} else {
-				"    ${helper}(${expr}, roc_host);\n"
+				"    ${expr}.decref(roc_host);\n"
 			}
 		}
 		RocTagUnion(tu) =>
@@ -1224,11 +1192,10 @@ decref_stmt_for_repr = |type_table, duplicate_tag_names, preferred_names, type_i
 				SinglePayload(payload_id) => decref_stmt_for_type_id(type_table, duplicate_tag_names, preferred_names, payload_id, expr)
 				SingleNoPayload => ""
 				NotSingleVariant => {
-					helper = decref_helper_name_from_repr(duplicate_tag_names, preferred_names, type_id, type_repr)
-					if helper == "" {
-						""
+					if tu.name != "" {
+						"    ${expr}.decref(roc_host);\n"
 					} else {
-						"    ${helper}(${expr}, roc_host);\n"
+						""
 					}
 				}
 			}
@@ -1241,7 +1208,7 @@ incref_stmt_for_type_id = |type_table, duplicate_tag_names, preferred_names, typ
 	incref_stmt_for_repr(type_table, duplicate_tag_names, preferred_names, type_id, type_repr, expr)
 }
 
-incref_stmt_for_repr = |type_table, duplicate_tag_names, preferred_names, type_id, type_repr, expr| {
+incref_stmt_for_repr = |type_table, duplicate_tag_names, preferred_names, _type_id, type_repr, expr| {
 	match type_repr {
 		RocStr => "    ${expr}.incref(amount);\n"
 		RocList(_) => "    ${expr}.incref(amount);\n"
@@ -1249,13 +1216,12 @@ incref_stmt_for_repr = |type_table, duplicate_tag_names, preferred_names, type_i
 			match TypeTable.get(TypeTable.from_list(type_table), inner_id) {
 				RocFunction(_) => "    increfErasedCallable(${expr}, amount);\n"
 				_ => "    increfBox(@ptrCast(${expr}), amount);\n"
-			}
-		RocRecord(_) => {
-			helper = incref_helper_name_from_repr(duplicate_tag_names, preferred_names, type_id, type_repr)
-			if helper == "" {
+		}
+		RocRecord(rec) => {
+			if rec.name == "" {
 				""
 			} else {
-				"    ${helper}(${expr}, amount);\n"
+				"    ${expr}.incref(amount);\n"
 			}
 		}
 		RocTagUnion(tu) =>
@@ -1269,19 +1235,17 @@ incref_stmt_for_repr = |type_table, duplicate_tag_names, preferred_names, type_i
 					_ => ""
 				}
 			} else {
-				helper = incref_helper_name_from_repr(duplicate_tag_names, preferred_names, type_id, type_repr)
-				if helper == "" {
-					""
+				if tu.name != "" {
+					"    ${expr}.incref(amount);\n"
 				} else {
-					"    ${helper}(${expr}, amount);\n"
+					""
 				}
 			}
 		_ => ""
 	}
 }
 
-generate_record_refcount_helpers = |type_table, duplicate_tag_names, preferred_names, rec| {
-	struct_name = name_to_struct_name(rec.name)
+generate_record_refcount_methods = |type_table, duplicate_tag_names, preferred_names, rec| {
 	var $decref_body = ""
 	var $incref_body = ""
 
@@ -1296,17 +1260,22 @@ generate_record_refcount_helpers = |type_table, duplicate_tag_names, preferred_n
 	}
 
 	if $decref_body == "" {
-		$decref_body = "    _ = value;\n    _ = roc_host;\n"
+		$decref_body = "        _ = value;\n        _ = roc_host;\n"
+	} else {
+		$decref_body = indent_lines($decref_body, "    ")
 	}
 	if $incref_body == "" {
-		$incref_body = "    _ = value;\n    _ = amount;\n"
+		$incref_body = "        _ = value;\n        _ = amount;\n"
+	} else {
+		$incref_body = indent_lines($incref_body, "    ")
 	}
 
-	"/// Recursively decrement Roc-owned fields in ${struct_name}.\npub fn decref${struct_name}(value: ${struct_name}, roc_host: *RocHost) void {\n${$decref_body}}\n\n/// Increment Roc-owned fields in ${struct_name}.\npub fn incref${struct_name}(value: ${struct_name}, amount: isize) void {\n${$incref_body}}\n\n"
+	"    /// Recursively decrement Roc-owned fields.\n    pub fn decref(self: @This(), roc_host: *RocHost) void {\n        const value = self;\n${$decref_body}    }\n\n    /// Increment Roc-owned fields.\n    pub fn incref(self: @This(), amount: isize) void {\n        const value = self;\n${$incref_body}    }\n"
 }
 
 generate_tag_payload_refcount_branch = |type_table, duplicate_tag_names, preferred_names, tag, mode| {
 	snake = to_lower_snake_case(tag.name)
+
 	if tag.payload_size == 0 {
 		return "        .${tag.name} => {},\n"
 	}
@@ -1346,23 +1315,67 @@ generate_tag_payload_refcount_branch = |type_table, duplicate_tag_names, preferr
 	}
 }
 
-tag_payload_refcount_uses_param = |type_table, duplicate_tag_names, preferred_names, tag, mode| {
+decref_stmt_uses_roc_host_for_type_id = |type_table, type_id| {
+	type_repr = TypeTable.get(TypeTable.from_list(type_table), type_id)
+	match type_repr {
+		RocStr => Bool.True
+		RocList(_) => Bool.True
+		RocBox(_) => Bool.True
+		RocRecord(rec) => rec.name != ""
+		RocTagUnion(tu) =>
+			match TypeTable.single_variant_payload(tu) {
+				SinglePayload(payload_id) => decref_stmt_uses_roc_host_for_type_id(type_table, payload_id)
+				SingleNoPayload => Bool.False
+				NotSingleVariant => tu.name != ""
+			}
+		_ => Bool.False
+	}
+}
+
+incref_stmt_uses_amount_for_type_id = |type_table, type_id| {
+	type_repr = TypeTable.get(TypeTable.from_list(type_table), type_id)
+	match type_repr {
+		RocStr => Bool.True
+		RocList(_) => Bool.True
+		RocBox(_) => Bool.True
+		RocRecord(rec) => rec.name != ""
+		RocTagUnion(tu) =>
+			if List.len(tu.tags) == 1 {
+				match List.first(tu.tags) {
+					Ok(tag) =>
+						match List.first(tag.payload) {
+							Ok(payload_id) => incref_stmt_uses_amount_for_type_id(type_table, payload_id)
+							_ => Bool.False
+						}
+					_ => Bool.False
+				}
+			} else {
+				tu.name != ""
+			}
+		_ => Bool.False
+	}
+}
+
+tag_payload_refcount_uses_param = |type_table, tag, mode| {
 	if tag.payload_size == 0 {
 		return Bool.False
 	}
 
 	List.any(tag.payload, |payload_id| {
-		stmt = if mode == "decref" {
-			decref_stmt_for_type_id(type_table, duplicate_tag_names, preferred_names, payload_id, "payload")
+		if mode == "decref" {
+			decref_stmt_uses_roc_host_for_type_id(type_table, payload_id)
 		} else {
-			incref_stmt_for_type_id(type_table, duplicate_tag_names, preferred_names, payload_id, "payload")
+			incref_stmt_uses_amount_for_type_id(type_table, payload_id)
 		}
-		stmt != ""
 	})
 }
 
-tag_union_refcount_uses_param = |type_table, duplicate_tag_names, preferred_names, tu, mode| {
-	List.any(tu.tags, |tag| tag_payload_refcount_uses_param(type_table, duplicate_tag_names, preferred_names, tag, mode))
+tag_union_refcount_uses_param = |type_table, tu, mode| {
+	List.any(tu.tags, |tag| tag_payload_refcount_uses_param(type_table, tag, mode))
+}
+
+generate_tag_union_refcount_method_delegates = |struct_name| {
+	"    /// Recursively decrement Roc-owned payloads.\n    pub fn decref(self: @This(), roc_host: *RocHost) void {\n        decref${struct_name}(self, roc_host);\n    }\n\n    /// Increment Roc-owned payloads.\n    pub fn incref(self: @This(), amount: isize) void {\n        incref${struct_name}(self, amount);\n    }\n"
 }
 
 generate_tag_union_refcount_helpers = |type_table, duplicate_tag_names, preferred_names, type_id, tu| {
@@ -1374,12 +1387,12 @@ generate_tag_union_refcount_helpers = |type_table, duplicate_tag_names, preferre
 		$incref_branches = Str.concat($incref_branches, generate_tag_payload_refcount_branch(type_table, duplicate_tag_names, preferred_names, tag, "incref"))
 	}
 
-	decref_uses_param = tag_union_refcount_uses_param(type_table, duplicate_tag_names, preferred_names, tu, "decref")
-	incref_uses_param = tag_union_refcount_uses_param(type_table, duplicate_tag_names, preferred_names, tu, "incref")
+	decref_uses_param = tag_union_refcount_uses_param(type_table, tu, "decref")
+	incref_uses_param = tag_union_refcount_uses_param(type_table, tu, "incref")
 	decref_unused = if decref_uses_param { "" } else { "    _ = roc_host;\n" }
 	incref_unused = if incref_uses_param { "" } else { "    _ = amount;\n" }
 
-	"/// Recursively decrement Roc-owned payloads in ${struct_name}.\npub fn decref${struct_name}(value: ${struct_name}, roc_host: *RocHost) void {\n${decref_unused}    switch (value.tag) {\n${$decref_branches}    }\n}\n\n/// Increment Roc-owned payloads in ${struct_name}.\npub fn incref${struct_name}(value: ${struct_name}, amount: isize) void {\n${incref_unused}    switch (value.tag) {\n${$incref_branches}    }\n}\n\n"
+	"fn decref${struct_name}(value: ${struct_name}, roc_host: *RocHost) void {\n${decref_unused}    switch (value.tag) {\n${$decref_branches}    }\n}\n\nfn incref${struct_name}(value: ${struct_name}, amount: isize) void {\n${incref_unused}    switch (value.tag) {\n${$incref_branches}    }\n}\n\n"
 }
 
 generate_box_payload_decref_helpers = |type_table, duplicate_tag_names, preferred_names| {
@@ -1414,22 +1427,14 @@ generate_box_payload_decref_helpers = |type_table, duplicate_tag_names, preferre
 }
 
 generate_refcount_helpers = |type_table, duplicate_tag_names, preferred_names| {
-	var $helpers = "// Generated Refcount Helpers\n\n"
+	var $helpers = ""
 	var $seen_names = []
 	var $type_id = 0
 
 	for type_repr in type_table {
 		match type_repr {
-			RocRecord(rec) =>
-				if rec.name != "" {
-					struct_name = name_to_struct_name(rec.name)
-					if !(List.contains($seen_names, struct_name)) {
-						$seen_names = $seen_names.append(struct_name)
-						$helpers = Str.concat($helpers, generate_record_refcount_helpers(type_table, duplicate_tag_names, preferred_names, rec))
-					}
-				}
 			RocTagUnion(tu) =>
-				if List.len(tu.tags) >= 2 and tu.name != "" {
+				if List.len(tu.tags) >= 2 and tu.name != "" and !List.all(tu.tags, |tag| tag.payload_size == 0) {
 					struct_name = tag_union_struct_name(preferred_names, duplicate_tag_names, $type_id, tu)
 					if !(List.contains($seen_names, struct_name)) {
 						$seen_names = $seen_names.append(struct_name)
@@ -1442,7 +1447,13 @@ generate_refcount_helpers = |type_table, duplicate_tag_names, preferred_names| {
 		$type_id = $type_id + 1
 	}
 
-	$helpers.concat(generate_box_payload_decref_helpers(type_table, duplicate_tag_names, preferred_names))
+	box_helpers = generate_box_payload_decref_helpers(type_table, duplicate_tag_names, preferred_names)
+	all_helpers = Str.concat($helpers, box_helpers)
+	if all_helpers == "" {
+		""
+	} else {
+		"// Generated Refcount Helpers\n\n${all_helpers}"
+	}
 }
 
 ## ZigGlue must keep distinct concrete types for generic Roc types such as
