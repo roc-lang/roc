@@ -154,6 +154,23 @@ pub fn appendPendingTask(
     return request_id;
 }
 
+pub fn appendAndStartPendingTask(
+    comptime Ctx: type,
+    ctx: Ctx.Handle,
+    allocator: std.mem.Allocator,
+    tasks: *std.ArrayListUnmanaged(PendingTask),
+    next_task_request_id: *u64,
+    roc_host: *abi.RocHost,
+    owner_scope_id: u64,
+    task_token: HostSignalToken,
+    task_name: []const u8,
+    request: []const u8,
+) u64 {
+    const request_id = appendPendingTask(allocator, tasks, next_task_request_id, roc_host, owner_scope_id, task_token, task_name, request);
+    Ctx.sink(ctx).startTask(request_id, task_name, request);
+    return request_id;
+}
+
 pub fn deinitPendingTask(allocator: std.mem.Allocator, roc_host: *abi.RocHost, task: *PendingTask) void {
     retained_values.releaseHostSignalToken(task.task_token, roc_host);
     allocator.free(task.task_name);

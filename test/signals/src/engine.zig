@@ -6125,8 +6125,7 @@ pub fn Engine(comptime Ctx: type) type {
             defer request.decref(roc_host);
 
             self.cancelPendingTasksByTaskToken(ctx, cmd.task_token);
-            const request_id = self.appendPendingTask(ctx, owner_scope_id, cmd.task_token, cmd.task_name.asSlice(), request.asSlice());
-            Ctx.sink(ctx).startTask(request_id, cmd.task_name.asSlice(), request.asSlice());
+            _ = effects_runtime.appendAndStartPendingTask(Ctx, ctx, Ctx.allocator(ctx), &self.pending_tasks, &self.next_task_request_id, self.roc_host.?, owner_scope_id, cmd.task_token, cmd.task_name.asSlice(), request.asSlice());
 
             if (task_payload.reset_on_start) {
                 const loading = erased_calls.callValueInitThunk(roc_host, task_payload.initial);
