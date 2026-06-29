@@ -49,6 +49,7 @@ pub const RuntimeMetrics = engine_metrics.RuntimeMetrics;
 pub const NoMetrics = engine_metrics.NoMetrics;
 pub const DispatchMetrics = engine_metrics.DispatchMetrics;
 pub const zeroRuntimeMetrics = engine_metrics.zeroRuntimeMetrics;
+pub const addRuntimeMetrics = engine_metrics.addRuntimeMetrics;
 pub const verifyRegistryOps = engine_contract.verifyRegistryOps;
 pub const verifySink = engine_contract.verifySink;
 pub const verifyMetrics = engine_contract.verifyMetrics;

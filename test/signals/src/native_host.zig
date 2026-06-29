@@ -87,6 +87,7 @@ const NativeCtx = struct {
 const HostEngine = engine.Engine(NativeCtx);
 const RuntimeMetrics = engine.RuntimeMetrics;
 const NoMetrics = engine.NoMetrics;
+const addRuntimeMetrics = engine.addRuntimeMetrics;
 
 comptime {
     std.debug.assert(@sizeOf(NoMetrics) == 0);
@@ -1208,65 +1209,6 @@ fn failHost(message: []const u8) noreturn {
     writeStderr(message);
     writeStderr("\n");
     std.process.exit(1);
-}
-
-fn addRuntimeMetrics(left: RuntimeMetrics, right: RuntimeMetrics) RuntimeMetrics {
-    return .{
-        .active_graph_records_rebuilt = left.active_graph_records_rebuilt + right.active_graph_records_rebuilt,
-        .append_child = left.append_child + right.append_child,
-        .active_intervals_synced = left.active_intervals_synced + right.active_intervals_synced,
-        .allocs_this_event = left.allocs_this_event + right.allocs_this_event,
-        .bind_event = left.bind_event + right.bind_event,
-        .closure_releases = left.closure_releases + right.closure_releases,
-        .closure_retains = left.closure_retains + right.closure_retains,
-        .create_element = left.create_element + right.create_element,
-        .deallocs_this_event = left.deallocs_this_event + right.deallocs_this_event,
-        .derived_calls_into_roc = left.derived_calls_into_roc + right.derived_calls_into_roc,
-        .each_key_compares = left.each_key_compares + right.each_key_compares,
-        .each_key_hashes = left.each_key_hashes + right.each_key_hashes,
-        .each_key_reuse_compares = left.each_key_reuse_compares + right.each_key_reuse_compares,
-        .each_key_duplicate_compares = left.each_key_duplicate_compares + right.each_key_duplicate_compares,
-        .each_item_compares = left.each_item_compares + right.each_item_compares,
-        .each_syncs = left.each_syncs + right.each_syncs,
-        .each_sync_keys = left.each_sync_keys + right.each_sync_keys,
-        .each_sync_existing_rows = left.each_sync_existing_rows + right.each_sync_existing_rows,
-        .events_processed = left.events_processed + right.events_processed,
-        .host_alloc_bytes_this_event = left.host_alloc_bytes_this_event + right.host_alloc_bytes_this_event,
-        .host_allocs_this_event = left.host_allocs_this_event + right.host_allocs_this_event,
-        .host_dealloc_bytes_this_event = left.host_dealloc_bytes_this_event + right.host_dealloc_bytes_this_event,
-        .host_deallocs_this_event = left.host_deallocs_this_event + right.host_deallocs_this_event,
-        .host_retained_alloc_delta = left.host_retained_alloc_delta + right.host_retained_alloc_delta,
-        .host_retained_bytes_delta = left.host_retained_bytes_delta + right.host_retained_bytes_delta,
-        .move_before = left.move_before + right.move_before,
-        .nodes_recomputed = left.nodes_recomputed + right.nodes_recomputed,
-        .patches_emitted = left.patches_emitted + right.patches_emitted,
-        .propagation_prunes = left.propagation_prunes + right.propagation_prunes,
-        .recompute_batches = left.recompute_batches + right.recompute_batches,
-        .remove_node = left.remove_node + right.remove_node,
-        .render_indexes_refreshed = left.render_indexes_refreshed + right.render_indexes_refreshed,
-        .retained_alloc_delta = left.retained_alloc_delta + right.retained_alloc_delta,
-        .reset_dom = left.reset_dom + right.reset_dom,
-        .rows_created = left.rows_created + right.rows_created,
-        .rows_removed = left.rows_removed + right.rows_removed,
-        .rows_reused = left.rows_reused + right.rows_reused,
-        .scopes_created = left.scopes_created + right.scopes_created,
-        .scopes_disposed = left.scopes_disposed + right.scopes_disposed,
-        .set_checked = left.set_checked + right.set_checked,
-        .set_disabled = left.set_disabled + right.set_disabled,
-        .set_metadata = left.set_metadata + right.set_metadata,
-        .set_text = left.set_text + right.set_text,
-        .set_value = left.set_value + right.set_value,
-        .signal_record_table_rebuilt = left.signal_record_table_rebuilt + right.signal_record_table_rebuilt,
-        .stream_nodes_scanned = left.stream_nodes_scanned + right.stream_nodes_scanned,
-        .stream_nodes_scanned_apply = left.stream_nodes_scanned_apply + right.stream_nodes_scanned_apply,
-        .stream_nodes_scanned_children = left.stream_nodes_scanned_children + right.stream_nodes_scanned_children,
-        .stream_nodes_scanned_dirty_scope = left.stream_nodes_scanned_dirty_scope + right.stream_nodes_scanned_dirty_scope,
-        .stream_nodes_scanned_events = left.stream_nodes_scanned_events + right.stream_nodes_scanned_events,
-        .stream_nodes_scanned_mounts = left.stream_nodes_scanned_mounts + right.stream_nodes_scanned_mounts,
-        .stream_nodes_scanned_remove_target = left.stream_nodes_scanned_remove_target + right.stream_nodes_scanned_remove_target,
-        .stream_nodes_scanned_render_scope = left.stream_nodes_scanned_render_scope + right.stream_nodes_scanned_render_scope,
-        .stream_nodes_scanned_splice = left.stream_nodes_scanned_splice + right.stream_nodes_scanned_splice,
-    };
 }
 
 fn u64MetricAsI64(value: u64) i64 {

@@ -72,6 +72,14 @@ pub fn zeroRuntimeMetrics() RuntimeMetrics {
     return std.mem.zeroes(RuntimeMetrics);
 }
 
+pub fn addRuntimeMetrics(left: RuntimeMetrics, right: RuntimeMetrics) RuntimeMetrics {
+    var result: RuntimeMetrics = undefined;
+    inline for (std.meta.fields(RuntimeMetrics)) |field| {
+        @field(result, field.name) = @field(left, field.name) + @field(right, field.name);
+    }
+    return result;
+}
+
 /// Zero-size stand-in for `RuntimeMetrics`: every `bump` is a comptime no-op.
 pub const NoMetrics = struct {
     pub const Field = RuntimeMetrics.Field;
@@ -107,6 +115,20 @@ test "RuntimeMetrics bump updates requested counter when metrics are enabled" {
     } else {
         try std.testing.expectEqual(@as(u64, 0), metrics.nodes_recomputed);
     }
+}
+
+test "addRuntimeMetrics folds unsigned and signed counters" {
+    var left = zeroRuntimeMetrics();
+    var right = zeroRuntimeMetrics();
+    left.nodes_recomputed = 3;
+    right.nodes_recomputed = 4;
+    left.host_retained_alloc_delta = -2;
+    right.host_retained_alloc_delta = 5;
+
+    const total = addRuntimeMetrics(left, right);
+
+    try std.testing.expectEqual(@as(u64, 7), total.nodes_recomputed);
+    try std.testing.expectEqual(@as(i64, 3), total.host_retained_alloc_delta);
 }
 
 test "NoMetrics is a zero-size no-op metrics sink" {
