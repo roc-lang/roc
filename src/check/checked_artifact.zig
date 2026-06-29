@@ -2114,8 +2114,14 @@ pub const CheckedStaticDispatchConstraint = struct {
     fn_name: canonical.MethodNameId,
     fn_ty: CheckedTypeId,
     origin: types.StaticDispatchConstraint.Origin,
-    binop_negated: bool = false,
-    num_literal: ?types.NumeralInfo = null,
+
+    pub fn binopNegated(self: @This()) bool {
+        return self.origin.binopNegated();
+    }
+
+    pub fn numeralInfo(self: @This()) ?types.NumeralInfo {
+        return self.origin.numeralInfo();
+    }
 };
 
 /// Public `NumericDefaultPhase` declaration.
@@ -3833,8 +3839,6 @@ pub const CheckedTypeStore = struct {
                 .fn_name = constraint.fn_name,
                 .fn_ty = try self.cloneCheckedTypeRootSubstituting(allocator, names, constraint.fn_ty, formals, actuals, active),
                 .origin = constraint.origin,
-                .binop_negated = constraint.origin.binopNegated(),
-                .num_literal = constraint.origin.numeralInfo(),
             };
         }
         return out;
@@ -5526,9 +5530,10 @@ const SubstitutedCheckedTypeKeyBuilder = struct {
             self.writeBytes(self.names.methodNameText(constraint.fn_name));
             try self.writeType(constraint.fn_ty);
             self.writeTag(@tagName(constraint.origin));
-            self.writeBool(constraint.binop_negated);
-            self.writeBool(constraint.num_literal != null);
-            if (constraint.num_literal) |num_literal| {
+            self.writeBool(constraint.binopNegated());
+            const maybe_num_literal = constraint.numeralInfo();
+            self.writeBool(maybe_num_literal != null);
+            if (maybe_num_literal) |num_literal| {
                 self.hasher.update(&num_literal.bytes);
                 self.writeBool(num_literal.is_u128);
                 self.writeBool(num_literal.is_negative);
@@ -5850,18 +5855,16 @@ fn numericDefaultPhaseForConstraints(
     constraints_range: types.StaticDispatchConstraint.SafeList.Range,
 ) ?NumericDefaultPhase {
     const constraints = module.typeStoreConst().sliceStaticDispatchConstraints(constraints_range);
-    var has_str_defaultable_literal = false;
+    const kind = types.StaticDispatchConstraint.dominantLiteralKind(constraints);
+    var has_arith = false;
     for (constraints) |constraint| {
-        switch (constraint.origin) {
-            .from_literal => |lit| switch (lit) {
-                .numeral => return .mono_specialization,
-                .quote, .interpolation => has_str_defaultable_literal = true,
-            },
-            else => {},
+        if (isDefaultableArithmeticConstraint(module, constraint)) {
+            has_arith = true;
+            break;
         }
-        if (isDefaultableArithmeticConstraint(module, constraint)) return .mono_specialization;
     }
-    if (has_str_defaultable_literal) return .mono_specialization_str;
+    if (kind == .numeral or has_arith) return .mono_specialization;
+    if (kind == .quote or kind == .interpolation) return .mono_specialization_str;
     return null;
 }
 
@@ -6045,8 +6048,6 @@ fn copyCheckedStaticDispatchConstraints(
             .fn_name = try names.internMethodIdent(module.identStoreConst(), constraint.fn_name),
             .fn_ty = try appendCheckedTypeRoot(allocator, module, names, imports, store, active, constraint.fn_var),
             .origin = constraint.origin,
-            .binop_negated = constraint.origin.binopNegated(),
-            .num_literal = constraint.origin.numeralInfo(),
         };
     }
     return out;
@@ -18575,9 +18576,10 @@ const PlatformAppRelationTypeDigestBuilder = struct {
             self.writeBytes(self.names.methodNameText(constraint.fn_name));
             try self.writeSourceType(constraint.fn_ty);
             self.writeTag(@tagName(constraint.origin));
-            self.writeBool(constraint.binop_negated);
-            self.writeBool(constraint.num_literal != null);
-            if (constraint.num_literal) |num_literal| {
+            self.writeBool(constraint.origin.binopNegated());
+            const maybe_num_literal = constraint.numeralInfo();
+            self.writeBool(maybe_num_literal != null);
+            if (maybe_num_literal) |num_literal| {
                 self.hasher.update(&num_literal.bytes);
                 self.writeBool(num_literal.is_u128);
                 self.writeBool(num_literal.is_negative);
@@ -25221,8 +25223,6 @@ pub const CheckedTypeProjector = struct {
                 .fn_name = try self.remapViewMethodName(source_names, constraint.fn_name),
                 .fn_ty = try self.projectCheckedTypeViewRootInner(source, source_names, constraint.fn_ty, active),
                 .origin = constraint.origin,
-                .binop_negated = constraint.origin.binopNegated(),
-                .num_literal = constraint.origin.numeralInfo(),
             };
         }
         return out;
@@ -25473,8 +25473,6 @@ pub const CheckedTypeProjector = struct {
                 .fn_name = try self.remapMethodName(imported, constraint.fn_name),
                 .fn_ty = try self.projectImportedCheckedType(imported, constraint.fn_ty),
                 .origin = constraint.origin,
-                .binop_negated = constraint.origin.binopNegated(),
-                .num_literal = constraint.origin.numeralInfo(),
             };
         }
         return out;
@@ -25780,8 +25778,6 @@ const CheckedTypeStoreImportProjector = struct {
                 .fn_name = try self.remapMethodName(constraint.fn_name),
                 .fn_ty = try self.project(constraint.fn_ty),
                 .origin = constraint.origin,
-                .binop_negated = constraint.origin.binopNegated(),
-                .num_literal = constraint.origin.numeralInfo(),
             };
         }
         return out;
@@ -28044,8 +28040,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, bump `serialized_layout_version` and replace the golden bytes below with
     // the ones this assertion prints.
     const golden: [32]u8 = .{
-        0x55, 0x69, 0xB8, 0x7E, 0x9F, 0x12, 0xB4, 0x0F, 0x34, 0xBC, 0x1E, 0x15, 0x84, 0xAC, 0xC6, 0x3E,
-        0x33, 0xAB, 0x0E, 0x38, 0xAA, 0xEE, 0x99, 0x7F, 0x67, 0xCF, 0x19, 0x44, 0x2C, 0x7B, 0x13, 0xB5,
+        0x2D, 0xBF, 0x8E, 0x09, 0xB7, 0x8A, 0x18, 0x61, 0xC0, 0xF9, 0xA2, 0xFC, 0xB5, 0x5F, 0xF6, 0xA4,
+        0x53, 0xE3, 0x8D, 0x31, 0x64, 0xE3, 0xEA, 0x0D, 0x0E, 0xC6, 0x2E, 0x7D, 0x23, 0x61, 0x31, 0x9D,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

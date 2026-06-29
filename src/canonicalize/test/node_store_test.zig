@@ -1436,3 +1436,24 @@ test "NodeStore round trip - Pattern" {
         return error.IncompletePatternTestCoverage;
     }
 }
+
+test "SurfaceOrigin encode/decode round-trips" {
+    const SurfaceOrigin = CIR.Expr.SurfaceOrigin;
+    // Every unit form.
+    const unit_origins = [_]SurfaceOrigin{ .method_call, .unary_minus, .unary_not };
+    for (unit_origins) |origin| {
+        try testing.expectEqual(
+            origin,
+            NodeStore.decodeSurfaceOrigin(NodeStore.encodeSurfaceOrigin(origin)),
+        );
+    }
+    // Every binop form.
+    inline for (@typeInfo(CIR.Expr.Binop.Op).@"enum".fields) |field| {
+        const op: CIR.Expr.Binop.Op = @enumFromInt(field.value);
+        const origin = SurfaceOrigin{ .binop = op };
+        try testing.expectEqual(
+            origin,
+            NodeStore.decodeSurfaceOrigin(NodeStore.encodeSurfaceOrigin(origin)),
+        );
+    }
+}
