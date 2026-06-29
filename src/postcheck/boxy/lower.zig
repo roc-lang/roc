@@ -37,6 +37,7 @@ pub const Output = struct {
 
 pub const Options = struct {
     target_usize: base.target.TargetUsize = .native,
+    list_in_place_map: bool = false,
 };
 
 pub fn run(
@@ -55,7 +56,7 @@ pub fn run(
     var resolved_workers = try ResolvedWorkers.init(allocator, modules, plan);
     defer resolved_workers.deinit();
 
-    var procedure_builder = ProcedureBuilder.init(allocator, modules, plan, &layout_plan, &resolved_workers, &result);
+    var procedure_builder = ProcedureBuilder.init(allocator, modules, plan, &layout_plan, &resolved_workers, &result, options);
     defer procedure_builder.deinit();
     try procedure_builder.emitRoots();
 
@@ -234,6 +235,7 @@ const ProcedureBuilder = struct {
     layout_plan: *const Layouts.LayoutPlan,
     resolved_workers: *const ResolvedWorkers,
     result: *LirProgram.Result,
+    options: Options,
     worker_procs: []?LIR.LirProcSpecId,
     symbols: Common.SymbolGen = .{},
 
@@ -244,6 +246,7 @@ const ProcedureBuilder = struct {
         layout_plan: *const Layouts.LayoutPlan,
         resolved_workers: *const ResolvedWorkers,
         result: *LirProgram.Result,
+        options: Options,
     ) ProcedureBuilder {
         return .{
             .allocator = allocator,
@@ -252,6 +255,7 @@ const ProcedureBuilder = struct {
             .layout_plan = layout_plan,
             .resolved_workers = resolved_workers,
             .result = result,
+            .options = options,
             .worker_procs = &.{},
         };
     }
@@ -1863,7 +1867,7 @@ const ProcBodyBuilder = struct {
             .box_box,
             .box_unbox,
             => boxyLowerInvariant("Box boundary low-level operation reached boxy lowering before descriptor-backed box adaptation lowering"),
-            .list_map_can_reuse => boxyLowerInvariant("list_map_can_reuse reached boxy lowering before target-width layout interchangeability metadata lowering"),
+            .list_map_can_reuse => return try self.lowerListMapCanReuseInto(target, args, next),
             else => {},
         }
         if (lowLevelNeedsIntegerMultiplicationOverflowCheck(op)) {
@@ -1888,6 +1892,89 @@ const ProcBodyBuilder = struct {
         } });
         continuation = try self.prependLoweredExprs(args, lowered, continuation);
         return continuation;
+    }
+
+    fn lowerListMapCanReuseInto(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        args: []const checked.CheckedExprId,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const interchangeable = self.listMapLayoutsInterchangeable(args);
+        if (!interchangeable.get(.u32) and !interchangeable.get(.u64)) {
+            return try self.parent.result.store.addCFStmt(.{ .assign_literal = .{
+                .target = target,
+                .value = .{ .i64_literal = .{
+                    .value = 0,
+                    .layout_idx = self.parent.result.store.getLocal(target).layout_idx,
+                } },
+                .next = next,
+            } });
+        }
+
+        const lowered = try self.lowerExprsToTemps(args);
+        defer self.parent.allocator.free(lowered);
+
+        var continuation = try self.parent.result.store.addCFStmt(.{ .assign_low_level = .{
+            .target = target,
+            .op = .list_map_can_reuse,
+            .rc_effect = LIR.LowLevel.list_map_can_reuse.rcEffect(),
+            .args = try self.parent.result.store.addLocalSpan(lowered),
+            .interchangeable = interchangeable,
+            .next = next,
+        } });
+        continuation = try self.prependLoweredExprs(args, lowered, continuation);
+        return continuation;
+    }
+
+    fn listMapLayoutsInterchangeable(
+        self: *ProcBodyBuilder,
+        args: []const checked.CheckedExprId,
+    ) layout.WidthValues(bool) {
+        const none = layout.WidthValues(bool).both(false, false);
+        if (!self.parent.options.list_in_place_map) return none;
+        if (args.len != 2) boxyLowerInvariant("list_map_can_reuse reached boxy lowering with the wrong arity");
+
+        const list_expr = self.module.checked_bodies.expr(args[0]);
+        const list_layout_idx = self.workerRuntimeLayoutForType(list_expr.ty).layoutIdx();
+        const list_layout = self.parent.result.layouts.getLayout(list_layout_idx);
+        if (list_layout.tag != .list) return none;
+        const in_elem_idx = self.parent.result.layouts.runtimeRepresentationLayoutIdx(list_layout.getIdx());
+
+        const transform_expr = self.module.checked_bodies.expr(args[1]);
+        const out_ret_rep = self.functionReturnRepForType(transform_expr.ty);
+        const out_elem_idx = self.parent.result.layouts.runtimeRepresentationLayoutIdx(
+            self.workerRuntimeLayoutForRep(out_ret_rep).layoutIdx(),
+        );
+
+        return layout.WidthValues(bool).both(
+            self.listMapInterchangeableAtWidth(in_elem_idx, out_elem_idx, .u32),
+            self.listMapInterchangeableAtWidth(in_elem_idx, out_elem_idx, .u64),
+        );
+    }
+
+    fn listMapInterchangeableAtWidth(
+        self: *ProcBodyBuilder,
+        in_elem_idx: layout.Idx,
+        out_elem_idx: layout.Idx,
+        target_usize: base.target.TargetUsize,
+    ) bool {
+        const layouts = &self.parent.result.layouts;
+        const in_elem = layouts.getLayout(in_elem_idx);
+        const in_size = layouts.sizeAt(in_elem, target_usize);
+        if (in_size == 0) return false;
+
+        const out_elem = layouts.getLayout(out_elem_idx);
+        if (layouts.sizeAt(out_elem, target_usize) != in_size) return false;
+
+        const ptr_width = target_usize.size();
+        const in_alignment: u32 = @intCast(in_elem.alignment(target_usize).toByteUnits());
+        const out_alignment: u32 = @intCast(out_elem.alignment(target_usize).toByteUnits());
+        if (@max(ptr_width, in_alignment) != @max(ptr_width, out_alignment)) return false;
+
+        if (layouts.layoutContainsRefcounted(in_elem) != layouts.layoutContainsRefcounted(out_elem)) return false;
+
+        return true;
     }
 
     fn lowerExprsToTemps(
@@ -3586,6 +3673,38 @@ const ProcBodyBuilder = struct {
 
     fn workerRuntimeLayoutForRep(self: *const ProcBodyBuilder, rep_id: Plan.TypeRepId) Layouts.RuntimeLayout {
         return self.parent.layout_plan.rep_layouts[@intFromEnum(rep_id)].worker;
+    }
+
+    fn functionReturnRepForType(self: *const ProcBodyBuilder, ty: checked.CheckedTypeId) Plan.TypeRepId {
+        return self.functionReturnRepForRep(self.repForType(ty));
+    }
+
+    fn functionReturnRepForRep(self: *const ProcBodyBuilder, rep_id: Plan.TypeRepId) Plan.TypeRepId {
+        var current = rep_id;
+        var depth: u16 = 0;
+        while (true) {
+            if (depth == 1024) boxyLowerInvariant("function representation alias chain exceeded boxy lowerer limit");
+            depth += 1;
+
+            const rep = self.parent.plan.representations.items[@intFromEnum(current)];
+            switch (rep.kind) {
+                .alias => current = self.requiredSingleChild(current, .alias_backing).rep,
+                .nominal => |kind| switch (kind) {
+                    .transparent => current = self.requiredSingleChild(current, .nominal_backing).rep,
+                    .opaque_nominal, .builtin_other => boxyLowerInvariant("opaque or unsupported nominal reached function return layout lowering"),
+                },
+                .erased_callable => {
+                    for (self.parent.plan.childSlice(rep.children)) |child| {
+                        switch (child.role) {
+                            .function_ret => return child.rep,
+                            else => {},
+                        }
+                    }
+                    boxyLowerInvariant("function representation had no return child");
+                },
+                else => boxyLowerInvariant("list_map_can_reuse transform argument is not a function"),
+            }
+        }
     }
 
     fn requiredSingleChild(self: *const ProcBodyBuilder, rep_id: Plan.TypeRepId, role: Plan.ChildRole) Plan.RepChild {
@@ -8836,6 +8955,59 @@ test "boxy lowerer emits ordinary low-level calls after source-order argument lo
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = add.target } }, out.lir_result.store.getCFStmt(add.next));
 }
 
+test "boxy lowerer folds list_map_can_reuse to false when in-place map is disabled" {
+    const gpa = std.testing.allocator;
+
+    var out = try lowerListMapCanReuseFixture(gpa, .u64, .{});
+    defer out.deinit();
+
+    try expectListMapCanReuseFalse(&out);
+}
+
+test "boxy lowerer emits list_map_can_reuse when list map layouts are interchangeable" {
+    const gpa = std.testing.allocator;
+
+    var out = try lowerListMapCanReuseFixture(gpa, .u64, .{ .list_in_place_map = true });
+    defer out.deinit();
+
+    const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
+    const proc_args = out.lir_result.store.getLocalSpan(proc.args);
+    try std.testing.expectEqual(@as(usize, 2), proc_args.len);
+
+    const list_arg = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_ref;
+    switch (list_arg.op) {
+        .local => |local| try std.testing.expectEqual(proc_args[0], local),
+        else => return error.TestUnexpectedResult,
+    }
+
+    const transform_arg = out.lir_result.store.getCFStmt(list_arg.next).assign_ref;
+    switch (transform_arg.op) {
+        .local => |local| try std.testing.expectEqual(proc_args[1], local),
+        else => return error.TestUnexpectedResult,
+    }
+
+    const reuse = out.lir_result.store.getCFStmt(transform_arg.next).assign_low_level;
+    try std.testing.expectEqual(@as(LIR.LowLevel, .list_map_can_reuse), reuse.op);
+    try std.testing.expectEqual(LIR.LowLevel.list_map_can_reuse.rcEffect(), reuse.rc_effect);
+    try std.testing.expect(reuse.interchangeable.get(.u32));
+    try std.testing.expect(reuse.interchangeable.get(.u64));
+
+    const reuse_args = out.lir_result.store.getLocalSpan(reuse.args);
+    try std.testing.expectEqual(@as(usize, 2), reuse_args.len);
+    try std.testing.expectEqual(list_arg.target, reuse_args[0]);
+    try std.testing.expectEqual(transform_arg.target, reuse_args[1]);
+    try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = reuse.target } }, out.lir_result.store.getCFStmt(reuse.next));
+}
+
+test "boxy lowerer folds list_map_can_reuse to false when list map layouts are not interchangeable" {
+    const gpa = std.testing.allocator;
+
+    var out = try lowerListMapCanReuseFixture(gpa, .u8, .{ .list_in_place_map = true });
+    defer out.deinit();
+
+    try expectListMapCanReuseFalse(&out);
+}
+
 test "boxy lowerer expands checked integer division low-level calls" {
     const gpa = std.testing.allocator;
 
@@ -9202,6 +9374,170 @@ fn intValue(value: i128) can.CIR.IntValue {
         .bytes = @bitCast(value),
         .kind = .i128,
     };
+}
+
+const ListMapCanReuseTransformRet = enum {
+    u64,
+    u8,
+};
+
+fn lowerListMapCanReuseFixture(
+    allocator: Allocator,
+    transform_ret: ListMapCanReuseTransformRet,
+    options: Options,
+) !Output {
+    var artifact = minimalCheckedArtifact(allocator);
+    defer artifact.canonical_names.deinit();
+    defer artifact.checked_types.deinit(allocator);
+    defer artifact.checked_bodies.deinit(allocator);
+
+    const transform_ret_ty: checked.CheckedTypeId = switch (transform_ret) {
+        .u64 => @enumFromInt(0),
+        .u8 => @enumFromInt(1),
+    };
+
+    try artifact.checked_types.type_id_pool.appendSlice(allocator, &.{
+        @as(checked.CheckedTypeId, @enumFromInt(0)), // List(U64) element.
+        @as(checked.CheckedTypeId, @enumFromInt(0)), // Transform argument.
+        @as(checked.CheckedTypeId, @enumFromInt(2)), // Root list argument.
+        @as(checked.CheckedTypeId, @enumFromInt(3)), // Root transform argument.
+    });
+    try artifact.checked_types.payloads.append(allocator, .{
+        .nominal = builtinNominal(.u64, @enumFromInt(0), .{}),
+    });
+    try artifact.checked_types.payloads.append(allocator, .{
+        .nominal = builtinNominal(.u8, @enumFromInt(1), .{}),
+    });
+    try artifact.checked_types.payloads.append(allocator, .{
+        .nominal = builtinNominal(.list, @enumFromInt(2), .{ .start = 0, .len = 1 }),
+    });
+    try artifact.checked_types.payloads.append(allocator, .{
+        .function = .{
+            .kind = .pure,
+            .args = .{ .start = 1, .len = 1 },
+            .ret = transform_ret_ty,
+            .needs_instantiation = false,
+        },
+    });
+    try artifact.checked_types.payloads.append(allocator, .{
+        .function = .{
+            .kind = .pure,
+            .args = .{ .start = 2, .len = 2 },
+            .ret = @enumFromInt(1),
+            .needs_instantiation = false,
+        },
+    });
+
+    try artifact.checked_bodies.pattern_binders.append(allocator, .{
+        .id = @enumFromInt(0),
+        .pattern = @enumFromInt(0),
+        .reassignable = false,
+    });
+    try artifact.checked_bodies.pattern_binders.append(allocator, .{
+        .id = @enumFromInt(1),
+        .pattern = @enumFromInt(1),
+        .reassignable = false,
+    });
+    try artifact.checked_bodies.pattern_binder_by_pattern.appendSlice(allocator, &.{
+        @as(?checked.PatternBinderId, @enumFromInt(0)),
+        @as(?checked.PatternBinderId, @enumFromInt(1)),
+    });
+    try artifact.checked_bodies.pattern_id_pool.appendSlice(allocator, &.{
+        @as(checked.CheckedPatternId, @enumFromInt(0)),
+        @as(checked.CheckedPatternId, @enumFromInt(1)),
+    });
+    try artifact.checked_bodies.stored_patterns.append(allocator, .{
+        .id = @enumFromInt(0),
+        .ty = @enumFromInt(2),
+        .source_region = base.Region.zero(),
+        .data = .{ .assign = @enumFromInt(0) },
+    });
+    try artifact.checked_bodies.stored_patterns.append(allocator, .{
+        .id = @enumFromInt(1),
+        .ty = @enumFromInt(3),
+        .source_region = base.Region.zero(),
+        .data = .{ .assign = @enumFromInt(1) },
+    });
+
+    try artifact.checked_bodies.expr_id_pool.appendSlice(allocator, &.{
+        @as(checked.CheckedExprId, @enumFromInt(2)),
+        @as(checked.CheckedExprId, @enumFromInt(3)),
+    });
+
+    const template_ref = procedureTemplateRef(artifact.key, 0);
+    try artifact.checked_bodies.stored_exprs.append(allocator, .{
+        .id = @enumFromInt(0),
+        .ty = @enumFromInt(4),
+        .source_region = base.Region.zero(),
+        .data = .{ .lambda = .{ .args = .{ .start = 0, .len = 2 }, .body = @enumFromInt(1) } },
+    });
+    try artifact.checked_bodies.stored_exprs.append(allocator, .{
+        .id = @enumFromInt(1),
+        .ty = @enumFromInt(1),
+        .source_region = base.Region.zero(),
+        .data = .{ .run_low_level = .{
+            .op = .list_map_can_reuse,
+            .args = .{ .start = 0, .len = 2 },
+        } },
+    });
+    try artifact.checked_bodies.stored_exprs.append(allocator, .{
+        .id = @enumFromInt(2),
+        .ty = @enumFromInt(2),
+        .source_region = base.Region.zero(),
+        .data = .{ .lookup_local = .{ .pattern = @enumFromInt(0), .resolved = null } },
+    });
+    try artifact.checked_bodies.stored_exprs.append(allocator, .{
+        .id = @enumFromInt(3),
+        .ty = @enumFromInt(3),
+        .source_region = base.Region.zero(),
+        .data = .{ .lookup_local = .{ .pattern = @enumFromInt(1), .resolved = null } },
+    });
+    try artifact.checked_bodies.bodies.append(allocator, .{
+        .id = @enumFromInt(0),
+        .root_expr = @enumFromInt(0),
+        .owner_template = template_ref,
+    });
+    var templates = [_]checked.CheckedProcedureTemplate{
+        checkedTemplate(template_ref, @enumFromInt(4), @enumFromInt(0)),
+    };
+    artifact.checked_procedure_templates = .{ .templates = &templates };
+
+    const root = checked.RootRequest{
+        .order = 0,
+        .module_idx = 0,
+        .kind = .runtime_entrypoint,
+        .source = .{ .def = @enumFromInt(0) },
+        .checked_type = @enumFromInt(4),
+        .abi = .roc,
+        .exposure = .private,
+        .procedure_template = template_ref,
+    };
+    var plan = try Plan.analyzeProgram(allocator, .{
+        .root_module = .{ .module = &artifact, .roots = undefined },
+        .roots = &.{root},
+    }, .{});
+    defer plan.deinit();
+
+    return try run(
+        allocator,
+        .{ .root = .{ .module = &artifact, .roots = undefined } },
+        .{},
+        &plan,
+        options,
+    );
+}
+
+fn expectListMapCanReuseFalse(out: *Output) !void {
+    const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
+    const literal = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_literal;
+    switch (literal.value) {
+        .i64_literal => |value| {
+            try std.testing.expectEqual(@as(i64, 0), value.value);
+            try std.testing.expectEqual(out.lir_result.store.getLocal(literal.target).layout_idx, value.layout_idx);
+        },
+        else => return error.TestUnexpectedResult,
+    }
+    try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = literal.target } }, out.lir_result.store.getCFStmt(literal.next));
 }
 
 fn procedureTemplateRef(key: checked.CheckedModuleArtifactKey, raw_template_id: u32) names.ProcedureTemplateRef {

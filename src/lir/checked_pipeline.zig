@@ -338,7 +338,10 @@ fn lowerBoxyCheckedModulesToLir(
         checkedModules(modules),
         rootRequests(roots, layout_requests, static_data_requests),
         &plan,
-        .{ .target_usize = target.target_usize },
+        .{
+            .target_usize = target.target_usize,
+            .list_in_place_map = target.list_in_place_map,
+        },
     );
     errdefer lowered.deinit();
 
