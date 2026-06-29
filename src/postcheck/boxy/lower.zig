@@ -4381,9 +4381,10 @@ fn appendRequestedLayouts(
     layout_plan: *const Layouts.LayoutPlan,
     result: *LirProgram.Result,
 ) Allocator.Error!void {
-    if (roots.layout_requests.len == 0) return;
+    const request_count = roots.layout_requests.len + roots.static_data_requests.len;
+    if (request_count == 0) return;
     const root_rep_start = plan.roots.items.len;
-    if (plan.root_reps.items.len < root_rep_start + roots.layout_requests.len) {
+    if (plan.root_reps.items.len < root_rep_start + request_count) {
         boxyLowerInvariant("boxy plan root representations did not cover requested layouts");
     }
 
@@ -4393,6 +4394,16 @@ fn appendRequestedLayouts(
     const root_types = modules.root.module.checked_types.view();
     for (roots.layout_requests, 0..) |checked_type, index| {
         const rep_id = plan.root_reps.items[root_rep_start + index];
+        try result.requested_layouts.append(allocator, .{
+            .ty = root_types.rootKey(checked_type),
+            .checked_type = checked_type,
+            .layout_idx = layout_plan.rep_layouts[@intFromEnum(rep_id)].host.layoutIdx(),
+            .plan = try const_plans.constPlanForRep(rep_id),
+        });
+    }
+    for (roots.static_data_requests, 0..) |request, index| {
+        const checked_type = request.data.checked_type;
+        const rep_id = plan.root_reps.items[root_rep_start + roots.layout_requests.len + index];
         try result.requested_layouts.append(allocator, .{
             .ty = root_types.rootKey(checked_type),
             .checked_type = checked_type,
@@ -11182,6 +11193,77 @@ test "boxy lowerer emits requested layout metadata for layout-only plans" {
     try std.testing.expectEqual(@as(checked.CheckedTypeId, @enumFromInt(0)), requested.checked_type);
     try std.testing.expectEqual(.u64, requested.layout_idx);
     try std.testing.expectEqual(LirProgram.ConstPlan.scalar, out.lir_result.const_plans.items[@intFromEnum(requested.plan)]);
+    try std.testing.expectEqual(@as(usize, 0), out.lir_result.root_procs.items.len);
+}
+
+test "boxy lowerer emits requested layout metadata for static data requests" {
+    const gpa = std.testing.allocator;
+
+    var artifact = minimalCheckedArtifact(gpa);
+    defer artifact.canonical_names.deinit();
+    defer artifact.checked_types.deinit(gpa);
+
+    try artifact.checked_types.roots.append(gpa, .{ .id = @enumFromInt(0), .key = typeKey(1) });
+    try artifact.checked_types.roots.append(gpa, .{ .id = @enumFromInt(1), .key = typeKey(2) });
+    try artifact.checked_types.payloads.append(gpa, .{
+        .nominal = builtinNominal(.u64, @enumFromInt(0), .{}),
+    });
+    try artifact.checked_types.payloads.append(gpa, .{
+        .nominal = builtinNominal(.str, @enumFromInt(1), .{}),
+    });
+
+    const data = checked.ProvidedDataExport{
+        .source_name = @enumFromInt(0),
+        .ffi_symbol = @enumFromInt(0),
+        .def = @enumFromInt(0),
+        .pattern = @enumFromInt(0),
+        .checked_type = @enumFromInt(1),
+        .source_scheme = typeSchemeKey(2),
+        .const_ref = .{
+            .artifact = artifact.key,
+            .owner = .{ .top_level_binding = .{
+                .module_idx = 0,
+                .pattern = @enumFromInt(0),
+            } },
+            .template = @enumFromInt(0),
+            .source_scheme = typeSchemeKey(2),
+        },
+    };
+
+    var plan = try Plan.analyzeProgram(gpa, .{
+        .checked_types = artifact.checked_types.view(),
+        .layout_requests = &.{
+            @as(checked.CheckedTypeId, @enumFromInt(0)),
+            @as(checked.CheckedTypeId, @enumFromInt(1)),
+        },
+    }, .{});
+    defer plan.deinit();
+
+    var out = try run(
+        gpa,
+        .{ .root = .{ .module = &artifact, .roots = undefined } },
+        .{
+            .layout_requests = &.{@as(checked.CheckedTypeId, @enumFromInt(0))},
+            .static_data_requests = &.{.{ .data = data }},
+        },
+        &plan,
+        .{},
+    );
+    defer out.deinit();
+
+    try std.testing.expectEqual(@as(usize, 2), out.lir_result.requested_layouts.items.len);
+
+    const explicit = out.lir_result.requested_layouts.items[0];
+    try std.testing.expectEqual(typeKey(1), explicit.ty);
+    try std.testing.expectEqual(@as(checked.CheckedTypeId, @enumFromInt(0)), explicit.checked_type);
+    try std.testing.expectEqual(.u64, explicit.layout_idx);
+    try std.testing.expectEqual(LirProgram.ConstPlan.scalar, out.lir_result.const_plans.items[@intFromEnum(explicit.plan)]);
+
+    const static_data = out.lir_result.requested_layouts.items[1];
+    try std.testing.expectEqual(typeKey(2), static_data.ty);
+    try std.testing.expectEqual(@as(checked.CheckedTypeId, @enumFromInt(1)), static_data.checked_type);
+    try std.testing.expectEqual(.str, static_data.layout_idx);
+    try std.testing.expectEqual(LirProgram.ConstPlan.str, out.lir_result.const_plans.items[@intFromEnum(static_data.plan)]);
     try std.testing.expectEqual(@as(usize, 0), out.lir_result.root_procs.items.len);
 }
 
