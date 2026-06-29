@@ -9729,6 +9729,14 @@ const CheckKindState = union(enum) {
         /// lowered in `.exit`.
         final_expr_hoists_suppressed: bool,
     },
+    /// State for `e_closure`. The closure forwards its (consumed) call-arg
+    /// status to its inner lambda before scheduling it, then restores the
+    /// previous `self.checking_call_arg` in `.exit` (mirroring the recursive
+    /// arm's `defer`).
+    closure: struct {
+        saved_checking_call_arg: bool,
+        saved_checking_immediate_callee: bool,
+    },
 };
 
 /// A reified `checkExpr` stack frame. Must be cheap to memcpy (lives in an
@@ -11845,6 +11853,96 @@ fn checkExprIter(self: *Self, root_idx: CIR.Expr.Idx, root_env: *Env, root_expec
                         // `expected` (not the statement-expected used above).
                         try self.check_frame_stack.append(self.gpa, makeEnterFrame(block.final_expr, child_env, block_expected));
                     },
+                    // Direct-single-child kinds: schedule the one child, then
+                    // run the post-child body in `.exit`.
+                    .e_nominal => |nominal| {
+                        frame.step = .exit;
+                        const child_env = frame.env;
+                        const child_expected = frame.prologue.child_expected;
+                        try self.check_frame_stack.append(self.gpa, makeEnterFrame(nominal.backing_expr, child_env, child_expected));
+                    },
+                    .e_nominal_external => |nominal| {
+                        frame.step = .exit;
+                        const child_env = frame.env;
+                        const child_expected = frame.prologue.child_expected;
+                        try self.check_frame_stack.append(self.gpa, makeEnterFrame(nominal.backing_expr, child_env, child_expected));
+                    },
+                    .e_field_access => |field_access| {
+                        frame.step = .exit;
+                        const child_env = frame.env;
+                        const child_expected = frame.prologue.child_expected;
+                        try self.check_frame_stack.append(self.gpa, makeEnterFrame(field_access.receiver, child_env, child_expected));
+                    },
+                    .e_dbg => |dbg| {
+                        // `dbg` is an observable effect; mark BEFORE checking the
+                        // child (matching the recursive arm's order). Its own
+                        // `does_fx` is forced to false in `.exit`.
+                        self.markCurrentHoistObservableEffect();
+                        frame.step = .exit;
+                        const child_env = frame.env;
+                        const child_expected = frame.prologue.child_expected;
+                        try self.check_frame_stack.append(self.gpa, makeEnterFrame(dbg.expr, child_env, child_expected));
+                    },
+                    .e_expect_err => |expect_err| {
+                        self.markCurrentHoistObservableEffect();
+                        frame.step = .exit;
+                        const child_env = frame.env;
+                        const child_expected = frame.prologue.child_expected;
+                        try self.check_frame_stack.append(self.gpa, makeEnterFrame(expect_err.expr, child_env, child_expected));
+                    },
+                    .e_return => |ret| {
+                        self.markCurrentHoistObservableEffect();
+                        frame.step = .exit;
+                        const child_env = frame.env;
+                        const return_expected = frame.expected.forReturnValue();
+                        try self.check_frame_stack.append(self.gpa, makeEnterFrame(ret.expr, child_env, return_expected));
+                    },
+                    .e_closure => |closure| {
+                        // The closure is only the capture wrapper around its inner
+                        // lambda; forward this closure's (already-consumed) call-arg
+                        // AND immediate-callee status so the inner lambda inherits
+                        // both (an argument lambda is not generalized; an
+                        // immediately-invoked one keeps its delayed-dependency
+                        // status). Restored in `.exit` (mirrors the recursive `defer`).
+                        const saved = self.checking_call_arg;
+                        const saved_immediate = self.checking_immediate_callee;
+                        self.checking_call_arg = frame.prologue.is_call_arg;
+                        self.checking_immediate_callee = frame.prologue.is_immediate_callee;
+                        frame.step = .exit;
+                        frame.kind_state = .{ .closure = .{
+                            .saved_checking_call_arg = saved,
+                            .saved_checking_immediate_callee = saved_immediate,
+                        } };
+                        const child_env = frame.env;
+                        const closure_expected = frame.expected;
+                        try self.check_frame_stack.append(self.gpa, makeEnterFrame(closure.lambda_idx, child_env, closure_expected));
+                    },
+                    // Direct-multi-child kinds: schedule children in REVERSE so
+                    // the first child runs first; post-child body in `.exit`.
+                    .e_structural_eq => |eq| {
+                        frame.step = .exit;
+                        const child_env = frame.env;
+                        const child_expected = frame.prologue.child_expected;
+                        try self.check_frame_stack.append(self.gpa, makeEnterFrame(eq.rhs, child_env, child_expected));
+                        try self.check_frame_stack.append(self.gpa, makeEnterFrame(eq.lhs, child_env, child_expected));
+                    },
+                    .e_structural_hash => |h| {
+                        frame.step = .exit;
+                        const child_env = frame.env;
+                        const child_expected = frame.prologue.child_expected;
+                        try self.check_frame_stack.append(self.gpa, makeEnterFrame(h.hasher, child_env, child_expected));
+                        try self.check_frame_stack.append(self.gpa, makeEnterFrame(h.value, child_env, child_expected));
+                    },
+                    // Helper-delegating / per-child-state kinds: like the leaf
+                    // kinds below, advance to `.exit` and run the recursive body
+                    // verbatim there. Their child `checkExpr` calls re-enter the
+                    // driver (each its own frame_base), so no native recursion
+                    // through the block/final-expr spine is added.
+                    .e_binop,
+                    .e_unary_minus,
+                    .e_unary_not,
+                    .e_expect,
+                    .e_method_eq,
                     // Leaf kinds: no children to schedule. Just advance to
                     // `.exit`, where the recursive arm's body runs verbatim and
                     // the shared epilogue+finish tail completes the frame. The
@@ -12571,6 +12669,232 @@ fn checkExprIter(self: *Self, root_idx: CIR.Expr.Idx, root_env: *Env, root_expec
                         const expr_var = f.prologue.expr_var;
                         try self.unifyWith(expr_var, .err, env);
                     },
+                    // ---- Single-child kinds (post-child body) ----
+                    // Children already checked; their `does_fx` was OR'd into
+                    // `f.does_fx` on pop. None of the calls below append to
+                    // `check_frame_stack`, so `f` stays valid through these arms.
+                    .e_nominal => |nominal| {
+                        const env = f.env;
+                        const expr_var = f.prologue.expr_var;
+                        const expr_region = f.prologue.expr_region;
+                        const actual_backing_var = ModuleEnv.varFrom(nominal.backing_expr);
+                        _ = try self.checkNominalTypeUsage(
+                            expr_var,
+                            actual_backing_var,
+                            ModuleEnv.varFrom(nominal.nominal_type_decl),
+                            nominal.backing_type,
+                            expr_region,
+                            env,
+                        );
+                    },
+                    .e_nominal_external => |nominal| {
+                        const env = f.env;
+                        const expr_var = f.prologue.expr_var;
+                        const expr_region = f.prologue.expr_region;
+                        const actual_backing_var = ModuleEnv.varFrom(nominal.backing_expr);
+                        if (try self.resolveVarFromExternal(nominal.module_idx, nominal.target_node_idx)) |ext_ref| {
+                            _ = try self.checkNominalTypeUsage(
+                                expr_var,
+                                actual_backing_var,
+                                ext_ref.local_var,
+                                nominal.backing_type,
+                                expr_region,
+                                env,
+                            );
+                        } else {
+                            try self.unifyWith(expr_var, .err, env);
+                        }
+                    },
+                    .e_field_access => |field_access| {
+                        const env = f.env;
+                        const expr_var = f.prologue.expr_var;
+                        const expr_region = f.prologue.expr_region;
+                        const receiver_var = ModuleEnv.varFrom(field_access.receiver);
+
+                        const record_field_var = try self.fresh(env, expr_region);
+                        const record_field_range = try self.types.appendRecordFields(&.{types_mod.RecordField{
+                            .name = field_access.field_name,
+                            .var_ = record_field_var,
+                        }});
+                        const record_ext_var = try self.fresh(env, expr_region);
+                        const record_being_accessed = try self.freshFromContent(.{ .structure = .{
+                            .record = .{ .fields = record_field_range, .ext = record_ext_var },
+                        } }, env, expr_region);
+
+                        _ = try self.unifyInContext(record_being_accessed, receiver_var, env, .{ .record_access = .{
+                            .field_name = field_access.field_name,
+                            .field_region = field_access.field_name_region,
+                        } });
+                        _ = try self.unify(expr_var, record_field_var, env);
+                    },
+                    .e_dbg => {
+                        // dbg evaluates its inner expression but returns {} and
+                        // its OWN does_fx is false (it discards the child's fx).
+                        const env = f.env;
+                        const expr_var = f.prologue.expr_var;
+                        self.check_frame_stack.items[top].does_fx = false;
+                        try self.unifyWith(expr_var, .{ .structure = .empty_record }, env);
+                    },
+                    .e_expect_err => {
+                        // The Err payload never returns, so its type is free; the
+                        // expression's own does_fx is false (child fx discarded).
+                        const env = f.env;
+                        const expr_var = f.prologue.expr_var;
+                        self.check_frame_stack.items[top].does_fx = false;
+                        try self.unifyWith(expr_var, .{ .flex = Flex.init() }, env);
+                    },
+                    .e_return => |ret| {
+                        const env = f.env;
+                        const return_expected = f.expected.forReturnValue();
+                        const ret_var = ModuleEnv.varFrom(ret.expr);
+                        const return_ctx: problem.Context = switch (ret.context) {
+                            .return_expr => .early_return,
+                            .try_suffix => .try_operator,
+                        };
+
+                        if (return_expected.returnResult()) |expected_return| {
+                            _ = try self.unifyInContext(expected_return, ret_var, env, return_ctx);
+                        } else {
+                            const lambda_expr = self.cir.store.getExpr(ret.lambda);
+                            std.debug.assert(lambda_expr == .e_lambda);
+                            _ = try self.constraints.append(self.gpa, Constraint{ .eql = .{
+                                .expected = ModuleEnv.varFrom(lambda_expr.e_lambda.body),
+                                .actual = ret_var,
+                                .ctx = return_ctx,
+                            } });
+                        }
+                        // Note: we DO NOT unify the return type with the expr here,
+                        // so this expr can unify with anything (e.g. implicit else).
+                    },
+                    .e_closure => |closure| {
+                        const env = f.env;
+                        const expr_var = f.prologue.expr_var;
+                        const lambda_var = ModuleEnv.varFrom(closure.lambda_idx);
+
+                        // For intermediate cycle participants, elevate the closure
+                        // var to match the un-generalized lambda rank.
+                        const lambda_rank = self.types.resolveVar(lambda_var).desc.rank;
+                        if (lambda_rank != .generalized) {
+                            const expr_resolved = self.types.resolveVar(expr_var);
+                            if (@intFromEnum(lambda_rank) > @intFromEnum(expr_resolved.desc.rank)) {
+                                std.debug.assert(self.defer_generalize);
+                                try self.types.setDescRank(expr_resolved.desc_idx, lambda_rank);
+                            }
+                        }
+
+                        _ = try self.unify(expr_var, lambda_var, env);
+
+                        // Restore the forwarded flags (mirrors the recursive defer).
+                        self.checking_call_arg = f.kind_state.closure.saved_checking_call_arg;
+                        self.checking_immediate_callee = f.kind_state.closure.saved_checking_immediate_callee;
+                    },
+                    .e_structural_eq => |eq| {
+                        const env = f.env;
+                        const expr_var = f.prologue.expr_var;
+                        const expr_region = f.prologue.expr_region;
+                        const lhs_var = ModuleEnv.varFrom(eq.lhs);
+                        const rhs_var = ModuleEnv.varFrom(eq.rhs);
+                        _ = try self.unify(lhs_var, rhs_var, env);
+                        _ = try self.unify(try self.freshBool(env, expr_region), expr_var, env);
+                    },
+                    .e_structural_hash => |h| {
+                        const env = f.env;
+                        const expr_var = f.prologue.expr_var;
+                        // `to_hash : self, Hasher -> Hasher` threads the Hasher
+                        // through, so the result has the incoming Hasher's type.
+                        const hasher_var = ModuleEnv.varFrom(h.hasher);
+                        _ = try self.unify(hasher_var, expr_var, env);
+                    },
+                    // ---- Helper-delegating / per-child-state kinds ----
+                    // Run the recursive arm body VERBATIM. Their child `checkExpr`
+                    // calls re-enter the driver and may realloc `check_frame_stack`,
+                    // so read all needed values into locals first and write
+                    // `does_fx` back via `items[top]` (never reuse `f` afterward).
+                    .e_binop => |binop| {
+                        const expr_idx_l = f.expr_idx;
+                        const expr_region = f.prologue.expr_region;
+                        const env = f.env;
+                        const expected = f.expected;
+                        const fx = try self.checkBinopExpr(expr_idx_l, expr_region, env, binop, expected);
+                        self.check_frame_stack.items[top].does_fx = fx;
+                    },
+                    .e_unary_minus => |unary| {
+                        const expr_idx_l = f.expr_idx;
+                        const expr_region = f.prologue.expr_region;
+                        const env = f.env;
+                        const expected = f.expected;
+                        const fx = try self.checkUnaryMinusExpr(expr_idx_l, expr_region, env, unary, expected);
+                        self.check_frame_stack.items[top].does_fx = fx;
+                    },
+                    .e_unary_not => |unary| {
+                        const expr_idx_l = f.expr_idx;
+                        const expr_region = f.prologue.expr_region;
+                        const env = f.env;
+                        const expected = f.expected;
+                        const fx = try self.checkUnaryNotExpr(expr_idx_l, expr_region, env, unary, expected);
+                        self.check_frame_stack.items[top].does_fx = fx;
+                    },
+                    .e_expect => |expect| {
+                        const expr_region = f.prologue.expr_region;
+                        const env = f.env;
+                        const expr_var = f.prologue.expr_var;
+                        const child_expected = f.prologue.child_expected;
+                        self.markCurrentHoistObservableEffect();
+                        const expect_does_fx = try self.checkExpectBody(expect.body, env, child_expected, expr_region);
+                        if (expect_does_fx) {
+                            _ = try self.problems.appendProblem(self.gpa, .{ .effectful_expect = .{
+                                .region = expr_region,
+                            } });
+                        }
+                        const body_var = ModuleEnv.varFrom(expect.body);
+                        const bool_var = try self.freshBool(env, expr_region);
+                        _ = try self.unifyInContext(bool_var, body_var, env, .expect);
+                        try self.unifyWith(expr_var, .{ .structure = .empty_record }, env);
+                        self.check_frame_stack.items[top].does_fx = expect_does_fx;
+                    },
+                    .e_method_eq => |eq| {
+                        const expr_idx_l = f.expr_idx;
+                        const expr_region = f.prologue.expr_region;
+                        const env = f.env;
+                        const expr_var = f.prologue.expr_var;
+                        const child_expected = f.prologue.child_expected;
+
+                        var arg_vars_sfa = std.heap.stackFallback(@sizeOf(Var), self.gpa);
+                        const arg_vars_alloc = arg_vars_sfa.get();
+                        const arg_vars = try arg_vars_alloc.alloc(Var, 1);
+                        defer arg_vars_alloc.free(arg_vars);
+
+                        self.checking_call_arg = true;
+                        const fx_lhs = try self.checkExpr(eq.lhs, env, child_expected);
+                        self.checking_call_arg = true;
+                        const fx_rhs = try self.checkExpr(eq.rhs, env, child_expected);
+
+                        const lhs_var = ModuleEnv.varFrom(eq.lhs);
+                        arg_vars[0] = ModuleEnv.varFrom(eq.rhs);
+                        if (self.types.resolveVar(lhs_var).desc.content == .err or
+                            self.types.resolveVar(arg_vars[0]).desc.content == .err)
+                        {
+                            try self.unifyWith(expr_var, .err, env);
+                        } else {
+                            const constraint_fn_var = try self.mkMethodCallConstraint(
+                                lhs_var,
+                                arg_vars,
+                                expr_var,
+                                self.cir.idents.is_eq,
+                                env,
+                                expr_region,
+                                expr_idx_l,
+                            );
+                            self.cir.store.replaceExprWithMethodEq(
+                                expr_idx_l,
+                                eq.lhs,
+                                eq.rhs,
+                                eq.negated,
+                                constraint_fn_var,
+                            );
+                        }
+                        self.check_frame_stack.items[top].does_fx = fx_lhs or fx_rhs;
+                    },
                     else => unreachable, // gated by isMigratedKind
                 }
                 const does_fx = try self.checkExitEpilogue(
@@ -12605,6 +12929,27 @@ fn isMigratedKind(expr: CIR.Expr) bool {
     return switch (expr) {
         .e_tuple_access => true,
         .e_block => true,
+        // Single-child / helper-delegating kinds (this batch). Direct-child
+        // kinds schedule their children as frames; helper-delegating and
+        // per-child-state kinds (`e_binop`, `e_unary_minus`, `e_unary_not`,
+        // `e_expect`, `e_method_eq`) run their recursive body verbatim under the
+        // driver, re-entering for any children (each its own frame_base), like
+        // `e_lookup_local`.
+        .e_binop,
+        .e_closure,
+        .e_dbg,
+        .e_expect,
+        .e_expect_err,
+        .e_field_access,
+        .e_method_eq,
+        .e_nominal,
+        .e_nominal_external,
+        .e_return,
+        .e_structural_eq,
+        .e_structural_hash,
+        .e_unary_minus,
+        .e_unary_not,
+        => true,
         // Leaf kinds: no child checkExpr scheduled; body runs verbatim in
         // `.exit`. `e_lookup_local` re-enters the driver via `checkDef`, but
         // that re-entry is a self-contained traversal (its own frame_base), so

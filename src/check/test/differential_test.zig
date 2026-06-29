@@ -159,3 +159,82 @@ test "differential: blocks with statements and nested-block bindings match" {
         \\}
     );
 }
+
+test "differential: binop and unary kinds match" {
+    // Exercises e_binop (+, *, >), e_unary_minus (-a), e_unary_not (!).
+    try expectIterMatchesRecursive(
+        \\main! = |_args| {
+        \\    a = 1 + 2 * 3
+        \\    b = -a
+        \\    c = !(a > 0)
+        \\    (a, b, c)
+        \\}
+    );
+}
+
+test "differential: field access matches" {
+    // Exercises e_field_access (record field projection).
+    try expectIterMatchesRecursive(
+        \\main! = |_args| {
+        \\    r = { x: 1, y: 2 }
+        \\    (r.x, r.y)
+        \\}
+    );
+}
+
+test "differential: closure (capture wrapper around lambda) matches" {
+    // Exercises e_closure forwarding call-arg status to its inner lambda.
+    try expectIterMatchesRecursive(
+        \\main! = |_args| {
+        \\    f = |x| x + 1
+        \\    g = |y| y * 2
+        \\    (f(2), g(3))
+        \\}
+    );
+}
+
+test "differential: explicit return matches" {
+    // Exercises e_return (early return with an expected return type).
+    try expectIterMatchesRecursive(
+        \\get : U64 -> U64
+        \\get = |n| {
+        \\    if n > 0 {
+        \\        return n
+        \\    }
+        \\    0
+        \\}
+        \\
+        \\main! = |_args| get(3)
+    );
+}
+
+test "differential: dbg matches" {
+    // Exercises e_dbg (evaluates inner expr, returns {}, own does_fx false).
+    try expectIterMatchesRecursive(
+        \\main! = |_args| {
+        \\    x = 5
+        \\    dbg x
+        \\    x
+        \\}
+    );
+}
+
+test "differential: expect and structural equality match" {
+    // Exercises e_expect (statement) and the `==` equality node it wraps.
+    try expectIterMatchesRecursive(
+        \\main! = |_args| {
+        \\    x = 1
+        \\    expect x == 1
+        \\    x
+        \\}
+    );
+}
+
+test "differential: nominal type construction matches" {
+    // Exercises e_nominal (constructing a value of a nominal tag-union type).
+    try expectIterMatchesRecursive(
+        \\Color := [Red, Green, Blue]
+        \\
+        \\main! = |_args| Color.Red
+    );
+}
