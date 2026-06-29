@@ -1114,7 +1114,7 @@ const Builder = struct {
 
     fn materializeWorkerHiddenDescriptorParams(self: *Builder) Allocator.Error!void {
         for (self.plan.workers.items, 0..) |worker, worker_index| {
-            if (workerSourceIsHosted(worker.source)) {
+            if (self.workerResolvesToHosted(worker.source)) {
                 self.plan.workers.items[worker_index].hidden_descs = .{};
                 continue;
             }
@@ -1143,6 +1143,16 @@ const Builder = struct {
                 .len = @intCast(pending.items.len),
             };
         }
+    }
+
+    fn workerResolvesToHosted(self: *Builder, source: WorkerSource) bool {
+        if (self.root_module == null) return workerSourceIsHosted(source);
+        return switch (self.rootWorkerBody(source)) {
+            .hosted_proc => true,
+            .checked_expr,
+            .intrinsic_wrapper,
+            => false,
+        };
     }
 
     fn materializeDirectCallHiddenDescriptorArgs(self: *Builder) Allocator.Error!void {
@@ -2234,6 +2244,231 @@ test "boxy planner walks callable eval finalized const function bodies" {
     try std.testing.expect(plan.repForSourceType(.{ .module = root_key, .ty = @enumFromInt(0) }) != null);
 }
 
+test "boxy planner does not add hidden descriptor params to imported hosted workers" {
+    const gpa = std.testing.allocator;
+
+    var root_artifact = minimalCheckedArtifact(gpa);
+    defer root_artifact.canonical_names.deinit();
+    defer root_artifact.checked_types.deinit(gpa);
+    defer root_artifact.checked_bodies.deinit(gpa);
+
+    var import_artifact = minimalCheckedArtifact(gpa);
+    import_artifact.key = moduleKey(2);
+    defer import_artifact.canonical_names.deinit();
+    defer import_artifact.checked_types.deinit(gpa);
+
+    try import_artifact.checked_types.type_id_pool.append(gpa, @as(checked.CheckedTypeId, @enumFromInt(0)));
+    try import_artifact.checked_types.payloads.append(gpa, .{ .flex = .{ .constraints = .{} } });
+    try import_artifact.checked_types.payloads.append(gpa, .{
+        .function = .{
+            .kind = .pure,
+            .args = .{ .start = 0, .len = 1 },
+            .ret = @enumFromInt(0),
+            .needs_instantiation = false,
+        },
+    });
+
+    const import_template = procedureTemplateRef(import_artifact.key, 0);
+    var import_templates = [_]checked.CheckedProcedureTemplate{
+        checkedTemplate(import_template, @enumFromInt(1), @enumFromInt(0), .hosted),
+    };
+    import_artifact.checked_procedure_templates = .{ .templates = &import_templates };
+
+    const hosted_order_key = "Import.dynamic_hosted";
+    var hosted_procs = [_]checked.HostedProc{
+        .{
+            .module_idx = 0,
+            .def_idx = @enumFromInt(0),
+            .expr_idx = @enumFromInt(0),
+            .external_symbol_name = @enumFromInt(0),
+            .deterministic_index = 0,
+            .order_key_start = 0,
+            .order_key_len = hosted_order_key.len,
+            .proc = procedureValueRef(import_template),
+            .template = import_template,
+        },
+    };
+    import_artifact.hosted_procs = .{
+        .procs = &hosted_procs,
+        .order_key_bytes = hosted_order_key,
+    };
+
+    const imported_binding = checked.ImportedProcedureBindingRef{
+        .artifact = import_artifact.key,
+        .def = @enumFromInt(0),
+        .pattern = @enumFromInt(0),
+    };
+    var exported_bindings = [_]checked.ImportedProcedureBindingView{
+        .{
+            .binding = imported_binding,
+            .source_scheme = typeSchemeKey(2),
+            .body = .{ .direct_template = .{
+                .proc_value = procedureValueRef(import_template),
+                .template = .{ .checked = import_template },
+            } },
+            .template_closure = .{},
+        },
+    };
+    import_artifact.exported_procedure_bindings = .{ .bindings = &exported_bindings };
+
+    try root_artifact.checked_types.type_id_pool.append(gpa, @as(checked.CheckedTypeId, @enumFromInt(0)));
+    try root_artifact.checked_types.type_id_pool.append(gpa, @as(checked.CheckedTypeId, @enumFromInt(0)));
+    try root_artifact.checked_types.payloads.append(gpa, .{ .flex = .{ .constraints = .{} } });
+    try root_artifact.checked_types.payloads.append(gpa, .{
+        .function = .{
+            .kind = .pure,
+            .args = .{ .start = 0, .len = 1 },
+            .ret = @enumFromInt(0),
+            .needs_instantiation = false,
+        },
+    });
+    try root_artifact.checked_types.payloads.append(gpa, .{
+        .function = .{
+            .kind = .pure,
+            .args = .{ .start = 1, .len = 1 },
+            .ret = @enumFromInt(0),
+            .needs_instantiation = false,
+        },
+    });
+
+    try root_artifact.checked_bodies.pattern_id_pool.append(gpa, @as(checked.CheckedPatternId, @enumFromInt(0)));
+    try root_artifact.checked_bodies.expr_id_pool.append(gpa, @as(checked.CheckedExprId, @enumFromInt(3)));
+    try root_artifact.checked_bodies.stored_patterns.append(gpa, .{
+        .id = @enumFromInt(0),
+        .ty = @enumFromInt(0),
+        .source_region = .zero(),
+        .data = .{ .assign = @enumFromInt(0) },
+    });
+    try root_artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(0),
+        .ty = @enumFromInt(1),
+        .source_region = .zero(),
+        .data = .{ .lambda = .{
+            .args = .{ .start = 0, .len = 1 },
+            .body = @enumFromInt(1),
+        } },
+    });
+    try root_artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(1),
+        .ty = @enumFromInt(0),
+        .source_region = .zero(),
+        .data = .{ .call = .{
+            .func = @enumFromInt(2),
+            .args = .{ .start = 0, .len = 1 },
+            .called_via = .apply,
+            .source_fn_ty_payload = @enumFromInt(2),
+            .direct_target = @enumFromInt(0),
+        } },
+    });
+    try root_artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(2),
+        .ty = @enumFromInt(2),
+        .source_region = .zero(),
+        .data = .{ .lookup_external = @enumFromInt(0) },
+    });
+    try root_artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(3),
+        .ty = @enumFromInt(0),
+        .source_region = .zero(),
+        .data = .{ .lookup_local = .{ .pattern = @enumFromInt(0), .resolved = null } },
+    });
+
+    const root_template = procedureTemplateRef(root_artifact.key, 0);
+    try root_artifact.checked_bodies.bodies.append(gpa, .{
+        .id = @enumFromInt(0),
+        .root_expr = @enumFromInt(0),
+        .owner_template = root_template,
+    });
+    var root_templates = [_]checked.CheckedProcedureTemplate{
+        checkedTemplate(root_template, @enumFromInt(1), @enumFromInt(0), .roc),
+    };
+    root_artifact.checked_procedure_templates = .{ .templates = &root_templates };
+
+    const imported_use = checked.ProcedureUseTemplate{
+        .binding = .{ .imported = imported_binding },
+        .source_fn_ty_template = typeKey(2),
+        .source_fn_ty_payload = @enumFromInt(2),
+    };
+    var resolved_records = [_]checked.ResolvedValueRefRecord{
+        .{
+            .expr = @enumFromInt(2),
+            .ref = .{ .imported_proc = imported_use },
+            .checked_ty = @enumFromInt(2),
+            .scope_depth = 0,
+        },
+    };
+    var refs_by_expr = [_]?checked.ResolvedValueRefId{
+        null,
+        null,
+        @as(checked.ResolvedValueRefId, @enumFromInt(0)),
+        null,
+    };
+    root_artifact.resolved_value_refs = .{
+        .records = &resolved_records,
+        .by_checked_expr = &refs_by_expr,
+    };
+
+    const imports = [_]checked.ImportedModuleView{
+        .{
+            .key = import_artifact.key,
+            .module_env = undefined,
+            .canonical_names = &import_artifact.canonical_names,
+            .module_identity = undefined,
+            .exports = .{},
+            .checked_types = import_artifact.checked_types.view(),
+            .checked_bodies = import_artifact.checked_bodies.view(),
+            .exhaustiveness_sites = undefined,
+            .checked_const_bodies = undefined,
+            .checked_procedure_templates = &import_artifact.checked_procedure_templates,
+            .compile_time_roots = undefined,
+            .entry_wrappers = undefined,
+            .intrinsic_wrappers = undefined,
+            .resolved_value_refs = &import_artifact.resolved_value_refs,
+            .nested_proc_sites = undefined,
+            .static_dispatch_plans = undefined,
+            .hosted_procs = &import_artifact.hosted_procs,
+            .exported_procedure_templates = .{},
+            .exported_procedure_bindings = import_artifact.exported_procedure_bindings.view(),
+            .exported_const_templates = .{},
+            .provided_exports = undefined,
+            .top_level_procedure_bindings = &import_artifact.top_level_procedure_bindings,
+            .platform_required_declarations = undefined,
+            .platform_required_bindings = undefined,
+            .callable_eval_templates = .{},
+            .hoisted_constants = undefined,
+            .const_templates = undefined,
+            .method_registry = undefined,
+            .interface_capabilities = &import_artifact.interface_capabilities,
+            .const_store = undefined,
+        },
+    };
+
+    const root = checked.RootRequest{
+        .order = 0,
+        .module_idx = 0,
+        .kind = .runtime_entrypoint,
+        .source = .{ .def = @enumFromInt(0) },
+        .checked_type = @enumFromInt(1),
+        .abi = .roc,
+        .exposure = .private,
+        .procedure_template = root_template,
+    };
+    var plan = try analyzeProgram(gpa, .{
+        .root_module = .{ .module = &root_artifact, .roots = undefined },
+        .imports = &imports,
+        .roots = &.{root},
+    }, .{});
+    defer plan.deinit();
+
+    try std.testing.expect(plan.descriptors.items.len != 0);
+    const call_ref = ExprRef{ .module = root_artifact.key, .expr = @enumFromInt(1) };
+    const direct = plan.directCallPlanForCall(call_ref) orelse return error.TestUnexpectedResult;
+    const callee_worker = plan.workers.items[@intFromEnum(direct.worker)];
+    try std.testing.expectEqual(WorkerSource{ .procedure_use = imported_use }, callee_worker.source);
+    try std.testing.expectEqual(@as(usize, 0), plan.hiddenDescriptorParamSlice(callee_worker.hidden_descs).len);
+    try std.testing.expectEqual(@as(usize, 0), plan.directCallHiddenDescriptorArgSlice(direct.hidden_desc_args).len);
+}
+
 test "boxy planner records explicit source type representation bindings" {
     const gpa = std.testing.allocator;
 
@@ -2779,6 +3014,74 @@ fn typeKey(byte: u8) canonical.CanonicalTypeKey {
     var key = canonical.CanonicalTypeKey{};
     key.bytes[0] = byte;
     return key;
+}
+
+fn typeSchemeKey(byte: u8) canonical.CanonicalTypeSchemeKey {
+    var key = canonical.CanonicalTypeSchemeKey{};
+    key.bytes[0] = byte;
+    return key;
+}
+
+fn procedureTemplateRef(key: checked.CheckedModuleArtifactKey, raw_template_id: u32) canonical.ProcedureTemplateRef {
+    return .{
+        .artifact = .{ .bytes = key.bytes },
+        .proc_base = @enumFromInt(raw_template_id),
+        .template = @enumFromInt(raw_template_id),
+    };
+}
+
+fn procedureValueRef(template: canonical.ProcedureTemplateRef) canonical.ProcedureValueRef {
+    return .{
+        .artifact = template.artifact,
+        .proc_base = template.proc_base,
+    };
+}
+
+fn checkedTemplate(
+    template_ref: canonical.ProcedureTemplateRef,
+    checked_fn_root: checked.CheckedTypeId,
+    body: checked.CheckedBodyId,
+    target: checked.ProcTarget,
+) checked.CheckedProcedureTemplate {
+    return .{
+        .proc_base = template_ref.proc_base,
+        .template_id = template_ref.template,
+        .body = .{ .checked_body = body },
+        .checked_fn_scheme = typeSchemeKey(9),
+        .checked_fn_root = checked_fn_root,
+        .static_dispatch_plans = .{},
+        .resolved_value_refs = .{},
+        .top_level_value_uses = .{},
+        .nested_proc_sites = .{},
+        .target = target,
+    };
+}
+
+fn minimalCheckedArtifact(allocator: Allocator) checked.CheckedModuleArtifact {
+    return .{
+        .key = moduleKey(1),
+        .canonical_names = canonical.CanonicalNameStore.init(allocator),
+        .module_identity = undefined,
+        .checking_context_identity = undefined,
+        .module_env = undefined,
+        .exports = undefined,
+        .provides_requires = undefined,
+        .method_registry = undefined,
+        .static_dispatch_plans = undefined,
+        .resolved_value_refs = undefined,
+        .checked_procedure_templates = undefined,
+        .top_level_procedure_bindings = undefined,
+        .root_requests = undefined,
+        .hosted_procs = .{},
+        .platform_required_declarations = undefined,
+        .platform_required_bindings = undefined,
+        .interface_capabilities = .{},
+        .compile_time_roots = undefined,
+        .top_level_values = undefined,
+        .hoisted_constants = undefined,
+        .const_templates = undefined,
+        .const_store = undefined,
+    };
 }
 
 fn dummyProcedureTemplate() canonical.ProcedureTemplateRef {
