@@ -3235,6 +3235,21 @@ statements in front of the continuation. This lets `lookup_local` consume the
 same checked binder ids that checking produced; the lowerer never reconstructs
 lexical scope from source syntax or declaration names.
 
+Checked `crash` expressions lower to terminal LIR `crash` statements carrying
+the checked string literal bytes copied into the LIR string store. The target
+local for the surrounding expression is not initialized on that path because the
+path does not continue.
+
+Checked `if` expressions lower as structured branch-result control flow. The
+lowerer allocates one join id for the expression's shared continuation and uses
+the expression target local as the join parameter. The final `else` expression
+and every branch body lower into that same target local and then jump to the
+join. Each branch condition lowers into a Bool local selected from the checked
+condition type's boxy representation, and the branch test is an ordinary LIR
+switch on the Bool runtime discriminant (`True` is value 1 by the checked Bool
+builtin rule). The lowerer consumes the checked if-branch list directly; it does
+not recover branch order or condition/body relationships from source syntax.
+
 Irrefutable declaration patterns lower as value binding plus explicit
 destructuring reads. Assignment patterns bind the RHS value directly. Tuple
 patterns read fields by checked tuple index. Record destructuring patterns read
