@@ -47,6 +47,81 @@ pub const RenderRemovalScan = struct {
     }
 };
 
+pub const ElemOwnedRemovalScratch = struct {
+    element_indexes: std.ArrayListUnmanaged(usize) = .empty,
+    text_node_indexes: std.ArrayListUnmanaged(usize) = .empty,
+    signal_text_node_indexes: std.ArrayListUnmanaged(usize) = .empty,
+    static_text_attr_indexes: std.ArrayListUnmanaged(usize) = .empty,
+    signal_text_attr_indexes: std.ArrayListUnmanaged(usize) = .empty,
+    static_bool_attr_indexes: std.ArrayListUnmanaged(usize) = .empty,
+    signal_bool_attr_indexes: std.ArrayListUnmanaged(usize) = .empty,
+    event_indexes: std.ArrayListUnmanaged(usize) = .empty,
+    named_event_indexes: std.ArrayListUnmanaged(usize) = .empty,
+
+    pub fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
+        self.element_indexes.deinit(allocator);
+        self.text_node_indexes.deinit(allocator);
+        self.signal_text_node_indexes.deinit(allocator);
+        self.static_text_attr_indexes.deinit(allocator);
+        self.signal_text_attr_indexes.deinit(allocator);
+        self.static_bool_attr_indexes.deinit(allocator);
+        self.signal_bool_attr_indexes.deinit(allocator);
+        self.event_indexes.deinit(allocator);
+        self.named_event_indexes.deinit(allocator);
+        self.* = .{};
+    }
+
+    pub fn assertEmpty(self: *const @This()) void {
+        if (self.element_indexes.items.len != 0 or
+            self.text_node_indexes.items.len != 0 or
+            self.signal_text_node_indexes.items.len != 0 or
+            self.static_text_attr_indexes.items.len != 0 or
+            self.signal_text_attr_indexes.items.len != 0 or
+            self.static_bool_attr_indexes.items.len != 0 or
+            self.signal_bool_attr_indexes.items.len != 0 or
+            self.event_indexes.items.len != 0 or
+            self.named_event_indexes.items.len != 0)
+        {
+            @panic("elem-owned removal scratch was already active");
+        }
+    }
+
+    pub fn clearRetainingCapacity(self: *@This()) void {
+        self.element_indexes.clearRetainingCapacity();
+        self.text_node_indexes.clearRetainingCapacity();
+        self.signal_text_node_indexes.clearRetainingCapacity();
+        self.static_text_attr_indexes.clearRetainingCapacity();
+        self.signal_text_attr_indexes.clearRetainingCapacity();
+        self.static_bool_attr_indexes.clearRetainingCapacity();
+        self.signal_bool_attr_indexes.clearRetainingCapacity();
+        self.event_indexes.clearRetainingCapacity();
+        self.named_event_indexes.clearRetainingCapacity();
+    }
+
+    pub fn appendDescriptorIndexes(self: *@This(), allocator: std.mem.Allocator, descriptor_index: anytype) void {
+        appendRemovalIndex(allocator, &self.element_indexes, descriptor_index.element);
+        appendRemovalIndex(allocator, &self.text_node_indexes, descriptor_index.text_node);
+        appendRemovalIndex(allocator, &self.signal_text_node_indexes, descriptor_index.signal_text_node);
+        appendTextFieldRemovalIndexes(allocator, &self.static_text_attr_indexes, descriptor_index.static_text_attrs);
+        appendTextFieldRemovalIndexes(allocator, &self.signal_text_attr_indexes, descriptor_index.signal_text_attrs);
+        appendBoolFieldRemovalIndexes(allocator, &self.static_bool_attr_indexes, descriptor_index.static_bool_attrs);
+        appendBoolFieldRemovalIndexes(allocator, &self.signal_bool_attr_indexes, descriptor_index.signal_bool_attrs);
+        appendEventRemovalIndexes(allocator, &self.event_indexes, descriptor_index.events);
+    }
+
+    pub fn sortDescending(self: *@This()) void {
+        sortRemovalIndexesDescending(self.element_indexes.items);
+        sortRemovalIndexesDescending(self.text_node_indexes.items);
+        sortRemovalIndexesDescending(self.signal_text_node_indexes.items);
+        sortRemovalIndexesDescending(self.static_text_attr_indexes.items);
+        sortRemovalIndexesDescending(self.signal_text_attr_indexes.items);
+        sortRemovalIndexesDescending(self.static_bool_attr_indexes.items);
+        sortRemovalIndexesDescending(self.signal_bool_attr_indexes.items);
+        sortRemovalIndexesDescending(self.event_indexes.items);
+        sortRemovalIndexesDescending(self.named_event_indexes.items);
+    }
+};
+
 fn u64SliceContains(items: []const u64, target: u64) bool {
     for (items) |item| {
         if (item == target) return true;
@@ -225,6 +300,63 @@ test "structural splice collects removal indexes" {
 
     try std.testing.expectEqualSlices(usize, &.{ 7, 3, 1 }, indexes.items);
     try std.testing.expect(scopeIsInTargetSet(&.{ false, true, false }, 1));
+}
+
+test "structural splice scratch collects descriptor indexes" {
+    const DescriptorIndex = struct {
+        element: ?usize = 3,
+        text_node: ?usize = null,
+        signal_text_node: ?usize = 9,
+        static_text_attrs: struct {
+            text: ?usize = 4,
+            role: ?usize = null,
+            label: ?usize = 1,
+            test_id: ?usize = null,
+            value: ?usize = null,
+            class: ?usize = null,
+        } = .{},
+        signal_text_attrs: struct {
+            text: ?usize = null,
+            role: ?usize = null,
+            label: ?usize = null,
+            test_id: ?usize = null,
+            value: ?usize = null,
+            class: ?usize = null,
+        } = .{},
+        static_bool_attrs: struct {
+            checked: ?usize = 2,
+            disabled: ?usize = null,
+        } = .{},
+        signal_bool_attrs: struct {
+            checked: ?usize = null,
+            disabled: ?usize = null,
+        } = .{},
+        events: struct {
+            click: ?usize = 8,
+            input: ?usize = null,
+            check: ?usize = null,
+            pointer_down: ?usize = null,
+            pointer_up: ?usize = null,
+            pointer_enter: ?usize = null,
+            pointer_leave: ?usize = null,
+        } = .{},
+    };
+
+    var scratch: ElemOwnedRemovalScratch = .{};
+    defer scratch.deinit(std.testing.allocator);
+
+    scratch.assertEmpty();
+    scratch.appendDescriptorIndexes(std.testing.allocator, DescriptorIndex{});
+    scratch.sortDescending();
+
+    try std.testing.expectEqualSlices(usize, &.{3}, scratch.element_indexes.items);
+    try std.testing.expectEqualSlices(usize, &.{9}, scratch.signal_text_node_indexes.items);
+    try std.testing.expectEqualSlices(usize, &.{ 4, 1 }, scratch.static_text_attr_indexes.items);
+    try std.testing.expectEqualSlices(usize, &.{2}, scratch.static_bool_attr_indexes.items);
+    try std.testing.expectEqualSlices(usize, &.{8}, scratch.event_indexes.items);
+
+    scratch.clearRetainingCapacity();
+    scratch.assertEmpty();
 }
 
 test "structural splice builds target scope set through explicit lookup" {

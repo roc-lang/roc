@@ -299,15 +299,7 @@ const EngineScratch = struct {
     each_next_hash_links: std.ArrayListUnmanaged(usize) = .empty,
     each_matched_existing: std.ArrayListUnmanaged(bool) = .empty,
     replacement_target_scopes: std.ArrayListUnmanaged(bool) = .empty,
-    remove_element_indexes: std.ArrayListUnmanaged(usize) = .empty,
-    remove_text_node_indexes: std.ArrayListUnmanaged(usize) = .empty,
-    remove_signal_text_node_indexes: std.ArrayListUnmanaged(usize) = .empty,
-    remove_static_text_attr_indexes: std.ArrayListUnmanaged(usize) = .empty,
-    remove_signal_text_attr_indexes: std.ArrayListUnmanaged(usize) = .empty,
-    remove_static_bool_attr_indexes: std.ArrayListUnmanaged(usize) = .empty,
-    remove_signal_bool_attr_indexes: std.ArrayListUnmanaged(usize) = .empty,
-    remove_event_indexes: std.ArrayListUnmanaged(usize) = .empty,
-    remove_named_event_indexes: std.ArrayListUnmanaged(usize) = .empty,
+    elem_owned_removal: structural_splice.ElemOwnedRemovalScratch = .{},
 
     fn deinit(self: *EngineScratch, allocator: std.mem.Allocator) void {
         self.debug_seen_render_nodes.deinit(allocator);
@@ -319,15 +311,7 @@ const EngineScratch = struct {
         self.each_next_hash_links.deinit(allocator);
         self.each_matched_existing.deinit(allocator);
         self.replacement_target_scopes.deinit(allocator);
-        self.remove_element_indexes.deinit(allocator);
-        self.remove_text_node_indexes.deinit(allocator);
-        self.remove_signal_text_node_indexes.deinit(allocator);
-        self.remove_static_text_attr_indexes.deinit(allocator);
-        self.remove_signal_text_attr_indexes.deinit(allocator);
-        self.remove_static_bool_attr_indexes.deinit(allocator);
-        self.remove_signal_bool_attr_indexes.deinit(allocator);
-        self.remove_event_indexes.deinit(allocator);
-        self.remove_named_event_indexes.deinit(allocator);
+        self.elem_owned_removal.deinit(allocator);
         self.* = .{};
     }
 };
@@ -3539,15 +3523,7 @@ pub fn Engine(comptime Ctx: type) type {
         }
 
         fn clearElemOwnedRemovalScratch(self: *Self) void {
-            self.scratch.remove_element_indexes.clearRetainingCapacity();
-            self.scratch.remove_text_node_indexes.clearRetainingCapacity();
-            self.scratch.remove_signal_text_node_indexes.clearRetainingCapacity();
-            self.scratch.remove_static_text_attr_indexes.clearRetainingCapacity();
-            self.scratch.remove_signal_text_attr_indexes.clearRetainingCapacity();
-            self.scratch.remove_static_bool_attr_indexes.clearRetainingCapacity();
-            self.scratch.remove_signal_bool_attr_indexes.clearRetainingCapacity();
-            self.scratch.remove_event_indexes.clearRetainingCapacity();
-            self.scratch.remove_named_event_indexes.clearRetainingCapacity();
+            self.scratch.elem_owned_removal.clearRetainingCapacity();
         }
 
         fn removeActiveElementDescriptorAt(self: *Self, ctx: Ctx.Handle, index: usize) void {
@@ -3833,75 +3809,51 @@ pub fn Engine(comptime Ctx: type) type {
 
         fn collectElemOwnedRemovalIndexes(self: *Self, ctx: Ctx.Handle, removed_elem_ids: []const u64) void {
             const allocator = Ctx.allocator(ctx);
-            if (self.scratch.remove_element_indexes.items.len != 0 or
-                self.scratch.remove_text_node_indexes.items.len != 0 or
-                self.scratch.remove_signal_text_node_indexes.items.len != 0 or
-                self.scratch.remove_static_text_attr_indexes.items.len != 0 or
-                self.scratch.remove_signal_text_attr_indexes.items.len != 0 or
-                self.scratch.remove_static_bool_attr_indexes.items.len != 0 or
-                self.scratch.remove_signal_bool_attr_indexes.items.len != 0 or
-                self.scratch.remove_event_indexes.items.len != 0 or
-                self.scratch.remove_named_event_indexes.items.len != 0)
-            {
-                @panic("elem-owned removal scratch was already active");
-            }
+            var scratch = &self.scratch.elem_owned_removal;
+            scratch.assertEmpty();
 
             for (removed_elem_ids) |elem_id| {
                 const descriptor_index = self.active_stream.elemDescriptorIndex(elem_id) orelse @panic("removed elem id had no descriptor index");
                 const has_render_descriptor = descriptor_index.element != null or descriptor_index.text_node != null or descriptor_index.signal_text_node != null;
                 if (!has_render_descriptor) @panic("removed rendered elem id had no render-owned descriptor");
 
-                structural_splice.appendRemovalIndex(allocator, &self.scratch.remove_element_indexes, descriptor_index.element);
-                structural_splice.appendRemovalIndex(allocator, &self.scratch.remove_text_node_indexes, descriptor_index.text_node);
-                structural_splice.appendRemovalIndex(allocator, &self.scratch.remove_signal_text_node_indexes, descriptor_index.signal_text_node);
-                structural_splice.appendTextFieldRemovalIndexes(allocator, &self.scratch.remove_static_text_attr_indexes, descriptor_index.static_text_attrs);
-                structural_splice.appendTextFieldRemovalIndexes(allocator, &self.scratch.remove_signal_text_attr_indexes, descriptor_index.signal_text_attrs);
-                structural_splice.appendBoolFieldRemovalIndexes(allocator, &self.scratch.remove_static_bool_attr_indexes, descriptor_index.static_bool_attrs);
-                structural_splice.appendBoolFieldRemovalIndexes(allocator, &self.scratch.remove_signal_bool_attr_indexes, descriptor_index.signal_bool_attrs);
-                structural_splice.appendEventRemovalIndexes(allocator, &self.scratch.remove_event_indexes, descriptor_index.events);
-                self.appendNamedEventRemovalIndexes(ctx, &self.scratch.remove_named_event_indexes, elem_id);
+                scratch.appendDescriptorIndexes(allocator, descriptor_index);
+                self.appendNamedEventRemovalIndexes(ctx, &scratch.named_event_indexes, elem_id);
             }
 
-            structural_splice.sortRemovalIndexesDescending(self.scratch.remove_element_indexes.items);
-            structural_splice.sortRemovalIndexesDescending(self.scratch.remove_text_node_indexes.items);
-            structural_splice.sortRemovalIndexesDescending(self.scratch.remove_signal_text_node_indexes.items);
-            structural_splice.sortRemovalIndexesDescending(self.scratch.remove_static_text_attr_indexes.items);
-            structural_splice.sortRemovalIndexesDescending(self.scratch.remove_signal_text_attr_indexes.items);
-            structural_splice.sortRemovalIndexesDescending(self.scratch.remove_static_bool_attr_indexes.items);
-            structural_splice.sortRemovalIndexesDescending(self.scratch.remove_signal_bool_attr_indexes.items);
-            structural_splice.sortRemovalIndexesDescending(self.scratch.remove_event_indexes.items);
-            structural_splice.sortRemovalIndexesDescending(self.scratch.remove_named_event_indexes.items);
+            scratch.sortDescending();
         }
 
         fn removeActiveElemOwnedDescriptorsForRemovedElems(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, removed_elem_ids: []const u64) void {
             self.collectElemOwnedRemovalIndexes(ctx, removed_elem_ids);
             defer self.clearElemOwnedRemovalScratch();
 
-            for (self.scratch.remove_static_text_attr_indexes.items) |index| {
+            const scratch = &self.scratch.elem_owned_removal;
+            for (scratch.static_text_attr_indexes.items) |index| {
                 self.removeActiveStaticTextAttrDescriptorAt(ctx, index);
             }
-            for (self.scratch.remove_signal_text_attr_indexes.items) |index| {
+            for (scratch.signal_text_attr_indexes.items) |index| {
                 self.removeActiveSignalTextAttrDescriptorAt(ctx, roc_host, index);
             }
-            for (self.scratch.remove_static_bool_attr_indexes.items) |index| {
+            for (scratch.static_bool_attr_indexes.items) |index| {
                 self.removeActiveStaticBoolAttrDescriptorAt(index);
             }
-            for (self.scratch.remove_signal_bool_attr_indexes.items) |index| {
+            for (scratch.signal_bool_attr_indexes.items) |index| {
                 self.removeActiveSignalBoolAttrDescriptorAt(ctx, roc_host, index);
             }
-            for (self.scratch.remove_event_indexes.items) |index| {
+            for (scratch.event_indexes.items) |index| {
                 self.removeActiveEventDescriptorAt(roc_host, index);
             }
-            for (self.scratch.remove_named_event_indexes.items) |index| {
+            for (scratch.named_event_indexes.items) |index| {
                 self.removeActiveNamedEventDescriptorAt(ctx, roc_host, index);
             }
-            for (self.scratch.remove_element_indexes.items) |index| {
+            for (scratch.element_indexes.items) |index| {
                 self.removeActiveElementDescriptorAt(ctx, index);
             }
-            for (self.scratch.remove_text_node_indexes.items) |index| {
+            for (scratch.text_node_indexes.items) |index| {
                 self.removeActiveTextNodeDescriptorAt(ctx, index);
             }
-            for (self.scratch.remove_signal_text_node_indexes.items) |index| {
+            for (scratch.signal_text_node_indexes.items) |index| {
                 self.removeActiveSignalTextNodeDescriptorAt(ctx, roc_host, index);
             }
         }
