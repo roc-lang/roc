@@ -1202,7 +1202,7 @@ fn findExactRocAllocationIndex(host: *HostEnv, ptr: *anyopaque) ?usize {
 }
 
 fn removeRocAllocationAt(host: *HostEnv, index: usize) RocAllocation {
-    return host.roc_allocations.removeAt(index) orelse failHost("Roc allocation ledger index is out of bounds");
+    return host.roc_allocations.removeAt(host.hostAllocator(), index) orelse failHost("Roc allocation ledger index is out of bounds");
 }
 
 fn recordFreedRocAllocation(host: *HostEnv, alloc: RocAllocation) void {
