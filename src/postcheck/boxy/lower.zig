@@ -223,23 +223,9 @@ const ConstPlanBuilder = struct {
     }
 
     fn tagUnionConstPlan(self: *ConstPlanBuilder, rep: Plan.TypeRepresentation) Allocator.Error!LirProgram.ConstPlan {
-        const children = self.plan.childSlice(rep.children);
-        var variant_count: usize = 0;
-        var active_tag: ?names.TagNameId = null;
-        for (children) |child| {
-            switch (child.role) {
-                .tag_payload => |payload| {
-                    if (active_tag == null or active_tag.? != payload.tag) {
-                        variant_count += 1;
-                        active_tag = payload.tag;
-                    }
-                },
-                .tag_ext => {},
-                else => {},
-            }
-        }
+        const tag_variants = self.plan.tagVariantSlice(rep.tag_variants);
 
-        const variants = try self.allocator.alloc(LirProgram.ConstTagVariant, variant_count);
+        const variants = try self.allocator.alloc(LirProgram.ConstTagVariant, tag_variants.len);
         var initialized: usize = 0;
         errdefer {
             for (variants[0..initialized]) |variant| {
@@ -249,33 +235,8 @@ const ConstPlanBuilder = struct {
             self.allocator.free(variants);
         }
 
-        active_tag = null;
-        var payload_start: usize = 0;
-        var variant_index: usize = 0;
-        for (children, 0..) |child, child_index| {
-            switch (child.role) {
-                .tag_payload => |payload| {
-                    if (active_tag == null) {
-                        active_tag = payload.tag;
-                        payload_start = child_index;
-                    } else if (active_tag.? != payload.tag) {
-                        variants[variant_index] = try self.buildTagVariant(
-                            active_tag.?,
-                            children[payload_start..child_index],
-                            variant_index,
-                        );
-                        initialized += 1;
-                        variant_index += 1;
-                        active_tag = payload.tag;
-                        payload_start = child_index;
-                    }
-                },
-                .tag_ext => {},
-                else => {},
-            }
-        }
-        if (active_tag) |tag| {
-            variants[variant_index] = try self.buildTagVariant(tag, children[payload_start..], variant_index);
+        for (tag_variants, variants, 0..) |tag_variant, *variant, discriminant| {
+            variant.* = try self.buildTagVariant(tag_variant, discriminant);
             initialized += 1;
         }
 
@@ -284,39 +245,31 @@ const ConstPlanBuilder = struct {
 
     fn buildTagVariant(
         self: *ConstPlanBuilder,
-        tag: names.TagNameId,
-        payload_children: []const Plan.RepChild,
+        variant: Plan.TagVariant,
         discriminant: usize,
     ) Allocator.Error!LirProgram.ConstTagVariant {
         const root_names = &self.modules.root.module.canonical_names;
-        const name = try self.allocator.dupe(u8, root_names.tagLabelText(tag));
+        const name = try self.allocator.dupe(u8, root_names.tagLabelText(variant.name));
         errdefer self.allocator.free(name);
 
-        var payload_count: usize = 0;
-        for (payload_children) |child| {
-            switch (child.role) {
-                .tag_payload => |payload| if (payload.tag == tag) {
-                    payload_count += 1;
-                },
-                else => {},
-            }
-        }
-        const payloads = try self.allocator.alloc(LirProgram.ConstPlanId, payload_count);
+        const payload_children = self.plan.childSlice(variant.payloads);
+        const payloads = try self.allocator.alloc(LirProgram.ConstPlanId, payload_children.len);
         errdefer self.allocator.free(payloads);
-        var cursor: usize = 0;
-        for (payload_children) |child| {
+        for (payload_children, payloads, 0..) |child, *payload_plan, index| {
             switch (child.role) {
-                .tag_payload => |payload| if (payload.tag == tag) {
-                    payloads[cursor] = try self.constPlanForRep(child.rep);
-                    cursor += 1;
+                .tag_payload => |payload| {
+                    if (payload.tag != variant.name or payload.index != index) {
+                        boxyLowerInvariant("tag variant payload span did not match its payload child roles");
+                    }
                 },
-                else => {},
+                else => boxyLowerInvariant("tag variant payload span included a non-payload child"),
             }
+            payload_plan.* = try self.constPlanForRep(child.rep);
         }
 
         return .{
             .name = name,
-            .checked_name = tag,
+            .checked_name = variant.name,
             .discriminant = @intCast(discriminant),
             .payloads = payloads,
         };
@@ -405,6 +358,64 @@ test "boxy lowerer emits requested layout metadata for layout-only plans" {
     try std.testing.expectEqual(.u64, requested.layout_idx);
     try std.testing.expectEqual(LirProgram.ConstPlan.scalar, out.lir_result.const_plans.items[@intFromEnum(requested.plan)]);
     try std.testing.expectEqual(@as(usize, 0), out.lir_result.root_procs.items.len);
+}
+
+test "boxy lowerer emits const plans for zero-payload tag variants" {
+    const gpa = std.testing.allocator;
+
+    var artifact = minimalCheckedArtifact(gpa);
+    defer artifact.canonical_names.deinit();
+    defer artifact.checked_types.deinit(gpa);
+
+    const tag_a = try artifact.canonical_names.internTagLabel("A");
+    const tag_b = try artifact.canonical_names.internTagLabel("B");
+
+    try artifact.checked_types.roots.append(gpa, .{ .id = @enumFromInt(0), .key = typeKey(0) });
+    try artifact.checked_types.roots.append(gpa, .{ .id = @enumFromInt(1), .key = typeKey(1) });
+    try artifact.checked_types.roots.append(gpa, .{ .id = @enumFromInt(2), .key = typeKey(2) });
+    try artifact.checked_types.type_id_pool.append(gpa, @enumFromInt(0));
+    try artifact.checked_types.tag_pool.append(gpa, .{ .name = tag_a, .args_start = 0, .args_len = 0 });
+    try artifact.checked_types.tag_pool.append(gpa, .{ .name = tag_b, .args_start = 0, .args_len = 1 });
+    try artifact.checked_types.payloads.append(gpa, .{
+        .nominal = builtinNominal(.u64, @enumFromInt(0), .{}),
+    });
+    try artifact.checked_types.payloads.append(gpa, .empty_tag_union);
+    try artifact.checked_types.payloads.append(gpa, .{
+        .tag_union = .{ .tags = .{ .start = 0, .len = 2 }, .ext = @enumFromInt(1) },
+    });
+
+    var plan = try Plan.analyzeProgram(gpa, .{
+        .checked_types = artifact.checked_types.view(),
+        .layout_requests = &.{@as(checked.CheckedTypeId, @enumFromInt(2))},
+    }, .{});
+    defer plan.deinit();
+
+    var out = try run(
+        gpa,
+        .{ .root = .{ .module = &artifact, .roots = undefined } },
+        .{ .layout_requests = &.{@as(checked.CheckedTypeId, @enumFromInt(2))} },
+        &plan,
+        .{},
+    );
+    defer out.deinit();
+
+    try std.testing.expectEqual(@as(usize, 1), out.lir_result.requested_layouts.items.len);
+    const requested = out.lir_result.requested_layouts.items[0];
+    const const_plan = out.lir_result.const_plans.items[@intFromEnum(requested.plan)];
+    switch (const_plan) {
+        .tag_union => |variants| {
+            try std.testing.expectEqual(@as(usize, 2), variants.len);
+            try std.testing.expectEqualStrings("A", variants[0].name);
+            try std.testing.expectEqual(tag_a, variants[0].checked_name);
+            try std.testing.expectEqual(@as(u16, 0), variants[0].discriminant);
+            try std.testing.expectEqual(@as(usize, 0), variants[0].payloads.len);
+            try std.testing.expectEqualStrings("B", variants[1].name);
+            try std.testing.expectEqual(tag_b, variants[1].checked_name);
+            try std.testing.expectEqual(@as(u16, 1), variants[1].discriminant);
+            try std.testing.expectEqual(@as(usize, 1), variants[1].payloads.len);
+        },
+        else => return error.TestUnexpectedResult,
+    }
 }
 
 fn minimalCheckedArtifact(allocator: Allocator) checked.CheckedModuleArtifact {

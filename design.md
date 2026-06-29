@@ -3164,6 +3164,16 @@ node in that declared order and marks it with the shared layout graph's
 nominal-struct marker. The ordinary layout store verifies or repairs the field
 order; boxy does not implement a separate nominal layout algorithm.
 
+Boxy tag-union planning stores tag variants explicitly, separately from payload
+children. The representation's child span still contains payload children in
+payload position order plus the row extension child, but the representation also
+carries a tag-variant span. Each tag variant records the checked tag label and a
+payload span into the child table. Zero-payload variants therefore have an
+ordinary variant row with an empty payload span. Layout planning, tag payload
+selection, discriminant assignment, and static-data `ConstPlan` construction
+consume the variant table directly instead of trying to rediscover variants from
+runs of payload children.
+
 Release `.lss` builds must not allocate, fill, traverse, or validate a materialized
 Lambda Mono expression, pattern, or statement tree. Release builds may allocate
 only the Lambda Mono decision data needed by direct LIR lowering: function-free types,
@@ -3465,10 +3475,13 @@ For `.boxy`, layout-only lowering may produce no procedures and still populate
 checked type, not the private worker layout, and carries a `ConstPlan` built
 from the same explicit boxy representation plan. Alias and unsupported builtin
 nominal representations share the child plan id rather than duplicating owned
-plan payloads. Dynamic values, erased callables, and opaque static-data shapes
-require the later descriptor/callable/static-data support; reaching them while
-building a requested-layout `ConstPlan` is a compiler invariant failure, not a
-fallback to an approximate plan.
+plan payloads. Tag-union const plans mirror the boxy tag-variant table exactly:
+every checked variant gets one `ConstTagVariant`, including zero-payload
+variants with an empty owned payload-plan slice. Dynamic values, erased
+callables, and opaque static-data shapes require the later
+descriptor/callable/static-data support; reaching them while building a
+requested-layout `ConstPlan` is a compiler invariant failure, not a fallback to
+an approximate plan.
 
 The output owns all of these stores and spans. Consumers borrow the fields they
 need and must not add their own side stores for the same data. `LirImage`

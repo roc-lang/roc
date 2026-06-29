@@ -89,6 +89,11 @@ pub const RepChild = struct {
     rep: TypeRepId,
 };
 
+pub const TagVariant = struct {
+    name: TagLabelId,
+    payloads: Span = .{},
+};
+
 pub const DeclaredField = struct {
     index: u16,
     source_type: checked.CheckedTypeId,
@@ -100,6 +105,7 @@ pub const TypeRepresentation = struct {
     source_type: checked.CheckedTypeId,
     kind: RepresentationKind,
     children: Span = .{},
+    tag_variants: Span = .{},
     declared_fields: Span = .{},
     dictionaries: Span = .{},
     descriptor: ?DescriptorRequirementId = null,
@@ -165,6 +171,7 @@ pub const ProgramPlan = struct {
     root_reps: std.ArrayList(TypeRepId),
     representations: std.ArrayList(TypeRepresentation),
     children: std.ArrayList(RepChild),
+    tag_variants: std.ArrayList(TagVariant),
     declared_fields: std.ArrayList(DeclaredField),
     descriptors: std.ArrayList(DescriptorRequirement),
     dictionaries: std.ArrayList(DictionaryRequirement),
@@ -177,6 +184,7 @@ pub const ProgramPlan = struct {
             .root_reps = .empty,
             .representations = .empty,
             .children = .empty,
+            .tag_variants = .empty,
             .declared_fields = .empty,
             .descriptors = .empty,
             .dictionaries = .empty,
@@ -187,6 +195,7 @@ pub const ProgramPlan = struct {
         self.dictionaries.deinit(self.allocator);
         self.descriptors.deinit(self.allocator);
         self.declared_fields.deinit(self.allocator);
+        self.tag_variants.deinit(self.allocator);
         self.children.deinit(self.allocator);
         self.representations.deinit(self.allocator);
         self.root_reps.deinit(self.allocator);
@@ -197,6 +206,10 @@ pub const ProgramPlan = struct {
 
     pub fn childSlice(self: *const ProgramPlan, span: Span) []const RepChild {
         return self.children.items[span.start .. span.start + span.len];
+    }
+
+    pub fn tagVariantSlice(self: *const ProgramPlan, span: Span) []const TagVariant {
+        return self.tag_variants.items[span.start .. span.start + span.len];
     }
 
     pub fn declaredFieldSlice(self: *const ProgramPlan, span: Span) []const DeclaredField {
@@ -755,10 +768,23 @@ const Builder = struct {
             }
         }
         try self.appendPendingChild(&children, .tag_ext, tag_union.ext);
+        const child_span = try self.commitPendingChildren(children.items);
+
+        const variant_start: u32 = @intCast(self.plan.tag_variants.items.len);
+        var payload_start = child_span.start;
+        for (tag_union.tags) |tag| {
+            try self.plan.tag_variants.append(self.allocator, .{
+                .name = tag.name,
+                .payloads = .{ .start = payload_start, .len = tag.args_len },
+            });
+            payload_start += tag.args_len;
+        }
+
         return .{
             .source_type = ty,
             .kind = .tag_union,
-            .children = try self.commitPendingChildren(children.items),
+            .children = child_span,
+            .tag_variants = .{ .start = variant_start, .len = @intCast(tag_union.tags.len) },
         };
     }
 
@@ -1013,6 +1039,45 @@ test "boxy planner keeps explicit Box of dynamic payload distinct from dynamic p
     try std.testing.expectEqual(@as(usize, 1), children.len);
     try std.testing.expectEqual(ChildRole.box_payload, children[0].role);
     try std.testing.expectEqual(RepresentationKind{ .dynamic = .flex }, plan.representations.items[@intFromEnum(children[0].rep)].kind);
+}
+
+test "boxy planner preserves zero-payload tag variants explicitly" {
+    const gpa = std.testing.allocator;
+
+    const tag_a: TagLabelId = @enumFromInt(1);
+    const tag_b: TagLabelId = @enumFromInt(2);
+    const type_pool = [_]checked.CheckedTypeId{@enumFromInt(0)};
+    const tags = [_]checked.CheckedTag{
+        .{ .name = tag_a, .args_start = 0, .args_len = 0 },
+        .{ .name = tag_b, .args_start = 0, .args_len = 1 },
+    };
+    const payloads = [_]checked.StoredCheckedTypePayload{
+        .{ .nominal = builtinNominal(.u64, @enumFromInt(0), .{}) },
+        .empty_tag_union,
+        .{ .tag_union = .{ .tags = .{ .start = 0, .len = tags.len }, .ext = @enumFromInt(1) } },
+    };
+    const view = checked.CheckedTypeStoreView{
+        .stored_payloads = &payloads,
+        .type_id_pool = &type_pool,
+        .tag_pool = &tags,
+    };
+
+    var plan = try analyzeCheckedTypes(gpa, view, &.{@as(checked.CheckedTypeId, @enumFromInt(2))}, .{});
+    defer plan.deinit();
+
+    const rep = plan.representations.items[@intFromEnum(plan.root_reps.items[0])];
+    try std.testing.expectEqual(RepresentationKind.tag_union, rep.kind);
+
+    const variants = plan.tagVariantSlice(rep.tag_variants);
+    try std.testing.expectEqual(@as(usize, 2), variants.len);
+    try std.testing.expectEqual(tag_a, variants[0].name);
+    try std.testing.expectEqual(@as(u32, 0), variants[0].payloads.len);
+    try std.testing.expectEqual(tag_b, variants[1].name);
+    try std.testing.expectEqual(@as(u32, 1), variants[1].payloads.len);
+
+    const payload_children = plan.childSlice(variants[1].payloads);
+    try std.testing.expectEqual(@as(usize, 1), payload_children.len);
+    try std.testing.expectEqual(ChildRole{ .tag_payload = .{ .tag = tag_b, .index = 0 } }, payload_children[0].role);
 }
 
 test "boxy planner records nominal declared field order from checked payloads" {

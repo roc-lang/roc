@@ -519,26 +519,23 @@ const GraphBuilder = struct {
         defer refs.deinit(self.parent.allocator);
         var payloads = std.ArrayList(Plan.TypeRepId).empty;
         defer payloads.deinit(self.parent.allocator);
-        var active_tag: ?TagLabelId = null;
 
-        for (children) |child| {
-            switch (child.role) {
-                .tag_payload => |payload| {
-                    if (active_tag == null) active_tag = payload.tag;
-                    if (active_tag.? != payload.tag) {
-                        try refs.append(self.parent.allocator, try self.payloadInput(payloads.items));
-                        payloads.clearRetainingCapacity();
-                        active_tag = payload.tag;
-                    }
-                    try payloads.append(self.parent.allocator, child.rep);
-                },
-                .tag_ext => {},
-                else => {},
+        for (self.parent.program.tagVariantSlice(rep.tag_variants)) |variant| {
+            payloads.clearRetainingCapacity();
+            for (self.parent.program.childSlice(variant.payloads), 0..) |child, index| {
+                switch (child.role) {
+                    .tag_payload => |payload| {
+                        if (payload.tag != variant.name or payload.index != index) {
+                            boxyLayoutInvariant("tag variant payload span did not match its payload child roles");
+                        }
+                    },
+                    else => boxyLayoutInvariant("tag variant payload span included a non-payload child"),
+                }
+                try payloads.append(self.parent.allocator, child.rep);
             }
-        }
-        if (active_tag != null) {
             try refs.append(self.parent.allocator, try self.payloadInput(payloads.items));
         }
+
         return try self.graph.appendRefs(self.parent.allocator, refs.items);
     }
 
@@ -686,6 +683,46 @@ test "boxy layout planner substitutes dynamic boxes into list elements" {
     const list_layout = store.getLayout(list_runtime.layoutIdx());
     try std.testing.expectEqual(layout.LayoutTag.list, list_layout.tag);
     try std.testing.expectEqual(layouts.dynamic_storage_layout, list_layout.getIdx());
+}
+
+test "boxy layout planner preserves zero-payload tag variants" {
+    const gpa = std.testing.allocator;
+
+    const tag_a: TagLabelId = @enumFromInt(1);
+    const tag_b: TagLabelId = @enumFromInt(2);
+    const type_pool = [_]checked.CheckedTypeId{@enumFromInt(0)};
+    const tags = [_]checked.CheckedTag{
+        .{ .name = tag_a, .args_start = 0, .args_len = 0 },
+        .{ .name = tag_b, .args_start = 0, .args_len = 1 },
+    };
+    const payloads = [_]checked.StoredCheckedTypePayload{
+        .{ .nominal = builtinNominal(.u64, @enumFromInt(0), .{}) },
+        .empty_tag_union,
+        .{ .tag_union = .{ .tags = .{ .start = 0, .len = tags.len }, .ext = @enumFromInt(1) } },
+    };
+    const view = checked.CheckedTypeStoreView{
+        .stored_payloads = &payloads,
+        .type_id_pool = &type_pool,
+        .tag_pool = &tags,
+    };
+
+    var program = try Plan.analyzeCheckedTypes(gpa, view, &.{@as(checked.CheckedTypeId, @enumFromInt(2))}, .{});
+    defer program.deinit();
+
+    var store = try layout.Store.init(gpa, .u64);
+    defer store.deinit();
+
+    var layouts = try build(gpa, &program, &store, .{});
+    defer layouts.deinit();
+
+    const runtime = layouts.rep_layouts[@intFromEnum(program.root_reps.items[0])].worker;
+    const tag_layout = store.getLayout(runtime.layoutIdx());
+    try std.testing.expectEqual(layout.LayoutTag.tag_union, tag_layout.tag);
+
+    const info = store.getTagUnionInfo(tag_layout);
+    try std.testing.expectEqual(@as(usize, 2), info.variants.len);
+    try std.testing.expectEqual(layout.Idx.zst, info.variants.get(0).payload_layout);
+    try std.testing.expectEqual(layout.Idx.u64, info.variants.get(1).payload_layout);
 }
 
 test "boxy layout planner records private worker function arg and return layouts" {
