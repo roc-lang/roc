@@ -3273,6 +3273,13 @@ const Builder = struct {
 
         const declared = self.functionShape(declared_fn_ty, "hosted declared type was not a function");
         const requested = self.functionShape(requested_fn_ty, "hosted requested type was not a function");
+        if (self.sameMonoType(declared.ret, requested.ret)) return false;
+
+        const declared_try = self.tryInfoOrNull(declared.ret) orelse return false;
+        const requested_try = self.tryInfoOrNull(requested.ret) orelse return false;
+        if (!self.sameMonoType(declared_try.ok_ty, requested_try.ok_ty)) return false;
+        if (!self.errorRowIsIncludedIn(declared_try.err_ty, requested_try.err_ty)) return false;
+
         const declared_args = self.program.types.span(declared.args);
         const requested_args = self.program.types.span(requested.args);
         if (declared_args.len != requested_args.len) {
@@ -3280,20 +3287,8 @@ const Builder = struct {
         }
         for (declared_args, requested_args) |declared_arg, requested_arg| {
             if (!self.sameMonoType(declared_arg, requested_arg)) {
-                Common.invariant("hosted function use changed an argument type from the declared ABI");
+                return false;
             }
-        }
-        if (self.sameMonoType(declared.ret, requested.ret)) return false;
-
-        const declared_try = self.tryInfoOrNull(declared.ret) orelse
-            Common.invariant("hosted function use changed a non-Try return type from the declared ABI");
-        const requested_try = self.tryInfoOrNull(requested.ret) orelse
-            Common.invariant("hosted function use changed a Try return type to a non-Try return type");
-        if (!self.sameMonoType(declared_try.ok_ty, requested_try.ok_ty)) {
-            Common.invariant("hosted function use changed a Try Ok type from the declared ABI");
-        }
-        if (!self.errorRowIsIncludedIn(declared_try.err_ty, requested_try.err_ty)) {
-            Common.invariant("hosted function use changed a Try Err type without a valid row injection");
         }
         return true;
     }
