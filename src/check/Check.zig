@@ -350,6 +350,9 @@ reported_dispatch_vars: std.AutoHashMap(Var, void),
 /// Scratch for `collectArgPositionVars`: guards its function-ret / alias
 /// spine walk against unbounded recursion.
 pinnable_spine_visited: std.AutoHashMap(Var, void),
+/// Scratch for the ambiguity sweep: vars an outside caller can pin through a
+/// top-level def's argument positions (computed once per `checkFile`).
+external_pinnable: std.AutoHashMap(Var, void),
 /// Scratch for `defaultLiteralsAtGeneralizationBoundary`: reachable-var
 /// closure of the def root(s) being generalized (constraint-signature edges
 /// included).
@@ -358,6 +361,41 @@ boundary_reachable_vars: std.AutoHashMap(Var, void),
 /// literal's constraint signatures, intersected with
 /// `boundary_reachable_vars` to detect interface leaks.
 boundary_leak_vars: std.AutoHashMap(Var, void),
+/// Reusable per-call buffer of the module's `.eql` constraint edges, so the
+/// generalization-boundary fixpoint iterates just the edges instead of
+/// re-scanning the whole constraint list each round. Front-loaded; cleared and
+/// refilled per call.
+boundary_eql_edges: std.ArrayListUnmanaged(@FieldType(Constraint, "eql")),
+// Literal-defaulting scratch (front-loaded; cleared per round/use). Reused across
+// the per-def/finalize defaulting passes — see runLiteralDefaultingRounds. Safe as
+// shared fields despite that function's cascade reentrancy: every buffer is cleared
+// at the start of its step and never read across the step-4 cascade.
+literal_defaulting_open_roots: std.ArrayListUnmanaged(Var),
+literal_defaulting_seen_roots: std.AutoHashMap(Var, void),
+literal_defaulting_component_parent: std.ArrayListUnmanaged(usize),
+literal_defaulting_is_driver: std.ArrayListUnmanaged(bool),
+literal_defaulting_footprint_owner: std.AutoHashMap(Var, usize),
+literal_defaulting_footprint: std.AutoHashMap(Var, void),
+literal_defaulting_group_drivers: std.ArrayListUnmanaged(Var),
+literal_defaulting_group_warnings: std.ArrayListUnmanaged(PendingBoundaryWarning),
+literal_defaulting_constraint_ranges: std.ArrayListUnmanaged(StaticDispatchConstraint.SafeList.Range),
+literal_defaulting_kinds: std.ArrayListUnmanaged(StaticDispatchConstraint.LiteralKind),
+literal_defaulting_candidate_vars: std.ArrayListUnmanaged(Var),
+// Match alternative-pattern binding scratch (front-loaded; cleared per call/branch).
+alt_pattern_baseline: std.AutoHashMap(u32, MatchAltBaselineEntry),
+alt_pattern_bindings: std.ArrayList(PatternBinding),
+alt_pattern_current: std.AutoHashMap(u32, CIR.Pattern.Idx),
+// Payload-emptiness scratch (front-loaded; cleared at each use).
+collected_constructed_tags: std.ArrayList(Ident.Idx),
+payload_vars_to_close: std.ArrayList(Var),
+known_empty_payload_vars_destructure: std.ArrayList(Var),
+known_empty_payload_vars_match: std.ArrayList(Var),
+/// Debug-only literal-defaulting probe instrumentation, asserted by the
+/// refuted-count guard test. Only written under `comptime std.debug.runtime_safety`,
+/// so release builds compile the bookkeeping out entirely (no global state, no
+/// hot-path cost). Per-instance, so no cross-test synchronization concern.
+bench_probe_attempts: usize = 0,
+bench_probe_refuted: usize = 0,
 /// Param-pattern spans of every checked `e_lambda` / `e_hosted_lambda`; the
 /// pinnable collection consumes this instead of re-walking the NodeStore.
 /// Union-find roots resolve at consumption time (eager roots would go stale).
@@ -1151,8 +1189,28 @@ fn initAssumePrepared(
         .pinnable_vars = std.AutoHashMap(Var, void).init(gpa),
         .reported_dispatch_vars = std.AutoHashMap(Var, void).init(gpa),
         .pinnable_spine_visited = std.AutoHashMap(Var, void).init(gpa),
+        .external_pinnable = std.AutoHashMap(Var, void).init(gpa),
         .boundary_reachable_vars = std.AutoHashMap(Var, void).init(gpa),
         .boundary_leak_vars = std.AutoHashMap(Var, void).init(gpa),
+        .boundary_eql_edges = .empty,
+        .literal_defaulting_open_roots = .empty,
+        .literal_defaulting_seen_roots = std.AutoHashMap(Var, void).init(gpa),
+        .literal_defaulting_component_parent = .empty,
+        .literal_defaulting_is_driver = .empty,
+        .literal_defaulting_footprint_owner = std.AutoHashMap(Var, usize).init(gpa),
+        .literal_defaulting_footprint = std.AutoHashMap(Var, void).init(gpa),
+        .literal_defaulting_group_drivers = .empty,
+        .literal_defaulting_group_warnings = .empty,
+        .literal_defaulting_constraint_ranges = .empty,
+        .literal_defaulting_kinds = .empty,
+        .literal_defaulting_candidate_vars = .empty,
+        .alt_pattern_baseline = std.AutoHashMap(u32, MatchAltBaselineEntry).init(gpa),
+        .alt_pattern_bindings = .empty,
+        .alt_pattern_current = std.AutoHashMap(u32, CIR.Pattern.Idx).init(gpa),
+        .collected_constructed_tags = .empty,
+        .payload_vars_to_close = .empty,
+        .known_empty_payload_vars_destructure = .empty,
+        .known_empty_payload_vars_match = .empty,
         .checked_lambda_params = .empty,
         .probe_var_pool_lens = .empty,
     };
@@ -1275,8 +1333,28 @@ pub fn deinit(self: *Self) void {
     self.pinnable_vars.deinit();
     self.reported_dispatch_vars.deinit();
     self.pinnable_spine_visited.deinit();
+    self.external_pinnable.deinit();
     self.boundary_reachable_vars.deinit();
     self.boundary_leak_vars.deinit();
+    self.boundary_eql_edges.deinit(self.gpa);
+    self.literal_defaulting_open_roots.deinit(self.gpa);
+    self.literal_defaulting_seen_roots.deinit();
+    self.literal_defaulting_component_parent.deinit(self.gpa);
+    self.literal_defaulting_is_driver.deinit(self.gpa);
+    self.literal_defaulting_footprint_owner.deinit();
+    self.literal_defaulting_footprint.deinit();
+    self.literal_defaulting_group_drivers.deinit(self.gpa);
+    self.literal_defaulting_group_warnings.deinit(self.gpa);
+    self.literal_defaulting_constraint_ranges.deinit(self.gpa);
+    self.literal_defaulting_kinds.deinit(self.gpa);
+    self.literal_defaulting_candidate_vars.deinit(self.gpa);
+    self.alt_pattern_baseline.deinit();
+    self.alt_pattern_bindings.deinit(self.gpa);
+    self.alt_pattern_current.deinit();
+    self.collected_constructed_tags.deinit(self.gpa);
+    self.payload_vars_to_close.deinit(self.gpa);
+    self.known_empty_payload_vars_destructure.deinit(self.gpa);
+    self.known_empty_payload_vars_match.deinit(self.gpa);
     self.checked_lambda_params.deinit(self.gpa);
     self.probe_var_pool_lens.deinit(self.gpa);
 }
@@ -1447,7 +1525,10 @@ fn warnIfComptimeConditionalExpr(
     self: *Self,
     expr: CIR.Expr.Idx,
     kind: @FieldType(problem.ComptimeCondition, "kind"),
+    expected: Expected,
 ) Allocator.Error!void {
+    if (!expected.emitsComptimeConditionWarnings()) return;
+
     const completed = self.last_hoist_result orelse return;
     if (completed.expr != expr or !completed.top_level_equivalent) return;
 
@@ -4687,9 +4768,8 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
     // ARGUMENT position of a top-level def, including argument positions of
     // function values returned by that def. These are the vars an outside caller
     // can still pin after this module is checked.
-    var external_pinnable = std.AutoHashMap(Var, void).init(self.gpa);
-    defer external_pinnable.deinit();
-    try self.collectExternalPinnableVars(&external_pinnable);
+    self.external_pinnable.clearRetainingCapacity();
+    try self.collectExternalPinnableVars(&self.external_pinnable);
 
     // The full pinnable set additionally includes direct lambda parameters. That
     // remains correct for direct dispatch expressions on uncalled function values:
@@ -4697,9 +4777,9 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
     // use only `external_pinnable`, because the call that instantiated the
     // contract must satisfy it now.
     self.pinnable_vars.clearRetainingCapacity();
-    try self.collectPinnableVars(&self.pinnable_vars, &external_pinnable);
+    try self.collectPinnableVars(&self.pinnable_vars, &self.external_pinnable);
 
-    try self.reportAmbiguousStaticDispatchPerInstantiation(&self.reported_dispatch_vars, &self.pinnable_vars, &external_pinnable);
+    try self.reportAmbiguousStaticDispatchPerInstantiation(&self.reported_dispatch_vars, &self.pinnable_vars, &self.external_pinnable);
     try self.reportAmbiguousStaticDispatch(&self.reported_dispatch_vars, &self.pinnable_vars);
 
     try self.reportPolymorphicExecutableRootResults();
@@ -6742,7 +6822,7 @@ fn checkExpectBody(
     self.current_expect_region = expect_region;
     defer self.current_expect_region = saved_expect_region;
 
-    return try self.checkExprWithHoistSelectionSuppressed(body, env, expected);
+    return try self.checkExprWithHoistSelectionSuppressed(body, env, expected.suppressComptimeConditionWarnings());
 }
 
 fn varIsFunctionType(self: *Self, var_: Var) bool {
@@ -8589,7 +8669,8 @@ fn validateRecordRow(
     region: Region,
     visited: *std.AutoHashMap(Var, void),
 ) Allocator.Error!bool {
-    var names = std.AutoHashMap(Ident.Idx, void).init(self.gpa);
+    var names_sfa = std.heap.stackFallback(32 * @sizeOf(Ident.Idx), self.gpa);
+    var names = std.AutoHashMap(Ident.Idx, void).init(names_sfa.get());
     defer names.deinit();
 
     const field_slice = self.types.getRecordFieldsSlice(fields);
@@ -8670,7 +8751,8 @@ fn validateTagUnionRow(
     region: Region,
     visited: *std.AutoHashMap(Var, void),
 ) Allocator.Error!bool {
-    var names = std.AutoHashMap(Ident.Idx, void).init(self.gpa);
+    var names_sfa = std.heap.stackFallback(32 * @sizeOf(Ident.Idx), self.gpa);
+    var names = std.AutoHashMap(Ident.Idx, void).init(names_sfa.get());
     defer names.deinit();
 
     const tag_slice = self.types.getTagsSlice(tags);
@@ -8849,13 +8931,23 @@ const Expected = struct {
     annotation: ?CIR.Annotation.Idx = null,
     branch_result: ?Var = null,
     return_result: ?Var = null,
+    comptime_condition_warnings: enum { emit, suppress } = .emit,
 
     fn none() Expected {
         return .{};
     }
 
     fn fromAnnotation(annotation_idx: CIR.Annotation.Idx) Expected {
-        return .{ .annotation = annotation_idx };
+        return Expected.none().withAnnotation(annotation_idx);
+    }
+
+    fn withAnnotation(self: Expected, annotation_idx: CIR.Annotation.Idx) Expected {
+        return .{
+            .annotation = annotation_idx,
+            .branch_result = self.branch_result,
+            .return_result = self.return_result,
+            .comptime_condition_warnings = self.comptime_condition_warnings,
+        };
     }
 
     fn withBranchResult(self: Expected, branch_result: Var) Expected {
@@ -8863,14 +8955,7 @@ const Expected = struct {
             .annotation = self.annotation,
             .branch_result = branch_result,
             .return_result = self.return_result orelse branch_result,
-        };
-    }
-
-    fn withReturnResult(self: Expected, return_result: ?Var) Expected {
-        return .{
-            .annotation = self.annotation,
-            .branch_result = self.branch_result,
-            .return_result = return_result,
+            .comptime_condition_warnings = self.comptime_condition_warnings,
         };
     }
 
@@ -8878,12 +8963,14 @@ const Expected = struct {
         return .{
             .branch_result = self.branch_result,
             .return_result = self.return_result,
+            .comptime_condition_warnings = self.comptime_condition_warnings,
         };
     }
 
     fn forStatement(self: Expected) Expected {
         return .{
             .return_result = self.return_result,
+            .comptime_condition_warnings = self.comptime_condition_warnings,
         };
     }
 
@@ -8892,7 +8979,21 @@ const Expected = struct {
         return .{
             .branch_result = expected_return,
             .return_result = expected_return,
+            .comptime_condition_warnings = self.comptime_condition_warnings,
         };
+    }
+
+    fn suppressComptimeConditionWarnings(self: Expected) Expected {
+        return .{
+            .annotation = self.annotation,
+            .branch_result = self.branch_result,
+            .return_result = self.return_result,
+            .comptime_condition_warnings = .suppress,
+        };
+    }
+
+    fn emitsComptimeConditionWarnings(self: Expected) bool {
+        return self.comptime_condition_warnings == .emit;
     }
 
     fn returnResult(self: Expected) ?Var {
@@ -9381,6 +9482,8 @@ const PatternBinding = struct {
     pattern_idx: CIR.Pattern.Idx,
 };
 
+const MatchAltBaselineEntry = struct { pattern_idx: CIR.Pattern.Idx, pattern_index: u32 };
+
 fn reportMatchAltBinderProblem(
     self: *Self,
     expected_pattern_idx: CIR.Pattern.Idx,
@@ -9492,20 +9595,14 @@ fn unifyMatchAltPatternBindings(
 ) std.mem.Allocator.Error!bool {
     if (branch_ptrn_idxs.len <= 1) return false;
 
-    var baseline = std.AutoHashMap(u32, struct {
-        pattern_idx: CIR.Pattern.Idx,
-        pattern_index: u32,
-    }).init(self.gpa);
-    defer baseline.deinit();
-
-    var bindings: std.ArrayList(PatternBinding) = .empty;
-    defer bindings.deinit(self.gpa);
+    self.alt_pattern_baseline.clearRetainingCapacity();
+    self.alt_pattern_bindings.clearRetainingCapacity();
 
     {
         const first_branch_pattern = self.cir.store.getMatchBranchPattern(branch_ptrn_idxs[0]);
-        try self.collectPatternBindings(first_branch_pattern.pattern, &bindings);
-        for (bindings.items) |binding| {
-            try baseline.put(@as(u32, @bitCast(binding.ident)), .{
+        try self.collectPatternBindings(first_branch_pattern.pattern, &self.alt_pattern_bindings);
+        for (self.alt_pattern_bindings.items) |binding| {
+            try self.alt_pattern_baseline.put(@as(u32, @bitCast(binding.ident)), .{
                 .pattern_idx = binding.pattern_idx,
                 .pattern_index = 0,
             });
@@ -9515,17 +9612,16 @@ fn unifyMatchAltPatternBindings(
     var had_type_error = false;
 
     for (branch_ptrn_idxs[1..], 1..) |branch_ptrn_idx, pattern_index| {
-        bindings.clearRetainingCapacity();
+        self.alt_pattern_bindings.clearRetainingCapacity();
         const branch_pattern = self.cir.store.getMatchBranchPattern(branch_ptrn_idx);
-        try self.collectPatternBindings(branch_pattern.pattern, &bindings);
+        try self.collectPatternBindings(branch_pattern.pattern, &self.alt_pattern_bindings);
 
-        var current = std.AutoHashMap(u32, CIR.Pattern.Idx).init(self.gpa);
-        defer current.deinit();
+        self.alt_pattern_current.clearRetainingCapacity();
 
-        for (bindings.items) |binding| {
+        for (self.alt_pattern_bindings.items) |binding| {
             const key: u32 = @bitCast(binding.ident);
-            try current.put(key, binding.pattern_idx);
-            const first = baseline.get(key) orelse {
+            try self.alt_pattern_current.put(key, binding.pattern_idx);
+            const first = self.alt_pattern_baseline.get(key) orelse {
                 const first_branch_pattern = self.cir.store.getMatchBranchPattern(branch_ptrn_idxs[0]);
                 try self.reportMatchAltBinderProblem(
                     first_branch_pattern.pattern,
@@ -9558,9 +9654,9 @@ fn unifyMatchAltPatternBindings(
             if (!result.isOk()) had_type_error = true;
         }
 
-        var baseline_iter = baseline.iterator();
+        var baseline_iter = self.alt_pattern_baseline.iterator();
         while (baseline_iter.next()) |entry| {
-            if (current.contains(entry.key_ptr.*)) continue;
+            if (self.alt_pattern_current.contains(entry.key_ptr.*)) continue;
 
             const ident: Ident.Idx = @bitCast(entry.key_ptr.*);
             try self.reportMatchAltBinderProblem(
@@ -12140,14 +12236,13 @@ fn collectKnownEmptyPayloadVarsForExpr(
     target_var: Var,
     out: *std.ArrayList(Var),
 ) Allocator.Error!bool {
-    var constructed_tags: std.ArrayList(Ident.Idx) = .empty;
-    defer constructed_tags.deinit(self.gpa);
+    self.collected_constructed_tags.clearRetainingCapacity();
 
-    const known = try self.collectConstructedTagsForExpr(expr_idx, &constructed_tags);
+    const known = try self.collectConstructedTagsForExpr(expr_idx, &self.collected_constructed_tags);
     if (!known) return false;
-    if (constructed_tags.items.len == 0) return true;
+    if (self.collected_constructed_tags.items.len == 0) return true;
 
-    try self.collectAbsentCtorPayloadBlockers(target_var, constructed_tags.items, out);
+    try self.collectAbsentCtorPayloadBlockers(target_var, self.collected_constructed_tags.items, out);
     return true;
 }
 
@@ -12156,12 +12251,11 @@ fn closeAbsentConstructedPayloadVars(
     expr_idx: CIR.Expr.Idx,
     target_var: Var,
 ) Allocator.Error!void {
-    var payload_vars_to_close: std.ArrayList(Var) = .empty;
-    defer payload_vars_to_close.deinit(self.gpa);
+    self.payload_vars_to_close.clearRetainingCapacity();
 
-    _ = try self.collectKnownEmptyPayloadVarsForExpr(expr_idx, target_var, &payload_vars_to_close);
+    _ = try self.collectKnownEmptyPayloadVarsForExpr(expr_idx, target_var, &self.payload_vars_to_close);
 
-    for (payload_vars_to_close.items) |payload_var| {
+    for (self.payload_vars_to_close.items) |payload_var| {
         try self.closePayloadVarToEmpty(payload_var);
     }
 }
@@ -12180,9 +12274,8 @@ fn checkDestructureExhaustiveness(
 ) std.mem.Allocator.Error!void {
     if (!self.patternNeedsExhaustiveness(pattern_idx)) return;
 
-    var known_empty_payload_vars: std.ArrayList(Var) = .empty;
-    defer known_empty_payload_vars.deinit(self.gpa);
-    const value_constructors_known = try self.collectKnownEmptyPayloadVarsForExpr(value_expr_idx, value_var, &known_empty_payload_vars);
+    self.known_empty_payload_vars_destructure.clearRetainingCapacity();
+    const value_constructors_known = try self.collectKnownEmptyPayloadVarsForExpr(value_expr_idx, value_var, &self.known_empty_payload_vars_destructure);
 
     const result = exhaustive.checkDestructure(
         self.cir.gpa,
@@ -12191,7 +12284,7 @@ fn checkDestructureExhaustiveness(
         self.exhaustiveBuiltinIdents(),
         pattern_idx,
         value_var,
-        known_empty_payload_vars.items,
+        self.known_empty_payload_vars_destructure.items,
         value_constructors_known,
     ) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
@@ -12356,7 +12449,7 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                 // Check the annotation, if it exists
                 const expectation = blk: {
                     if (decl_stmt.anno) |annotation_idx| {
-                        break :blk Expected.fromAnnotation(annotation_idx).withReturnResult(statement_expected.return_result);
+                        break :blk statement_expected.withAnnotation(annotation_idx);
                     } else {
                         break :blk statement_expected;
                     }
@@ -12429,7 +12522,7 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                             _ = try self.problems.appendProblem(self.gpa, .{ .polymorphic_var_annotation = .{ .region = self.cir.store.getAnnotationRegion(annotation_idx) } });
                             break :blk statement_expected;
                         }
-                        break :blk Expected.fromAnnotation(annotation_idx).withReturnResult(statement_expected.return_result);
+                        break :blk statement_expected.withAnnotation(annotation_idx);
                     } else {
                         break :blk statement_expected;
                     }
@@ -12948,7 +13041,7 @@ fn checkIfElseExpr(
     const bool_var = try self.freshBool(env, expr_region);
     const first_cond_result = try self.unifyInContext(bool_var, first_cond_var, env, .if_condition);
     if (if_.warn_unused_branches and first_cond_result.isOk()) {
-        try self.warnIfComptimeConditionalExpr(first_branch.cond, .if_condition);
+        try self.warnIfComptimeConditionalExpr(first_branch.cond, .if_condition, expected);
     }
 
     // Then we check the 1st branch's body
@@ -12981,7 +13074,7 @@ fn checkIfElseExpr(
         const branch_bool_var = try self.freshBool(env, expr_region);
         const cond_result = try self.unifyInContext(branch_bool_var, cond_var, env, .if_condition);
         if (if_.warn_unused_branches and cond_result.isOk()) {
-            try self.warnIfComptimeConditionalExpr(branch.cond, .if_condition);
+            try self.warnIfComptimeConditionalExpr(branch.cond, .if_condition, expected);
         }
 
         // Check the branch body
@@ -13018,7 +13111,7 @@ fn checkIfElseExpr(
                     const fresh_bool = try self.freshBool(env, expr_region);
                     const remaining_cond_result = try self.unifyInContext(fresh_bool, remaining_cond_var, env, .if_condition);
                     if (if_.warn_unused_branches and remaining_cond_result.isOk()) {
-                        try self.warnIfComptimeConditionalExpr(remaining_branch.cond, .if_condition);
+                        try self.warnIfComptimeConditionalExpr(remaining_branch.cond, .if_condition, expected);
                     }
 
                     does_fx = try self.checkExprWithHoistSelectionSuppressed(remaining_branch.body, env, expected.forBranchBody()) or does_fx;
@@ -13137,7 +13230,7 @@ fn checkMatchExpr(
         }
     }
     if (!match.is_try_suffix and !match.skip_exhaustiveness) {
-        try self.warnIfComptimeConditionalExpr(match.cond, .match_scrutinee);
+        try self.warnIfComptimeConditionalExpr(match.cond, .match_scrutinee, expected);
     }
 
     // Manually check the 1st branch
@@ -13189,7 +13282,7 @@ fn checkMatchExpr(
             const guard_bool_var = try self.freshBool(env, expr_region);
             const guard_result = try self.unifyInContext(guard_bool_var, guard_var, env, .if_condition);
             if (!match.skip_exhaustiveness and guard_result.isOk()) {
-                try self.warnIfComptimeConditionalExpr(guard_idx, .if_guard);
+                try self.warnIfComptimeConditionalExpr(guard_idx, .if_guard, expected);
             }
         }
 
@@ -13247,7 +13340,7 @@ fn checkMatchExpr(
             const branch_guard_bool_var = try self.freshBool(env, expr_region);
             const guard_result = try self.unifyInContext(branch_guard_bool_var, guard_var, env, .if_condition);
             if (!match.skip_exhaustiveness and guard_result.isOk()) {
-                try self.warnIfComptimeConditionalExpr(guard_idx, .if_guard);
+                try self.warnIfComptimeConditionalExpr(guard_idx, .if_guard, expected);
             }
         }
 
@@ -13337,9 +13430,8 @@ fn checkMatchExpr(
     if (!match.skip_exhaustiveness and !had_type_error and !cond_is_error and !has_invalid_try and !cond_always_crashes) {
         const match_region = self.getRegionAt(@enumFromInt(@intFromEnum(expr_idx)));
 
-        var known_empty_payload_vars: std.ArrayList(Var) = .empty;
-        defer known_empty_payload_vars.deinit(self.gpa);
-        const cond_constructors_known = try self.collectKnownEmptyPayloadVarsForExpr(match.cond, cond_var, &known_empty_payload_vars);
+        self.known_empty_payload_vars_match.clearRetainingCapacity();
+        const cond_constructors_known = try self.collectKnownEmptyPayloadVarsForExpr(match.cond, cond_var, &self.known_empty_payload_vars_match);
 
         const result = exhaustive.checkMatch(
             self.cir.gpa,
@@ -13349,7 +13441,7 @@ fn checkMatchExpr(
             match.branches,
             cond_var,
             match_region,
-            known_empty_payload_vars.items,
+            self.known_empty_payload_vars_match.items,
             cond_constructors_known,
         ) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
@@ -14953,29 +15045,14 @@ const LiteralDefaultUniverse = union(enum) {
 /// `anyDeferredDispatchReceiverResolved`), with runaway recursion capped by
 /// `max_deferred_dispatch_iterations`.
 fn runLiteralDefaultingRounds(self: *Self, env: *Env, universe: LiteralDefaultUniverse) std.mem.Allocator.Error!void {
-    // Round-scoped scratch. Components are tiny in practice (most literals are
-    // lone passives or single drivers), so plain local containers suffice.
-    var open_roots: std.ArrayListUnmanaged(Var) = .empty;
-    defer open_roots.deinit(self.gpa);
-    var seen_roots = std.AutoHashMap(Var, void).init(self.gpa);
-    defer seen_roots.deinit();
-    var component_parent: std.ArrayListUnmanaged(usize) = .empty;
-    defer component_parent.deinit(self.gpa);
-    var is_driver: std.ArrayListUnmanaged(bool) = .empty;
-    defer is_driver.deinit(self.gpa);
-    var footprint_owner = std.AutoHashMap(Var, usize).init(self.gpa);
-    defer footprint_owner.deinit();
-    var footprint = std.AutoHashMap(Var, void).init(self.gpa);
-    defer footprint.deinit();
-    var group_drivers: std.ArrayListUnmanaged(Var) = .empty;
-    defer group_drivers.deinit(self.gpa);
-    var group_warnings: std.ArrayListUnmanaged(PendingBoundaryWarning) = .empty;
-    defer group_warnings.deinit(self.gpa);
+    // Round-scoped scratch. Front-loaded as Check fields; cleared at the start
+    // of each step. Safe despite cascade reentrancy: every buffer is cleared
+    // before use and never read across the step-4 cascade.
 
     while (true) {
         // --- 1. Gather the still-open literal roots (deduped). ---
-        open_roots.clearRetainingCapacity();
-        seen_roots.clearRetainingCapacity();
+        self.literal_defaulting_open_roots.clearRetainingCapacity();
+        self.literal_defaulting_seen_roots.clearRetainingCapacity();
         switch (universe) {
             .finalize => |finalize| {
                 for (self.open_literal_vars.items[0..finalize.literal_count]) |literal_var| {
@@ -14983,9 +15060,9 @@ fn runLiteralDefaultingRounds(self: *Self, env: *Env, universe: LiteralDefaultUn
                     if (resolved.desc.content != .flex) continue;
                     if (resolved.desc.rank == .generalized) continue;
                     if (self.varLiteralKind(resolved.var_) == null) continue;
-                    const gop = try seen_roots.getOrPut(resolved.var_);
+                    const gop = try self.literal_defaulting_seen_roots.getOrPut(resolved.var_);
                     if (gop.found_existing) continue;
-                    try open_roots.append(self.gpa, resolved.var_);
+                    try self.literal_defaulting_open_roots.append(self.gpa, resolved.var_);
                 }
             },
             .boundary => |boundary| {
@@ -15006,13 +15083,13 @@ fn runLiteralDefaultingRounds(self: *Self, env: *Env, universe: LiteralDefaultUn
                     // thunk simply generalizes as a polymorphic function (see
                     // `reportPolymorphicTopLevelValues`).
                     if (self.boundary_reachable_vars.contains(resolved.var_)) continue;
-                    const gop = try seen_roots.getOrPut(resolved.var_);
+                    const gop = try self.literal_defaulting_seen_roots.getOrPut(resolved.var_);
                     if (gop.found_existing) continue;
-                    try open_roots.append(self.gpa, resolved.var_);
+                    try self.literal_defaulting_open_roots.append(self.gpa, resolved.var_);
                 }
             },
         }
-        if (open_roots.items.len == 0) return;
+        if (self.literal_defaulting_open_roots.items.len == 0) return;
 
         // --- 1b. Default unambiguous quote literals before ambiguous numerals. ---
         // A quote literal has exactly one possible type (Str), so committing it is
@@ -15035,7 +15112,7 @@ fn runLiteralDefaultingRounds(self: *Self, env: *Env, universe: LiteralDefaultUn
         // quote if any is open, else a numeral).
         {
             var any_quote = false;
-            for (open_roots.items) |root| {
+            for (self.literal_defaulting_open_roots.items) |root| {
                 if (self.varLiteralKind(root) == .quote) {
                     any_quote = true;
                     break;
@@ -15043,49 +15120,42 @@ fn runLiteralDefaultingRounds(self: *Self, env: *Env, universe: LiteralDefaultUn
             }
             if (any_quote) {
                 var write_idx: usize = 0;
-                for (open_roots.items) |root| {
+                for (self.literal_defaulting_open_roots.items) |root| {
                     if (self.varLiteralKind(root) != .quote) continue;
-                    open_roots.items[write_idx] = root;
+                    self.literal_defaulting_open_roots.items[write_idx] = root;
                     write_idx += 1;
                 }
-                open_roots.shrinkRetainingCapacity(write_idx);
+                self.literal_defaulting_open_roots.shrinkRetainingCapacity(write_idx);
             }
         }
 
         // --- 2. Partition into interference components. ---
-        component_parent.clearRetainingCapacity();
-        is_driver.clearRetainingCapacity();
-        footprint_owner.clearRetainingCapacity();
-        for (open_roots.items, 0..) |root, idx| {
-            try component_parent.append(self.gpa, idx);
+        self.literal_defaulting_component_parent.clearRetainingCapacity();
+        self.literal_defaulting_is_driver.clearRetainingCapacity();
+        self.literal_defaulting_footprint_owner.clearRetainingCapacity();
+        for (self.literal_defaulting_open_roots.items, 0..) |root, idx| {
+            try self.literal_defaulting_component_parent.append(self.gpa, idx);
             // Seed each literal's own root so any driver whose footprint reaches
             // it is merged into its component. Roots are deduped, so no collision
             // is possible here.
-            try footprint_owner.putNoClobber(root, idx);
+            try self.literal_defaulting_footprint_owner.putNoClobber(root, idx);
         }
-        for (open_roots.items, 0..) |root, idx| {
+        for (self.literal_defaulting_open_roots.items, 0..) |root, idx| {
             const constraint_range = self.types.resolveVar(root).desc.content.flex.constraints;
             const drives = self.rangeHasNonLiteralConstraint(constraint_range);
-            try is_driver.append(self.gpa, drives);
+            try self.literal_defaulting_is_driver.append(self.gpa, drives);
             if (!drives) continue;
 
-            // collectReachableVars only reads the store, so holding the
-            // constraint slice across it is safe (same fence as
-            // `boundaryDefaultLeaksIntoSignature`). It stores RESOLVED roots.
-            footprint.clearRetainingCapacity();
-            for (self.types.sliceStaticDispatchConstraints(constraint_range)) |constraint| {
-                if (constraint.origin == .from_literal) continue;
-                try self.collectReachableVars(constraint.fn_var, &footprint);
-            }
-            var fp_iter = footprint.keyIterator();
+            try self.collectConstraintSignatureReachable(constraint_range, &self.literal_defaulting_footprint);
+            var fp_iter = self.literal_defaulting_footprint.keyIterator();
             while (fp_iter.next()) |fp_var| {
                 // Only still-flex roots interfere; everything else is immune to
                 // pinning. (Union order is irrelevant: unions commute, so the
                 // partition is independent of hash-map iteration order.)
                 if (self.types.resolveVar(fp_var.*).desc.content != .flex) continue;
-                const gop = try footprint_owner.getOrPut(fp_var.*);
+                const gop = try self.literal_defaulting_footprint_owner.getOrPut(fp_var.*);
                 if (gop.found_existing) {
-                    componentUnion(component_parent.items, idx, gop.value_ptr.*);
+                    componentUnion(self.literal_defaulting_component_parent.items, idx, gop.value_ptr.*);
                 } else {
                     gop.value_ptr.* = idx;
                 }
@@ -15093,15 +15163,15 @@ fn runLiteralDefaultingRounds(self: *Self, env: *Env, universe: LiteralDefaultUn
         }
 
         // --- 3. Commit every component (disjoint, so order is unobservable). ---
-        for (0..open_roots.items.len) |leader| {
-            if (componentFind(component_parent.items, leader) != leader) continue;
-            group_drivers.clearRetainingCapacity();
+        for (0..self.literal_defaulting_open_roots.items.len) |leader| {
+            if (componentFind(self.literal_defaulting_component_parent.items, leader) != leader) continue;
+            self.literal_defaulting_group_drivers.clearRetainingCapacity();
             var member_count: usize = 0;
-            for (open_roots.items, 0..) |member_root, member_idx| {
-                if (componentFind(component_parent.items, member_idx) != leader) continue;
+            for (self.literal_defaulting_open_roots.items, 0..) |member_root, member_idx| {
+                if (componentFind(self.literal_defaulting_component_parent.items, member_idx) != leader) continue;
                 member_count += 1;
-                if (is_driver.items[member_idx]) {
-                    try group_drivers.append(self.gpa, member_root);
+                if (self.literal_defaulting_is_driver.items[member_idx]) {
+                    try self.literal_defaulting_group_drivers.append(self.gpa, member_root);
                 }
             }
             // Within a round, every gathered root is still flex with its
@@ -15109,46 +15179,19 @@ fn runLiteralDefaultingRounds(self: *Self, env: *Env, universe: LiteralDefaultUn
             // of OTHER components only touch their own (disjoint) footprints, and
             // this component commits exactly once. So the kind lookups below
             // cannot fail — gather guaranteed them non-null.
-            if (group_drivers.items.len == 0) {
+            if (self.literal_defaulting_group_drivers.items.len == 0) {
                 // A component without drivers is a lone passive (a passive's
                 // footprint is just itself, so only a driver can merge it).
                 std.debug.assert(member_count == 1);
-                const passive_root = open_roots.items[leader];
+                const passive_root = self.literal_defaulting_open_roots.items[leader];
                 const kind = self.varLiteralKind(passive_root) orelse unreachable;
                 try self.commitGatheredLiteral(passive_root, kind, universe, env);
-            } else if (group_drivers.items.len == 1) {
-                const driver_root = group_drivers.items[0];
+            } else if (self.literal_defaulting_group_drivers.items.len == 1) {
+                const driver_root = self.literal_defaulting_group_drivers.items[0];
                 const kind = self.varLiteralKind(driver_root) orelse unreachable;
                 try self.commitGatheredLiteral(driver_root, kind, universe, env);
             } else {
-                // Several drivers, possibly of mixed literal kinds: quote drivers
-                // take their single candidate (Str) on every attempt while the
-                // numeral candidate scan iterates its list.
-                //
-                // BOUNDARY WARNING SEMANTICS FOR GROUPS: the leak check is per
-                // literal (it walks one literal's constraint signatures), so it
-                // runs for EVERY group member pre-commit — while all drivers are
-                // still flex — and each leaking member gets its own LITERAL
-                // DEFAULTED warning post-commit, exactly as if it had committed
-                // alone. Non-leaking members default silently (def-local), and the
-                // component's passives are never committed here, matching the
-                // single-commit paths: a passive carries only literal-conversion
-                // constraints, so its leak set is empty and it could never warn.
-                group_warnings.clearRetainingCapacity();
-                if (universe == .boundary) {
-                    for (group_drivers.items) |driver| {
-                        try group_warnings.append(self.gpa, try self.boundaryWarningBeforeCommit(driver));
-                    }
-                }
-                try self.commitLiteralGroupDefault(group_drivers.items, env);
-                if (universe == .boundary) {
-                    // The group commit unified each driver with its committed var,
-                    // so the driver root itself renders the committed type for the
-                    // snapshot.
-                    for (group_drivers.items, group_warnings.items) |driver, pending| {
-                        try self.emitBoundaryWarningAfterCommit(pending, driver, driver);
-                    }
-                }
+                try self.commitGatheredGroup(self.literal_defaulting_group_drivers.items, &self.literal_defaulting_group_warnings, universe, env);
             }
         }
 
@@ -15177,6 +15220,41 @@ fn commitGatheredLiteral(
             const pending = try self.boundaryWarningBeforeCommit(root);
             const default_var = try self.commitLiteralDefault(root, kind, env);
             try self.emitBoundaryWarningAfterCommit(pending, root, default_var);
+        },
+    }
+}
+
+/// Commit a multi-driver literal component via the shared group probe — plus, at
+/// a generalization boundary, a per-driver LITERAL DEFAULTED leak warning
+/// bracketing the commit, exactly as `commitGatheredLiteral` does for the single
+/// case. `warnings_scratch` is a caller-owned reused buffer (cleared here).
+///
+/// BOUNDARY WARNING SEMANTICS FOR GROUPS: the leak check is per literal (it walks
+/// one literal's constraint signatures), so it runs for EVERY group member
+/// pre-commit — while all drivers are still flex — and each leaking member gets
+/// its own LITERAL DEFAULTED warning post-commit, exactly as if it had committed
+/// alone. Non-leaking members default silently (def-local), and the component's
+/// passives are never committed here, matching the single-commit paths.
+fn commitGatheredGroup(
+    self: *Self,
+    drivers: []const Var,
+    warnings_scratch: *std.ArrayListUnmanaged(PendingBoundaryWarning),
+    universe: LiteralDefaultUniverse,
+    env: *Env,
+) std.mem.Allocator.Error!void {
+    switch (universe) {
+        .finalize => try self.commitLiteralGroupDefault(drivers, env),
+        .boundary => {
+            warnings_scratch.clearRetainingCapacity();
+            for (drivers) |driver| {
+                try warnings_scratch.append(self.gpa, try self.boundaryWarningBeforeCommit(driver));
+            }
+            try self.commitLiteralGroupDefault(drivers, env);
+            // The group commit unified each driver with its committed var, so the
+            // driver root itself renders the committed type for the snapshot.
+            for (drivers, warnings_scratch.items) |driver, pending| {
+                try self.emitBoundaryWarningAfterCommit(pending, driver, driver);
+            }
         },
     }
 }
@@ -15252,22 +15330,17 @@ fn commitLiteralGroupDefault(self: *Self, drivers: []const Var, env: *Env) Alloc
     // Constraint ranges and literal kinds captured while the drivers are still
     // flex; the ranges index the constraint store, whose entries outlive the
     // unifications below.
-    var constraint_ranges: std.ArrayListUnmanaged(StaticDispatchConstraint.SafeList.Range) = .empty;
-    defer constraint_ranges.deinit(self.gpa);
-    var kinds: std.ArrayListUnmanaged(StaticDispatchConstraint.LiteralKind) = .empty;
-    defer kinds.deinit(self.gpa);
+    self.literal_defaulting_constraint_ranges.clearRetainingCapacity();
+    self.literal_defaulting_kinds.clearRetainingCapacity();
     var has_numeral_driver = false;
     for (drivers) |driver| {
-        try constraint_ranges.append(self.gpa, self.types.resolveVar(driver).desc.content.flex.constraints);
+        try self.literal_defaulting_constraint_ranges.append(self.gpa, self.types.resolveVar(driver).desc.content.flex.constraints);
         // Every group driver is an open literal (the component gather keyed
         // on `varLiteralKind`), so the kind always exists.
         const kind = self.varLiteralKind(driver).?;
-        try kinds.append(self.gpa, kind);
+        try self.literal_defaulting_kinds.append(self.gpa, kind);
         if (kind == .numeral) has_numeral_driver = true;
     }
-
-    var candidate_vars: std.ArrayListUnmanaged(Var) = .empty;
-    defer candidate_vars.deinit(self.gpa);
 
     // Quote drivers have exactly one candidate (Str) and are assigned it on
     // every attempt; only numeral drivers consume the candidate scan, so an
@@ -15282,16 +15355,9 @@ fn commitLiteralGroupDefault(self: *Self, drivers: []const Var, env: *Env) Alloc
         // arithmetic on the constraint payloads, before any speculation. Quote
         // drivers are assigned Str, which their own literal-conversion provenance
         // accepts by definition, so they have nothing to precheck.
-        for (constraint_ranges.items, kinds.items) |range, kind| {
+        for (self.literal_defaulting_constraint_ranges.items, self.literal_defaulting_kinds.items) |range, kind| {
             if (kind != .numeral) continue;
-            for (self.types.sliceStaticDispatchConstraints(range)) |constraint| {
-                switch (constraint.origin) {
-                    .from_literal => |lit| {
-                        if (!literalInfoAcceptsBuiltinNumKind(lit, candidate_kind)) continue :candidate;
-                    },
-                    else => {},
-                }
-            }
+            if (!self.rangeNumeralDigitsFit(range, candidate_kind)) continue :candidate;
         }
 
         var commit_probe = try self.beginCommitProbe(env);
@@ -15304,8 +15370,8 @@ fn commitLiteralGroupDefault(self: *Self, drivers: []const Var, env: *Env) Alloc
         // distinct and still flex, so these unifications are independent of each
         // other; flex-vs-concrete cannot mismatch (the drivers' dispatch
         // constraints defer onto the candidate as usual).
-        candidate_vars.clearRetainingCapacity();
-        for (drivers, kinds.items) |driver, kind| {
+        self.literal_defaulting_candidate_vars.clearRetainingCapacity();
+        for (drivers, self.literal_defaulting_kinds.items) |driver, kind| {
             const candidate_var = switch (kind) {
                 .numeral => try self.freshFromContent(
                     try self.mkBuiltinNumberTypeContentFromKind(candidate_kind, env),
@@ -15314,32 +15380,19 @@ fn commitLiteralGroupDefault(self: *Self, drivers: []const Var, env: *Env) Alloc
                 ),
                 .quote, .interpolation => try self.freshStr(env, self.getRegionAt(driver)),
             };
-            try candidate_vars.append(self.gpa, candidate_var);
+            try self.literal_defaulting_candidate_vars.append(self.gpa, candidate_var);
             const unify_result = try self.unify(driver, candidate_var, env);
             if (!unify_result.isOk()) continue :candidate;
         }
 
         // Phase 2: verify every driver's every non-literal constraint.
-        // Store-backed iterator, not a held slice: the verification appends to
-        // the constraint store, which can reallocate and dangle a slice.
-        for (drivers, 0..) |_, driver_idx| {
-            var constraints_iter = self.types.iterStaticDispatchConstraints(constraint_ranges.items[driver_idx]);
-            while (constraints_iter.next()) |constraint| {
-                switch (constraint.origin) {
-                    // Validated digit-fit above, before the probe began.
-                    .from_literal => {},
-                    else => {
-                        if (!try self.staticDispatchConstraintAcceptsCandidate(
-                            &commit_probe,
-                            constraint,
-                            candidate_vars.items[driver_idx],
-                            env,
-                        )) {
-                            continue :candidate;
-                        }
-                    },
-                }
-            }
+        for (0..drivers.len) |driver_idx| {
+            if (!try self.candidateSatisfiesRangeConstraints(
+                &commit_probe,
+                self.literal_defaulting_constraint_ranges.items[driver_idx],
+                self.literal_defaulting_candidate_vars.items[driver_idx],
+                env,
+            )) continue :candidate;
         }
 
         committed = true;
@@ -15351,7 +15404,7 @@ fn commitLiteralGroupDefault(self: *Self, drivers: []const Var, env: *Env) Alloc
     // default (Dec for numerals, Str for quotes) so the dispatch pass reports the
     // conflicts. (All drivers are flex again — every failed probe rolled back —
     // but re-check defensively.)
-    for (drivers, kinds.items) |driver, kind| {
+    for (drivers, self.literal_defaulting_kinds.items) |driver, kind| {
         if (self.types.resolveVar(driver).desc.content != .flex) continue;
         switch (kind) {
             .numeral => _ = try self.commitLiteralDefaultHead(driver, env),
@@ -15386,18 +15439,30 @@ fn commitLiteralGroupDefault(self: *Self, drivers: []const Var, env: *Env) Alloc
 ///
 /// Must run while `literal_var` is still flex (before the default unify) and after
 /// `boundary_reachable_vars` is populated for the current boundary.
+/// Clear `out`, then collect every var reachable from the var's non-`from_literal`
+/// dispatch constraints into it. Single source of truth for the "signature
+/// footprint" used by both interference partitioning (runLiteralDefaultingRounds)
+/// and boundary-leak detection (boundaryDefaultLeaksIntoSignature) — they MUST
+/// agree, or a literal could be partitioned non-interfering yet warned.
+/// collectReachableVars only reads the store, so holding the constraint slice
+/// across it is safe.
+fn collectConstraintSignatureReachable(
+    self: *Self,
+    constraint_range: StaticDispatchConstraint.SafeList.Range,
+    out: *std.AutoHashMap(Var, void),
+) std.mem.Allocator.Error!void {
+    out.clearRetainingCapacity();
+    for (self.types.sliceStaticDispatchConstraints(constraint_range)) |constraint| {
+        if (constraint.origin == .from_literal) continue;
+        try self.collectReachableVars(constraint.fn_var, out);
+    }
+}
+
 fn boundaryDefaultLeaksIntoSignature(self: *Self, literal_var: Var) std.mem.Allocator.Error!bool {
     const resolved = self.types.resolveVar(literal_var);
     if (resolved.desc.content != .flex) return false;
 
-    // collectReachableVars only reads the store and inserts into the map (no
-    // unify/instantiate), so holding the constraint slice across it is safe.
-    self.boundary_leak_vars.clearRetainingCapacity();
-    const constraints = self.types.sliceStaticDispatchConstraints(resolved.desc.content.flex.constraints);
-    for (constraints) |constraint| {
-        if (constraint.origin == .from_literal) continue;
-        try self.collectReachableVars(constraint.fn_var, &self.boundary_leak_vars);
-    }
+    try self.collectConstraintSignatureReachable(resolved.desc.content.flex.constraints, &self.boundary_leak_vars);
 
     var leak_iter = self.boundary_leak_vars.keyIterator();
     while (leak_iter.next()) |leak_var| {
@@ -15482,6 +15547,20 @@ fn defaultLiteralsAtGeneralizationBoundary(self: *Self, def_root_var: Var, env: 
     }
     if (!has_candidate) return;
 
+    // Collect the module's `.eql` edges once so the recursive-def pass and the
+    // fixpoint below iterate just the edges, not the whole constraint list.
+    // Safe to snapshot here: nothing between this point and the fixpoint adds an
+    // `.eql` constraint (the passes only collect reachable vars).
+    self.boundary_eql_edges.clearRetainingCapacity();
+    {
+        var edge_iter = self.constraints.iterIndices();
+        while (edge_iter.next()) |constraint_idx| {
+            switch (self.constraints.get(constraint_idx).*) {
+                .eql => |eql| try self.boundary_eql_edges.append(self.gpa, eql),
+            }
+        }
+    }
+
     // The def root's reachable closure (recursing into `where`-constraint
     // signatures). A cycle root generalizes its whole group at once, so also seed
     // from every deferred cycle participant's def vars; at a non-cycle boundary
@@ -15520,36 +15599,31 @@ fn defaultLiteralsAtGeneralizationBoundary(self: *Self, def_root_var: Var, env: 
     // carries a `Str`, not an open numeral, so seeding its var changes no defaulting
     // and the real clash still surfaces. Purely conservative throughout: only ever
     // keeps more literals open, defaults none.
-    {
-        var rec_iter = self.constraints.iterIndices();
-        while (rec_iter.next()) |constraint_idx| {
-            switch (self.constraints.get(constraint_idx).*) {
-                .eql => |eql| switch (eql.ctx) {
-                    .recursive_def => {
-                        const ref_resolved = self.types.resolveVar(eql.actual);
-                        const ref_func = ref_resolved.desc.content.unwrapFunc() orelse continue;
-                        try self.collectReachableVars(ref_func.ret, &self.boundary_reachable_vars);
+    for (self.boundary_eql_edges.items) |eql| {
+        switch (eql.ctx) {
+            .recursive_def => {
+                const ref_resolved = self.types.resolveVar(eql.actual);
+                const ref_func = ref_resolved.desc.content.unwrapFunc() orelse continue;
+                try self.collectReachableVars(ref_func.ret, &self.boundary_reachable_vars);
 
-                        // The referenced def's annotated body var supplies the
-                        // parameter types: `expected` (a self-reference's pattern
-                        // var) is not yet unified with the annotation here, but the
-                        // body var has carried it since the body was checked.
-                        const annotated_fn_var = eql.recursive_annotated_fn_var orelse continue;
-                        const annotated_func = self.types.resolveVar(annotated_fn_var).desc.content.unwrapFunc() orelse continue;
-                        const call_args = self.types.sliceVars(ref_func.args);
-                        const param_vars = self.types.sliceVars(annotated_func.args);
-                        const arg_count = @min(call_args.len, param_vars.len);
-                        for (call_args[0..arg_count], param_vars[0..arg_count]) |call_arg, param_var| {
-                            const param_content = self.types.resolveVar(param_var).desc.content;
-                            switch (param_content) {
-                                .flex, .rigid => {},
-                                .structure, .alias, .err => try self.collectReachableVars(call_arg, &self.boundary_reachable_vars),
-                            }
-                        }
-                    },
-                    else => {},
-                },
-            }
+                // The referenced def's annotated body var supplies the
+                // parameter types: `expected` (a self-reference's pattern
+                // var) is not yet unified with the annotation here, but the
+                // body var has carried it since the body was checked.
+                const annotated_fn_var = eql.recursive_annotated_fn_var orelse continue;
+                const annotated_func = self.types.resolveVar(annotated_fn_var).desc.content.unwrapFunc() orelse continue;
+                const call_args = self.types.sliceVars(ref_func.args);
+                const param_vars = self.types.sliceVars(annotated_func.args);
+                const arg_count = @min(call_args.len, param_vars.len);
+                for (call_args[0..arg_count], param_vars[0..arg_count]) |call_arg, param_var| {
+                    const param_content = self.types.resolveVar(param_var).desc.content;
+                    switch (param_content) {
+                        .flex, .rigid => {},
+                        .structure, .alias, .err => try self.collectReachableVars(call_arg, &self.boundary_reachable_vars),
+                    }
+                }
+            },
+            else => {},
         }
     }
 
@@ -15561,18 +15635,13 @@ fn defaultLiteralsAtGeneralizationBoundary(self: *Self, def_root_var: Var, env: 
     var changed = true;
     while (changed) {
         changed = false;
-        var constraint_iter = self.constraints.iterIndices();
-        while (constraint_iter.next()) |constraint_idx| {
-            switch (self.constraints.get(constraint_idx).*) {
-                .eql => |eql| {
-                    const expected_in = self.boundary_reachable_vars.contains(self.types.resolveVar(eql.expected).var_);
-                    const actual_in = self.boundary_reachable_vars.contains(self.types.resolveVar(eql.actual).var_);
-                    if (expected_in == actual_in) continue;
-                    try self.collectReachableVars(eql.expected, &self.boundary_reachable_vars);
-                    try self.collectReachableVars(eql.actual, &self.boundary_reachable_vars);
-                    changed = true;
-                },
-            }
+        for (self.boundary_eql_edges.items) |eql| {
+            const expected_in = self.boundary_reachable_vars.contains(self.types.resolveVar(eql.expected).var_);
+            const actual_in = self.boundary_reachable_vars.contains(self.types.resolveVar(eql.actual).var_);
+            if (expected_in == actual_in) continue;
+            try self.collectReachableVars(eql.expected, &self.boundary_reachable_vars);
+            try self.collectReachableVars(eql.actual, &self.boundary_reachable_vars);
+            changed = true;
         }
     }
 
@@ -15623,49 +15692,23 @@ fn literalSourceRegion(self: *Self, var_: Var) ?Region {
 /// never type-check, but the kind reported here picks which head default is
 /// attempted (Dec vs Str) and hence which literal-kind diagnostic fires — so it
 /// must not depend on constraint storage order (which unify side each literal
-/// arrived on), or mirror-image programs would get different diagnostics. We scan
-/// all literal-origin constraints and prefer `.numeral` over `.quote`, agreeing
-/// with the two other sites that encode this choice:
-/// `numericDefaultPhaseForConstraints` in src/check/checked_artifact.zig (any
-/// numeral selects the Dec mono phase before quote is considered) and
-/// `flexLiteralDefaultKind` in src/check/canonical_type_keys.zig (numeral if any,
-/// else quote).
+/// arrived on), or mirror-image programs would get different diagnostics.
+/// Delegates to `StaticDispatchConstraint.dominantLiteralKind`, the single
+/// source of truth for the numeral > quote > interpolation tie-break shared
+/// with `flexLiteralDefaultKind` (canonical_type_keys.zig) and
+/// `numericDefaultPhaseForConstraints` (checked_artifact.zig).
 fn varLiteralKind(self: *Self, var_: Var) ?StaticDispatchConstraint.LiteralKind {
     const resolved = self.types.resolveVar(var_);
     if (resolved.desc.content != .flex) return null;
     const constraints = self.types.sliceStaticDispatchConstraints(resolved.desc.content.flex.constraints);
-    var has_quote = false;
-    var has_interpolation = false;
-    for (constraints) |constraint| {
-        switch (constraint.origin) {
-            .from_literal => |lit| switch (lit) {
-                .numeral => return .numeral,
-                .quote => has_quote = true,
-                .interpolation => has_interpolation = true,
-            },
-            else => {},
-        }
-    }
-    return if (has_quote) .quote else if (has_interpolation) .interpolation else null;
+    return StaticDispatchConstraint.dominantLiteralKind(constraints);
 }
 
-/// Whether this flex var carries any interpolation literal-origin constraint.
 // --- Per-kind literal facts, each an exhaustive `switch (LiteralKind)` ---------
 //
 // Adding a `LiteralKind` variant turns each switch below into a compile error
 // until the new kind is handled: the exhaustiveness *is* the checklist for the
 // next literal kind (e.g. strings).
-
-// Literal-defaulting probe test-support counters (PERMANENT):
-// `bench_probe_attempts` and `bench_probe_refuted` are reset and asserted by the
-// refuted-count guard test in src/check/test/type_checking_integration.zig, which
-// detects `numeralCandidateStructurallyRefuted` silently going dead (refuting
-// nothing). Zig's default test runner executes a binary's tests sequentially
-// in-process, so the reset-check-assert pattern needs no synchronization.
-/// Number of default-candidate probes attempted by literal-defaulting tests.
-pub var bench_probe_attempts: usize = 0;
-/// Number of default-candidate probes skipped by structural refutation tests.
-pub var bench_probe_refuted: usize = 0;
 
 /// Default a still-open literal var and COMMIT the result, returning the var the
 /// literal was resolved against (for the boundary warning's snapshot).
@@ -15704,15 +15747,17 @@ fn commitLiteralDefault(self: *Self, literal_var: Var, kind: StaticDispatchConst
                         // counted as such below via `bench_probe_refuted`), so
                         // counting the safety-only re-probe as an attempt would make
                         // the refuted-count guard test's attempt/refuted bookkeeping
-                        // diverge between safety and release builds.
+                        // diverge between safety and release builds. Both counters are
+                        // per-instance debug-only fields, compiled out entirely in
+                        // release builds (no global state, no hot-path cost).
                         if (comptime std.debug.runtime_safety) {
                             const witness = try self.tryCommitNumeralCandidate(literal_var, candidate_kind, constraint_range, env);
                             std.debug.assert(witness == null);
+                            self.bench_probe_refuted += 1;
                         }
-                        bench_probe_refuted += 1;
                         continue;
                     }
-                    bench_probe_attempts += 1;
+                    if (comptime std.debug.runtime_safety) self.bench_probe_attempts += 1;
                     if (try self.tryCommitNumeralCandidate(literal_var, candidate_kind, constraint_range, env)) |committed_var| {
                         return committed_var;
                     }
@@ -15896,14 +15941,7 @@ fn tryCommitNumeralCandidate(
     // numerals: the digits fit `candidate_kind`). Pure arithmetic on the
     // constraint payloads, checked before any store mutation so refuting a
     // candidate on digits alone costs no speculation at all.
-    for (self.types.sliceStaticDispatchConstraints(constraint_range)) |constraint| {
-        switch (constraint.origin) {
-            .from_literal => |lit| {
-                if (!literalInfoAcceptsBuiltinNumKind(lit, candidate_kind)) return null;
-            },
-            else => {},
-        }
-    }
+    if (!self.rangeNumeralDigitsFit(constraint_range, candidate_kind)) return null;
 
     var commit_probe = try self.beginCommitProbe(env);
     var committed = false;
@@ -15926,20 +15964,7 @@ fn tryCommitNumeralCandidate(
     const unify_result = try self.unify(literal_var, candidate_var, env);
     if (!unify_result.isOk()) return null;
 
-    // Store-backed iterator, not a held slice: the probe below appends to the
-    // constraint store, which can reallocate and dangle a slice.
-    var constraints_iter = self.types.iterStaticDispatchConstraints(constraint_range);
-    while (constraints_iter.next()) |constraint| {
-        switch (constraint.origin) {
-            // Validated digit-fit above, before the probe began.
-            .from_literal => {},
-            else => {
-                if (!try self.staticDispatchConstraintAcceptsCandidate(&commit_probe, constraint, candidate_var, env)) {
-                    return null;
-                }
-            },
-        }
-    }
+    if (!try self.candidateSatisfiesRangeConstraints(&commit_probe, constraint_range, candidate_var, env)) return null;
 
     committed = true;
     commit_probe.commit();
@@ -16004,6 +16029,52 @@ fn staticDispatchConstraintAcceptsCandidate(
     // commit-probe rollback rewinds.
     const result = try self.unify(method_var, constraint.fn_var, env);
     return result.isOk();
+}
+
+/// Whether the builtin numeric candidate `candidate_kind` can represent every
+/// `from_literal` numeral payload in `range` (digit fit). Pure arithmetic on the
+/// constraint payloads — no speculation. Shared digit-fit precheck for the
+/// single-literal and group numeral probes.
+fn rangeNumeralDigitsFit(
+    self: *Self,
+    range: StaticDispatchConstraint.SafeList.Range,
+    candidate_kind: CIR.NumKind,
+) bool {
+    for (self.types.sliceStaticDispatchConstraints(range)) |constraint| {
+        switch (constraint.origin) {
+            .from_literal => |lit| {
+                if (!literalInfoAcceptsBuiltinNumKind(lit, candidate_kind)) return false;
+            },
+            else => {},
+        }
+    }
+    return true;
+}
+
+/// Whether `candidate_var` satisfies every non-`from_literal` dispatch constraint
+/// in `range`, under the open `probe` scope. Uses the store-backed iterator (not a
+/// held slice) because verification appends to the constraint store, which can
+/// reallocate. Shared phase-2 verify for the single-literal and group numeral
+/// probes.
+fn candidateSatisfiesRangeConstraints(
+    self: *Self,
+    probe: *CommitProbe,
+    range: StaticDispatchConstraint.SafeList.Range,
+    candidate_var: Var,
+    env: *Env,
+) Allocator.Error!bool {
+    var constraints_iter = self.types.iterStaticDispatchConstraints(range);
+    while (constraints_iter.next()) |constraint| {
+        switch (constraint.origin) {
+            .from_literal => {},
+            else => {
+                if (!try self.staticDispatchConstraintAcceptsCandidate(probe, constraint, candidate_var, env)) {
+                    return false;
+                }
+            },
+        }
+    }
+    return true;
 }
 
 fn isBuiltinNumericNominal(self: *Self, var_: Var) bool {

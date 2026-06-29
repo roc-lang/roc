@@ -514,8 +514,18 @@ fn addMethodCallData(store: *NodeStore, args: CIR.Expr.Span, method_name_region:
 // Binop ops are offset past the three unit tags so every `Binop.Op` value has
 // a distinct slot.
 const surface_origin_binop_offset: u32 = 3;
+comptime {
+    // The binop range starts after the unit (payload-less) tags; keep the offset
+    // in sync so a new unit variant can't collide with a `Binop.Op` slot.
+    var unit_count: u32 = 0;
+    for (@typeInfo(CIR.Expr.SurfaceOrigin).@"union".fields) |field| {
+        if (field.type == void) unit_count += 1;
+    }
+    std.debug.assert(surface_origin_binop_offset == unit_count);
+}
 
-fn encodeSurfaceOrigin(origin: CIR.Expr.SurfaceOrigin) u32 {
+/// Encode surface origin
+pub fn encodeSurfaceOrigin(origin: CIR.Expr.SurfaceOrigin) u32 {
     return switch (origin) {
         .method_call => 0,
         .unary_minus => 1,
@@ -524,7 +534,8 @@ fn encodeSurfaceOrigin(origin: CIR.Expr.SurfaceOrigin) u32 {
     };
 }
 
-fn decodeSurfaceOrigin(encoded: u32) CIR.Expr.SurfaceOrigin {
+/// Decode surface origin
+pub fn decodeSurfaceOrigin(encoded: u32) CIR.Expr.SurfaceOrigin {
     return switch (encoded) {
         0 => .method_call,
         1 => .unary_minus,

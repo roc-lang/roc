@@ -618,11 +618,11 @@ pub fn assertLastDefTypeWithWarnings(
     try testing.expectEqualStrings(expected, self.type_writer.get());
 }
 
-/// Assert that every type problem is warning-severity and that the rendered
-/// titles match `expected_titles` exactly, in order. Any error-severity
-/// problem (or a count/title mismatch) fails the assertion.
-fn assertOnlyTypeWarnings(self: *TestEnv, expected_titles: []const []const u8) TestEnvError!void {
-    var report_builder = try report_mod.ReportBuilder.init(
+/// Construct a ReportBuilder wired to this TestEnv's allocator, module env,
+/// checker snapshots, problems, and regions. All test call sites are
+/// identical, so this single helper avoids repeating the nine arguments.
+fn initReportBuilder(self: *TestEnv) Allocator.Error!report_mod.ReportBuilder {
+    return report_mod.ReportBuilder.init(
         self.gpa,
         self.module_env,
         self.module_env,
@@ -633,6 +633,13 @@ fn assertOnlyTypeWarnings(self: *TestEnv, expected_titles: []const []const u8) T
         &self.checker.import_mapping,
         &self.checker.regions,
     );
+}
+
+/// Assert that every type problem is warning-severity and that the rendered
+/// titles match `expected_titles` exactly, in order. Any error-severity
+/// problem (or a count/title mismatch) fails the assertion.
+fn assertOnlyTypeWarnings(self: *TestEnv, expected_titles: []const []const u8) TestEnvError!void {
+    var report_builder = try self.initReportBuilder();
     defer report_builder.deinit();
 
     try testing.expectEqual(expected_titles.len, self.checker.problems.problems.items.len);
@@ -695,17 +702,7 @@ pub fn assertOneTypeError(self: *TestEnv, expected: []const u8) TestEnvError!voi
     const problem = self.checker.problems.problems.items[0];
 
     // Assert the rendered problem matches the expected problem
-    var report_builder = try report_mod.ReportBuilder.init(
-        self.gpa,
-        self.module_env,
-        self.module_env,
-        &self.checker.snapshots,
-        &self.checker.problems,
-        "test",
-        &.{},
-        &self.checker.import_mapping,
-        &self.checker.regions,
-    );
+    var report_builder = try self.initReportBuilder();
     defer report_builder.deinit();
 
     var report = try report_builder.build(problem);
@@ -725,17 +722,7 @@ pub fn assertOneTypeErrorMsg(self: *TestEnv, expected: []const u8) TestEnvError!
     const problem = self.checker.problems.problems.items[0];
 
     // Assert the rendered problem matches the expected problem
-    var report_builder = try report_mod.ReportBuilder.init(
-        self.gpa,
-        self.module_env,
-        self.module_env,
-        &self.checker.snapshots,
-        &self.checker.problems,
-        "test",
-        &.{},
-        &self.checker.import_mapping,
-        &self.checker.regions,
-    );
+    var report_builder = try self.initReportBuilder();
     defer report_builder.deinit();
 
     var report = try report_builder.build(problem);
@@ -756,20 +743,10 @@ pub fn assertTypeErrorMsgs(self: *TestEnv, expected: []const []const u8) TestEnv
 
     try testing.expectEqual(expected.len, self.checker.problems.problems.items.len);
 
-    for (expected, self.checker.problems.problems.items) |expected_msg, problem| {
-        var report_builder = try report_mod.ReportBuilder.init(
-            self.gpa,
-            self.module_env,
-            self.module_env,
-            &self.checker.snapshots,
-            &self.checker.problems,
-            "test",
-            &.{},
-            &self.checker.import_mapping,
-            &self.checker.regions,
-        );
-        defer report_builder.deinit();
+    var report_builder = try self.initReportBuilder();
+    defer report_builder.deinit();
 
+    for (expected, self.checker.problems.problems.items) |expected_msg, problem| {
         var report = try report_builder.build(problem);
         defer report.deinit();
 
@@ -823,17 +800,7 @@ pub fn assertFirstTypeError(self: *TestEnv, expected: []const u8) TestEnvError!v
     const problem = self.checker.problems.problems.items[0];
 
     // Assert the rendered problem matches the expected problem
-    var report_builder = try report_mod.ReportBuilder.init(
-        self.gpa,
-        self.module_env,
-        self.module_env,
-        &self.checker.snapshots,
-        &self.checker.problems,
-        "test",
-        &.{},
-        &self.checker.import_mapping,
-        &self.checker.regions,
-    );
+    var report_builder = try self.initReportBuilder();
     defer report_builder.deinit();
 
     var report = try report_builder.build(problem);
@@ -902,7 +869,7 @@ fn assertNoCanProblems(self: *TestEnv) TestEnvError!void {
 }
 
 fn assertNoTypeProblems(self: *TestEnv) TestEnvError!void {
-    var report_builder = try report_mod.ReportBuilder.init(self.gpa, self.module_env, self.module_env, &self.checker.snapshots, &self.checker.problems, "test", &.{}, &self.checker.import_mapping, &self.checker.regions);
+    var report_builder = try self.initReportBuilder();
     defer report_builder.deinit();
 
     var report_buf = try std.array_list.Managed(u8).initCapacity(self.gpa, 256);

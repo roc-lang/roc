@@ -228,3 +228,36 @@ test "emit function application" {
     try emitter.emitExpr(call_idx);
     try testing.expectEqualStrings("f(42)", emitter.getOutput());
 }
+
+test "emit unary minus over negative typed numeral parenthesizes receiver" {
+    // A negative `e_typed_num_from_numeral` emits as one unit `-5.U8`; under a
+    // unary minus the receiver must be parenthesized so the leading `-` does not
+    // fuse into `--`. The whole receiver (type suffix included) stays inside the
+    // parens, so it reparses to the same single typed-numeral node: `-(-5.U8)`.
+    const module_env = try createTestEnv(test_allocator, "-(-5.U8)");
+    defer destroyTestEnv(test_allocator, module_env);
+
+    const u8_ident = try module_env.insertIdent(base.Ident.for_text("U8"));
+    const typed_idx = try module_env.store.addExpr(.{
+        .e_typed_num_from_numeral = .{ .type_name = u8_ident },
+    }, base.Region.zero());
+
+    try module_env.recordNumeralLiteral(
+        ModuleEnv.nodeIdxFrom(typed_idx),
+        &[_]u8{5}, // before-decimal base-256 digits
+        &[_]u8{}, // after-decimal digits
+        0, // after_decimal_digit_count
+        true, // is_negative
+        false, // is_fractional
+        false, // had_decimal_point
+    );
+
+    const unary_idx = try module_env.store.addExpr(.{
+        .e_unary_minus = CIR.Expr.UnaryMinus.init(typed_idx),
+    }, base.Region.zero());
+
+    var emitter = Emitter.init(test_allocator, module_env);
+    defer emitter.deinit();
+    try emitter.emitExpr(unary_idx);
+    try testing.expectEqualStrings("-(-5.U8)", emitter.getOutput());
+}

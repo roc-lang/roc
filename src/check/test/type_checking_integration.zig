@@ -348,14 +348,10 @@ test "check type - numeral defaulting survivor matrix - every candidate as first
 // candidates before `u8` in `numeral_default_candidates` (src/check/Check.zig:
 // dec, i64, u64, i128, u128, i32, u32, i16, u16, i8 — then u8). Editing that
 // list must update this count to u8's new index.
-// `bench_probe_attempts`/`bench_probe_refuted` are permanent test-support
-// counters in Check.zig; zig's default test runner runs this binary's tests
-// sequentially in-process, so resetting them here cannot race.
+// `bench_probe_attempts`/`bench_probe_refuted` are per-instance debug-only fields
+// on the Check struct, compiled out entirely in release builds. A fresh Check
+// instance starts at 0, so no reset is needed.
 test "check type - numeral defaulting pre-filter refutes provably-failing candidates" {
-    const Check = @import("../Check.zig");
-    Check.bench_probe_attempts = 0;
-    Check.bench_probe_refuted = 0;
-
     const source =
         \\my_u8 : U8
         \\my_u8 = 7
@@ -369,8 +365,10 @@ test "check type - numeral defaulting pre-filter refutes provably-failing candid
     // canonical default).
     try test_env.assertDefType("h", "U8");
 
-    try testing.expectEqual(@as(usize, 1), Check.bench_probe_attempts);
-    try testing.expectEqual(@as(usize, 10), Check.bench_probe_refuted);
+    if (comptime std.debug.runtime_safety) {
+        try testing.expectEqual(@as(usize, 1), test_env.checker.bench_probe_attempts);
+        try testing.expectEqual(@as(usize, 10), test_env.checker.bench_probe_refuted);
+    }
 }
 
 // CANDIDATE-ORDER PIN for `numeral_default_candidates` (src/check/Check.zig):
@@ -2897,6 +2895,91 @@ test "check type - expect" {
         source,
         .{ .pass = .last_def },
         "Dec",
+    );
+}
+
+test "check type - top-level expect suppresses constant match warning" {
+    const source =
+        \\Color : [Blue, Red]
+        \\
+        \\get_favorite_color : Str -> Color
+        \\get_favorite_color = |name| {
+        \\    if name == "Bob" {
+        \\        Blue
+        \\    } else {
+        \\        Red
+        \\    }
+        \\}
+        \\
+        \\expect match get_favorite_color("Bob") {
+        \\    Blue => True
+        \\    _ => False
+        \\}
+    ;
+
+    try checkTypesModule(
+        source,
+        .{ .pass = .{ .def = "get_favorite_color" } },
+        "Str -> Color",
+    );
+}
+
+test "check type - inline expect suppresses constant match warning" {
+    const source =
+        \\Color : [Blue, Red]
+        \\
+        \\get_favorite_color : Str -> Color
+        \\get_favorite_color = |name| {
+        \\    if name == "Bob" {
+        \\        Blue
+        \\    } else {
+        \\        Red
+        \\    }
+        \\}
+        \\
+        \\main = {
+        \\    expect match get_favorite_color("Bob") {
+        \\        Blue => True
+        \\        _ => False
+        \\    }
+        \\    {}
+        \\}
+    ;
+
+    try checkTypesModule(
+        source,
+        .{ .pass = .{ .def = "main" } },
+        "{}",
+    );
+}
+
+test "check type - expect suppression survives annotated local binding" {
+    const source =
+        \\Color : [Blue, Red]
+        \\
+        \\get_favorite_color : Str -> Color
+        \\get_favorite_color = |name| {
+        \\    if name == "Bob" {
+        \\        Blue
+        \\    } else {
+        \\        Red
+        \\    }
+        \\}
+        \\
+        \\expect {
+        \\    is_blue : Bool
+        \\    is_blue = match get_favorite_color("Bob") {
+        \\        Blue => True
+        \\        _ => False
+        \\    }
+        \\    is_blue
+        \\}
+    ;
+
+    try checkTypesModule(
+        source,
+        .{ .pass = .{ .def = "get_favorite_color" } },
+        "Str -> Color",
     );
 }
 
