@@ -3228,6 +3228,13 @@ statements in front of the continuation. This lets `lookup_local` consume the
 same checked binder ids that checking produced; the lowerer never reconstructs
 lexical scope from source syntax or declaration names.
 
+Aggregate expression lowering allocates temporary LIR locals from each checked
+element or field type through the representation table, lowers children in
+source evaluation order, then emits the aggregate-building statement with a
+local span ordered by the committed boxy layout. Tuple construction is a direct
+`assign_struct` over element locals; record and nominal construction use the
+same rule with field-order data from the representation plan.
+
 For every checked function value expression, the boxy lowerer emits an
 `assign_packed_erased_fn`-style LIR statement that creates an erased callable
 payload. The payload stores the function entry and capture bytes. Capture bytes

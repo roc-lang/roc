@@ -461,6 +461,7 @@ const ProcBodyBuilder = struct {
             } }),
             .empty_record => try self.assignZst(target, next),
             .lookup_local => |lookup| try self.assignLocal(target, self.localForPattern(lookup.pattern), next),
+            .tuple => |items| try self.lowerTupleInto(target, items, next),
             .block => |block| blk: {
                 try self.reserveBlockBindings(block.statements);
                 var continuation = try self.lowerExprInto(target, block.final_expr, next);
@@ -474,6 +475,33 @@ const ProcBodyBuilder = struct {
             .lambda => boxyLowerInvariant("nested lambda reached boxy expression lowering before erased callable lowering was emitted"),
             else => boxyLowerInvariant("checked expression form reached boxy body lowering before its LIR lowering was implemented"),
         };
+    }
+
+    fn lowerTupleInto(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        items: []const checked.CheckedExprId,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const field_locals = try self.parent.allocator.alloc(LIR.LocalId, items.len);
+        defer self.parent.allocator.free(field_locals);
+
+        for (items, field_locals) |item, *local| {
+            const expr = self.module.checked_bodies.expr(item);
+            local.* = try self.addFrameLocal(self.workerRuntimeLayoutForType(expr.ty).layoutIdx());
+        }
+
+        var continuation = try self.parent.result.store.addCFStmt(.{ .assign_struct = .{
+            .target = target,
+            .fields = try self.parent.result.store.addLocalSpan(field_locals),
+            .next = next,
+        } });
+        var index = items.len;
+        while (index > 0) {
+            index -= 1;
+            continuation = try self.lowerExprInto(field_locals[index], items[index], continuation);
+        }
+        return continuation;
     }
 
     fn reserveBlockBindings(self: *ProcBodyBuilder, statements: []const checked.CheckedStatementId) Allocator.Error!void {
@@ -1175,6 +1203,119 @@ test "boxy lowerer emits block declaration bindings with checked type layouts" {
     const final_copy = out.lir_result.store.getCFStmt(decl_assign.next).assign_ref;
     try std.testing.expectEqual(decl_assign.target, final_copy.op.local);
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = final_copy.target } }, out.lir_result.store.getCFStmt(final_copy.next));
+}
+
+test "boxy lowerer emits tuple construction in element order" {
+    const gpa = std.testing.allocator;
+
+    var artifact = minimalCheckedArtifact(gpa);
+    defer artifact.canonical_names.deinit();
+    defer artifact.checked_types.deinit(gpa);
+    defer artifact.checked_bodies.deinit(gpa);
+
+    try artifact.checked_types.type_id_pool.appendSlice(gpa, &.{
+        @as(checked.CheckedTypeId, @enumFromInt(0)),
+        @as(checked.CheckedTypeId, @enumFromInt(0)),
+    });
+    try artifact.checked_types.payloads.append(gpa, .{
+        .nominal = builtinNominal(.u64, @enumFromInt(0), .{}),
+    });
+    try artifact.checked_types.payloads.append(gpa, .{
+        .tuple = .{ .start = 0, .len = 2 },
+    });
+    try artifact.checked_types.payloads.append(gpa, .{
+        .function = .{
+            .kind = .pure,
+            .args = .{},
+            .ret = @enumFromInt(1),
+            .needs_instantiation = false,
+        },
+    });
+
+    try artifact.checked_bodies.expr_id_pool.appendSlice(gpa, &.{
+        @as(checked.CheckedExprId, @enumFromInt(2)),
+        @as(checked.CheckedExprId, @enumFromInt(3)),
+    });
+
+    const template_ref = procedureTemplateRef(artifact.key, 0);
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(0),
+        .ty = @enumFromInt(2),
+        .source_region = base.Region.zero(),
+        .data = .{ .lambda = .{ .args = .{}, .body = @enumFromInt(1) } },
+    });
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(1),
+        .ty = @enumFromInt(1),
+        .source_region = base.Region.zero(),
+        .data = .{ .tuple = .{ .start = 0, .len = 2 } },
+    });
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(2),
+        .ty = @enumFromInt(0),
+        .source_region = base.Region.zero(),
+        .data = .{ .num = .{ .value = intValue(1), .kind = .u64 } },
+    });
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(3),
+        .ty = @enumFromInt(0),
+        .source_region = base.Region.zero(),
+        .data = .{ .num = .{ .value = intValue(2), .kind = .u64 } },
+    });
+    try artifact.checked_bodies.bodies.append(gpa, .{
+        .id = @enumFromInt(0),
+        .root_expr = @enumFromInt(0),
+        .owner_template = template_ref,
+    });
+    var templates = [_]checked.CheckedProcedureTemplate{
+        checkedTemplate(template_ref, @enumFromInt(2), @enumFromInt(0)),
+    };
+    artifact.checked_procedure_templates = .{ .templates = &templates };
+
+    const root = checked.RootRequest{
+        .order = 0,
+        .module_idx = 0,
+        .kind = .runtime_entrypoint,
+        .source = .{ .def = @enumFromInt(0) },
+        .checked_type = @enumFromInt(2),
+        .abi = .roc,
+        .exposure = .private,
+        .procedure_template = template_ref,
+    };
+    var plan = try Plan.analyzeProgram(gpa, .{
+        .checked_types = artifact.checked_types.view(),
+        .roots = &.{root},
+    }, .{});
+    defer plan.deinit();
+
+    var out = try run(
+        gpa,
+        .{ .root = .{ .module = &artifact, .roots = undefined } },
+        .{},
+        &plan,
+        .{},
+    );
+    defer out.deinit();
+
+    const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
+    try std.testing.expectEqual(@as(usize, 3), out.lir_result.store.getLocalSpan(proc.frame_locals).len);
+
+    const first = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_literal;
+    switch (first.value) {
+        .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 1), literal.value),
+        else => return error.TestUnexpectedResult,
+    }
+    const second = out.lir_result.store.getCFStmt(first.next).assign_literal;
+    switch (second.value) {
+        .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 2), literal.value),
+        else => return error.TestUnexpectedResult,
+    }
+    const build = out.lir_result.store.getCFStmt(second.next).assign_struct;
+    const fields = out.lir_result.store.getLocalSpan(build.fields);
+    try std.testing.expectEqual(@as(usize, 2), fields.len);
+    try std.testing.expectEqual(first.target, fields[0]);
+    try std.testing.expectEqual(second.target, fields[1]);
+    try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = build.target } }, out.lir_result.store.getCFStmt(build.next));
 }
 
 test "boxy lowerer publishes host wrapper proc for exported roots" {
