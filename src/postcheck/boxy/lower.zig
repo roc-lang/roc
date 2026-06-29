@@ -9536,27 +9536,41 @@ test "boxy lowerer publishes host wrapper proc for exported roots" {
     try artifact.checked_types.payloads.append(gpa, .{
         .nominal = builtinNominal(.u64, @enumFromInt(0), .{}),
     });
+    try artifact.checked_types.type_id_pool.append(gpa, @enumFromInt(0));
     try artifact.checked_types.payloads.append(gpa, .{
         .function = .{
             .kind = .pure,
-            .args = .{},
+            .args = .{ .start = 0, .len = 1 },
             .ret = @enumFromInt(0),
             .needs_instantiation = false,
         },
     });
 
     const template_ref = try namedProcedureTemplateRef(&artifact, 0, "exported_main");
+    try artifact.checked_bodies.pattern_binders.append(gpa, .{
+        .id = @enumFromInt(0),
+        .pattern = @enumFromInt(0),
+        .reassignable = false,
+    });
+    try artifact.checked_bodies.pattern_binder_by_pattern.append(gpa, @enumFromInt(0));
+    try artifact.checked_bodies.pattern_id_pool.append(gpa, @enumFromInt(0));
+    try artifact.checked_bodies.stored_patterns.append(gpa, .{
+        .id = @enumFromInt(0),
+        .ty = @enumFromInt(0),
+        .source_region = base.Region.zero(),
+        .data = .{ .assign = @enumFromInt(0) },
+    });
     try artifact.checked_bodies.stored_exprs.append(gpa, .{
         .id = @enumFromInt(0),
         .ty = @enumFromInt(1),
         .source_region = base.Region.zero(),
-        .data = .{ .lambda = .{ .args = .{}, .body = @enumFromInt(1) } },
+        .data = .{ .lambda = .{ .args = .{ .start = 0, .len = 1 }, .body = @enumFromInt(1) } },
     });
     try artifact.checked_bodies.stored_exprs.append(gpa, .{
         .id = @enumFromInt(1),
         .ty = @enumFromInt(0),
         .source_region = base.Region.zero(),
-        .data = .{ .num = .{ .value = intValue(7), .kind = .u64 } },
+        .data = .{ .lookup_local = .{ .pattern = @enumFromInt(0), .resolved = null } },
     });
     try artifact.checked_bodies.bodies.append(gpa, .{
         .id = @enumFromInt(0),
@@ -9597,12 +9611,25 @@ test "boxy lowerer publishes host wrapper proc for exported roots" {
     try std.testing.expectEqual(@as(usize, 2), out.lir_result.store.proc_specs.items.len);
     const wrapper_id = out.lir_result.root_procs.items[0];
     const wrapper = out.lir_result.store.getProcSpec(wrapper_id);
+    const wrapper_args = out.lir_result.store.getLocalSpan(wrapper.args);
+    try std.testing.expectEqual(@as(usize, 1), wrapper_args.len);
     const call = out.lir_result.store.getCFStmt(wrapper.body orelse return error.TestUnexpectedResult).assign_call;
-    try std.testing.expect(call.args.isEmpty());
+    const call_args = out.lir_result.store.getLocalSpan(call.args);
+    try std.testing.expectEqual(@as(usize, 1), call_args.len);
+    try std.testing.expectEqual(wrapper_args[0], call_args[0]);
     try std.testing.expect(call.proc != wrapper_id);
     try std.testing.expectEqual(@as(@TypeOf(wrapper.ret_layout), .u64), wrapper.ret_layout);
     try std.testing.expectEqualStrings("exported_main", out.lir_result.store.procDebugName(wrapper_id) orelse return error.TestUnexpectedResult);
     try std.testing.expectEqualStrings("exported_main", out.lir_result.store.procDebugName(call.proc) orelse return error.TestUnexpectedResult);
+    const worker = out.lir_result.store.getProcSpec(call.proc);
+    const worker_args = out.lir_result.store.getLocalSpan(worker.args);
+    try std.testing.expectEqual(@as(usize, 1), worker_args.len);
+    const worker_copy = out.lir_result.store.getCFStmt(worker.body orelse return error.TestUnexpectedResult).assign_ref;
+    switch (worker_copy.op) {
+        .local => |local| try std.testing.expectEqual(worker_args[0], local),
+        else => return error.TestUnexpectedResult,
+    }
+    try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = worker_copy.target } }, out.lir_result.store.getCFStmt(worker_copy.next));
     try std.testing.expectEqual(@as(u32, 11), out.lir_result.root_metadata.items[0].order);
     try std.testing.expectEqual(@as(lir_core.RootMetadata.RootExposure, .exported), out.lir_result.root_metadata.items[0].exposure);
 }
