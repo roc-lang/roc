@@ -3259,6 +3259,13 @@ the checked string literal bytes copied into the LIR string store. The target
 local for the surrounding expression is not initialized on that path because the
 path does not continue.
 
+Checked `return` expressions and statements lower to terminal LIR `ret`
+statements. The lowerer validates that the checked return target lambda is the
+current boxy worker lambda, lowers the returned expression into a fresh local
+with the worker return layout, and emits `ret` for that local. It does not jump
+to the surrounding expression continuation, and it does not infer the target
+function from lexical names or source position.
+
 Checked `dbg` and `expect` expressions lower to explicit side statements and a
 unit result. `dbg` lowers its child into a message local, emits LIR `debug`, and
 then assigns the target zst unit value. `expect` lowers its Bool condition into
