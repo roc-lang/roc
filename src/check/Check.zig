@@ -11845,6 +11845,39 @@ fn checkExprIter(self: *Self, root_idx: CIR.Expr.Idx, root_env: *Env, root_expec
                         // `expected` (not the statement-expected used above).
                         try self.check_frame_stack.append(self.gpa, makeEnterFrame(block.final_expr, child_env, block_expected));
                     },
+                    // Leaf kinds: no children to schedule. Just advance to
+                    // `.exit`, where the recursive arm's body runs verbatim and
+                    // the shared epilogue+finish tail completes the frame. The
+                    // self.* checking flags set by `checkEnterPrologue` stay
+                    // intact until `.exit` because no other frame runs between
+                    // this `.enter` and the immediately-following `.exit` (no
+                    // child was pushed).
+                    .e_anno_only,
+                    .e_break,
+                    .e_bytes_literal,
+                    .e_crash,
+                    .e_dec,
+                    .e_dec_small,
+                    .e_ellipsis,
+                    .e_empty_list,
+                    .e_empty_record,
+                    .e_frac_f32,
+                    .e_frac_f64,
+                    .e_hosted_lambda,
+                    .e_num,
+                    .e_lookup_external,
+                    .e_lookup_required,
+                    .e_lookup_local,
+                    .e_num_from_numeral,
+                    .e_runtime_error,
+                    .e_str_segment,
+                    .e_typed_int,
+                    .e_typed_frac,
+                    .e_typed_num_from_numeral,
+                    .e_zero_argument_tag,
+                    => {
+                        frame.step = .exit;
+                    },
                     else => unreachable, // gated by isMigratedKind
                 }
             },
@@ -11948,6 +11981,596 @@ fn checkExprIter(self: *Self, root_idx: CIR.Expr.Idx, root_env: *Env, root_expec
 
                         self.endHoistLexicalScope(bl.hoist_scope);
                     },
+                    // ---- Leaf kinds ----
+                    // Each arm runs the recursive arm's body VERBATIM. Locals
+                    // (`env`, `expr_var`, `expr_region`, `expr_idx`, `expected`)
+                    // are read from the frame's prologue/fields, matching the
+                    // names the recursive body used. `does_fx` stays the frame's
+                    // seeded value (false for leaves) and is applied by the
+                    // shared tail below.
+                    .e_str_segment => {
+                        const env = f.env;
+                        const expr_var = f.prologue.expr_var;
+                        const expr_region = f.prologue.expr_region;
+                        const str_var = try self.freshStr(env, expr_region);
+                        _ = try self.unify(expr_var, str_var, env);
+                    },
+                    .e_bytes_literal => {
+                        const env = f.env;
+                        const expr_var = f.prologue.expr_var;
+                        const expr_region = f.prologue.expr_region;
+                        // Create List(U8) type
+                        const u8_content = try self.mkNumberTypeContent(.u8, env);
+                        const u8_var = try self.freshFromContent(u8_content, env, expr_region);
+                        const list_content = try self.mkListContent(u8_var, env);
+                        try self.unifyWith(expr_var, list_content, env);
+                    },
+                    .e_num => |num| {
+                        const env = f.env;
+                        const expr_var = f.prologue.expr_var;
+                        const expr_region = f.prologue.expr_region;
+                        switch (num.kind) {
+                            .num_unbound, .int_unbound => {
+                                // For unannotated literals, create a flex var with from_numeral constraint
+                                const num_literal_info = switch (num.value.kind) {
+                                    .u128 => types_mod.NumeralInfo.fromU128(@bitCast(num.value.bytes), false, expr_region),
+                                    .i128 => types_mod.NumeralInfo.fromI128(num.value.toI128(), num.value.toI128() < 0, false, expr_region),
+                                };
+
+                                // Create flex var with from_numeral constraint
+                                const flex_var = try self.mkFlexWithFromNumeralConstraint(ModuleEnv.nodeIdxFrom(expr_idx), num_literal_info, env);
+                                _ = try self.unify(expr_var, flex_var, env);
+                            },
+                            .u8 => try self.unifyWith(expr_var, try self.mkNumberTypeContent(.u8, env), env),
+                            .i8 => try self.unifyWith(expr_var, try self.mkNumberTypeContent(.i8, env), env),
+                            .u16 => try self.unifyWith(expr_var, try self.mkNumberTypeContent(.u16, env), env),
+                            .i16 => try self.unifyWith(expr_var, try self.mkNumberTypeContent(.i16, env), env),
+                            .u32 => try self.unifyWith(expr_var, try self.mkNumberTypeContent(.u32, env), env),
+                            .i32 => try self.unifyWith(expr_var, try self.mkNumberTypeContent(.i32, env), env),
+                            .u64 => try self.unifyWith(expr_var, try self.mkNumberTypeContent(.u64, env), env),
+                            .i64 => try self.unifyWith(expr_var, try self.mkNumberTypeContent(.i64, env), env),
+                            .u128 => try self.unifyWith(expr_var, try self.mkNumberTypeContent(.u128, env), env),
+                            .i128 => try self.unifyWith(expr_var, try self.mkNumberTypeContent(.i128, env), env),
+                            .f32 => try self.unifyWith(expr_var, try self.mkNumberTypeContent(.f32, env), env),
+                            .f64 => try self.unifyWith(expr_var, try self.mkNumberTypeContent(.f64, env), env),
+                            .dec => try self.unifyWith(expr_var, try self.mkNumberTypeContent(.dec, env), env),
+                        }
+                    },
+                    .e_num_from_numeral => {
+                        const env = f.env;
+                        const expr_var = f.prologue.expr_var;
+                        const expr_region = f.prologue.expr_region;
+                        const num_literal_info = try self.exactNumeralInfoForExpr(expr_idx, expr_region);
+                        const flex_var = try self.mkFlexWithFromNumeralConstraint(ModuleEnv.nodeIdxFrom(expr_idx), num_literal_info, env);
+                        _ = try self.unify(expr_var, flex_var, env);
+                    },
+                    .e_frac_f32 => |frac| {
+                        const env = f.env;
+                        const expr_var = f.prologue.expr_var;
+                        const expr_region = f.prologue.expr_region;
+                        if (frac.has_suffix) {
+                            try self.unifyWith(expr_var, try self.mkNumberTypeContent(.f32, env), env);
+                        } else {
+                            // Unsuffixed fractional literal - create constrained flex var
+                            var num_literal_info = types_mod.NumeralInfo.fromI128(
+                                @as(i128, @as(u32, @bitCast(frac.value))),
+                                frac.value < 0,
+                                true,
+                                expr_region,
+                            );
+                            num_literal_info.frac_requirements = .{
+                                .fits_in_f32 = true,
+                                .fits_in_dec = CIR.fitsInDec(@as(f64, @floatCast(frac.value))),
+                            };
+                            const flex_var = try self.mkFlexWithFromNumeralConstraint(ModuleEnv.nodeIdxFrom(expr_idx), num_literal_info, env);
+                            _ = try self.unify(expr_var, flex_var, env);
+                        }
+                    },
+                    .e_frac_f64 => |frac| {
+                        const env = f.env;
+                        const expr_var = f.prologue.expr_var;
+                        const expr_region = f.prologue.expr_region;
+                        if (frac.has_suffix) {
+                            try self.unifyWith(expr_var, try self.mkNumberTypeContent(.f64, env), env);
+                        } else {
+                            // Unsuffixed fractional literal - create constrained flex var
+                            var num_literal_info = types_mod.NumeralInfo.fromI128(
+                                @as(i128, @as(u64, @bitCast(frac.value))),
+                                frac.value < 0,
+                                true,
+                                expr_region,
+                            );
+                            num_literal_info.frac_requirements = .{
+                                .fits_in_f32 = CIR.fitsInF32(frac.value),
+                                .fits_in_dec = CIR.fitsInDec(frac.value),
+                            };
+                            const flex_var = try self.mkFlexWithFromNumeralConstraint(ModuleEnv.nodeIdxFrom(expr_idx), num_literal_info, env);
+                            _ = try self.unify(expr_var, flex_var, env);
+                        }
+                    },
+                    .e_dec => |frac| {
+                        const env = f.env;
+                        const expr_var = f.prologue.expr_var;
+                        const expr_region = f.prologue.expr_region;
+                        if (frac.has_suffix) {
+                            const num_literal_info = try self.exactNumeralInfoForExpr(expr_idx, expr_region);
+                            _ = try self.reportInvalidBuiltinFromNumeralInfo(expr_var, .dec, num_literal_info, env);
+                            try self.unifyWith(expr_var, try self.mkNumberTypeContent(.dec, env), env);
+                        } else {
+                            // Unsuffixed Dec literal - create constrained flex var
+                            var num_literal_info = types_mod.NumeralInfo.fromI128(
+                                frac.value.num,
+                                frac.value.num < 0,
+                                true,
+                                expr_region,
+                            );
+                            num_literal_info.frac_requirements = .{
+                                .fits_in_f32 = CIR.fitsInF32(frac.value.toF64()),
+                                .fits_in_dec = true,
+                            };
+                            const flex_var = try self.mkFlexWithFromNumeralConstraint(ModuleEnv.nodeIdxFrom(expr_idx), num_literal_info, env);
+                            _ = try self.unify(expr_var, flex_var, env);
+                        }
+                    },
+                    .e_dec_small => |frac| {
+                        const env = f.env;
+                        const expr_var = f.prologue.expr_var;
+                        const expr_region = f.prologue.expr_region;
+                        if (frac.has_suffix) {
+                            const num_literal_info = try self.exactNumeralInfoForExpr(expr_idx, expr_region);
+                            _ = try self.reportInvalidBuiltinFromNumeralInfo(expr_var, .dec, num_literal_info, env);
+                            try self.unifyWith(expr_var, try self.mkNumberTypeContent(.dec, env), env);
+                        } else {
+                            // Unsuffixed small Dec literal - create constrained flex var
+                            const scaled_value = frac.value.toRocDec().num;
+                            const literal = self.recordedNumeralLiteralForExpr(expr_idx);
+                            const is_fractional = literal.hadDecimalPoint() or frac.value.denominator_power_of_ten != 0;
+                            const literal_value: i128 = if (is_fractional) scaled_value else frac.value.numerator;
+                            var num_literal_info = types_mod.NumeralInfo.fromI128(
+                                literal_value,
+                                literal_value < 0,
+                                is_fractional,
+                                expr_region,
+                            );
+                            const f64_val = frac.value.toF64();
+                            num_literal_info.frac_requirements = .{
+                                .fits_in_f32 = CIR.fitsInF32(f64_val),
+                                .fits_in_dec = true,
+                            };
+                            const flex_var = try self.mkFlexWithFromNumeralConstraint(ModuleEnv.nodeIdxFrom(expr_idx), num_literal_info, env);
+                            _ = try self.unify(expr_var, flex_var, env);
+                        }
+                    },
+                    .e_typed_int => |typed_num| {
+                        const env = f.env;
+                        const expr_var = f.prologue.expr_var;
+                        const expr_region = f.prologue.expr_region;
+                        // Typed integer literal like 123.U64
+                        // Create from_numeral constraint and unify with the explicit type
+                        var num_literal_info = if (self.typedLiteralTargetsBuiltin(expr_idx, .dec))
+                            try self.exactNumeralInfoForExpr(expr_idx, expr_region)
+                        else switch (typed_num.value.kind) {
+                            .u128 => types_mod.NumeralInfo.fromU128(@bitCast(typed_num.value.bytes), false, expr_region),
+                            .i128 => types_mod.NumeralInfo.fromI128(typed_num.value.toI128(), typed_num.value.toI128() < 0, false, expr_region),
+                        };
+                        num_literal_info.explicit_suffix = true;
+
+                        // Create flex var with from_numeral constraint
+                        const flex_var = try self.mkFlexWithFromNumeralConstraint(ModuleEnv.nodeIdxFrom(expr_idx), num_literal_info, env);
+
+                        try self.unifyTypedLiteralWithExplicitType(
+                            flex_var,
+                            expr_idx,
+                            expr_region,
+                            env,
+                        );
+                        if (self.typedLiteralTargetsBuiltin(expr_idx, .dec)) {
+                            _ = try self.reportInvalidBuiltinFromNumeralInfo(flex_var, .dec, num_literal_info, env);
+                        }
+
+                        // Unify expr_var with the flex_var (which is now constrained to the explicit type)
+                        _ = try self.unify(expr_var, flex_var, env);
+                    },
+                    .e_typed_frac => {
+                        const env = f.env;
+                        const expr_var = f.prologue.expr_var;
+                        const expr_region = f.prologue.expr_region;
+                        // Typed fractional literal like 3.14.Dec
+                        var num_literal_info = try self.exactNumeralInfoForExpr(expr_idx, expr_region);
+                        num_literal_info.explicit_suffix = true;
+
+                        // Create flex var with from_numeral constraint
+                        const flex_var = try self.mkFlexWithFromNumeralConstraint(ModuleEnv.nodeIdxFrom(expr_idx), num_literal_info, env);
+
+                        try self.unifyTypedLiteralWithExplicitType(
+                            flex_var,
+                            expr_idx,
+                            expr_region,
+                            env,
+                        );
+                        if (self.typedLiteralTargetsBuiltin(expr_idx, .dec)) {
+                            _ = try self.reportInvalidBuiltinFromNumeralInfo(flex_var, .dec, num_literal_info, env);
+                        }
+
+                        // Unify expr_var with the flex_var (which is now constrained to the explicit type)
+                        _ = try self.unify(expr_var, flex_var, env);
+                    },
+                    .e_typed_num_from_numeral => {
+                        const env = f.env;
+                        const expr_var = f.prologue.expr_var;
+                        const expr_region = f.prologue.expr_region;
+                        var num_literal_info = try self.exactNumeralInfoForExpr(expr_idx, expr_region);
+                        num_literal_info.explicit_suffix = true;
+                        const flex_var = try self.mkFlexWithFromNumeralConstraint(ModuleEnv.nodeIdxFrom(expr_idx), num_literal_info, env);
+
+                        try self.unifyTypedLiteralWithExplicitType(
+                            flex_var,
+                            expr_idx,
+                            expr_region,
+                            env,
+                        );
+                        if (self.typedLiteralTargetsBuiltin(expr_idx, .dec)) {
+                            _ = try self.reportInvalidBuiltinFromNumeralInfo(flex_var, .dec, num_literal_info, env);
+                        }
+
+                        _ = try self.unify(expr_var, flex_var, env);
+                    },
+                    .e_empty_list => {
+                        const env = f.env;
+                        const expr_var = f.prologue.expr_var;
+                        const expr_region = f.prologue.expr_region;
+                        // Create a nominal List with a fresh unbound element type
+                        const elem_var = try self.fresh(env, expr_region);
+                        const list_content = try self.mkListContent(elem_var, env);
+                        try self.unifyWith(expr_var, list_content, env);
+                    },
+                    .e_empty_record => {
+                        const env = f.env;
+                        const expr_var = f.prologue.expr_var;
+                        try self.unifyWith(expr_var, .{ .structure = .empty_record }, env);
+                    },
+                    .e_zero_argument_tag => |e| {
+                        const env = f.env;
+                        const expr_var = f.prologue.expr_var;
+                        const expr_region = f.prologue.expr_region;
+                        const ext_var = try self.fresh(env, expr_region);
+
+                        const tag = try self.types.mkTag(e.name, &.{});
+                        const tag_union_content = try self.types.mkTagUnion(&[_]types_mod.Tag{tag}, ext_var);
+
+                        // Update the expr to point to the new type
+                        try self.unifyWith(expr_var, tag_union_content, env);
+                    },
+                    .e_lookup_local => |lookup| {
+                        // Read scalars into locals BEFORE the body: `checkDef`
+                        // re-enters the iterative driver and may realloc
+                        // `check_frame_stack`, invalidating `f`. The shared tail
+                        // below re-indexes `items[top]`, so it is safe too.
+                        const env = f.env;
+                        const expr_var = f.prologue.expr_var;
+                        blk: {
+                            const pat_var = ModuleEnv.varFrom(lookup.pattern_idx);
+
+                            try self.value_lookup_tracking.append(self.gpa, .{
+                                .expr_idx = expr_idx,
+                                .pattern_idx = lookup.pattern_idx,
+                            });
+
+                            const mb_processing_def = self.top_level_ptrns.get(lookup.pattern_idx);
+                            if (mb_processing_def) |processing_def| {
+                                const referenced_def = self.cir.store.getDef(processing_def.def_idx);
+
+                                switch (processing_def.status) {
+                                    .not_processed => {
+                                        var sub_env = try self.env_pool.acquire();
+                                        errdefer self.env_pool.release(sub_env);
+
+                                        // Push through to top_level
+                                        try sub_env.var_pool.pushRank();
+                                        std.debug.assert(sub_env.rank() == .outermost);
+
+                                        try self.checkDef(processing_def.def_idx, &sub_env);
+
+                                        if (self.defer_generalize) {
+                                            std.debug.assert(self.cycle_root_def != null);
+
+                                            // Cycle detected: store env for merge at cycle root.
+                                            _ = try self.deferred_cycle_envs.append(self.gpa, sub_env);
+
+                                            const def = self.cir.store.getDef(processing_def.def_idx);
+                                            const def_expr_var = ModuleEnv.varFrom(def.expr);
+                                            if (def.annotation != null) {
+                                                // Forward reference to an ANNOTATED member of the
+                                                // recursive group (mutual recursion). Decouple the
+                                                // reference with a flex var and defer a
+                                                // cross-reference constraint to the cycle root,
+                                                // where the target is generalized and instantiated
+                                                // per use-site. Unifying directly with the target's
+                                                // (not-yet-generalized) type would force the two
+                                                // members' rigid type parameters to coincide,
+                                                // producing a spurious `T(k)` != `T(k)`.
+                                                try self.unifyWith(expr_var, .{ .flex = Flex.init() }, env);
+                                                _ = try self.constraints.append(self.gpa, Constraint{ .eql = .{
+                                                    .expected = def_expr_var,
+                                                    .actual = expr_var,
+                                                    .ctx = .{ .recursive_def = .{ .def_name = processing_def.def_name } },
+                                                    .is_cross_reference = true,
+                                                    .recursive_annotated_fn_var = def_expr_var,
+                                                } });
+                                            } else {
+                                                // Unannotated member: the group is inferred together
+                                                // and shares type variables, so link monomorphically.
+                                                // After checkDef, e_closure rank elevation has run,
+                                                // so the closure var is at rank 2 — safe to unify
+                                                // without pulling body vars below the generalization
+                                                // rank.
+                                                _ = try self.unify(expr_var, def_expr_var, env);
+                                            }
+
+                                            break :blk;
+                                        } else {
+                                            std.debug.assert(sub_env.rank() == .outermost);
+                                            self.env_pool.release(sub_env);
+                                        }
+                                    },
+                                    .processing => {
+                                        if (!isFunctionDef(&self.cir.store, self.cir.store.getExpr(referenced_def.expr))) {
+                                            if (self.delayed_dependency_depth == 0) {
+                                                try self.poisonRecursiveNonFunctionProcessingDef(processing_def, expr_idx, env);
+                                            } else {
+                                                // Inside a delayed-dependency context (a non-immediately-
+                                                // invoked lambda body), a reference to a still-in-flight
+                                                // non-function def is a benign forward reference: just link
+                                                // the types, no diagnostic/poisoning (mirrors the recursive arm).
+                                                _ = try self.unify(expr_var, ModuleEnv.varFrom(referenced_def.expr), env);
+                                            }
+                                            break :blk;
+                                        }
+
+                                        // Recursive function reference. We assign the lookup a
+                                        // flex var, then record an equality constraint for
+                                        // later validation at the function-recursion boundary.
+
+                                        // Assert that this def is NOT generalized nor outermost
+                                        std.debug.assert(self.types.resolveVar(pat_var).desc.rank != .generalized);
+
+                                        // Set the expr to be a flex
+                                        try self.unifyWith(expr_var, .{ .flex = Flex.init() }, env);
+
+                                        // A reference to a *different*, ANNOTATED def in the cycle
+                                        // (mutual recursion) is instantiated per use-site at
+                                        // validation time, so the members' rigid type parameters
+                                        // don't clash. A self-reference, or a reference to an
+                                        // unannotated member, stays monomorphic: unannotated
+                                        // mutually-recursive functions are inferred as a group and
+                                        // must share their (not-yet-generalized) type variables.
+                                        const is_cross_reference = (referenced_def.annotation != null) and
+                                            if (self.current_processing_def) |current_def|
+                                                current_def != processing_def.def_idx
+                                            else
+                                                false;
+
+                                        // For a cross-reference, target the callee's expr var
+                                        // rather than its pattern var: at the cycle root the
+                                        // root's pattern var is not yet linked to its generalized
+                                        // type (that def-level unification happens after the body
+                                        // is checked), but every participant's expr var has been
+                                        // generalized by then — so instantiation can find it.
+                                        const constraint_expected = if (is_cross_reference)
+                                            ModuleEnv.varFrom(referenced_def.expr)
+                                        else
+                                            pat_var;
+
+                                        // Write down this constraint for later validation. The
+                                        // annotated body var is recorded only when the referenced
+                                        // def is actually annotated: a literal argument is pinned to
+                                        // an annotated parameter, never to one whose type was merely
+                                        // inferred from the body.
+                                        _ = try self.constraints.append(self.gpa, Constraint{ .eql = .{
+                                            .expected = constraint_expected,
+                                            .actual = expr_var,
+                                            .ctx = .{ .recursive_def = .{ .def_name = processing_def.def_name } },
+                                            .is_cross_reference = is_cross_reference,
+                                            .recursive_annotated_fn_var = if (referenced_def.annotation != null)
+                                                ModuleEnv.varFrom(referenced_def.expr)
+                                            else
+                                                null,
+                                        } });
+
+                                        // Detect mutual recursion through local lookups. If the
+                                        // referenced def is different from the current one, we
+                                        // have a function cycle: current → ... → this_def → ...
+                                        // → current.
+                                        if (self.current_processing_def) |current_def| {
+                                            if (current_def != processing_def.def_idx) {
+                                                if (self.cycle_root_def == null) {
+                                                    // First cycle detection: no prior cycle should be in progress.
+                                                    std.debug.assert(!self.defer_generalize);
+                                                    std.debug.assert(self.deferred_cycle_envs.items.len == 0);
+                                                    std.debug.assert(self.deferred_def_unifications.items.len == 0);
+                                                    self.cycle_root_def = processing_def.def_idx;
+                                                }
+                                                self.defer_generalize = true;
+                                            }
+                                        }
+
+                                        break :blk;
+                                    },
+                                    .processed => {},
+                                }
+                            }
+
+                            // Local block-def recursion. If this lookup targets a local `s_decl`
+                            // function whose body is currently being checked, it's a recursive
+                            // reference (to the def itself, or to an enclosing in-flight def).
+                            // Defer unification — fresh flex now + a pending `local_recursive_refs`
+                            // entry validated after the def generalizes — so we don't unify with
+                            // the not-yet-generalized pattern var, which would lower its rank and
+                            // prevent generalization of the def's rigid type parameters.
+                            //
+                            // A reference to an already-finished sibling local def is NOT in this
+                            // map (removed after it generalizes), so it falls through to the tail
+                            // below and instantiates normally.
+                            if (self.local_processing_ptrns.get(lookup.pattern_idx)) |local_def| {
+                                // The pattern is mid-check, so it must not be generalized yet.
+                                std.debug.assert(self.types.resolveVar(pat_var).desc.rank != .generalized);
+
+                                // Set the expr to be a flex
+                                try self.unifyWith(expr_var, .{ .flex = Flex.init() }, env);
+
+                                // Record for validation once the def's lambda has generalized.
+                                // A dedicated stack, not the shared constraints list (sequential
+                                // scoping makes this a single self/enclosing chain — see the
+                                // `local_recursive_refs` field doc).
+                                try self.local_recursive_refs.append(self.gpa, .{
+                                    .pat_var = pat_var,
+                                    .expr_var = expr_var,
+                                    .def_name = local_def.def_name,
+                                });
+
+                                break :blk;
+                            }
+
+                            const compile_time_known_binding = known: {
+                                if (self.patternIsTopLevel(lookup.pattern_idx)) break :known true;
+                                if (self.hoist_selection_suppressed_depth != 0) {
+                                    if (self.hoist_known_values.get(lookup.pattern_idx)) |known_value| {
+                                        switch (known_value) {
+                                            .pattern_extraction => {
+                                                if (try self.ensureHoistedBindingRoot(lookup.pattern_idx)) break :known true;
+                                            },
+                                            .binding_rhs,
+                                            .selected_root,
+                                            .unavailable_runtime,
+                                            => {},
+                                        }
+                                    }
+                                }
+                                if (self.shouldDeferHoistedBindingSelection() and self.hoistKnownBindingAvailable(lookup.pattern_idx)) {
+                                    try self.hoist_deferred_binding_dependencies.append(self.gpa, lookup.pattern_idx);
+                                    break :known true;
+                                }
+                                if (try self.ensureHoistedBindingRoot(lookup.pattern_idx)) break :known true;
+                                break :known self.markHoistContextualDependencyForLookup(lookup.pattern_idx);
+                            };
+                            if (!compile_time_known_binding) {
+                                self.markCurrentHoistRuntimeDependency();
+                            }
+
+                            // Instantiate if generalized, otherwise just use the pattern var
+                            const resolved_pat = self.types.resolveVar(pat_var);
+                            if (resolved_pat.desc.rank == Rank.generalized) {
+                                const instantiated = try self.instantiateVar(pat_var, env, .use_last_var);
+                                _ = try self.unify(expr_var, instantiated, env);
+                            } else {
+                                _ = try self.unify(expr_var, pat_var, env);
+                            }
+                        }
+                    },
+                    .e_lookup_external => |ext| {
+                        const env = f.env;
+                        const expr_var = f.prologue.expr_var;
+                        const expr_region = f.prologue.expr_region;
+                        // With WaitingForDependencies phase, dependencies are guaranteed to be Done
+                        // before canonicalization, so target_node_idx is always valid.
+                        if (try self.resolveVarFromExternal(ext.module_idx, ext.target_node_idx)) |ext_ref| {
+                            const ext_instantiated_var = try self.instantiateVar(
+                                ext_ref.local_var,
+                                env,
+                                .{ .explicit = expr_region },
+                            );
+                            _ = try self.unify(expr_var, ext_instantiated_var, env);
+                        } else {
+                            try self.unifyWith(expr_var, .err, env);
+                        }
+                    },
+                    .e_lookup_required => |req| {
+                        const env = f.env;
+                        const expr_var = f.prologue.expr_var;
+                        const expr_region = f.prologue.expr_region;
+                        self.markCurrentHoistRuntimeDependency();
+                        // Look up the type from the platform's requires clause
+                        const requires_items = self.cir.requires_types.items.items;
+                        const idx = req.requires_idx.toU32();
+                        if (idx < requires_items.len) {
+                            const required_type = requires_items[idx];
+                            const type_var = ModuleEnv.varFrom(required_type.type_anno);
+                            const instantiated_var = try self.instantiateVar(
+                                type_var,
+                                env,
+                                .{ .explicit = expr_region },
+                            );
+                            _ = try self.unify(expr_var, instantiated_var, env);
+                        } else {
+                            try self.unifyWith(expr_var, .err, env);
+                        }
+                    },
+                    .e_crash => {
+                        const env = f.env;
+                        const expr_var = f.prologue.expr_var;
+                        try self.unifyWith(expr_var, .{ .flex = Flex.init() }, env);
+                    },
+                    .e_ellipsis => {
+                        const env = f.env;
+                        const expr_var = f.prologue.expr_var;
+                        try self.unifyWith(expr_var, .{ .flex = Flex.init() }, env);
+                    },
+                    .e_anno_only => |anno| {
+                        const env = f.env;
+                        const expr_var = f.prologue.expr_var;
+                        const expr_region = f.prologue.expr_region;
+                        const expected = f.expected;
+                        if (expected.annotation != null and
+                            can.BuiltinLowLevel.isBuiltinModule(self.cir) and
+                            can.BuiltinLowLevel.isIntrinsicAnnotation(self.cir, anno.ident))
+                        {
+                            // Builtin.roc has a small explicit set of compiler-owned intrinsic
+                            // wrappers that post-check lowering handles from checked data.
+                        } else {
+                            _ = try self.problems.appendProblem(self.gpa, .{ .annotation_only_value = .{
+                                .region = if (expected.annotation) |annotation_idx|
+                                    self.cir.store.getAnnotationRegion(annotation_idx)
+                                else
+                                    expr_region,
+                            } });
+                            try self.unifyWith(expr_var, .err, env);
+                        }
+                    },
+                    .e_break => {
+                        // Nothing to do. `break` diverges, so this expression can unify with
+                        // any surrounding expected type.
+                    },
+                    .e_hosted_lambda => |lambda| {
+                        const env = f.env;
+                        const expr_var = f.prologue.expr_var;
+                        const expected = f.expected;
+                        self.markCurrentHoistObservableEffect();
+                        // Record the parameter span for the end-of-check pinnable
+                        // collection (see `checked_lambda_params`).
+                        try self.checked_lambda_params.append(self.gpa, lambda.args);
+
+                        // For hosted lambda expressions, the type comes from the annotation.
+                        // This is similar to e_anno_only - the implementation is provided by the host.
+                        if (expected.annotation) |annotation_idx| {
+                            const annotation_var = ModuleEnv.varFrom(annotation_idx);
+                            if (try self.varContainsUnboxedFunctionInHostedSignature(annotation_var)) {
+                                const region = self.cir.store.getAnnotationRegion(annotation_idx);
+                                _ = try self.problems.appendProblem(self.gpa, .{ .hosted_unboxed_function = .{
+                                    .region = region,
+                                } });
+                            }
+                            // The expr will be unified with the expected type below
+                            // expr_var is a flex var by default, so no action is need here
+                        } else {
+                            // This shouldn't happen since hosted lambdas always have annotations
+                            try self.unifyWith(expr_var, .err, env);
+                        }
+                    },
+                    .e_runtime_error => {
+                        const env = f.env;
+                        const expr_var = f.prologue.expr_var;
+                        try self.unifyWith(expr_var, .err, env);
+                    },
                     else => unreachable, // gated by isMigratedKind
                 }
                 const does_fx = try self.checkExitEpilogue(
@@ -11982,6 +12605,34 @@ fn isMigratedKind(expr: CIR.Expr) bool {
     return switch (expr) {
         .e_tuple_access => true,
         .e_block => true,
+        // Leaf kinds: no child checkExpr scheduled; body runs verbatim in
+        // `.exit`. `e_lookup_local` re-enters the driver via `checkDef`, but
+        // that re-entry is a self-contained traversal (its own frame_base), so
+        // it is still a leaf w.r.t. this frame's work stack.
+        .e_anno_only,
+        .e_break,
+        .e_bytes_literal,
+        .e_crash,
+        .e_dec,
+        .e_dec_small,
+        .e_ellipsis,
+        .e_empty_list,
+        .e_empty_record,
+        .e_frac_f32,
+        .e_frac_f64,
+        .e_hosted_lambda,
+        .e_num,
+        .e_lookup_external,
+        .e_lookup_required,
+        .e_lookup_local,
+        .e_num_from_numeral,
+        .e_runtime_error,
+        .e_str_segment,
+        .e_typed_int,
+        .e_typed_frac,
+        .e_typed_num_from_numeral,
+        .e_zero_argument_tag,
+        => true,
         else => false,
     };
 }

@@ -73,6 +73,74 @@ test "differential: deeply nested blocks match across recursive/iterative" {
     );
 }
 
+test "differential: leaf kinds — int/dec/frac/str/empty literals" {
+    // Exercises e_num (typed via annotation), e_dec_small, e_frac_f64,
+    // e_str_segment, e_empty_list, e_empty_record, e_bytes_literal.
+    try expectIterMatchesRecursive(
+        \\main! = |_args| {
+        \\    n : U64
+        \\    n = 42
+        \\    d = 3.14
+        \\    f = 1.5f64
+        \\    s = "hello"
+        \\    el = []
+        \\    er = {}
+        \\    by = "abc".Utf8
+        \\    (n, d, f, s, el, er, by)
+        \\}
+    );
+}
+
+test "differential: leaf kinds — typed/suffixed numeric literals" {
+    // Exercises e_typed_int, e_typed_frac, e_num with suffix, e_dec.
+    try expectIterMatchesRecursive(
+        \\main! = |_args| {
+        \\    a = 100u8
+        \\    b = 7i32
+        \\    c = 2.5dec
+        \\    d = 9.0f32
+        \\    (a, b, c, d)
+        \\}
+    );
+}
+
+test "differential: leaf kinds — local lookups and zero-arg tag" {
+    // Exercises e_lookup_local (both the not-processed top-level path via the
+    // reference to `helper`, and ordinary local binding lookups) and
+    // e_zero_argument_tag.
+    try expectIterMatchesRecursive(
+        \\helper = 5
+        \\
+        \\main! = |_args| {
+        \\    x = helper
+        \\    y = x
+        \\    tag = None
+        \\    (y, tag)
+        \\}
+    );
+}
+
+test "differential: leaf kinds — crash and ellipsis diverging exprs" {
+    // Exercises e_crash and e_ellipsis (both produce a free flex var).
+    try expectIterMatchesRecursive(
+        \\foo = |_x| crash "boom"
+        \\
+        \\bar = |_x| ...
+        \\
+        \\main! = |_args| (foo, bar)
+    );
+}
+
+test "differential: leaf kinds — recursive local lookup (processing path)" {
+    // Exercises e_lookup_local's `.processing` recursive-function path.
+    try expectIterMatchesRecursive(
+        \\countdown : U64 -> U64
+        \\countdown = |n| if n == 0 0 else countdown(n - 1)
+        \\
+        \\main! = |_args| countdown(5)
+    );
+}
+
 test "differential: blocks with statements and nested-block bindings match" {
     // Exercises the statement loop (s_decl with a block RHS) plus a final-expr
     // block, so both the statement path and the spine are covered.
