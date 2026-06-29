@@ -3194,6 +3194,16 @@ dictionary arguments required by the checked type and dispatch plans. Hidden
 arguments are ordinary LIR locals in private procs. They are not part of root
 metadata and are never exposed to the host ABI.
 
+Before emitting worker bodies, the boxy lowerer resolves every worker plan to a
+checked procedure source. A worker source is one of the explicit authorities
+recorded in checking: a checked procedure template, a top-level procedure
+binding, or a procedure-use template. Resolution follows those references by
+artifact key and table id, then records the checked procedure template and
+checked body in a lowerer-local resolved-worker table. A runtime boxy worker
+must resolve to a checked body; lifted, synthetic, callable-eval, intrinsic, and
+compile-time entry-wrapper templates are not compatibility fallbacks for this
+path.
+
 For every checked function value expression, the boxy lowerer emits an
 `assign_packed_erased_fn`-style LIR statement that creates an erased callable
 payload. The payload stores the function entry and capture bytes. Capture bytes

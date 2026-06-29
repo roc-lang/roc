@@ -47,6 +47,9 @@ pub fn run(
     var layout_plan = try Layouts.build(allocator, plan, &result.layouts, .{});
     defer layout_plan.deinit();
 
+    var resolved_workers = try ResolvedWorkers.init(allocator, modules, plan);
+    defer resolved_workers.deinit();
+
     if (plan.roots.items.len != 0) {
         boxyLowerInvariant("boxy checked-to-LIR lowerer does not yet implement checked procedure lowering");
     }
@@ -56,6 +59,158 @@ pub fn run(
         .lir_result = result,
         .runtime_schemas = RuntimeSchemaStore.init(allocator),
     };
+}
+
+const ProcedureModuleView = struct {
+    key: checked.CheckedModuleArtifactKey,
+    checked_bodies: checked.CheckedBodyStoreView,
+    checked_procedure_templates: *const checked.CheckedProcedureTemplateTable,
+    top_level_procedure_bindings: *const checked.TopLevelProcedureBindingTable,
+};
+
+const ResolvedWorker = struct {
+    worker: Plan.WorkerPlanId,
+    module_key: checked.CheckedModuleArtifactKey,
+    template_ref: names.ProcedureTemplateRef,
+    template: checked.CheckedProcedureTemplate,
+    body: checked.CheckedBody,
+};
+
+const ResolvedWorkers = struct {
+    allocator: Allocator,
+    items: []ResolvedWorker,
+
+    fn init(
+        allocator: Allocator,
+        modules: Common.CheckedModules,
+        plan: *const Plan.ProgramPlan,
+    ) Allocator.Error!ResolvedWorkers {
+        const items = try allocator.alloc(ResolvedWorker, plan.workers.items.len);
+        errdefer allocator.free(items);
+
+        for (plan.workers.items, items) |worker, *resolved| {
+            resolved.* = resolveWorkerProcedure(modules, worker);
+        }
+
+        return .{
+            .allocator = allocator,
+            .items = items,
+        };
+    }
+
+    fn deinit(self: *ResolvedWorkers) void {
+        self.allocator.free(self.items);
+        self.* = undefined;
+    }
+};
+
+fn resolveWorkerProcedure(modules: Common.CheckedModules, worker: Plan.WorkerPlan) ResolvedWorker {
+    return switch (worker.source) {
+        .procedure_template => |template| resolveProcedureTemplate(modules, worker.id, template),
+        .procedure_binding => |binding| resolveProcedureBinding(modules, worker.id, rootProcedureModule(modules), binding),
+        .procedure_use => |use| resolveProcedureUse(modules, worker.id, use),
+    };
+}
+
+fn resolveProcedureUse(
+    modules: Common.CheckedModules,
+    worker: Plan.WorkerPlanId,
+    use: checked.ProcedureUseTemplate,
+) ResolvedWorker {
+    return switch (use.binding) {
+        .top_level => |top_level| resolveProcedureBinding(
+            modules,
+            worker,
+            procedureModuleByKey(modules, top_level.artifact),
+            top_level.binding,
+        ),
+        .platform_required => |required| resolveProcedureBinding(
+            modules,
+            worker,
+            procedureModuleByKey(modules, required.app_value.artifact),
+            required.procedure_binding,
+        ),
+        .imported => boxyLowerInvariant("imported procedure use reached boxy worker resolution before imported body lowering is implemented"),
+        .hosted => boxyLowerInvariant("hosted procedure use reached boxy worker resolution before hosted wrapper lowering is implemented"),
+    };
+}
+
+fn resolveProcedureBinding(
+    modules: Common.CheckedModules,
+    worker: Plan.WorkerPlanId,
+    module: ProcedureModuleView,
+    binding_ref: checked.TopLevelProcedureBindingRef,
+) ResolvedWorker {
+    const binding = module.top_level_procedure_bindings.get(binding_ref);
+    return switch (binding.body) {
+        .direct_template => |direct| switch (direct.template) {
+            .checked => |template| resolveProcedureTemplate(modules, worker, template),
+            .lifted,
+            .synthetic,
+            => boxyLowerInvariant("non-checked procedure template reached boxy worker resolution"),
+        },
+        .callable_eval_template => boxyLowerInvariant("callable eval procedure binding reached runtime boxy worker resolution"),
+    };
+}
+
+fn resolveProcedureTemplate(
+    modules: Common.CheckedModules,
+    worker: Plan.WorkerPlanId,
+    template_ref: names.ProcedureTemplateRef,
+) ResolvedWorker {
+    const module = procedureModuleByArtifactRef(modules, template_ref.artifact);
+    const template = module.checked_procedure_templates.get(template_ref.template);
+    const body_id = switch (template.body) {
+        .checked_body => |body| body,
+        .intrinsic_wrapper => boxyLowerInvariant("intrinsic wrapper reached boxy checked-body worker resolution"),
+        .entry_wrapper => boxyLowerInvariant("compile-time entry wrapper reached runtime boxy worker resolution"),
+    };
+
+    return .{
+        .worker = worker,
+        .module_key = module.key,
+        .template_ref = template_ref,
+        .template = template,
+        .body = module.checked_bodies.body(body_id),
+    };
+}
+
+fn rootProcedureModule(modules: Common.CheckedModules) ProcedureModuleView {
+    const artifact = modules.root.module;
+    return .{
+        .key = artifact.key,
+        .checked_bodies = artifact.checked_bodies.view(),
+        .checked_procedure_templates = &artifact.checked_procedure_templates,
+        .top_level_procedure_bindings = &artifact.top_level_procedure_bindings,
+    };
+}
+
+fn procedureModuleFromImport(import: checked.ImportedModuleView) ProcedureModuleView {
+    return .{
+        .key = import.key,
+        .checked_bodies = import.checked_bodies,
+        .checked_procedure_templates = import.checked_procedure_templates,
+        .top_level_procedure_bindings = import.top_level_procedure_bindings,
+    };
+}
+
+fn procedureModuleByArtifactRef(modules: Common.CheckedModules, artifact: names.ArtifactRef) ProcedureModuleView {
+    return procedureModuleByKey(modules, .{ .bytes = artifact.bytes });
+}
+
+fn procedureModuleByKey(modules: Common.CheckedModules, key: checked.CheckedModuleArtifactKey) ProcedureModuleView {
+    if (artifactKeyEqual(modules.root.module.key, key)) return rootProcedureModule(modules);
+    for (modules.imports) |import| {
+        if (artifactKeyEqual(import.key, key)) return procedureModuleFromImport(import);
+    }
+    for (modules.root.relation_modules) |relation| {
+        if (artifactKeyEqual(relation.key, key)) return procedureModuleFromImport(relation);
+    }
+    boxyLowerInvariant("boxy worker referenced a checked artifact that was not available to lowering");
+}
+
+fn artifactKeyEqual(a: checked.CheckedModuleArtifactKey, b: checked.CheckedModuleArtifactKey) bool {
+    return std.mem.eql(u8, a.bytes[0..], b.bytes[0..]);
 }
 
 fn appendRequestedLayouts(
@@ -324,6 +479,94 @@ test "boxy lowerer returns an empty LIR program for an empty plan" {
     try std.testing.expectEqual(@as(usize, 0), out.lir_result.root_procs.items.len);
 }
 
+test "boxy lowerer resolves procedure-template workers to checked bodies" {
+    const gpa = std.testing.allocator;
+
+    var artifact = minimalCheckedArtifact(gpa);
+    defer artifact.canonical_names.deinit();
+    defer artifact.checked_types.deinit(gpa);
+    defer artifact.checked_bodies.deinit(gpa);
+
+    const template_ref = procedureTemplateRef(artifact.key, 0);
+    try artifact.checked_bodies.bodies.append(gpa, .{
+        .id = @enumFromInt(0),
+        .root_expr = @enumFromInt(3),
+        .owner_template = template_ref,
+    });
+    var templates = [_]checked.CheckedProcedureTemplate{
+        checkedTemplate(template_ref, @enumFromInt(9), @enumFromInt(0)),
+    };
+    artifact.checked_procedure_templates = .{ .templates = &templates };
+
+    var plan = Plan.ProgramPlan.init(gpa);
+    defer plan.deinit();
+    try plan.workers.append(gpa, .{
+        .id = @enumFromInt(0),
+        .request = dummyRootRequest(),
+        .source = .{ .procedure_template = template_ref },
+        .checked_type = @enumFromInt(9),
+        .rep = @enumFromInt(0),
+    });
+
+    var resolved = try ResolvedWorkers.init(gpa, .{ .root = .{ .module = &artifact, .roots = undefined } }, &plan);
+    defer resolved.deinit();
+
+    try std.testing.expectEqual(@as(usize, 1), resolved.items.len);
+    try std.testing.expectEqual(@as(Plan.WorkerPlanId, @enumFromInt(0)), resolved.items[0].worker);
+    try std.testing.expect(names.procedureTemplateRefEql(template_ref, resolved.items[0].template_ref));
+    try std.testing.expectEqual(@as(checked.CheckedBodyId, @enumFromInt(0)), resolved.items[0].body.id);
+    try std.testing.expectEqual(@as(checked.CheckedExprId, @enumFromInt(3)), resolved.items[0].body.root_expr);
+}
+
+test "boxy lowerer resolves top-level direct bindings to checked bodies" {
+    const gpa = std.testing.allocator;
+
+    var artifact = minimalCheckedArtifact(gpa);
+    defer artifact.canonical_names.deinit();
+    defer artifact.checked_types.deinit(gpa);
+    defer artifact.checked_bodies.deinit(gpa);
+
+    const template_ref = procedureTemplateRef(artifact.key, 0);
+    try artifact.checked_bodies.bodies.append(gpa, .{
+        .id = @enumFromInt(0),
+        .root_expr = @enumFromInt(5),
+        .owner_template = template_ref,
+    });
+    var templates = [_]checked.CheckedProcedureTemplate{
+        checkedTemplate(template_ref, @enumFromInt(7), @enumFromInt(0)),
+    };
+    artifact.checked_procedure_templates = .{ .templates = &templates };
+
+    var bindings = [_]checked.TopLevelProcedureBinding{
+        .{
+            .source_scheme = typeSchemeKey(1),
+            .body = .{ .direct_template = .{
+                .proc_value = procedureValueRef(template_ref),
+                .template = .{ .checked = template_ref },
+            } },
+        },
+    };
+    artifact.top_level_procedure_bindings = .{ .bindings = &bindings };
+
+    var plan = Plan.ProgramPlan.init(gpa);
+    defer plan.deinit();
+    try plan.workers.append(gpa, .{
+        .id = @enumFromInt(0),
+        .request = dummyRootRequest(),
+        .source = .{ .procedure_binding = @enumFromInt(0) },
+        .checked_type = @enumFromInt(7),
+        .rep = @enumFromInt(0),
+    });
+
+    var resolved = try ResolvedWorkers.init(gpa, .{ .root = .{ .module = &artifact, .roots = undefined } }, &plan);
+    defer resolved.deinit();
+
+    try std.testing.expectEqual(@as(usize, 1), resolved.items.len);
+    try std.testing.expect(names.procedureTemplateRefEql(template_ref, resolved.items[0].template_ref));
+    try std.testing.expectEqual(@as(checked.CheckedBodyId, @enumFromInt(0)), resolved.items[0].body.id);
+    try std.testing.expectEqual(@as(checked.CheckedExprId, @enumFromInt(5)), resolved.items[0].body.root_expr);
+}
+
 test "boxy lowerer emits requested layout metadata for layout-only plans" {
     const gpa = std.testing.allocator;
 
@@ -471,4 +714,56 @@ fn typeKey(byte: u8) names.TypeDigest {
     var key = names.TypeDigest{};
     key.bytes[0] = byte;
     return key;
+}
+
+fn typeSchemeKey(byte: u8) names.CanonicalTypeSchemeKey {
+    var key = names.CanonicalTypeSchemeKey{};
+    key.bytes[0] = byte;
+    return key;
+}
+
+fn procedureTemplateRef(key: checked.CheckedModuleArtifactKey, raw_template_id: u32) names.ProcedureTemplateRef {
+    return .{
+        .artifact = .{ .bytes = key.bytes },
+        .proc_base = @enumFromInt(raw_template_id),
+        .template = @enumFromInt(raw_template_id),
+    };
+}
+
+fn procedureValueRef(template: names.ProcedureTemplateRef) names.ProcedureValueRef {
+    return .{
+        .artifact = template.artifact,
+        .proc_base = template.proc_base,
+    };
+}
+
+fn checkedTemplate(
+    template_ref: names.ProcedureTemplateRef,
+    checked_fn_root: checked.CheckedTypeId,
+    body: checked.CheckedBodyId,
+) checked.CheckedProcedureTemplate {
+    return .{
+        .proc_base = template_ref.proc_base,
+        .template_id = template_ref.template,
+        .body = .{ .checked_body = body },
+        .checked_fn_scheme = typeSchemeKey(9),
+        .checked_fn_root = checked_fn_root,
+        .static_dispatch_plans = .{},
+        .resolved_value_refs = .{},
+        .top_level_value_uses = .{},
+        .nested_proc_sites = .{},
+        .target = .roc,
+    };
+}
+
+fn dummyRootRequest() checked.RootRequest {
+    return .{
+        .order = 0,
+        .module_idx = 0,
+        .kind = .runtime_entrypoint,
+        .source = .{ .def = @enumFromInt(0) },
+        .checked_type = @enumFromInt(0),
+        .abi = .roc,
+        .exposure = .private,
+    };
 }
