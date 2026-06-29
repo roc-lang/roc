@@ -1235,7 +1235,7 @@ const ProcBodyBuilder = struct {
             },
             .underscore => on_match,
             .list => |list| try self.lowerListPatternThen(list, source, on_match, miss, remaps),
-            .str_interpolation => boxyLowerInvariant("string interpolation pattern reached boxy match lowering before string-pattern LIR support"),
+            .str_interpolation => |str| try self.lowerStrPatternThen(str, source, on_match, miss),
             .runtime_error,
             .pending,
             => boxyLowerInvariant("runtime-error or pending checked pattern reached boxy match lowering"),
@@ -1396,6 +1396,66 @@ const ProcBodyBuilder = struct {
         head = try self.assignU64Literal(required, fixed_count, head);
         head = try self.assignUnaryLowLevel(len_local, .list_len, source, head);
         return head;
+    }
+
+    fn lowerStrPatternThen(
+        self: *ProcBodyBuilder,
+        str: anytype,
+        source: LIR.LocalId,
+        on_match: LIR.CFStmtId,
+        miss: ?PatternMiss,
+    ) Allocator.Error!LIR.CFStmtId {
+        const arm = try self.lowerStrPatternArm(str, on_match);
+        return try self.parent.result.store.addCFStmt(.{ .str_match = .{
+            .source = source,
+            .prefix = arm.prefix,
+            .steps = arm.steps,
+            .end = arm.end,
+            .on_match = arm.on_match,
+            .on_miss = try self.patternMissJump(miss),
+        } });
+    }
+
+    fn lowerStrPatternArm(
+        self: *ProcBodyBuilder,
+        str: anytype,
+        on_match: LIR.CFStmtId,
+    ) Allocator.Error!LIR.StrMatchArm {
+        const lir_steps = try self.parent.allocator.alloc(LIR.StrMatchStep, str.steps.len);
+        defer self.parent.allocator.free(lir_steps);
+
+        for (str.steps, lir_steps) |input_step, *lir_step| {
+            lir_step.* = .{
+                .capture = if (input_step.capture) |capture| blk: {
+                    const pattern = self.module.checked_bodies.pattern(capture);
+                    break :blk .{ .view = try self.addFrameLocal(self.workerRuntimeLayoutForType(pattern.ty).layoutIdx()) };
+                } else .discard,
+                .delimiter = try self.lirStrLiteral(input_step.delimiter),
+            };
+        }
+
+        var match_body = on_match;
+        var index = str.steps.len;
+        while (index > 0) {
+            index -= 1;
+            if (str.steps[index].capture) |capture| {
+                const capture_local = switch (lir_steps[index].capture) {
+                    .view => |local| local,
+                    .discard => boxyLowerInvariant("string-pattern capture step lowered without a capture local"),
+                };
+                match_body = try self.bindPatternFromLocal(capture, capture_local, match_body);
+            }
+        }
+
+        return .{
+            .prefix = try self.lirStrLiteral(str.prefix),
+            .steps = try self.parent.result.store.addStrMatchSteps(lir_steps),
+            .end = switch (str.end) {
+                .exact => .exact,
+                .tail => .tail,
+            },
+            .on_match = match_body,
+        };
     }
 
     fn lowerFieldPatternThen(
@@ -3694,6 +3754,14 @@ const ProcBodyBuilder = struct {
     ) Allocator.Error!LIR.CFStmtId {
         const text = self.module.checked_bodies.stringLiteral(literal_id);
         return try self.assignStringBytesLiteral(target, text, next);
+    }
+
+    fn lirStrLiteral(
+        self: *ProcBodyBuilder,
+        literal_id: checked.CheckedStringLiteralId,
+    ) Allocator.Error!LIR.StrLiteral {
+        const text = self.module.checked_bodies.stringLiteral(literal_id);
+        return try self.parent.result.store.insertStringView(text, 0, @intCast(text.len));
     }
 
     fn assignStringBytesLiteral(
@@ -6511,6 +6579,164 @@ test "boxy lowerer emits checked list match patterns as length checks and elemen
 
     const bind = out.lir_result.store.getCFStmt(item.next).assign_ref;
     try std.testing.expectEqual(item.target, bind.op.local);
+    const branch_result = out.lir_result.store.getCFStmt(bind.next).assign_ref;
+    try std.testing.expectEqual(bind.target, branch_result.op.local);
+    try std.testing.expectEqual(LIR.CFStmt{ .jump = .{ .target = outer_join.id } }, out.lir_result.store.getCFStmt(branch_result.next));
+}
+
+test "boxy lowerer emits checked string interpolation match patterns" {
+    const gpa = std.testing.allocator;
+
+    var artifact = minimalCheckedArtifact(gpa);
+    defer artifact.canonical_names.deinit();
+    defer artifact.checked_types.deinit(gpa);
+    defer artifact.checked_bodies.deinit(gpa);
+
+    try artifact.checked_types.payloads.append(gpa, .{
+        .nominal = builtinNominal(.str, @enumFromInt(0), .{}),
+    });
+    try artifact.checked_types.payloads.append(gpa, .{
+        .function = .{
+            .kind = .pure,
+            .args = .{},
+            .ret = @enumFromInt(0),
+            .needs_instantiation = false,
+        },
+    });
+
+    try artifact.checked_bodies.string_bytes.appendSlice(gpa, "preMIDpostprepost");
+    try artifact.checked_bodies.string_ranges.appendSlice(gpa, &.{
+        .{ .start = 0, .len = 10 },
+        .{ .start = 10, .len = 3 },
+        .{ .start = 13, .len = 4 },
+    });
+
+    try artifact.checked_bodies.pattern_binders.append(gpa, .{
+        .id = @enumFromInt(0),
+        .pattern = @enumFromInt(1),
+        .reassignable = false,
+    });
+    try artifact.checked_bodies.pattern_binder_by_pattern.appendSlice(gpa, &.{
+        null,
+        @as(?checked.PatternBinderId, @enumFromInt(0)),
+    });
+    try artifact.checked_bodies.str_pattern_step_pool.append(gpa, .{
+        .capture = @enumFromInt(1),
+        .delimiter = @enumFromInt(2),
+    });
+    try artifact.checked_bodies.stored_patterns.append(gpa, .{
+        .id = @enumFromInt(0),
+        .ty = @enumFromInt(0),
+        .source_region = base.Region.zero(),
+        .data = .{ .str_interpolation = .{
+            .prefix = @enumFromInt(1),
+            .steps = .{ .start = 0, .len = 1 },
+            .end = .exact,
+        } },
+    });
+    try artifact.checked_bodies.stored_patterns.append(gpa, .{
+        .id = @enumFromInt(1),
+        .ty = @enumFromInt(0),
+        .source_region = base.Region.zero(),
+        .data = .{ .assign = @enumFromInt(0) },
+    });
+    try artifact.checked_bodies.match_branch_pattern_pool.append(gpa, .{
+        .pattern = @enumFromInt(0),
+        .degenerate = false,
+    });
+    try artifact.checked_bodies.match_branch_pool.append(gpa, .{
+        .pt_start = 0,
+        .pt_len = 1,
+        .value = @enumFromInt(3),
+        .guard = null,
+    });
+
+    const template_ref = procedureTemplateRef(artifact.key, 0);
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(0),
+        .ty = @enumFromInt(1),
+        .source_region = base.Region.zero(),
+        .data = .{ .lambda = .{ .args = .{}, .body = @enumFromInt(1) } },
+    });
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(1),
+        .ty = @enumFromInt(0),
+        .source_region = base.Region.zero(),
+        .data = .{ .match_ = .{
+            .cond = @enumFromInt(2),
+            .branches = .{ .start = 0, .len = 1 },
+            .is_try_suffix = false,
+            .skip_exhaustiveness = false,
+            .comptime_site_kind = .match,
+        } },
+    });
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(2),
+        .ty = @enumFromInt(0),
+        .source_region = base.Region.zero(),
+        .data = .{ .str_segment = @enumFromInt(0) },
+    });
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(3),
+        .ty = @enumFromInt(0),
+        .source_region = base.Region.zero(),
+        .data = .{ .lookup_local = .{ .pattern = @enumFromInt(1), .resolved = null } },
+    });
+    try artifact.checked_bodies.bodies.append(gpa, .{
+        .id = @enumFromInt(0),
+        .root_expr = @enumFromInt(0),
+        .owner_template = template_ref,
+    });
+    var templates = [_]checked.CheckedProcedureTemplate{
+        checkedTemplate(template_ref, @enumFromInt(1), @enumFromInt(0)),
+    };
+    artifact.checked_procedure_templates = .{ .templates = &templates };
+
+    const root = checked.RootRequest{
+        .order = 0,
+        .module_idx = 0,
+        .kind = .runtime_entrypoint,
+        .source = .{ .def = @enumFromInt(0) },
+        .checked_type = @enumFromInt(1),
+        .abi = .roc,
+        .exposure = .private,
+        .procedure_template = template_ref,
+    };
+    var plan = try Plan.analyzeProgram(gpa, .{
+        .root_module = .{ .module = &artifact, .roots = undefined },
+        .roots = &.{root},
+    }, .{});
+    defer plan.deinit();
+
+    var out = try run(
+        gpa,
+        .{ .root = .{ .module = &artifact, .roots = undefined } },
+        .{},
+        &plan,
+        .{},
+    );
+    defer out.deinit();
+
+    const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
+    const outer_join = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).join;
+    const source = out.lir_result.store.getCFStmt(outer_join.remainder).assign_literal;
+    const miss_join = out.lir_result.store.getCFStmt(source.next).join;
+    const str_match = out.lir_result.store.getCFStmt(miss_join.remainder).str_match;
+
+    try std.testing.expectEqual(source.target, str_match.source);
+    try std.testing.expectEqualStrings("pre", out.lir_result.store.getStringLiteral(str_match.prefix));
+    try std.testing.expectEqual(LIR.StrPatternEnd.exact, str_match.end);
+
+    const steps = out.lir_result.store.getStrMatchSteps(str_match.steps);
+    try std.testing.expectEqual(@as(usize, 1), steps.len);
+    try std.testing.expectEqualStrings("post", out.lir_result.store.getStringLiteral(steps[0].delimiter));
+    const capture = switch (steps[0].capture) {
+        .view => |local| local,
+        .discard => return error.TestUnexpectedResult,
+    };
+
+    const bind = out.lir_result.store.getCFStmt(str_match.on_match).assign_ref;
+    try std.testing.expectEqual(capture, bind.op.local);
     const branch_result = out.lir_result.store.getCFStmt(bind.next).assign_ref;
     try std.testing.expectEqual(bind.target, branch_result.op.local);
     try std.testing.expectEqual(LIR.CFStmt{ .jump = .{ .target = outer_join.id } }, out.lir_result.store.getCFStmt(branch_result.next));
