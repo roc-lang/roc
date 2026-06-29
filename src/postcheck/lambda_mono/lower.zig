@@ -78,6 +78,20 @@ const CaptureSpanId = struct {
     }
 };
 
+const CaptureTypeId = struct {
+    start: u32,
+    len: u32,
+    solved_fn_ty: SolvedType.TypeVarId,
+
+    fn from(span: SolvedType.Span, solved_fn_ty: SolvedType.TypeVarId) CaptureTypeId {
+        return .{
+            .start = span.start,
+            .len = span.len,
+            .solved_fn_ty = solved_fn_ty,
+        };
+    }
+};
+
 const FnSpec = struct {
     source: Lifted.FnId,
     solved_fn_ty: SolvedType.TypeVarId,
@@ -112,18 +126,21 @@ const FnSpecContext = struct {
     }
 };
 
-const CaptureTypeMap = std.HashMap(CaptureSpanId, Type.TypeId, CaptureSpanContext, std.hash_map.default_max_load_percentage);
+const CaptureTypeMap = std.HashMap(CaptureTypeId, Type.TypeId, CaptureSpanContext, std.hash_map.default_max_load_percentage);
 
 const CaptureSpanContext = struct {
-    pub fn hash(_: CaptureSpanContext, span: CaptureSpanId) u64 {
+    pub fn hash(_: CaptureSpanContext, span: CaptureTypeId) u64 {
         var hasher = std.hash.Wyhash.init(0);
         std.hash.autoHash(&hasher, span.start);
         std.hash.autoHash(&hasher, span.len);
+        std.hash.autoHash(&hasher, @intFromEnum(span.solved_fn_ty));
         return hasher.final();
     }
 
-    pub fn eql(_: CaptureSpanContext, lhs: CaptureSpanId, rhs: CaptureSpanId) bool {
-        return lhs.start == rhs.start and lhs.len == rhs.len;
+    pub fn eql(_: CaptureSpanContext, lhs: CaptureTypeId, rhs: CaptureTypeId) bool {
+        return lhs.start == rhs.start and
+            lhs.len == rhs.len and
+            lhs.solved_fn_ty == rhs.solved_fn_ty;
     }
 };
 
@@ -376,12 +393,13 @@ const Lowerer = struct {
         captures: SolvedType.Span,
     ) Allocator.Error!Ast.FnId {
         const capture_items = self.solved.types.captureSpan(captures);
+        const root_fn_ty = self.solved.types.root(solved_fn_ty);
         const spec = FnSpec{
             .source = source,
-            .solved_fn_ty = self.solved.types.root(solved_fn_ty),
+            .solved_fn_ty = root_fn_ty,
             .abi = abi,
             .captures = CaptureSpanId.from(captures),
-            .capture_ty = if (capture_items.len == 0) null else try self.captureRecordType(captures),
+            .capture_ty = if (capture_items.len == 0) null else try self.captureRecordType(captures, root_fn_ty),
         };
 
         const result = try self.fn_spec_map.getOrPut(spec);
@@ -703,7 +721,9 @@ const Lowerer = struct {
         if (captures.len != 0) {
             const capture_exprs = self.solved.lifted.exprSpan(capture_exprs_span);
             if (capture_exprs.len != captures.len) Common.invariant("direct call capture operand count differed from callee capture count");
-            const capture_ty = try self.captureRecordType(captures);
+            const target_fn = try self.ensureOwnFnSpec(fn_id, .finite);
+            const capture_ty = self.fn_specs.items[@intFromEnum(target_fn)].capture_ty orelse
+                Common.invariant("capturing direct call target had no capture record type");
             const call_args = try self.allocator.alloc(Ast.ExprId, args.len + 1);
             defer self.allocator.free(call_args);
             @memcpy(call_args[0..args.len], args);
@@ -950,10 +970,14 @@ const Lowerer = struct {
         if (self.type_map.get(root)) |cached| return cached;
 
         const content = self.solved.types.get(root);
-
-        switch (content) {
-            .func => |func| return try self.lowerType(func.callable),
-            else => {},
+        if (content == .func) {
+            const reserved = try self.program.types.add(.zst);
+            try self.type_map.put(root, reserved);
+            errdefer {
+                if (self.type_map.get(root) == reserved) _ = self.type_map.remove(root);
+            }
+            self.program.types.set(reserved, try self.lowerCallableForFn(content.func.callable, root));
+            return reserved;
         }
 
         const reserved = try self.program.types.add(.zst);
@@ -970,9 +994,9 @@ const Lowerer = struct {
             .zst => .zst,
             .erased => |erased| .{ .erased_fn = .{
                 .source_fn_ty = erased.source_fn_ty,
-                .members = try self.lowerFnMembers(erased.members, .erased),
+                .members = try self.lowerFnMembersFromOwnTypes(erased.members, .erased),
             } },
-            .func => |func| return self.program.types.get(try self.lowerType(func.callable)),
+            .func => Common.invariant("function type reached content lowering without its call signature"),
             .list => |elem| .{ .list = try self.lowerType(elem) },
             .box => |elem| .{ .box = try self.lowerType(elem) },
             .tuple => |items| blk: {
@@ -1018,9 +1042,22 @@ const Lowerer = struct {
                     .declared_order = try self.lowerDeclaredOrder(named.declared_order),
                 } };
             },
-            .lambda_set => |members| blk: {
-                break :blk .{ .callable = try self.lowerFnMembers(members, .finite) };
-            },
+            .lambda_set => |members| .{ .callable = try self.lowerFnMembersFromOwnTypes(members, .finite) },
+        };
+    }
+
+    fn lowerCallableForFn(
+        self: *Lowerer,
+        callable: SolvedType.TypeVarId,
+        solved_fn_ty: SolvedType.TypeVarId,
+    ) Allocator.Error!Type.Content {
+        return switch (self.solved.types.rootContent(callable)) {
+            .lambda_set => |members| .{ .callable = try self.lowerFnMembers(members, .finite, solved_fn_ty) },
+            .erased => |erased| .{ .erased_fn = .{
+                .source_fn_ty = erased.source_fn_ty,
+                .members = try self.lowerFnMembers(erased.members, .erased, solved_fn_ty),
+            } },
+            else => Common.invariant("function callable slot was unresolved before Lambda Mono"),
         };
     }
 
@@ -1041,12 +1078,39 @@ const Lowerer = struct {
         return try self.program.types.addDeclaredFields(lowered);
     }
 
-    fn lowerFnMembers(self: *Lowerer, members: SolvedType.Span, abi: CaptureAbi) Allocator.Error!Type.Span {
+    fn lowerFnMembers(
+        self: *Lowerer,
+        members: SolvedType.Span,
+        abi: CaptureAbi,
+        solved_fn_ty: SolvedType.TypeVarId,
+    ) Allocator.Error!Type.Span {
+        const solved_members = self.solved.types.memberSpan(members);
+        const variants = try self.allocator.alloc(Type.FnVariant, solved_members.len);
+        defer self.allocator.free(variants);
+        const root_fn_ty = self.solved.types.root(solved_fn_ty);
+        for (solved_members, 0..) |member, i| {
+            const source = self.sourceFnForSymbol(member.lambda);
+            const target = try self.ensureFnSpec(
+                source,
+                root_fn_ty,
+                abi,
+                member.captures,
+            );
+            variants[i] = .{
+                .id = undefined, // assigned by addFnVariants before the variant is stored
+                .source = member.lambda,
+                .target = target,
+                .capture_ty = self.fn_specs.items[@intFromEnum(target)].capture_ty,
+            };
+        }
+        return try self.program.types.addFnVariants(variants);
+    }
+
+    fn lowerFnMembersFromOwnTypes(self: *Lowerer, members: SolvedType.Span, abi: CaptureAbi) Allocator.Error!Type.Span {
         const solved_members = self.solved.types.memberSpan(members);
         const variants = try self.allocator.alloc(Type.FnVariant, solved_members.len);
         defer self.allocator.free(variants);
         for (solved_members, 0..) |member, i| {
-            const captures = self.solved.types.captureSpan(member.captures);
             const source = self.sourceFnForSymbol(member.lambda);
             const target = try self.ensureFnSpec(
                 source,
@@ -1058,14 +1122,18 @@ const Lowerer = struct {
                 .id = undefined, // assigned by addFnVariants before the variant is stored
                 .source = member.lambda,
                 .target = target,
-                .capture_ty = if (captures.len == 0) null else try self.captureRecordType(member.captures),
+                .capture_ty = self.fn_specs.items[@intFromEnum(target)].capture_ty,
             };
         }
         return try self.program.types.addFnVariants(variants);
     }
 
-    fn captureRecordType(self: *Lowerer, captures: SolvedType.Span) Allocator.Error!Type.TypeId {
-        const id = CaptureSpanId.from(captures);
+    fn captureRecordType(
+        self: *Lowerer,
+        captures: SolvedType.Span,
+        solved_fn_ty: SolvedType.TypeVarId,
+    ) Allocator.Error!Type.TypeId {
+        const id = CaptureTypeId.from(captures, self.solved.types.root(solved_fn_ty));
         if (self.capture_types.get(id)) |existing| return existing;
 
         const capture_items = self.solved.types.captureSpan(captures);

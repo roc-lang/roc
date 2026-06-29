@@ -5899,6 +5899,28 @@ test "uniqueness: freshly built list consumed by a checked op elides the check" 
     try testing.expectEqual(@as(u64, 1), f.uniqueArgsFor(appended));
 }
 
+test "uniqueness: slice-producing checked op result keeps later check" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const list = try f.local(f.list_i64);
+    const sliced = try f.local(f.list_i64);
+    const trimmed = try f.local(f.list_i64);
+    const result = try f.local(.i64);
+
+    // elem = []; sliced = sublist_like(elem); trimmed = checked_op(sliced)
+    const ret = try f.ret(result);
+    const result_assign = try f.assignI64(result, 1, ret);
+    const trim = try f.assignLowLevel(trimmed, &.{sliced}, LIR.LowLevel.RcEffect.runtimeUniqueness(1), result_assign);
+    const slice = try f.assignLowLevel(sliced, &.{list}, LIR.LowLevel.RcEffect.runtimeUniquenessMaybeSharedResult(1), trim);
+    const body = try f.assignList(list, &.{}, slice);
+    _ = try f.addProc(&.{}, body, .i64);
+
+    try f.run();
+    // Slice-producing list builtins can return a seamless slice of a shared
+    // allocation, so their result must not seed born-unique analysis.
+    try testing.expectEqual(@as(u64, 0), f.uniqueArgsFor(trimmed));
+}
+
 test "uniqueness: list held by a struct keeps its runtime check" {
     var f = try ArcTest.init(testing.allocator);
     defer f.deinit();
