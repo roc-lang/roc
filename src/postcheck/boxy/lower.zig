@@ -4557,6 +4557,135 @@ test "boxy lowerer emits direct calls to planned private workers" {
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = callee_copy.target } }, out.lir_result.store.getCFStmt(callee_copy.next));
 }
 
+test "boxy lowerer emits recursive direct calls to the current private worker" {
+    const gpa = std.testing.allocator;
+
+    var artifact = minimalCheckedArtifact(gpa);
+    defer artifact.canonical_names.deinit();
+    defer artifact.checked_types.deinit(gpa);
+    defer artifact.checked_bodies.deinit(gpa);
+
+    try artifact.checked_types.payloads.append(gpa, .{
+        .nominal = builtinNominal(.u64, @enumFromInt(0), .{}),
+    });
+    try artifact.checked_types.payloads.append(gpa, .{
+        .function = .{
+            .kind = .pure,
+            .args = .{},
+            .ret = @enumFromInt(0),
+            .needs_instantiation = false,
+        },
+    });
+
+    const template_ref = procedureTemplateRef(artifact.key, 0);
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(0),
+        .ty = @enumFromInt(1),
+        .source_region = base.Region.zero(),
+        .data = .{ .lambda = .{ .args = .{}, .body = @enumFromInt(1) } },
+    });
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(1),
+        .ty = @enumFromInt(0),
+        .source_region = base.Region.zero(),
+        .data = .{ .call = .{
+            .func = @enumFromInt(2),
+            .args = .{},
+            .called_via = .apply,
+            .source_fn_ty_payload = @enumFromInt(1),
+            .direct_target = @enumFromInt(0),
+        } },
+    });
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(2),
+        .ty = @enumFromInt(1),
+        .source_region = base.Region.zero(),
+        .data = .{ .lookup_external = @enumFromInt(0) },
+    });
+    try artifact.checked_bodies.bodies.append(gpa, .{
+        .id = @enumFromInt(0),
+        .root_expr = @enumFromInt(0),
+        .owner_template = template_ref,
+    });
+
+    var templates = [_]checked.CheckedProcedureTemplate{
+        checkedTemplate(template_ref, @enumFromInt(1), @enumFromInt(0)),
+    };
+    artifact.checked_procedure_templates = .{ .templates = &templates };
+
+    var bindings = [_]checked.TopLevelProcedureBinding{
+        .{
+            .source_scheme = typeSchemeKey(1),
+            .body = .{ .direct_template = .{
+                .proc_value = procedureValueRef(template_ref),
+                .template = .{ .checked = template_ref },
+            } },
+        },
+    };
+    artifact.top_level_procedure_bindings = .{ .bindings = &bindings };
+
+    var resolved_records = [_]checked.ResolvedValueRefRecord{
+        .{
+            .expr = @enumFromInt(2),
+            .ref = .{ .top_level_proc = .{
+                .binding = .{ .top_level = .{ .artifact = artifact.key, .binding = @enumFromInt(0) } },
+                .source_fn_ty_template = canonicalTypeKey(1),
+                .source_fn_ty_payload = @enumFromInt(1),
+            } },
+            .checked_ty = @enumFromInt(1),
+            .scope_depth = 0,
+        },
+    };
+    var refs_by_expr = [_]?checked.ResolvedValueRefId{
+        null,
+        null,
+        @as(checked.ResolvedValueRefId, @enumFromInt(0)),
+    };
+    artifact.resolved_value_refs = .{
+        .records = &resolved_records,
+        .by_checked_expr = &refs_by_expr,
+    };
+
+    const root = checked.RootRequest{
+        .order = 0,
+        .module_idx = 0,
+        .kind = .runtime_entrypoint,
+        .source = .{ .def = @enumFromInt(0) },
+        .checked_type = @enumFromInt(1),
+        .abi = .roc,
+        .exposure = .private,
+        .procedure_template = template_ref,
+        .procedure_binding = @enumFromInt(0),
+    };
+    var plan = try Plan.analyzeProgram(gpa, .{
+        .root_module = .{ .module = &artifact, .roots = undefined },
+        .roots = &.{root},
+    }, .{});
+    defer plan.deinit();
+
+    try std.testing.expectEqual(@as(usize, 1), plan.workers.items.len);
+    try std.testing.expectEqual(plan.roots.items[0].worker, plan.directWorkerForCall(@enumFromInt(1)) orelse return error.TestUnexpectedResult);
+
+    var out = try run(
+        gpa,
+        .{ .root = .{ .module = &artifact, .roots = undefined } },
+        .{},
+        &plan,
+        .{},
+    );
+    defer out.deinit();
+
+    try std.testing.expectEqual(@as(usize, 1), out.lir_result.root_procs.items.len);
+    try std.testing.expectEqual(@as(usize, 1), out.lir_result.store.proc_specs.items.len);
+
+    const proc_id = out.lir_result.root_procs.items[0];
+    const proc = out.lir_result.store.getProcSpec(proc_id);
+    const call = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_call;
+    try std.testing.expectEqual(proc_id, call.proc);
+    try std.testing.expect(call.args.isEmpty());
+    try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = call.target } }, out.lir_result.store.getCFStmt(call.next));
+}
+
 test "boxy lowerer emits checked crash as terminal LIR crash" {
     const gpa = std.testing.allocator;
 
