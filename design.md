@@ -3248,6 +3248,14 @@ the checked string literal bytes copied into the LIR string store. The target
 local for the surrounding expression is not initialized on that path because the
 path does not continue.
 
+Checked `dbg` and `expect` expressions lower to explicit side statements and a
+unit result. `dbg` lowers its child into a message local, emits LIR `debug`, and
+then assigns the target zst unit value. `expect` lowers its Bool condition into
+a condition local, emits LIR `expect`, and then assigns the target zst unit
+value. When these forms occur as checked statements instead of expressions, the
+same child-lowering and side-statement rules apply without the final unit
+assignment.
+
 Checked `if` expressions lower as structured branch-result control flow. The
 lowerer allocates one join id for the expression's shared continuation and uses
 the expression target local as the join parameter. The final `else` expression
