@@ -74,9 +74,13 @@ const ProcedureModuleView = struct {
     canonical_names: *const names.CanonicalNameStore,
     checked_types: checked.CheckedTypeStoreView,
     checked_bodies: checked.CheckedBodyStoreView,
+    compile_time_roots: *const checked.CompileTimeRootTable,
     checked_procedure_templates: *const checked.CheckedProcedureTemplateTable,
+    nested_proc_sites: *const checked.NestedProcSiteTable,
     top_level_procedure_bindings: *const checked.TopLevelProcedureBindingTable,
+    callable_eval_templates: checked.CallableEvalTemplateTableView,
     exported_procedure_bindings: checked.ExportedProcedureBindingView,
+    const_store: *const check.ConstStore.ConstStore,
 };
 
 const ResolvedWorker = struct {
@@ -85,7 +89,8 @@ const ResolvedWorker = struct {
     module: ProcedureModuleView,
     template_ref: names.ProcedureTemplateRef,
     template: checked.CheckedProcedureTemplate,
-    body: checked.CheckedBody,
+    body_id: ?checked.CheckedBodyId,
+    root_expr: checked.CheckedExprId,
 };
 
 const ResolvedWorkers = struct {
@@ -171,7 +176,7 @@ fn resolveProcedureBinding(
             .synthetic,
             => boxyLowerInvariant("non-checked procedure template reached boxy worker resolution"),
         },
-        .callable_eval_template => boxyLowerInvariant("callable eval procedure binding reached runtime boxy worker resolution"),
+        .callable_eval_template => |template| resolveCallableEvalTemplate(modules, worker, module, template),
     };
 }
 
@@ -189,7 +194,7 @@ fn resolveImportedProcedureBinding(
             .synthetic,
             => boxyLowerInvariant("non-checked imported procedure template reached boxy worker resolution"),
         },
-        .callable_eval_template => boxyLowerInvariant("callable eval imported procedure binding reached runtime boxy worker resolution"),
+        .callable_eval_template => |template| resolveCallableEvalTemplate(modules, worker, module, template),
     };
 }
 
@@ -215,8 +220,13 @@ fn resolveProcedureTemplate(
 ) ResolvedWorker {
     const module = procedureModuleByArtifactRef(modules, template_ref.artifact);
     const template = module.checked_procedure_templates.get(template_ref.template);
-    const body_id = switch (template.body) {
+    const body_id: ?checked.CheckedBodyId = switch (template.body) {
         .checked_body => |body| body,
+        .intrinsic_wrapper => boxyLowerInvariant("intrinsic wrapper reached boxy checked-body worker resolution"),
+        .entry_wrapper => boxyLowerInvariant("compile-time entry wrapper reached runtime boxy worker resolution"),
+    };
+    const root_expr = switch (template.body) {
+        .checked_body => |body| module.checked_bodies.body(body).root_expr,
         .intrinsic_wrapper => boxyLowerInvariant("intrinsic wrapper reached boxy checked-body worker resolution"),
         .entry_wrapper => boxyLowerInvariant("compile-time entry wrapper reached runtime boxy worker resolution"),
     };
@@ -227,8 +237,97 @@ fn resolveProcedureTemplate(
         .module = module,
         .template_ref = template_ref,
         .template = template,
-        .body = module.checked_bodies.body(body_id),
+        .body_id = body_id,
+        .root_expr = root_expr,
     };
+}
+
+fn resolveCallableEvalTemplate(
+    modules: Common.CheckedModules,
+    worker: Plan.WorkerPlanId,
+    module: ProcedureModuleView,
+    template_id: checked.CallableEvalTemplateId,
+) ResolvedWorker {
+    const raw = @intFromEnum(template_id);
+    if (raw >= module.callable_eval_templates.templates.len) {
+        boxyLowerInvariant("callable eval binding referenced a missing checked template");
+    }
+    const callable_template = module.callable_eval_templates.templates[raw];
+    const root = module.compile_time_roots.root(callable_template.root);
+    return switch (root.payload) {
+        .fn_value => |fn_id| resolveConstFnValue(modules, worker, module, fn_id),
+        .pending => boxyLowerInvariant("pending callable eval root reached runtime boxy worker resolution before compile-time finalization"),
+        .const_node,
+        .expect,
+        => boxyLowerInvariant("callable eval binding root did not output a callable value"),
+    };
+}
+
+fn resolveConstFnValue(
+    modules: Common.CheckedModules,
+    worker: Plan.WorkerPlanId,
+    store_module: ProcedureModuleView,
+    fn_id: checked.ConstFnId,
+) ResolvedWorker {
+    const raw = @intFromEnum(fn_id);
+    if (raw >= store_module.const_store.fns.items.len) {
+        boxyLowerInvariant("callable eval function value referenced a missing ConstStore function");
+    }
+    const fn_value = store_module.const_store.getFn(fn_id);
+    if (fn_value.captures.len != 0) {
+        boxyLowerInvariant("capturing stored function reached runtime boxy worker resolution before const capture lowering");
+    }
+    return switch (fn_value.fn_def) {
+        .local_template,
+        .imported_template,
+        .checked_generated,
+        => |template| resolveProcedureTemplate(modules, worker, template),
+        .nested => |nested| resolveNestedConstFn(modules, worker, nested),
+        .local_hosted,
+        .imported_hosted,
+        => boxyLowerInvariant("hosted stored function reached runtime boxy worker resolution before hosted wrapper lowering is implemented"),
+        .parser_runtime,
+        .encode_to_runtime,
+        => boxyLowerInvariant("generated parser/encoder stored function reached runtime boxy worker resolution before generated runtime support"),
+    };
+}
+
+fn resolveNestedConstFn(
+    modules: Common.CheckedModules,
+    worker: Plan.WorkerPlanId,
+    nested: anytype,
+) ResolvedWorker {
+    const module = procedureModuleByKey(modules, .{ .bytes = names.procTemplateModuleDigest(nested.owner).bytes });
+    const expr_id = checkedLambdaExprForNestedFn(module, nested);
+    const template = module.checked_procedure_templates.get(nested.owner.template);
+    return .{
+        .worker = worker,
+        .module_key = module.key,
+        .module = module,
+        .template_ref = nested.owner,
+        .template = template,
+        .body_id = null,
+        .root_expr = expr_id,
+    };
+}
+
+fn checkedLambdaExprForNestedFn(
+    module: ProcedureModuleView,
+    nested: anytype,
+) checked.CheckedExprId {
+    for (module.nested_proc_sites.sites) |site| {
+        if (site.site != nested.site) continue;
+        if (!names.procedureTemplateRefEql(site.owner_template, nested.owner)) continue;
+        const expr_id = site.checked_expr orelse
+            boxyLowerInvariant("stored nested function had no checked expression site");
+        const expr = module.checked_bodies.expr(expr_id);
+        return switch (expr.data) {
+            .lambda => expr_id,
+            .closure => |closure| closure.lambda,
+            else => boxyLowerInvariant("stored nested function site did not point at a lambda or closure"),
+        };
+    }
+    boxyLowerInvariant("stored nested function referenced a missing checked nested site");
 }
 
 fn rootProcedureModule(modules: Common.CheckedModules) ProcedureModuleView {
@@ -238,9 +337,13 @@ fn rootProcedureModule(modules: Common.CheckedModules) ProcedureModuleView {
         .canonical_names = &artifact.canonical_names,
         .checked_types = artifact.checked_types.view(),
         .checked_bodies = artifact.checked_bodies.view(),
+        .compile_time_roots = &artifact.compile_time_roots,
         .checked_procedure_templates = &artifact.checked_procedure_templates,
+        .nested_proc_sites = &artifact.nested_proc_sites,
         .top_level_procedure_bindings = &artifact.top_level_procedure_bindings,
+        .callable_eval_templates = artifact.callable_eval_templates.view(),
         .exported_procedure_bindings = artifact.exported_procedure_bindings.view(),
+        .const_store = &artifact.const_store,
     };
 }
 
@@ -250,9 +353,13 @@ fn procedureModuleFromImport(import: checked.ImportedModuleView) ProcedureModule
         .canonical_names = import.canonical_names,
         .checked_types = import.checked_types,
         .checked_bodies = import.checked_bodies,
+        .compile_time_roots = import.compile_time_roots,
         .checked_procedure_templates = import.checked_procedure_templates,
+        .nested_proc_sites = import.nested_proc_sites,
         .top_level_procedure_bindings = import.top_level_procedure_bindings,
+        .callable_eval_templates = import.callable_eval_templates,
         .exported_procedure_bindings = import.exported_procedure_bindings,
+        .const_store = import.const_store,
     };
 }
 
@@ -386,18 +493,18 @@ const ProcedureBuilder = struct {
         resolved: ResolvedWorker,
         proc: *ProcBodyBuilder,
     ) Allocator.Error!checked.CheckedExprId {
-        const root_expr = resolved.module.checked_bodies.expr(resolved.body.root_expr);
+        const root_expr = resolved.module.checked_bodies.expr(resolved.root_expr);
         return switch (root_expr.data) {
             .lambda => |lambda| blk: {
                 const worker_args = self.layout_plan.workerLayoutSlice(proc.worker_layout.args);
                 if (lambda.args.len != worker_args.len) {
                     boxyLowerInvariant("boxy worker lambda arity disagreed with worker root layout");
                 }
-                proc.current_lambda = resolved.body.root_expr;
+                proc.current_lambda = resolved.root_expr;
                 try proc.bindLambdaArgs(lambda.args);
                 break :blk lambda.body;
             },
-            else => resolved.body.root_expr,
+            else => resolved.root_expr,
         };
     }
 
@@ -5377,8 +5484,8 @@ test "boxy lowerer resolves procedure-template workers to checked bodies" {
     try std.testing.expectEqual(@as(usize, 1), resolved.items.len);
     try std.testing.expectEqual(@as(Plan.WorkerPlanId, @enumFromInt(0)), resolved.items[0].worker);
     try std.testing.expect(names.procedureTemplateRefEql(template_ref, resolved.items[0].template_ref));
-    try std.testing.expectEqual(@as(checked.CheckedBodyId, @enumFromInt(0)), resolved.items[0].body.id);
-    try std.testing.expectEqual(@as(checked.CheckedExprId, @enumFromInt(3)), resolved.items[0].body.root_expr);
+    try std.testing.expectEqual(@as(?checked.CheckedBodyId, @enumFromInt(0)), resolved.items[0].body_id);
+    try std.testing.expectEqual(@as(checked.CheckedExprId, @enumFromInt(3)), resolved.items[0].root_expr);
 }
 
 test "boxy lowerer resolves top-level direct bindings to checked bodies" {
@@ -5426,8 +5533,115 @@ test "boxy lowerer resolves top-level direct bindings to checked bodies" {
 
     try std.testing.expectEqual(@as(usize, 1), resolved.items.len);
     try std.testing.expect(names.procedureTemplateRefEql(template_ref, resolved.items[0].template_ref));
-    try std.testing.expectEqual(@as(checked.CheckedBodyId, @enumFromInt(0)), resolved.items[0].body.id);
-    try std.testing.expectEqual(@as(checked.CheckedExprId, @enumFromInt(5)), resolved.items[0].body.root_expr);
+    try std.testing.expectEqual(@as(?checked.CheckedBodyId, @enumFromInt(0)), resolved.items[0].body_id);
+    try std.testing.expectEqual(@as(checked.CheckedExprId, @enumFromInt(5)), resolved.items[0].root_expr);
+}
+
+test "boxy lowerer resolves callable eval bindings to finalized const function expressions" {
+    const gpa = std.testing.allocator;
+
+    var artifact = minimalCheckedArtifact(gpa);
+    defer artifact.canonical_names.deinit();
+    defer artifact.checked_types.deinit(gpa);
+    defer artifact.checked_bodies.deinit(gpa);
+    artifact.const_store = check.ConstStore.ConstStore.init(gpa);
+    defer artifact.const_store.deinit();
+
+    const template_ref = procedureTemplateRef(artifact.key, 0);
+    var callable_templates = [_]checked.CallableEvalTemplate{
+        .{
+            .id = @enumFromInt(0),
+            .module_idx = 0,
+            .pattern = @enumFromInt(0),
+            .root = @enumFromInt(0),
+            .source_scheme = typeSchemeKey(1),
+            .checked_fn_root = @enumFromInt(1),
+        },
+    };
+    artifact.callable_eval_templates = .{ .templates = &callable_templates };
+
+    const fn_id = try artifact.const_store.appendFn(.{
+        .fn_def = .{ .nested = .{
+            .owner = template_ref,
+            .site = @enumFromInt(0),
+        } },
+        .source_fn_ty = @enumFromInt(1),
+        .source_fn_key = typeKey(1),
+    });
+    var compile_time_roots = [_]checked.CompileTimeRoot{
+        .{
+            .id = @enumFromInt(0),
+            .module_idx = 0,
+            .kind = .callable_binding,
+            .source = .{ .def = @enumFromInt(0) },
+            .pattern = @enumFromInt(0),
+            .expr = @enumFromInt(0),
+            .checked_type = @enumFromInt(1),
+            .payload = .{ .fn_value = fn_id },
+        },
+    };
+    artifact.compile_time_roots = .{ .roots = &compile_time_roots };
+
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(0),
+        .ty = @enumFromInt(1),
+        .source_region = base.Region.zero(),
+        .data = .{ .lambda = .{ .args = .{}, .body = @enumFromInt(1) } },
+    });
+    var nested_sites = [_]checked.NestedProcSite{
+        .{
+            .site = @enumFromInt(0),
+            .owner_template = template_ref,
+            .path_start = 0,
+            .path_len = 0,
+            .kind = .local_function,
+            .checked_expr = @enumFromInt(0),
+            .checked_pattern = null,
+        },
+    };
+    artifact.nested_proc_sites = .{ .sites = &nested_sites };
+
+    var templates = [_]checked.CheckedProcedureTemplate{
+        .{
+            .proc_base = template_ref.proc_base,
+            .template_id = template_ref.template,
+            .body = .{ .entry_wrapper = @enumFromInt(0) },
+            .checked_fn_scheme = typeSchemeKey(2),
+            .checked_fn_root = @enumFromInt(2),
+            .static_dispatch_plans = .{},
+            .resolved_value_refs = .{},
+            .top_level_value_uses = .{},
+            .nested_proc_sites = .{},
+            .target = .comptime_only,
+        },
+    };
+    artifact.checked_procedure_templates = .{ .templates = &templates };
+
+    var bindings = [_]checked.TopLevelProcedureBinding{
+        .{
+            .source_scheme = typeSchemeKey(1),
+            .body = .{ .callable_eval_template = @enumFromInt(0) },
+        },
+    };
+    artifact.top_level_procedure_bindings = .{ .bindings = &bindings };
+
+    var plan = Plan.ProgramPlan.init(gpa);
+    defer plan.deinit();
+    try plan.workers.append(gpa, .{
+        .id = @enumFromInt(0),
+        .root_request = dummyRootRequest(),
+        .source = .{ .procedure_binding = .{ .artifact = artifact.key, .binding = @enumFromInt(0) } },
+        .checked_type = .{ .ty = @enumFromInt(1) },
+        .rep = @enumFromInt(0),
+    });
+
+    var resolved = try ResolvedWorkers.init(gpa, .{ .root = .{ .module = &artifact, .roots = undefined } }, &plan);
+    defer resolved.deinit();
+
+    try std.testing.expectEqual(@as(usize, 1), resolved.items.len);
+    try std.testing.expect(names.procedureTemplateRefEql(template_ref, resolved.items[0].template_ref));
+    try std.testing.expectEqual(@as(?checked.CheckedBodyId, null), resolved.items[0].body_id);
+    try std.testing.expectEqual(@as(checked.CheckedExprId, @enumFromInt(0)), resolved.items[0].root_expr);
 }
 
 test "boxy lowerer emits private worker proc for zero-arg numeric lambda root" {

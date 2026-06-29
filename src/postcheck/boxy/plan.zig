@@ -21,6 +21,8 @@ const empty_interface_capabilities = checked.ModuleInterfaceCapabilities{};
 const empty_resolved_value_refs = checked.ResolvedValueRefTable{};
 const empty_checked_procedure_templates = checked.CheckedProcedureTemplateTable{};
 const empty_top_level_procedure_bindings = checked.TopLevelProcedureBindingTable{};
+const empty_compile_time_roots = checked.CompileTimeRootTable{};
+const empty_nested_proc_sites = checked.NestedProcSiteTable{};
 
 pub const TypeRepId = enum(u32) { _ };
 pub const RootPlanId = enum(u32) { _ };
@@ -281,11 +283,15 @@ pub const ModuleView = struct {
     canonical_names: ?*const canonical.CanonicalNameStore = null,
     checked_types: checked.CheckedTypeStoreView,
     checked_bodies: checked.CheckedBodyStoreView = .{},
+    compile_time_roots: *const checked.CompileTimeRootTable = &empty_compile_time_roots,
     resolved_value_refs: *const checked.ResolvedValueRefTable = &empty_resolved_value_refs,
     checked_procedure_templates: *const checked.CheckedProcedureTemplateTable = &empty_checked_procedure_templates,
+    nested_proc_sites: *const checked.NestedProcSiteTable = &empty_nested_proc_sites,
     top_level_procedure_bindings: *const checked.TopLevelProcedureBindingTable = &empty_top_level_procedure_bindings,
+    callable_eval_templates: checked.CallableEvalTemplateTableView = .{},
     exported_procedure_bindings: checked.ExportedProcedureBindingView = .{},
     interface_capabilities: *const checked.ModuleInterfaceCapabilities = &empty_interface_capabilities,
+    const_store: ?*const check.ConstStore.ConstStore = null,
 };
 
 pub const ProgramInput = struct {
@@ -535,6 +541,12 @@ const Builder = struct {
         fields: []const checked.CheckedRecordField,
         ext: ?checked.CheckedTypeId,
     ) Allocator.Error!TypeRepresentation {
+        if (ext) |ext_ty| {
+            if (!try self.recordExtensionIsExplicitlyClosed(view, ext_ty)) {
+                return try self.dynamicRepresentation(source_type, &.{}, .flex);
+            }
+        }
+
         var children = std.ArrayList(RepChild).empty;
         defer children.deinit(self.allocator);
         for (fields) |field| {
@@ -547,6 +559,33 @@ const Builder = struct {
             .source_type = source_type,
             .kind = kind,
             .children = try self.commitPendingChildren(children.items),
+        };
+    }
+
+    fn recordExtensionIsExplicitlyClosed(
+        self: *Builder,
+        view: ModuleView,
+        ext_ty: checked.CheckedTypeId,
+    ) Allocator.Error!bool {
+        var seen = std.AutoHashMap(TypeRef, void).init(self.allocator);
+        defer seen.deinit();
+        return try self.recordExtensionIsExplicitlyClosedInner(view, ext_ty, &seen);
+    }
+
+    fn recordExtensionIsExplicitlyClosedInner(
+        self: *Builder,
+        view: ModuleView,
+        ext_ty: checked.CheckedTypeId,
+        seen: *std.AutoHashMap(TypeRef, void),
+    ) Allocator.Error!bool {
+        const source = typeRef(view, ext_ty);
+        const entry = try seen.getOrPut(source);
+        if (entry.found_existing) return false;
+
+        return switch (view.checked_types.payload(ext_ty)) {
+            .empty_record => true,
+            .alias => |alias| try self.recordExtensionIsExplicitlyClosedInner(view, alias.backing, seen),
+            else => false,
         };
     }
 
@@ -1000,12 +1039,12 @@ const Builder = struct {
 
     fn analyzeWorkerBodyTypes(self: *Builder, source: WorkerSource) Allocator.Error!void {
         const body = self.rootWorkerBody(source);
-        try self.analyzeExprTypes(body.view, body.body.root_expr);
+        try self.analyzeExprTypes(body.view, body.root_expr);
     }
 
     const WorkerBody = struct {
         view: ModuleView,
-        body: checked.CheckedBody,
+        root_expr: checked.CheckedExprId,
     };
 
     fn rootWorkerBody(self: *Builder, source: WorkerSource) WorkerBody {
@@ -1036,7 +1075,7 @@ const Builder = struct {
                 .synthetic,
                 => boxyPlanInvariant("non-checked procedure template reached boxy body type planning"),
             },
-            .callable_eval_template => boxyPlanInvariant("callable eval procedure binding reached runtime boxy body type planning"),
+            .callable_eval_template => |template| self.callableEvalTemplateBody(view, template),
         };
     }
 
@@ -1050,7 +1089,7 @@ const Builder = struct {
                 .synthetic,
                 => boxyPlanInvariant("non-checked imported procedure template reached boxy body type planning"),
             },
-            .callable_eval_template => boxyPlanInvariant("callable eval imported procedure binding reached runtime boxy body type planning"),
+            .callable_eval_template => |template| self.callableEvalTemplateBody(view, template),
         };
     }
 
@@ -1073,15 +1112,102 @@ const Builder = struct {
     fn rootProcedureTemplateBody(self: *Builder, template_ref: canonical.ProcedureTemplateRef) WorkerBody {
         const view = self.moduleForArtifactRef(template_ref.artifact);
         const template = view.checked_procedure_templates.get(template_ref.template);
-        const body_id = switch (template.body) {
-            .checked_body => |body| body,
+        const root_expr = switch (template.body) {
+            .checked_body => |body| view.checked_bodies.body(body).root_expr,
             .intrinsic_wrapper => boxyPlanInvariant("intrinsic wrapper reached boxy body type planning"),
             .entry_wrapper => boxyPlanInvariant("compile-time entry wrapper reached runtime boxy body type planning"),
         };
         return .{
             .view = view,
-            .body = view.checked_bodies.body(body_id),
+            .root_expr = root_expr,
         };
+    }
+
+    fn callableEvalTemplateBody(
+        self: *Builder,
+        view: ModuleView,
+        template_id: checked.CallableEvalTemplateId,
+    ) WorkerBody {
+        const template = self.callableEvalTemplate(view, template_id);
+        const root = view.compile_time_roots.root(template.root);
+        return switch (root.payload) {
+            .fn_value => |fn_id| self.constFnValueBody(view, fn_id),
+            .pending => boxyPlanInvariant("pending callable eval root reached runtime boxy body type planning before compile-time finalization"),
+            .const_node,
+            .expect,
+            => boxyPlanInvariant("callable eval binding root did not output a callable value"),
+        };
+    }
+
+    fn constFnValueBody(
+        self: *Builder,
+        store_view: ModuleView,
+        fn_id: checked.ConstFnId,
+    ) WorkerBody {
+        const store = store_view.const_store orelse
+            boxyPlanInvariant("callable eval function value had no checked ConstStore");
+        const raw = @intFromEnum(fn_id);
+        if (raw >= store.fns.items.len) {
+            boxyPlanInvariant("callable eval function value referenced a missing ConstStore function");
+        }
+        const fn_value = store.getFn(fn_id);
+        if (fn_value.captures.len != 0) {
+            boxyPlanInvariant("capturing stored function reached runtime boxy body type planning before const capture lowering");
+        }
+        return switch (fn_value.fn_def) {
+            .local_template,
+            .imported_template,
+            .checked_generated,
+            => |template| self.rootProcedureTemplateBody(template),
+            .nested => |nested| self.nestedConstFnBody(nested),
+            .local_hosted,
+            .imported_hosted,
+            => boxyPlanInvariant("hosted stored function reached runtime boxy body type planning before hosted wrapper planning"),
+            .parser_runtime,
+            .encode_to_runtime,
+            => boxyPlanInvariant("generated parser/encoder stored function reached runtime boxy body type planning before generated runtime support"),
+        };
+    }
+
+    fn nestedConstFnBody(self: *Builder, nested: anytype) WorkerBody {
+        const view = self.moduleForId(.{ .bytes = canonical.procTemplateModuleDigest(nested.owner).bytes });
+        const expr_id = self.checkedLambdaExprForNestedFn(view, nested);
+        return .{
+            .view = view,
+            .root_expr = expr_id,
+        };
+    }
+
+    fn checkedLambdaExprForNestedFn(
+        _: *Builder,
+        view: ModuleView,
+        nested: anytype,
+    ) checked.CheckedExprId {
+        for (view.nested_proc_sites.sites) |site| {
+            if (site.site != nested.site) continue;
+            if (!canonical.procedureTemplateRefEql(site.owner_template, nested.owner)) continue;
+            const expr_id = site.checked_expr orelse
+                boxyPlanInvariant("stored nested function had no checked expression site");
+            const expr = view.checked_bodies.expr(expr_id);
+            return switch (expr.data) {
+                .lambda => expr_id,
+                .closure => |closure| closure.lambda,
+                else => boxyPlanInvariant("stored nested function site did not point at a lambda or closure"),
+            };
+        }
+        boxyPlanInvariant("stored nested function referenced a missing checked nested site");
+    }
+
+    fn callableEvalTemplate(
+        _: *Builder,
+        view: ModuleView,
+        template_id: checked.CallableEvalTemplateId,
+    ) checked.CallableEvalTemplate {
+        const raw = @intFromEnum(template_id);
+        if (raw >= view.callable_eval_templates.templates.len) {
+            boxyPlanInvariant("callable eval binding referenced a missing checked template");
+        }
+        return view.callable_eval_templates.templates[raw];
     }
 
     fn analyzeExprTypes(self: *Builder, view: ModuleView, expr_id: checked.CheckedExprId) Allocator.Error!void {
@@ -1381,7 +1507,7 @@ const Builder = struct {
                 .synthetic,
                 => boxyPlanInvariant("non-checked procedure template reached boxy worker type planning"),
             },
-            .callable_eval_template => boxyPlanInvariant("callable eval procedure binding reached runtime boxy worker type planning"),
+            .callable_eval_template => |template| typeRef(view, self.callableEvalTemplate(view, template).checked_fn_root),
         };
     }
 
@@ -1398,7 +1524,7 @@ const Builder = struct {
                 .synthetic,
                 => boxyPlanInvariant("non-checked imported procedure template reached boxy worker type planning"),
             },
-            .callable_eval_template => boxyPlanInvariant("callable eval imported procedure binding reached runtime boxy worker type planning"),
+            .callable_eval_template => |template| typeRef(view, self.callableEvalTemplate(view, template).checked_fn_root),
         };
     }
 
@@ -1458,11 +1584,15 @@ fn moduleViewFromImported(imported: checked.ImportedModuleView) ModuleView {
         .canonical_names = imported.canonical_names,
         .checked_types = imported.checked_types,
         .checked_bodies = imported.checked_bodies,
+        .compile_time_roots = imported.compile_time_roots,
         .resolved_value_refs = imported.resolved_value_refs,
         .checked_procedure_templates = imported.checked_procedure_templates,
+        .nested_proc_sites = imported.nested_proc_sites,
         .top_level_procedure_bindings = imported.top_level_procedure_bindings,
+        .callable_eval_templates = imported.callable_eval_templates,
         .exported_procedure_bindings = imported.exported_procedure_bindings,
         .interface_capabilities = imported.interface_capabilities,
+        .const_store = imported.const_store,
     };
 }
 
@@ -1472,11 +1602,15 @@ fn moduleViewFromArtifact(artifact: *const checked.CheckedModuleArtifact) Module
         .canonical_names = &artifact.canonical_names,
         .checked_types = artifact.checked_types.view(),
         .checked_bodies = artifact.checked_bodies.view(),
+        .compile_time_roots = &artifact.compile_time_roots,
         .resolved_value_refs = &artifact.resolved_value_refs,
         .checked_procedure_templates = &artifact.checked_procedure_templates,
+        .nested_proc_sites = &artifact.nested_proc_sites,
         .top_level_procedure_bindings = &artifact.top_level_procedure_bindings,
+        .callable_eval_templates = artifact.callable_eval_templates.view(),
         .exported_procedure_bindings = artifact.exported_procedure_bindings.view(),
         .interface_capabilities = &artifact.interface_capabilities,
+        .const_store = &artifact.const_store,
     };
 }
 
@@ -1549,6 +1683,120 @@ test "boxy planner records root wrapper plans from checked root metadata" {
     try std.testing.expectEqual(@as(u32, 3), plan.roots.items[0].request.order);
     try std.testing.expectEqual(plan.roots.items[0].host_rep, plan.roots.items[0].worker_rep);
     try std.testing.expectEqual(@as(usize, 1), plan.root_reps.items.len);
+}
+
+test "boxy planner walks callable eval finalized const function bodies" {
+    const gpa = std.testing.allocator;
+
+    const root_key = moduleKey(1);
+    const template_ref = dummyProcedureTemplate();
+    const payloads = [_]checked.StoredCheckedTypePayload{
+        .{ .empty_record = {} },
+        .{ .function = .{
+            .kind = .pure,
+            .args = .{},
+            .ret = @enumFromInt(0),
+            .needs_instantiation = false,
+        } },
+    };
+    const exprs = [_]checked.StoredCheckedExpr{
+        .{
+            .id = @enumFromInt(0),
+            .ty = @enumFromInt(1),
+            .source_region = .zero(),
+            .data = .{ .lambda = .{ .args = .{}, .body = @enumFromInt(1) } },
+        },
+        .{
+            .id = @enumFromInt(1),
+            .ty = @enumFromInt(0),
+            .source_region = .zero(),
+            .data = .empty_record,
+        },
+    };
+    const callable_templates = [_]checked.CallableEvalTemplate{
+        .{
+            .id = @enumFromInt(0),
+            .module_idx = 0,
+            .pattern = @enumFromInt(0),
+            .root = @enumFromInt(0),
+            .source_scheme = .{},
+            .checked_fn_root = @enumFromInt(1),
+        },
+    };
+    var const_store = check.ConstStore.ConstStore.init(gpa);
+    defer const_store.deinit();
+    const fn_id = try const_store.appendFn(.{
+        .fn_def = .{ .nested = .{
+            .owner = template_ref,
+            .site = @enumFromInt(0),
+        } },
+        .source_fn_ty = @enumFromInt(1),
+        .source_fn_key = typeKey(1),
+    });
+    var compile_time_roots = [_]checked.CompileTimeRoot{
+        .{
+            .id = @enumFromInt(0),
+            .module_idx = 0,
+            .kind = .callable_binding,
+            .source = .{ .def = @enumFromInt(0) },
+            .pattern = @enumFromInt(0),
+            .expr = @enumFromInt(0),
+            .checked_type = @enumFromInt(1),
+            .payload = .{ .fn_value = fn_id },
+        },
+    };
+    var compile_time_root_table = checked.CompileTimeRootTable{ .roots = &compile_time_roots };
+    var nested_sites = [_]checked.NestedProcSite{
+        .{
+            .site = @enumFromInt(0),
+            .owner_template = template_ref,
+            .path_start = 0,
+            .path_len = 0,
+            .kind = .local_function,
+            .checked_expr = @enumFromInt(0),
+            .checked_pattern = null,
+        },
+    };
+    var nested_proc_site_table = checked.NestedProcSiteTable{ .sites = &nested_sites };
+    var bindings = [_]checked.TopLevelProcedureBinding{
+        .{
+            .source_scheme = .{},
+            .body = .{ .callable_eval_template = @enumFromInt(0) },
+        },
+    };
+    var binding_table = checked.TopLevelProcedureBindingTable{ .bindings = &bindings };
+    const roots = [_]checked.RootRequest{
+        .{
+            .order = 0,
+            .module_idx = 0,
+            .kind = .runtime_entrypoint,
+            .source = .{ .def = @enumFromInt(0) },
+            .checked_type = @enumFromInt(1),
+            .abi = .roc,
+            .exposure = .private,
+            .procedure_binding = @enumFromInt(0),
+        },
+    };
+
+    var plan = try analyzeProgram(gpa, .{
+        .root_view = .{
+            .key = root_key,
+            .checked_types = .{ .stored_payloads = &payloads },
+            .checked_bodies = .{ .stored_exprs = &exprs },
+            .compile_time_roots = &compile_time_root_table,
+            .nested_proc_sites = &nested_proc_site_table,
+            .top_level_procedure_bindings = &binding_table,
+            .callable_eval_templates = .{ .templates = &callable_templates },
+            .const_store = &const_store,
+        },
+        .roots = &roots,
+    }, .{});
+    defer plan.deinit();
+
+    try std.testing.expectEqual(@as(usize, 1), plan.workers.items.len);
+    try std.testing.expectEqual(WorkerSource{ .procedure_binding = .{ .artifact = root_key, .binding = @enumFromInt(0) } }, plan.workers.items[0].source);
+    try expectTypeRef(root_key, @enumFromInt(1), plan.workers.items[0].checked_type);
+    try std.testing.expect(plan.repForSourceType(.{ .module = root_key, .ty = @enumFromInt(0) }) != null);
 }
 
 test "boxy planner records explicit source type representation bindings" {
@@ -1646,6 +1894,23 @@ test "boxy planner propagates dynamic descriptor requirements through records" {
     try std.testing.expectEqual(@as(usize, 3), plan.childSlice(record.children).len);
     try std.testing.expectEqual(@as(usize, 2), plan.descriptors.items.len);
     try std.testing.expectEqual(DescriptorReason.aggregate_contains_dynamic, plan.descriptors.items[@intFromEnum(record.descriptor.?)].reason);
+}
+
+test "boxy planner represents open record rows dynamically" {
+    const gpa = std.testing.allocator;
+
+    const payloads = [_]checked.StoredCheckedTypePayload{
+        .{ .record = .{ .fields = .{}, .ext = @enumFromInt(0) } },
+    };
+    const view = checked.CheckedTypeStoreView{ .stored_payloads = &payloads };
+
+    var plan = try analyzeCheckedTypes(gpa, view, &.{@as(checked.CheckedTypeId, @enumFromInt(0))}, .{});
+    defer plan.deinit();
+
+    const rep = plan.representations.items[@intFromEnum(plan.root_reps.items[0])];
+    try std.testing.expectEqual(RepresentationKind{ .dynamic = .flex }, rep.kind);
+    try std.testing.expect(rep.contains_dynamic);
+    try std.testing.expect(rep.descriptor != null);
 }
 
 test "boxy planner keeps explicit Box of dynamic payload distinct from dynamic payload representation" {

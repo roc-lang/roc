@@ -1955,12 +1955,20 @@ For runtime roots whose worker source resolves to a checked body in any checked
 module view available to post-check lowering, representation planning walks the
 reachable checked expressions, statements, and patterns in that body and records
 their checked types with that body's checked module id before layout planning
-runs. Imported direct calls therefore keep imported type ids attached to the
-imported artifact that owns them; they are not projected into root-module type
-ids and they are not recovered by name. A type that appears only in a local
-aggregate, temporary receiver, nested expression, or destructuring pattern is
-therefore still present in the explicit representation table consumed by
-lowering.
+runs. Callable-eval procedure bindings are resolved through the checked
+compile-time root table first. In completed runtime lowering, the root payload
+must be a finalized `ConstStore` function value; boxy reads its explicit
+`FnDef`, follows direct template references directly, and follows nested
+function identities through the checked `NestedProcSiteTable` to the lambda or
+closure expression that is the runtime callable body. It does not lower the
+compile-time entry-wrapper evaluator block as a runtime worker. A pending
+callable-eval root belongs to checking finalization, not runtime boxy lowering.
+Imported direct calls and restored const functions therefore keep imported type
+ids attached to the imported artifact that owns them; they are not projected
+into root-module type ids and they are not recovered by name. A type that
+appears only in a local aggregate, temporary receiver, nested expression, or
+destructuring pattern is therefore still present in the explicit representation
+table consumed by lowering.
 
 `.boxy` represents an unknown type-variable value as one ordinary Roc box
 payload pointer. This is the same runtime shape as `Box(T)`: a nullable or
@@ -1996,6 +2004,15 @@ payload elements. If such a value crosses a host ABI boundary, the wrapper uses
 the exact checked host layout for that boundary and adapts between the
 host-visible layout and the internal boxy layout. Host layout selection is
 never derived from the internal boxy layout.
+
+A checked record row is concrete in `.boxy` only when its extension is
+explicitly closed by `empty_record` after following checked alias payloads. A
+record whose row extension remains open, including the self-recursive empty row
+used by checked row variables, is represented as a dynamic boxed value. This
+prevents layout planning from inventing a concrete struct shape for a value
+whose fields are still row-polymorphic. Field access on such a value is a
+polymorphic operation and must be driven by explicit hidden row descriptor or
+dictionary data; it is not recovered from field names during lowering.
 
 ### Boxy `TypeDesc`
 
@@ -3217,11 +3234,15 @@ Before emitting worker bodies, the boxy lowerer resolves every worker plan to a
 checked procedure source. A worker source is one of the explicit authorities
 recorded in checking: a checked procedure template, a top-level procedure
 binding, or a procedure-use template. Resolution follows those references by
-artifact key and table id, then records the checked procedure template and
-checked body in a lowerer-local resolved-worker table. A runtime boxy worker
-must resolve to a checked body; lifted, synthetic, callable-eval, intrinsic, and
-compile-time entry-wrapper templates are not compatibility fallbacks for this
-path.
+artifact key and table id. Direct checked templates record their checked body.
+Callable-eval bindings first resolve the finalized compile-time root payload;
+the runtime worker is the stored `ConstStore` function's checked template or
+nested lambda expression, not the compile-time entry-wrapper evaluator. The
+lowerer-local resolved-worker table therefore records the checked module view,
+owning template identity, optional checked body id, and explicit root expression
+id that worker emission must lower. Lifted, synthetic, intrinsic, pending
+callable-eval roots, and generated runtime functions are not compatibility
+fallbacks for this path.
 
 The worker body builder consumes checked expression and pattern ids directly and
 emits statement LIR. Lambda worker arguments become LIR proc arguments, binder
