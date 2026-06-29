@@ -479,3 +479,76 @@ test "differential: nested if in branch body matches" {
         \\}
     );
 }
+
+test "differential: match on tag union (helper-delegating) matches" {
+    // Exercises the e_match arm: cond child, multiple branches each with their
+    // own hoist scope, per-pattern checkPattern + cond/pattern unify, and the
+    // between-branch pairwise body unify (no expected return type → pairwise
+    // path with the first branch's body var).
+    try expectIterMatchesRecursive(
+        \\Color : [Red, Green, Blue]
+        \\
+        \\name : Color -> Str
+        \\name = |c|
+        \\    match c {
+        \\        Red => "red"
+        \\        Green => "green"
+        \\        Blue => "blue"
+        \\    }
+        \\
+        \\main! = |_args| name(Red)
+    );
+}
+
+test "differential: match with payload binding and guard matches" {
+    // Branch patterns bind a payload var (checkPattern bindings + cond unify)
+    // and a guard (checkExprWithHoistSelectionSuppressed + freshBool unify),
+    // exercising the suppression raise/lower across the scheduled guard/body.
+    try expectIterMatchesRecursive(
+        \\classify : [Some(I64), None] -> Str
+        \\classify = |opt|
+        \\    match opt {
+        \\        Some(n) if n > 0 => "positive"
+        \\        Some(_) => "nonpos"
+        \\        None => "none"
+        \\    }
+        \\
+        \\main! = |_args| classify(Some(3))
+    );
+}
+
+test "differential: match with expected return annotation (accumulator path) matches" {
+    // The annotation supplies expected.branch_result, so the branch_acc
+    // accumulator path (checkBranchBodyAgainstExpected) is exercised instead of
+    // the pairwise path.
+    try expectIterMatchesRecursive(
+        \\to_num : [A, B, C] -> I64
+        \\to_num = |t|
+        \\    match t {
+        \\        A => 1
+        \\        B => 2
+        \\        C => 3
+        \\    }
+        \\
+        \\main! = |_args| to_num(B)
+    );
+}
+
+test "differential: match nested inside if branch body matches" {
+    // A match nested under an if branch body: the match runs as a re-entrant
+    // checkExpr under the iterative if-body frame, flattening recursion across
+    // the two interleaving kinds.
+    try expectIterMatchesRecursive(
+        \\main! = |_args| {
+        \\    x = 1
+        \\    if x > 0 {
+        \\        match x {
+        \\            0 => "zero"
+        \\            _ => "nonzero"
+        \\        }
+        \\    } else {
+        \\        "neg"
+        \\    }
+        \\}
+    );
+}
