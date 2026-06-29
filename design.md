@@ -3328,6 +3328,14 @@ interchangeability bits from committed element layouts and emits either a
 constant false value or an `assign_low_level` with explicit
 `interchangeable` metadata.
 
+Checked unary operator nodes use that same primitive path when they remain in a
+checked body. Unary `-` lowers as `num_negate`, so signed-integer
+lowest-value protection is emitted by the low-level expander before the raw
+operation. Unary `!` lowers as `bool_not` over the checked Bool representation.
+If checking resolved the source operator to a static-dispatch call instead, the
+boxy lowerer consumes the checked dispatch plan for that call rather than
+reinterpreting the original source operator.
+
 For every checked function value expression, the boxy lowerer emits an
 `assign_packed_erased_fn`-style LIR statement that creates an erased callable
 payload. The payload stores the function entry and capture bytes. Capture bytes
