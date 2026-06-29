@@ -85,10 +85,18 @@ pub const RepChild = struct {
     rep: TypeRepId,
 };
 
+pub const DeclaredField = struct {
+    index: u16,
+    source_type: checked.CheckedTypeId,
+    rep: TypeRepId,
+    is_padding: bool = false,
+};
+
 pub const TypeRepresentation = struct {
     source_type: checked.CheckedTypeId,
     kind: RepresentationKind,
     children: Span = .{},
+    declared_fields: Span = .{},
     dictionaries: Span = .{},
     descriptor: ?DescriptorRequirementId = null,
     contains_dynamic: bool = false,
@@ -137,6 +145,7 @@ pub const ProgramPlan = struct {
     root_reps: std.ArrayList(TypeRepId),
     representations: std.ArrayList(TypeRepresentation),
     children: std.ArrayList(RepChild),
+    declared_fields: std.ArrayList(DeclaredField),
     descriptors: std.ArrayList(DescriptorRequirement),
     dictionaries: std.ArrayList(DictionaryRequirement),
 
@@ -147,6 +156,7 @@ pub const ProgramPlan = struct {
             .root_reps = .empty,
             .representations = .empty,
             .children = .empty,
+            .declared_fields = .empty,
             .descriptors = .empty,
             .dictionaries = .empty,
         };
@@ -155,6 +165,7 @@ pub const ProgramPlan = struct {
     pub fn deinit(self: *ProgramPlan) void {
         self.dictionaries.deinit(self.allocator);
         self.descriptors.deinit(self.allocator);
+        self.declared_fields.deinit(self.allocator);
         self.children.deinit(self.allocator);
         self.representations.deinit(self.allocator);
         self.root_reps.deinit(self.allocator);
@@ -164,6 +175,10 @@ pub const ProgramPlan = struct {
 
     pub fn childSlice(self: *const ProgramPlan, span: Span) []const RepChild {
         return self.children.items[span.start .. span.start + span.len];
+    }
+
+    pub fn declaredFieldSlice(self: *const ProgramPlan, span: Span) []const DeclaredField {
+        return self.declared_fields.items[span.start .. span.start + span.len];
     }
 
     pub fn dictionarySlice(self: *const ProgramPlan, span: Span) []const DictionaryRequirement {
@@ -382,6 +397,7 @@ const Builder = struct {
         for (nominal.padding_field_types, 0..) |padding, index| {
             try self.appendChild(.{ .nominal_padding_field = @intCast(index) }, padding);
         }
+        const declared_fields = try self.appendNominalDeclaredFields(nominal);
         return .{
             .source_type = ty,
             .kind = .{ .nominal = if (nominal.representation == .opaque_without_backing)
@@ -391,7 +407,72 @@ const Builder = struct {
             else
                 .transparent },
             .children = self.childSpanFrom(start),
+            .declared_fields = declared_fields,
         };
+    }
+
+    fn appendNominalDeclaredFields(
+        self: *Builder,
+        nominal: checked.CheckedNominalType,
+    ) Allocator.Error!Span {
+        if (nominal.declared_fields.len == 0) return Span.empty();
+        const backing_fields = switch (self.checked_types.payload(nominal.backing)) {
+            .record => |record| record.fields,
+            else => boxyPlanInvariant("checked nominal declared field order had a non-record backing"),
+        };
+
+        const start: u32 = @intCast(self.plan.declared_fields.items.len);
+        var padding_ordinal: u16 = 0;
+        for (nominal.declared_fields) |declared| {
+            switch (declared) {
+                .named => |name| {
+                    const field = self.nominalBackingField(backing_fields, name) orelse
+                        boxyPlanInvariant("checked nominal declared named field was missing from backing row");
+                    try self.plan.declared_fields.append(self.allocator, .{
+                        .index = field.index,
+                        .source_type = field.ty,
+                        .rep = try self.analyzeType(field.ty),
+                    });
+                },
+                .padding => |index| {
+                    const raw_index: usize = @intCast(index);
+                    if (raw_index >= nominal.padding_field_types.len) {
+                        boxyPlanInvariant("checked nominal declared padding field index was out of range");
+                    }
+                    const padding_ty = nominal.padding_field_types[raw_index];
+                    try self.plan.declared_fields.append(self.allocator, .{
+                        .index = @intCast(backing_fields.len + padding_ordinal),
+                        .source_type = padding_ty,
+                        .rep = try self.analyzeType(padding_ty),
+                        .is_padding = true,
+                    });
+                    padding_ordinal += 1;
+                },
+            }
+        }
+        return .{
+            .start = start,
+            .len = @intCast(self.plan.declared_fields.items.len - start),
+        };
+    }
+
+    const NominalBackingField = struct {
+        index: u16,
+        ty: checked.CheckedTypeId,
+    };
+
+    fn nominalBackingField(
+        _: *Builder,
+        backing_fields: []const checked.CheckedRecordField,
+        name: RecordFieldLabelId,
+    ) ?NominalBackingField {
+        for (backing_fields, 0..) |field, index| {
+            if (field.name == name) return .{
+                .index = @intCast(index),
+                .ty = field.ty,
+            };
+        }
+        return null;
     }
 
     fn builtinUnaryNominalRepresentation(
@@ -676,6 +757,58 @@ test "boxy planner keeps explicit Box of dynamic payload distinct from dynamic p
     try std.testing.expectEqual(@as(usize, 1), children.len);
     try std.testing.expectEqual(ChildRole.box_payload, children[0].role);
     try std.testing.expectEqual(RepresentationKind{ .dynamic = .flex }, plan.representations.items[@intFromEnum(children[0].rep)].kind);
+}
+
+test "boxy planner records nominal declared field order from checked payloads" {
+    const gpa = std.testing.allocator;
+
+    const field_a: RecordFieldLabelId = @enumFromInt(1);
+    const field_b: RecordFieldLabelId = @enumFromInt(2);
+    const type_pool = [_]checked.CheckedTypeId{@enumFromInt(0)};
+    const record_fields = [_]checked.CheckedRecordField{
+        .{ .name = field_a, .ty = @enumFromInt(0) },
+        .{ .name = field_b, .ty = @enumFromInt(1) },
+    };
+    const declared_fields = [_]checked.CheckedDeclaredField{
+        .{ .named = field_a },
+        .{ .padding = 0 },
+        .{ .named = field_b },
+    };
+    const payloads = [_]checked.StoredCheckedTypePayload{
+        .{ .nominal = builtinNominal(.u8, @enumFromInt(0), .{}) },
+        .{ .nominal = builtinNominal(.u16, @enumFromInt(1), .{}) },
+        .{ .empty_record = {} },
+        .{ .record = .{ .fields = .{ .start = 0, .len = 2 }, .ext = @enumFromInt(2) } },
+        .{ .nominal = .{
+            .name = @enumFromInt(3),
+            .origin_module = @enumFromInt(4),
+            .is_opaque = false,
+            .backing = @enumFromInt(3),
+            .representation = .{ .local_declaration = @enumFromInt(0) },
+            .padding_field_types = .{ .start = 0, .len = 1 },
+            .declared_fields = .{ .start = 0, .len = 3 },
+        } },
+    };
+    const view = checked.CheckedTypeStoreView{
+        .stored_payloads = &payloads,
+        .type_id_pool = &type_pool,
+        .record_field_pool = &record_fields,
+        .declared_field_pool = &declared_fields,
+    };
+
+    var plan = try analyzeCheckedTypes(gpa, view, &.{@as(checked.CheckedTypeId, @enumFromInt(4))}, .{});
+    defer plan.deinit();
+
+    const nominal = plan.representations.items[@intFromEnum(plan.root_reps.items[0])];
+    try std.testing.expectEqual(RepresentationKind{ .nominal = .transparent }, nominal.kind);
+    const fields = plan.declaredFieldSlice(nominal.declared_fields);
+    try std.testing.expectEqual(@as(usize, 3), fields.len);
+    try std.testing.expectEqual(@as(u16, 0), fields[0].index);
+    try std.testing.expect(!fields[0].is_padding);
+    try std.testing.expectEqual(@as(u16, 2), fields[1].index);
+    try std.testing.expect(fields[1].is_padding);
+    try std.testing.expectEqual(@as(u16, 1), fields[2].index);
+    try std.testing.expect(!fields[2].is_padding);
 }
 
 fn builtinNominal(

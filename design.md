@@ -2486,7 +2486,13 @@ Nominal records additionally carry their declared field order as separate
 explicit data, because their runtime layout follows declaration order rather
 than the lexicographic row order (see Nominal Record Field Order). The
 lexicographic row order remains the identity used for field-name resolution;
-declared order feeds only layout. These stay two separate data.
+declared order feeds only layout. In checked artifacts this is a flat
+`CheckedDeclaredField` pool. A named entry stores the record-field label that
+must be matched against the lexicographic backing row; a padding entry stores
+the ordinal of the corresponding checked padding type in
+`padding_field_types`. The padding type itself is not duplicated in the
+declared-order entry, so generic nominal instantiation substitutes padding
+types in exactly one place. These stay two separate data.
 
 For named types, checking outputs:
 
@@ -3142,6 +3148,14 @@ caches of explicit checked and boxy lowering data. They must not recover missing
 facts from source syntax, type display strings, backend symbols, or runtime
 bytes.
 
+Boxy representation planning consumes checked nominal declared-order entries
+directly. It lowers each named entry to the matching backing-row child and each
+padding entry to the instantiated padding type referenced by its ordinal. The
+boxy layout planner then emits a nominal struct node in that declared order and
+marks it with the shared layout graph's nominal-struct marker. The ordinary
+layout store verifies or repairs the field order; boxy does not implement a
+separate nominal layout algorithm.
+
 Release `.lss` builds must not allocate, fill, traverse, or validate a materialized
 Lambda Mono expression, pattern, or statement tree. Release builds may allocate
 only the Lambda Mono decision data needed by direct LIR lowering: function-free types,
@@ -3525,10 +3539,13 @@ by name at several stages (checking, Monotype row lowering, and Monotype
 instantiation) because field-name resolution and digests depend on a single
 fixed order, so the declared order is not recoverable from the lowered record
 itself. Canonicalization preserves it — a nominal declaration's record
-annotation keeps its fields in source order — and it is carried forward as a
-datum on the nominal type, distinct from the (lexicographic) backing row, so
-later stages consume it without rescanning declarations. The struct commit
-applies it as the declared order described above; field-name resolution
+annotation keeps its fields in source order — and checking records it in the
+checked artifact's declared-field pool. Nominal declaration rows and any
+materialized nominal type payload that represents that declaration carry a span
+into that pool, distinct from the (lexicographic) backing row, so later stages
+consume it without rescanning declarations. Monotype lowering, boxy planning,
+and layout lowering all use this checked datum. The struct commit applies it as
+the declared order described above; field-name resolution
 continues to use the lexicographic row order, independent of the layout offset
 map. The same datum is consumed by the interpreter's layout store, so all
 backends agree.

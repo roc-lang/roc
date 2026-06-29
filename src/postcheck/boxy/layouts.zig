@@ -14,6 +14,7 @@ const Plan = @import("plan.zig");
 
 const Allocator = std.mem.Allocator;
 const checked = check.CheckedModule;
+const RecordFieldLabelId = @TypeOf(@as(checked.CheckedRecordField, undefined).name);
 const TagLabelId = @TypeOf(@as(checked.CheckedTag, undefined).name);
 
 pub const DynamicBoxLayout = struct {
@@ -405,8 +406,12 @@ const GraphBuilder = struct {
             .alias => return try self.inputForRep(self.parent.requiredSingleChild(rep_id, .alias_backing).rep),
             .nominal => |kind| switch (kind) {
                 .transparent => {
-                    if (hasNominalPadding(self.parent.program.childSlice(rep.children))) {
-                        boxyLayoutInvariant("checked nominal layout is missing declared field order for padding fields");
+                    if (rep.declared_fields.len != 0) {
+                        const node = try self.graph.reserveNode(self.parent.allocator);
+                        self.local_nodes[index] = node;
+                        self.graph.setNode(node, .{ .struct_ = try self.nominalDeclaredFields(rep) });
+                        try self.graph.markNominalStruct(self.parent.allocator, node);
+                        return .{ .local = node };
                     }
                     return try self.inputForRep(self.parent.requiredSingleChild(rep_id, .nominal_backing).rep);
                 },
@@ -462,6 +467,22 @@ const GraphBuilder = struct {
             }
         }
         return try self.graph.appendFields(self.parent.allocator, fields.items);
+    }
+
+    fn nominalDeclaredFields(self: *GraphBuilder, rep: Plan.TypeRepresentation) Allocator.Error!layout.GraphFieldSpan {
+        const declared_fields = self.parent.program.declaredFieldSlice(rep.declared_fields);
+        if (declared_fields.len == 0) return layout.GraphFieldSpan.empty();
+
+        const fields = try self.parent.allocator.alloc(layout.GraphField, declared_fields.len);
+        defer self.parent.allocator.free(fields);
+        for (declared_fields, fields) |field, *out| {
+            out.* = .{
+                .index = field.index,
+                .child = try self.inputForRep(field.rep),
+                .is_padding = field.is_padding,
+            };
+        }
+        return try self.graph.appendFields(self.parent.allocator, fields);
     }
 
     fn requireClosedRecord(self: *GraphBuilder, children: []const Plan.RepChild) Allocator.Error!void {
@@ -567,13 +588,6 @@ fn primitiveLayout(primitive: checked.CheckedPrimitive) layout.Idx {
         .f64 => .f64,
         .dec => .dec,
     };
-}
-
-fn hasNominalPadding(children: []const Plan.RepChild) bool {
-    for (children) |child| {
-        if (child.role == .nominal_padding_field) return true;
-    }
-    return false;
 }
 
 fn sameChildRole(a: Plan.ChildRole, b: Plan.ChildRole) bool {
@@ -728,6 +742,59 @@ test "boxy layout planner records private worker function arg and return layouts
     try std.testing.expectEqual(layouts.dynamic_storage_layout, ret_layout.getIdx());
     try std.testing.expectEqual(@as(usize, 0), layouts.rootLayoutSlice(root.host_args).len);
     try std.testing.expect(root.host_ret == null);
+}
+
+test "boxy layout planner commits nominal declared fields through shared layout store" {
+    const gpa = std.testing.allocator;
+
+    const field_a: RecordFieldLabelId = @enumFromInt(1);
+    const field_b: RecordFieldLabelId = @enumFromInt(2);
+    const type_pool = [_]checked.CheckedTypeId{@enumFromInt(0)};
+    const record_fields = [_]checked.CheckedRecordField{
+        .{ .name = field_a, .ty = @enumFromInt(0) },
+        .{ .name = field_b, .ty = @enumFromInt(1) },
+    };
+    const declared_fields = [_]checked.CheckedDeclaredField{
+        .{ .named = field_a },
+        .{ .padding = 0 },
+        .{ .named = field_b },
+    };
+    const payloads = [_]checked.StoredCheckedTypePayload{
+        .{ .nominal = builtinNominal(.u8, @enumFromInt(0), .{}) },
+        .{ .nominal = builtinNominal(.u16, @enumFromInt(1), .{}) },
+        .{ .empty_record = {} },
+        .{ .record = .{ .fields = .{ .start = 0, .len = 2 }, .ext = @enumFromInt(2) } },
+        .{ .nominal = .{
+            .name = @enumFromInt(3),
+            .origin_module = @enumFromInt(4),
+            .is_opaque = false,
+            .backing = @enumFromInt(3),
+            .representation = .{ .local_declaration = @enumFromInt(0) },
+            .padding_field_types = .{ .start = 0, .len = 1 },
+            .declared_fields = .{ .start = 0, .len = 3 },
+        } },
+    };
+    const view = checked.CheckedTypeStoreView{
+        .stored_payloads = &payloads,
+        .type_id_pool = &type_pool,
+        .record_field_pool = &record_fields,
+        .declared_field_pool = &declared_fields,
+    };
+
+    var program = try Plan.analyzeCheckedTypes(gpa, view, &.{@as(checked.CheckedTypeId, @enumFromInt(4))}, .{});
+    defer program.deinit();
+
+    var store = try layout.Store.init(gpa, .u64);
+    defer store.deinit();
+
+    var layouts = try build(gpa, &program, &store, .{});
+    defer layouts.deinit();
+
+    const runtime = layouts.rep_layouts[@intFromEnum(program.root_reps.items[0])].worker;
+    const struct_idx = store.getLayout(runtime.layoutIdx()).getStruct().idx;
+    try std.testing.expectEqual(@as(u32, 0), store.getStructFieldOffsetByOriginalIndex(struct_idx, 0));
+    try std.testing.expectEqual(@as(u32, 2), store.getStructFieldOffsetByOriginalIndex(struct_idx, 1));
+    try std.testing.expectEqual(@as(u32, 4), store.getStructSize(struct_idx));
 }
 
 fn builtinNominal(

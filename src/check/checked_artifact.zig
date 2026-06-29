@@ -2149,6 +2149,16 @@ pub const CheckedRecordField = struct {
     ty: CheckedTypeId,
 };
 
+/// One entry in a nominal record's source-declared layout order.
+///
+/// Named entries reference the lexicographic backing row by field name. Padding
+/// entries reference the corresponding slot in `padding_field_types`; the type
+/// itself stays in that existing pool so substitution has one source of truth.
+pub const CheckedDeclaredField = union(enum) {
+    named: canonical.RecordFieldLabelId,
+    padding: u32,
+};
+
 /// Public `CheckedRecordType` declaration.
 pub const CheckedRecordType = struct {
     fields: []const CheckedRecordField,
@@ -2360,6 +2370,9 @@ pub const CheckedNominalType = struct {
     /// layout selection reserves `sizeof` of each. Empty for the common case of
     /// a nominal with no unnamed fields.
     padding_field_types: []const CheckedTypeId = &.{},
+    /// Source-declared field order for nominal record layout. Empty for
+    /// non-record nominal backings and for builtin nominals.
+    declared_fields: []const CheckedDeclaredField = &.{},
 };
 
 /// Public `CheckedTypePayload` declaration (read form).
@@ -2425,7 +2438,7 @@ pub const StoredAlias = struct {
 };
 
 /// POD form of `CheckedNominalType`: `args` and `padding_field_types` are ranges
-/// into `type_id_pool`.
+/// into `type_id_pool`; `declared_fields` is a range into `declared_field_pool`.
 pub const StoredNominal = struct {
     name: canonical.TypeNameId,
     origin_module: canonical.ModuleNameId,
@@ -2436,6 +2449,7 @@ pub const StoredNominal = struct {
     representation: CheckedNominalRepresentationRef,
     args: CheckedTypeRange = .{},
     padding_field_types: CheckedTypeRange = .{},
+    declared_fields: CheckedTypeRange = .{},
 };
 
 /// POD form of `CheckedRecordType`: `fields` is a range into `record_field_pool`.
@@ -2525,6 +2539,7 @@ fn reconstructCheckedTypePayload(pool_owner: anytype, stored: StoredCheckedTypeP
             .representation = n.representation,
             .args = pool_owner.typeIdPool()[n.args.start .. n.args.start + n.args.len],
             .padding_field_types = pool_owner.typeIdPool()[n.padding_field_types.start .. n.padding_field_types.start + n.padding_field_types.len],
+            .declared_fields = pool_owner.declaredFieldPool()[n.declared_fields.start .. n.declared_fields.start + n.declared_fields.len],
         } },
         .function => |f| .{ .function = .{
             .kind = f.kind,
@@ -2568,6 +2583,7 @@ pub const CheckedTypeStoreView = struct {
     nominal_declarations: []const CheckedNominalDeclaration = &.{},
     type_id_pool: []const CheckedTypeId = &.{},
     record_field_pool: []const CheckedRecordField = &.{},
+    declared_field_pool: []const CheckedDeclaredField = &.{},
     constraint_pool: []const CheckedStaticDispatchConstraint = &.{},
     tag_pool: []const CheckedTag = &.{},
     var_names: *const canonical.NameInterner = &empty_view_var_names,
@@ -2580,6 +2596,11 @@ pub const CheckedTypeStoreView = struct {
     /// The shared flat pool of record fields backing record range fields.
     pub fn recordFieldPool(self: CheckedTypeStoreView) []const CheckedRecordField {
         return self.record_field_pool;
+    }
+
+    /// The shared flat pool of declared nominal record fields.
+    pub fn declaredFieldPool(self: CheckedTypeStoreView) []const CheckedDeclaredField {
+        return self.declared_field_pool;
     }
 
     /// The shared flat pool of static-dispatch constraints.
@@ -2898,6 +2919,11 @@ pub const CheckedNominalDeclaration = struct {
     pf_start: u32 = 0,
     pf_len: u32 = 0,
 
+    /// Range into `CheckedTypeStore.declared_field_pool` for the source-declared
+    /// nominal record field order.
+    df_start: u32 = 0,
+    df_len: u32 = 0,
+
     /// The declaration's formal args within its store's `type_id_pool`.
     pub fn formalArgs(self: CheckedNominalDeclaration, pool_owner: anytype) []const CheckedTypeId {
         return pool_owner.typeIdPool()[self.fa_start .. self.fa_start + self.fa_len];
@@ -2906,6 +2932,11 @@ pub const CheckedNominalDeclaration = struct {
     /// The declaration's padding field types within its store's `type_id_pool`.
     pub fn paddingFieldTypes(self: CheckedNominalDeclaration, pool_owner: anytype) []const CheckedTypeId {
         return pool_owner.typeIdPool()[self.pf_start .. self.pf_start + self.pf_len];
+    }
+
+    /// The declaration's source-declared nominal record field order.
+    pub fn declaredFields(self: CheckedNominalDeclaration, pool_owner: anytype) []const CheckedDeclaredField {
+        return pool_owner.declaredFieldPool()[self.df_start .. self.df_start + self.df_len];
     }
 };
 
@@ -2959,6 +2990,8 @@ pub const CheckedTypeStore = struct {
     type_id_pool: std.ArrayList(CheckedTypeId) = .empty,
     /// Flat pool of record fields backing record/record_unbound payloads.
     record_field_pool: std.ArrayList(CheckedRecordField) = .empty,
+    /// Flat pool of source-declared nominal record layout fields.
+    declared_field_pool: std.ArrayList(CheckedDeclaredField) = .empty,
     /// Flat pool of static-dispatch constraints backing flex/rigid variables.
     constraint_pool: std.ArrayList(CheckedStaticDispatchConstraint) = .empty,
     /// Flat pool of (range-form) tags backing tag_union payloads.
@@ -2977,6 +3010,11 @@ pub const CheckedTypeStore = struct {
     /// The shared flat pool of record fields backing record range fields.
     pub fn recordFieldPool(self: *const CheckedTypeStore) []const CheckedRecordField {
         return self.record_field_pool.items;
+    }
+
+    /// The shared flat pool of declared nominal record fields.
+    pub fn declaredFieldPool(self: *const CheckedTypeStore) []const CheckedDeclaredField {
+        return self.declared_field_pool.items;
     }
 
     /// The shared flat pool of static-dispatch constraints.
@@ -3024,6 +3062,12 @@ pub const CheckedTypeStore = struct {
     fn appendRecordFields(self: *CheckedTypeStore, allocator: Allocator, fields: []const CheckedRecordField) Allocator.Error!CheckedTypeRange {
         std.debug.assert(!self.serialized);
         return artifact_serialize.appendSpan(CheckedTypeRange, CheckedRecordField, &self.record_field_pool, allocator, fields);
+    }
+
+    /// Append `fields` to `declared_field_pool`, returning their range.
+    fn appendDeclaredFields(self: *CheckedTypeStore, allocator: Allocator, fields: []const CheckedDeclaredField) Allocator.Error!CheckedTypeRange {
+        std.debug.assert(!self.serialized);
+        return artifact_serialize.appendSpan(CheckedTypeRange, CheckedDeclaredField, &self.declared_field_pool, allocator, fields);
     }
 
     /// Append `constraints` to `constraint_pool`, returning their range.
@@ -3094,6 +3138,8 @@ pub const CheckedTypeStore = struct {
                 if (n.args.len != 0) allocator.free(n.args);
                 const padding_field_types = try self.appendTypeIds(allocator, n.padding_field_types);
                 if (n.padding_field_types.len != 0) allocator.free(n.padding_field_types);
+                const declared_fields = try self.appendDeclaredFields(allocator, n.declared_fields);
+                if (n.declared_fields.len != 0) allocator.free(n.declared_fields);
                 break :blk .{ .nominal = .{
                     .name = n.name,
                     .origin_module = n.origin_module,
@@ -3104,6 +3150,7 @@ pub const CheckedTypeStore = struct {
                     .representation = n.representation,
                     .args = args,
                     .padding_field_types = padding_field_types,
+                    .declared_fields = declared_fields,
                 } };
             },
             .function => |f| blk: {
@@ -3286,6 +3333,7 @@ pub const CheckedTypeStore = struct {
             .nominal_declarations = self.nominal_declarations.items,
             .type_id_pool = self.type_id_pool.items,
             .record_field_pool = self.record_field_pool.items,
+            .declared_field_pool = self.declared_field_pool.items,
             .constraint_pool = self.constraint_pool.items,
             .tag_pool = self.tag_pool.items,
             .var_names = &self.var_names,
@@ -3543,6 +3591,7 @@ pub const CheckedTypeStore = struct {
             self.roots.deinit(allocator);
             self.type_id_pool.deinit(allocator);
             self.record_field_pool.deinit(allocator);
+            self.declared_field_pool.deinit(allocator);
             self.constraint_pool.deinit(allocator);
             self.tag_pool.deinit(allocator);
             self.var_names.deinit(allocator);
@@ -3560,15 +3609,16 @@ pub const CheckedTypeStore = struct {
         nominal_declarations: SerializedSlice(CheckedNominalDeclaration) = .{},
         type_id_pool: SerializedSlice(CheckedTypeId) = .{},
         record_field_pool: SerializedSlice(CheckedRecordField) = .{},
+        declared_field_pool: SerializedSlice(CheckedDeclaredField) = .{},
         constraint_pool: SerializedSlice(CheckedStaticDispatchConstraint) = .{},
         tag_pool: SerializedSlice(CheckedTag) = .{},
         var_names: canonical.NameInterner.Serialized,
 
         comptime {
-            // 11 = 8 `SerializedSlice` fields + 3 for the nested `var_names`
+            // 12 = 9 `SerializedSlice` fields + 3 for the nested `var_names`
             // (`SerialStringInterner.Serialized` = 3 `SafeList` base pointers). The
             // count is the true total fixups, independent of stored data size.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 11);
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 12);
         }
 
         const Serde = artifact_serialize.SliceStoreSerde(CheckedTypeStore, @This());
@@ -3668,6 +3718,8 @@ pub const CheckedTypeStore = struct {
                 .backing = n.backing,
                 .representation = n.representation,
                 .args = try allocator.dupe(CheckedTypeId, n.args),
+                .padding_field_types = try allocator.dupe(CheckedTypeId, n.padding_field_types),
+                .declared_fields = try allocator.dupe(CheckedDeclaredField, n.declared_fields),
             } },
             .function => |f| .{ .function = .{
                 .kind = f.kind,
@@ -3743,6 +3795,7 @@ pub const CheckedTypeStore = struct {
                 .representation = nominal.representation,
                 .args = try self.cloneCheckedTypeIdSliceSubstituting(allocator, names, nominal.args, formals, actuals, active),
                 .padding_field_types = try self.cloneCheckedTypeIdSliceSubstituting(allocator, names, nominal.padding_field_types, formals, actuals, active),
+                .declared_fields = try allocator.dupe(CheckedDeclaredField, nominal.declared_fields),
             } },
             .function => |function| try self.cloneCheckedFunctionTypeSubstituting(allocator, names, function, formals, actuals, active),
             .tag_union => |tag_union| .{ .tag_union = .{
@@ -3992,6 +4045,7 @@ fn deinitCheckedTypePayloadBuild(allocator: Allocator, payload: *CheckedTypePayl
         .nominal => |nominal| {
             allocator.free(nominal.args);
             allocator.free(nominal.padding_field_types);
+            allocator.free(nominal.declared_fields);
         },
         .function => |function| allocator.free(function.args),
         .tag_union => |tag_union| deinitCheckedTagsBuild(allocator, tag_union.tags),
@@ -4168,6 +4222,16 @@ fn appendCheckedNominalDeclarationFromStatement(
     var padding_field_types_owned = padding_field_types.len != 0;
     errdefer if (padding_field_types_owned) allocator.free(padding_field_types);
 
+    const declared_fields = try declaredFieldsFromDeclarationAnno(
+        allocator,
+        module,
+        names,
+        padding_field_types,
+        anno_idx,
+    );
+    var declared_fields_owned = declared_fields.len != 0;
+    errdefer if (declared_fields_owned) allocator.free(declared_fields);
+
     const nominal_payload = CheckedTypePayloadBuild{ .nominal = .{
         .name = statement_nominal.name,
         .origin_module = statement_nominal.origin_module,
@@ -4181,9 +4245,11 @@ fn appendCheckedNominalDeclarationFromStatement(
             .{ .local_declaration = localNominalDeclarationIdForStatement(module, statement_idx) },
         .args = formal_args,
         .padding_field_types = padding_field_types,
+        .declared_fields = declared_fields,
     } };
     formal_args_owned = false;
     padding_field_types_owned = false;
+    declared_fields_owned = false;
 
     const declaration_root = try appendNominalDeclarationRootPayload(
         allocator,
@@ -4524,6 +4590,8 @@ fn appendInstantiatedNamedApplicationFromTemplate(
 
             const payload_args = if (actual_args.len == 0) &.{} else try allocator.dupe(CheckedTypeId, actual_args);
             errdefer if (payload_args.len != 0) allocator.free(payload_args);
+            const declared_fields = if (nominal.declared_fields.len == 0) &.{} else try allocator.dupe(CheckedDeclaredField, nominal.declared_fields);
+            errdefer if (declared_fields.len != 0) allocator.free(declared_fields);
 
             break :blk try appendExplicitCheckedTypePayload(allocator, names, store, .{ .nominal = .{
                 .name = nominal.name,
@@ -4535,6 +4603,7 @@ fn appendInstantiatedNamedApplicationFromTemplate(
                 .representation = nominal.representation,
                 .args = payload_args,
                 .padding_field_types = padding_field_types,
+                .declared_fields = declared_fields,
             } });
         },
         else => checkedArtifactInvariant("checked declaration template application did not resolve to a named type", .{}),
@@ -4724,6 +4793,45 @@ fn paddingFieldTypesFromDeclarationAnno(
         if (!field.is_unnamed) continue;
         out[out_index] = try appendCheckedTypeRootFromDeclarationAnno(allocator, module, names, imports, store, active, local_type_declarations, declaration_formals, field.ty);
         out_index += 1;
+    }
+    return out;
+}
+
+fn declaredFieldsFromDeclarationAnno(
+    allocator: Allocator,
+    module: TypedCIR.Module,
+    names: *canonical.CanonicalNameStore,
+    padding_field_types: []const CheckedTypeId,
+    anno_idx: CIR.TypeAnno.Idx,
+) Allocator.Error![]const CheckedDeclaredField {
+    var record_anno = anno_idx;
+    const record = while (true) {
+        switch (module.moduleEnvConst().store.getTypeAnno(record_anno)) {
+            .parens => |parens| record_anno = parens.anno,
+            .record => |record| break record,
+            else => return &.{},
+        }
+    };
+    const fields = module.moduleEnvConst().store.sliceAnnoRecordFields(record.fields);
+    if (fields.len == 0) return &.{};
+
+    const out = try allocator.alloc(CheckedDeclaredField, fields.len);
+    errdefer allocator.free(out);
+    var padding_cursor: u32 = 0;
+    for (fields, 0..) |field_idx, i| {
+        const field = module.moduleEnvConst().store.getAnnoRecordField(field_idx);
+        out[i] = if (field.is_unnamed) blk: {
+            if (padding_cursor >= padding_field_types.len) {
+                checkedArtifactInvariant("nominal declaration had more unnamed fields than recorded padding types", .{});
+            }
+            defer padding_cursor += 1;
+            break :blk .{ .padding = padding_cursor };
+        } else .{
+            .named = try names.internRecordFieldIdent(module.identStoreConst(), field.name),
+        };
+    }
+    if (padding_cursor != padding_field_types.len) {
+        checkedArtifactInvariant("nominal declaration recorded padding types that were missing from declared field order", .{});
     }
     return out;
 }
@@ -4985,7 +5093,8 @@ fn appendCheckedNominalDeclarationFromPayload(
         if (canonicalNominalTypeKeyEql(existing.nominal, nominal_key)) {
             if (existing.backing == nominal.backing and
                 checkedTypeIdSliceEql(existing.formalArgs(store), nominal.args) and
-                checkedTypeIdSliceEql(existing.paddingFieldTypes(store), nominal.padding_field_types))
+                checkedTypeIdSliceEql(existing.paddingFieldTypes(store), nominal.padding_field_types) and
+                checkedDeclaredFieldSliceEql(existing.declaredFields(store), nominal.declared_fields))
             {
                 return;
             }
@@ -4999,8 +5108,11 @@ fn appendCheckedNominalDeclarationFromPayload(
     defer allocator.free(args_copy);
     const padding_copy = try allocator.dupe(CheckedTypeId, nominal.padding_field_types);
     defer allocator.free(padding_copy);
+    const declared_copy = try allocator.dupe(CheckedDeclaredField, nominal.declared_fields);
+    defer allocator.free(declared_copy);
     const fa = try store.appendTypeIds(allocator, args_copy);
     const pf = try store.appendTypeIds(allocator, padding_copy);
+    const df = try store.appendDeclaredFields(allocator, declared_copy);
     try declarations.append(allocator, .{
         .id = @enumFromInt(@as(u32, @intCast(declarations.items.len))),
         .nominal = nominal_key,
@@ -5010,6 +5122,8 @@ fn appendCheckedNominalDeclarationFromPayload(
         .fa_len = fa.len,
         .pf_start = pf.start,
         .pf_len = pf.len,
+        .df_start = df.start,
+        .df_len = df.len,
     });
 }
 
@@ -5017,6 +5131,23 @@ fn checkedTypeIdSliceEql(a: []const CheckedTypeId, b: []const CheckedTypeId) boo
     if (a.len != b.len) return false;
     for (a, b) |left, right| {
         if (left != right) return false;
+    }
+    return true;
+}
+
+fn checkedDeclaredFieldSliceEql(a: []const CheckedDeclaredField, b: []const CheckedDeclaredField) bool {
+    if (a.len != b.len) return false;
+    for (a, b) |left, right| {
+        switch (left) {
+            .named => |left_name| switch (right) {
+                .named => |right_name| if (left_name != right_name) return false,
+                .padding => return false,
+            },
+            .padding => |left_index| switch (right) {
+                .named => return false,
+                .padding => |right_index| if (left_index != right_index) return false,
+            },
+        }
     }
     return true;
 }
@@ -5169,6 +5300,7 @@ const SubstitutedCheckedTypeKeyBuilder = struct {
                 for (nominal.args) |arg| try self.writeType(arg);
                 self.writeU32(@intCast(nominal.padding_field_types.len));
                 for (nominal.padding_field_types) |padding_type| try self.writeType(padding_type);
+                self.writeDeclaredFields(nominal.declared_fields);
             },
             .function => |func| {
                 switch (finalizedFunctionKind(func.kind)) {
@@ -5533,6 +5665,25 @@ const SubstitutedCheckedTypeKeyBuilder = struct {
                 self.writeBool(num_literal.is_u128);
                 self.writeBool(num_literal.is_negative);
                 self.writeBool(num_literal.is_fractional);
+            }
+        }
+    }
+
+    fn writeDeclaredFields(
+        self: *SubstitutedCheckedTypeKeyBuilder,
+        fields: []const CheckedDeclaredField,
+    ) void {
+        self.writeU32(@intCast(fields.len));
+        for (fields) |field| {
+            switch (field) {
+                .named => |name| {
+                    self.writeTag("named");
+                    self.writeBytes(self.names.recordFieldLabelText(name));
+                },
+                .padding => |index| {
+                    self.writeTag("padding");
+                    self.writeU32(index);
+                },
             }
         }
     }
@@ -5923,6 +6074,7 @@ fn copyCheckedFlatType(
                     // annotation), not on usage payloads copied from the internal
                     // type store, which carry no unnamed-field information.
                     .padding_field_types = &.{},
+                    .declared_fields = &.{},
                 },
             };
         },
@@ -15931,6 +16083,7 @@ const PlatformRequirementTypeCompatibilityChecker = struct {
         if (expected_nominal.builtin != actual_nominal.builtin) return false;
         if (expected_nominal.is_opaque != actual_nominal.is_opaque) return false;
         if (expected_nominal.args.len != actual_nominal.args.len) return false;
+        if (!checkedDeclaredFieldSliceEql(expected_nominal.declared_fields, actual_nominal.declared_fields)) return false;
         for (expected_nominal.args, actual_nominal.args) |expected_arg, actual_arg| {
             if (!try self.compatible(expected_arg, actual_arg)) return false;
         }
@@ -16508,6 +16661,8 @@ const PlatformAppRelationTypeResolver = struct {
                 errdefer self.allocator.free(args);
                 const padding_field_types = try self.finalizeRootSlice(nominal.padding_field_types);
                 errdefer self.allocator.free(padding_field_types);
+                const declared_fields = if (nominal.declared_fields.len == 0) &.{} else try self.allocator.dupe(CheckedDeclaredField, nominal.declared_fields);
+                errdefer if (declared_fields.len != 0) self.allocator.free(declared_fields);
                 const backing = try self.finalize(nominal.backing, .value);
                 break :blk .{ .nominal = .{
                     .name = nominal.name,
@@ -16519,6 +16674,7 @@ const PlatformAppRelationTypeResolver = struct {
                     .representation = nominal.representation,
                     .args = args,
                     .padding_field_types = padding_field_types,
+                    .declared_fields = declared_fields,
                 } };
             },
         };
@@ -16561,7 +16717,8 @@ const PlatformAppRelationTypeResolver = struct {
             platform_nominal.origin_module != app_nominal.origin_module or
             platform_nominal.source_decl != app_nominal.source_decl or
             platform_nominal.is_opaque != app_nominal.is_opaque or
-            platform_nominal.args.len != app_nominal.args.len)
+            platform_nominal.args.len != app_nominal.args.len or
+            !checkedDeclaredFieldSliceEql(platform_nominal.declared_fields, app_nominal.declared_fields))
         {
             checkedArtifactInvariant("platform/app relation nominal mismatch", .{});
         }
@@ -16569,6 +16726,8 @@ const PlatformAppRelationTypeResolver = struct {
         errdefer self.allocator.free(args);
         const padding_field_types = try self.mergeRootSlices(platform_nominal.padding_field_types, app_nominal.padding_field_types);
         errdefer self.allocator.free(padding_field_types);
+        const declared_fields = if (platform_nominal.declared_fields.len == 0) &.{} else try self.allocator.dupe(CheckedDeclaredField, platform_nominal.declared_fields);
+        errdefer if (declared_fields.len != 0) self.allocator.free(declared_fields);
         const backing = try self.merge(platform_nominal.backing, app_nominal.backing, .value);
         return .{ .nominal = .{
             .name = platform_nominal.name,
@@ -16580,6 +16739,7 @@ const PlatformAppRelationTypeResolver = struct {
             .representation = platform_nominal.representation,
             .args = args,
             .padding_field_types = padding_field_types,
+            .declared_fields = declared_fields,
         } };
     }
 
@@ -17305,7 +17465,8 @@ const PlatformAppRelationTypeDigestBuilder = struct {
                     platform_nominal.source_decl != app_nominal.source_decl or
                     platform_nominal.is_opaque != app_nominal.is_opaque or
                     platform_nominal.args.len != app_nominal.args.len or
-                    platform_nominal.padding_field_types.len != app_nominal.padding_field_types.len)
+                    platform_nominal.padding_field_types.len != app_nominal.padding_field_types.len or
+                    !checkedDeclaredFieldSliceEql(platform_nominal.declared_fields, app_nominal.declared_fields))
                 {
                     checkedArtifactInvariant("platform/app relation digest nominal mismatch", .{});
                 }
@@ -17320,6 +17481,7 @@ const PlatformAppRelationTypeDigestBuilder = struct {
                 for (platform_nominal.padding_field_types, app_nominal.padding_field_types) |platform_pad, app_pad| {
                     try self.writeMerge(platform_pad, app_pad, .value);
                 }
+                self.writeDeclaredFields(platform_nominal.declared_fields);
             },
         };
     }
@@ -17414,6 +17576,7 @@ const PlatformAppRelationTypeDigestBuilder = struct {
                 for (nominal.args) |arg| try self.writeFinalize(arg, .value);
                 self.writeU32(@intCast(nominal.padding_field_types.len));
                 for (nominal.padding_field_types) |padding_type| try self.writeFinalize(padding_type, .value);
+                self.writeDeclaredFields(nominal.declared_fields);
             },
         };
     }
@@ -17462,6 +17625,7 @@ const PlatformAppRelationTypeDigestBuilder = struct {
                 for (nominal.args) |arg| try self.writeSourceType(arg);
                 self.writeU32(@intCast(nominal.padding_field_types.len));
                 for (nominal.padding_field_types) |padding_type| try self.writeSourceType(padding_type);
+                self.writeDeclaredFields(nominal.declared_fields);
             },
             .function => |function| {
                 switch (finalizedFunctionKind(function.kind)) {
@@ -18589,6 +18753,25 @@ const PlatformAppRelationTypeDigestBuilder = struct {
     fn writeCycle(self: *PlatformAppRelationTypeDigestBuilder, slot: u32) void {
         self.writeTag("cycle");
         self.writeU32(slot);
+    }
+
+    fn writeDeclaredFields(
+        self: *PlatformAppRelationTypeDigestBuilder,
+        fields: []const CheckedDeclaredField,
+    ) void {
+        self.writeU32(@intCast(fields.len));
+        for (fields) |field| {
+            switch (field) {
+                .named => |name| {
+                    self.writeTag("named");
+                    self.writeBytes(self.names.recordFieldLabelText(name));
+                },
+                .padding => |index| {
+                    self.writeTag("padding");
+                    self.writeU32(index);
+                },
+            }
+        }
     }
 
     fn writeTag(self: *PlatformAppRelationTypeDigestBuilder, tag: []const u8) void {
@@ -24097,7 +24280,7 @@ pub const CheckedModuleArtifact = struct {
             // `proc_bases`; `checked_types` includes its `var_names` interner = 3).
             // POD inline `key`/`module_identity` contribute 0. Fixed at compile time,
             // independent of stored data size.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 175);
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 176);
         }
 
         /// Append every sub-store's bytes to `writer` in field order, recording
@@ -24217,7 +24400,7 @@ pub const CheckedModuleArtifact = struct {
     /// Manual discriminant for `SERIALIZED_VERSION_HASH`: bump to force a cache /
     /// baked-blob invalidation for a layout change the structural fingerprint below
     /// cannot observe (e.g. a semantic change to how a field is interpreted).
-    const serialized_layout_version: u32 = 3;
+    const serialized_layout_version: u32 = 4;
 
     /// Comptime fingerprint of `Serialized`'s layout, mirroring
     /// `cache_module.MODULE_ENV_VERSION_HASH`. It is appended to the baked builtin
@@ -25168,6 +25351,7 @@ pub const CheckedTypeProjector = struct {
                 .representation = remapViewNominalRepresentation(nominal.representation),
                 .args = try self.projectCheckedTypeViewIds(source, source_names, nominal.args, active),
                 .padding_field_types = try self.projectCheckedTypeViewIds(source, source_names, nominal.padding_field_types, active),
+                .declared_fields = try self.projectCheckedTypeViewDeclaredFields(source_names, nominal.declared_fields),
             } },
             .function => |function| .{ .function = .{
                 .kind = finalizedFunctionKind(function.kind),
@@ -25258,6 +25442,23 @@ pub const CheckedTypeProjector = struct {
             out[i] = .{
                 .name = try self.remapViewRecordField(source_names, field.name),
                 .ty = try self.projectCheckedTypeViewRootInner(source, source_names, field.ty, active),
+            };
+        }
+        return out;
+    }
+
+    fn projectCheckedTypeViewDeclaredFields(
+        self: *CheckedTypeProjector,
+        source_names: ?*const canonical.CanonicalNameStore,
+        fields: []const CheckedDeclaredField,
+    ) Allocator.Error![]const CheckedDeclaredField {
+        if (fields.len == 0) return &.{};
+        const out = try self.allocator.alloc(CheckedDeclaredField, fields.len);
+        errdefer self.allocator.free(out);
+        for (fields, 0..) |field, i| {
+            out[i] = switch (field) {
+                .named => |name| .{ .named = try self.remapViewRecordField(source_names, name) },
+                .padding => |index| .{ .padding = index },
             };
         }
         return out;
@@ -25506,6 +25707,8 @@ pub const CheckedTypeProjector = struct {
         errdefer self.allocator.free(args);
         const padding_field_types = try self.projectImportedTypeIds(imported, nominal.padding_field_types);
         errdefer self.allocator.free(padding_field_types);
+        const declared_fields = try self.projectImportedDeclaredFields(imported, nominal.declared_fields);
+        errdefer self.allocator.free(declared_fields);
         return .{ .nominal = .{
             .name = try self.remapTypeName(imported, nominal.name),
             .origin_module = try self.remapModuleName(imported, nominal.origin_module),
@@ -25516,6 +25719,7 @@ pub const CheckedTypeProjector = struct {
             .representation = try self.remapImportedNominalRepresentation(imported, nominal),
             .args = args,
             .padding_field_types = padding_field_types,
+            .declared_fields = declared_fields,
         } };
     }
 
@@ -25567,6 +25771,23 @@ pub const CheckedTypeProjector = struct {
             out[i] = .{
                 .name = try self.remapRecordField(imported, field.name),
                 .ty = try self.projectImportedCheckedType(imported, field.ty),
+            };
+        }
+        return out;
+    }
+
+    fn projectImportedDeclaredFields(
+        self: *CheckedTypeProjector,
+        imported: ImportedModuleView,
+        fields: []const CheckedDeclaredField,
+    ) Allocator.Error![]const CheckedDeclaredField {
+        if (fields.len == 0) return &.{};
+        const out = try self.allocator.alloc(CheckedDeclaredField, fields.len);
+        errdefer self.allocator.free(out);
+        for (fields, 0..) |field, i| {
+            out[i] = switch (field) {
+                .named => |name| .{ .named = try self.remapRecordField(imported, name) },
+                .padding => |index| .{ .padding = index },
             };
         }
         return out;
@@ -25736,6 +25957,7 @@ const CheckedTypeStoreImportProjector = struct {
                 .representation = try self.remapNominalRepresentation(nominal),
                 .args = try self.projectIds(nominal.args),
                 .padding_field_types = try self.projectIds(nominal.padding_field_types),
+                .declared_fields = try self.projectDeclaredFields(nominal.declared_fields),
             } },
             .function => |function| .{ .function = .{
                 .kind = finalizedFunctionKind(function.kind),
@@ -25811,6 +26033,22 @@ const CheckedTypeStoreImportProjector = struct {
             out[i] = .{
                 .name = try self.remapRecordField(field.name),
                 .ty = try self.project(field.ty),
+            };
+        }
+        return out;
+    }
+
+    fn projectDeclaredFields(
+        self: *CheckedTypeStoreImportProjector,
+        fields: []const CheckedDeclaredField,
+    ) Allocator.Error![]const CheckedDeclaredField {
+        if (fields.len == 0) return &.{};
+        const out = try self.allocator.alloc(CheckedDeclaredField, fields.len);
+        errdefer self.allocator.free(out);
+        for (fields, 0..) |field, i| {
+            out[i] = switch (field) {
+                .named => |name| .{ .named = try self.remapRecordField(name) },
+                .padding => |index| .{ .padding = index },
             };
         }
         return out;
@@ -27739,6 +27977,11 @@ test "CheckedTypeStore: POD round-trip preserves payloads, tags, var names, rang
 
     // A nominal declaration with formal args [b].
     const fa = try store.appendTypeIds(gpa, &.{b});
+    const pf = try store.appendTypeIds(gpa, &.{a});
+    const df = try store.appendDeclaredFields(gpa, &.{
+        .{ .named = @enumFromInt(4) },
+        .{ .padding = 0 },
+    });
     try store.nominal_declarations.append(gpa, .{
         .id = @enumFromInt(@as(u32, @intCast(store.nominal_declarations.items.len))),
         .nominal = .{ .module_name = @enumFromInt(1), .type_name = @enumFromInt(2), .source_decl = null },
@@ -27746,6 +27989,10 @@ test "CheckedTypeStore: POD round-trip preserves payloads, tags, var names, rang
         .backing = a,
         .fa_start = fa.start,
         .fa_len = fa.len,
+        .pf_start = pf.start,
+        .pf_len = pf.len,
+        .df_start = df.start,
+        .df_len = df.len,
     });
 
     // Serialize → aligned buffer → deserialize.
@@ -27780,6 +28027,8 @@ test "CheckedTypeStore: POD round-trip preserves payloads, tags, var names, rang
     // Scheme generalized vars + decl formal args.
     try std.testing.expectEqualSlices(CheckedTypeId, &.{ a, b }, loaded.schemes.items[0].generalizedVars(&loaded));
     try std.testing.expectEqualSlices(CheckedTypeId, &.{b}, loaded.nominal_declarations.items[0].formalArgs(&loaded));
+    try std.testing.expectEqualSlices(CheckedTypeId, &.{a}, loaded.nominal_declarations.items[0].paddingFieldTypes(&loaded));
+    try std.testing.expectEqualSlices(CheckedDeclaredField, &.{ .{ .named = @enumFromInt(4) }, .{ .padding = 0 } }, loaded.nominal_declarations.items[0].declaredFields(&loaded));
 
     // The view exposes the same data.
     const v = loaded.view();
@@ -28008,8 +28257,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, bump `serialized_layout_version` and replace the golden bytes below with
     // the ones this assertion prints.
     const golden: [32]u8 = .{
-        0xDC, 0xEE, 0xC1, 0xAC, 0xB4, 0xCE, 0x7E, 0xFD, 0x41, 0xFC, 0xDC, 0x67, 0x7A, 0x26, 0x0B, 0x8B,
-        0x41, 0xF6, 0x4C, 0x0A, 0x48, 0xEA, 0x2C, 0x23, 0x50, 0x9E, 0x28, 0xE3, 0x12, 0xFA, 0x16, 0xA0,
+        0x82, 0xA9, 0x2F, 0x23, 0xF9, 0x36, 0x81, 0xC6, 0x6F, 0x0C, 0xA9, 0x68, 0x8B, 0x1A, 0x8C, 0x89,
+        0x13, 0xDD, 0x3D, 0x99, 0xD2, 0x7E, 0x16, 0x46, 0x69, 0x6C, 0x1A, 0x85, 0x59, 0x56, 0x4A, 0x57,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }
