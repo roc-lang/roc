@@ -51,6 +51,23 @@ list_tag_record_parses_and_encodes = |json| {
 
 expect list_tag_record_parses_and_encodes("[{\"status\":\"Active\"},{\"status\":\"Paused\"}]")
 
+expect {
+	missing_payload : Try([Active, Paused], Json)
+	missing_payload = Json.parse("{\"Active\":}")
+
+	missing_trailing_payload : Try([Active, Paused], Json)
+	missing_trailing_payload = Json.parse("{\"Active\":,}")
+
+	explicit_empty_payload : Try([Active, Paused], Json)
+	explicit_empty_payload = Json.parse("{\"Active\":{}}")
+
+	missing_payload_is_invalid = missing_payload == Err(Json.invalid_json)
+	missing_trailing_payload_is_invalid = missing_trailing_payload == Err(Json.invalid_json)
+	explicit_empty_payload_is_valid = explicit_empty_payload == Ok(Active)
+
+	missing_payload_is_invalid and missing_trailing_payload_is_invalid and explicit_empty_payload_is_valid
+}
+
 list_two_field_record_parses_and_encodes : Str -> Bool
 list_two_field_record_parses_and_encodes = |json| {
 	result : Try(List({ foo : Str, bar : U64 }), Json)

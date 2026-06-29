@@ -1397,6 +1397,14 @@ Builtin :: [].{
 
 						payload = Str.trim_start(Str.drop_prefix(after_key, ":"))
 
+						if Str.starts_with(payload, "}") {
+							return Err(Json.invalid_json)
+						}
+
+						if Str.starts_with(payload, ",") {
+							return Err(Json.invalid_json)
+						}
+
 						parsed = ParseTagUnionSpec.parse(
 							spec,
 							{
