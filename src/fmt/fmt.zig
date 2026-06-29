@@ -1877,11 +1877,6 @@ const Formatter = struct {
                 const args_region = AST.TokenizedRegion{ .start = mapper_region.end, .end = region.end };
                 try fmt.formatCollection(args_region, .round, AST.Expr.Idx, fmt.ast.store.exprSlice(na.args), Formatter.formatExpr);
             },
-            .nominal_record => |nr| {
-                try fmt.formatExprDiscard(nr.mapper);
-                try fmt.push('.');
-                try fmt.formatExprDiscard(nr.backing);
-            },
             .malformed => {
                 // Output nothing for malformed node
             },
@@ -1955,6 +1950,11 @@ const Formatter = struct {
                 }
 
                 try fmt.pushTokenText(t.tag_tok);
+                if (t.backing_value) {
+                    // Nominal-value destructure renders as `Type.(args)` (the `.`
+                    // distinguishes it from an ordinary applied-tag `Tag(args)`).
+                    try fmt.push('.');
+                }
                 if (t.args.span.len > 0) {
                     try fmt.formatCollection(region, .round, AST.Pattern.Idx, fmt.ast.store.patternSlice(t.args), Formatter.formatPattern);
                 }
@@ -3200,13 +3200,6 @@ const Formatter = struct {
                     },
                     .record_builder => |rb| {
                         return fmt.nodesWillBeMultiline(AST.RecordField.Idx, fmt.ast.store.recordFieldSlice(rb.fields));
-                    },
-                    .nominal_record => |nr| {
-                        if (fmt.nodeWillBeMultiline(AST.Expr.Idx, nr.mapper)) {
-                            return true;
-                        }
-
-                        return fmt.nodeWillBeMultiline(AST.Expr.Idx, nr.backing);
                     },
                     .suffix_single_question => |s| {
                         return fmt.nodeWillBeMultiline(AST.Expr.Idx, s.expr);

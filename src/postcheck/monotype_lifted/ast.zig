@@ -40,6 +40,8 @@ pub const ComptimeSiteKind = Mono.ComptimeSiteKind;
 pub const ComptimeSite = Mono.ComptimeSite;
 /// Record field expression entry.
 pub const FieldExpr = Mono.FieldExpr;
+/// Keyed pre-lift function capture operand.
+pub const FnDefCapture = Mono.FnDefCapture;
 /// Record destructuring field pattern.
 pub const RecordDestruct = Mono.RecordDestruct;
 /// Compiler-generated initialized-payload switch shared with Monotype IR.
@@ -135,6 +137,7 @@ pub const Program = struct {
     typed_locals: std.ArrayList(TypedLocal),
     stmt_ids: std.ArrayList(StmtId),
     field_exprs: std.ArrayList(FieldExpr),
+    fn_def_captures: std.ArrayList(FnDefCapture),
     record_destructs: std.ArrayList(RecordDestruct),
     str_pattern_steps: std.ArrayList(Mono.StrPatternStep),
     branches: std.ArrayList(Branch),
@@ -177,6 +180,7 @@ pub const Program = struct {
         typed_locals: std.ArrayList(TypedLocal),
         stmt_ids: std.ArrayList(StmtId),
         field_exprs: std.ArrayList(FieldExpr),
+        fn_def_captures: std.ArrayList(FnDefCapture),
         record_destructs: std.ArrayList(RecordDestruct),
         str_pattern_steps: std.ArrayList(Mono.StrPatternStep),
         branches: std.ArrayList(Branch),
@@ -207,6 +211,7 @@ pub const Program = struct {
             .typed_locals = typed_locals,
             .stmt_ids = stmt_ids,
             .field_exprs = field_exprs,
+            .fn_def_captures = fn_def_captures,
             .record_destructs = record_destructs,
             .str_pattern_steps = str_pattern_steps,
             .branches = branches,
@@ -253,6 +258,7 @@ pub const Program = struct {
         self.branches.deinit(self.allocator);
         self.str_pattern_steps.deinit(self.allocator);
         self.record_destructs.deinit(self.allocator);
+        self.fn_def_captures.deinit(self.allocator);
         self.field_exprs.deinit(self.allocator);
         self.stmt_ids.deinit(self.allocator);
         self.typed_locals.deinit(self.allocator);
@@ -378,6 +384,12 @@ pub const Program = struct {
         return .{ .start = start, .len = @intCast(values.len) };
     }
 
+    pub fn addFnDefCaptureSpan(self: *Program, values: []const FnDefCapture) std.mem.Allocator.Error!Span(FnDefCapture) {
+        const start: u32 = @intCast(self.fn_def_captures.items.len);
+        try self.fn_def_captures.appendSlice(self.allocator, values);
+        return .{ .start = start, .len = @intCast(values.len) };
+    }
+
     pub fn addRecordDestructSpan(self: *Program, values: []const RecordDestruct) std.mem.Allocator.Error!Span(RecordDestruct) {
         const start: u32 = @intCast(self.record_destructs.items.len);
         try self.record_destructs.appendSlice(self.allocator, values);
@@ -420,6 +432,10 @@ pub const Program = struct {
 
     pub fn fieldExprSpan(self: *const Program, span_: Span(FieldExpr)) []const FieldExpr {
         return self.field_exprs.items[span_.start..][0..span_.len];
+    }
+
+    pub fn fnDefCaptureSpan(self: *const Program, span_: Span(FnDefCapture)) []const FnDefCapture {
+        return self.fn_def_captures.items[span_.start..][0..span_.len];
     }
 
     pub fn recordDestructSpan(self: *const Program, span_: Span(RecordDestruct)) []const RecordDestruct {
