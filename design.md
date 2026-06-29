@@ -3226,6 +3226,14 @@ explicit target local before continuing to the next statement. Literal workers
 use the ordinary `assign_literal` statements with layouts selected from the
 boxy layout plan; zst values use ordinary empty-struct assignment.
 
+Checked string segment literals lower to ordinary LIR string-view literals. The
+lowerer copies the checked literal bytes into the LIR string store and emits
+`assign_literal.str_literal` with a view over exactly those bytes. A
+`str_from_quote` expression whose checked target is builtin `Str` follows the
+same path. A `str_from_quote` expression with a static-dispatch conversion plan
+is not a string literal assignment; it lowers through the checked dispatch plan
+for that conversion.
+
 Checked block lowering is continuation-based. Before the final expression is
 lowered, the body builder allocates and binds every checked declaration local
 from the block's explicit checked statement list, using the checked pattern type
