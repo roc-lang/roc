@@ -552,3 +552,66 @@ test "differential: match nested inside if branch body matches" {
         \\}
     );
 }
+
+test "differential: unannotated lambda (no expected function) matches" {
+    // Exercises the e_lambda `.enter`/`.exit` path with NO annotation: arg
+    // patterns checked with `.fn_arg` ctx, body scheduled with Expected.none(),
+    // and the function type built via mkFuncUnbound (body performs no effects).
+    try expectIterMatchesRecursive(
+        \\main! = |_args| {
+        \\    add = |a, b| a + b
+        \\    add(1, 2)
+        \\}
+    );
+}
+
+test "differential: annotated lambda (expected function return) matches" {
+    // Exercises the e_lambda annotated path: arg patterns checked with
+    // `.from_annotation`, per-arg annotation unify, the body checked with the
+    // annotation's return type as branch_result, and the post-body
+    // annotation-return unify.
+    try expectIterMatchesRecursive(
+        \\twice : I64 -> I64
+        \\twice = |n| n * 2
+        \\
+        \\main! = |_args| twice(21)
+    );
+}
+
+test "differential: multi-arg annotated lambda with shared rigid type var matches" {
+    // Two args share the rigid `a`, driving the rigid-var pairwise unify loop
+    // (`.fn_args_bound_var`) in addition to the per-arg annotation unify.
+    try expectIterMatchesRecursive(
+        \\pick : a, a -> a
+        \\pick = |x, y| if x == y x else y
+        \\
+        \\main! = |_args| pick(1, 2)
+    );
+}
+
+test "differential: lambda with effectful body builds effectful function type" {
+    // The lambda body performs an effect (a `dbg`), so the body's does_fx is
+    // true and the function type is built via mkFuncEffectful — while the lambda
+    // expression itself must still contribute does_fx = false to its parent.
+    try expectIterMatchesRecursive(
+        \\main! = |_args| {
+        \\    log = |x| {
+        \\        dbg x
+        \\        x
+        \\    }
+        \\    log(7)
+        \\}
+    );
+}
+
+test "differential: nested lambda (closure inside lambda body) matches" {
+    // A lambda whose body returns another lambda: the inner lambda is scheduled
+    // as a child frame under the outer lambda's body slot, exercising the
+    // empirical-exhaustiveness save/restore nesting and recursion flattening.
+    try expectIterMatchesRecursive(
+        \\adder : I64 -> (I64 -> I64)
+        \\adder = |x| |y| x + y
+        \\
+        \\main! = |_args| adder(3)(4)
+    );
+}

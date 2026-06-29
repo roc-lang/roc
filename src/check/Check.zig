@@ -9821,6 +9821,22 @@ const CheckKindState = union(enum) {
         last_if_branch: CIR.Expr.IfBranch.Idx,
         error_recovery: bool,
     },
+    /// State for `e_lambda`. Created in `.enter` after the arg patterns and
+    /// annotation unifies run; carries what `.exit` needs once the single `body`
+    /// child completes. `anno_ret` is the (unwrapped) expected function's return
+    /// var when the lambda is annotated (used for the post-body annotation-return
+    /// unify and as the body's expected `branch_result`), else null.
+    /// `saved_empirical_exhaustiveness_depth` is the value `.enter` zeroed (the
+    /// recursive arm's `defer`-restored guard), restored in `.exit`.
+    lambda: struct {
+        anno_ret: ?Var,
+        saved_empirical_exhaustiveness_depth: u32,
+        /// True when this lambda is NOT an immediate callee, so its body is a
+        /// delayed dependency: `delayed_dependency_depth` was bumped in
+        /// `enterLambdaExpr` and must be lowered in `exitLambdaExpr` (mirrors the
+        /// recursive arm's `defer`).
+        body_is_delayed_dependency: bool,
+    },
 };
 
 /// A reified `checkExpr` stack frame. Must be cheap to memcpy (lives in an
@@ -12035,6 +12051,18 @@ fn checkExprIter(self: *Self, root_idx: CIR.Expr.Idx, root_env: *Env, root_expec
                     .e_if => {
                         try self.enterIfExpr(top);
                     },
+                    // INTERLEAVING: `e_lambda` records its param span, checks the
+                    // arg patterns inline, runs the annotation rigid/per-arg
+                    // unifies, saves+zeroes the exhaustiveness guard, and
+                    // schedules the single `body` child; `.exit` runs the
+                    // post-body close/anno-return unify and builds the function
+                    // type. Delegated to a helper (NOT inlined) so its
+                    // arg-scheduling/constraint locals do not bloat
+                    // `checkExprIter`'s native stack frame on the deep
+                    // statement-nesting spine (mirrors `enterForExpr`).
+                    .e_lambda => {
+                        try self.enterLambdaExpr(top);
+                    },
                     // Helper-delegating / per-child-state kinds: like the leaf
                     // kinds below, advance to `.exit` and run the recursive body
                     // verbatim there. Their child `checkExpr` calls re-enter the
@@ -13265,6 +13293,21 @@ fn checkExprIter(self: *Self, root_idx: CIR.Expr.Idx, root_env: *Env, root_expec
                     .e_if => {
                         try self.exitIfExpr(top);
                     },
+                    // INTERLEAVING POST-BODY for `e_lambda`: the single `body`
+                    // child has been checked (its `does_fx` OR'd into `f.does_fx`
+                    // on pop). Delegated to a helper (NOT inlined) so its
+                    // constraint locals + arg-buffer do not bloat
+                    // `checkExprIter`'s native stack frame on the deep
+                    // statement-nesting spine. The helper reads the body's
+                    // `does_fx` to pick `mkFuncEffectful`/`mkFuncUnbound`, then
+                    // RESETS `f.does_fx` to false — a lambda value performs no
+                    // effects itself, so it must contribute `false` to its
+                    // parent and to `hoist_frame.finish` (the recursive arm never
+                    // assigns its outer `does_fx`). No `checkExpr` re-entry / no
+                    // `check_frame_stack` append, so `f` stays valid.
+                    .e_lambda => {
+                        try self.exitLambdaExpr(top);
+                    },
                     else => unreachable, // gated by isMigratedKind
                 }
                 const does_fx = try self.checkExitEpilogue(
@@ -13356,6 +13399,12 @@ fn isMigratedKind(expr: CIR.Expr) bool {
         // unifies and loop the branch cursor; `.exit` runs the final-else
         // post-body and the closing unifies.
         .e_if,
+        // Single-child interleaving kind: `.enter` records the param span,
+        // checks the arg patterns inline, runs the annotation rigid/per-arg
+        // unifies, zeroes the exhaustiveness guard, and schedules the `body`
+        // child; `.exit` runs the post-body close/anno-return unify, restores
+        // the guard, processes return constraints, and builds the function type.
+        .e_lambda,
         // Variable-arity multi-child kinds (this batch): schedule every child
         // as a frame in `.enter`, run the post-child body in `.exit`.
         .e_list,
@@ -16938,6 +16987,231 @@ fn forAfterIterable(self: *Self, top: usize) Allocator.Error!void {
     // Advance, THEN schedule the body (the append below may realloc).
     self.check_frame_stack.items[top].step = .exit;
     try self.check_frame_stack.append(self.gpa, makeEnterFrame(for_expr.body, env, child_expected));
+}
+
+/// `e_lambda` `.enter` step for the iterative driver (extracted from
+/// `checkExprIter` so its arg-scheduling/constraint locals do not bloat that
+/// function's native stack frame on the deep statement-nesting spine — mirrors
+/// `enterForExpr`).
+///
+/// Inlines the front of the recursive `.e_lambda` arm, in the SAME order:
+///   1. record the param span for the end-of-check pinnable collection;
+///   2. unwrap the (optional) expected `Func` from the annotation, following
+///      aliases through `fn_pure`/`fn_unbound`/`fn_effectful`;
+///   3. check the argument patterns inline (BEFORE any expected-type unify, so
+///      all pattern types are inferred) — `checkPattern` does not append to
+///      `check_frame_stack`, so `items[top]` stays valid across it;
+///   4. when annotated and arities match, run the rigid-var pairwise unify loop
+///      (poisoning `expr_var` to `.err` on a problem) then the per-arg
+///      annotation unify;
+///   5. save and ZERO `empirical_exhaustiveness_depth` (the recursive arm's
+///      `defer`-restored guard — restored in `exitLambdaExpr`).
+/// Then it parks the saved depth + the annotation return var in
+/// `kind_state.lambda`, advances to `.exit`, and schedules the single `body`
+/// child with the annotation's return type as `branch_result` (when annotated)
+/// or `Expected.none()`. The body schedule is last because `append` may realloc.
+/// `arg_vars` are NOT parked: each is `ModuleEnv.varFrom(pattern)`, a pure index
+/// transform, so `exitLambdaExpr` re-derives them from the param span.
+fn enterLambdaExpr(self: *Self, top: usize) Allocator.Error!void {
+    const lambda = self.cir.store.getExpr(self.check_frame_stack.items[top].expr_idx).e_lambda;
+    const env = self.check_frame_stack.items[top].env;
+    const expr_var = self.check_frame_stack.items[top].prologue.expr_var;
+    const mb_anno_vars = self.check_frame_stack.items[top].prologue.mb_anno_vars;
+
+    // (1) Record the parameter span for the end-of-check pinnable collection
+    // (appends to `checked_lambda_params`, NOT `check_frame_stack`).
+    try self.checked_lambda_params.append(self.gpa, lambda.args);
+
+    // (2) Even with an expected type, it may not actually be a function: unwrap
+    // it, following aliases, to get the actual function to check against.
+    const mb_anno_func: ?types_mod.Func = blk: {
+        if (mb_anno_vars) |anno_vars| {
+            var var_ = anno_vars.anno_var;
+            var guard = types_mod.debug.IterationGuard.init("checkExpr.lambda.unwrapExpectedFunc");
+            while (true) {
+                guard.tick();
+                switch (self.types.resolveVar(var_).desc.content) {
+                    .structure => |flat_type| {
+                        switch (flat_type) {
+                            .fn_pure => |func| break :blk func,
+                            .fn_unbound => |func| break :blk func,
+                            .fn_effectful => |func| break :blk func,
+                            else => break :blk null,
+                        }
+                    },
+                    .alias => |alias| {
+                        var_ = self.types.getAliasBackingVar(alias);
+                    },
+                    else => break :blk null,
+                }
+            }
+        } else {
+            break :blk null;
+        }
+    };
+
+    // (3) Check the argument patterns. This must happen *before* checking against
+    // the expected type so all the pattern types are inferred.
+    const arg_count = lambda.args.span.len;
+    const pattern_ctx: PatternCtx = if (mb_anno_func != null) .from_annotation else .fn_arg;
+    for (0..arg_count) |i| {
+        const pattern_idx = self.cir.store.patternAt(lambda.args, i);
+        try self.checkPattern(pattern_idx, pattern_ctx, env);
+    }
+
+    // (4) Now validate against the expected function, if any.
+    if (mb_anno_func) |anno_func| {
+        // Use index-based iteration instead of slices because unifyInContext may
+        // trigger reallocations that would invalidate slice pointers.
+        const anno_func_args_range = anno_func.args;
+        const anno_func_args_len = anno_func_args_range.len();
+
+        // Only when the arities match (otherwise the arity mismatch is caught by
+        // the regular expectation checking below this switch).
+        if (anno_func_args_len == arg_count) {
+            // First, find all rigid vars in the function's type and unify the
+            // matching corresponding lambda arguments together.
+            for (0..anno_func_args_len) |i| {
+                const anno_arg_1 = self.types.getVarAt(anno_func_args_range, @intCast(i));
+                const anno_resolved_1 = self.types.resolveVar(anno_arg_1);
+
+                // Skip any concrete arguments.
+                if (anno_resolved_1.desc.content != .rigid) {
+                    continue;
+                }
+
+                // Look for other arguments with the same type variable.
+                for (i + 1..anno_func_args_len) |j| for_blk: {
+                    const anno_arg_2 = self.types.getVarAt(anno_func_args_range, @intCast(j));
+                    const anno_resolved_2 = self.types.resolveVar(anno_arg_2);
+                    if (anno_resolved_1.var_ == anno_resolved_2.var_) {
+                        // These two argument indexes in the function's type have
+                        // the same rigid variable, so unify the corresponding
+                        // *lambda args* (re-derived from the param span).
+                        const arg_1 = ModuleEnv.varFrom(self.cir.store.patternAt(lambda.args, i));
+                        const arg_2 = ModuleEnv.varFrom(self.cir.store.patternAt(lambda.args, j));
+
+                        const unify_result = try self.unifyInContext(arg_1, arg_2, env, .{
+                            .fn_args_bound_var = .{
+                                .fn_name = self.enclosing_func_name,
+                                .first_arg_var = arg_1,
+                                .second_arg_var = arg_2,
+                                .first_arg_index = @intCast(i),
+                                .second_arg_index = @intCast(j),
+                                .num_args = @intCast(arg_count),
+                            },
+                        });
+                        if (unify_result.isProblem()) {
+                            // Context already set by unifyInContext. Stop.
+                            try self.unifyWith(expr_var, .err, env);
+                            break :for_blk;
+                        }
+                    }
+                }
+            }
+
+            // Then, lastly, unify the annotation types against the actual types.
+            for (0..arg_count) |i| {
+                const arg_var = ModuleEnv.varFrom(self.cir.store.patternAt(lambda.args, i));
+                const expected_arg_var = self.types.getVarAt(anno_func_args_range, @intCast(i));
+                _ = try self.unifyInContext(expected_arg_var, arg_var, env, .type_annotation);
+            }
+        }
+    }
+
+    // (5) Save & zero the empirical-exhaustiveness guard for the body subtree
+    // (restored in `exitLambdaExpr`, mirroring the recursive arm's `defer`).
+    const saved_empirical_exhaustiveness_depth = self.empirical_exhaustiveness_depth;
+    self.empirical_exhaustiveness_depth = 0;
+
+    // (6) If this lambda is not an immediate callee, its body is a delayed
+    // dependency: bump `delayed_dependency_depth` for the body subtree (lowered in
+    // `exitLambdaExpr`), mirroring the recursive arm's `defer`. This affects the
+    // body's hoisting decisions.
+    const body_is_delayed_dependency = !self.check_frame_stack.items[top].prologue.is_immediate_callee;
+    if (body_is_delayed_dependency) self.delayed_dependency_depth += 1;
+
+    const anno_ret: ?Var = if (mb_anno_func) |f| f.ret else null;
+
+    // Park state, advance, THEN schedule the body (the append may realloc).
+    self.check_frame_stack.items[top].kind_state = .{ .lambda = .{
+        .anno_ret = anno_ret,
+        .saved_empirical_exhaustiveness_depth = saved_empirical_exhaustiveness_depth,
+        .body_is_delayed_dependency = body_is_delayed_dependency,
+    } };
+    self.check_frame_stack.items[top].step = .exit;
+    // If we have an expected function, use its return type as the body's expected
+    // type; otherwise no expectation.
+    const body_expected = if (anno_ret) |ret| Expected.none().withBranchResult(ret) else Expected.none();
+    try self.check_frame_stack.append(self.gpa, makeEnterFrame(lambda.body, env, body_expected));
+}
+
+/// `e_lambda` `.exit` post-body step for the iterative driver (extracted from
+/// `checkExprIter` so its constraint locals + arg-buffer do not bloat that
+/// function's native stack frame on the deep statement-nesting spine).
+///
+/// The single `body` child has been checked (its `does_fx` OR'd into the lambda
+/// frame on pop). Inlines the tail of the recursive `.e_lambda` arm, in the SAME
+/// order: close absent constructed payload vars; run the annotation return-type
+/// unify (only when annotated); restore `empirical_exhaustiveness_depth`; process
+/// pending return constraints; check for infinite types; then build the function
+/// type — `mkFuncEffectful` when the body does fx, else `mkFuncUnbound` — by
+/// re-deriving `arg_vars` from the param span (cheap pure index transforms,
+/// avoiding a heap buffer parked across the body child). Finally it RESETS the
+/// frame's `does_fx` to false: defining a lambda performs no effects itself (the
+/// body's effectfulness is captured in the function type), and the recursive arm
+/// never assigns its outer `does_fx`, so the lambda frame must contribute `false`
+/// to both `hoist_frame.finish` (in the epilogue) and its parent. No `checkExpr`
+/// re-entry / no `check_frame_stack` append below, so `items[top]` stays valid.
+fn exitLambdaExpr(self: *Self, top: usize) Allocator.Error!void {
+    const lambda = self.cir.store.getExpr(self.check_frame_stack.items[top].expr_idx).e_lambda;
+    const env = self.check_frame_stack.items[top].env;
+    const expr_var = self.check_frame_stack.items[top].prologue.expr_var;
+    const st = self.check_frame_stack.items[top].kind_state.lambda;
+    // The body's effectfulness (OR'd into the frame on the body child's pop)
+    // selects the function type's effect; it is NOT the lambda's own does_fx.
+    const body_does_fx = self.check_frame_stack.items[top].does_fx;
+
+    const body_var = ModuleEnv.varFrom(lambda.body);
+
+    // Close absent constructed payload vars (both annotated and unannotated
+    // paths), then run the annotation return unify (annotated path only).
+    try self.closeAbsentConstructedPayloadVars(lambda.body, body_var);
+    if (st.anno_ret) |anno_ret| {
+        _ = try self.unifyInContext(anno_ret, body_var, env, .type_annotation);
+    }
+
+    // Restore the empirical-exhaustiveness guard (recursive arm's `defer`).
+    self.empirical_exhaustiveness_depth = st.saved_empirical_exhaustiveness_depth;
+
+    // Process pending return constraints (early returns / `?`) before generalizing
+    // the function type, then check for infinite types.
+    try self.processReturnConstraints(env);
+    try self.checkForInfiniteType(CIR.Expr.Idx, lambda.body);
+
+    // Create the function type. Re-derive `arg_vars` from the param span.
+    const arg_count = lambda.args.span.len;
+    var arg_vars_sfa = std.heap.stackFallback(16 * @sizeOf(Var), self.gpa);
+    const arg_vars_alloc = arg_vars_sfa.get();
+    const arg_vars = try arg_vars_alloc.alloc(Var, arg_count);
+    defer arg_vars_alloc.free(arg_vars);
+    for (0..arg_count) |i| {
+        arg_vars[i] = ModuleEnv.varFrom(self.cir.store.patternAt(lambda.args, i));
+    }
+
+    if (body_does_fx) {
+        try self.unifyWith(expr_var, try self.types.mkFuncEffectful(arg_vars, body_var), env);
+    } else {
+        try self.unifyWith(expr_var, try self.types.mkFuncUnbound(arg_vars, body_var), env);
+    }
+
+    // Lower the delayed-dependency depth bumped in `enterLambdaExpr` (mirrors the
+    // recursive arm's `defer`). The body subtree — which reads this for hoisting —
+    // has already completed, so the position here only needs to balance the bump.
+    if (st.body_is_delayed_dependency) self.delayed_dependency_depth -= 1;
+
+    // A lambda value performs no effects itself: contribute `false` upward.
+    self.check_frame_stack.items[top].does_fx = false;
 }
 
 fn checkIteratorForLoop(
