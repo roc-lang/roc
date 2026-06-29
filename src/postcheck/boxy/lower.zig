@@ -2332,7 +2332,7 @@ const ProcBodyBuilder = struct {
         switch (op) {
             .box_box,
             .box_unbox,
-            => boxyLowerInvariant("Box boundary low-level operation reached boxy lowering before descriptor-backed box adaptation lowering"),
+            => return try self.lowerBoxBoundaryLowLevelInto(target, op, args, next),
             .list_map_can_reuse => return try self.lowerListMapCanReuseInto(target, args, next),
             else => {},
         }
@@ -2358,6 +2358,58 @@ const ProcBodyBuilder = struct {
         } });
         continuation = try self.prependLoweredExprs(args, lowered, continuation);
         return continuation;
+    }
+
+    fn lowerBoxBoundaryLowLevelInto(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        op: can.CIR.Expr.LowLevel,
+        args: []const checked.CheckedExprId,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        if (args.len != 1) boxyLowerInvariant("Box low-level operation reached boxy lowering with the wrong arity");
+        const source_expr = self.module.checked_bodies.expr(args[0]);
+        const source = try self.addFrameLocal(self.workerRuntimeLayoutForType(source_expr.ty).layoutIdx());
+        const assign = try self.assignBoxBoundary(target, source, op, next);
+        return try self.lowerExprInto(source, args[0], assign);
+    }
+
+    fn assignBoxBoundary(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        source: LIR.LocalId,
+        op: can.CIR.Expr.LowLevel,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const target_layout = self.parent.result.store.getLocal(target).layout_idx;
+        const source_layout = self.parent.result.store.getLocal(source).layout_idx;
+        if (target_layout == source_layout) return try self.assignLocal(target, source, next);
+
+        const target_content = self.parent.result.layouts.getLayout(target_layout);
+        const source_content = self.parent.result.layouts.getLayout(source_layout);
+        if (target_content.eql(source_content)) return try self.assignLocal(target, source, next);
+
+        switch (op) {
+            .box_box => {
+                if (target_content.tag == .box and self.parent.result.layouts.getLayout(target_content.getIdx()).eql(source_content)) {
+                    return try self.assignUnaryLowLevel(target, .box_box, source, next);
+                }
+                if (target_content.tag == .box_of_zst and self.parent.result.layouts.isZeroSized(source_content)) {
+                    return try self.assignUnaryLowLevel(target, .box_box, source, next);
+                }
+            },
+            .box_unbox => {
+                if (source_content.tag == .box and self.parent.result.layouts.getLayout(source_content.getIdx()).eql(target_content)) {
+                    return try self.assignUnaryLowLevel(target, .box_unbox, source, next);
+                }
+                if (source_content.tag == .box_of_zst and self.parent.result.layouts.isZeroSized(target_content)) {
+                    return try self.assignUnaryLowLevel(target, .box_unbox, source, next);
+                }
+            },
+            else => unreachable,
+        }
+
+        boxyLowerInvariant("Box boundary low-level operation required descriptor-backed box adaptation lowering");
     }
 
     fn lowerListMapCanReuseInto(
@@ -11718,6 +11770,218 @@ test "boxy lowerer emits ordinary low-level calls after source-order argument lo
     try std.testing.expectEqual(first.target, args[0]);
     try std.testing.expectEqual(second.target, args[1]);
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = add.target } }, out.lir_result.store.getCFStmt(add.next));
+}
+
+test "boxy lowerer boxes concrete values with ordinary box low-level" {
+    const gpa = std.testing.allocator;
+
+    var artifact = minimalCheckedArtifact(gpa);
+    defer artifact.canonical_names.deinit();
+    defer artifact.checked_types.deinit(gpa);
+    defer artifact.checked_bodies.deinit(gpa);
+
+    try artifact.checked_types.type_id_pool.append(gpa, @enumFromInt(0));
+    try artifact.checked_types.payloads.append(gpa, .{
+        .nominal = builtinNominal(.u64, @enumFromInt(0), .{}),
+    });
+    try artifact.checked_types.payloads.append(gpa, .{
+        .nominal = builtinNominal(.box, @enumFromInt(1), .{ .start = 0, .len = 1 }),
+    });
+    try artifact.checked_types.payloads.append(gpa, .{
+        .function = .{
+            .kind = .pure,
+            .args = .{},
+            .ret = @enumFromInt(1),
+            .needs_instantiation = false,
+        },
+    });
+
+    try artifact.checked_bodies.expr_id_pool.append(gpa, @enumFromInt(2));
+
+    const template_ref = procedureTemplateRef(artifact.key, 0);
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(0),
+        .ty = @enumFromInt(2),
+        .source_region = base.Region.zero(),
+        .data = .{ .lambda = .{ .args = .{}, .body = @enumFromInt(1) } },
+    });
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(1),
+        .ty = @enumFromInt(1),
+        .source_region = base.Region.zero(),
+        .data = .{ .run_low_level = .{
+            .op = .box_box,
+            .args = .{ .start = 0, .len = 1 },
+        } },
+    });
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(2),
+        .ty = @enumFromInt(0),
+        .source_region = base.Region.zero(),
+        .data = .{ .num = .{ .value = intValue(42), .kind = .u64 } },
+    });
+    try artifact.checked_bodies.bodies.append(gpa, .{
+        .id = @enumFromInt(0),
+        .root_expr = @enumFromInt(0),
+        .owner_template = template_ref,
+    });
+    var templates = [_]checked.CheckedProcedureTemplate{
+        checkedTemplate(template_ref, @enumFromInt(2), @enumFromInt(0)),
+    };
+    artifact.checked_procedure_templates = .{ .templates = &templates };
+
+    const root = checked.RootRequest{
+        .order = 0,
+        .module_idx = 0,
+        .kind = .runtime_entrypoint,
+        .source = .{ .def = @enumFromInt(0) },
+        .checked_type = @enumFromInt(2),
+        .abi = .roc,
+        .exposure = .private,
+        .procedure_template = template_ref,
+    };
+    var plan = try Plan.analyzeProgram(gpa, .{
+        .root_module = .{ .module = &artifact, .roots = undefined },
+        .roots = &.{root},
+    }, .{});
+    defer plan.deinit();
+
+    var out = try run(
+        gpa,
+        .{ .root = .{ .module = &artifact, .roots = undefined } },
+        .{},
+        &plan,
+        .{},
+    );
+    defer out.deinit();
+
+    const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
+    const value = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_literal;
+    switch (value.value) {
+        .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 42), literal.value),
+        else => return error.TestUnexpectedResult,
+    }
+    const boxed = out.lir_result.store.getCFStmt(value.next).assign_low_level;
+    try std.testing.expectEqual(@as(LIR.LowLevel, .box_box), boxed.op);
+    const args = out.lir_result.store.getLocalSpan(boxed.args);
+    try std.testing.expectEqual(@as(usize, 1), args.len);
+    try std.testing.expectEqual(value.target, args[0]);
+    try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = boxed.target } }, out.lir_result.store.getCFStmt(boxed.next));
+}
+
+test "boxy lowerer unboxes concrete values with ordinary box low-level" {
+    const gpa = std.testing.allocator;
+
+    var artifact = minimalCheckedArtifact(gpa);
+    defer artifact.canonical_names.deinit();
+    defer artifact.checked_types.deinit(gpa);
+    defer artifact.checked_bodies.deinit(gpa);
+
+    try artifact.checked_types.type_id_pool.append(gpa, @enumFromInt(0));
+    try artifact.checked_types.payloads.append(gpa, .{
+        .nominal = builtinNominal(.u64, @enumFromInt(0), .{}),
+    });
+    try artifact.checked_types.payloads.append(gpa, .{
+        .nominal = builtinNominal(.box, @enumFromInt(1), .{ .start = 0, .len = 1 }),
+    });
+    try artifact.checked_types.payloads.append(gpa, .{
+        .function = .{
+            .kind = .pure,
+            .args = .{},
+            .ret = @enumFromInt(0),
+            .needs_instantiation = false,
+        },
+    });
+
+    try artifact.checked_bodies.expr_id_pool.appendSlice(gpa, &.{
+        @as(checked.CheckedExprId, @enumFromInt(2)),
+        @as(checked.CheckedExprId, @enumFromInt(3)),
+    });
+
+    const template_ref = procedureTemplateRef(artifact.key, 0);
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(0),
+        .ty = @enumFromInt(2),
+        .source_region = base.Region.zero(),
+        .data = .{ .lambda = .{ .args = .{}, .body = @enumFromInt(1) } },
+    });
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(1),
+        .ty = @enumFromInt(0),
+        .source_region = base.Region.zero(),
+        .data = .{ .run_low_level = .{
+            .op = .box_unbox,
+            .args = .{ .start = 0, .len = 1 },
+        } },
+    });
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(2),
+        .ty = @enumFromInt(1),
+        .source_region = base.Region.zero(),
+        .data = .{ .run_low_level = .{
+            .op = .box_box,
+            .args = .{ .start = 1, .len = 1 },
+        } },
+    });
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(3),
+        .ty = @enumFromInt(0),
+        .source_region = base.Region.zero(),
+        .data = .{ .num = .{ .value = intValue(99), .kind = .u64 } },
+    });
+    try artifact.checked_bodies.bodies.append(gpa, .{
+        .id = @enumFromInt(0),
+        .root_expr = @enumFromInt(0),
+        .owner_template = template_ref,
+    });
+    var templates = [_]checked.CheckedProcedureTemplate{
+        checkedTemplate(template_ref, @enumFromInt(2), @enumFromInt(0)),
+    };
+    artifact.checked_procedure_templates = .{ .templates = &templates };
+
+    const root = checked.RootRequest{
+        .order = 0,
+        .module_idx = 0,
+        .kind = .runtime_entrypoint,
+        .source = .{ .def = @enumFromInt(0) },
+        .checked_type = @enumFromInt(2),
+        .abi = .roc,
+        .exposure = .private,
+        .procedure_template = template_ref,
+    };
+    var plan = try Plan.analyzeProgram(gpa, .{
+        .root_module = .{ .module = &artifact, .roots = undefined },
+        .roots = &.{root},
+    }, .{});
+    defer plan.deinit();
+
+    var out = try run(
+        gpa,
+        .{ .root = .{ .module = &artifact, .roots = undefined } },
+        .{},
+        &plan,
+        .{},
+    );
+    defer out.deinit();
+
+    const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
+    const value = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_literal;
+    switch (value.value) {
+        .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 99), literal.value),
+        else => return error.TestUnexpectedResult,
+    }
+    const boxed = out.lir_result.store.getCFStmt(value.next).assign_low_level;
+    try std.testing.expectEqual(@as(LIR.LowLevel, .box_box), boxed.op);
+    const boxed_args = out.lir_result.store.getLocalSpan(boxed.args);
+    try std.testing.expectEqual(@as(usize, 1), boxed_args.len);
+    try std.testing.expectEqual(value.target, boxed_args[0]);
+
+    const unboxed = out.lir_result.store.getCFStmt(boxed.next).assign_low_level;
+    try std.testing.expectEqual(@as(LIR.LowLevel, .box_unbox), unboxed.op);
+    const unboxed_args = out.lir_result.store.getLocalSpan(unboxed.args);
+    try std.testing.expectEqual(@as(usize, 1), unboxed_args.len);
+    try std.testing.expectEqual(boxed.target, unboxed_args[0]);
+    try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = unboxed.target } }, out.lir_result.store.getCFStmt(unboxed.next));
 }
 
 test "boxy lowerer folds list_map_can_reuse to false when in-place map is disabled" {
