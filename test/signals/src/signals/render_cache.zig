@@ -20,6 +20,28 @@ pub const NamedEventBinding = struct {
     payload_accessor: EventPayloadAccessor,
 };
 
+pub const EventBindings = struct {
+    click: ?EventBinding = null,
+    input: ?EventBinding = null,
+    check: ?EventBinding = null,
+    pointer_down: ?EventBinding = null,
+    pointer_up: ?EventBinding = null,
+    pointer_enter: ?EventBinding = null,
+    pointer_leave: ?EventBinding = null,
+};
+
+pub fn eventBindingSlot(bindings: *EventBindings, kind: EventKind) *?EventBinding {
+    return switch (kind) {
+        .click => &bindings.click,
+        .input => &bindings.input,
+        .check => &bindings.check,
+        .pointer_down => &bindings.pointer_down,
+        .pointer_up => &bindings.pointer_up,
+        .pointer_enter => &bindings.pointer_enter,
+        .pointer_leave => &bindings.pointer_leave,
+    };
+}
+
 pub const CustomTextAttr = struct {
     name: []const u8,
     value: []const u8,
@@ -643,6 +665,25 @@ test "unchanged event binding emits no duplicate command" {
     cache.applyEventBinding(&host, 1, .click, null, &counts);
     try std.testing.expectEqual(@as(u64, 2), counts.bind_event);
     try std.testing.expectEqual(@as(u64, 1), host.clear_event_count);
+}
+
+test "event binding slots are keyed by event kind" {
+    var bindings = EventBindings{};
+    const click = EventBinding{ .event_id = 1, .payload_accessor = .none };
+    const input = EventBinding{ .event_id = 2, .payload_accessor = .target_value };
+    const pointer_down = EventBinding{ .event_id = 3, .payload_accessor = .target_checked };
+
+    eventBindingSlot(&bindings, .click).* = click;
+    eventBindingSlot(&bindings, .input).* = input;
+    eventBindingSlot(&bindings, .pointer_down).* = pointer_down;
+
+    try std.testing.expectEqual(click, bindings.click.?);
+    try std.testing.expectEqual(input, bindings.input.?);
+    try std.testing.expectEqual(pointer_down, bindings.pointer_down.?);
+    try std.testing.expectEqual(@as(?EventBinding, null), bindings.check);
+    try std.testing.expectEqual(@as(?EventBinding, null), bindings.pointer_up);
+    try std.testing.expectEqual(@as(?EventBinding, null), bindings.pointer_enter);
+    try std.testing.expectEqual(@as(?EventBinding, null), bindings.pointer_leave);
 }
 
 test "custom text attr application and clear are idempotent" {

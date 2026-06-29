@@ -227,39 +227,10 @@ pub const EachRowValues = struct {
 pub const HostEachRowRenderSegment = each_runtime.RenderSegment;
 pub const HostEachRowRenderMove = each_runtime.RenderMove;
 
-pub const HostRequiredEventBinding = struct {
-    event_id: u64,
-    payload_accessor: EventPayloadAccessor,
-};
-
-pub const HostRequiredNamedEventBinding = struct {
-    event_id: u64,
-    options: u32,
-    payload_kind: EventPayloadKind,
-    payload_accessor: EventPayloadAccessor,
-};
-
-pub const HostRequiredEventBindings = struct {
-    click: ?HostRequiredEventBinding = null,
-    input: ?HostRequiredEventBinding = null,
-    check: ?HostRequiredEventBinding = null,
-    pointer_down: ?HostRequiredEventBinding = null,
-    pointer_up: ?HostRequiredEventBinding = null,
-    pointer_enter: ?HostRequiredEventBinding = null,
-    pointer_leave: ?HostRequiredEventBinding = null,
-};
-
-pub fn requiredEventBindingSlot(bindings: *HostRequiredEventBindings, kind: RenderEventKind) *?HostRequiredEventBinding {
-    return switch (kind) {
-        .click => &bindings.click,
-        .input => &bindings.input,
-        .check => &bindings.check,
-        .pointer_down => &bindings.pointer_down,
-        .pointer_up => &bindings.pointer_up,
-        .pointer_enter => &bindings.pointer_enter,
-        .pointer_leave => &bindings.pointer_leave,
-    };
-}
+pub const HostRequiredEventBinding = render_cache_mod.EventBinding;
+pub const HostRequiredNamedEventBinding = render_cache_mod.NamedEventBinding;
+pub const HostRequiredEventBindings = render_cache_mod.EventBindings;
+pub const requiredEventBindingSlot = render_cache_mod.eventBindingSlot;
 
 pub const HostBinderToken = descriptor_stream.BinderToken;
 pub const HostBinderBinding = descriptor_stream.BinderBinding;
@@ -811,21 +782,11 @@ pub fn Engine(comptime Ctx: type) type {
         }
 
         pub fn applyRenderEventBinding(self: *Self, ctx: Ctx.Handle, elem_id: u64, kind: RenderEventKind, binding: ?HostRequiredEventBinding, counts: *render.Counts) void {
-            const cache_binding: ?render_cache_mod.EventBinding = if (binding) |payload| .{
-                .event_id = payload.event_id,
-                .payload_accessor = payload.payload_accessor,
-            } else null;
-            self.render_cache.applyEventBinding(ctx, elem_id, kind, cache_binding, counts);
+            self.render_cache.applyEventBinding(ctx, elem_id, kind, binding, counts);
         }
 
         pub fn applyRenderNamedEventBinding(self: *Self, ctx: Ctx.Handle, elem_id: u64, name: []const u8, binding: ?HostRequiredNamedEventBinding, counts: *render.Counts) void {
-            const cache_binding: ?render_cache_mod.NamedEventBinding = if (binding) |payload| .{
-                .event_id = payload.event_id,
-                .options = payload.options,
-                .payload_kind = payload.payload_kind,
-                .payload_accessor = payload.payload_accessor,
-            } else null;
-            self.render_cache.applyNamedEventBinding(ctx, elem_id, name, cache_binding, counts);
+            self.render_cache.applyNamedEventBinding(ctx, elem_id, name, binding, counts);
         }
 
         fn descriptorStreamNodeTag(stream: *const HostNodeDescriptorStream, node: HostRenderNode) []const u8 {
