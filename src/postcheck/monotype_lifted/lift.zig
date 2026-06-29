@@ -165,14 +165,14 @@ const MonoFnBody = struct {
     body: Mono.FnBody,
 };
 
-const CaptureKey = union(enum) {
+const CaptureIdentity = union(enum) {
     binder: checked.PatternBinderId,
     generated: u32,
     local: Ast.LocalId,
 };
 
 const CaptureOperand = struct {
-    key: CaptureKey,
+    identity: CaptureIdentity,
     value: Ast.ExprId,
 };
 
@@ -676,7 +676,7 @@ const Lifter = struct {
                 .data = .{ .local = capture.local },
             });
             operands[index] = .{
-                .key = captureKeyForLocal(self.output, capture.local),
+                .identity = captureIdentityForLocal(self.output, capture.local),
                 .value = exprs[index],
             };
         }
@@ -718,7 +718,7 @@ const Lifter = struct {
                 });
             }
             operands[index] = .{
-                .key = captureKeyForLocal(self.output, capture.local),
+                .identity = captureIdentityForLocal(self.output, capture.local),
                 .value = exprs[index],
             };
         }
@@ -755,13 +755,16 @@ const Lifter = struct {
     ) []const CaptureOperand {
         const span = self.capture_operands_by_expr.get(expr_id) orelse
             Common.invariant("lifted function reference had captures without keyed operands");
-        if (span.len != expr_span.len) {
-            Common.invariant("lifted function reference keyed operands disagreed with expression operands");
-        }
         const operands = self.captureOperandSpan(span);
-        for (operands, self.output.exprSpan(expr_span)) |operand, expr| {
-            if (operand.value != expr) {
-                Common.invariant("lifted function reference keyed operands diverged from expression operands");
+        const exprs = self.output.exprSpan(expr_span);
+        if (exprs.len != 0) {
+            if (span.len != exprs.len) {
+                Common.invariant("lifted function reference capture identity operands disagreed with expression operands");
+            }
+            for (operands, exprs) |operand, expr| {
+                if (operand.value != expr) {
+                    Common.invariant("lifted function reference capture identity operands diverged from expression operands");
+                }
             }
         }
         return operands;
@@ -862,7 +865,7 @@ fn captureOperandsFromPositionals(
     errdefer allocator.free(operands);
     for (captures, exprs, 0..) |capture, expr, index| {
         operands[index] = .{
-            .key = captureKeyForLocal(program, capture.local),
+            .identity = captureIdentityForLocal(program, capture.local),
             .value = expr,
         };
     }
@@ -877,15 +880,15 @@ fn finalizeCaptureExprSpanFromOperands(
 ) Allocator.Error!Ast.Span(Ast.ExprId) {
     if (captures.len == 0) return .empty();
 
-    assertUniqueOperandKeys(operands);
-    assertUniqueCaptureKeys(program, captures);
+    assertUniqueOperandIdentities(operands);
+    assertUniqueCaptureIdentities(program, captures);
 
     const exprs = try allocator.alloc(Ast.ExprId, captures.len);
     defer allocator.free(exprs);
 
     for (captures, 0..) |capture, capture_index| {
-        const key = captureKeyForLocal(program, capture.local);
-        const operand = findCaptureOperand(operands, key) orelse
+        const identity = captureIdentityForLocal(program, capture.local);
+        const operand = findCaptureOperand(operands, identity) orelse
             Common.invariant("function reference missing operand for finalized capture slot");
         const operand_ty = program.exprs.items[@intFromEnum(operand.value)].ty;
         if (operand_ty != capture.ty) {
@@ -897,42 +900,42 @@ fn finalizeCaptureExprSpanFromOperands(
     return try program.addExprSpan(exprs);
 }
 
-fn assertUniqueOperandKeys(operands: []const CaptureOperand) void {
+fn assertUniqueOperandIdentities(operands: []const CaptureOperand) void {
     for (operands, 0..) |operand, index| {
         for (operands[index + 1 ..]) |other| {
-            if (captureKeyEql(operand.key, other.key)) {
+            if (captureIdentityEql(operand.identity, other.identity)) {
                 Common.invariant("function reference carried duplicate keyed capture operands");
             }
         }
     }
 }
 
-fn assertUniqueCaptureKeys(program: *const Ast.Program, captures: []const Ast.TypedLocal) void {
+fn assertUniqueCaptureIdentities(program: *const Ast.Program, captures: []const Ast.TypedLocal) void {
     for (captures, 0..) |capture, index| {
-        const key = captureKeyForLocal(program, capture.local);
+        const identity = captureIdentityForLocal(program, capture.local);
         for (captures[index + 1 ..]) |other| {
-            if (captureKeyEql(key, captureKeyForLocal(program, other.local))) {
+            if (captureIdentityEql(identity, captureIdentityForLocal(program, other.local))) {
                 Common.invariant("lifted function declared duplicate capture identities");
             }
         }
     }
 }
 
-fn findCaptureOperand(operands: []const CaptureOperand, key: CaptureKey) ?CaptureOperand {
+fn findCaptureOperand(operands: []const CaptureOperand, identity: CaptureIdentity) ?CaptureOperand {
     for (operands) |operand| {
-        if (captureKeyEql(operand.key, key)) return operand;
+        if (captureIdentityEql(operand.identity, identity)) return operand;
     }
     return null;
 }
 
-fn captureKeyForLocal(program: *const Ast.Program, local: Ast.LocalId) CaptureKey {
+fn captureIdentityForLocal(program: *const Ast.Program, local: Ast.LocalId) CaptureIdentity {
     const local_data = program.locals.items[@intFromEnum(local)];
     if (local_data.binder) |binder| return .{ .binder = binder };
     if (local_data.capture_id) |capture_id| return .{ .generated = capture_id };
     return .{ .local = local };
 }
 
-fn captureKeyEql(left: CaptureKey, right: CaptureKey) bool {
+fn captureIdentityEql(left: CaptureIdentity, right: CaptureIdentity) bool {
     return switch (left) {
         .binder => |left_binder| switch (right) {
             .binder => |right_binder| left_binder == right_binder,
