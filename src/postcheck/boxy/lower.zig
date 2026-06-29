@@ -479,6 +479,7 @@ const ProcBodyBuilder = struct {
                 break :blk try self.lowerRecordInto(target, expr.ty, record.fields, next);
             },
             .nominal => |nominal| try self.lowerNominalInto(target, nominal.backing_expr, next),
+            .run_low_level => |run_low_level| try self.lowerLowLevelInto(target, run_low_level.op, run_low_level.args, next),
             .block => |block| blk: {
                 try self.reserveBlockBindings(block.statements);
                 var continuation = try self.lowerExprInto(target, block.final_expr, next);
@@ -963,6 +964,490 @@ const ProcBodyBuilder = struct {
             => next,
             else => boxyLowerInvariant("checked statement form reached boxy body lowering before its LIR lowering was implemented"),
         };
+    }
+
+    fn lowerLowLevelInto(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        op: can.CIR.Expr.LowLevel,
+        args: []const checked.CheckedExprId,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        switch (op) {
+            .box_box,
+            .box_unbox,
+            => boxyLowerInvariant("Box boundary low-level operation reached boxy lowering before descriptor-backed box adaptation lowering"),
+            .list_map_can_reuse => boxyLowerInvariant("list_map_can_reuse reached boxy lowering before target-width layout interchangeability metadata lowering"),
+            else => {},
+        }
+        if (lowLevelNeedsIntegerMultiplicationOverflowCheck(op)) {
+            return try self.lowerIntegerOverflowCheckedMultiplicationLowLevelInto(target, op, args, next);
+        }
+        if (lowLevelNeedsSignedIntegerLowestCheck(op)) {
+            return try self.lowerSignedIntegerLowestCheckedUnaryLowLevelInto(target, op, args, next);
+        }
+        if (lowLevelNeedsIntegerZeroDenominatorCheck(op)) {
+            return try self.lowerIntegerZeroDenominatorCheckedLowLevelInto(target, op, args, next);
+        }
+
+        const lowered = try self.lowerExprsToTemps(args);
+        defer self.parent.allocator.free(lowered);
+
+        var continuation = try self.parent.result.store.addCFStmt(.{ .assign_low_level = .{
+            .target = target,
+            .op = op,
+            .rc_effect = op.rcEffect(),
+            .args = try self.parent.result.store.addLocalSpan(lowered),
+            .next = next,
+        } });
+        continuation = try self.prependLoweredExprs(args, lowered, continuation);
+        return continuation;
+    }
+
+    fn lowerExprsToTemps(
+        self: *ProcBodyBuilder,
+        args: []const checked.CheckedExprId,
+    ) Allocator.Error![]LIR.LocalId {
+        const lowered = try self.parent.allocator.alloc(LIR.LocalId, args.len);
+        errdefer self.parent.allocator.free(lowered);
+        for (args, lowered) |arg, *local| {
+            const expr = self.module.checked_bodies.expr(arg);
+            local.* = try self.addFrameLocal(self.workerRuntimeLayoutForType(expr.ty).layoutIdx());
+        }
+        return lowered;
+    }
+
+    fn prependLoweredExprs(
+        self: *ProcBodyBuilder,
+        args: []const checked.CheckedExprId,
+        lowered: []const LIR.LocalId,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        if (args.len != lowered.len) {
+            boxyLowerInvariant("boxy lowered expression locals disagreed with source expression count");
+        }
+        var continuation = next;
+        var index = args.len;
+        while (index > 0) {
+            index -= 1;
+            continuation = try self.lowerExprInto(lowered[index], args[index], continuation);
+        }
+        return continuation;
+    }
+
+    fn lowLevelNeedsIntegerZeroDenominatorCheck(op: LIR.LowLevel) bool {
+        return switch (op) {
+            .num_div_by,
+            .num_div_trunc_by,
+            .num_rem_by,
+            .num_mod_by,
+            => true,
+            else => false,
+        };
+    }
+
+    fn lowLevelNeedsIntegerMultiplicationOverflowCheck(op: LIR.LowLevel) bool {
+        return switch (op) {
+            .num_times => true,
+            else => false,
+        };
+    }
+
+    fn lowLevelNeedsSignedIntegerLowestCheck(op: LIR.LowLevel) bool {
+        return switch (op) {
+            .num_negate,
+            .num_abs,
+            => true,
+            else => false,
+        };
+    }
+
+    fn integerDivisionByZeroMessage(layout_idx: layout.Idx) ?[]const u8 {
+        return switch (layout_idx) {
+            .u8 => "U8 division by zero",
+            .i8 => "I8 division by zero",
+            .u16 => "U16 division by zero",
+            .i16 => "I16 division by zero",
+            .u32 => "U32 division by zero",
+            .i32 => "I32 division by zero",
+            .u64 => "U64 division by zero",
+            .i64 => "I64 division by zero",
+            .u128 => "U128 division by zero",
+            .i128 => "I128 division by zero",
+            else => null,
+        };
+    }
+
+    fn signedIntegerLowestValue(layout_idx: layout.Idx) ?i128 {
+        return switch (layout_idx) {
+            .i8 => std.math.minInt(i8),
+            .i16 => std.math.minInt(i16),
+            .i32 => std.math.minInt(i32),
+            .i64 => std.math.minInt(i64),
+            .i128 => std.math.minInt(i128),
+            else => null,
+        };
+    }
+
+    fn signedIntegerLowestOverflowMessage(op: LIR.LowLevel, layout_idx: layout.Idx) ?[]const u8 {
+        if (signedIntegerLowestValue(layout_idx) == null) return null;
+
+        return switch (op) {
+            .num_negate => "signed integer negation overflowed",
+            .num_abs => "signed integer absolute value overflowed",
+            .num_div_by,
+            .num_div_trunc_by,
+            => "signed integer division overflowed",
+            else => null,
+        };
+    }
+
+    fn lowerIntegerOverflowCheckedMultiplicationLowLevelInto(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        op: LIR.LowLevel,
+        args: []const checked.CheckedExprId,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        if (args.len != 2) {
+            boxyLowerInvariant("integer multiplication reached boxy LIR lowering with the wrong arity");
+        }
+
+        const lowered = try self.lowerExprsToTemps(args);
+        defer self.parent.allocator.free(lowered);
+
+        const lhs = lowered[0];
+        const rhs = lowered[1];
+        const lhs_layout = self.parent.result.store.getLocal(lhs).layout_idx;
+        const rhs_layout = self.parent.result.store.getLocal(rhs).layout_idx;
+        if (integerDivisionByZeroMessage(lhs_layout) == null) {
+            var continuation = try self.parent.result.store.addCFStmt(.{ .assign_low_level = .{
+                .target = target,
+                .op = op,
+                .rc_effect = op.rcEffect(),
+                .args = try self.parent.result.store.addLocalSpan(lowered),
+                .next = next,
+            } });
+            continuation = try self.prependLoweredExprs(args, lowered, continuation);
+            return continuation;
+        }
+
+        const zero = try self.addFrameLocal(rhs_layout);
+        const rhs_is_zero = try self.addFrameLocal(.bool);
+        const quotient = try self.addFrameLocal(lhs_layout);
+        const quotient_matches_lhs = try self.addFrameLocal(.bool);
+
+        const crash_stmt = try self.parent.result.store.addCFStmt(.{ .crash = .{
+            .msg = try self.parent.result.store.insertString("integer multiplication overflowed"),
+        } });
+
+        const quotient_match_switch = try self.boolSwitchNoContinuation(quotient_matches_lhs, next, crash_stmt);
+        const quotient_eq_args = [_]LIR.LocalId{ quotient, lhs };
+        const quotient_eq_stmt = try self.parent.result.store.addCFStmt(.{ .assign_low_level = .{
+            .target = quotient_matches_lhs,
+            .op = .num_is_eq,
+            .rc_effect = LIR.LowLevel.num_is_eq.rcEffect(),
+            .args = try self.parent.result.store.addLocalSpan(&quotient_eq_args),
+            .next = quotient_match_switch,
+        } });
+        const div_args = [_]LIR.LocalId{ target, rhs };
+        const division_check = try self.parent.result.store.addCFStmt(.{ .assign_low_level = .{
+            .target = quotient,
+            .op = .num_div_trunc_by,
+            .rc_effect = LIR.LowLevel.num_div_trunc_by.rcEffect(),
+            .args = try self.parent.result.store.addLocalSpan(&div_args),
+            .next = quotient_eq_stmt,
+        } });
+
+        const nonzero_check = if (signedIntegerLowestValue(lhs_layout)) |lowest_value| blk: {
+            const lowest = try self.addFrameLocal(lhs_layout);
+            const neg_one = try self.addFrameLocal(rhs_layout);
+            const lhs_is_lowest = try self.addFrameLocal(.bool);
+            const rhs_is_neg_one = try self.addFrameLocal(.bool);
+
+            const rhs_neg_one_switch = try self.boolSwitchNoContinuation(rhs_is_neg_one, crash_stmt, division_check);
+            const rhs_eq_args = [_]LIR.LocalId{ rhs, neg_one };
+            const rhs_eq_stmt = try self.parent.result.store.addCFStmt(.{ .assign_low_level = .{
+                .target = rhs_is_neg_one,
+                .op = .num_is_eq,
+                .rc_effect = LIR.LowLevel.num_is_eq.rcEffect(),
+                .args = try self.parent.result.store.addLocalSpan(&rhs_eq_args),
+                .next = rhs_neg_one_switch,
+            } });
+            const assign_neg_one = try self.parent.result.store.addCFStmt(.{ .assign_literal = .{
+                .target = neg_one,
+                .value = .{ .i128_literal = .{
+                    .value = -1,
+                    .layout_idx = rhs_layout,
+                } },
+                .next = rhs_eq_stmt,
+            } });
+
+            const lhs_lowest_switch = try self.boolSwitchNoContinuation(lhs_is_lowest, assign_neg_one, division_check);
+            const lhs_eq_args = [_]LIR.LocalId{ lhs, lowest };
+            const lhs_eq_stmt = try self.parent.result.store.addCFStmt(.{ .assign_low_level = .{
+                .target = lhs_is_lowest,
+                .op = .num_is_eq,
+                .rc_effect = LIR.LowLevel.num_is_eq.rcEffect(),
+                .args = try self.parent.result.store.addLocalSpan(&lhs_eq_args),
+                .next = lhs_lowest_switch,
+            } });
+            break :blk try self.parent.result.store.addCFStmt(.{ .assign_literal = .{
+                .target = lowest,
+                .value = .{ .i128_literal = .{
+                    .value = lowest_value,
+                    .layout_idx = lhs_layout,
+                } },
+                .next = lhs_eq_stmt,
+            } });
+        } else division_check;
+
+        const zero_switch = try self.boolSwitchNoContinuation(rhs_is_zero, next, nonzero_check);
+        const zero_eq_args = [_]LIR.LocalId{ rhs, zero };
+        const zero_eq_stmt = try self.parent.result.store.addCFStmt(.{ .assign_low_level = .{
+            .target = rhs_is_zero,
+            .op = .num_is_eq,
+            .rc_effect = LIR.LowLevel.num_is_eq.rcEffect(),
+            .args = try self.parent.result.store.addLocalSpan(&zero_eq_args),
+            .next = zero_switch,
+        } });
+        const assign_zero = try self.parent.result.store.addCFStmt(.{ .assign_literal = .{
+            .target = zero,
+            .value = .{ .i128_literal = .{
+                .value = 0,
+                .layout_idx = rhs_layout,
+            } },
+            .next = zero_eq_stmt,
+        } });
+
+        const raw_args = [_]LIR.LocalId{ lhs, rhs };
+        var continuation = try self.parent.result.store.addCFStmt(.{ .assign_low_level = .{
+            .target = target,
+            .op = op,
+            .rc_effect = op.rcEffect(),
+            .args = try self.parent.result.store.addLocalSpan(&raw_args),
+            .next = assign_zero,
+        } });
+        continuation = try self.prependLoweredExprs(args, lowered, continuation);
+        return continuation;
+    }
+
+    fn lowerSignedIntegerLowestCheckedUnaryLowLevelInto(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        op: LIR.LowLevel,
+        args: []const checked.CheckedExprId,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        if (args.len != 1) {
+            boxyLowerInvariant("signed integer unary operation reached boxy LIR lowering with the wrong arity");
+        }
+
+        const lowered = try self.lowerExprsToTemps(args);
+        defer self.parent.allocator.free(lowered);
+
+        const source = lowered[0];
+        const source_layout = self.parent.result.store.getLocal(source).layout_idx;
+        const lowest_value = signedIntegerLowestValue(source_layout) orelse {
+            var continuation = try self.parent.result.store.addCFStmt(.{ .assign_low_level = .{
+                .target = target,
+                .op = op,
+                .rc_effect = op.rcEffect(),
+                .args = try self.parent.result.store.addLocalSpan(lowered),
+                .next = next,
+            } });
+            continuation = try self.prependLoweredExprs(args, lowered, continuation);
+            return continuation;
+        };
+        const crash_message = signedIntegerLowestOverflowMessage(op, source_layout) orelse {
+            boxyLowerInvariant("signed integer unary operation did not have an overflow message");
+        };
+
+        const lowest = try self.addFrameLocal(source_layout);
+        const is_lowest = try self.addFrameLocal(.bool);
+
+        const raw_args = [_]LIR.LocalId{source};
+        const raw_stmt = try self.parent.result.store.addCFStmt(.{ .assign_low_level = .{
+            .target = target,
+            .op = op,
+            .rc_effect = op.rcEffect(),
+            .args = try self.parent.result.store.addLocalSpan(&raw_args),
+            .next = next,
+        } });
+
+        const crash_stmt = try self.parent.result.store.addCFStmt(.{ .crash = .{
+            .msg = try self.parent.result.store.insertString(crash_message),
+        } });
+
+        const switch_stmt = try self.boolSwitchNoContinuation(is_lowest, crash_stmt, raw_stmt);
+
+        const eq_args = [_]LIR.LocalId{ source, lowest };
+        const eq_stmt = try self.parent.result.store.addCFStmt(.{ .assign_low_level = .{
+            .target = is_lowest,
+            .op = .num_is_eq,
+            .rc_effect = LIR.LowLevel.num_is_eq.rcEffect(),
+            .args = try self.parent.result.store.addLocalSpan(&eq_args),
+            .next = switch_stmt,
+        } });
+
+        var continuation = try self.parent.result.store.addCFStmt(.{ .assign_literal = .{
+            .target = lowest,
+            .value = .{ .i128_literal = .{
+                .value = lowest_value,
+                .layout_idx = source_layout,
+            } },
+            .next = eq_stmt,
+        } });
+        continuation = try self.prependLoweredExprs(args, lowered, continuation);
+        return continuation;
+    }
+
+    fn lowerIntegerZeroDenominatorCheckedLowLevelInto(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        op: LIR.LowLevel,
+        args: []const checked.CheckedExprId,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        if (args.len != 2) {
+            boxyLowerInvariant("integer division/remainder reached boxy LIR lowering with the wrong arity");
+        }
+
+        const lowered = try self.lowerExprsToTemps(args);
+        defer self.parent.allocator.free(lowered);
+
+        const lhs = lowered[0];
+        const rhs = lowered[1];
+        const rhs_layout = self.parent.result.store.getLocal(rhs).layout_idx;
+        const lhs_layout = self.parent.result.store.getLocal(lhs).layout_idx;
+        const crash_message = integerDivisionByZeroMessage(rhs_layout) orelse {
+            var continuation = try self.parent.result.store.addCFStmt(.{ .assign_low_level = .{
+                .target = target,
+                .op = op,
+                .rc_effect = op.rcEffect(),
+                .args = try self.parent.result.store.addLocalSpan(lowered),
+                .next = next,
+            } });
+            continuation = try self.prependLoweredExprs(args, lowered, continuation);
+            return continuation;
+        };
+
+        const zero = try self.addFrameLocal(rhs_layout);
+        const is_zero = try self.addFrameLocal(.bool);
+
+        const div_args = [_]LIR.LocalId{ lhs, rhs };
+        const div_stmt = try self.parent.result.store.addCFStmt(.{ .assign_low_level = .{
+            .target = target,
+            .op = op,
+            .rc_effect = op.rcEffect(),
+            .args = try self.parent.result.store.addLocalSpan(&div_args),
+            .next = next,
+        } });
+
+        const normal_stmt = if (signedIntegerLowestValue(lhs_layout)) |lowest_value| blk: {
+            const overflow_body = switch (op) {
+                .num_div_by,
+                .num_div_trunc_by,
+                => try self.parent.result.store.addCFStmt(.{ .crash = .{
+                    .msg = try self.parent.result.store.insertString(signedIntegerLowestOverflowMessage(op, lhs_layout) orelse {
+                        boxyLowerInvariant("signed integer division operation did not have an overflow message");
+                    }),
+                } }),
+                .num_rem_by,
+                .num_mod_by,
+                => try self.parent.result.store.addCFStmt(.{ .assign_literal = .{
+                    .target = target,
+                    .value = .{ .i128_literal = .{
+                        .value = 0,
+                        .layout_idx = lhs_layout,
+                    } },
+                    .next = next,
+                } }),
+                else => div_stmt,
+            };
+
+            const lowest = try self.addFrameLocal(lhs_layout);
+            const neg_one = try self.addFrameLocal(rhs_layout);
+            const lhs_is_lowest = try self.addFrameLocal(.bool);
+            const rhs_is_neg_one = try self.addFrameLocal(.bool);
+
+            const rhs_neg_one_switch = try self.boolSwitchNoContinuation(rhs_is_neg_one, overflow_body, div_stmt);
+            const rhs_eq_args = [_]LIR.LocalId{ rhs, neg_one };
+            const rhs_eq_stmt = try self.parent.result.store.addCFStmt(.{ .assign_low_level = .{
+                .target = rhs_is_neg_one,
+                .op = .num_is_eq,
+                .rc_effect = LIR.LowLevel.num_is_eq.rcEffect(),
+                .args = try self.parent.result.store.addLocalSpan(&rhs_eq_args),
+                .next = rhs_neg_one_switch,
+            } });
+            const assign_neg_one = try self.parent.result.store.addCFStmt(.{ .assign_literal = .{
+                .target = neg_one,
+                .value = .{ .i128_literal = .{
+                    .value = -1,
+                    .layout_idx = rhs_layout,
+                } },
+                .next = rhs_eq_stmt,
+            } });
+
+            const lhs_lowest_switch = try self.boolSwitchNoContinuation(lhs_is_lowest, assign_neg_one, div_stmt);
+            const lhs_eq_args = [_]LIR.LocalId{ lhs, lowest };
+            const lhs_eq_stmt = try self.parent.result.store.addCFStmt(.{ .assign_low_level = .{
+                .target = lhs_is_lowest,
+                .op = .num_is_eq,
+                .rc_effect = LIR.LowLevel.num_is_eq.rcEffect(),
+                .args = try self.parent.result.store.addLocalSpan(&lhs_eq_args),
+                .next = lhs_lowest_switch,
+            } });
+            break :blk try self.parent.result.store.addCFStmt(.{ .assign_literal = .{
+                .target = lowest,
+                .value = .{ .i128_literal = .{
+                    .value = lowest_value,
+                    .layout_idx = lhs_layout,
+                } },
+                .next = lhs_eq_stmt,
+            } });
+        } else div_stmt;
+
+        const crash_stmt = try self.parent.result.store.addCFStmt(.{ .crash = .{
+            .msg = try self.parent.result.store.insertString(crash_message),
+        } });
+
+        const switch_stmt = try self.boolSwitchNoContinuation(is_zero, crash_stmt, normal_stmt);
+
+        const eq_args = [_]LIR.LocalId{ rhs, zero };
+        const eq_stmt = try self.parent.result.store.addCFStmt(.{ .assign_low_level = .{
+            .target = is_zero,
+            .op = .num_is_eq,
+            .rc_effect = LIR.LowLevel.num_is_eq.rcEffect(),
+            .args = try self.parent.result.store.addLocalSpan(&eq_args),
+            .next = switch_stmt,
+        } });
+
+        var continuation = try self.parent.result.store.addCFStmt(.{ .assign_literal = .{
+            .target = zero,
+            .value = .{ .i128_literal = .{
+                .value = 0,
+                .layout_idx = rhs_layout,
+            } },
+            .next = eq_stmt,
+        } });
+        continuation = try self.prependLoweredExprs(args, lowered, continuation);
+        return continuation;
+    }
+
+    fn boolSwitchNoContinuation(
+        self: *ProcBodyBuilder,
+        cond: LIR.LocalId,
+        true_body: LIR.CFStmtId,
+        false_body: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const branches = [_]LIR.CFSwitchBranch{.{ .value = 1, .body = true_body }};
+        return try self.parent.result.store.addCFStmt(.{ .switch_stmt = .{
+            .cond = cond,
+            .branches = try self.parent.result.store.addCFSwitchBranches(&branches),
+            .default_branch = false_body,
+            .continuation = null,
+        } });
     }
 
     fn assignIntLiteral(self: *ProcBodyBuilder, target: LIR.LocalId, value: i128, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
@@ -2951,6 +3436,243 @@ test "boxy lowerer emits empty list construction" {
     const list = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_list;
     try std.testing.expect(list.elems.isEmpty());
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = list.target } }, out.lir_result.store.getCFStmt(list.next));
+}
+
+test "boxy lowerer emits ordinary low-level calls after source-order argument lowering" {
+    const gpa = std.testing.allocator;
+
+    var artifact = minimalCheckedArtifact(gpa);
+    defer artifact.canonical_names.deinit();
+    defer artifact.checked_types.deinit(gpa);
+    defer artifact.checked_bodies.deinit(gpa);
+
+    try artifact.checked_types.payloads.append(gpa, .{
+        .nominal = builtinNominal(.u64, @enumFromInt(0), .{}),
+    });
+    try artifact.checked_types.payloads.append(gpa, .{
+        .function = .{
+            .kind = .pure,
+            .args = .{},
+            .ret = @enumFromInt(0),
+            .needs_instantiation = false,
+        },
+    });
+
+    try artifact.checked_bodies.expr_id_pool.appendSlice(gpa, &.{
+        @as(checked.CheckedExprId, @enumFromInt(2)),
+        @as(checked.CheckedExprId, @enumFromInt(3)),
+    });
+
+    const template_ref = procedureTemplateRef(artifact.key, 0);
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(0),
+        .ty = @enumFromInt(1),
+        .source_region = base.Region.zero(),
+        .data = .{ .lambda = .{ .args = .{}, .body = @enumFromInt(1) } },
+    });
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(1),
+        .ty = @enumFromInt(0),
+        .source_region = base.Region.zero(),
+        .data = .{ .run_low_level = .{
+            .op = .num_plus,
+            .args = .{ .start = 0, .len = 2 },
+        } },
+    });
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(2),
+        .ty = @enumFromInt(0),
+        .source_region = base.Region.zero(),
+        .data = .{ .num = .{ .value = intValue(10), .kind = .u64 } },
+    });
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(3),
+        .ty = @enumFromInt(0),
+        .source_region = base.Region.zero(),
+        .data = .{ .num = .{ .value = intValue(20), .kind = .u64 } },
+    });
+    try artifact.checked_bodies.bodies.append(gpa, .{
+        .id = @enumFromInt(0),
+        .root_expr = @enumFromInt(0),
+        .owner_template = template_ref,
+    });
+    var templates = [_]checked.CheckedProcedureTemplate{
+        checkedTemplate(template_ref, @enumFromInt(1), @enumFromInt(0)),
+    };
+    artifact.checked_procedure_templates = .{ .templates = &templates };
+
+    const root = checked.RootRequest{
+        .order = 0,
+        .module_idx = 0,
+        .kind = .runtime_entrypoint,
+        .source = .{ .def = @enumFromInt(0) },
+        .checked_type = @enumFromInt(1),
+        .abi = .roc,
+        .exposure = .private,
+        .procedure_template = template_ref,
+    };
+    var plan = try Plan.analyzeProgram(gpa, .{
+        .root_module = .{ .module = &artifact, .roots = undefined },
+        .roots = &.{root},
+    }, .{});
+    defer plan.deinit();
+
+    var out = try run(
+        gpa,
+        .{ .root = .{ .module = &artifact, .roots = undefined } },
+        .{},
+        &plan,
+        .{},
+    );
+    defer out.deinit();
+
+    const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
+    try std.testing.expectEqual(@as(usize, 3), out.lir_result.store.getLocalSpan(proc.frame_locals).len);
+
+    const first = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_literal;
+    switch (first.value) {
+        .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 10), literal.value),
+        else => return error.TestUnexpectedResult,
+    }
+    const second = out.lir_result.store.getCFStmt(first.next).assign_literal;
+    switch (second.value) {
+        .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 20), literal.value),
+        else => return error.TestUnexpectedResult,
+    }
+    const add = out.lir_result.store.getCFStmt(second.next).assign_low_level;
+    try std.testing.expectEqual(@as(LIR.LowLevel, .num_plus), add.op);
+    try std.testing.expectEqual(LIR.LowLevel.num_plus.rcEffect(), add.rc_effect);
+    const args = out.lir_result.store.getLocalSpan(add.args);
+    try std.testing.expectEqual(@as(usize, 2), args.len);
+    try std.testing.expectEqual(first.target, args[0]);
+    try std.testing.expectEqual(second.target, args[1]);
+    try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = add.target } }, out.lir_result.store.getCFStmt(add.next));
+}
+
+test "boxy lowerer expands checked integer division low-level calls" {
+    const gpa = std.testing.allocator;
+
+    var artifact = minimalCheckedArtifact(gpa);
+    defer artifact.canonical_names.deinit();
+    defer artifact.checked_types.deinit(gpa);
+    defer artifact.checked_bodies.deinit(gpa);
+
+    try artifact.checked_types.payloads.append(gpa, .{
+        .nominal = builtinNominal(.u64, @enumFromInt(0), .{}),
+    });
+    try artifact.checked_types.payloads.append(gpa, .{
+        .function = .{
+            .kind = .pure,
+            .args = .{},
+            .ret = @enumFromInt(0),
+            .needs_instantiation = false,
+        },
+    });
+
+    try artifact.checked_bodies.expr_id_pool.appendSlice(gpa, &.{
+        @as(checked.CheckedExprId, @enumFromInt(2)),
+        @as(checked.CheckedExprId, @enumFromInt(3)),
+    });
+
+    const template_ref = procedureTemplateRef(artifact.key, 0);
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(0),
+        .ty = @enumFromInt(1),
+        .source_region = base.Region.zero(),
+        .data = .{ .lambda = .{ .args = .{}, .body = @enumFromInt(1) } },
+    });
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(1),
+        .ty = @enumFromInt(0),
+        .source_region = base.Region.zero(),
+        .data = .{ .run_low_level = .{
+            .op = .num_div_trunc_by,
+            .args = .{ .start = 0, .len = 2 },
+        } },
+    });
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(2),
+        .ty = @enumFromInt(0),
+        .source_region = base.Region.zero(),
+        .data = .{ .num = .{ .value = intValue(84), .kind = .u64 } },
+    });
+    try artifact.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(3),
+        .ty = @enumFromInt(0),
+        .source_region = base.Region.zero(),
+        .data = .{ .num = .{ .value = intValue(2), .kind = .u64 } },
+    });
+    try artifact.checked_bodies.bodies.append(gpa, .{
+        .id = @enumFromInt(0),
+        .root_expr = @enumFromInt(0),
+        .owner_template = template_ref,
+    });
+    var templates = [_]checked.CheckedProcedureTemplate{
+        checkedTemplate(template_ref, @enumFromInt(1), @enumFromInt(0)),
+    };
+    artifact.checked_procedure_templates = .{ .templates = &templates };
+
+    const root = checked.RootRequest{
+        .order = 0,
+        .module_idx = 0,
+        .kind = .runtime_entrypoint,
+        .source = .{ .def = @enumFromInt(0) },
+        .checked_type = @enumFromInt(1),
+        .abi = .roc,
+        .exposure = .private,
+        .procedure_template = template_ref,
+    };
+    var plan = try Plan.analyzeProgram(gpa, .{
+        .root_module = .{ .module = &artifact, .roots = undefined },
+        .roots = &.{root},
+    }, .{});
+    defer plan.deinit();
+
+    var out = try run(
+        gpa,
+        .{ .root = .{ .module = &artifact, .roots = undefined } },
+        .{},
+        &plan,
+        .{},
+    );
+    defer out.deinit();
+
+    const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
+    const lhs = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_literal;
+    const rhs = out.lir_result.store.getCFStmt(lhs.next).assign_literal;
+    const zero = out.lir_result.store.getCFStmt(rhs.next).assign_literal;
+    switch (zero.value) {
+        .i128_literal => |literal| {
+            try std.testing.expectEqual(@as(i128, 0), literal.value);
+            try std.testing.expectEqual(@as(@TypeOf(literal.layout_idx), .u64), literal.layout_idx);
+        },
+        else => return error.TestUnexpectedResult,
+    }
+
+    const eq = out.lir_result.store.getCFStmt(zero.next).assign_low_level;
+    try std.testing.expectEqual(@as(LIR.LowLevel, .num_is_eq), eq.op);
+    const eq_args = out.lir_result.store.getLocalSpan(eq.args);
+    try std.testing.expectEqual(@as(usize, 2), eq_args.len);
+    try std.testing.expectEqual(rhs.target, eq_args[0]);
+    try std.testing.expectEqual(zero.target, eq_args[1]);
+
+    const zero_check = out.lir_result.store.getCFStmt(eq.next).switch_stmt;
+    const zero_check_branches = out.lir_result.store.getCFSwitchBranches(zero_check.branches);
+    try std.testing.expectEqual(eq.target, zero_check.cond);
+    try std.testing.expectEqual(@as(usize, 1), zero_check_branches.len);
+    try std.testing.expectEqual(@as(u64, 1), zero_check_branches[0].value);
+    switch (out.lir_result.store.getCFStmt(zero_check_branches[0].body)) {
+        .crash => {},
+        else => return error.TestUnexpectedResult,
+    }
+
+    const div = out.lir_result.store.getCFStmt(zero_check.default_branch).assign_low_level;
+    try std.testing.expectEqual(@as(LIR.LowLevel, .num_div_trunc_by), div.op);
+    const div_args = out.lir_result.store.getLocalSpan(div.args);
+    try std.testing.expectEqual(@as(usize, 2), div_args.len);
+    try std.testing.expectEqual(lhs.target, div_args[0]);
+    try std.testing.expectEqual(rhs.target, div_args[1]);
+    try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = div.target } }, out.lir_result.store.getCFStmt(div.next));
 }
 
 test "boxy lowerer publishes host wrapper proc for exported roots" {

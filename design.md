@@ -3291,6 +3291,28 @@ committed element storage layout, the boxy lowerer emits the explicit box/adapt
 statement required by that boundary; it never inserts an implicit conversion or
 asks the backend to reinterpret list element bytes.
 
+Checked `run_low_level` expressions lower directly from checked CIR. The boxy
+body builder allocates one temporary local per checked argument using the
+argument expression's checked type and boxy representation plan, lowers those
+arguments in source evaluation order, and then emits the primitive operation.
+Ordinary primitive operations become `assign_low_level` with the op's explicit
+`RcEffect`; ARC and later consumers read that metadata exactly as they do for
+`.lss` output. Primitive operations whose raw machine operation is not the
+complete Roc semantics are expanded before the raw op is emitted: integer
+division and remainder emit explicit zero-denominator checks, signed integer
+division emits the lowest-value / negative-one check, signed `negate` and `abs`
+emit the lowest-value check, and checked integer multiplication emits the same
+overflow proof sequence used by `.lss`. These checks are ordinary LIR
+comparisons, switches, literals, and crashes; no backend may rediscover or omit
+them. Explicit `Box` boundary low-levels are not treated as ordinary primitive
+calls in `.boxy`; they lower through the boxy box/unbox/adapt statements so a
+value that already has the host-compatible `Box(...)` representation is reused
+instead of double-boxed. `list_map_can_reuse` also carries its compile-time
+layout decision at LIR lowering: the lowerer computes the per-pointer-width
+interchangeability bits from committed element layouts and emits either a
+constant false value or an `assign_low_level` with explicit
+`interchangeable` metadata.
+
 For every checked function value expression, the boxy lowerer emits an
 `assign_packed_erased_fn`-style LIR statement that creates an erased callable
 payload. The payload stores the function entry and capture bytes. Capture bytes
