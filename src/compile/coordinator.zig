@@ -5600,7 +5600,7 @@ test "Coordinator checked cache key requires checked direct imports" {
     defer env.deinit();
     try env.initCIRFields("W4");
 
-    const import_idx = try env.imports.getOrPut(allocator, &env.common.strings, "Host");
+    const import_idx = try env.imports.getOrPut(allocator, &env.common, "Host");
     env.imports.setResolvedModule(import_idx, 1);
 
     try std.testing.expect(!Coordinator.resolvedDirectImportsHaveCheckedOutput(&env, &.{}));

@@ -895,18 +895,18 @@ pub const Import = struct {
         /// The module name is first checked against existing imports by comparing strings.
         /// New imports are initially unresolved (unresolved).
         /// If ident_idx is provided, it will be stored for index-based lookups.
-        pub fn getOrPut(self: *Store, allocator: std.mem.Allocator, strings: *base.StringLiteral.Store, module_name: []const u8) Allocator.Error!Import.Idx {
-            return self.getOrPutWithIdent(allocator, strings, module_name, null);
+        pub fn getOrPut(self: *Store, allocator: std.mem.Allocator, common: *base.CommonEnv, module_name: []const u8) Allocator.Error!Import.Idx {
+            return self.getOrPutWithIdent(allocator, common, module_name, null);
         }
 
         /// Get or create an Import.Idx for the given module name, with an associated ident.
         /// The module name is first checked against existing imports by comparing strings.
         /// New imports are initially unresolved (unresolved).
         /// If ident_idx is provided, it will be stored for index-based lookups.
-        pub fn getOrPutWithIdent(self: *Store, allocator: std.mem.Allocator, strings: *base.StringLiteral.Store, module_name: []const u8, ident_idx: ?base.Ident.Idx) Allocator.Error!Import.Idx {
+        pub fn getOrPutWithIdent(self: *Store, allocator: std.mem.Allocator, common: *base.CommonEnv, module_name: []const u8, ident_idx: ?base.Ident.Idx) Allocator.Error!Import.Idx {
             // First check if we already have this module name by comparing strings
             for (self.imports.items.items, 0..) |existing_string_idx, i| {
-                const existing_name = strings.get(existing_string_idx);
+                const existing_name = common.getString(existing_string_idx);
                 if (std.mem.eql(u8, existing_name, module_name)) {
                     // Found existing import with same name
                     // Update ident if provided and not already set
@@ -923,7 +923,7 @@ pub const Import = struct {
             }
 
             // Not found - create new import
-            const string_idx = try strings.insert(allocator, module_name);
+            const string_idx = try common.insertString(allocator, module_name);
             const idx = @as(Import.Idx, @enumFromInt(self.imports.len()));
 
             // Add to both the list and the map, with unresolved module initially

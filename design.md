@@ -675,6 +675,49 @@ Correctness belongs to the producer path that writes the cache entry, and
 invalidation belongs to the cache key and explicit cache/selection format
 versions.
 
+`ModuleEnv` contains `CommonEnv.strings`, a `base.StringLiteral.Store`. That
+store is part of the checked module cache data. A cache hit materializes it as a
+view of its byte buffer and stops. Cache reads must not scan the string entries,
+rebuild a string interning table, check every string length header, check every
+static refcount word, or check every entry alignment. This design adds no
+store-specific release-build validation; cache reads perform only the existing
+cache-entry admission and decode checks before trusting the blob. Once those
+pass, the internal string buffer structure is a producer invariant. Debug builds
+may assert this invariant while constructing fresh stores and in focused store
+tests; optimized cache reads consume the store directly.
+
+String literal deduplication is a build-time concern. The durable
+`StringLiteral.Store` owns only the static-refcounted byte buffer plus `get` and
+iteration by `StringLiteral.Idx`. It has no insert API and no dedup index.
+Fresh construction uses `StringLiteral.Builder` state paired with a `Store`.
+That state may live in a wrapper or in the build owner that owns the store, but
+it is always transient. The builder index is never serialized, never stored in
+LirImage, and never rebuilt on a cache hit. If a later phase needs a mutable
+string-literal builder, it must request an explicit fresh builder from source
+data or another builder-owned input; it must not reopen a cached store on the
+normal cache path.
+
+The byte interning algorithm has one owner shared by identifier names, checked
+name stores, and string-literal builders. Storage policies own only id encoding,
+text lookup, and append layout. For string literals, appending a new entry writes
+exactly the current static-data layout:
+
+```text
+len: u32 | padding to isize | static refcount: isize(0) | bytes
+```
+
+and returns the content byte offset as `StringLiteral.Idx`. Duplicate input
+bytes must return the existing content offset. The hash table is an accelerator
+only: hash matches must still compare exact byte length and contents before an
+existing id is reused. The shared interning algorithm is comptime-policy
+specialized, so string literals, identifier names, and checked name stores do
+not pay a runtime storage-kind branch.
+
+The string-literal builder must reject impossible `u32` length or content-offset
+overflow as a compiler invariant: debug builds assert or panic with the
+invariant, and optimized builds mark the path unreachable. It must never silently
+truncate a string length or offset.
+
 The checked module cache id is target-independent:
 
 ```text
