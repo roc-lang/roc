@@ -87,23 +87,13 @@ The `import` statement imports a [type](types.md) into scope from a [type module
 
 ### [`import` with `exposing`](#import-exposing) {#import-exposing}
 
-TODO
-
 ### [Renaming Imports with `as`](#renaming-imports) {#renaming-imports}
-
-TODO
 
 ### [Importing non-Roc files](#importing-non-roc-files) {#importing-non-roc-files}
 
-TODO
-
 ## [`dbg`](#dbg) {#dbg}
 
-TODO
-
 ## [`expect`](#expect) {#expect}
-
-TODO
 
 ## [`return`](#return) {#return}
 

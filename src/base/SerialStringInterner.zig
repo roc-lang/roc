@@ -20,12 +20,13 @@
 //! place. `enableRuntimeInserts` can re-open it for insertion if ever needed.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const collections = @import("collections");
 
 const Allocator = std.mem.Allocator;
 const CompactWriter = collections.CompactWriter;
 const SafeList = collections.SafeList;
-const core = @import("StringInternerCore.zig");
+const InternedBytes = @import("InternedBytes.zig");
 
 const SerialStringInterner = @This();
 
@@ -48,6 +49,7 @@ index: SafeList(u32) = .{},
 supports_inserts: bool = true,
 
 const initial_index_capacity: usize = 16;
+const Index = InternedBytes.Index(Policy);
 
 /// Initialize an empty, insertable interner sized for roughly `capacity` names.
 pub fn initCapacity(gpa: Allocator, capacity: usize) Allocator.Error!SerialStringInterner {
@@ -93,16 +95,19 @@ pub fn getText(self: *const SerialStringInterner, id: u32) []const u8 {
     return self.textAt(id);
 }
 
-/// Id encoding for the shared `StringInternerCore`: dense serial ids (0, 1, 2, …)
+/// Id encoding for the shared `InternedBytes`: dense serial ids (0, 1, 2, …)
 /// stored via the `ranges` array, with hash-table cells holding `id + 1` (so 0 is
 /// the empty-slot sentinel).
-const Encoding = struct {
+const Policy = struct {
     pub const Id = u32;
     pub const Cell = u32;
     pub const empty_cell: Cell = 0;
     pub const initial_index_capacity: usize = SerialStringInterner.initial_index_capacity;
 
     pub fn count(self: *const SerialStringInterner) u32 {
+        return @intCast(self.ranges.items.items.len);
+    }
+    pub fn entryCount(self: *const SerialStringInterner, _: *const Index) u32 {
         return @intCast(self.ranges.items.items.len);
     }
     pub fn cellForId(id: Id) Cell {
@@ -115,24 +120,42 @@ const Encoding = struct {
         return self.textAt(id);
     }
     pub fn appendEntry(self: *SerialStringInterner, gpa: Allocator, string: []const u8) Allocator.Error!Id {
+        assertSupportsInserts(self.supports_inserts);
         const id: u32 = @intCast(self.ranges.items.items.len);
         const start: u32 = @intCast(self.bytes.items.items.len);
         _ = try self.bytes.appendSlice(gpa, string);
         _ = try self.ranges.append(gpa, .{ .start = start, .len = @intCast(string.len) });
         return id;
     }
+    pub fn hash(string: []const u8) u64 {
+        return InternedBytes.hash(string);
+    }
 };
+
+fn assertSupportsInserts(supports_inserts: bool) void {
+    if (supports_inserts) return;
+
+    if (comptime builtin.mode == .Debug) {
+        std.debug.panic("SerialStringInterner invariant violated: attempted to insert into frozen interner", .{});
+    }
+    unreachable;
+}
 
 /// Look up a string's serial id without modifying the interner. Safe on frozen
 /// (deserialized) interners.
 pub fn lookup(self: *const SerialStringInterner, string: []const u8) ?u32 {
-    return core.lookup(Encoding, self, string);
+    const index = Index.fromCells(self.index, self.count());
+    return index.lookup(self, string);
 }
 
 /// Intern `string`, returning its serial id. Deduplicates: equal text always
 /// returns the same id.
 pub fn insert(self: *SerialStringInterner, gpa: Allocator, string: []const u8) Allocator.Error!u32 {
-    return core.insert(Encoding, self, gpa, string);
+    var index = Index.fromCells(self.index, self.count());
+    defer {
+        self.index = index.cells;
+    }
+    return index.insert(self, gpa, string);
 }
 
 /// Re-open a deserialized interner for insertion by copying its data into fresh,
@@ -278,6 +301,28 @@ test "SerialStringInterner: lookup + getText survive serialize/deserialize with 
     try testing.expectEqual(@as(?u32, list), rt.it.lookup("List"));
     try testing.expectEqual(@as(?u32, dict), rt.it.lookup("Dict"));
     try testing.expectEqual(@as(?u32, null), rt.it.lookup("Set"));
+}
+
+test "SerialStringInterner: enableRuntimeInserts copies frozen data and permits insertion" {
+    const gpa = testing.allocator;
+
+    var it = try SerialStringInterner.initCapacity(gpa, 4);
+    defer it.deinit(gpa);
+
+    const list = try it.insert(gpa, "List");
+
+    var rt = try roundTrip(gpa, &it);
+    defer gpa.free(rt.buffer);
+
+    try rt.it.enableRuntimeInserts(gpa);
+    defer rt.it.deinit(gpa);
+
+    try testing.expect(rt.it.supports_inserts);
+    try testing.expectEqual(@as(?u32, list), rt.it.lookup("List"));
+    const dict = try rt.it.insert(gpa, "Dict");
+    try testing.expectEqual(@as(u32, 1), dict);
+    try testing.expectEqual(@as(?u32, dict), rt.it.lookup("Dict"));
+    try testing.expectEqualStrings("Dict", rt.it.getText(dict));
 }
 
 fn nonEmptyBasePointers(it: *const SerialStringInterner) usize {

@@ -25,7 +25,7 @@ const LineInfo = line_info.LineInfo;
 const CIR = can.CIR;
 const ModuleEnv = can.ModuleEnv;
 const Region = base.Region;
-const builtin_loading = eval_mod.builtin_loading;
+const builtin_static = eval_mod.builtin_static;
 
 /// Semantic token indices matching TOKEN_TYPES in capabilities.zig.
 pub const SemanticType = enum(u32) {
@@ -294,11 +294,8 @@ pub fn extractSemanticTokensWithImports(
     // Initialize CIR fields
     module_env.initCIRFields("semantic-tokens") catch return error.OutOfMemory;
 
-    const builtin_indices = builtin_loading.deserializeBuiltinIndices(allocator, compiled_builtins.builtin_indices_bin) catch |err| switch (err) {
-        error.OutOfMemory => return error.OutOfMemory,
-        else => return extractSemanticTokens(allocator, source, info),
-    };
-    var builtin_module = builtin_loading.loadCompiledModule(allocator, compiled_builtins.builtin_bin, "Builtin", compiled_builtins.builtin_source) catch |err| switch (err) {
+    const builtin_indices = compiled_builtins.builtinIndices(CIR);
+    var builtin_module = builtin_static.moduleView(allocator, compiled_builtins.builtin_bin[0..], "Builtin", compiled_builtins.builtin_source) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         else => return extractSemanticTokens(allocator, source, info),
     };

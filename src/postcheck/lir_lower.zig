@@ -1357,9 +1357,13 @@ const Lowerer = struct {
         const args = self.program.exprSpan(call.args);
         const lowered = try self.lowerExprsToTemps(args);
         defer self.allocator.free(lowered.ids);
+        const proc = switch (call.target) {
+            .local => |fn_id| self.fn_map[@intFromEnum(fn_id)],
+            .imported => Common.invariant("LIR lowering requires imported Lambda Mono calls to be linked before this stage"),
+        };
         var current = try self.result.store.addCFStmt(.{ .assign_call = .{
             .target = target,
-            .proc = self.fn_map[@intFromEnum(call.target)],
+            .proc = proc,
             .args = try self.result.store.addLocalSpan(lowered.ids),
             .is_cold = call.is_cold,
             .next = next,

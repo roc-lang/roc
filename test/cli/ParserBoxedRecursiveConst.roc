@@ -55,7 +55,7 @@ step = {
 }
 
 recursive : Parser(U64, List(U64))
-recursive = 
+recursive =
 	Parser.alt(
 		Parser.map2(step, Parser.lazy(|_| recursive), |head, tail| List.prepend(tail, head)),
 		Parser.succeed([]),

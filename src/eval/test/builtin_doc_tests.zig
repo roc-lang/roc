@@ -39,10 +39,10 @@ const BuiltinDocTestError = test_helpers.TestHelperError || eval_mod.BuiltinModu
     TestUnexpectedResult,
 };
 
-/// Builtin module loaded and published once in the parent test process and
+/// Builtin module viewed and published once in the parent test process and
 /// reused (read-only) by every block: directly for the in-parent check phase,
 /// and — via fork copy-on-write — by the child eval phase. Reusing it avoids
-/// re-deserializing and re-publishing the Builtin module ~700 times. File-scope
+/// re-creating the view and re-publishing the Builtin module ~700 times. File-scope
 /// because the C-ABI child work fns dispatched through `runInChild` cannot
 /// capture it, and because it must already be in the parent's address space
 /// when `fork()` copies it into each child.
@@ -785,7 +785,7 @@ test "Builtin.roc doc code blocks check and evaluate" {
 
     // Load and publish the Builtin module once. Every block's check phase (in
     // this parent process) and eval phase (in a forked child, via copy-on-write)
-    // borrows it read-only instead of re-deserializing and re-publishing it.
+    // borrows it read-only instead of re-creating the view and re-publishing it.
     var builtins_instance = try eval_mod.BuiltinModules.init(allocator);
     defer builtins_instance.deinit();
     shared_builtins = &builtins_instance;

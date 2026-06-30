@@ -5,7 +5,7 @@
 //! no separate semantic/backend enum pair.
 
 /// Canonical primitive operations shared across canonicalization and LIR/codegen.
-pub const LowLevel = enum {
+pub const LowLevel = enum(u16) {
     // String operations
     str_is_eq,
     str_is_eq_static_small,

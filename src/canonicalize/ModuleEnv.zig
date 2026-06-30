@@ -640,6 +640,12 @@ store: NodeStore,
 /// Set after canonicalization completes. Must not be accessed before then.
 evaluation_order: ?*DependencyGraph.EvaluationOrder,
 
+/// True only after `check.TypedCIR.prepareRuntimeEnv` has prepared this env for
+/// checked-artifact consumption. Serialized user modules intentionally do not
+/// preserve this flag; the baked builtin module does, because its static env is
+/// prepared before embedding and must not allocate/copy on compiler startup.
+runtime_prepared: bool,
+
 /// Well-known identifiers for type checking, operator desugaring, and layout generation.
 /// Interned once during init to avoid repeated string comparisons.
 idents: CommonIdents,
@@ -798,6 +804,7 @@ pub fn initCIRFields(self: *Self, module_name: []const u8) Allocator.Error!void 
     self.diagnostics = CIR.Diagnostic.Span{ .span = base.DataSpan{ .start = 0, .len = 0 } };
     // Note: self.store already exists from ModuleEnv.init(), so we don't create a new one
     self.evaluation_order = null; // Will be set after canonicalization completes
+    self.runtime_prepared = false;
 }
 
 /// Alias for initCIRFields for backwards compatibility with tests
@@ -842,6 +849,7 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .diagnostics = CIR.Diagnostic.Span{ .span = base.DataSpan{ .start = 0, .len = 0 } },
         .store = try NodeStore.initCapacity(gpa, node_capacity),
         .evaluation_order = null, // Will be set after canonicalization completes
+        .runtime_prepared = false,
         .idents = idents,
         .import_mapping = types_mod.import_mapping.ImportMapping.init(gpa),
         .method_idents = MethodIdents.init(),
@@ -3049,6 +3057,8 @@ pub const Serialized = extern struct {
     diagnostics: CIR.Diagnostic.Span,
     store: NodeStore.Serialized,
     evaluation_order_reserved: u64, // Reserved space for evaluation_order field (required for in-place deserialization cast)
+    runtime_prepared: bool,
+    runtime_prepared_padding: [7]u8,
     // Well-known identifier indices (serialized directly, no lookup needed during deserialization)
     idents: CommonIdents,
     import_mapping_reserved: [6]u64, // Reserved space for import_mapping (AutoHashMap is ~40 bytes), initialized at runtime
@@ -3106,6 +3116,8 @@ pub const Serialized = extern struct {
         self.display_module_name_idx_reserved = @bitCast(env.display_module_name_idx);
         self.qualified_module_ident_reserved = @bitCast(env.qualified_module_ident);
         self.evaluation_order_reserved = 0;
+        self.runtime_prepared = env.module_role == .builtin and env.runtime_prepared;
+        self.runtime_prepared_padding = .{ 0, 0, 0, 0, 0, 0, 0 };
         // Serialize well-known identifier indices directly (no lookup needed during deserialization)
         self.idents = env.idents;
         // import_mapping is runtime-only and initialized fresh during deserialization
@@ -3169,6 +3181,7 @@ pub const Serialized = extern struct {
             .diagnostics = self.diagnostics,
             .store = self.store.deserializeInto(base_addr, gpa),
             .evaluation_order = null, // Not serialized, will be recomputed if needed
+            .runtime_prepared = self.runtime_prepared,
             .idents = self.idents,
             .import_mapping = types_mod.import_mapping.ImportMapping.init(gpa),
             .method_idents = self.method_idents.deserializeInto(base_addr),
@@ -3182,6 +3195,60 @@ pub const Serialized = extern struct {
         };
 
         return env;
+    }
+
+    /// Materialize a non-owning view over statically embedded serialized bytes.
+    /// This is for the compiler's baked Builtin module: every list/slice points
+    /// into the executable's aligned static data and no backing bytes are copied.
+    pub fn viewStatic(
+        self: *const Serialized,
+        base_addr: usize,
+        gpa: std.mem.Allocator,
+        source: []const u8,
+        module_name: []const u8,
+    ) error{CorruptSerializedModuleEnv}!Self {
+        if (self.imports.imports.len != 0) return error.CorruptSerializedModuleEnv;
+        if (self.imports.import_idents.len != 0) return error.CorruptSerializedModuleEnv;
+        if (self.imports.resolved_modules.len != 0) return error.CorruptSerializedModuleEnv;
+
+        return Self{
+            .gpa = gpa,
+            .common = self.common.deserializeInto(base_addr, source),
+            .types = self.types.deserializeInto(base_addr, gpa),
+            .module_kind = self.module_kind.decode(),
+            .module_role = self.module_role,
+            .all_defs = self.all_defs,
+            .global_value_defs = self.global_value_defs,
+            .all_statements = self.all_statements,
+            .type_decls = self.type_decls,
+            .forward_type_decls = self.forward_type_decls,
+            .exports = self.exports,
+            .requires_types = self.requires_types.deserializeInto(base_addr),
+            .for_clause_aliases = self.for_clause_aliases.deserializeInto(base_addr),
+            .provides_entries = self.provides_entries.deserializeInto(base_addr),
+            .hosted_entries = self.hosted_entries.deserializeInto(base_addr),
+            .builtin_statements = self.builtin_statements,
+            .external_decls = self.external_decls.deserializeInto(base_addr),
+            .imports = CIR.Import.Store.init(),
+            .file_dependencies = self.file_dependencies.deserializeInto(base_addr),
+            .module_name = module_name,
+            .display_module_name_idx = @bitCast(self.display_module_name_idx_reserved),
+            .qualified_module_ident = @bitCast(self.qualified_module_ident_reserved),
+            .diagnostics = self.diagnostics,
+            .store = self.store.deserializeInto(base_addr, gpa),
+            .evaluation_order = null,
+            .runtime_prepared = self.runtime_prepared,
+            .idents = self.idents,
+            .import_mapping = types_mod.import_mapping.ImportMapping.init(gpa),
+            .method_idents = self.method_idents.deserializeInto(base_addr),
+            .method_defs = self.method_defs.deserializeInto(base_addr),
+            .for_loop_dispatch_plans = self.for_loop_dispatch_plans.deserializeInto(base_addr),
+            .numeral_digit_bytes = self.numeral_digit_bytes.deserializeInto(base_addr),
+            .numeral_literals = self.numeral_literals.deserializeInto(base_addr),
+            .numeral_dispatch_plans = self.numeral_dispatch_plans.deserializeInto(base_addr),
+            .quote_dispatch_plans = self.quote_dispatch_plans.deserializeInto(base_addr),
+            .numeric_suffix_targets = self.numeric_suffix_targets.deserializeInto(base_addr),
+        };
     }
 
     /// Deserialize with mutable type store and node store for cache modules.
@@ -3227,6 +3294,7 @@ pub const Serialized = extern struct {
             // Use deserializeWithCopy for NodeStore so regions can be extended
             .store = try self.store.deserializeWithCopy(base_addr, gpa),
             .evaluation_order = null,
+            .runtime_prepared = self.runtime_prepared,
             .idents = self.idents,
             .import_mapping = types_mod.import_mapping.ImportMapping.init(gpa),
             .method_idents = self.method_idents.deserializeInto(base_addr),
