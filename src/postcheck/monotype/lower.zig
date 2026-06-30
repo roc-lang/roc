@@ -15948,6 +15948,7 @@ const BodyContext = struct {
             .builtin_owner = template.builtin_owner,
             .args = try self.builder.program.types.addSpan(args),
             .backing = .{ .ty = backing_ty, .use = template.backing.?.use },
+            .declared_order = template.declared_order,
         } });
     }
 
