@@ -11154,6 +11154,14 @@ Builtin :: [].{
 			## represent exactly.
 			to_f64 : Dec -> F64
 
+			## No-op: leave a [Dec] unchanged as a [Dec].
+			to_dec : Dec -> Dec
+			to_dec = |self| self
+
+			## Leave a [Dec] unchanged as a [Dec]. Always succeeds.
+			to_dec_try : Dec -> Try(Dec, _never_fails)
+			to_dec_try = |self| Ok(self)
+
 			## Iterator of decimals beginning with this `Dec` and ending with the
 			## other `Dec`, stepping by `1.0`. (Use [Dec.until] instead to end with
 			## the other `Dec` minus one.) Returns an empty iterator if this `Dec`
@@ -12095,6 +12103,18 @@ Builtin :: [].{
 			to_u128_try : F32 -> Try(U128, [OutOfRange])
 			to_u128_try = |num| out_of_range_try(f32_to_u128_try_unsafe(num))
 
+			## No-op: leave an [F32] unchanged as an [F32].
+			to_f32 : F32 -> F32
+			to_f32 = |self| self
+
+			## No-op: leave an [F32] unchanged as an [F32].
+			to_f32_wrap : F32 -> F32
+			to_f32_wrap = |self| self
+
+			## Leave an [F32] unchanged as an [F32]. Always succeeds.
+			to_f32_try : F32 -> Try(F32, _never_fails)
+			to_f32_try = |self| Ok(self)
+
 			## Convert an [F32] to an [F64]. This is a safe widening conversion:
 			## every [F32] value is exactly representable as an [F64], including
 			## `NaN`, `inf`, and `-inf`.
@@ -12994,6 +13014,18 @@ Builtin :: [].{
 			## ```
 			to_f32_try : F64 -> Try(F32, [OutOfRange])
 			to_f32_try = |num| out_of_range_try(f64_to_f32_try_unsafe(num))
+
+			## No-op: leave an [F64] unchanged as an [F64].
+			to_f64 : F64 -> F64
+			to_f64 = |self| self
+
+			## No-op: leave an [F64] unchanged as an [F64].
+			to_f64_wrap : F64 -> F64
+			to_f64_wrap = |self| self
+
+			## Leave an [F64] unchanged as an [F64]. Always succeeds.
+			to_f64_try : F64 -> Try(F64, _never_fails)
+			to_f64_try = |self| Ok(self)
 
 			## Encode an F64 using a format that provides encode_f64
 			encode : F64, fmt -> Try(encoded, err)
