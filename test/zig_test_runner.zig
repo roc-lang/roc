@@ -600,6 +600,27 @@ fn mainServer(init: std.process.Init.Minimal, config: RunnerConfig) anyerror!voi
                 log_err_count = 0;
 
                 const metadata_index = try server.receiveBody_u32();
+
+                // Normally `query_test_metadata` runs first and populates `selected_indices`.
+                // But when a test hard-aborts (e.g. a `std.debug.panic` in a Debug build), Zig's
+                // build runner re-spawns this binary to continue the remaining tests, replaying
+                // `run_test` against the metadata it cached from the first run *without*
+                // re-querying (std.Build.Step.Run only sends `query_test_metadata` when its
+                // metadata is null). The stock runner is immune because it indexes
+                // `builtin.test_functions` directly; our partition indirection is not. Rebuild
+                // lazily so the cached index still maps. `buildSelectedIndices` is deterministic
+                // for a given config, so the index stays valid; this keeps the crash isolated to
+                // the offending test (so the rest of the suite still reports) instead of masking
+                // it with a runner-internal index error on every re-spawn.
+                if (selected_indices.len == 0) {
+                    selected_indices = try buildSelectedIndices(allocator, config);
+                }
+                if (metadata_index >= selected_indices.len) {
+                    std.debug.panic(
+                        "run_test index {d} out of range for {d} selected test(s)",
+                        .{ metadata_index, selected_indices.len },
+                    );
+                }
                 const test_fn = builtin.test_functions[selected_indices[metadata_index]];
 
                 try server.serveStringMessage(.test_started, &.{});
