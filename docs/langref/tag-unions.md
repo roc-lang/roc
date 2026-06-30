@@ -140,11 +140,7 @@ structural tag unions do.
 
 ### Qualified Tags
 
-TODO
-
 ### Opaque Tag Unions
-
-TODO
 
 ### Structural-Nominal Compatibility
 
@@ -153,7 +149,7 @@ As a convenience, you can use structural tags to represent nominal tags with the
 For example, you can do this:
 
 ```roc
-TODO
+
 ```
 
 > **Note:** This does not get around opaque access boundaries.

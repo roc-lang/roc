@@ -8911,12 +8911,23 @@ fn generateStructAccess(self: *Self, sa: anytype) Allocator.Error!void {
     try self.emitLocalSet(struct_ptr);
 
     // Get the field offset
-    const struct_layout = ls.getLayout(sa.struct_layout);
-    std.debug.assert(struct_layout.tag == .struct_);
+    const source_layout = ls.getLayout(sa.struct_layout);
+    const struct_layout_idx = switch (source_layout.tag) {
+        .box => source_layout.getIdx(),
+        else => sa.struct_layout,
+    };
+    const struct_layout = ls.getLayout(struct_layout_idx);
+    if (struct_layout.tag != .struct_) {
+        wasmInvariantFmt(
+            "WasmCodeGen invariant violated: field access expected struct layout, got {s}",
+            .{@tagName(struct_layout.tag)},
+        );
+    }
 
     const field_offset = try self.structFieldOffsetByOriginalIndexWasm(struct_layout.getStruct().idx, sa.field_idx);
     const field_byte_size = try self.structFieldSizeByOriginalIndexWasm(struct_layout.getStruct().idx, sa.field_idx);
-    const field_layout = ls.getLayout(ls.getStructFieldLayoutByOriginalIndex(struct_layout.getStruct().idx, sa.field_idx));
+    const source_field_layout_idx = ls.getStructFieldLayoutByOriginalIndex(struct_layout.getStruct().idx, sa.field_idx);
+    const field_layout = ls.getLayout(source_field_layout_idx);
 
     // Check if the field is a composite type
     if (try self.isCompositeLayout(sa.field_layout) and field_byte_size > 0) {

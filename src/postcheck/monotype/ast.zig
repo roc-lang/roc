@@ -14,6 +14,14 @@ const Type = @import("type.zig");
 const checked = check.CheckedModule;
 const names = check.CheckedNames;
 
+/// Monotype ids are local to the `ProgramView` or mapped shard that owns the
+/// corresponding side array. In particular, expression, pattern, statement,
+/// local, definition, function, string-literal, compile-time-site, and type ids
+/// must not be interpreted against another shard's arrays. Cross-shard function
+/// references are represented only by `FnSlot.imported`, whose `ImportedFnId`
+/// indexes an import table entry containing the target `ShardId` and local
+/// `FnId` inside that shard. Specialization records store local `FnId`s because
+/// a record belongs to exactly one shard.
 /// Identifier for an expression in Monotype IR.
 pub const ExprId = enum(u32) { _ };
 /// Identifier for a pattern in Monotype IR.
@@ -24,6 +32,12 @@ pub const DefId = enum(u32) { _ };
 pub const NestedDefId = enum(u32) { _ };
 /// Identifier for a function specialization in Monotype IR.
 pub const FnId = enum(u32) { _ };
+/// Identifier for a specialization record in a Monotype program.
+pub const SpecId = enum(u32) { _ };
+/// Identifier for a loaded specialization shard. Shard 0 is the current build.
+pub const ShardId = enum(u32) { local = 0, _ };
+/// Identifier for an imported function entry in a Monotype program view.
+pub const ImportedFnId = enum(u32) { _ };
 /// Identifier for a local binding in Monotype IR.
 pub const LocalId = enum(u32) { _ };
 /// Identifier assigned by Monotype lifting when this storage is consumed.
@@ -57,7 +71,7 @@ pub fn Span(comptime _: type) type {
 }
 
 /// Checked function definition used by a Monotype function template.
-pub const FnDef = union(enum) {
+pub const FnDef = union(enum(u8)) {
     local_template: names.ProcTemplate,
     imported_template: names.ProcTemplate,
     nested: NestedFn,
@@ -99,6 +113,63 @@ pub const FnTemplate = struct {
 /// Monotype function-specialization metadata.
 pub const Fn = struct {
     source: FnTemplate,
+};
+
+/// Function imported from another specialization shard.
+pub const ImportedFn = extern struct {
+    shard: ShardId,
+    fn_id: FnId,
+};
+
+/// Direct function slot in a Monotype program shard.
+pub const FnSlot = union(enum(u8)) {
+    local: FnId,
+    imported: ImportedFnId,
+};
+
+/// Identifier for a hosted callable in durable specialization identities.
+pub const HostedId = enum(u32) { _ };
+/// Identifier for a compiler-generated callable in durable specialization identities.
+pub const GeneratedId = enum(u32) { _ };
+
+/// Stable callable identity used to reuse or cache a specialization.
+pub const CallableIdentity = union(enum(u8)) {
+    proc_template: struct {
+        module: names.CheckedModuleDigest,
+        proc_base: u32,
+        template: u32,
+    },
+    nested_site: struct {
+        module: names.CheckedModuleDigest,
+        owner_proc_base: u32,
+        owner_template: u32,
+        owner_fn_digest: names.TypeDigest,
+        site: u32,
+    },
+    hosted: HostedId,
+    generated: GeneratedId,
+};
+
+/// Full specialization identity: callable plus source and closed function types.
+pub const SpecIdentity = struct {
+    callable: CallableIdentity,
+    source_fn_ty_digest: names.TypeDigest,
+    mono_fn_ty_digest: names.TypeDigest,
+    mono_fn_ty: Type.TypeId,
+};
+
+/// Lifecycle state for a specialization record.
+pub const SpecStatus = enum(u8) {
+    reserved,
+    lowering,
+    ready,
+};
+
+/// Durable record describing one reserved, lowering, or ready specialization.
+pub const SpecRecord = struct {
+    identity: SpecIdentity,
+    fn_id: FnId,
+    status: SpecStatus,
 };
 
 /// Compare the fields that make two function templates identical for Monotype.
@@ -249,10 +320,25 @@ pub const MonotypeFunctionValue = struct {
 };
 
 /// Direct call target before or after Monotype lifting.
-pub const ProcCallee = union(enum) {
-    func: FnId,
+pub const ProcCallee = union(enum(u8)) {
+    func: FnSlot,
     lifted: LiftedFnId,
 };
+
+/// Construct a direct call target for a local Monotype function.
+pub fn localProcCallee(fn_id: FnId) ProcCallee {
+    return .{ .func = .{ .local = fn_id } };
+}
+
+/// Construct a direct call target from an already-resolved function slot.
+pub fn procCalleeForSlot(slot: FnSlot) ProcCallee {
+    return .{ .func = slot };
+}
+
+/// Construct a direct call target for a function imported from a loaded shard.
+pub fn importedProcCallee(imported: ImportedFnId) ProcCallee {
+    return .{ .func = .{ .imported = imported } };
+}
 
 /// Direct call to a known function.
 pub const CallProc = struct {
@@ -346,7 +432,7 @@ pub const ContinueExpr = struct {
 };
 
 /// Source control-flow construct observed during compile-time finalization.
-pub const ComptimeSiteKind = enum {
+pub const ComptimeSiteKind = enum(u8) {
     match,
     destructure,
     if_,
@@ -380,7 +466,7 @@ pub const Return = struct {
 };
 
 /// Monotype expression forms.
-pub const ExprData = union(enum) {
+pub const ExprData = union(enum(u8)) {
     local: LocalId,
     unit,
     int_lit: can.CIR.IntValue,
@@ -471,7 +557,7 @@ pub const Pat = struct {
 };
 
 /// Monotype pattern forms.
-pub const PatData = union(enum) {
+pub const PatData = union(enum(u8)) {
     bind: LocalId,
     wildcard,
     as: struct {
@@ -495,7 +581,7 @@ pub const PatData = union(enum) {
 };
 
 /// End behavior for a Monotype string interpolation pattern.
-pub const StrPatternEnd = enum {
+pub const StrPatternEnd = enum(u8) {
     exact,
     tail,
 };
@@ -552,7 +638,7 @@ pub const IfBranch = struct {
 pub const StmtId = enum(u32) { _ };
 
 /// Monotype statement forms.
-pub const Stmt = union(enum) {
+pub const Stmt = union(enum(u8)) {
     uninitialized: PatId,
     let_: struct {
         pat: PatId,
@@ -578,7 +664,7 @@ pub const Def = struct {
 };
 
 /// Body availability for a top-level or generated Monotype definition.
-pub const FnBody = union(enum) {
+pub const FnBody = union(enum(u8)) {
     roc: ExprId,
     hosted,
 };
@@ -594,7 +680,52 @@ pub const NestedDef = struct {
 };
 
 /// Source procedure names for runtime diagnostics, keyed by generated symbol.
-pub const ProcDebugNameMap = std.AutoHashMap(Common.Symbol, names.ExportNameId);
+/// Procedure debug-name entry.
+pub const ProcDebugName = struct {
+    symbol: Common.Symbol,
+    name: names.ExportNameId,
+};
+
+/// Builder-owned procedure debug-name table.
+pub const ProcDebugNameMap = struct {
+    allocator: std.mem.Allocator,
+    items: std.ArrayList(ProcDebugName),
+
+    pub fn init(allocator: std.mem.Allocator) ProcDebugNameMap {
+        return .{
+            .allocator = allocator,
+            .items = .empty,
+        };
+    }
+
+    pub fn deinit(self: *ProcDebugNameMap) void {
+        self.items.deinit(self.allocator);
+    }
+
+    pub fn get(self: *const ProcDebugNameMap, symbol: Common.Symbol) ?names.ExportNameId {
+        return procDebugNameInSlice(self.items.items, symbol);
+    }
+
+    pub fn put(self: *ProcDebugNameMap, symbol: Common.Symbol, name: names.ExportNameId) std.mem.Allocator.Error!void {
+        for (self.items.items) |*entry| {
+            if (entry.symbol == symbol) {
+                entry.name = name;
+                return;
+            }
+        }
+        try self.items.append(self.allocator, .{
+            .symbol = symbol,
+            .name = name,
+        });
+    }
+};
+
+fn procDebugNameInSlice(entries: []const ProcDebugName, symbol: Common.Symbol) ?names.ExportNameId {
+    for (entries) |entry| {
+        if (entry.symbol == symbol) return entry.name;
+    }
+    return null;
+}
 
 /// Root request bound to a Monotype definition.
 pub const Root = struct {
@@ -615,12 +746,199 @@ pub const RuntimeSchemaRequest = struct {
     ty: Type.TypeId,
 };
 
-/// Complete Monotype program plus side arrays.
-pub const Program = struct {
+/// Errors reported by Monotype program-view call-target verification.
+pub const CallTargetVerifyError = enum {
+    local_fn_out_of_bounds,
+    local_fn_type_out_of_bounds,
+    local_fn_type_not_function,
+    local_fn_definition_arity_mismatch,
+    local_call_arity_mismatch,
+    imported_fn_out_of_bounds,
+    imported_local_fn_out_of_bounds,
+    lifted_fn_before_lifting,
+};
+
+/// Errors reported by completed Monotype program-view type-id verification.
+pub const CompletedTypeIdVerifyError = enum {
+    type_store_not_frozen,
+    spec_type_out_of_bounds,
+    fn_type_out_of_bounds,
+    def_type_out_of_bounds,
+    nested_def_type_out_of_bounds,
+    expr_type_out_of_bounds,
+    pat_type_out_of_bounds,
+    local_type_out_of_bounds,
+    typed_local_type_out_of_bounds,
+    layout_request_type_out_of_bounds,
+    runtime_schema_request_type_out_of_bounds,
+};
+
+/// Read-only Monotype program view.
+///
+/// Today this view borrows the builder-owned arrays in `Program`. The durable
+/// specialization-cache form should expose the same shape from mapped sections.
+pub const ProgramView = struct {
+    names: *const names.NameStore,
+    types: Type.Store.View,
+    specs: []const SpecRecord,
+    imported_fns: []const ImportedFn,
+    fns: []const Fn,
+    defs: []const Def,
+    nested_defs: []const NestedDef,
+    exprs: []const Expr,
+    pats: []const Pat,
+    stmts: []const Stmt,
+    locals: []const Local,
+    expr_ids: []const ExprId,
+    pat_ids: []const PatId,
+    typed_locals: []const TypedLocal,
+    stmt_ids: []const StmtId,
+    field_exprs: []const FieldExpr,
+    fn_def_captures: []const FnDefCapture,
+    record_destructs: []const RecordDestruct,
+    str_pattern_steps: []const StrPatternStep,
+    branches: []const Branch,
+    if_branches: []const IfBranch,
+    string_literals: []const StringLiteral,
+    proc_debug_names: []const ProcDebugName,
+    roots: []const Root,
+    layout_requests: []const LayoutRequest,
+    runtime_schema_requests: []const RuntimeSchemaRequest,
+    comptime_sites: []const ComptimeSite,
+    source_files: []const []const u8,
+    expr_locs: []const base.SourceLoc,
+    expr_regions: []const base.Region,
+    stmt_locs: []const base.SourceLoc,
+    stmt_regions: []const base.Region,
+    local_names: []const []const u8,
+    next_symbol: u32,
+
+    pub fn fnSource(self: ProgramView, id: FnId) FnTemplate {
+        const raw = @intFromEnum(id);
+        if (raw >= self.fns.len) Common.invariant("Monotype function id referenced a missing specialization");
+        return self.fns[raw].source;
+    }
+
+    pub fn procDebugName(self: ProgramView, symbol: Common.Symbol) ?names.ExportNameId {
+        return procDebugNameInSlice(self.proc_debug_names, symbol);
+    }
+
+    /// Verify that a completed program view refers only to durable type-store
+    /// ids. Active graph views are rejected by graph-scoped sealing while the
+    /// graph maps still exist; completed views must additionally be frozen and
+    /// contain only in-bounds final type ids.
+    pub fn verifyCompletedTypeIds(self: ProgramView) ?CompletedTypeIdVerifyError {
+        if (!self.types.frozen) return .type_store_not_frozen;
+
+        for (self.specs) |spec| {
+            if (!self.typeRefInBounds(spec.identity.mono_fn_ty)) return .spec_type_out_of_bounds;
+        }
+        for (self.fns) |fn_| {
+            if (!self.typeRefInBounds(fn_.source.mono_fn_ty)) return .fn_type_out_of_bounds;
+        }
+        for (self.defs) |def| {
+            if (def.fn_def) |fn_def| {
+                if (!self.typeRefInBounds(fn_def.mono_fn_ty)) return .def_type_out_of_bounds;
+            }
+            if (!self.typeRefInBounds(def.ret)) return .def_type_out_of_bounds;
+        }
+        for (self.nested_defs) |def| {
+            if (!self.typeRefInBounds(def.fn_def.mono_fn_ty)) return .nested_def_type_out_of_bounds;
+            if (!self.typeRefInBounds(def.ret)) return .nested_def_type_out_of_bounds;
+        }
+        for (self.exprs) |expr| {
+            if (!self.typeRefInBounds(expr.ty)) return .expr_type_out_of_bounds;
+        }
+        for (self.pats) |pat| {
+            if (!self.typeRefInBounds(pat.ty)) return .pat_type_out_of_bounds;
+        }
+        for (self.locals) |local| {
+            if (!self.typeRefInBounds(local.ty)) return .local_type_out_of_bounds;
+        }
+        for (self.typed_locals) |typed_local| {
+            if (!self.typeRefInBounds(typed_local.ty)) return .typed_local_type_out_of_bounds;
+        }
+        for (self.layout_requests) |request| {
+            if (!self.typeRefInBounds(request.ty)) return .layout_request_type_out_of_bounds;
+        }
+        for (self.runtime_schema_requests) |request| {
+            if (!self.typeRefInBounds(request.ty)) return .runtime_schema_request_type_out_of_bounds;
+        }
+
+        return null;
+    }
+
+    pub fn verifyCallTargets(self: ProgramView) ?CallTargetVerifyError {
+        for (self.imported_fns) |imported| {
+            if (imported.shard == .local and @intFromEnum(imported.fn_id) >= self.fns.len) {
+                return .imported_local_fn_out_of_bounds;
+            }
+        }
+
+        for (self.defs) |def| {
+            if (def.fn_id) |fn_id| {
+                if (self.verifyFnDefinition(fn_id, def.args)) |err| return err;
+            }
+        }
+        for (self.nested_defs) |def| {
+            if (self.verifyFnDefinition(def.fn_id, def.args)) |err| return err;
+        }
+
+        for (self.exprs) |expr| {
+            switch (expr.data) {
+                .call_proc => |call| switch (call.callee) {
+                    .func => |slot| switch (slot) {
+                        .local => |fn_id| {
+                            const raw_fn = @intFromEnum(fn_id);
+                            if (raw_fn >= self.fns.len) return .local_fn_out_of_bounds;
+                            const raw_ty = @intFromEnum(self.fns[raw_fn].source.mono_fn_ty);
+                            if (raw_ty >= self.types.types.len) return .local_fn_type_out_of_bounds;
+                            switch (self.types.get(self.fns[raw_fn].source.mono_fn_ty)) {
+                                .func => |func| {
+                                    if (func.args.len != call.args.len) return .local_call_arity_mismatch;
+                                },
+                                else => return .local_fn_type_not_function,
+                            }
+                        },
+                        .imported => |imported| {
+                            if (@intFromEnum(imported) >= self.imported_fns.len) return .imported_fn_out_of_bounds;
+                        },
+                    },
+                    .lifted => return .lifted_fn_before_lifting,
+                },
+                else => {},
+            }
+        }
+        return null;
+    }
+
+    fn typeRefInBounds(self: ProgramView, ty: Type.TypeId) bool {
+        return @intFromEnum(ty) < self.types.types.len;
+    }
+
+    fn verifyFnDefinition(self: ProgramView, fn_id: FnId, args: Span(TypedLocal)) ?CallTargetVerifyError {
+        const raw_fn = @intFromEnum(fn_id);
+        if (raw_fn >= self.fns.len) return .local_fn_out_of_bounds;
+        const raw_ty = @intFromEnum(self.fns[raw_fn].source.mono_fn_ty);
+        if (raw_ty >= self.types.types.len) return .local_fn_type_out_of_bounds;
+        return switch (self.types.get(self.fns[raw_fn].source.mono_fn_ty)) {
+            .func => |func| {
+                if (func.args.len != args.len) return .local_fn_definition_arity_mismatch;
+                return null;
+            },
+            else => .local_fn_type_not_function,
+        };
+    }
+};
+
+/// Mutable builder-side Monotype program storage plus side arrays.
+pub const ProgramBuilder = struct {
     allocator: std.mem.Allocator,
     names: names.NameStore,
     next_symbol: u32,
     types: Type.Store,
+    specs: std.ArrayList(SpecRecord),
+    imported_fns: std.ArrayList(ImportedFn),
     fns: std.ArrayList(Fn),
     defs: std.ArrayList(Def),
     nested_defs: std.ArrayList(NestedDef),
@@ -665,12 +983,14 @@ pub const Program = struct {
     /// Ambient checked source region recorded by `addExpr`/`addStmt`.
     current_region: base.Region,
 
-    pub fn init(allocator: std.mem.Allocator) Program {
+    pub fn init(allocator: std.mem.Allocator) ProgramBuilder {
         return .{
             .allocator = allocator,
             .names = names.NameStore.init(allocator),
             .next_symbol = 0,
             .types = Type.Store.init(allocator),
+            .specs = .empty,
+            .imported_fns = .empty,
             .fns = .empty,
             .defs = .empty,
             .nested_defs = .empty,
@@ -705,7 +1025,7 @@ pub const Program = struct {
         };
     }
 
-    pub fn deinit(self: *Program) void {
+    pub fn deinit(self: *ProgramBuilder) void {
         for (self.local_names.items) |name| {
             if (name.len > 0) self.allocator.free(name);
         }
@@ -743,23 +1063,82 @@ pub const Program = struct {
         self.nested_defs.deinit(self.allocator);
         self.defs.deinit(self.allocator);
         self.fns.deinit(self.allocator);
+        self.imported_fns.deinit(self.allocator);
+        self.specs.deinit(self.allocator);
         self.types.deinit();
         self.names.deinit();
     }
 
-    pub fn addFn(self: *Program, source: FnTemplate) std.mem.Allocator.Error!FnId {
+    pub fn addFn(self: *ProgramBuilder, source: FnTemplate) std.mem.Allocator.Error!FnId {
         const id: FnId = @enumFromInt(@as(u32, @intCast(self.fns.items.len)));
         try self.fns.append(self.allocator, .{ .source = source });
         return id;
     }
 
-    pub fn fnSource(self: *const Program, id: FnId) FnTemplate {
-        const raw = @intFromEnum(id);
-        if (raw >= self.fns.items.len) Common.invariant("Monotype function id referenced a missing specialization");
-        return self.fns.items[raw].source;
+    pub fn addImportedFn(self: *ProgramBuilder, imported: ImportedFn) std.mem.Allocator.Error!ImportedFnId {
+        const id: ImportedFnId = @enumFromInt(@as(u32, @intCast(self.imported_fns.items.len)));
+        try self.imported_fns.append(self.allocator, imported);
+        return id;
     }
 
-    pub fn addExpr(self: *Program, expr: Expr) std.mem.Allocator.Error!ExprId {
+    pub fn addSpec(self: *ProgramBuilder, record: SpecRecord) std.mem.Allocator.Error!SpecId {
+        const id: SpecId = @enumFromInt(@as(u32, @intCast(self.specs.items.len)));
+        try self.specs.append(self.allocator, record);
+        return id;
+    }
+
+    pub fn fnSource(self: *const ProgramBuilder, id: FnId) FnTemplate {
+        return self.view().fnSource(id);
+    }
+
+    pub fn verifyCallTargets(self: *const ProgramBuilder) ?CallTargetVerifyError {
+        return self.view().verifyCallTargets();
+    }
+
+    pub fn freeze(self: *ProgramBuilder) void {
+        self.types.freeze();
+    }
+
+    pub fn view(self: *const ProgramBuilder) ProgramView {
+        return .{
+            .names = &self.names,
+            .types = self.types.view(),
+            .specs = self.specs.items,
+            .imported_fns = self.imported_fns.items,
+            .fns = self.fns.items,
+            .defs = self.defs.items,
+            .nested_defs = self.nested_defs.items,
+            .exprs = self.exprs.items,
+            .pats = self.pats.items,
+            .stmts = self.stmts.items,
+            .locals = self.locals.items,
+            .expr_ids = self.expr_ids.items,
+            .pat_ids = self.pat_ids.items,
+            .typed_locals = self.typed_locals.items,
+            .stmt_ids = self.stmt_ids.items,
+            .field_exprs = self.field_exprs.items,
+            .fn_def_captures = self.fn_def_captures.items,
+            .record_destructs = self.record_destructs.items,
+            .str_pattern_steps = self.str_pattern_steps.items,
+            .branches = self.branches.items,
+            .if_branches = self.if_branches.items,
+            .string_literals = self.string_literals.items,
+            .proc_debug_names = self.proc_debug_names.items.items,
+            .roots = self.roots.items,
+            .layout_requests = self.layout_requests.items,
+            .runtime_schema_requests = self.runtime_schema_requests.items,
+            .comptime_sites = self.comptime_sites.items,
+            .source_files = self.source_files.items,
+            .expr_locs = self.expr_locs.items,
+            .expr_regions = self.expr_regions.items,
+            .stmt_locs = self.stmt_locs.items,
+            .stmt_regions = self.stmt_regions.items,
+            .local_names = self.local_names.items,
+            .next_symbol = self.next_symbol,
+        };
+    }
+
+    pub fn addExpr(self: *ProgramBuilder, expr: Expr) std.mem.Allocator.Error!ExprId {
         const id: ExprId = @enumFromInt(@as(u32, @intCast(self.exprs.items.len)));
         try self.exprs.append(self.allocator, expr);
         try self.expr_locs.append(self.allocator, self.current_loc);
@@ -767,17 +1146,17 @@ pub const Program = struct {
         return id;
     }
 
-    pub fn setProcDebugName(self: *Program, symbol: Common.Symbol, name: names.ExportNameId) std.mem.Allocator.Error!void {
+    pub fn setProcDebugName(self: *ProgramBuilder, symbol: Common.Symbol, name: names.ExportNameId) std.mem.Allocator.Error!void {
         try self.proc_debug_names.put(symbol, name);
     }
 
-    pub fn procDebugName(self: *const Program, symbol: Common.Symbol) ?names.ExportNameId {
+    pub fn procDebugName(self: *const ProgramBuilder, symbol: Common.Symbol) ?names.ExportNameId {
         return self.proc_debug_names.get(symbol);
     }
 
     /// Register a source file (module display name) and return its index for
     /// `SourceLoc.file`. Callers deduplicate; this always appends.
-    pub fn addSourceFile(self: *Program, name: []const u8) std.mem.Allocator.Error!u32 {
+    pub fn addSourceFile(self: *ProgramBuilder, name: []const u8) std.mem.Allocator.Error!u32 {
         const id: u32 = @intCast(self.source_files.items.len);
         const owned = try self.allocator.dupe(u8, name);
         errdefer self.allocator.free(owned);
@@ -786,32 +1165,32 @@ pub const Program = struct {
     }
 
     /// Source location of an expression.
-    pub fn exprLoc(self: *const Program, id: ExprId) base.SourceLoc {
+    pub fn exprLoc(self: *const ProgramBuilder, id: ExprId) base.SourceLoc {
         return self.expr_locs.items[@intFromEnum(id)];
     }
 
     /// Checked source region of an expression.
-    pub fn exprRegion(self: *const Program, id: ExprId) base.Region {
+    pub fn exprRegion(self: *const ProgramBuilder, id: ExprId) base.Region {
         return self.expr_regions.items[@intFromEnum(id)];
     }
 
     /// Source location of a statement.
-    pub fn stmtLoc(self: *const Program, id: StmtId) base.SourceLoc {
+    pub fn stmtLoc(self: *const ProgramBuilder, id: StmtId) base.SourceLoc {
         return self.stmt_locs.items[@intFromEnum(id)];
     }
 
     /// Checked source region of a statement.
-    pub fn stmtRegion(self: *const Program, id: StmtId) base.Region {
+    pub fn stmtRegion(self: *const ProgramBuilder, id: StmtId) base.Region {
         return self.stmt_regions.items[@intFromEnum(id)];
     }
 
-    pub fn addPat(self: *Program, pat: Pat) std.mem.Allocator.Error!PatId {
+    pub fn addPat(self: *ProgramBuilder, pat: Pat) std.mem.Allocator.Error!PatId {
         const id: PatId = @enumFromInt(@as(u32, @intCast(self.pats.items.len)));
         try self.pats.append(self.allocator, pat);
         return id;
     }
 
-    pub fn addStmt(self: *Program, stmt: Stmt) std.mem.Allocator.Error!StmtId {
+    pub fn addStmt(self: *ProgramBuilder, stmt: Stmt) std.mem.Allocator.Error!StmtId {
         const id: StmtId = @enumFromInt(@as(u32, @intCast(self.stmts.items.len)));
         try self.stmts.append(self.allocator, stmt);
         try self.stmt_locs.append(self.allocator, self.current_loc);
@@ -820,7 +1199,7 @@ pub const Program = struct {
     }
 
     pub fn addComptimeSite(
-        self: *Program,
+        self: *ProgramBuilder,
         kind: ComptimeSiteKind,
         region: base.Region,
         checked_site: ?checked.CheckedExhaustivenessSiteId,
@@ -838,15 +1217,15 @@ pub const Program = struct {
         return id;
     }
 
-    pub fn comptimeSite(self: *const Program, id: ComptimeSiteId) ComptimeSite {
+    pub fn comptimeSite(self: *const ProgramBuilder, id: ComptimeSiteId) ComptimeSite {
         return self.comptime_sites.items[@intFromEnum(id)];
     }
 
-    pub fn addStringLiteral(self: *Program, text: []const u8) std.mem.Allocator.Error!StringLiteralId {
+    pub fn addStringLiteral(self: *ProgramBuilder, text: []const u8) std.mem.Allocator.Error!StringLiteralId {
         return try self.addStringView(text, 0, @intCast(text.len));
     }
 
-    pub fn addStringView(self: *Program, backing: []const u8, offset: u32, len: u32) std.mem.Allocator.Error!StringLiteralId {
+    pub fn addStringView(self: *ProgramBuilder, backing: []const u8, offset: u32, len: u32) std.mem.Allocator.Error!StringLiteralId {
         const offset_usize: usize = offset;
         const len_usize: usize = len;
         if (offset_usize > backing.len or len_usize > backing.len - offset_usize) {
@@ -864,20 +1243,20 @@ pub const Program = struct {
         return id;
     }
 
-    pub fn stringLiteral(self: *const Program, id: StringLiteralId) StringLiteral {
+    pub fn stringLiteral(self: *const ProgramBuilder, id: StringLiteralId) StringLiteral {
         return self.string_literals.items[@intFromEnum(id)];
     }
 
-    pub fn stringLiteralText(self: *const Program, id: StringLiteralId) []const u8 {
+    pub fn stringLiteralText(self: *const ProgramBuilder, id: StringLiteralId) []const u8 {
         return self.stringLiteral(id).text();
     }
 
-    pub fn addLocal(self: *Program, symbol: Common.Symbol, ty: Type.TypeId) std.mem.Allocator.Error!LocalId {
+    pub fn addLocal(self: *ProgramBuilder, symbol: Common.Symbol, ty: Type.TypeId) std.mem.Allocator.Error!LocalId {
         return try self.addLocalWithBinder(symbol, ty, null);
     }
 
     pub fn addLocalWithBinder(
-        self: *Program,
+        self: *ProgramBuilder,
         symbol: Common.Symbol,
         ty: Type.TypeId,
         binder: ?checked.PatternBinderId,
@@ -888,12 +1267,12 @@ pub const Program = struct {
         return id;
     }
 
-    pub fn setLocalCaptureId(self: *Program, id: LocalId, capture_id: u32) void {
+    pub fn setLocalCaptureId(self: *ProgramBuilder, id: LocalId, capture_id: u32) void {
         self.locals.items[@intFromEnum(id)].capture_id = capture_id;
     }
 
     /// Record the source-level name of a local (dupes; empty means none).
-    pub fn setLocalName(self: *Program, id: LocalId, name: []const u8) std.mem.Allocator.Error!void {
+    pub fn setLocalName(self: *ProgramBuilder, id: LocalId, name: []const u8) std.mem.Allocator.Error!void {
         if (name.len == 0) return;
         const slot = &self.local_names.items[@intFromEnum(id)];
         if (slot.len > 0) self.allocator.free(slot.*);
@@ -901,11 +1280,11 @@ pub const Program = struct {
     }
 
     /// Source-level name of a local; empty for compiler-generated temporaries.
-    pub fn localName(self: *const Program, id: LocalId) []const u8 {
+    pub fn localName(self: *const ProgramBuilder, id: LocalId) []const u8 {
         return self.local_names.items[@intFromEnum(id)];
     }
 
-    pub fn setLocalType(self: *Program, id: LocalId, ty: Type.TypeId) void {
+    pub fn setLocalType(self: *ProgramBuilder, id: LocalId, ty: Type.TypeId) void {
         self.locals.items[@intFromEnum(id)].ty = ty;
         for (self.typed_locals.items) |*typed_local| {
             if (typed_local.local == id) {
@@ -914,19 +1293,19 @@ pub const Program = struct {
         }
     }
 
-    pub fn addExprSpan(self: *Program, ids: []const ExprId) std.mem.Allocator.Error!Span(ExprId) {
+    pub fn addExprSpan(self: *ProgramBuilder, ids: []const ExprId) std.mem.Allocator.Error!Span(ExprId) {
         const start: u32 = @intCast(self.expr_ids.items.len);
         try self.expr_ids.appendSlice(self.allocator, ids);
         return .{ .start = start, .len = @intCast(ids.len) };
     }
 
-    pub fn addPatSpan(self: *Program, ids: []const PatId) std.mem.Allocator.Error!Span(PatId) {
+    pub fn addPatSpan(self: *ProgramBuilder, ids: []const PatId) std.mem.Allocator.Error!Span(PatId) {
         const start: u32 = @intCast(self.pat_ids.items.len);
         try self.pat_ids.appendSlice(self.allocator, ids);
         return .{ .start = start, .len = @intCast(ids.len) };
     }
 
-    pub fn addTypedLocalSpan(self: *Program, values: []const TypedLocal) std.mem.Allocator.Error!Span(TypedLocal) {
+    pub fn addTypedLocalSpan(self: *ProgramBuilder, values: []const TypedLocal) std.mem.Allocator.Error!Span(TypedLocal) {
         const start: u32 = @intCast(self.typed_locals.items.len);
         try self.typed_locals.ensureUnusedCapacity(self.allocator, values.len);
         for (values) |value| {
@@ -936,89 +1315,327 @@ pub const Program = struct {
         return .{ .start = start, .len = @intCast(values.len) };
     }
 
-    pub fn addFieldExprSpan(self: *Program, values: []const FieldExpr) std.mem.Allocator.Error!Span(FieldExpr) {
+    pub fn addFieldExprSpan(self: *ProgramBuilder, values: []const FieldExpr) std.mem.Allocator.Error!Span(FieldExpr) {
         const start: u32 = @intCast(self.field_exprs.items.len);
         try self.field_exprs.appendSlice(self.allocator, values);
         return .{ .start = start, .len = @intCast(values.len) };
     }
 
-    pub fn addFnDefCaptureSpan(self: *Program, values: []const FnDefCapture) std.mem.Allocator.Error!Span(FnDefCapture) {
+    pub fn addFnDefCaptureSpan(self: *ProgramBuilder, values: []const FnDefCapture) std.mem.Allocator.Error!Span(FnDefCapture) {
         const start: u32 = @intCast(self.fn_def_captures.items.len);
         try self.fn_def_captures.appendSlice(self.allocator, values);
         return .{ .start = start, .len = @intCast(values.len) };
     }
 
-    pub fn addRecordDestructSpan(self: *Program, values: []const RecordDestruct) std.mem.Allocator.Error!Span(RecordDestruct) {
+    pub fn addRecordDestructSpan(self: *ProgramBuilder, values: []const RecordDestruct) std.mem.Allocator.Error!Span(RecordDestruct) {
         const start: u32 = @intCast(self.record_destructs.items.len);
         try self.record_destructs.appendSlice(self.allocator, values);
         return .{ .start = start, .len = @intCast(values.len) };
     }
 
-    pub fn addStrPatternStepSpan(self: *Program, values: []const StrPatternStep) std.mem.Allocator.Error!Span(StrPatternStep) {
+    pub fn addStrPatternStepSpan(self: *ProgramBuilder, values: []const StrPatternStep) std.mem.Allocator.Error!Span(StrPatternStep) {
         const start: u32 = @intCast(self.str_pattern_steps.items.len);
         try self.str_pattern_steps.appendSlice(self.allocator, values);
         return .{ .start = start, .len = @intCast(values.len) };
     }
 
-    pub fn addBranchSpan(self: *Program, values: []const Branch) std.mem.Allocator.Error!Span(Branch) {
+    pub fn addBranchSpan(self: *ProgramBuilder, values: []const Branch) std.mem.Allocator.Error!Span(Branch) {
         const start: u32 = @intCast(self.branches.items.len);
         try self.branches.appendSlice(self.allocator, values);
         return .{ .start = start, .len = @intCast(values.len) };
     }
 
-    pub fn addIfBranchSpan(self: *Program, values: []const IfBranch) std.mem.Allocator.Error!Span(IfBranch) {
+    pub fn addIfBranchSpan(self: *ProgramBuilder, values: []const IfBranch) std.mem.Allocator.Error!Span(IfBranch) {
         const start: u32 = @intCast(self.if_branches.items.len);
         try self.if_branches.appendSlice(self.allocator, values);
         return .{ .start = start, .len = @intCast(values.len) };
     }
 
-    pub fn addStmtSpan(self: *Program, ids: []const StmtId) std.mem.Allocator.Error!Span(StmtId) {
+    pub fn addStmtSpan(self: *ProgramBuilder, ids: []const StmtId) std.mem.Allocator.Error!Span(StmtId) {
         const start: u32 = @intCast(self.stmt_ids.items.len);
         try self.stmt_ids.appendSlice(self.allocator, ids);
         return .{ .start = start, .len = @intCast(ids.len) };
     }
 
-    pub fn exprSpan(self: *const Program, span_: Span(ExprId)) []const ExprId {
+    pub fn exprSpan(self: *const ProgramBuilder, span_: Span(ExprId)) []const ExprId {
         return self.expr_ids.items[span_.start..][0..span_.len];
     }
 
-    pub fn patSpan(self: *const Program, span_: Span(PatId)) []const PatId {
+    pub fn patSpan(self: *const ProgramBuilder, span_: Span(PatId)) []const PatId {
         return self.pat_ids.items[span_.start..][0..span_.len];
     }
 
-    pub fn typedLocalSpan(self: *const Program, span_: Span(TypedLocal)) []const TypedLocal {
+    pub fn typedLocalSpan(self: *const ProgramBuilder, span_: Span(TypedLocal)) []const TypedLocal {
         return self.typed_locals.items[span_.start..][0..span_.len];
     }
 
-    pub fn stmtSpan(self: *const Program, span_: Span(StmtId)) []const StmtId {
+    pub fn stmtSpan(self: *const ProgramBuilder, span_: Span(StmtId)) []const StmtId {
         return self.stmt_ids.items[span_.start..][0..span_.len];
     }
 
-    pub fn fieldExprSpan(self: *const Program, span_: Span(FieldExpr)) []const FieldExpr {
+    pub fn fieldExprSpan(self: *const ProgramBuilder, span_: Span(FieldExpr)) []const FieldExpr {
         return self.field_exprs.items[span_.start..][0..span_.len];
     }
 
-    pub fn fnDefCaptureSpan(self: *const Program, span_: Span(FnDefCapture)) []const FnDefCapture {
+    pub fn fnDefCaptureSpan(self: *const ProgramBuilder, span_: Span(FnDefCapture)) []const FnDefCapture {
         return self.fn_def_captures.items[span_.start..][0..span_.len];
     }
 
-    pub fn recordDestructSpan(self: *const Program, span_: Span(RecordDestruct)) []const RecordDestruct {
+    pub fn recordDestructSpan(self: *const ProgramBuilder, span_: Span(RecordDestruct)) []const RecordDestruct {
         return self.record_destructs.items[span_.start..][0..span_.len];
     }
 
-    pub fn strPatternStepSpan(self: *const Program, span_: Span(StrPatternStep)) []const StrPatternStep {
+    pub fn strPatternStepSpan(self: *const ProgramBuilder, span_: Span(StrPatternStep)) []const StrPatternStep {
         return self.str_pattern_steps.items[span_.start..][0..span_.len];
     }
 
-    pub fn branchSpan(self: *const Program, span_: Span(Branch)) []const Branch {
+    pub fn branchSpan(self: *const ProgramBuilder, span_: Span(Branch)) []const Branch {
         return self.branches.items[span_.start..][0..span_.len];
     }
 
-    pub fn ifBranchSpan(self: *const Program, span_: Span(IfBranch)) []const IfBranch {
+    pub fn ifBranchSpan(self: *const ProgramBuilder, span_: Span(IfBranch)) []const IfBranch {
         return self.if_branches.items[span_.start..][0..span_.len];
     }
 };
 
+/// Compatibility name for existing Monotype builder-owned program storage.
+pub const Program = ProgramBuilder;
+
+/// Design-document name for mutable Monotype builder storage.
+pub const MonoProgramBuilder = ProgramBuilder;
+
+/// Design-document name for the read-only Monotype program view.
+pub const MonoProgramView = ProgramView;
+
 test "monotype ast declarations are referenced" {
     std.testing.refAllDecls(@This());
+}
+
+test "monotype program view exposes read-only side arrays" {
+    var program = Program.init(std.testing.allocator);
+    defer program.deinit();
+
+    const unit_ty = try program.types.add(.zst);
+    const fn_id = try program.addFn(testFnSource(unit_ty));
+    _ = try program.addSpec(.{
+        .identity = .{
+            .callable = .{ .proc_template = .{ .module = .{}, .proc_base = 0, .template = 0 } },
+            .source_fn_ty_digest = .{},
+            .mono_fn_ty_digest = .{},
+            .mono_fn_ty = unit_ty,
+        },
+        .fn_id = fn_id,
+        .status = .reserved,
+    });
+    const local = try program.addLocal(@enumFromInt(7), unit_ty);
+    _ = try program.addExpr(.{ .ty = unit_ty, .data = .unit });
+    _ = try program.addTypedLocalSpan(&.{.{ .local = local, .ty = unit_ty }});
+    program.next_symbol = 42;
+
+    const view_ = program.view();
+    try std.testing.expectEqual(@as(usize, 1), view_.types.types.len);
+    try std.testing.expectEqual(@as(usize, 1), view_.types.type_digests.len);
+    try std.testing.expectEqual(@as(usize, 1), view_.specs.len);
+    try std.testing.expectEqual(fn_id, view_.specs[0].fn_id);
+    try std.testing.expectEqual(@as(usize, 1), view_.locals.len);
+    try std.testing.expectEqual(@as(usize, 1), view_.exprs.len);
+    try std.testing.expectEqual(@as(usize, 1), view_.typed_locals.len);
+    try std.testing.expectEqual(@as(u32, 42), view_.next_symbol);
+    try std.testing.expect(!view_.types.frozen);
+
+    program.freeze();
+    try std.testing.expect(program.types.isFrozen());
+    try std.testing.expect(program.view().types.frozen);
+}
+
+test "completed monotype type id verifier requires frozen in-bounds type ids" {
+    var program = Program.init(std.testing.allocator);
+    defer program.deinit();
+
+    const unit_ty = try program.types.add(.zst);
+    _ = try program.addExpr(.{ .ty = unit_ty, .data = .unit });
+
+    try std.testing.expectEqual(
+        CompletedTypeIdVerifyError.type_store_not_frozen,
+        program.view().verifyCompletedTypeIds().?,
+    );
+
+    program.freeze();
+    try std.testing.expectEqual(@as(?CompletedTypeIdVerifyError, null), program.view().verifyCompletedTypeIds());
+
+    program.exprs.items[0].ty = @enumFromInt(99);
+    try std.testing.expectEqual(
+        CompletedTypeIdVerifyError.expr_type_out_of_bounds,
+        program.view().verifyCompletedTypeIds().?,
+    );
+}
+
+test "monotype call target verifier checks local and imported slots" {
+    {
+        var program = Program.init(std.testing.allocator);
+        defer program.deinit();
+
+        const unit_ty = try program.types.add(.zst);
+        const fn_ty = try program.types.add(.{ .func = .{
+            .args = Type.Span.empty(),
+            .ret = unit_ty,
+        } });
+        const fn_id = try program.addFn(testFnSource(fn_ty));
+        _ = try program.addExpr(.{ .ty = unit_ty, .data = .{ .call_proc = .{
+            .callee = localProcCallee(fn_id),
+            .args = Span(ExprId).empty(),
+        } } });
+        try std.testing.expectEqual(@as(?CallTargetVerifyError, null), program.verifyCallTargets());
+    }
+
+    {
+        var program = Program.init(std.testing.allocator);
+        defer program.deinit();
+
+        const unit_ty = try program.types.add(.zst);
+        const imported = try program.addImportedFn(.{
+            .shard = @enumFromInt(1),
+            .fn_id = undefined, // external-shard function id is not inspected by this verifier test
+        });
+        _ = try program.addExpr(.{ .ty = unit_ty, .data = .{ .call_proc = .{
+            .callee = importedProcCallee(imported),
+            .args = Span(ExprId).empty(),
+        } } });
+        try std.testing.expectEqual(@as(?CallTargetVerifyError, null), program.verifyCallTargets());
+    }
+
+    {
+        var program = Program.init(std.testing.allocator);
+        defer program.deinit();
+
+        const unit_ty = try program.types.add(.zst);
+        _ = try program.addExpr(.{ .ty = unit_ty, .data = .{ .call_proc = .{
+            .callee = localProcCallee(@enumFromInt(99)),
+            .args = Span(ExprId).empty(),
+        } } });
+        try std.testing.expectEqual(CallTargetVerifyError.local_fn_out_of_bounds, program.verifyCallTargets().?);
+    }
+
+    {
+        var program = Program.init(std.testing.allocator);
+        defer program.deinit();
+
+        const unit_ty = try program.types.add(.zst);
+        const fn_id = try program.addFn(testFnSource(unit_ty));
+        _ = try program.addExpr(.{ .ty = unit_ty, .data = .{ .call_proc = .{
+            .callee = localProcCallee(fn_id),
+            .args = Span(ExprId).empty(),
+        } } });
+        try std.testing.expectEqual(CallTargetVerifyError.local_fn_type_not_function, program.verifyCallTargets().?);
+    }
+
+    {
+        var program = Program.init(std.testing.allocator);
+        defer program.deinit();
+
+        const unit_ty = try program.types.add(.zst);
+        const fn_ty = try program.types.add(.{ .func = .{
+            .args = try program.types.addSpan(&.{unit_ty}),
+            .ret = unit_ty,
+        } });
+        const fn_id = try program.addFn(testFnSource(fn_ty));
+        try program.defs.append(std.testing.allocator, .{
+            .symbol = undefined, // symbol is not inspected by the call-target verifier
+            .fn_id = fn_id,
+            .args = Span(TypedLocal).empty(),
+            .body = .hosted,
+            .ret = unit_ty,
+        });
+        try std.testing.expectEqual(CallTargetVerifyError.local_fn_definition_arity_mismatch, program.verifyCallTargets().?);
+    }
+
+    {
+        var program = Program.init(std.testing.allocator);
+        defer program.deinit();
+
+        const unit_ty = try program.types.add(.zst);
+        const fn_ty = try program.types.add(.{ .func = .{
+            .args = try program.types.addSpan(&.{unit_ty}),
+            .ret = unit_ty,
+        } });
+        const fn_id = try program.addFn(testFnSource(fn_ty));
+        _ = try program.addExpr(.{ .ty = unit_ty, .data = .{ .call_proc = .{
+            .callee = localProcCallee(fn_id),
+            .args = Span(ExprId).empty(),
+        } } });
+        try std.testing.expectEqual(CallTargetVerifyError.local_call_arity_mismatch, program.verifyCallTargets().?);
+    }
+
+    {
+        var program = Program.init(std.testing.allocator);
+        defer program.deinit();
+
+        const unit_ty = try program.types.add(.zst);
+        _ = try program.addExpr(.{ .ty = unit_ty, .data = .{ .call_proc = .{
+            .callee = importedProcCallee(@enumFromInt(99)),
+            .args = Span(ExprId).empty(),
+        } } });
+        try std.testing.expectEqual(CallTargetVerifyError.imported_fn_out_of_bounds, program.verifyCallTargets().?);
+    }
+}
+
+test "fresh single-shard view preserves builder local call graph" {
+    var program = Program.init(std.testing.allocator);
+    defer program.deinit();
+
+    const unit_ty = try program.types.add(.zst);
+    const fn_ty = try program.types.add(.{ .func = .{
+        .args = Type.Span.empty(),
+        .ret = unit_ty,
+    } });
+    const first_fn = try program.addFn(testFnSource(fn_ty));
+    const second_fn = try program.addFn(testFnSource(fn_ty));
+
+    _ = try program.addExpr(.{ .ty = unit_ty, .data = .{ .call_proc = .{
+        .callee = localProcCallee(first_fn),
+        .args = Span(ExprId).empty(),
+    } } });
+    _ = try program.addExpr(.{ .ty = unit_ty, .data = .{ .call_proc = .{
+        .callee = localProcCallee(second_fn),
+        .args = Span(ExprId).empty(),
+    } } });
+
+    var builder_targets = std.ArrayList(FnId).empty;
+    defer builder_targets.deinit(std.testing.allocator);
+    try collectSingleShardLocalCallTargets(std.testing.allocator, program.exprs.items, &builder_targets);
+
+    const view_ = program.view();
+    var view_targets = std.ArrayList(FnId).empty;
+    defer view_targets.deinit(std.testing.allocator);
+    try collectSingleShardLocalCallTargets(std.testing.allocator, view_.exprs, &view_targets);
+
+    try std.testing.expectEqualSlices(FnId, builder_targets.items, view_targets.items);
+}
+
+fn collectSingleShardLocalCallTargets(
+    allocator: std.mem.Allocator,
+    exprs: []const Expr,
+    out: *std.ArrayList(FnId),
+) (std.mem.Allocator.Error || error{TestUnexpectedResult})!void {
+    for (exprs) |expr| {
+        switch (expr.data) {
+            .call_proc => |call| switch (call.callee) {
+                .func => |slot| switch (slot) {
+                    .local => |fn_id| try out.append(allocator, fn_id),
+                    .imported => return error.TestUnexpectedResult,
+                },
+                .lifted => return error.TestUnexpectedResult,
+            },
+            else => {},
+        }
+    }
+}
+
+fn testFnSource(mono_fn_ty: Type.TypeId) FnTemplate {
+    return .{
+        .fn_def = undefined, // call-target verifier tests do not inspect the source callable
+        .source_fn_ty = undefined, // call-target verifier tests do not inspect the checked type id
+        .source_fn_key = .{},
+        .mono_fn_ty = mono_fn_ty,
+    };
 }
