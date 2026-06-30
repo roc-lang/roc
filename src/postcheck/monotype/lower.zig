@@ -1356,6 +1356,7 @@ const Builder = struct {
                     .body = .hosted,
                     .ret = fn_data.ret,
                 };
+                self.program.fns.items[@intFromEnum(reservation.fn_id)].source = fn_template;
                 try self.markTemplateReady(family, reservation.def, lower_fn_ty);
                 return reservation.def;
             },
