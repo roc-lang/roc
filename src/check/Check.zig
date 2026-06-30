@@ -2846,14 +2846,12 @@ fn checkForInfiniteType(self: *Self, comptime Idx: anytype, idx: Idx) std.mem.Al
     const occurs_result = try occurs.occurs(self.types, &self.occurs_scratch, var_);
 
     switch (occurs_result) {
-        .not_recursive, .recursive_nominal => {
-            // These are fine - no cycle, or valid recursion through a nominal type
+        .valid => {
+            // This is fine - no cycle, or valid recursion through a nominal type
         },
         .recursive_anonymous => {
-            const err_var = if (self.occurs_scratch.err_chain.len() > 0)
-                self.occurs_scratch.err_chain.items.items[0]
-            else
-                var_;
+            std.debug.assert(self.occurs_scratch.err_var != null);
+            const err_var = self.occurs_scratch.err_var.?;
 
             // Anonymous recursion (recursive type not through a nominal type)
             const snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, err_var);
@@ -2870,10 +2868,8 @@ fn checkForInfiniteType(self: *Self, comptime Idx: anytype, idx: Idx) std.mem.Al
             try self.types.setVarContent(var_, .err);
         },
         .infinite => {
-            const err_var = if (self.occurs_scratch.err_chain.len() > 0)
-                self.occurs_scratch.err_chain.items.items[0]
-            else
-                var_;
+            std.debug.assert(self.occurs_scratch.err_var != null);
+            const err_var = self.occurs_scratch.err_var.?;
 
             // Infinite type (like `a = List(a)`)
             const snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, err_var);
