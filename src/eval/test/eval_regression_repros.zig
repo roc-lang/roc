@@ -15,14 +15,14 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "1" },
     },
     .{
-        .name = "regression B005: signed min-int division overflow wraps",
+        .name = "regression B005: signed min-int division overflow crashes",
         .source = "(-128.I8) // -1.I8",
-        .expected = .{ .inspect_str = "-128" },
+        .expected = .{ .crash = {} },
     },
     .{
-        .name = "regression B006: signed min-int negate wraps",
+        .name = "regression B006: signed min-int negate overflow crashes",
         .source = "I8.negate(-128)",
-        .expected = .{ .inspect_str = "-128" },
+        .expected = .{ .crash = {} },
     },
     .{
         .name = "regression B007: Dec suffix preserves exact decimal source text",
@@ -149,9 +149,9 @@ pub const tests = [_]TestCase{
         .expected = .{ .problem = {} },
     },
     .{
-        .name = "regression B031: very large decimal fraction literal is not zero",
+        .name = "regression B031: very large decimal fraction literal is rejected",
         .source = "999999999999999999999999999999999999999.0 == 0.0",
-        .expected = .{ .inspect_str = "False" },
+        .expected = .{ .problem = {} },
     },
     .{
         .name = "regression B035: out-of-bounds tuple projection is rejected",

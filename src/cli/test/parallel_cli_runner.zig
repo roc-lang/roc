@@ -2278,8 +2278,10 @@ const hot_reload_app_data_body =
 ;
 
 const hot_reload_extra_five_source =
-    \\value : U64
-    \\value = 5
+    \\Extra :: [].{
+    \\    value : U64
+    \\    value = 5
+    \\}
     \\
 ;
 
@@ -2539,16 +2541,22 @@ const hot_reload_host_c_source =
     \\"main_for_host! = |arg| main!(arg) + 1\n";
     \\
     \\static const char *extra_five =
-    \\"value : U64\n"
-    \\"value = 5\n";
+    \\"Extra :: [].{\n"
+    \\"    value : U64\n"
+    \\"    value = 5\n"
+    \\"}\n";
     \\
     \\static const char *extra_six =
-    \\"value : U64\n"
-    \\"value = 6\n";
+    \\"Extra :: [].{\n"
+    \\"    value : U64\n"
+    \\"    value = 6\n"
+    \\"}\n";
     \\
     \\static const char *extra_eight =
-    \\"value : U64\n"
-    \\"value = 8\n";
+    \\"Extra :: [].{\n"
+    \\"    value : U64\n"
+    \\"    value = 8\n"
+    \\"}\n";
     \\
     \\static int write_bytes(const char *path, const char *bytes) {
     \\    FILE *file = fopen(path, "wb");

@@ -1170,13 +1170,27 @@ const Builder = struct {
         // requester's id in place. Builder-global types stay snapshots; they
         // serve many specializations.
         const root_node = try body_ctx.instNode(template.checked_fn_root);
+        const requested_fn_ty = try body_ctx.snapshotFunctionTypeIfGeneratedOpaqueArgs(lower_fn_ty);
+        const mutable_view_fn_ty = if (requested_fn_ty == lower_fn_ty) lower_fn_ty else public_constraint_fn_ty;
         if (!self.unsolved_monos.contains(lower_fn_ty)) {
-            try graph.addMonoView(root_node, lower_fn_ty);
+            try graph.addMonoView(root_node, mutable_view_fn_ty);
         }
-        const live_fn_ty = try graph.monoFor(root_node);
+        const live_fn_ty = try body_ctx.functionTypePreservingGeneratedOpaqueArgs(
+            requested_fn_ty,
+            try graph.monoFor(root_node),
+        );
         const lowered = try body_ctx.lowerTemplateBody(template_ref, template, live_fn_ty);
-        const solved_view_ty = try graph.refreshedMonoFor(root_node);
-        const solved_fn_ty = if (requester != null) try graph.snapshotMonoFor(root_node) else solved_view_ty;
+        const solved_view_ty = try body_ctx.functionTypePreservingGeneratedOpaqueArgs(
+            requested_fn_ty,
+            try graph.refreshedMonoFor(root_node),
+        );
+        const solved_fn_ty = if (requester != null)
+            try body_ctx.functionTypePreservingGeneratedOpaqueArgs(
+                requested_fn_ty,
+                try graph.snapshotMonoFor(root_node),
+            )
+        else
+            solved_view_ty;
         const solved_fn_data = self.functionShape(solved_fn_ty, "lowered procedure template root type was not a function");
         // The definition records the body's solved view of the root type.
         // Deferred call sites embed the requested type, which digests
@@ -2220,15 +2234,24 @@ const Builder = struct {
             .status = .lowering,
         });
 
-        try request.ctx.constrainTypeToMono(fn_template.source_fn_ty, fn_template.mono_fn_ty);
+        const requested_fn_ty = try request.ctx.snapshotFunctionTypeIfGeneratedOpaqueArgs(fn_template.mono_fn_ty);
+        const public_constraint_fn_ty = try request.ctx.publicOpaqueFunctionUnificationType(fn_template.mono_fn_ty);
+        try request.ctx.constrainTypeToMono(fn_template.source_fn_ty, public_constraint_fn_ty);
 
         const root_node = try request.ctx.instNode(fn_template.source_fn_ty);
+        const mutable_view_fn_ty = if (requested_fn_ty == fn_template.mono_fn_ty) fn_template.mono_fn_ty else public_constraint_fn_ty;
         if (!self.unsolved_monos.contains(fn_template.mono_fn_ty)) {
-            try request.ctx.graph.addMonoView(root_node, fn_template.mono_fn_ty);
+            try request.ctx.graph.addMonoView(root_node, mutable_view_fn_ty);
         }
-        const live_fn_ty = try request.ctx.graph.monoFor(root_node);
+        const live_fn_ty = try request.ctx.functionTypePreservingGeneratedOpaqueArgs(
+            requested_fn_ty,
+            try request.ctx.graph.monoFor(root_node),
+        );
         const lowered = try request.ctx.lowerNestedFunction(request.expr_id, live_fn_ty);
-        const solved_fn_ty = try request.ctx.graph.refreshedMonoFor(root_node);
+        const solved_fn_ty = try request.ctx.functionTypePreservingGeneratedOpaqueArgs(
+            requested_fn_ty,
+            try request.ctx.graph.refreshedMonoFor(root_node),
+        );
         const solved_fn_data = self.functionShape(solved_fn_ty, "lowered nested function root type was not a function");
         var def_template = fn_template;
         def_template.mono_fn_ty = solved_fn_ty;
@@ -5292,7 +5315,9 @@ const BodyContext = struct {
             },
             .fields_rename_fields => blk: {
                 if (args.len != 2 or arg_tys.len != 2) Common.invariant("FieldNames.rename_fields reached Monotype with an unexpected arity");
-                if (self.generatedFieldNamesBackingValueFieldNames(arg_tys[0]) != null) break :blk arg_tys[0];
+                if (self.generatedFieldNamesBackingValueFieldNames(arg_tys[0]) != null) {
+                    break :blk try self.snapshotGeneratedOpaqueEvidenceType(arg_tys[0]);
+                }
                 if (expected_ret_ty) |expected| break :blk expected;
                 break :blk try self.lowerType(checked_ret_ty);
             },
@@ -5471,17 +5496,18 @@ const BodyContext = struct {
         const fields_value = try self.lowerParseIntrinsicArgAtType(args[0], arg_tys[0]);
         const rename_value = try self.lowerParseIntrinsicArgAtType(args[1], arg_tys[1]);
         if (self.generatedFieldNamesBackingValueFieldNames(arg_tys[0])) |backing_fields| {
-            const fields_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), ret_ty);
+            const fields_ty = ret_ty;
+            const fields_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), fields_ty);
             const rename_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), arg_tys[1]);
             var body = try self.lowerGeneratedFieldNamesRenameFieldNames(
                 backing_fields,
-                ret_ty,
+                fields_ty,
                 fields_local,
                 rename_local,
                 arg_tys[1],
             );
-            body = try self.wrapLet(rename_local, arg_tys[1], rename_value, body, ret_ty);
-            return try self.wrapLet(fields_local, ret_ty, fields_value, body, ret_ty);
+            body = try self.wrapLet(rename_local, arg_tys[1], rename_value, body, fields_ty);
+            return try self.wrapLet(fields_local, fields_ty, fields_value, body, ret_ty);
         }
 
         const fields_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), ret_ty);
@@ -5763,11 +5789,8 @@ const BodyContext = struct {
         defer self.allocator.free(item_fields);
 
         for (item_fields, 0..) |*field, index| {
-            const label = try std.fmt.allocPrint(self.allocator, "field_{d}", .{index});
-            defer self.allocator.free(label);
-
             field.* = .{
-                .name = try self.builder.program.names.internRecordFieldLabel(label),
+                .name = try self.generatedOrdinalBackingFieldName("field", index),
                 .ty = field_handle_ty,
             };
         }
@@ -5782,11 +5805,11 @@ const BodyContext = struct {
                 .ty = items_ty,
             },
             .{
-                .name = try self.builder.program.names.internRecordFieldLabel("shortest_name"),
+                .name = try self.builder.program.names.internRecordFieldLabel("longest_name"),
                 .ty = u64_ty,
             },
             .{
-                .name = try self.builder.program.names.internRecordFieldLabel("longest_name"),
+                .name = try self.builder.program.names.internRecordFieldLabel("shortest_name"),
                 .ty = u64_ty,
             },
         };
@@ -6211,6 +6234,59 @@ const BodyContext = struct {
 
     fn isGeneratedOpaqueEvidenceType(self: *BodyContext, ty: Type.TypeId) bool {
         return self.isGeneratedFieldNamesEvidenceType(ty) or self.isGeneratedParseTagUnionSpecEvidenceType(ty);
+    }
+
+    fn snapshotGeneratedOpaqueEvidenceType(
+        self: *BodyContext,
+        ty: Type.TypeId,
+    ) Allocator.Error!Type.TypeId {
+        if (!self.isGeneratedOpaqueEvidenceType(ty)) return ty;
+        return try self.graph.snapshotMonoFor(try self.graph.importMono(ty));
+    }
+
+    fn snapshotFunctionTypeIfGeneratedOpaqueArgs(
+        self: *BodyContext,
+        fn_ty: Type.TypeId,
+    ) Allocator.Error!Type.TypeId {
+        const function = self.builder.functionShape(fn_ty, "generated opaque snapshot requested for a non-function type");
+        for (self.builder.program.types.span(function.args)) |arg_ty| {
+            if (self.isGeneratedOpaqueEvidenceType(arg_ty)) {
+                return try self.graph.snapshotMonoFor(try self.graph.importMono(fn_ty));
+            }
+        }
+        return fn_ty;
+    }
+
+    fn functionTypePreservingGeneratedOpaqueArgs(
+        self: *BodyContext,
+        requested_fn_ty: Type.TypeId,
+        live_fn_ty: Type.TypeId,
+    ) Allocator.Error!Type.TypeId {
+        const requested_fn = self.builder.functionShape(requested_fn_ty, "requested function type was not a function");
+        const live_fn = self.builder.functionShape(live_fn_ty, "live function type was not a function");
+        const requested_args = self.builder.program.types.span(requested_fn.args);
+        const live_args = self.builder.program.types.span(live_fn.args);
+        if (requested_args.len != live_args.len) {
+            Common.invariant("requested and live function arities differed while preserving generated opaque args");
+        }
+
+        var changed = false;
+        const args = try self.allocator.alloc(Type.TypeId, live_args.len);
+        defer self.allocator.free(args);
+        for (requested_args, live_args, 0..) |requested_arg, live_arg, index| {
+            if (self.isGeneratedOpaqueEvidenceType(requested_arg)) {
+                args[index] = requested_arg;
+                changed = true;
+            } else {
+                args[index] = live_arg;
+            }
+        }
+        if (!changed) return live_fn_ty;
+
+        return try self.builder.program.types.add(.{ .func = .{
+            .args = try self.builder.program.types.addSpan(args),
+            .ret = live_fn.ret,
+        } });
     }
 
     fn publicOpaqueUnificationType(self: *BodyContext, ty: Type.TypeId) Allocator.Error!Type.TypeId {
@@ -7014,10 +7090,8 @@ const BodyContext = struct {
 
         for (fields, 0..) |field, index| {
             locals[index] = try self.builder.program.addLocal(self.builder.symbols.fresh(), str_ty);
-            self.builder.program.setLocalCaptureId(
-                locals[index],
-                self.parserFieldCaptureIdForRecordField(fields, index, base_capture_id),
-            );
+            const capture_id = self.parserFieldCaptureIdForRecordField(fields, index, base_capture_id);
+            self.builder.program.setLocalCaptureId(locals[index], capture_id);
             values[index] = try self.renamedRecordFieldNameExpr(encoding_expr, encoding_ty, field, str_ty);
         }
 
@@ -7205,16 +7279,22 @@ const BodyContext = struct {
         self: *BodyContext,
         index: usize,
     ) Allocator.Error!names.RecordFieldNameId {
-        const label = try std.fmt.allocPrint(self.allocator, "record_{d}", .{index});
-        defer self.allocator.free(label);
-        return try self.builder.program.names.internRecordFieldLabel(label);
+        return try self.generatedOrdinalBackingFieldName("record", index);
     }
 
     fn generatedParseTagUnionSpecBackingFieldName(
         self: *BodyContext,
         index: usize,
     ) Allocator.Error!names.RecordFieldNameId {
-        const label = try std.fmt.allocPrint(self.allocator, "field_{d}", .{index});
+        return try self.generatedOrdinalBackingFieldName("field", index);
+    }
+
+    fn generatedOrdinalBackingFieldName(
+        self: *BodyContext,
+        prefix: []const u8,
+        index: usize,
+    ) Allocator.Error!names.RecordFieldNameId {
+        const label = try std.fmt.allocPrint(self.allocator, "{s}_{d:0>20}", .{ prefix, index });
         defer self.allocator.free(label);
         return try self.builder.program.names.internRecordFieldLabel(label);
     }
@@ -9123,7 +9203,7 @@ const BodyContext = struct {
             };
         }
 
-        const fn_ty = (try self.indirectCalleeMonoType(call.func)) orelse fn_ty: {
+        const fn_ty = (try self.indirectCalleeMonoType(call.func, call.args, expected_ret_ty)) orelse fn_ty: {
             var call_ctx = try BodyContext.init(self.allocator, self.builder, self.view, self.owner_template, self.graph);
             defer call_ctx.deinit();
             call_ctx.owner_context_fn_key = self.owner_context_fn_key;
@@ -9147,19 +9227,40 @@ const BodyContext = struct {
         };
     }
 
-    fn indirectCalleeMonoType(self: *BodyContext, checked_func: checked.CheckedExprId) Allocator.Error!?Type.TypeId {
+    fn indirectCalleeMonoType(
+        self: *BodyContext,
+        checked_func: checked.CheckedExprId,
+        checked_args: []const checked.CheckedExprId,
+        expected_ret_ty: ?Type.TypeId,
+    ) Allocator.Error!?Type.TypeId {
         const expr = self.view.bodies.expr(checked_func);
         return switch (expr.data) {
             .lookup_local,
             .lookup_external,
             .lookup_required,
-            => self.localCalleeMonoType(checked_func),
-            .field_access => try self.lowerExprType(checked_func),
+            => try self.localCalleeMonoType(checked_func, checked_args, expected_ret_ty),
+            .field_access => |field| blk: {
+                switch (self.view.bodies.expr(field.receiver).data) {
+                    .lookup_required => {},
+                    else => break :blk null,
+                }
+                const field_ty = try self.lowerExprType(checked_func);
+                if (expected_ret_ty) |expected| {
+                    const fn_data = self.builder.functionShape(field_ty, "checked field callee type was not a function");
+                    if (!self.sameType(expected, fn_data.ret)) break :blk null;
+                }
+                break :blk field_ty;
+            },
             else => null,
         };
     }
 
-    fn localCalleeMonoType(self: *BodyContext, checked_func: checked.CheckedExprId) ?Type.TypeId {
+    fn localCalleeMonoType(
+        self: *BodyContext,
+        checked_func: checked.CheckedExprId,
+        checked_args: []const checked.CheckedExprId,
+        expected_ret_ty: ?Type.TypeId,
+    ) Allocator.Error!?Type.TypeId {
         const expr = self.view.bodies.expr(checked_func);
         const maybe_ref = switch (expr.data) {
             .lookup_local => |lookup| lookup.resolved,
@@ -9169,7 +9270,21 @@ const BodyContext = struct {
         };
         const ref_id = maybe_ref orelse Common.invariant("checked callee lookup reached Monotype without resolved value ref");
         const local_id = self.currentLocalForResolvedValue(ref_id) orelse return null;
-        return self.builder.program.locals.items[@intFromEnum(local_id)].ty;
+        const fn_ty = self.builder.program.locals.items[@intFromEnum(local_id)].ty;
+        const fn_data = self.builder.functionShape(fn_ty, "checked local callee type was not a function");
+        const arg_tys = self.builder.program.types.span(fn_data.args);
+        if (arg_tys.len != checked_args.len) Common.invariant("checked local callee arity differed from call arity");
+        if (expected_ret_ty) |expected| {
+            if (!self.sameType(expected, fn_data.ret)) return null;
+        }
+        for (checked_args) |checked_arg| {
+            if (try self.callArgumentMonoType(checked_arg, null)) |evidence_ty| {
+                if (self.isGeneratedOpaqueEvidenceType(evidence_ty)) {
+                    return null;
+                }
+            }
+        }
+        return fn_ty;
     }
 
     fn directCallInstantiationSourceFnType(
@@ -9537,7 +9652,7 @@ const BodyContext = struct {
         expected_ret_ty: ?Type.TypeId,
     ) Allocator.Error!?Type.TypeId {
         if (call.direct_target == null) {
-            if (try self.indirectCalleeMonoType(call.func)) |fn_ty| {
+            if (try self.indirectCalleeMonoType(call.func, call.args, expected_ret_ty)) |fn_ty| {
                 const ret_ty = self.functionReturnType(fn_ty);
                 if (expected_ret_ty) |expected| {
                     if (!self.sameType(expected, ret_ty)) {

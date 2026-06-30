@@ -422,8 +422,8 @@ const Solver = struct {
             },
             .nominal => |backing| {
                 if (try self.namedBacking(expected)) |backing_ty| {
-                    if (self.hasBuiltinOwner(expected, .fields)) {
-                        _ = try self.inferExpr(backing);
+                    if (self.hasBuiltinOwner(expected, .fields) or self.hasBuiltinOwner(expected, .field)) {
+                        try self.inferGeneratedOpaqueBacking(backing);
                     } else {
                         _ = try self.expectExpr(backing, backing_ty);
                     }
@@ -624,6 +624,49 @@ const Solver = struct {
             => |expr| _ = try self.inferExpr(expr),
             .return_ => |ret| _ = try self.expectExpr(ret.value, self.returnTargetTy(ret.target)),
             .crash => {},
+        }
+    }
+
+    fn inferGeneratedOpaqueBacking(self: *Solver, expr_id: Lifted.ExprId) Allocator.Error!void {
+        const index = @intFromEnum(expr_id);
+        if (self.expr_done[index]) return;
+
+        const expr = self.program.lifted.exprs.items[index];
+        switch (expr.data) {
+            .record => |fields| {
+                _ = try self.exprSlot(expr_id);
+                self.expr_done[index] = true;
+                for (self.program.lifted.fieldExprSpan(fields)) |field| {
+                    _ = try self.inferExpr(field.value);
+                }
+            },
+            .tuple => |items| {
+                _ = try self.exprSlot(expr_id);
+                self.expr_done[index] = true;
+                for (self.program.lifted.exprSpan(items)) |item| {
+                    _ = try self.inferExpr(item);
+                }
+            },
+            .tag => |tag| {
+                _ = try self.exprSlot(expr_id);
+                self.expr_done[index] = true;
+                for (self.program.lifted.exprSpan(tag.payloads)) |payload| {
+                    _ = try self.inferExpr(payload);
+                }
+            },
+            .nominal => |backing| {
+                _ = try self.exprSlot(expr_id);
+                self.expr_done[index] = true;
+                try self.inferGeneratedOpaqueBacking(backing);
+            },
+            .let_ => |let_| {
+                _ = try self.exprSlot(expr_id);
+                self.expr_done[index] = true;
+                const value_ty = try self.inferExpr(let_.value);
+                try self.bindPattern(let_.bind, value_ty);
+                try self.inferGeneratedOpaqueBacking(let_.rest);
+            },
+            else => _ = try self.inferExpr(expr_id),
         }
     }
 
@@ -1439,7 +1482,8 @@ const TypeCloner = struct {
         if (self.map.get(ty)) |cached| return cached;
         const reserved = try self.solver.program.types.add(.unbound);
         try self.map.put(ty, reserved);
-        self.solver.program.types.set(reserved, try self.lowerContent(self.solver.program.lifted.types.get(ty)));
+        const content = self.solver.program.lifted.types.get(ty);
+        self.solver.program.types.set(reserved, try self.lowerContent(content));
         return reserved;
     }
 
@@ -1506,9 +1550,15 @@ const TypeCloner = struct {
                     .kind = named.kind,
                     .builtin_owner = named.builtin_owner,
                     .args = try self.solver.program.types.addSpan(args),
-                    .backing = if (named.backing) |raw_backing| .{
-                        .ty = try self.lower(try self.structuralBackingForNamed(named.def, raw_backing.ty)),
-                        .use = raw_backing.use,
+                    .backing = if (named.backing) |raw_backing| blk_backing: {
+                        const backing_ty = if (builtinBackingSpecializes(named.builtin_owner))
+                            raw_backing.ty
+                        else
+                            try self.structuralBackingForNamed(named.def, raw_backing.ty);
+                        break :blk_backing .{
+                            .ty = try self.lower(backing_ty),
+                            .use = raw_backing.use,
+                        };
                     } else null,
                     .declared_order = try self.lowerDeclaredOrder(named.declared_order),
                 } };
@@ -1554,6 +1604,16 @@ const TypeCloner = struct {
         }
     }
 };
+
+fn builtinBackingSpecializes(owner: ?static_dispatch.BuiltinOwner) bool {
+    return switch (owner orelse return false) {
+        .fields,
+        .field,
+        .parse_tag_union_spec,
+        => true,
+        else => false,
+    };
+}
 
 fn sameBuiltinOwner(left: ?static_dispatch.BuiltinOwner, right: ?static_dispatch.BuiltinOwner, owner: static_dispatch.BuiltinOwner) bool {
     const left_owner = left orelse return false;

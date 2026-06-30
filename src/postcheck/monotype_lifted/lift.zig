@@ -304,9 +304,10 @@ const Lifter = struct {
                     if (captures.len == fn_ref.captures.len) continue;
                     if (fn_ref.captures.len != 0) Common.invariant("function reference capture operands disagreed with finalized lifted captures");
                     const expr_id: Ast.ExprId = @enumFromInt(@as(u32, @intCast(index)));
+                    const capture_span = try self.captureExprSpanFromTypedLocals(captures, expr_id);
                     self.output.exprs.items[index].data = .{ .fn_ref = .{
                         .fn_id = fn_ref.fn_id,
-                        .captures = try self.captureExprSpanFromTypedLocals(captures, expr_id),
+                        .captures = capture_span,
                     } };
                 },
                 .call_proc => |call| {
@@ -315,10 +316,11 @@ const Lifter = struct {
                     if (captures.len == call.captures.len) continue;
                     if (call.captures.len != 0) Common.invariant("direct call capture operands disagreed with finalized lifted captures");
                     const expr_id: Ast.ExprId = @enumFromInt(@as(u32, @intCast(index)));
+                    const capture_span = try self.captureExprSpanFromTypedLocals(captures, expr_id);
                     self.output.exprs.items[index].data = .{ .call_proc = .{
                         .callee = call.callee,
                         .args = call.args,
-                        .captures = try self.captureExprSpanFromTypedLocals(captures, expr_id),
+                        .captures = capture_span,
                         .is_cold = call.is_cold,
                     } };
                 },
@@ -423,17 +425,19 @@ const Lifter = struct {
                 if (raw >= self.def_map.len) Common.invariant("Monotype definition reference was outside the definition table");
                 const fn_id = self.def_map[raw] orelse
                     Common.invariant("Monotype definition reference reached lifting before its function was registered");
+                const captures = try self.captureExprSpanForFn(fn_id, expr_id);
                 self.output.exprs.items[index].data = .{ .fn_ref = .{
                     .fn_id = fn_id,
-                    .captures = try self.captureExprSpanForFn(fn_id, expr_id),
+                    .captures = captures,
                 } };
             },
             .fn_def => |fn_def| {
                 for (self.output.fnDefCaptureSpan(fn_def.captures)) |capture| try self.rewriteExpr(capture.value);
                 const lifted = self.liftedFn(fn_def.fn_id);
+                const captures = try self.fnRefCaptureExprSpanForFnDef(lifted, fn_def.captures, expr_id);
                 self.output.exprs.items[index].data = .{ .fn_ref = .{
                     .fn_id = lifted,
-                    .captures = try self.fnRefCaptureExprSpanForFnDef(lifted, fn_def.captures, expr_id),
+                    .captures = captures,
                 } };
             },
             .call_value => |call| {
@@ -508,9 +512,10 @@ const Lifter = struct {
     fn liftLambda(self: *Lifter, expr_id: Mono.ExprId, ty: @import("../monotype/type.zig").TypeId, lambda: Mono.LambdaExpr) Allocator.Error!void {
         const fn_id = try self.reserveFn(lambda.fn_id);
         if (self.nested_fn_ids.contains(fn_id) or self.initialized_fns.contains(fn_id)) {
+            const captures = try self.captureExprSpanForFn(fn_id, expr_id);
             self.output.exprs.items[@intFromEnum(expr_id)].data = .{ .fn_ref = .{
                 .fn_id = fn_id,
-                .captures = try self.captureExprSpanForFn(fn_id, expr_id),
+                .captures = captures,
             } };
             return;
         }
@@ -529,9 +534,10 @@ const Lifter = struct {
         try bindTypedLocals(self.output, &bound, self.output.typedLocalSpan(lambda.args));
         try captures.collectExpr(lambda.body, &bound);
 
+        const capture_exprs = try self.captureExprSpanFromTypedLocals(captures.items.items, expr_id);
         self.output.exprs.items[@intFromEnum(expr_id)].data = .{ .fn_ref = .{
             .fn_id = fn_id,
-            .captures = try self.captureExprSpanFromTypedLocals(captures.items.items, expr_id),
+            .captures = capture_exprs,
         } };
 
         try self.rewriteExpr(lambda.body);

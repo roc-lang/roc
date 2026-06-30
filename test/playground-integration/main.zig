@@ -327,6 +327,8 @@ fn failureData(allocator: std.mem.Allocator, message: ?[]const u8, status: TestR
 const TestData = struct {
     pub fn happyPathRocCode(allocator: std.mem.Allocator) Allocator.Error![]u8 {
         return allocator.dupe(u8,
+            \\main! = |_| {}
+            \\
             \\foo = "bar"
         );
     }
