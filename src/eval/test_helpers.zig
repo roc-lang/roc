@@ -1440,6 +1440,12 @@ fn publishImportArtifacts(
         for (artifacts.items) |*artifact| artifact.deinit(allocator);
         artifacts.deinit(allocator);
     }
+    // Reserve the final size up front so `artifacts` never reallocates while we
+    // publish. The `view` we store for each artifact in `published_keys` aliases
+    // the artifact's in-list storage; if the backing array moved, those views
+    // would dangle and later modules would read another module's identity.
+    const builtin_in_artifacts: usize = if (pre_published_builtin == null) 1 else 0;
+    try artifacts.ensureTotalCapacityPrecise(allocator, extra_module_count + builtin_in_artifacts);
 
     var published_keys = std.ArrayList(check.CheckedArtifact.PublishImportArtifact).empty;
     defer published_keys.deinit(allocator);
@@ -1451,7 +1457,7 @@ fn publishImportArtifacts(
             .view = check.CheckedArtifact.importedView(ppb.artifact),
         });
     } else {
-        var builtin_artifact = try check.CheckedArtifact.publishFromTypedModule(
+        const builtin_artifact = try check.CheckedArtifact.publishFromTypedModule(
             allocator,
             typed_cir_modules,
             1,
@@ -1461,19 +1467,15 @@ fn publishImportArtifacts(
             },
         );
         builtin_module_owned_by_artifact.* = true;
-        published_keys.append(allocator, .{
+        // Move into stable storage first, then build the view from that pointer.
+        // On failure the artifact is owned by `artifacts` and freed by errdefer.
+        artifacts.appendAssumeCapacity(builtin_artifact);
+        const builtin_ptr = &artifacts.items[artifacts.items.len - 1];
+        try published_keys.append(allocator, .{
             .module_idx = 1,
-            .key = builtin_artifact.key,
-            .view = check.CheckedArtifact.importedView(&builtin_artifact),
-        }) catch |err| {
-            builtin_artifact.deinit(allocator);
-            return err;
-        };
-        artifacts.append(allocator, builtin_artifact) catch |err| {
-            _ = published_keys.pop();
-            builtin_artifact.deinit(allocator);
-            return err;
-        };
+            .key = builtin_ptr.key,
+            .view = check.CheckedArtifact.importedView(builtin_ptr),
+        });
     }
 
     if (extra_module_count == 0) return try artifacts.toOwnedSlice(allocator);
@@ -1492,7 +1494,7 @@ fn publishImportArtifacts(
             const module_idx: u32 = @intCast(extra_i + 2);
             if (!directImportsArePublished(typed_cir_modules.module(module_idx), published_keys.items)) continue;
 
-            var artifact = try check.CheckedArtifact.publishFromTypedModule(
+            const artifact = try check.CheckedArtifact.publishFromTypedModule(
                 allocator,
                 typed_cir_modules,
                 module_idx,
@@ -1505,19 +1507,15 @@ fn publishImportArtifacts(
             extra_modules[extra_i].published_owns_module_env = true;
             extra_modules[extra_i].owned_source = null;
 
-            published_keys.append(allocator, .{
+            // Move into stable storage first, then build the view from that
+            // pointer so it cannot dangle when later modules are published.
+            artifacts.appendAssumeCapacity(artifact);
+            const artifact_ptr = &artifacts.items[artifacts.items.len - 1];
+            try published_keys.append(allocator, .{
                 .module_idx = module_idx,
-                .key = artifact.key,
-                .view = check.CheckedArtifact.importedView(&artifact),
-            }) catch |err| {
-                artifact.deinit(allocator);
-                return err;
-            };
-            artifacts.append(allocator, artifact) catch |err| {
-                _ = published_keys.pop();
-                artifact.deinit(allocator);
-                return err;
-            };
+                .key = artifact_ptr.key,
+                .view = check.CheckedArtifact.importedView(artifact_ptr),
+            });
 
             published_extra[extra_i] = true;
             remaining -= 1;
@@ -1597,7 +1595,20 @@ pub fn renderProblemsWithConfig(
     source: []const u8,
     config: reporting.ReportingConfig,
 ) TestHelperError![]u8 {
-    var resources = try parseAndCheckProgramForProblems(allocator, source_kind, source, &.{});
+    return try renderProblemsWithConfigAndImports(allocator, source_kind, source, &.{}, config);
+}
+
+/// Like `renderProblemsWithConfig` but type-checks against the supplied imported
+/// modules so a source containing `import` statements does not hit unresolved
+/// imports while rendering problems.
+pub fn renderProblemsWithConfigAndImports(
+    allocator: Allocator,
+    source_kind: SourceKind,
+    source: []const u8,
+    imports: []const ModuleSource,
+    config: reporting.ReportingConfig,
+) TestHelperError![]u8 {
+    var resources = try parseAndCheckProgramForProblems(allocator, source_kind, source, imports);
     defer resources.deinit(allocator);
 
     return try renderCheckedModuleProblemsWithConfig(allocator, &resources.main, "repl", config);
