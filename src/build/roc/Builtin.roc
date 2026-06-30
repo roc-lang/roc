@@ -365,6 +365,10 @@ Builtin :: [].{
 		## ```
 		to_utf8 : Str -> List(U8)
 
+        ## No-op: leave a [Str] unchanged as a [Str].
+        to_str : Str -> Str
+        to_str = |self| self
+
 		## Converts a [List] of [U8] UTF-8 [code units](https://unicode.org/glossary/#code_unit) to a string.
 		## Any grouping of invalid byte sequences are replaced with a single unicode replacement character '�'.
 		##
