@@ -43,9 +43,9 @@ const ProblemStore = @import("problem.zig").Store;
 
 const Self = @This();
 
-/// Interim guard: until all unbounded-depth kinds are migrated, native recursion
-/// through checkExprRecursive is bounded here so a pathological input yields a
-/// clean error instead of a native stack overflow. Generous; only pathological
+/// Bounds native recursion through checkExprRecursive (reached via the escape
+/// hatch and the `force_recursive` path) so a pathological input yields a clean
+/// error instead of a native stack overflow. Generous; only pathological
 /// inputs approach it.
 const MAX_CHECK_RECURSION_DEPTH: u32 = 8192;
 
@@ -421,11 +421,12 @@ commit_probe_active: bool = false,
 /// Work stack for the iterative checkExpr driver. Allocated once at init,
 /// reused across calls via a saved base high-water-mark.
 check_frame_stack: std.ArrayList(CheckFrame),
-/// When true, checkExprIter escape-hatches every kind to checkExprRecursive
-/// (i.e. exact pre-migration behavior). Used by the differential harness.
+/// When true, checkExprIter escape-hatches every kind to checkExprRecursive,
+/// i.e. runs the checker entirely on the recursive path. Used by the differential
+/// harness to compare the two drivers.
 force_recursive: bool,
 /// Native recursion depth through checkExprRecursive; converts a would-be
-/// stack overflow into a clean diagnostic during migration.
+/// stack overflow into a clean diagnostic (see MAX_CHECK_RECURSION_DEPTH).
 check_recursion_depth: u32,
 /// A def + processing data
 const DefProcessed = struct {
@@ -9703,8 +9704,8 @@ fn unifyMatchAltPatternBindings(
 
 // expr //
 
-/// Where in a frame's lifecycle the driver is. More variants are added as
-/// node kinds are migrated (block adds its resume steps in a later task).
+/// Where in a frame's lifecycle the driver is. Kinds that interleave work between
+/// children add their own resume steps here (e.g. the block_* / if_* steps).
 const CheckStep = enum {
     enter,
     exit,
@@ -9763,17 +9764,25 @@ const CheckStep = enum {
     /// child (or fall through to `.exit` once all fields are consumed). Mirrors
     /// the per-field body of the recursive `e_record` field loop.
     record_after_field,
+    /// `e_str` resume step: the segment at `kind_state.str.cursor` has been
+    /// checked. For an interpolated (non-`e_str_segment`) segment, unify a fresh
+    /// `Str` with the segment var (poisoning it to `.err` + setting `did_err` on
+    /// failure). Then, when `!did_err`, fold the segment's resolved-`.err` state
+    /// into `did_err`. Advance the cursor and schedule the next segment child, or
+    /// fall through to `.exit` once all segments are consumed. Mirrors the
+    /// per-segment body of the recursive `e_str` loop.
+    str_after_segment,
 };
 
-/// Per-node-kind loop/scratch state for interleaving nodes. `none` for the
-/// fixed-arity kinds migrated in this phase except where noted.
+/// Per-node-kind loop/scratch state for interleaving nodes. `none` for fixed-arity
+/// kinds except where noted.
 const CheckKindState = union(enum) {
     none,
     /// State for `e_block`. The block's statements are checked as a unit in
     /// `.enter` (their nested `checkExpr` calls already re-enter the iterative
     /// driver), and the block's `final_expr` is scheduled on the work stack —
-    /// that is the recursion spine this migration flattens. This carries what
-    /// `.exit` needs once the final expr completes.
+    /// that is the deep-nesting spine the work stack walks iteratively. This
+    /// carries what `.exit` needs once the final expr completes.
     block_loop: struct {
         hoist_scope: HoistLexicalScope,
         /// Block diverges (a statement was `return`/`crash`/`break`): the final
@@ -9866,6 +9875,16 @@ const CheckKindState = union(enum) {
         record_being_updated_var: Var,
         record_being_updated_name: ?Ident.Idx,
         scratch_top: u32,
+        cursor: usize,
+    },
+    /// State for `e_str`. Carries the two cross-segment accumulators that the
+    /// recursive arm keeps as loop locals (`did_err`, `has_interpolation`) plus
+    /// `cursor`, the index of the current segment in `str.span` (advanced in
+    /// `str_after_segment`). `did_err` drives the final 3-way unify in `.exit`;
+    /// `has_interpolation` selects the `Str`-vs-`from_quote` post-loop path.
+    str: struct {
+        did_err: bool,
+        has_interpolation: bool,
         cursor: usize,
     },
 };
@@ -12108,6 +12127,17 @@ fn checkExprIter(self: *Self, root_idx: CIR.Expr.Idx, root_env: *Env, root_expec
                     .e_record => {
                         try self.enterRecordExpr(top);
                     },
+                    // INTERLEAVING: `e_str` parks its cross-segment accumulators
+                    // (`did_err`/`has_interpolation`) and schedules its first
+                    // segment child. The `str_after_segment` resume step runs the
+                    // per-segment interpolation unify + err tracking and loops the
+                    // segment cursor; `.exit` runs the final 3-way unify. Delegated
+                    // to a helper (NOT inlined) so its scheduling locals do not
+                    // bloat `checkExprIter`'s native stack frame on the deep
+                    // statement-nesting spine (mirrors `enterInterpolationExpr`).
+                    .e_str => {
+                        try self.enterStrExpr(top);
+                    },
                     // Helper-delegating / per-child-state kinds: like the leaf
                     // kinds below, advance to `.exit` and run the recursive body
                     // verbatim there. Their child `checkExpr` calls re-enter the
@@ -12162,7 +12192,10 @@ fn checkExprIter(self: *Self, root_idx: CIR.Expr.Idx, root_env: *Env, root_expec
                     => {
                         frame.step = .exit;
                     },
-                    else => unreachable, // gated by isMigratedKind
+                    // NOTE: no `else` prong — every `CIR.Expr` kind is now migrated
+                    // (`isMigratedKind` returns true for all), so this switch is
+                    // exhaustive. A future new kind will fail to compile here until
+                    // its `.enter` dispatch is added (the desired forcing function).
                 }
             },
             // `e_call` resume step. The function child has been checked and its
@@ -12223,6 +12256,16 @@ fn checkExprIter(self: *Self, root_idx: CIR.Expr.Idx, root_env: *Env, root_expec
             },
             .record_after_field => {
                 try self.recordAfterField(top);
+            },
+            // `e_str` resume step. The segment at `kind_state.str.cursor` has been
+            // checked and its `does_fx` OR'd into this frame. Delegated to a helper
+            // (NOT inlined) so its scheduling/constraint locals do not bloat
+            // `checkExprIter`'s native stack frame on the deep statement-nesting
+            // spine (mirrors the `e_interpolation` resume helpers). The helper runs
+            // the per-segment interpolation unify + err tracking and schedules the
+            // next segment (or advances to `.exit`).
+            .str_after_segment => {
+                try self.strAfterSegment(top);
             },
             .exit => {
                 const f = &self.check_frame_stack.items[top];
@@ -13327,6 +13370,19 @@ fn checkExprIter(self: *Self, root_idx: CIR.Expr.Idx, root_env: *Env, root_expec
                     .e_interpolation => {
                         try self.checkInterpolationPostLoop(top);
                     },
+                    // INTERLEAVING POST-LOOP body for `e_str`. Every segment child
+                    // was checked via a scheduled frame (their `does_fx` OR'd into
+                    // `f.does_fx` on pop); `did_err`/`has_interpolation` were parked
+                    // across the resume steps. Delegated to a helper (NOT inlined)
+                    // so its constraint-building locals do not bloat
+                    // `checkExprIter`'s native stack frame on the deep
+                    // statement-nesting spine (mirrors `checkInterpolationPostLoop`).
+                    // The helper performs no `checkExpr` re-entry and never appends
+                    // to `check_frame_stack`, so `f` stays valid; it runs the final
+                    // 3-way unify (err / has_interpolation / from_quote).
+                    .e_str => {
+                        try self.checkStrPostLoop(top);
+                    },
                     // POST-BODY body for `e_for`. The pattern, iterable, and body
                     // children have all been checked (the iterable/body via
                     // scheduled frames, their `does_fx` OR'd into `f.does_fx` on
@@ -13380,7 +13436,9 @@ fn checkExprIter(self: *Self, root_idx: CIR.Expr.Idx, root_env: *Env, root_expec
                     .e_record => {
                         try self.exitRecordExpr(top);
                     },
-                    else => unreachable, // gated by isMigratedKind
+                    // NOTE: no `else` prong — every `CIR.Expr` kind is now migrated,
+                    // so this post-body switch is exhaustive. A future new kind
+                    // fails to compile here until its `.exit` body is added.
                 }
                 const does_fx = try self.checkExitEpilogue(
                     &self.check_frame_stack.items[top].prologue,
@@ -13484,6 +13542,11 @@ fn isMigratedKind(expr: CIR.Expr) bool {
         // field cursor; `.exit` runs the final unify (update:
         // `unify(updated_var, expr_var)`; plain: sort+materialize+build).
         .e_record,
+        // Interleaving variable-arity string kind: `.enter` schedules the first
+        // segment child; the `str_after_segment` resume step runs the per-segment
+        // interpolation unify + err tracking and loops the segment cursor; `.exit`
+        // runs the final 3-way unify (err / has_interpolation / from_quote).
+        .e_str,
         // Variable-arity multi-child kinds (this batch): schedule every child
         // as a frame in `.enter`, run the post-child body in `.exit`.
         .e_list,
@@ -13518,7 +13581,11 @@ fn isMigratedKind(expr: CIR.Expr) bool {
         .e_typed_num_from_numeral,
         .e_zero_argument_tag,
         => true,
-        else => false,
+        // NOTE: no `else` prong — with `e_str` migrated, every `CIR.Expr` kind is
+        // handled by the iterative driver, so this switch is exhaustive and always
+        // returns true. The `checkExprIter` escape hatch is consequently dead at
+        // runtime but kept as a structural fallback. A future new kind fails to
+        // compile here until it is classified (the desired forcing function).
     };
 }
 
@@ -16233,6 +16300,134 @@ fn checkInterpolationPostLoop(self: *Self, top: usize) Allocator.Error!void {
             constraint_fn_var,
             step_fn_var,
         );
+    }
+}
+
+/// `e_str` `.enter` dispatch (extracted from `checkExprIter` to keep its
+/// `CheckFrame`-sized scheduling local off that function's native stack frame,
+/// which is on the deep statement-nesting recursion spine — mirrors
+/// `enterInterpolationExpr`). Parks the cross-segment accumulators
+/// (`did_err`/`has_interpolation`, both initially false) plus the segment
+/// `cursor` in `kind_state.str`, then schedules the first segment child against
+/// `child_expected`. With no segments (e.g. an empty literal), advances straight
+/// to `.exit`, where the `from_quote` path runs. Segments are NOT marked
+/// `call_arg` — the recursive `e_str` arm checks each segment without setting
+/// `self.checking_call_arg`. `top` is re-indexed across the `append` (realloc).
+fn enterStrExpr(self: *Self, top: usize) Allocator.Error!void {
+    const str = self.cir.store.getExpr(self.check_frame_stack.items[top].expr_idx).e_str;
+    const segments = self.cir.store.sliceExpr(str.span);
+
+    // Park state BEFORE scheduling (the append may realloc `items[top]`).
+    self.check_frame_stack.items[top].kind_state = .{ .str = .{
+        .did_err = false,
+        .has_interpolation = false,
+        .cursor = 0,
+    } };
+
+    if (segments.len == 0) {
+        self.check_frame_stack.items[top].step = .exit;
+    } else {
+        self.check_frame_stack.items[top].step = .str_after_segment;
+        const child_env = self.check_frame_stack.items[top].env;
+        const child_expected = self.check_frame_stack.items[top].prologue.child_expected;
+        try self.check_frame_stack.append(self.gpa, makeEnterFrame(segments[0], child_env, child_expected));
+    }
+}
+
+/// `e_str` `str_after_segment` resume step (extracted from `checkExprIter` to
+/// keep its scheduling local off that function's native stack frame — mirrors
+/// the `e_interpolation` resume helpers). The segment at `kind_state.str.cursor`
+/// has been checked; mirror the recursive arm's per-segment body VERBATIM: for
+/// an interpolated (non-`e_str_segment`) segment, set `has_interpolation`,
+/// unify a fresh `Str` with the segment var, and on failure poison the segment
+/// to `.err` + set `did_err`. Then, when `!did_err`, fold the segment's
+/// resolved-`.err` state into `did_err` (this check runs for EVERY segment in
+/// the recursive arm, not just interpolated ones). Advance the cursor and
+/// schedule the next segment child, or advance to `.exit` once all segments are
+/// consumed. None of the unify/resolve calls append to `check_frame_stack`, so
+/// `items[top]` stays valid until the final `append`, across which `top` is
+/// re-indexed.
+fn strAfterSegment(self: *Self, top: usize) Allocator.Error!void {
+    const env = self.check_frame_stack.items[top].env;
+    const cursor = self.check_frame_stack.items[top].kind_state.str.cursor;
+    const str = self.cir.store.getExpr(self.check_frame_stack.items[top].expr_idx).e_str;
+    const segments = self.cir.store.sliceExpr(str.span);
+    const seg_expr_idx = segments[cursor];
+    const seg_var = ModuleEnv.varFrom(seg_expr_idx);
+
+    var did_err = self.check_frame_stack.items[top].kind_state.str.did_err;
+
+    switch (self.cir.store.getExpr(seg_expr_idx)) {
+        .e_str_segment => {
+            // String literal segments are already Str type — nothing to do.
+        },
+        else => {
+            self.check_frame_stack.items[top].kind_state.str.has_interpolation = true;
+
+            // Interpolated expressions must be of type Str.
+            const seg_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(seg_expr_idx));
+            const expected_str_var = try self.freshStr(env, seg_region);
+
+            const unify_result = try self.unify(expected_str_var, seg_var, env);
+            if (!unify_result.isOk()) {
+                // Unification failed - mark as error.
+                try self.unifyWith(seg_var, .err, env);
+                did_err = true;
+            }
+        },
+    }
+
+    // Check if it errored (for non-interpolation segments).
+    if (!did_err) {
+        did_err = self.types.resolveVar(seg_var).desc.content == .err;
+    }
+    self.check_frame_stack.items[top].kind_state.str.did_err = did_err;
+
+    const next_cursor = cursor + 1;
+    self.check_frame_stack.items[top].kind_state.str.cursor = next_cursor;
+
+    if (next_cursor < segments.len) {
+        const child_env = self.check_frame_stack.items[top].env;
+        const child_expected = self.check_frame_stack.items[top].prologue.child_expected;
+        try self.check_frame_stack.append(self.gpa, makeEnterFrame(segments[next_cursor], child_env, child_expected));
+    } else {
+        self.check_frame_stack.items[top].step = .exit;
+    }
+}
+
+/// Post-loop body of the `e_str` arm, run by the iterative driver's `.exit` step
+/// once every segment child has been checked (their `does_fx` already
+/// accumulated into the frame). Copied verbatim from the recursive arm's final
+/// 3-way unify. Reads the parked `did_err`/`has_interpolation` out of
+/// `kind_state.str`. Lives in its own function — rather than inlined into
+/// `checkExprIter` — so its constraint-building locals do NOT bloat
+/// `checkExprIter`'s native stack frame on the deep statement-nesting spine
+/// (mirrors `checkInterpolationPostLoop`). It is a leaf w.r.t. the work stack:
+/// no `checkExpr` re-entry, never appends to `check_frame_stack`, so `items[top]`
+/// stays valid throughout.
+fn checkStrPostLoop(self: *Self, top: usize) Allocator.Error!void {
+    const env = self.check_frame_stack.items[top].env;
+    const expr_idx = self.check_frame_stack.items[top].expr_idx;
+    const expr_var = self.check_frame_stack.items[top].prologue.expr_var;
+    const expr_region = self.check_frame_stack.items[top].prologue.expr_region;
+    const st = self.check_frame_stack.items[top].kind_state.str;
+
+    if (st.did_err) {
+        // If any segment errored, propagate that error to the root string.
+        try self.unifyWith(expr_var, .err, env);
+    } else if (st.has_interpolation) {
+        // Interpolated strings are Str.
+        const str_var = try self.freshStr(env, expr_region);
+        _ = try self.unify(expr_var, str_var, env);
+    } else {
+        // A plain literal converts to its target type through from_quote,
+        // defaulting to Str if nothing pins it.
+        const flex_var = try self.mkFlexWithFromQuoteConstraint(ModuleEnv.nodeIdxFrom(expr_idx), expr_region, env);
+        if (self.cir.numericSuffixTargetForNode(ModuleEnv.nodeIdxFrom(expr_idx)) != null) {
+            // Explicit type suffix, e.g. `"foo".MyType`.
+            try self.unifyTypedLiteralWithExplicitType(flex_var, expr_idx, expr_region, env);
+        }
+        _ = try self.unify(expr_var, flex_var, env);
     }
 }
 

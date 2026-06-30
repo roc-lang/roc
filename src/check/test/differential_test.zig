@@ -1,15 +1,17 @@
-//! Two-pass differential harness for the iterative checker conversion.
+//! Two-pass differential harness: verify the checker's two code paths agree.
 //!
-//! Type-checks the same module twice in independent `Check` instances — once
-//! forced fully-recursive (`force_recursive = true`), once with the iterative
-//! driver (`force_recursive = false`) — and asserts the inferred def types are
-//! identical and the diagnostic COUNT is unchanged. Per the fidelity rule,
-//! inferred types must be preserved exactly while diagnostics may reorder, so
-//! we compare types exactly but diagnostics by count (catching added/dropped
-//! diagnostics without flagging pure reordering). The snapshot suite remains
-//! the primary oracle for full diagnostic content/ordering. This is the
-//! REQUIRED results-preservation guarantee for the recursion-to-work-stack
-//! migration.
+//! The checker has two interchangeable drivers — the iterative work-stack driver
+//! (`checkExprIter`) and the recursive driver (`checkExprRecursive`), selected by
+//! the `force_recursive` flag. They MUST produce identical inference. This harness
+//! type-checks the same module twice in independent `Check` instances — once with
+//! `force_recursive = true`, once with `force_recursive = false` — and asserts the
+//! inferred def types are identical and the diagnostic COUNT is unchanged.
+//!
+//! Why types exactly but diagnostics by count: inferred types must be preserved
+//! exactly, while diagnostic ordering between the two paths may legitimately
+//! differ. Comparing diagnostics by count catches added/dropped diagnostics
+//! without flagging pure reordering. The snapshot suite remains the primary oracle
+//! for full diagnostic content/ordering.
 
 const std = @import("std");
 const TestEnv = @import("TestEnv.zig");
@@ -58,8 +60,8 @@ test "differential: tuple access matches across recursive/iterative" {
 }
 
 test "differential: deeply nested blocks match across recursive/iterative" {
-    // The block `final_expr` spine — the recursion flattened by the e_block
-    // migration. Statement lists are empty, so only nesting via final_expr.
+    // Exercises the block `final_expr` spine (the iterative work-stack path).
+    // Statement lists are empty, so this nests purely via final_expr.
     try expectIterMatchesRecursive(
         \\main! = |_args| {
         \\    {
@@ -295,8 +297,8 @@ test "differential: method call / dispatch call matches" {
     );
 }
 
-test "differential: e_call (apply) — interleaved func/args migration matches" {
-    // Exercises the migrated e_call apply path: a generalized immediately-invoked
+test "differential: e_call (apply) — interleaved func/args match" {
+    // Exercises the e_call apply path: a generalized immediately-invoked
     // lambda (`(|x| ...)(arg)`, forcing the instantiate-on-generalized branch in
     // the `call_after_func` resume step), a top-level multi-arg function call
     // (rigid-shared args unified pairwise), a nested call passed as an argument
@@ -318,14 +320,13 @@ test "differential: e_call (apply) — interleaved func/args migration matches" 
     );
 }
 
-test "differential: e_call with bare-lambda (unmigrated) arg keeps call-arg flag" {
-    // Regression guard: a function-literal call argument that canonicalizes to a
-    // bare `e_lambda` (no captures, so NOT a migrated kind) takes the iterative
-    // driver's escape hatch. It must still be checked with `checking_call_arg`
-    // set, exactly like the recursive arm's per-arg flag — otherwise the lambda
-    // is wrongly generalized and the result stays polymorphic (`a`) instead of
-    // defaulting (`Dec`). The literal-defaulting outcome differs unless the flag
-    // is honored, so this exercises the escape-hatch `call_arg` re-assertion.
+test "differential: e_call with bare-lambda arg keeps call-arg flag" {
+    // Regression guard: a function-literal call argument (`|n| n + 1`) must be
+    // checked with `checking_call_arg` set — otherwise the lambda is wrongly
+    // generalized and the result stays polymorphic (`a`) instead of defaulting
+    // (`Dec`). The literal-defaulting outcome differs unless the flag is honored,
+    // so this confirms the iterative and recursive drivers agree on the per-arg
+    // `checking_call_arg` handling.
     try expectIterMatchesRecursive(
         \\apply2 = |f, x| f(x)
         \\result = apply2(|n| n + 1, 10)
@@ -650,5 +651,53 @@ test "differential: record update (e.ext) matches" {
         \\    moved = { ..base, x: 10, y: 20 }
         \\    moved.z
         \\}
+    );
+}
+
+test "differential: plain string literal (e_str from_quote path) matches" {
+    // A non-interpolated string literal is canonicalized to `e_str` (interpolated
+    // strings desugar to `e_interpolation` instead). It exercises the migrated
+    // `e_str` arm: the single `e_str_segment` child is scheduled on the work
+    // stack, the `str_after_segment` resume step folds its (non-)error state, and
+    // `.exit` runs the `from_quote` post-loop path (no interpolation, no error).
+    try expectIterMatchesRecursive(
+        \\main! = |_args| {
+        \\    greeting = "hello world"
+        \\    greeting
+        \\}
+    );
+}
+
+test "differential: string literal flowing into Str-typed binding (e_str) matches" {
+    // The `from_quote` flex var is pinned by the surrounding annotation, so the
+    // migrated `e_str` arm's post-loop `from_quote` unify must resolve to `Str`
+    // identically under both drivers.
+    try expectIterMatchesRecursive(
+        \\main! = |_args| {
+        \\    label : Str
+        \\    label = "ready"
+        \\    label
+        \\}
+    );
+}
+
+test "differential: immediately-invoked lambda (immediate callee) matches" {
+    // `(|x| x + 1)(5)`: the lambda is the immediately-invoked callee, so the
+    // call marks it `checking_immediate_callee = true`, and the lambda's body is
+    // NOT treated as a delayed dependency. The iterative `e_call`/`e_lambda` path
+    // must thread that flag exactly like the recursive arm.
+    try expectIterMatchesRecursive(
+        \\main! = |_args| (|x| x + 1)(5)
+    );
+}
+
+test "differential: lambda passed as argument (delayed dependency) matches" {
+    // Here the inner lambda is a call ARGUMENT, not the callee, so it is NOT an
+    // immediate callee and its body IS a delayed dependency
+    // (`delayed_dependency_depth` bumped around the body). Pairing this with the
+    // immediately-invoked case above exercises both sides of the flag.
+    try expectIterMatchesRecursive(
+        \\apply = |f, x| f(x)
+        \\main! = |_args| apply(|n| n * 2, 21)
     );
 }
