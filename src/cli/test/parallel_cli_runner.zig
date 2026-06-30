@@ -27,6 +27,7 @@ const util = @import("util.zig");
 const collections = @import("collections");
 const bytebox = @import("bytebox");
 
+/// Error returned when a hosted function reports a Roc panic to the runner.
 pub const HostFunctionError = error{RocPanic};
 
 const child_command_timeout_reserve_ms: u64 = 1_000;
@@ -4534,6 +4535,19 @@ const GlueRuntimeWasmInterface = struct {
     }
 };
 
+const GlueRuntimeWasmSetupError = std.Io.Dir.ReadFileAllocError ||
+    std.mem.Allocator.Error ||
+    bytebox.MalformedError ||
+    bytebox.ValidationError ||
+    bytebox.UnlinkableError ||
+    bytebox.UninstantiableError ||
+    bytebox.TrapError ||
+    bytebox.ExportError;
+
+const GlueRuntimeWasmCallError = bytebox.TrapError || error{
+    GlueWasmResultOutOfBounds,
+};
+
 const GlueRuntimeWasmHostContext = struct {
     memory: ?*bytebox.MemoryInstance = null,
 
@@ -4548,23 +4562,20 @@ const GlueRuntimeWasmHostContext = struct {
         return "(invalid wasm memory access)";
     }
 
-    pub fn roc_panic(ctx: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) HostFunctionError!void {
-        _ = module;
+    pub fn roc_panic(ctx: ?*anyopaque, _: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) HostFunctionError!void {
         const self: *GlueRuntimeWasmHostContext = @ptrCast(@alignCast(ctx));
         const msg = self.readString(params[0].I32, params[1].I32);
         std.debug.print("[glue wasm panic] {s}\n", .{msg});
         return error.RocPanic;
     }
 
-    pub fn roc_dbg(ctx: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
-        _ = module;
+    pub fn roc_dbg(ctx: ?*anyopaque, _: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
         const self: *GlueRuntimeWasmHostContext = @ptrCast(@alignCast(ctx));
         const msg = self.readString(params[0].I32, params[1].I32);
         std.debug.print("[glue wasm dbg] {s}\n", .{msg});
     }
 
-    pub fn roc_expect_failed(ctx: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
-        _ = module;
+    pub fn roc_expect_failed(ctx: ?*anyopaque, _: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
         const self: *GlueRuntimeWasmHostContext = @ptrCast(@alignCast(ctx));
         const msg = self.readString(params[0].I32, params[1].I32);
         std.debug.print("[glue wasm expect failed] {s}\n", .{msg});
@@ -4573,7 +4584,7 @@ const GlueRuntimeWasmHostContext = struct {
 
 var glue_runtime_wasm_host_context: GlueRuntimeWasmHostContext = .{};
 
-fn setupGlueRuntimeWasm(io: std.Io, allocator: Allocator, wasm_path: []const u8) anyerror!GlueRuntimeWasmInterface {
+fn setupGlueRuntimeWasm(io: std.Io, allocator: Allocator, wasm_path: []const u8) GlueRuntimeWasmSetupError!GlueRuntimeWasmInterface {
     const wasm_data = try std.Io.Dir.cwd().readFileAlloc(io, wasm_path, allocator, .limited(256 * 1024 * 1024));
 
     var module_def = try bytebox.createModuleDefinition(allocator, .{ .debug_name = "glue_runtime_contract" });
@@ -4608,7 +4619,7 @@ fn setupGlueRuntimeWasm(io: std.Io, allocator: Allocator, wasm_path: []const u8)
     };
 }
 
-fn callGlueRuntimeWasmMain(wasm: *const GlueRuntimeWasmInterface, allocator: Allocator) anyerror![]const u8 {
+fn callGlueRuntimeWasmMain(wasm: *const GlueRuntimeWasmInterface, allocator: Allocator) GlueRuntimeWasmCallError![]const u8 {
     var params_main: [0]bytebox.Val = undefined;
     var returns_main: [1]bytebox.Val = undefined;
     _ = wasm.module_instance.invoke(wasm.wasm_main_handle, &params_main, &returns_main, .{}) catch |err| {

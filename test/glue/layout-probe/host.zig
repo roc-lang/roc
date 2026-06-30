@@ -46,32 +46,6 @@ fn deallocRaw(ptr: ?*anyopaque) void {
     dealloc_count += 1;
 }
 
-fn hostAlloc(_: *abi.RocHost, length: usize, alignment: usize) callconv(.c) ?*anyopaque {
-    return allocRaw(length, alignment);
-}
-
-fn hostDealloc(_: *abi.RocHost, ptr: *anyopaque, _: usize) callconv(.c) void {
-    deallocRaw(ptr);
-}
-
-fn hostRealloc(_: *abi.RocHost, ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) ?*anyopaque {
-    deallocRaw(ptr);
-    return allocRaw(new_length, alignment);
-}
-
-fn hostDbg(_: *abi.RocHost, bytes: [*]const u8, len: usize) callconv(.c) void {
-    writeStderr(bytes[0..len]);
-    writeStderr("\n");
-}
-
-fn hostExpectFailed(_: *abi.RocHost, _: [*]const u8, _: usize) callconv(.c) void {
-    fail("roc_expect_failed", .{});
-}
-
-fn hostCrashed(_: *abi.RocHost, _: [*]const u8, _: usize) callconv(.c) void {
-    fail("roc_crashed", .{});
-}
-
 export fn roc_alloc(length: usize, alignment: usize) callconv(.c) ?*anyopaque {
     return allocRaw(length, alignment);
 }
