@@ -394,6 +394,7 @@ const CustomCase = enum {
     glue_rust_duplicate_tag_unions,
     glue_rust_box_payload_alignment,
     glue_zig_bang_record_fields,
+    glue_package_nominal_api_alias,
     glue_c_tests,
 };
 
@@ -718,6 +719,7 @@ const glue_cases = [_]CliCase{
     .{ .id = 0, .suite = .glue, .name = "glue regression: RustGlue handles duplicate tag-union names", .body = .{ .custom = .glue_rust_duplicate_tag_unions } },
     .{ .id = 0, .suite = .glue, .name = "glue regression: RustGlue decrefs non-refcounted boxed payloads with payload alignment", .body = .{ .custom = .glue_rust_box_payload_alignment } },
     .{ .id = 0, .suite = .glue, .name = "glue regression: ZigGlue quotes bang record fields", .body = .{ .custom = .glue_zig_bang_record_fields } },
+    .{ .id = 0, .suite = .glue, .name = "issue 9865: RustGlue does not panic for package nominal record API alias", .body = .{ .custom = .glue_package_nominal_api_alias } },
     .{ .id = 0, .suite = .glue, .name = "CGlue.roc expect tests pass", .body = .{ .custom = .glue_c_tests } },
 };
 
@@ -1935,6 +1937,7 @@ fn runCustomCase(
         .glue_rust_duplicate_tag_unions => customGlueRustDuplicateTagUnions(io, allocator, &env, &timer),
         .glue_rust_box_payload_alignment => customGlueRustBoxPayloadAlignment(io, allocator, &env, &timer, timeout_ms),
         .glue_zig_bang_record_fields => customGlueZigBangRecordFieldNames(io, allocator, &env, &timer, timeout_ms),
+        .glue_package_nominal_api_alias => customGluePackageNominalApiAlias(io, allocator, &env, &timer, timeout_ms),
         .glue_c_tests => customGlueCTests(io, allocator, &env, &timer, timeout_ms),
     };
 
@@ -4727,6 +4730,28 @@ fn customGlueDebugInterpreter(io: std.Io, allocator: Allocator, env: *const Case
             .{ .stream = .stderr, .text = "PANIC" },
             .{ .stream = .stderr, .text = "unreachable" },
             .{ .stream = .stderr, .text = "name: \"\"" },
+        },
+    })) |failure| return failure;
+    return null;
+}
+
+fn customGluePackageNominalApiAlias(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
+    const output_dir = createWorkSubdir(io, allocator, env, "glue-out") catch |err|
+        return customInfraFailure(allocator, timer, "failed to create glue output dir: {}", .{err});
+    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+        .args = &.{"check"},
+        .roc_file = "test/glue/package-nominal-api/repro_app/main.roc",
+        .not_contains = &.{
+            .{ .stream = .stderr, .text = "PANIC" },
+            .{ .stream = .stderr, .text = "unreachable" },
+        },
+    })) |failure| return failure;
+    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+        .args = &.{ "glue", "src/glue/src/RustGlue.roc", output_dir, "test/glue/package-nominal-api/platform/main.roc" },
+        .exit = .not_panic,
+        .not_contains = &.{
+            .{ .stream = .stderr, .text = "PANIC" },
+            .{ .stream = .stderr, .text = "unreachable" },
         },
     })) |failure| return failure;
     return null;
