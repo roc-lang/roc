@@ -3427,22 +3427,10 @@ fn builtinNumTypeIdent(self: *const Self, num_kind: CIR.NumKind) Ident.Idx {
 }
 
 fn builtinNumStmtFromIndices(indices: CIR.BuiltinIndices, num_kind: CIR.NumKind) CIR.Statement.Idx {
-    return switch (num_kind) {
-        .u8 => indices.u8_type,
-        .i8 => indices.i8_type,
-        .u16 => indices.u16_type,
-        .i16 => indices.i16_type,
-        .u32 => indices.u32_type,
-        .i32 => indices.i32_type,
-        .u64 => indices.u64_type,
-        .i64 => indices.i64_type,
-        .u128 => indices.u128_type,
-        .i128 => indices.i128_type,
-        .f32 => indices.f32_type,
-        .f64 => indices.f64_type,
-        .dec => indices.dec_type,
-        else => unreachable,
-    };
+    inline for (CIR.builtin_type_specs) |spec| {
+        if (spec.num_kind == num_kind) return @field(indices, spec.type_field);
+    }
+    unreachable;
 }
 
 fn builtinNominalIdent(self: *const Self, decl: BuiltinNominalDecl) Ident.Idx {
@@ -20510,61 +20498,57 @@ pub fn createImportMapping(
     // Step 1: Add auto-imported builtin types
     if (builtin_module) |builtin_env| {
         if (builtin_indices) |indices| {
-            const fields = @typeInfo(CIR.BuiltinIndices).@"struct".fields;
-            inline for (fields) |field| {
-                // Only process Statement.Idx fields (skip Ident.Idx fields)
-                if (field.type == CIR.Statement.Idx) {
-                    const stmt_idx: CIR.Statement.Idx = @field(indices, field.name);
+            inline for (CIR.builtin_type_specs) |spec| {
+                const stmt_idx: CIR.Statement.Idx = @field(indices, spec.type_field);
 
-                    // Skip invalid statement indices (index 0 is typically invalid/sentinel)
-                    if (@intFromEnum(stmt_idx) != 0) {
-                        const stmt = builtin_env.store.getStatement(stmt_idx);
-                        const header_idx = switch (stmt) {
-                            .s_nominal_decl => |decl| decl.header,
-                            .s_alias_decl => |alias| alias.header,
-                            else => null,
+                // Skip invalid statement indices (index 0 is typically invalid/sentinel)
+                if (@intFromEnum(stmt_idx) != 0) {
+                    const stmt = builtin_env.store.getStatement(stmt_idx);
+                    const header_idx = switch (stmt) {
+                        .s_nominal_decl => |decl| decl.header,
+                        .s_alias_decl => |alias| alias.header,
+                        else => null,
+                    };
+                    if (header_idx) |hdr_idx| {
+                        const header = builtin_env.store.getTypeHeader(hdr_idx);
+                        const qualified_name = builtin_env.getIdentText(header.name);
+                        const relative_name = builtin_env.getIdentText(header.relative_name);
+
+                        // Extract display name (last component after dots)
+                        const display_name = blk: {
+                            var last_dot: usize = 0;
+                            for (qualified_name, 0..) |c, i| {
+                                if (c == '.') last_dot = i + 1;
+                            }
+                            break :blk qualified_name[last_dot..];
                         };
-                        if (header_idx) |hdr_idx| {
-                            const header = builtin_env.store.getTypeHeader(hdr_idx);
-                            const qualified_name = builtin_env.getIdentText(header.name);
-                            const relative_name = builtin_env.getIdentText(header.relative_name);
 
-                            // Extract display name (last component after dots)
-                            const display_name = blk: {
-                                var last_dot: usize = 0;
-                                for (qualified_name, 0..) |c, i| {
-                                    if (c == '.') last_dot = i + 1;
-                                }
-                                break :blk qualified_name[last_dot..];
-                            };
+                        const qualified_ident = try idents.insert(gpa, Ident.for_text(qualified_name));
+                        const relative_ident = try idents.insert(gpa, Ident.for_text(relative_name));
+                        const display_ident = try idents.insert(gpa, Ident.for_text(display_name));
 
-                            const qualified_ident = try idents.insert(gpa, Ident.for_text(qualified_name));
-                            const relative_ident = try idents.insert(gpa, Ident.for_text(relative_name));
-                            const display_ident = try idents.insert(gpa, Ident.for_text(display_name));
-
-                            // Add mapping for qualified_name -> display_name
-                            if (mapping.get(qualified_ident)) |existing_ident| {
-                                const existing_name = idents.getText(existing_ident);
-                                if (displayNameIsBetter(display_name, existing_name)) {
-                                    try mapping.put(qualified_ident, display_ident);
-                                }
-                            } else {
+                        // Add mapping for qualified_name -> display_name
+                        if (mapping.get(qualified_ident)) |existing_ident| {
+                            const existing_name = idents.getText(existing_ident);
+                            if (displayNameIsBetter(display_name, existing_name)) {
                                 try mapping.put(qualified_ident, display_ident);
                             }
+                        } else {
+                            try mapping.put(qualified_ident, display_ident);
+                        }
 
-                            // Also add mapping for relative_name -> display_name
-                            // This ensures types stored with relative_name (like "Num.Numeral") also map to display_name
-                            if (mapping.get(relative_ident)) |existing_ident| {
-                                const existing_name = idents.getText(existing_ident);
-                                if (displayNameIsBetter(display_name, existing_name)) {
-                                    try mapping.put(relative_ident, display_ident);
-                                }
-                            } else {
+                        // Also add mapping for relative_name -> display_name
+                        // This ensures types stored with relative_name (like "Num.Numeral") also map to display_name
+                        if (mapping.get(relative_ident)) |existing_ident| {
+                            const existing_name = idents.getText(existing_ident);
+                            if (displayNameIsBetter(display_name, existing_name)) {
                                 try mapping.put(relative_ident, display_ident);
                             }
+                        } else {
+                            try mapping.put(relative_ident, display_ident);
                         }
-                        // else: Skip non-nominal/alias statements (e.g., nested types that aren't directly importable)
                     }
+                    // else: Skip non-nominal/alias statements (e.g., nested types that aren't directly importable)
                 }
             }
         }

@@ -527,6 +527,105 @@ The recommended migration order is:
 8. Verify with focused canonicalization tests, `zig build minici`, and
    parser/canonicalization benchmarks.
 
+## Canonicalization Policy Ownership
+
+Canonicalization owns source-name scope policy before checking. Any rule that
+decides whether a source type name is inserted, shadows another type, replaces
+an auto-imported type, redeclares an existing type, or repeats the same external
+type must live in one place. Callers may choose which source operation they are
+performing, but they must not duplicate the type-binding collision matrix.
+
+The `Scope.type_bindings` table has one ordinary mutation API for type names.
+It accepts the full scope slice, the target scope index, the introduced name,
+and the incoming binding:
+
+```zig
+const TypeBindingInput = union(enum) {
+    local_nominal: CIR.Statement.Idx,
+    local_alias: CIR.Statement.Idx,
+    associated_nominal: CIR.Statement.Idx,
+    external_nominal: Scope.ExternalTypeBinding,
+};
+
+const TypeBindingDecision = union(enum) {
+    inserted,
+    inserted_shadowing_parent: Scope.TypeBinding,
+    replaced_current_external: Scope.ExternalTypeBinding,
+    idempotent_current,
+    rejected_current_conflict: Scope.TypeBinding,
+    redeclared_current: Scope.TypeBinding,
+};
+```
+
+The exact names may change with implementation, but the shape must remain:
+one `Scope` function mutates `type_bindings`, and its return value carries the
+old binding that caused any warning or error. `Scope` does not push diagnostics,
+does not inspect source regions from `ModuleEnv`, and does not update import
+display mappings. `Can` maps the returned decision to diagnostics and performs
+the import-mapping side effects that are specific to external imports.
+
+Parent-scope shadowing must be computed by the same type-binding API. The
+function receives the scope slice and target index directly; it does not use an
+untyped callback or a callback without context. The parent walk chooses the
+nearest parent binding and returns that binding to the caller. This preserves
+regions for both local statements and external imports without reconstructing
+them at each call site.
+
+The current-scope collision matrix is:
+
+- A same statement already bound to the same name is idempotent.
+- A same external module/original-name pair already bound to the same name is
+  idempotent.
+- A local declaration replacing an external binding succeeds and returns the
+  replaced external binding so `Can` can report the shadowing region.
+- An external binding colliding with any different current binding is rejected
+  and returns the existing binding.
+- A local alias colliding with a current local alias reports alias
+  redeclaration.
+- A local nominal colliding with a current local nominal or associated nominal
+  reports type redeclaration.
+- A local declaration colliding with the other local kind reports the diagnostic
+  chosen by the existing binding, not by the incoming binding.
+
+Direct writes to `Scope.type_bindings` are allowed only for explicit
+initialization paths that prove the binding cannot collide, such as seeding the
+compiler-owned builtin scope before source declarations are introduced. If that
+proof stops being local and obvious, the initialization path must use the same
+type-binding API.
+
+Result suffix desugaring has a separate owner inside `Can`. The suffix forms
+`expr?`, `expr ? handler`, and `expr ?? default` all lower to a match over the
+same `Try` shape. They must share one concrete builder for the common structure:
+
+- resolve the compiler-owned `Try` nominal target once,
+- wrap `Ok` and `Err` tag patterns with that nominal target,
+- append the `Ok(#ok) => #ok` branch,
+- construct the `Err(...)` tag expression used by early return,
+- create the final match with the caller-selected `is_try_suffix` value.
+
+The builder must support both local and external nominal targets because the
+Builtin module may refer to its own `Try`, while ordinary modules use the
+compiler-owned external builtin. It must not silently fall back to bare `Ok` and
+`Err` patterns when `Try` is missing. A missing compiler-owned `Try` target is a
+compiler invariant violation after builtin setup, not an alternate
+canonicalization mode.
+
+The three suffix callers provide only the distinct error-branch body:
+
+- `expr?` returns the original error payload from the enclosing function, or
+  emits `e_expect_err` inside a top-level `expect`.
+- `expr ? handler` transforms the error payload and then returns `Err(...)`, or
+  emits `e_expect_err` inside a top-level `expect`.
+- `expr ?? default` uses the default expression and does not mark the match as a
+  try suffix.
+
+Do not introduce a generic desugaring interpreter for these cases. The helper
+should be a small set of concrete `Can` functions that emit the same CIR nodes
+and scratch spans as the current hand-written paths. This keeps
+canonicalization output explicit, keeps diagnostics in `Can`, and keeps release
+builds fast: the work runs once per source suffix or type declaration, with no
+runtime cost in the compiled program.
+
 ## Type Alias Invariant
 
 Source type aliases are transparent views of their backing type. An alias root
@@ -575,6 +674,49 @@ or walk checked expressions to prove that cached checked data is still complete.
 Correctness belongs to the producer path that writes the cache entry, and
 invalidation belongs to the cache key and explicit cache/selection format
 versions.
+
+`ModuleEnv` contains `CommonEnv.strings`, a `base.StringLiteral.Store`. That
+store is part of the checked module cache data. A cache hit materializes it as a
+view of its byte buffer and stops. Cache reads must not scan the string entries,
+rebuild a string interning table, check every string length header, check every
+static refcount word, or check every entry alignment. This design adds no
+store-specific release-build validation; cache reads perform only the existing
+cache-entry admission and decode checks before trusting the blob. Once those
+pass, the internal string buffer structure is a producer invariant. Debug builds
+may assert this invariant while constructing fresh stores and in focused store
+tests; optimized cache reads consume the store directly.
+
+String literal deduplication is a build-time concern. The durable
+`StringLiteral.Store` owns only the static-refcounted byte buffer plus `get` and
+iteration by `StringLiteral.Idx`. It has no insert API and no dedup index.
+Fresh construction uses `StringLiteral.Builder` state paired with a `Store`.
+That state may live in a wrapper or in the build owner that owns the store, but
+it is always transient. The builder index is never serialized, never stored in
+LirImage, and never rebuilt on a cache hit. If a later phase needs a mutable
+string-literal builder, it must request an explicit fresh builder from source
+data or another builder-owned input; it must not reopen a cached store on the
+normal cache path.
+
+The byte interning algorithm has one owner shared by identifier names, checked
+name stores, and string-literal builders. Storage policies own only id encoding,
+text lookup, and append layout. For string literals, appending a new entry writes
+exactly the current static-data layout:
+
+```text
+len: u32 | padding to isize | static refcount: isize(0) | bytes
+```
+
+and returns the content byte offset as `StringLiteral.Idx`. Duplicate input
+bytes must return the existing content offset. The hash table is an accelerator
+only: hash matches must still compare exact byte length and contents before an
+existing id is reused. The shared interning algorithm is comptime-policy
+specialized, so string literals, identifier names, and checked name stores do
+not pay a runtime storage-kind branch.
+
+The string-literal builder must reject impossible `u32` length or content-offset
+overflow as a compiler invariant: debug builds assert or panic with the
+invariant, and optimized builds mark the path unreachable. It must never silently
+truncate a string length or offset.
 
 The checked module cache id is target-independent:
 

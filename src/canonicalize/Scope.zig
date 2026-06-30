@@ -189,18 +189,22 @@ pub const IntroduceResult = union(enum) {
     var_reassignment_ok: CIR.Pattern.Idx, // Var reassignment - return existing pattern
 };
 
-/// Result of introducing a type declaration
-pub const TypeIntroduceResult = union(enum) {
-    success: void,
-    shadowing_warning: CIR.Statement.Idx, // The type declaration that was shadowed
-    redeclared_error: CIR.Statement.Idx, // The type declaration that was redeclared
-    type_alias_redeclared: CIR.Statement.Idx, // The type alias that was redeclared
-    nominal_type_redeclared: CIR.Statement.Idx, // The nominal type that was redeclared
-    cross_scope_shadowing: CIR.Statement.Idx, // Type shadowed across different scopes
-    parameter_conflict: struct {
-        original_stmt: CIR.Statement.Idx,
-        conflicting_parameter: base.Ident.Idx,
-    },
+/// A requested type-name binding introduction.
+pub const TypeBindingInput = union(enum) {
+    local_nominal: CIR.Statement.Idx,
+    local_alias: CIR.Statement.Idx,
+    associated_nominal: CIR.Statement.Idx,
+    external_nominal: ExternalTypeBinding,
+};
+
+/// The outcome of applying type-name binding policy to a scope.
+pub const TypeBindingDecision = union(enum) {
+    inserted,
+    inserted_shadowing_parent: TypeBinding,
+    replaced_current_external: ExternalTypeBinding,
+    idempotent_current,
+    rejected_current_conflict: TypeBinding,
+    redeclared_current: TypeBinding,
 };
 
 /// Result of introducing a type variable
@@ -281,123 +285,107 @@ pub fn put(scope: *Scope, gpa: std.mem.Allocator, comptime item_kind: ItemKind, 
     try scope.items(item_kind).put(gpa, name, value);
 }
 
-/// Introduce a type declaration into the scope
-pub fn introduceTypeDecl(
-    scope: *Scope,
-    gpa: std.mem.Allocator,
+/// Return the statement behind a local type binding, if it has one.
+pub fn typeBindingStatement(binding: TypeBinding) ?CIR.Statement.Idx {
+    return switch (binding) {
+        .local_nominal => |stmt| stmt,
+        .local_alias => |stmt| stmt,
+        .associated_nominal => |stmt| stmt,
+        .external_nominal => null,
+    };
+}
+
+/// Convert an introduction request to the binding that would be stored.
+pub fn inputToBinding(input: TypeBindingInput) TypeBinding {
+    return switch (input) {
+        .local_nominal => |stmt| TypeBinding{ .local_nominal = stmt },
+        .local_alias => |stmt| TypeBinding{ .local_alias = stmt },
+        .associated_nominal => |stmt| TypeBinding{ .associated_nominal = stmt },
+        .external_nominal => |external| TypeBinding{ .external_nominal = external },
+    };
+}
+
+fn inputStatement(input: TypeBindingInput) ?CIR.Statement.Idx {
+    return switch (input) {
+        .local_nominal => |stmt| stmt,
+        .local_alias => |stmt| stmt,
+        .associated_nominal => |stmt| stmt,
+        .external_nominal => null,
+    };
+}
+
+/// Return whether two external bindings refer to the same imported type name.
+pub fn sameExternal(a: ExternalTypeBinding, b: ExternalTypeBinding) bool {
+    return a.module_ident.eql(b.module_ident) and a.original_ident.eql(b.original_ident);
+}
+
+fn currentCollisionDecision(existing: TypeBinding, incoming: TypeBindingInput) TypeBindingDecision {
+    if (inputStatement(incoming)) |incoming_stmt| {
+        if (typeBindingStatement(existing)) |existing_stmt| {
+            if (existing_stmt == incoming_stmt) return .idempotent_current;
+        }
+    }
+
+    return switch (incoming) {
+        .external_nominal => |incoming_external| switch (existing) {
+            .external_nominal => |existing_external| if (sameExternal(existing_external, incoming_external))
+                .idempotent_current
+            else
+                TypeBindingDecision{ .rejected_current_conflict = existing },
+            .local_nominal, .local_alias, .associated_nominal => TypeBindingDecision{ .rejected_current_conflict = existing },
+        },
+        .local_nominal, .local_alias => switch (existing) {
+            .external_nominal => |existing_external| TypeBindingDecision{ .replaced_current_external = existing_external },
+            .local_nominal, .local_alias, .associated_nominal => TypeBindingDecision{ .redeclared_current = existing },
+        },
+        .associated_nominal => TypeBindingDecision{ .redeclared_current = existing },
+    };
+}
+
+/// Introduce or reject a type binding according to the canonical type-name policy.
+pub fn introduceTypeBinding(
+    gpa: Allocator,
+    scopes: []Scope,
+    scope_idx: usize,
     name: Ident.Idx,
-    type_decl: CIR.Statement.Idx,
-    parent_lookup_fn: ?fn (Ident.Idx) ?CIR.Statement.Idx,
-) std.mem.Allocator.Error!TypeIntroduceResult {
-    // Check if type already exists in this scope
-    if (scope.type_bindings.getPtr(name)) |existing| {
-        return switch (existing.*) {
-            .local_nominal => |stmt| TypeIntroduceResult{ .redeclared_error = stmt },
-            .local_alias => |stmt| TypeIntroduceResult{ .type_alias_redeclared = stmt },
-            .associated_nominal => |stmt| TypeIntroduceResult{ .nominal_type_redeclared = stmt },
-            .external_nominal => blk: {
-                try scope.type_bindings.put(gpa, name, TypeBinding{ .local_nominal = type_decl });
-                break :blk TypeIntroduceResult{ .success = {} };
+    incoming: TypeBindingInput,
+) Allocator.Error!TypeBindingDecision {
+    std.debug.assert(scope_idx < scopes.len);
+
+    const incoming_binding = inputToBinding(incoming);
+    const scope = &scopes[scope_idx];
+
+    if (scope.type_bindings.get(name)) |existing| {
+        const decision = currentCollisionDecision(existing, incoming);
+        switch (decision) {
+            .replaced_current_external => {
+                try scope.type_bindings.put(gpa, name, incoming_binding);
             },
-        };
+            .inserted,
+            .inserted_shadowing_parent,
+            .idempotent_current,
+            .rejected_current_conflict,
+            .redeclared_current,
+            => {},
+        }
+        return decision;
     }
 
-    // Check for shadowing in parent scopes and issue warnings
-    var shadowed_stmt: ?CIR.Statement.Idx = null;
-    if (parent_lookup_fn) |lookup_fn| {
-        shadowed_stmt = lookup_fn(name);
+    var shadowed_parent: ?TypeBinding = null;
+    var parent_idx = scope_idx;
+    while (parent_idx > 0) {
+        parent_idx -= 1;
+        if (scopes[parent_idx].type_bindings.get(name)) |parent_binding| {
+            shadowed_parent = parent_binding;
+            break;
+        }
     }
 
-    // Add type binding (single source of truth)
-    // Use the correct binding type based on the statement type
-    try scope.type_bindings.put(gpa, name, TypeBinding{ .local_nominal = type_decl });
-
-    if (shadowed_stmt) |stmt| {
-        return TypeIntroduceResult{ .shadowing_warning = stmt };
+    try scope.type_bindings.put(gpa, name, incoming_binding);
+    if (shadowed_parent) |binding| {
+        return TypeBindingDecision{ .inserted_shadowing_parent = binding };
     }
-
-    return TypeIntroduceResult{ .success = {} };
-}
-
-/// Introduce a type declaration into the scope with explicit binding type
-pub fn introduceTypeDeclWithKind(
-    scope: *Scope,
-    gpa: std.mem.Allocator,
-    name: Ident.Idx,
-    type_decl: CIR.Statement.Idx,
-    is_alias: bool,
-    parent_lookup_fn: ?fn (Ident.Idx) ?CIR.Statement.Idx,
-) std.mem.Allocator.Error!TypeIntroduceResult {
-    // Check if type already exists in this scope
-    if (scope.type_bindings.getPtr(name)) |existing| {
-        return switch (existing.*) {
-            .local_nominal => |stmt| TypeIntroduceResult{ .redeclared_error = stmt },
-            .local_alias => |stmt| TypeIntroduceResult{ .type_alias_redeclared = stmt },
-            .associated_nominal => |stmt| TypeIntroduceResult{ .nominal_type_redeclared = stmt },
-            .external_nominal => blk: {
-                const binding = if (is_alias)
-                    TypeBinding{ .local_alias = type_decl }
-                else
-                    TypeBinding{ .local_nominal = type_decl };
-                try scope.type_bindings.put(gpa, name, binding);
-                break :blk TypeIntroduceResult{ .success = {} };
-            },
-        };
-    }
-
-    // Check for shadowing in parent scopes and issue warnings
-    var shadowed_stmt: ?CIR.Statement.Idx = null;
-    if (parent_lookup_fn) |lookup_fn| {
-        shadowed_stmt = lookup_fn(name);
-    }
-
-    // Add type binding with the correct type (alias vs nominal)
-    const binding = if (is_alias)
-        TypeBinding{ .local_alias = type_decl }
-    else
-        TypeBinding{ .local_nominal = type_decl };
-    try scope.type_bindings.put(gpa, name, binding);
-
-    if (shadowed_stmt) |stmt| {
-        return TypeIntroduceResult{ .shadowing_warning = stmt };
-    }
-
-    return TypeIntroduceResult{ .success = {} };
-}
-
-/// Introduce an unqualified type alias (for associated types)
-/// Maps an unqualified name to a fully qualified type declaration
-pub fn introduceTypeAlias(
-    scope: *Scope,
-    gpa: std.mem.Allocator,
-    unqualified_name: Ident.Idx,
-    qualified_type_decl: CIR.Statement.Idx,
-) Allocator.Error!void {
-    try scope.type_bindings.put(gpa, unqualified_name, TypeBinding{
-        .associated_nominal = qualified_type_decl,
-    });
-}
-
-/// Update an existing type declaration in the scope
-/// This is used for recursive type declarations where we need to update
-/// the statement index after canonicalizing the type annotation
-pub fn updateTypeDecl(
-    scope: *Scope,
-    gpa: std.mem.Allocator,
-    name: Ident.Idx,
-    new_type_decl: CIR.Statement.Idx,
-) std.mem.Allocator.Error!void {
-    if (scope.type_bindings.getPtr(name)) |binding_ptr| {
-        const current = binding_ptr.*;
-        binding_ptr.* = switch (current) {
-            .local_nominal => TypeBinding{ .local_nominal = new_type_decl },
-            .local_alias => TypeBinding{ .local_alias = new_type_decl },
-            .associated_nominal => TypeBinding{ .associated_nominal = new_type_decl },
-            .external_nominal => current,
-        };
-    } else {
-        try scope.type_bindings.put(gpa, name, TypeBinding{ .local_nominal = new_type_decl });
-    }
+    return .inserted;
 }
 
 /// Introduce a type variable into the scope

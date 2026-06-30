@@ -4,7 +4,7 @@
 //! 1. Parse and type-check the Builtin.roc module (which contains nested Bool, Try, Str, Dict, Set types)
 //! 2. Serialize the resulting ModuleEnv to a binary file
 //! 3. Publish the type-checked module to a CheckedModuleArtifact and serialize it
-//! 4. Output Builtin.bin, builtin_indices.bin, and Builtin.artifact.bin to paths provided by the build system
+//! 4. Output Builtin.bin, builtin_indices.zig, and Builtin.artifact.bin to paths provided by the build system
 
 const std = @import("std");
 const base = @import("base");
@@ -14,7 +14,7 @@ const check = @import("check");
 const collections = @import("collections");
 const types = @import("types");
 const reporting = @import("reporting");
-const builtin_loading = @import("builtin_loading");
+const builtin_static = can.BuiltinStatic;
 const comptime_finalizer = @import("comptime_finalizer");
 
 const ModuleEnv = can.ModuleEnv;
@@ -27,10 +27,6 @@ const CompactWriter = collections.CompactWriter;
 const CheckedModuleArtifact = check.CheckedArtifact.CheckedModuleArtifact;
 
 const max_builtin_bytes = 1024 * 1024;
-
-/// Generous cap for reading back serialized binaries (Builtin.bin), which are
-/// substantially larger than the .roc source.
-const max_serialized_bytes = 64 * 1024 * 1024;
 
 // Stderr writer for diagnostic reporting
 var stderr_buffer: [4096]u8 = undefined;
@@ -69,7 +65,7 @@ fn readFileAllocPath(gpa: Allocator, io: std.Io, path: []const u8, limit: usize)
 /// The build system passes:
 /// 1. the absolute path to Builtin.roc for cache tracking
 /// 2. the output path for Builtin.bin
-/// 3. the output path for builtin_indices.bin
+/// 3. the output path for builtin_indices.zig
 /// 4. the output path for Builtin.artifact.bin
 ///
 /// We also keep project-relative defaults so manual runs still succeed.
@@ -90,7 +86,7 @@ pub fn main(process_init: std.process.Init) !void {
     // project-relative defaults so manual runs still succeed.
     const builtin_src_path = if (args.len >= 2) args[1] else "src/build/roc/Builtin.roc";
     const builtin_bin_path = if (args.len >= 3) args[2] else "zig-out/builtins/Builtin.bin";
-    const builtin_indices_path = if (args.len >= 4) args[3] else "zig-out/builtins/builtin_indices.bin";
+    const builtin_indices_zig_path = if (args.len >= 4) args[3] else "zig-out/builtins/builtin_indices.zig";
     const builtin_artifact_path = if (args.len >= 5) args[4] else "zig-out/builtins/Builtin.artifact.bin";
 
     // Read the Builtin.roc source file at runtime
@@ -122,47 +118,41 @@ pub fn main(process_init: std.process.Init) !void {
     if (std.fs.path.dirname(builtin_bin_path)) |dir| {
         try std.Io.Dir.cwd().createDirPath(io, dir);
     }
-    if (std.fs.path.dirname(builtin_indices_path)) |dir| {
+    if (std.fs.path.dirname(builtin_indices_zig_path)) |dir| {
         try std.Io.Dir.cwd().createDirPath(io, dir);
     }
     if (std.fs.path.dirname(builtin_artifact_path)) |dir| {
         try std.Io.Dir.cwd().createDirPath(io, dir);
     }
 
+    // Prepare once before baking so the compiler executable can view the static
+    // env directly without enabling runtime inserts or finalizing method tables.
+    try check.TypedCIR.prepareRuntimeEnv(gpa, builtin_env);
+
     // Serialize the single Builtin module
     try serializeModuleEnv(gpa, io, builtin_env, builtin_bin_path);
 
     // Publish the type-checked Builtin to a CheckedModuleArtifact and serialize
-    // it. This reloads the just-written Builtin.bin via the same loader
-    // BuiltinModules.init uses, so the baked artifact pairs identically with the
-    // env loaded at runtime.
-    try serializeBuiltinArtifact(gpa, io, builtin_bin_path, builtin_roc_source, builtin_artifact_path);
+    // it from the same prepared env that is embedded as Builtin.bin.
+    try serializeBuiltinArtifact(gpa, io, builtin_env, builtin_artifact_path);
 
     // Validate that BuiltinIndices contains all type declarations under Builtin
-    // This ensures BuiltinIndices stays in sync with the actual Builtin module content
-    try validateBuiltinIndicesCompleteness(gpa, builtin_env, builtin_indices);
+    // before emitting the typed static data consumed by the compiler executable.
+    try builtin_static.validateBuiltinIndices(builtin_env, builtin_indices);
 
-    try serializeBuiltinIndices(io, builtin_indices, builtin_indices_path);
+    try writeBuiltinIndicesZig(io, builtin_indices, builtin_indices_zig_path);
 }
 
-/// Reload the just-written Builtin.bin, publish it to a CheckedModuleArtifact
-/// using the same sequence BuiltinModules.init follows, then serialize the
-/// artifact to the output path.
+/// Publish the prepared Builtin env to a CheckedModuleArtifact, then serialize
+/// the artifact to the output path.
 fn serializeBuiltinArtifact(
     gpa: Allocator,
     io: std.Io,
-    builtin_bin_path: []const u8,
-    builtin_source: []const u8,
+    builtin_env: *ModuleEnv,
     output_path: []const u8,
 ) !void {
-    const builtin_bin = try readFileAllocPath(gpa, io, builtin_bin_path, max_serialized_bytes);
-    defer gpa.free(builtin_bin);
-
-    var builtin_module = try builtin_loading.loadCompiledModule(gpa, builtin_bin, "Builtin", builtin_source);
-    defer builtin_module.deinit();
-
     var typed_modules = try check.TypedCIR.Modules.init(gpa, &.{
-        .{ .precompiled = builtin_module.env },
+        .{ .precompiled = builtin_env },
     });
     defer typed_modules.deinit();
 
@@ -171,15 +161,10 @@ fn serializeBuiltinArtifact(
         &typed_modules,
         0,
         .{
-            .module_env_storage = .{ .compiled_buffer = .{
-                .env = builtin_module.env,
-                .buffer = builtin_module.buffer,
-            } },
+            .module_env_storage = .{ .checked_source = builtin_env },
             .compile_time_finalizer = comptime_finalizer.finalizer(),
         },
     );
-    // The artifact's module_env storage now owns builtin_module's env and buffer;
-    // retain them so `builtin_module.deinit()` above frees them exactly once.
     defer artifact.deinitRetainingModuleEnv(gpa);
 
     var arena = collections.SingleThreadArena.init(gpa);
@@ -197,126 +182,29 @@ fn serializeBuiltinArtifact(
 
     try writer.writeGather(file, io);
 
-    // Append the layout-version hash as a trailer (after the serialized region, so
-    // the `Serialized` stays at offset 0 / 16-byte-aligned for the loader). The
-    // loader (`CheckedModuleArtifact.splitVersionTrailer`) validates and strips it
-    // before relocating, rejecting a blob whose layout differs from the running
-    // compiler's instead of reading into a mismatched struct.
+    // Append the layout-version hash as a trailer after the serialized region.
+    // `CheckedModuleArtifact.splitVersionTrailer` validates and strips it before
+    // the runtime creates a static view, rejecting a blob whose layout differs
+    // from the running compiler's instead of reading into a mismatched struct.
     try file.writePositionalAll(io, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH, writer.total_bytes);
 }
 
 fn buildBuiltinIndices(gpa: Allocator, env: *const ModuleEnv) !BuiltinIndices {
-    const bool_type_idx = try findTypeDeclaration(gpa, env, "Bool");
-    const parse_tag_union_spec_type_idx = try findNestedTypeDeclaration(gpa, env, "Encoding", "ParseTagUnionSpec");
-    const fields_type_idx = try findTypeDeclarationByQualifiedName(env, "Builtin.Encoding.FieldName.FieldNames");
-    const field_type_idx = try findTypeDeclarationByQualifiedName(env, "Builtin.Encoding.FieldName");
-    const json_state_type_idx = try findTypeDeclarationByQualifiedName(env, "Builtin.Encoding.JsonState");
-    const json_encode_state_type_idx = try findTypeDeclarationByQualifiedName(env, "Builtin.Encoding.JsonEncodeState");
-    const json_encoding_type_idx = try findTypeDeclarationByQualifiedName(env, "Builtin.Encoding.JsonEncoding");
-    const json_type_idx = try findNestedTypeDeclaration(gpa, env, "Encoding", "Json");
-    const http_header_state_type_idx = try findTypeDeclarationByQualifiedName(env, "Builtin.Encoding.HttpHeaderState");
-    const http_header_encoding_type_idx = try findTypeDeclarationByQualifiedName(env, "Builtin.Encoding.HttpHeaderEncoding");
-    const http_header_type_idx = try findNestedTypeDeclaration(gpa, env, "Encoding", "HttpHeader");
-    const try_type_idx = try findTypeDeclaration(gpa, env, "Try");
-    const dict_type_idx = try findTypeDeclaration(gpa, env, "Dict");
-    const set_type_idx = try findTypeDeclaration(gpa, env, "Set");
-    const str_type_idx = try findTypeDeclaration(gpa, env, "Str");
-    const hasher_type_idx = try findTypeDeclaration(gpa, env, "Hasher");
-    const iter_type_idx = try findTypeDeclaration(gpa, env, "Iter");
-    const stream_type_idx = try findTypeDeclaration(gpa, env, "Stream");
-    const list_type_idx = try findTypeDeclaration(gpa, env, "List");
-    const box_type_idx = try findTypeDeclaration(gpa, env, "Box");
+    var result: BuiltinIndices = undefined;
+    inline for (CIR.builtin_type_specs) |spec| {
+        @field(result, spec.type_field) = try findBuiltinTypeDeclaration(gpa, env, spec);
+        @field(result, spec.ident_field) = expectBuiltinIdent(env, spec.qualified_name);
+    }
+    result.ok_ident = expectBuiltinIdent(env, "Ok");
+    result.err_ident = expectBuiltinIdent(env, "Err");
+    return result;
+}
 
-    const utf8_problem_type_idx = try findNestedTypeDeclaration(gpa, env, "Str", "Utf8Problem");
-
-    const u8_type_idx = try findNestedTypeDeclaration(gpa, env, "Num", "U8");
-    const i8_type_idx = try findNestedTypeDeclaration(gpa, env, "Num", "I8");
-    const u16_type_idx = try findNestedTypeDeclaration(gpa, env, "Num", "U16");
-    const i16_type_idx = try findNestedTypeDeclaration(gpa, env, "Num", "I16");
-    const u32_type_idx = try findNestedTypeDeclaration(gpa, env, "Num", "U32");
-    const i32_type_idx = try findNestedTypeDeclaration(gpa, env, "Num", "I32");
-    const u64_type_idx = try findNestedTypeDeclaration(gpa, env, "Num", "U64");
-    const i64_type_idx = try findNestedTypeDeclaration(gpa, env, "Num", "I64");
-    const u128_type_idx = try findNestedTypeDeclaration(gpa, env, "Num", "U128");
-    const i128_type_idx = try findNestedTypeDeclaration(gpa, env, "Num", "I128");
-    const dec_type_idx = try findNestedTypeDeclaration(gpa, env, "Num", "Dec");
-    const f32_type_idx = try findNestedTypeDeclaration(gpa, env, "Num", "F32");
-    const f64_type_idx = try findNestedTypeDeclaration(gpa, env, "Num", "F64");
-    const numeral_type_idx = try findNestedTypeDeclaration(gpa, env, "Num", "Numeral");
-
-    return .{
-        .bool_type = bool_type_idx,
-        .try_type = try_type_idx,
-        .dict_type = dict_type_idx,
-        .set_type = set_type_idx,
-        .str_type = str_type_idx,
-        .hasher_type = hasher_type_idx,
-        .iter_type = iter_type_idx,
-        .stream_type = stream_type_idx,
-        .list_type = list_type_idx,
-        .box_type = box_type_idx,
-        .parse_tag_union_spec_type = parse_tag_union_spec_type_idx,
-        .fields_type = fields_type_idx,
-        .field_type = field_type_idx,
-        .json_state_type = json_state_type_idx,
-        .json_encode_state_type = json_encode_state_type_idx,
-        .json_encoding_type = json_encoding_type_idx,
-        .json_type = json_type_idx,
-        .http_header_state_type = http_header_state_type_idx,
-        .http_header_encoding_type = http_header_encoding_type_idx,
-        .http_header_type = http_header_type_idx,
-        .utf8_problem_type = utf8_problem_type_idx,
-        .u8_type = u8_type_idx,
-        .i8_type = i8_type_idx,
-        .u16_type = u16_type_idx,
-        .i16_type = i16_type_idx,
-        .u32_type = u32_type_idx,
-        .i32_type = i32_type_idx,
-        .u64_type = u64_type_idx,
-        .i64_type = i64_type_idx,
-        .u128_type = u128_type_idx,
-        .i128_type = i128_type_idx,
-        .dec_type = dec_type_idx,
-        .f32_type = f32_type_idx,
-        .f64_type = f64_type_idx,
-        .numeral_type = numeral_type_idx,
-        .bool_ident = expectBuiltinIdent(env, "Builtin.Bool"),
-        .parse_tag_union_spec_ident = expectBuiltinIdent(env, "Builtin.Encoding.ParseTagUnionSpec"),
-        .fields_ident = expectBuiltinIdent(env, "Builtin.Encoding.FieldName.FieldNames"),
-        .field_ident = expectBuiltinIdent(env, "Builtin.Encoding.FieldName"),
-        .json_state_ident = expectBuiltinIdent(env, "Builtin.Encoding.JsonState"),
-        .json_encode_state_ident = expectBuiltinIdent(env, "Builtin.Encoding.JsonEncodeState"),
-        .json_encoding_ident = expectBuiltinIdent(env, "Builtin.Encoding.JsonEncoding"),
-        .json_ident = expectBuiltinIdent(env, "Builtin.Encoding.Json"),
-        .http_header_state_ident = expectBuiltinIdent(env, "Builtin.Encoding.HttpHeaderState"),
-        .http_header_encoding_ident = expectBuiltinIdent(env, "Builtin.Encoding.HttpHeaderEncoding"),
-        .http_header_ident = expectBuiltinIdent(env, "Builtin.Encoding.HttpHeader"),
-        .try_ident = expectBuiltinIdent(env, "Builtin.Try"),
-        .dict_ident = expectBuiltinIdent(env, "Builtin.Dict"),
-        .set_ident = expectBuiltinIdent(env, "Builtin.Set"),
-        .str_ident = expectBuiltinIdent(env, "Builtin.Str"),
-        .hasher_ident = expectBuiltinIdent(env, "Builtin.Hasher"),
-        .iter_ident = expectBuiltinIdent(env, "Builtin.Iter"),
-        .stream_ident = expectBuiltinIdent(env, "Builtin.Stream"),
-        .list_ident = expectBuiltinIdent(env, "Builtin.List"),
-        .box_ident = expectBuiltinIdent(env, "Builtin.Box"),
-        .utf8_problem_ident = expectBuiltinIdent(env, "Builtin.Str.Utf8Problem"),
-        .u8_ident = expectBuiltinIdent(env, "Builtin.Num.U8"),
-        .i8_ident = expectBuiltinIdent(env, "Builtin.Num.I8"),
-        .u16_ident = expectBuiltinIdent(env, "Builtin.Num.U16"),
-        .i16_ident = expectBuiltinIdent(env, "Builtin.Num.I16"),
-        .u32_ident = expectBuiltinIdent(env, "Builtin.Num.U32"),
-        .i32_ident = expectBuiltinIdent(env, "Builtin.Num.I32"),
-        .u64_ident = expectBuiltinIdent(env, "Builtin.Num.U64"),
-        .i64_ident = expectBuiltinIdent(env, "Builtin.Num.I64"),
-        .u128_ident = expectBuiltinIdent(env, "Builtin.Num.U128"),
-        .i128_ident = expectBuiltinIdent(env, "Builtin.Num.I128"),
-        .dec_ident = expectBuiltinIdent(env, "Builtin.Num.Dec"),
-        .f32_ident = expectBuiltinIdent(env, "Builtin.Num.F32"),
-        .f64_ident = expectBuiltinIdent(env, "Builtin.Num.F64"),
-        .numeral_ident = expectBuiltinIdent(env, "Builtin.Num.Numeral"),
-        .ok_ident = expectBuiltinIdent(env, "Ok"),
-        .err_ident = expectBuiltinIdent(env, "Err"),
+fn findBuiltinTypeDeclaration(gpa: Allocator, env: *const ModuleEnv, spec: CIR.BuiltinTypeSpec) !CIR.Statement.Idx {
+    return switch (spec.lookup) {
+        .top_level => |name| findTypeDeclaration(gpa, env, name),
+        .nested => |nested| findNestedTypeDeclaration(gpa, env, nested.parent, nested.name),
+        .qualified => |name| findTypeDeclarationByQualifiedName(env, name),
     };
 }
 
@@ -325,89 +213,10 @@ fn expectBuiltinIdent(env: *const ModuleEnv, text: []const u8) base.Ident.Idx {
 }
 
 fn installBuiltinNodeIndices(gpa: Allocator, env: *ModuleEnv, indices: BuiltinIndices) !void {
-    try env.common.setTypeNodeIndexById(gpa, indices.bool_ident, @intCast(@intFromEnum(indices.bool_type)));
-    try env.common.setTypeNodeIndexById(gpa, indices.try_ident, @intCast(@intFromEnum(indices.try_type)));
-    try env.common.setTypeNodeIndexById(gpa, indices.dict_ident, @intCast(@intFromEnum(indices.dict_type)));
-    try env.common.setTypeNodeIndexById(gpa, indices.set_ident, @intCast(@intFromEnum(indices.set_type)));
-    try env.common.setTypeNodeIndexById(gpa, indices.str_ident, @intCast(@intFromEnum(indices.str_type)));
-    try env.common.setTypeNodeIndexById(gpa, indices.hasher_ident, @intCast(@intFromEnum(indices.hasher_type)));
-    try env.common.setTypeNodeIndexById(gpa, indices.iter_ident, @intCast(@intFromEnum(indices.iter_type)));
-    try env.common.setTypeNodeIndexById(gpa, indices.stream_ident, @intCast(@intFromEnum(indices.stream_type)));
-    try env.common.setTypeNodeIndexById(gpa, indices.list_ident, @intCast(@intFromEnum(indices.list_type)));
-    try env.common.setTypeNodeIndexById(gpa, indices.box_ident, @intCast(@intFromEnum(indices.box_type)));
-    try env.common.setTypeNodeIndexById(gpa, indices.parse_tag_union_spec_ident, @intCast(@intFromEnum(indices.parse_tag_union_spec_type)));
-    try env.common.setTypeNodeIndexById(gpa, indices.fields_ident, @intCast(@intFromEnum(indices.fields_type)));
-    try env.common.setTypeNodeIndexById(gpa, indices.field_ident, @intCast(@intFromEnum(indices.field_type)));
-    try env.common.setTypeNodeIndexById(gpa, indices.json_state_ident, @intCast(@intFromEnum(indices.json_state_type)));
-    try env.common.setTypeNodeIndexById(gpa, indices.json_encode_state_ident, @intCast(@intFromEnum(indices.json_encode_state_type)));
-    try env.common.setTypeNodeIndexById(gpa, indices.json_encoding_ident, @intCast(@intFromEnum(indices.json_encoding_type)));
-    try env.common.setTypeNodeIndexById(gpa, indices.json_ident, @intCast(@intFromEnum(indices.json_type)));
-    try env.common.setTypeNodeIndexById(gpa, indices.http_header_state_ident, @intCast(@intFromEnum(indices.http_header_state_type)));
-    try env.common.setTypeNodeIndexById(gpa, indices.http_header_encoding_ident, @intCast(@intFromEnum(indices.http_header_encoding_type)));
-    try env.common.setTypeNodeIndexById(gpa, indices.http_header_ident, @intCast(@intFromEnum(indices.http_header_type)));
-    try env.common.setTypeNodeIndexById(gpa, indices.utf8_problem_ident, @intCast(@intFromEnum(indices.utf8_problem_type)));
-    try env.common.setTypeNodeIndexById(gpa, indices.u8_ident, @intCast(@intFromEnum(indices.u8_type)));
-    try env.common.setTypeNodeIndexById(gpa, indices.i8_ident, @intCast(@intFromEnum(indices.i8_type)));
-    try env.common.setTypeNodeIndexById(gpa, indices.u16_ident, @intCast(@intFromEnum(indices.u16_type)));
-    try env.common.setTypeNodeIndexById(gpa, indices.i16_ident, @intCast(@intFromEnum(indices.i16_type)));
-    try env.common.setTypeNodeIndexById(gpa, indices.u32_ident, @intCast(@intFromEnum(indices.u32_type)));
-    try env.common.setTypeNodeIndexById(gpa, indices.i32_ident, @intCast(@intFromEnum(indices.i32_type)));
-    try env.common.setTypeNodeIndexById(gpa, indices.u64_ident, @intCast(@intFromEnum(indices.u64_type)));
-    try env.common.setTypeNodeIndexById(gpa, indices.i64_ident, @intCast(@intFromEnum(indices.i64_type)));
-    try env.common.setTypeNodeIndexById(gpa, indices.u128_ident, @intCast(@intFromEnum(indices.u128_type)));
-    try env.common.setTypeNodeIndexById(gpa, indices.i128_ident, @intCast(@intFromEnum(indices.i128_type)));
-    try env.common.setTypeNodeIndexById(gpa, indices.dec_ident, @intCast(@intFromEnum(indices.dec_type)));
-    try env.common.setTypeNodeIndexById(gpa, indices.f32_ident, @intCast(@intFromEnum(indices.f32_type)));
-    try env.common.setTypeNodeIndexById(gpa, indices.f64_ident, @intCast(@intFromEnum(indices.f64_type)));
-    try env.common.setTypeNodeIndexById(gpa, indices.numeral_ident, @intCast(@intFromEnum(indices.numeral_type)));
-}
-
-/// Validates that BuiltinIndices contains all nominal type declarations in the Builtin module.
-/// Iterates through all statements and ensures every s_nominal_decl is present in BuiltinIndices,
-/// with the exception of container types, which are not auto-imported types.
-fn validateBuiltinIndicesCompleteness(gpa: Allocator, env: *const ModuleEnv, indices: BuiltinIndices) !void {
-    // Collect all statement indices from BuiltinIndices using reflection
-    // Only check Statement.Idx fields (skip Ident.Idx fields)
-    var indexed_stmts = std.AutoHashMap(CIR.Statement.Idx, void).init(gpa);
-    defer indexed_stmts.deinit();
-
-    const fields = @typeInfo(BuiltinIndices).@"struct".fields;
-    inline for (fields) |field| {
-        if (field.type == CIR.Statement.Idx) {
-            const stmt_idx = @field(indices, field.name);
-            try indexed_stmts.put(stmt_idx, {});
-        }
-    }
-
-    // Check all nominal type declarations in the Builtin module
-    const all_stmts = env.store.sliceStatements(env.all_statements);
-    for (all_stmts) |stmt_idx| {
-        const stmt = env.store.getStatement(stmt_idx);
-        switch (stmt) {
-            .s_nominal_decl => |decl| {
-                const header = env.store.getTypeHeader(decl.header);
-                const ident_text = env.getIdentText(header.name);
-
-                // Skip container types that are not auto-imported types
-                if (std.mem.eql(u8, ident_text, "Builtin") or
-                    std.mem.eql(u8, ident_text, "Builtin.Num") or
-                    std.mem.eql(u8, ident_text, "Builtin.Encoding"))
-                {
-                    continue;
-                }
-
-                // Every other nominal type should be in BuiltinIndices
-                if (!indexed_stmts.contains(stmt_idx)) {
-                    std.debug.print("ERROR: Type '{s}' (stmt_idx={d}) is not in BuiltinIndices!\n", .{
-                        ident_text,
-                        @intFromEnum(stmt_idx),
-                    });
-                    std.debug.print("Add this type to BuiltinIndices in CIR.zig and builtin_compiler/main.zig\n", .{});
-                    return error.BuiltinIndicesIncomplete;
-                }
-            },
-            else => continue,
-        }
+    inline for (CIR.builtin_type_specs) |spec| {
+        const ident = @field(indices, spec.ident_field);
+        const stmt = @field(indices, spec.type_field);
+        try env.common.setTypeNodeIndexById(gpa, ident, @intCast(@intFromEnum(stmt)));
     }
 }
 
@@ -708,17 +517,54 @@ fn findTypeDeclarationByQualifiedName(env: *const ModuleEnv, qualified_name: []c
     return error.TypeDeclarationNotFound;
 }
 
-/// Serialize BuiltinIndices to a binary file
-fn serializeBuiltinIndices(
+/// Write BuiltinIndices as typed Zig static data for embedding in the compiler.
+fn writeBuiltinIndicesZig(
     io: std.Io,
     indices: BuiltinIndices,
     output_path: []const u8,
 ) !void {
-    // Create output file
     const file = try std.Io.Dir.cwd().createFile(io, output_path, .{});
     defer file.close(io);
 
-    // Write the struct directly as binary data
-    // BuiltinIndices stores compact enum indices, so we can write it directly.
-    try file.writePositionalAll(io, std.mem.asBytes(&indices), 0);
+    var write_buffer: [4096]u8 = undefined;
+    var writer = file.writer(io, &write_buffer);
+    const out = &writer.interface;
+
+    try out.print("pub const builtin_type_registry_hash: u64 = 0x{x};\n", .{CIR.BUILTIN_TYPE_REGISTRY_HASH});
+    try out.print("pub const builtin_indices_layout_hash: u64 = 0x{x};\n\n", .{CIR.BUILTIN_INDICES_LAYOUT_HASH});
+    try out.writeAll("pub const builtin_indices_raw = .{\n");
+
+    inline for (@typeInfo(BuiltinIndices).@"struct".fields) |field| {
+        const value = @field(indices, field.name);
+        if (field.type == CIR.Statement.Idx) {
+            try out.print("    .{s} = {d},\n", .{ field.name, @intFromEnum(value) });
+        } else if (field.type == base.Ident.Idx) {
+            try out.print("    .{s} = {d},\n", .{ field.name, @as(u32, @bitCast(value)) });
+        } else {
+            @compileError("unsupported BuiltinIndices field type: " ++ @typeName(field.type));
+        }
+    }
+
+    try out.writeAll(
+        \\};
+        \\
+        \\pub fn builtinIndices(comptime CIR: type) CIR.BuiltinIndices {
+        \\    return .{
+        \\
+    );
+    inline for (@typeInfo(BuiltinIndices).@"struct".fields) |field| {
+        if (field.type == CIR.Statement.Idx) {
+            try out.print("        .{s} = @enumFromInt(builtin_indices_raw.{s}),\n", .{ field.name, field.name });
+        } else if (field.type == base.Ident.Idx) {
+            try out.print("        .{s} = @bitCast(@as(u32, builtin_indices_raw.{s})),\n", .{ field.name, field.name });
+        } else {
+            @compileError("unsupported BuiltinIndices field type: " ++ @typeName(field.type));
+        }
+    }
+    try out.writeAll(
+        \\    };
+        \\}
+        \\
+    );
+    try out.flush();
 }

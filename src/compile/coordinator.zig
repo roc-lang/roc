@@ -2416,7 +2416,6 @@ pub const Coordinator = struct {
             )) continue;
 
             const plan_changed = validation_snapshot.dispatchPlanChanged(app_artifact, plan_index, plan);
-
             switch (plan.resolution) {
                 .resolved_target => |target| {
                     if (!plan_changed) continue;
@@ -2555,18 +2554,66 @@ pub const Coordinator = struct {
         expr_id: check.CheckedArtifact.CheckedExprId,
     ) ?PlatformRequiredDispatchReportType {
         const expr = app_artifact.checked_bodies.expr(expr_id);
-        if (!check.CheckedArtifact.checkedTypeRootIsIdentity(app_artifact, expr.ty)) {
-            return .{ .artifact = app_artifact, .ty = expr.ty };
-        }
+        const expr_ty: ?PlatformRequiredDispatchReportType = if (check.CheckedArtifact.checkedTypeRootIsIdentity(app_artifact, expr.ty))
+            null
+        else
+            .{ .artifact = app_artifact, .ty = expr.ty };
         return switch (expr.data) {
-            .dispatch_call => |plan_id| self.platformRequiredResolvedDispatchReturnType(app_artifact, app_imported_artifacts, plan_id orelse return null),
-            .method_eq => |plan_id| self.platformRequiredResolvedDispatchReturnType(app_artifact, app_imported_artifacts, plan_id orelse return null),
+            .dispatch_call => |plan_id| if (plan_id) |id| self.platformRequiredResolvedDispatchReturnType(app_artifact, app_imported_artifacts, id) orelse expr_ty else expr_ty,
+            .method_eq => |plan_id| if (plan_id) |id| self.platformRequiredResolvedDispatchReturnType(app_artifact, app_imported_artifacts, id) orelse expr_ty else expr_ty,
             .num_from_numeral,
             .typed_num_from_numeral,
-            => |plan_id| self.platformRequiredResolvedDispatchReturnType(app_artifact, app_imported_artifacts, plan_id orelse return null),
-            .str_from_quote => |quote| self.platformRequiredResolvedDispatchReturnType(app_artifact, app_imported_artifacts, quote.plan orelse return null),
-            else => null,
+            => |plan_id| if (plan_id) |id| self.platformRequiredResolvedDispatchReturnType(app_artifact, app_imported_artifacts, id) orelse expr_ty else expr_ty,
+            .str_from_quote => |quote| if (quote.plan) |id| self.platformRequiredResolvedDispatchReturnType(app_artifact, app_imported_artifacts, id) orelse expr_ty else expr_ty,
+            .match_ => |match| blk: {
+                if (!match.is_try_suffix) break :blk expr_ty;
+                const cond = self.platformRequiredConcreteExprType(app_artifact, app_imported_artifacts, match.cond) orelse {
+                    const cond_expr = app_artifact.checked_bodies.expr(match.cond);
+                    if (check.CheckedArtifact.checkedTypeRootIsIdentity(app_artifact, cond_expr.ty)) break :blk expr_ty;
+                    break :blk platformRequiredTryOkType(app_artifact, cond_expr.ty);
+                };
+                break :blk if (platformRequiredTryOkType(cond.artifact, cond.ty)) |ok| ok else expr_ty;
+            },
+            else => expr_ty,
         };
+    }
+
+    fn platformRequiredTryOkType(
+        artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+        root: check.CheckedArtifact.CheckedTypeId,
+    ) ?PlatformRequiredDispatchReportType {
+        var current = root;
+        var remaining = artifact.checked_types.payloads.items.len;
+        while (true) {
+            const payload = artifact.checked_types.payload(current);
+            switch (payload) {
+                .alias => |alias| current = alias.backing,
+                .nominal => |nominal| current = nominal.backing,
+                .tag_union => |tag_union| {
+                    if (platformRequiredOkTagPayload(artifact, tag_union.tags)) |ok| return .{ .artifact = artifact, .ty = ok };
+                    current = tag_union.ext;
+                },
+                .empty_tag_union => return null,
+                else => return null,
+            }
+            if (remaining == 0) {
+                coordinatorInvariant("platform-required Try success type lookup reached a cyclic checked type", .{});
+            }
+            remaining -= 1;
+        }
+    }
+
+    fn platformRequiredOkTagPayload(
+        artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+        tags: []const check.CheckedArtifact.CheckedTag,
+    ) ?check.CheckedArtifact.CheckedTypeId {
+        for (tags) |tag| {
+            if (!std.mem.eql(u8, artifact.canonical_names.tagLabelText(tag.name), "Ok")) continue;
+            const args = tag.argsSlice(&artifact.checked_types);
+            if (args.len != 1) return null;
+            return args[0];
+        }
+        return null;
     }
 
     fn platformRequiredResolvedDispatchReturnType(
@@ -2582,6 +2629,10 @@ pub const Coordinator = struct {
             .resolved_target => |target| target,
             .unresolved_checked_plan => return null,
         };
+        const plan_ret = checkedFunctionReturnType(app_artifact, plan.callable_ty) orelse return null;
+        if (!check.CheckedArtifact.checkedTypeRootIsIdentity(app_artifact, plan_ret)) {
+            return .{ .artifact = app_artifact, .ty = plan_ret };
+        }
         switch (target.kind) {
             .generated_structural_parser,
             .generated_structural_encoder,
@@ -2595,9 +2646,7 @@ pub const Coordinator = struct {
                 }
             },
         }
-        const plan_ret = checkedFunctionReturnType(app_artifact, plan.callable_ty) orelse return null;
-        if (check.CheckedArtifact.checkedTypeRootIsIdentity(app_artifact, plan_ret)) return null;
-        return .{ .artifact = app_artifact, .ty = plan_ret };
+        return null;
     }
 
     fn platformRequiredDispatchTargetArtifact(
@@ -5601,7 +5650,7 @@ test "Coordinator checked cache key requires checked direct imports" {
     defer env.deinit();
     try env.initCIRFields("W4");
 
-    const import_idx = try env.imports.getOrPut(allocator, &env.common.strings, "Host");
+    const import_idx = try env.imports.getOrPut(allocator, &env.common, "Host");
     env.imports.setResolvedModule(import_idx, 1);
 
     try std.testing.expect(!Coordinator.resolvedDirectImportsHaveCheckedOutput(&env, &.{}));
