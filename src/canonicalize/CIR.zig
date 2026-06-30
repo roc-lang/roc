@@ -524,7 +524,7 @@ pub const IntValue = struct {
     bytes: [16]u8,
     kind: IntKind,
 
-    pub const IntKind = enum {
+    pub const IntKind = enum(u8) {
         i128,
         u128,
     };
