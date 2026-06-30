@@ -930,8 +930,8 @@ fn receiverMethodOwnerFromTypeAnno(
 ) std.mem.Allocator.Error!?ModuleEnv.MethodOwner {
     const root_idx = self.unwrapTypeAnnoParens(type_anno_idx);
     return switch (self.env.store.getTypeAnno(root_idx)) {
-        .lookup => |lookup| try self.receiverMethodOwnerFromTypeBase(lookup.name, lookup.base),
-        .apply => |apply| try self.receiverMethodOwnerFromTypeBase(apply.name, apply.base),
+        .lookup => |lookup| try self.receiverMethodOwnerFromTypeBase(lookup.base),
+        .apply => |apply| try self.receiverMethodOwnerFromTypeBase(apply.base),
         else => null,
     };
 }
@@ -948,10 +948,8 @@ fn unwrapTypeAnnoParens(self: *const Self, type_anno_idx: TypeAnno.Idx) TypeAnno
 
 fn receiverMethodOwnerFromTypeBase(
     self: *Self,
-    type_name: Ident.Idx,
     type_base: TypeAnno.LocalOrExternal,
 ) std.mem.Allocator.Error!?ModuleEnv.MethodOwner {
-    _ = type_name;
     return switch (type_base) {
         .local => |local| ModuleEnv.MethodOwner.init(self.env.qualified_module_ident, local.decl_idx),
         .external => |external| try self.receiverMethodOwnerFromExternalType(external),
