@@ -89,6 +89,15 @@ tasks:
   - key: captain
     call: rwx/install-captain 1.1.7
 
+  # Rust toolchain — the CLI glue matrix (run-test-cli, suite cli-platforms) compiles generated
+  # Rust glue with `rustc`. GHA gets it free from the runner image; rwx/base has none. The leaf
+  # exports ~/.cargo/bin onto PATH (arch auto-detected via uname -m, so aarch64 here). Only the
+  # `platforms` task needs it.
+  - key: rust-lang
+    call: rust-lang/install 1.0.7
+    with:
+      rust-version: 1.83.0
+
   # System packages not on the rwx/base image, pulled into their own cached tasks.
   - key: system-file
     run: |
@@ -116,9 +125,9 @@ tasks:
     filter: *pos-build
     tool-cache: ci-build-ci-arm64
     timeout: 45m  # arm64 build compiles roc + kcov from source; exceeds the 10m default
-    agent:
-      cpus: 32
-      memory: 64gb
+    agent:  # GP 8c/32g — Debug anchor; builds kcov too, so 8c parallelism needs >16g (OOM'd at CO 8c/16g)
+      cpus: 8
+      memory: 32gb
     run: |
       set -euo pipefail
       # -Droc-test-runner: pre-build the custom-runner test binaries so the unit tasks cache-hit
@@ -142,7 +151,7 @@ tasks:
       - legal_details
       - zig-out
       - .captain  # Captain suite config (.captain/config.yml); without it `captain run` finds no command
-    agent: &test-agent
+    agent: &test-agent  # CPU-bound test leaves: CO 8c/16g
       cpus: 8
       memory: 16gb
     run: |
@@ -160,7 +169,7 @@ tasks:
   # file, so it keeps CONTRIBUTING/profiling on top of the leaf inputs (only
   # CONTRIBUTING reader on this leg, so the list is inline rather than anchored).
   - key: platforms
-    use: [build-ci-arm64, captain]
+    use: [build-ci-arm64, captain, rust-lang]
     filter:
       - build.zig
       - build.zig.zon
@@ -203,8 +212,8 @@ tasks:
     filter: *pos-build
     tool-cache: ci-build-release-arm64
     timeout: 45m
-    agent:
-      cpus: 32
+    agent:  # GP 16c/64g — parallel + critical path (arm leg); 16c is the balance point, needs 64g at 16c
+      cpus: 16
       memory: 64gb
     run: |
       set -euo pipefail

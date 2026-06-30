@@ -80,6 +80,16 @@ tasks:
   - key: captain
     call: rwx/install-captain 1.1.7
 
+  # Rust toolchain — the CLI glue matrix (run-test-cli, suite cli-platforms) compiles generated
+  # Rust glue with `rustc` (src/cli/test/parallel_cli_runner.zig:compileGeneratedRustGlue). GHA
+  # gets rustc free from the GitHub runner image; the rwx/base image has none, so install it here.
+  # The leaf exports ~/.cargo/bin onto PATH (carried across use:, like the $HOME Zig toolchain).
+  # Only the `platforms` task needs it (cli-llvm filters glue out).
+  - key: rust-lang
+    call: rust-lang/install 1.0.7
+    with:
+      rust-version: 1.83.0
+
   # ============================================================ source-only gates
   # Pure source/grep/perl checks — no compiled binaries needed, so they run in
   # parallel with the build instead of waiting on the anchor (build.zig:4091-4115).
@@ -150,9 +160,9 @@ tasks:
     filter: *pos-build
     tool-cache: ci-build-ci-x64  # persist .zig-cache + ~/.cache/zig → warm runs skip the build-runner compile & recompile only changed modules
     timeout: 45m
-    agent:
-      cpus: 32
-      memory: 64gb
+    agent:  # CO 8c/16g — Debug anchor; off critical path, feeds gates+leaves so keep it reasonably fast (4c gated the run)
+      cpus: 8
+      memory: 16gb
     run: |
       set -euo pipefail
       # -Droc-test-runner so the module + standalone test binaries are compiled ONCE here with
@@ -286,7 +296,7 @@ tasks:
 
   # CLI platform tests (interpreter + dev) + minimal roc-check smoke (debug roc).
   - key: platforms
-    use: [build-ci-x64, captain]
+    use: [build-ci-x64, captain, rust-lang]
     filter: *pos-cli
     agent: *test-agent
     run: |
@@ -432,9 +442,9 @@ tasks:
     # Match the build anchors: Compute-Optimized 32c/64gb. A full `zig build` of roc is
     # memory-heavy (LLVM/link peak) — 32gb (CO 16c) OOMs; 64gb is the next CO tier (32c) and is
     # what the anchors use to build roc with even more pressure (-Droc-test-runner -Dfuzz).
-    agent:
-      cpus: 32
-      memory: 64gb
+    agent:  # MO 4c/32g — off critical path; 4c is a free cost win, 32g holds the 32-bit-target peak
+      cpus: 4
+      memory: 32gb
     parallel:
       matrix:
         target:
@@ -475,9 +485,9 @@ tasks:
       - tracy
     tool-cache: ci-tracy-check
     timeout: 45m
-    agent:
-      cpus: 16
-      memory: 32gb
+    agent:  # CO 8c/16g — -Dno-bin compile-check; off-path. 8c (not 2c) is cheaper AND faster; needs 16g (8g stalls)
+      cpus: 8
+      memory: 16gb
     run: |
       set -euo pipefail
       zig build -Dno-bin -Dfuzz -Dtracy=./tracy
@@ -491,7 +501,7 @@ tasks:
     filter: *pos-build
     tool-cache: ci-build-release-x64
     timeout: 45m
-    agent:
+    agent:  # CO 32c/64g — kept large: genuinely parallel ReleaseFast build; shrinking cost both time and money
       cpus: 32
       memory: 64gb
     run: |
@@ -570,9 +580,9 @@ tasks:
     filter: *pos-build
     tool-cache: ci-build-valgrind-x64
     timeout: 45m
-    agent:
-      cpus: 32
-      memory: 64gb
+    agent:  # MO 4c/32g — serial build (cores don't help); memory headroom for the full-DWARF -Dstrip=false build
+      cpus: 4
+      memory: 32gb
     run: |
       set -euo pipefail
       # Build ONLY what the valgrind leaf uses (roc + snapshot + test_runner + the str/int
