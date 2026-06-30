@@ -752,7 +752,7 @@ pub const BuildEnv = struct {
         // Also queue the platform's root module if this is an app
         // The platform's root module contains the `requires` clause which must be compiled
         // for type checking against the app's exports
-        var platform_root_queued = false;
+        const root_is_app = root_pkg.kind == .app or root_pkg.kind == .default_app;
         var pf_it = self.packages.iterator();
         while (pf_it.next()) |pf_entry| {
             const pf_pkg = pf_entry.value_ptr.*;
@@ -767,10 +767,12 @@ pub const BuildEnv = struct {
                         platform_coord_pkg.remaining_modules += 1;
                         coord.total_remaining += 1;
                         try coord.enqueueParseTask(pf_entry.key_ptr.*, plat_root_id);
-                        platform_root_queued = true;
                         if (comptime trace_build) {
                             std.debug.print("[BUILD] Queued platform root module: {s} in package {s}\n", .{ plat_module_name, pf_entry.key_ptr.* });
                         }
+                    }
+                    if (root_is_app) {
+                        try coord.setPlatformRequirementDependency(coord_pkg, platform_coord_pkg, plat_root_id);
                     }
                 }
             }

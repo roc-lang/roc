@@ -45,6 +45,10 @@ const Self = @This();
 
 const InterpolationConstraintId = enum(u32) { _ };
 
+pub const PlatformRequirements = struct {
+    module_env: *const ModuleEnv,
+};
+
 const InterpolationConstraintMetadata = struct {
     expr_idx: CIR.Expr.Idx,
     item_var: Var,
@@ -134,6 +138,9 @@ constraint_expr_by_fn_var: std.AutoHashMap(Var, CIR.Expr.Idx),
 /// method call resolves to a record field function, the checker rewrites the
 /// method call to an ordinary call using this field access as the callee.
 method_field_access_exprs: std.AutoHashMapUnmanaged(CIR.Expr.Idx, CIR.Expr.Idx),
+/// Platform-required signatures copied into this module, keyed by the app def
+/// that must be checked against the required type.
+platform_required_expected_types: std.AutoHashMap(CIR.Def.Idx, PlatformRequiredExpectedType),
 /// Interpolation metadata records keyed by their static dispatch constraint function.
 interpolation_constraint_ids_by_fn_var: std.AutoHashMap(Var, InterpolationConstraintId),
 /// Metadata produced when checking interpolation expressions and consumed when
@@ -949,6 +956,11 @@ const DeferredDefUnification = struct {
     expr_var: Var,
 };
 
+const PlatformRequiredExpectedType = struct {
+    var_: Var,
+    required_ident: Ident.Idx,
+};
+
 const ValueLookupEntry = struct {
     expr_idx: CIR.Expr.Idx,
     pattern_idx: CIR.Pattern.Idx,
@@ -1147,6 +1159,7 @@ fn initAssumePrepared(
         .ident_to_var_map = std.AutoHashMap(Ident.Idx, Var).init(gpa),
         .constraint_expr_by_fn_var = std.AutoHashMap(Var, CIR.Expr.Idx).init(gpa),
         .method_field_access_exprs = .{},
+        .platform_required_expected_types = std.AutoHashMap(CIR.Def.Idx, PlatformRequiredExpectedType).init(gpa),
         .interpolation_constraint_ids_by_fn_var = std.AutoHashMap(Var, InterpolationConstraintId).init(gpa),
         .interpolation_constraint_metadata = .empty,
         .reported_constraint_errors = std.AutoHashMap(ReportedConstraintError, void).init(gpa),
@@ -1308,6 +1321,7 @@ pub fn deinit(self: *Self) void {
     self.ident_to_var_map.deinit();
     self.constraint_expr_by_fn_var.deinit();
     self.method_field_access_exprs.deinit(self.gpa);
+    self.platform_required_expected_types.deinit();
     self.interpolation_constraint_ids_by_fn_var.deinit();
     for (self.interpolation_constraint_metadata.items) |meta| {
         self.gpa.free(meta.interpolated_vars);
@@ -4530,10 +4544,21 @@ fn copyBuiltinTypes(self: *Self) Allocator.Error!void {
 
 /// Public `checkFile` function.
 pub fn checkFile(self: *Self) std.mem.Allocator.Error!void {
-    return self.checkFileInternal(false);
+    return self.checkFileInternal(null, false);
 }
 
-fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator.Error!void {
+pub fn checkFileWithPlatformRequirements(
+    self: *Self,
+    platform_requirements: PlatformRequirements,
+) std.mem.Allocator.Error!void {
+    return self.checkFileInternal(platform_requirements, false);
+}
+
+fn checkFileInternal(
+    self: *Self,
+    platform_requirements: ?PlatformRequirements,
+    skip_numeric_defaults: bool,
+) std.mem.Allocator.Error!void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -4643,6 +4668,9 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
     // Process requires_types annotations for platforms
     // This ensures the type store has the actual types for platform requirements
     try self.processRequiresTypes(&env);
+
+    self.platform_required_expected_types.clearRetainingCapacity();
+    try self.collectPlatformRequiredExpectedTypes(platform_requirements, &env);
 
     // Then, iterate over defs again, inferring types
     for (0..self.cir.all_defs.span.len) |def_offset| {
@@ -7219,6 +7247,44 @@ fn processRequiresTypes(self: *Self, env: *Env) std.mem.Allocator.Error!void {
     }
 }
 
+fn collectPlatformRequiredExpectedTypes(
+    self: *Self,
+    platform_requirements: ?PlatformRequirements,
+    env: *Env,
+) std.mem.Allocator.Error!void {
+    const platform = platform_requirements orelse return;
+    std.debug.assert(env.rank() == .outermost);
+
+    for (platform.module_env.requires_types.items.items) |required_type| {
+        if (platform.module_env.for_clause_aliases.sliceRange(required_type.type_aliases).len > 0) {
+            continue;
+        }
+
+        const required_name = platform.module_env.getIdent(required_type.ident);
+        const app_def = self.appDefByRequiredName(required_name) orelse continue;
+        const required_ident = try @constCast(self.cir).insertIdent(base.Ident.for_text(required_name));
+        const app_def_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(app_def));
+        const copied_required_type = try self.copyVar(
+            ModuleEnv.varFrom(required_type.type_anno),
+            platform.module_env,
+            app_def_region,
+        );
+        try self.platform_required_expected_types.put(app_def, .{
+            .var_ = copied_required_type,
+            .required_ident = required_ident,
+        });
+    }
+}
+
+fn appDefByRequiredName(self: *const Self, required_name: []const u8) ?CIR.Def.Idx {
+    for (self.cir.store.sliceDefs(self.cir.global_value_defs)) |def_idx| {
+        const def = self.cir.store.getDef(def_idx);
+        const name = self.getPatternIdent(def.pattern) orelse continue;
+        if (std.mem.eql(u8, self.cir.getIdent(name), required_name)) return def_idx;
+    }
+    return null;
+}
+
 /// Check if a statement index is a for-clause alias statement.
 /// For-clause alias statements are created during platform header processing
 /// for type aliases like [Model : model] in the requires clause.
@@ -7470,13 +7536,19 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx, env: *Env) std.mem.Allocator.Erro
     defer self.enclosing_func_name = saved_func_name;
 
     // Check the annotation, if it exists
-    const expectation = blk: {
+    var expectation = blk: {
         if (def.annotation) |annotation_idx| {
             break :blk Expected.fromAnnotation(annotation_idx);
         } else {
             break :blk Expected.none();
         }
     };
+    if (self.platform_required_expected_types.get(def_idx)) |required| {
+        expectation = expectation.withType(.{
+            .var_ = required.var_,
+            .context = .{ .platform_requirement = .{ .required_ident = required.required_ident } },
+        });
+    }
 
     self.empirical_exhaustiveness_depth += 1;
     defer self.empirical_exhaustiveness_depth -= 1;
@@ -8823,7 +8895,13 @@ fn setBuiltinTypeContent(
 // types //
 
 const Expected = struct {
+    const Type = struct {
+        var_: Var,
+        context: problem.Context,
+    };
+
     annotation: ?CIR.Annotation.Idx = null,
+    type_: ?Type = null,
     branch_result: ?Var = null,
     return_result: ?Var = null,
     comptime_condition_warnings: enum { emit, suppress } = .emit,
@@ -8839,6 +8917,17 @@ const Expected = struct {
     fn withAnnotation(self: Expected, annotation_idx: CIR.Annotation.Idx) Expected {
         return .{
             .annotation = annotation_idx,
+            .type_ = self.type_,
+            .branch_result = self.branch_result,
+            .return_result = self.return_result,
+            .comptime_condition_warnings = self.comptime_condition_warnings,
+        };
+    }
+
+    fn withType(self: Expected, type_: Type) Expected {
+        return .{
+            .annotation = self.annotation,
+            .type_ = type_,
             .branch_result = self.branch_result,
             .return_result = self.return_result,
             .comptime_condition_warnings = self.comptime_condition_warnings,
@@ -8848,6 +8937,7 @@ const Expected = struct {
     fn withBranchResult(self: Expected, branch_result: Var) Expected {
         return .{
             .annotation = self.annotation,
+            .type_ = self.type_,
             .branch_result = branch_result,
             .return_result = self.return_result orelse branch_result,
             .comptime_condition_warnings = self.comptime_condition_warnings,
@@ -8881,6 +8971,7 @@ const Expected = struct {
     fn suppressComptimeConditionWarnings(self: Expected) Expected {
         return .{
             .annotation = self.annotation,
+            .type_ = self.type_,
             .branch_result = self.branch_result,
             .return_result = self.return_result,
             .comptime_condition_warnings = .suppress,
@@ -9658,10 +9749,24 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             break :blk .{ expr_var_raw, null };
         }
 
+        const expected_type_var: ?Var = if (expected.type_) |expected_type|
+            try self.instantiateVarOrphan(
+                expected_type.var_,
+                env,
+                env.rank(),
+                .use_last_var,
+            )
+        else
+            null;
+
         if (expected.annotation) |annotation_idx| {
             // Generate the type for the annotation
             try self.generateAnnotationType(annotation_idx, env);
             const anno_var = ModuleEnv.varFrom(annotation_idx);
+
+            if (expected_type_var) |type_var| {
+                _ = try self.unifyInContext(type_var, anno_var, env, expected.type_.?.context);
+            }
 
             // Copy/paste the variable. This will be used if the expr errors to
             // preserve the type annotation for places that reference this def.
@@ -9674,7 +9779,28 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
 
             break :blk .{
                 try self.fresh(env, expr_region),
-                .{ .anno_var = anno_var, .anno_var_backup = anno_var_backup },
+                .{
+                    .anno_var = anno_var,
+                    .anno_var_backup = anno_var_backup,
+                    .context = .type_annotation,
+                },
+            };
+        } else if (expected.type_) |expected_type| {
+            const type_var = expected_type_var.?;
+            const type_var_backup = try self.instantiateVarOrphan(
+                type_var,
+                env,
+                env.rank(),
+                .use_last_var,
+            );
+
+            break :blk .{
+                try self.fresh(env, expr_region),
+                .{
+                    .anno_var = type_var,
+                    .anno_var_backup = type_var_backup,
+                    .context = expected_type.context,
+                },
             };
         } else {
             break :blk .{ expr_var_raw, null };
@@ -11388,7 +11514,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
     // Check if we have an annotation
     if (mb_anno_vars) |anno_vars| {
         // Unify the anno with the expr var
-        _ = try self.unifyInContext(anno_vars.anno_var, expr_var, env, .type_annotation);
+        _ = try self.unifyInContext(anno_vars.anno_var, expr_var, env, anno_vars.context);
 
         // Check if the expression type contains any errors anywhere in its
         // structure. If it does and we have an annotation, use the annotation
@@ -11882,7 +12008,11 @@ fn isExprNodeTag(tag: CIR.Node.Tag) bool {
     return Ident.textStartsWith(@tagName(tag), "expr_");
 }
 
-const AnnoVars = struct { anno_var: Var, anno_var_backup: Var };
+const AnnoVars = struct {
+    anno_var: Var,
+    anno_var_backup: Var,
+    context: problem.Context,
+};
 
 /// Check if an expression represents a function definition that should be generalized.
 /// This includes lambdas and function declarations (even those without bodies).

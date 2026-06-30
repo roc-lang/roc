@@ -350,6 +350,8 @@ pub const ModuleState = struct {
     imports: std.ArrayList(ModuleId),
     /// External imports (qualified names like "pf.Stdout")
     external_imports: std.ArrayList([]const u8),
+    /// Platform root whose requires entries constrain this app before checking.
+    platform_requirement_dependency: ?ModuleRef,
     /// Modules that depend on this one (for waking dependents)
     dependents: std.ArrayList(ModuleId),
     /// Transitive local imports known for this module.
@@ -381,6 +383,7 @@ pub const ModuleState = struct {
             .phase = .Parse,
             .imports = std.ArrayList(ModuleId).empty,
             .external_imports = std.ArrayList([]const u8).empty,
+            .platform_requirement_dependency = null,
             .dependents = std.ArrayList(ModuleId).empty,
             .reachable_local_imports = .{},
             .reports = std.ArrayList(Report).empty,
@@ -1298,7 +1301,25 @@ pub const Coordinator = struct {
         pf_pkg.modules.items[pf_module_id].depth = 1;
         pf_pkg.remaining_modules += 1;
         self.total_remaining += 1;
+
+        try self.setPlatformRequirementDependency(app_pkg, pf_pkg, pf_module_id);
+
         try self.enqueueParseTask("pf", pf_module_id);
+    }
+
+    pub fn setPlatformRequirementDependency(
+        self: *Coordinator,
+        app_pkg: *PackageState,
+        platform_pkg: *PackageState,
+        platform_module_id: ModuleId,
+    ) Allocator.Error!void {
+        const app_root_module_id = app_pkg.root_module_id orelse return;
+        const app_root = app_pkg.getModule(app_root_module_id).?;
+        app_root.platform_requirement_dependency = .{
+            .pkg_name = platform_pkg.name,
+            .module_id = platform_module_id,
+        };
+        try self.registerCrossPackageDependent(platform_pkg.name, platform_module_id, app_pkg.name, app_root_module_id);
     }
 
     /// Register a non-platform package and (optionally) wire a shorthand on
@@ -1602,6 +1623,25 @@ pub const Coordinator = struct {
         }
 
         return try views.toOwnedSlice(allocator);
+    }
+
+    fn platformRequirementArtifactForTypecheck(
+        self: *Coordinator,
+        mod: *ModuleState,
+    ) ?*const check.CheckedArtifact.CheckedModuleArtifact {
+        const env = mod.moduleEnv() orelse return null;
+        switch (env.module_kind) {
+            .app, .default_app => {},
+            .type_module,
+            .package,
+            .platform,
+            .hosted,
+            .module,
+            .malformed,
+            => return null,
+        }
+        const platform_root = self.findRootModule(.platform) orelse return null;
+        return platform_root.mod.checkedArtifact();
     }
 
     fn appendTypecheckAvailablePublicApiClosure(
@@ -2223,27 +2263,8 @@ pub const Coordinator = struct {
         const platform_declaration_artifact = platform_root.mod.checkedArtifact() orelse return;
         const requirement_context = check.CheckedArtifact.platformRequirementContextKey(platform_declaration_artifact);
 
-        const original_app_artifact = app_root.mod.checkedArtifact() orelse return;
-        var validation_snapshot = try PlatformRequiredValidationSnapshot.init(self.gpa, original_app_artifact);
-        defer validation_snapshot.deinit(self.gpa);
-
-        try self.appendPlatformRequiredInvalidNumericExpressionReports(app_root.mod, original_app_artifact, platform_declaration_artifact);
-        if (self.hasUserErrors() and !allow_user_errors) return;
-
-        try self.republishCheckedArtifact(app_root.pkg, app_root.mod, .{
-            .platform_requirement_artifact = check.CheckedArtifact.importedView(platform_declaration_artifact),
-            .platform_requirement_context = requirement_context,
-        });
-
-        const app_artifact = app_root.mod.checkedArtifact() orelse {
-            if (builtin.mode == .Debug) {
-                std.debug.panic("compile.coordinator.finalizeExecutableArtifacts missing app artifact after co-finalization", .{});
-            }
-            unreachable;
-        };
-        try self.appendPlatformRequiredUnresolvedDispatchReports(app_root.mod, app_artifact, &validation_snapshot);
-        try self.appendPlatformRequiredInvalidNumericPatternReports(app_root.mod, app_artifact, &validation_snapshot);
-        if (self.hasUserErrors() and !allow_user_errors) return;
+        const app_artifact = app_root.mod.checkedArtifact() orelse return;
+        self.assertAppCheckedWithPlatformRequirement(app_artifact, requirement_context);
 
         var relation_result = try check.CheckedArtifact.buildPlatformAppRelation(
             self.gpa,
@@ -2300,27 +2321,8 @@ pub const Coordinator = struct {
         const platform_declaration_artifact = platform_root.mod.checkedArtifact() orelse return;
         const requirement_context = check.CheckedArtifact.platformRequirementContextKey(platform_declaration_artifact);
 
-        const original_app_artifact = app_root.mod.checkedArtifact() orelse return;
-        var validation_snapshot = try PlatformRequiredValidationSnapshot.init(self.gpa, original_app_artifact);
-        defer validation_snapshot.deinit(self.gpa);
-
-        try self.appendPlatformRequiredInvalidNumericExpressionReports(app_root.mod, original_app_artifact, platform_declaration_artifact);
-        if (self.hasUserErrors()) return;
-
-        try self.republishCheckedArtifact(app_root.pkg, app_root.mod, .{
-            .platform_requirement_artifact = check.CheckedArtifact.importedView(platform_declaration_artifact),
-            .platform_requirement_context = requirement_context,
-        });
-
-        const app_artifact = app_root.mod.checkedArtifact() orelse {
-            if (builtin.mode == .Debug) {
-                std.debug.panic("compile.coordinator.validatePlatformAppRelationsForCheck missing app artifact after co-finalization", .{});
-            }
-            unreachable;
-        };
-        try self.appendPlatformRequiredUnresolvedDispatchReports(app_root.mod, app_artifact, &validation_snapshot);
-        try self.appendPlatformRequiredInvalidNumericPatternReports(app_root.mod, app_artifact, &validation_snapshot);
-        if (self.hasUserErrors()) return;
+        const app_artifact = app_root.mod.checkedArtifact() orelse return;
+        self.assertAppCheckedWithPlatformRequirement(app_artifact, requirement_context);
 
         var relation_result = try check.CheckedArtifact.buildPlatformAppRelation(
             self.gpa,
@@ -2343,6 +2345,20 @@ pub const Coordinator = struct {
                 platform_declaration_artifact,
                 missing,
             ),
+        }
+    }
+
+    fn assertAppCheckedWithPlatformRequirement(
+        self: *Coordinator,
+        app_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+        requirement_context: check.CheckedArtifact.PlatformRequirementContextKey,
+    ) void {
+        _ = self;
+        const artifact_context = app_artifact.checking_context_identity.platform_requirement_context orelse {
+            coordinatorInvariant("app artifact was not checked with the platform-required signature", .{});
+        };
+        if (!std.mem.eql(u8, &artifact_context.bytes, &requirement_context.bytes)) {
+            coordinatorInvariant("app artifact was checked with a different platform-required signature", .{});
         }
     }
 
@@ -3677,6 +3693,7 @@ pub const Coordinator = struct {
         env: *ModuleEnv,
         imported_envs: []const *ModuleEnv,
         imported_artifacts: []const check.CheckedArtifact.PublishImportArtifact,
+        platform_requirement_context: ?check.CheckedArtifact.PlatformRequirementContextKey,
         explicit_roots: []const check.CheckedArtifact.ExplicitRootRequestInput,
     ) Allocator.Error!check.CheckedArtifact.CheckedModuleArtifactKey {
         var typed = try CheckedModules.initForRootModule(self.gpa, env, imported_envs);
@@ -3688,6 +3705,7 @@ pub const Coordinator = struct {
             typed.module_idx,
             .{
                 .imports = imported_artifacts,
+                .platform_requirement_context = platform_requirement_context,
                 .explicit_roots = explicit_roots,
             },
         );
@@ -3769,6 +3787,7 @@ pub const Coordinator = struct {
         mod: *ModuleState,
         imported_envs: []const *ModuleEnv,
         imported_artifacts: []const check.CheckedArtifact.PublishImportArtifact,
+        platform_requirement_context: ?check.CheckedArtifact.PlatformRequirementContextKey,
         explicit_roots: []const check.CheckedArtifact.ExplicitRootRequestInput,
     ) bool {
         const manager = self.cache_manager orelse return false;
@@ -3776,7 +3795,13 @@ pub const Coordinator = struct {
 
         const current_env = mod.moduleEnv() orelse return false;
         if (!resolvedDirectImportsHaveCheckedOutput(current_env, imported_artifacts)) return false;
-        const cache_key = self.checkedModuleCacheKey(current_env, imported_envs, imported_artifacts, explicit_roots) catch return false;
+        const cache_key = self.checkedModuleCacheKey(
+            current_env,
+            imported_envs,
+            imported_artifacts,
+            platform_requirement_context,
+            explicit_roots,
+        ) catch return false;
 
         return self.installCachedCheckedArtifact(pkg, mod, cache_key, current_env);
     }
@@ -4209,13 +4234,39 @@ pub const Coordinator = struct {
         errdefer task_payload_alloc.free(imported_envs);
         const imported_artifacts = try self.buildTypecheckImportedArtifacts(pkg, mod, task_payload_alloc);
         errdefer task_payload_alloc.free(imported_artifacts);
-        const available_artifacts = try self.collectTypecheckAvailableArtifactViews(task_payload_alloc, imported_artifacts);
+        var available_artifacts = try self.collectTypecheckAvailableArtifactViews(task_payload_alloc, imported_artifacts);
         errdefer task_payload_alloc.free(available_artifacts);
         const explicit_roots = try buildExplicitRootRequests(mod, task_payload_alloc);
         errdefer task_payload_alloc.free(explicit_roots);
 
+        var platform_requirement_artifact: ?*const check.CheckedArtifact.CheckedModuleArtifact = null;
+        var platform_requirement_context: ?check.CheckedArtifact.PlatformRequirementContextKey = null;
+        if (self.platformRequirementArtifactForTypecheck(mod)) |platform_artifact| {
+            const platform_view = check.CheckedArtifact.importedView(platform_artifact);
+            var extended_available = std.ArrayList(check.CheckedArtifact.ImportedModuleView).empty;
+            errdefer extended_available.deinit(task_payload_alloc);
+            try extended_available.appendSlice(task_payload_alloc, available_artifacts);
+            try self.appendTypecheckAvailablePublicApiClosure(
+                &extended_available,
+                task_payload_alloc,
+                platform_view,
+            );
+            const old_available = available_artifacts;
+            available_artifacts = try extended_available.toOwnedSlice(task_payload_alloc);
+            task_payload_alloc.free(old_available);
+            platform_requirement_artifact = platform_artifact;
+            platform_requirement_context = check.CheckedArtifact.platformRequirementContextKey(platform_artifact);
+        }
+
         if (mod.reports.items.len == 0 and
-            self.tryLoadCachedCheckedModule(pkg, mod, imported_envs, imported_artifacts, explicit_roots))
+            self.tryLoadCachedCheckedModule(
+                pkg,
+                mod,
+                imported_envs,
+                imported_artifacts,
+                platform_requirement_context,
+                explicit_roots,
+            ))
         {
             task_payload_alloc.free(imported_envs);
             task_payload_alloc.free(imported_artifacts);
@@ -4237,6 +4288,8 @@ pub const Coordinator = struct {
                 .imported_envs = imported_envs,
                 .imported_artifacts = imported_artifacts,
                 .available_artifacts = available_artifacts,
+                .platform_requirement_artifact = platform_requirement_artifact,
+                .platform_requirement_context = platform_requirement_context,
                 .explicit_roots = explicit_roots,
             },
         });
@@ -4690,6 +4743,17 @@ pub const Coordinator = struct {
             if (!self.isExternalReady(pkg.name, ext_name)) {
                 if (comptime trace_build) {
                     std.debug.print("[COORD] UNBLOCK WAIT: pkg={s} module={s} waiting on external {s}\n", .{ pkg.name, mod.name, ext_name });
+                }
+                return;
+            }
+        }
+
+        if (mod.platform_requirement_dependency) |dependency| {
+            const dependency_pkg = self.packages.get(dependency.pkg_name) orelse return;
+            const dependency_mod = dependency_pkg.getModule(dependency.module_id) orelse return;
+            if (dependency_mod.phase != .Done) {
+                if (comptime trace_build) {
+                    std.debug.print("[COORD] UNBLOCK WAIT: pkg={s} module={s} waiting on platform requirement {s}:{}\n", .{ pkg.name, mod.name, dependency.pkg_name, dependency.module_id });
                 }
                 return;
             }
@@ -5162,6 +5226,10 @@ pub const Coordinator = struct {
         // Keep those allocations with the published result instead of the
         // task-local scratch arena, which is reset after the worker task.
         const check_alloc = result_alloc;
+        const platform_requirement_artifact = if (task.platform_requirement_artifact) |artifact|
+            check.CheckedArtifact.importedView(artifact)
+        else
+            null;
         var typecheck_output = try compile_package.PackageEnv.typeCheckModule(
             check_alloc,
             result_alloc,
@@ -5170,6 +5238,8 @@ pub const Coordinator = struct {
             task.imported_envs,
             task.imported_artifacts,
             task.available_artifacts,
+            platform_requirement_artifact,
+            task.platform_requirement_context,
             task.explicit_roots,
         );
         defer typecheck_output.deinit();
