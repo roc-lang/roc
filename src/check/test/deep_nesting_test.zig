@@ -22,11 +22,11 @@
 //!
 //! If the `e_block` final_expr spine ever stops being walked iteratively, thousands
 //! of final_expr-nested blocks overflow the native stack (SIGSEGV via the
-//! compiler-rt stack probe) — long before the interim depth guard
-//! (`MAX_CHECK_RECURSION_DEPTH`) can convert it into a returned `error.OutOfMemory`.
-//! The shape-1 test guards against exactly that: do NOT weaken it or the depth
-//! guard to "fix" such a regression — its job is to fail loudly if the spine stops
-//! being iterative.
+//! compiler-rt stack probe). There is NO depth guard in the checker (see the note
+//! at the top of `Check.zig`): the iterative final_expr spine IS the protection
+//! for the common deep case, so the shape-1 test guards exactly that — do NOT
+//! weaken it to "fix" such a regression; its job is to fail loudly if the spine
+//! stops being iterative.
 //!
 //! ## Measured ceilings (this codebase, native stack)
 //!
@@ -153,6 +153,46 @@ test "deep nesting: statement-nested blocks (partial coverage)" {
     // depth that overflows would crash the whole test runner, not just this test.
     // Reifying checkBlockStatements onto the work stack would make this shape O(1),
     // after which the depth could match NESTING_DEPTH.
+    const diags = try test_env.module_env.getDiagnostics();
+    defer test_env.gpa.free(diags);
+}
+
+/// Depth for the deep binop-chain stress program (a third O(depth) native spine,
+/// distinct from the two block shapes above). A left-associative
+/// `1 + 1 + 1 + ...` nests as `((1 + 1) + 1) + ...`; checking the outer `e_binop`
+/// runs `checkBinopExpr`, which re-enters `checkExpr -> checkExprIter` for each
+/// operand, so each operator adds a native frame. There is no depth guard, so
+/// this is kept well under the native crash floor: it is a floor guard that the
+/// iterative driver checks a reasonably deep binop chain to completion without
+/// crashing. (Like statement nesting, a pathologically deep chain would SIGSEGV;
+/// do NOT raise this toward that ceiling — an overflow crashes the whole runner.)
+const BINOP_CHAIN_DEPTH: usize = 150;
+
+/// Build `main! = |_args| 1 + 1 + 1 + ... ` with `depth` additions — a single
+/// left-associative binop chain `depth` operators deep.
+fn binopChain(gpa: std.mem.Allocator, depth: usize) ![]u8 {
+    var buf = std.ArrayList(u8).empty;
+    errdefer buf.deinit(gpa);
+    try buf.appendSlice(gpa, "main! = |_args| 1");
+    var i: usize = 0;
+    while (i < depth) : (i += 1) try buf.appendSlice(gpa, " + 1");
+    try buf.appendSlice(gpa, "\n");
+    return buf.toOwnedSlice(gpa);
+}
+
+test "deep nesting: deep binop chain checks without native stack overflow" {
+    const gpa = std.testing.allocator;
+    const src = try binopChain(gpa, BINOP_CHAIN_DEPTH);
+    defer gpa.free(src);
+
+    // The binop chain is O(depth) native stack (checkBinopExpr -> checkExpr ->
+    // checkExprIter per operator). This is a FLOOR guard: it proves the iterative
+    // driver checks a reasonably deep binop chain (well under the native crash
+    // floor) to completion without crashing. Do NOT raise toward that floor — a
+    // pathologically deep chain SIGSEGVs the whole runner (there is no depth
+    // guard; see the note at the top of Check.zig).
+    var test_env = try TestEnv.init("DeepBinop", src);
+    defer test_env.deinit();
     const diags = try test_env.module_env.getDiagnostics();
     defer test_env.gpa.free(diags);
 }

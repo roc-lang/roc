@@ -205,23 +205,9 @@ pub fn init(module_name: []const u8, source: []const u8) TestEnvError!TestEnv {
     return initWithExecutableRootNames(module_name, source, &.{});
 }
 
-/// Like `init`, but forces the checker into pure-recursive mode when
-/// `force_recursive` is true (escape-hatches every kind in checkExprIter).
-/// Used by the two-pass differential harness.
-pub fn initWithMode(module_name: []const u8, source: []const u8, force_recursive: bool) TestEnvError!TestEnv {
-    return initWithExecutableRootNamesAndMode(module_name, source, &.{}, force_recursive);
-}
-
 /// Initialize a source file and mark selected top-level defs as executable
 /// zero-arg roots for checker validation.
 pub fn initWithExecutableRootNames(module_name: []const u8, source: []const u8, explicit_root_names: []const []const u8) TestEnvError!TestEnv {
-    return initWithExecutableRootNamesAndMode(module_name, source, explicit_root_names, false);
-}
-
-/// Shared implementation for the `init*` helpers: selects executable roots via
-/// `explicit_root_names` and, when `force_recursive` is true, forces the checker
-/// down the pure-recursive path (used by the differential harness).
-fn initWithExecutableRootNamesAndMode(module_name: []const u8, source: []const u8, explicit_root_names: []const []const u8, force_recursive: bool) TestEnvError!TestEnv {
     const gpa = std.testing.allocator;
 
     const roc_ctx = CoreCtx.testing(gpa, gpa);
@@ -311,7 +297,6 @@ fn initWithExecutableRootNamesAndMode(module_name: []const u8, source: []const u
         module_builtin_ctx,
     );
     checker.fixupTypeWriter();
-    checker.force_recursive = force_recursive;
     for (explicit_root_names) |root_name| {
         const root_def_idx = can.explicitRootDefByName(root_name) orelse {
             if (@import("builtin").mode == .Debug) {
