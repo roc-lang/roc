@@ -861,8 +861,14 @@ const Lowerer = struct {
         defer self.result.store.current_loc = saved_loc;
         const saved_region = self.result.store.current_region;
         defer self.result.store.current_region = saved_region;
-        self.result.store.current_loc = self.program.exprLoc(expr_id);
-        self.result.store.current_region = self.program.exprRegion(expr_id);
+        const expr_loc = self.program.exprLoc(expr_id);
+        if (expr_loc.hasLocation()) {
+            self.result.store.current_loc = expr_loc;
+        }
+        const expr_region = self.program.exprRegion(expr_id);
+        if (!expr_region.isEmpty()) {
+            self.result.store.current_region = expr_region;
+        }
         return switch (expr_data.data) {
             .local => |local| try self.assignLocal(target, try self.localFor(local), next),
             .unit => try self.assignZst(target, next),
@@ -2210,8 +2216,14 @@ const Lowerer = struct {
         defer self.result.store.current_loc = saved_loc;
         const saved_region = self.result.store.current_region;
         defer self.result.store.current_region = saved_region;
-        self.result.store.current_loc = self.program.stmtLoc(stmt_id);
-        self.result.store.current_region = self.program.stmtRegion(stmt_id);
+        const stmt_loc = self.program.stmtLoc(stmt_id);
+        if (stmt_loc.hasLocation()) {
+            self.result.store.current_loc = stmt_loc;
+        }
+        const stmt_region = self.program.stmtRegion(stmt_id);
+        if (!stmt_region.isEmpty()) {
+            self.result.store.current_region = stmt_region;
+        }
         return switch (self.program.stmts.items[@intFromEnum(stmt_id)]) {
             .uninitialized => |pat_id| try self.initUninitializedPattern(pat_id, next),
             .let_ => |let_| blk: {
