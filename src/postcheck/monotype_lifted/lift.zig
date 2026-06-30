@@ -22,6 +22,8 @@ pub fn run(
     owned.names = @import("check").CheckedNames.NameStore.init(allocator);
     var types = owned.types;
     owned.types = @import("../monotype/type.zig").Store.init(allocator);
+    var imported_fns = owned.imported_fns;
+    owned.imported_fns = .empty;
     var exprs = owned.exprs;
     owned.exprs = .empty;
     var pats = owned.pats;
@@ -75,6 +77,7 @@ pub fn run(
         allocator,
         name_store,
         types,
+        imported_fns,
         exprs,
         pats,
         stmts,
@@ -102,6 +105,7 @@ pub fn run(
     );
     name_store = undefined;
     types = undefined;
+    imported_fns = undefined;
     exprs = undefined;
     pats = undefined;
     stmts = undefined;
@@ -128,7 +132,8 @@ pub fn run(
     runtime_schema_requests = undefined;
     errdefer program.deinit();
 
-    var lifter = try Lifter.init(allocator, &owned, &program);
+    const source_view = movedMonoView(&owned, &program);
+    var lifter = try Lifter.init(allocator, source_view, &program);
     defer lifter.deinit();
 
     try lifter.lowerDefsAndRoots();
@@ -136,6 +141,48 @@ pub fn run(
 
     owned.deinit();
     return program;
+}
+
+/// Build the read-only Monotype input view after side arrays have been moved
+/// into the lifted output program. The source still owns definitions, roots,
+/// and specialization metadata until `run` finishes.
+fn movedMonoView(source: *const Mono.Program, moved: *const Ast.Program) Mono.ProgramView {
+    return .{
+        .names = &moved.names,
+        .types = moved.types.view(),
+        .specs = source.specs.items,
+        .imported_fns = source.imported_fns.items,
+        .fns = source.fns.items,
+        .defs = source.defs.items,
+        .nested_defs = source.nested_defs.items,
+        .exprs = moved.exprs.items,
+        .pats = moved.pats.items,
+        .stmts = moved.stmts.items,
+        .locals = moved.locals.items,
+        .expr_ids = moved.expr_ids.items,
+        .pat_ids = moved.pat_ids.items,
+        .typed_locals = moved.typed_locals.items,
+        .stmt_ids = moved.stmt_ids.items,
+        .field_exprs = moved.field_exprs.items,
+        .fn_def_captures = moved.fn_def_captures.items,
+        .record_destructs = moved.record_destructs.items,
+        .str_pattern_steps = moved.str_pattern_steps.items,
+        .branches = moved.branches.items,
+        .if_branches = moved.if_branches.items,
+        .string_literals = moved.string_literals.items,
+        .proc_debug_names = moved.proc_debug_names.items.items,
+        .roots = source.roots.items,
+        .layout_requests = source.layout_requests.items,
+        .runtime_schema_requests = moved.runtime_schema_requests.items,
+        .comptime_sites = moved.comptime_sites.items,
+        .source_files = moved.source_files.items,
+        .expr_locs = moved.expr_locs.items,
+        .expr_regions = moved.expr_regions.items,
+        .stmt_locs = moved.stmt_locs.items,
+        .stmt_regions = moved.stmt_regions.items,
+        .local_names = moved.local_names.items,
+        .next_symbol = source.next_symbol,
+    };
 }
 
 /// Recompute every lifted function's capture span from the current function
@@ -164,7 +211,7 @@ const MonoFnBody = struct {
 
 const Lifter = struct {
     allocator: Allocator,
-    source: *const Mono.Program,
+    source: Mono.ProgramView,
     output: *Ast.Program,
     expr_done: []bool,
     stmt_done: []bool,
@@ -182,7 +229,7 @@ const Lifter = struct {
     /// walking (possibly already-rewritten) bodies.
     fn_captures: []std.ArrayList(Ast.TypedLocal),
 
-    fn init(allocator: Allocator, source: *const Mono.Program, output: *Ast.Program) Allocator.Error!Lifter {
+    fn init(allocator: Allocator, source: Mono.ProgramView, output: *Ast.Program) Allocator.Error!Lifter {
         const expr_done = try allocator.alloc(bool, output.exprCount());
         errdefer allocator.free(expr_done);
         @memset(expr_done, false);
@@ -222,13 +269,13 @@ const Lifter = struct {
     }
 
     fn lowerDefsAndRoots(self: *Lifter) Allocator.Error!void {
-        self.fn_map = try self.allocator.alloc(?Ast.FnId, self.source.fns.items.len);
+        self.fn_map = try self.allocator.alloc(?Ast.FnId, self.source.fns.len);
         @memset(self.fn_map, null);
 
-        self.def_map = try self.allocator.alloc(?Ast.FnId, self.source.defs.items.len);
+        self.def_map = try self.allocator.alloc(?Ast.FnId, self.source.defs.len);
         @memset(self.def_map, null);
 
-        for (self.source.defs.items, 0..) |def, index| {
+        for (self.source.defs, 0..) |def, index| {
             const fn_id: Ast.FnId = @enumFromInt(@as(u32, @intCast(self.output.fns.items.len)));
             try self.output.fns.append(self.allocator, undefined);
             try self.fn_bodies.append(self.allocator, .{ .args = def.args, .body = def.body });
@@ -236,9 +283,9 @@ const Lifter = struct {
             if (def.fn_id) |source_fn_id| self.registerFn(source_fn_id, fn_id);
         }
 
-        self.nested_def_map = try self.allocator.alloc(?Ast.FnId, self.source.nested_defs.items.len);
+        self.nested_def_map = try self.allocator.alloc(?Ast.FnId, self.source.nested_defs.len);
         @memset(self.nested_def_map, null);
-        for (self.source.nested_defs.items, 0..) |def, index| {
+        for (self.source.nested_defs, 0..) |def, index| {
             const fn_id: Ast.FnId = @enumFromInt(@as(u32, @intCast(self.output.fns.items.len)));
             try self.output.fns.append(self.allocator, undefined);
             try self.fn_bodies.append(self.allocator, .{ .args = def.args, .body = .{ .roc = def.body } });
@@ -249,12 +296,12 @@ const Lifter = struct {
 
         try self.computeCaptureFixpoint();
 
-        for (self.source.defs.items, 0..) |def, index| {
+        for (self.source.defs, 0..) |def, index| {
             try self.lowerTopLevelDef(self.def_map[index] orelse
                 Common.invariant("Monotype definition was not reserved before lifting"), def);
         }
 
-        for (self.source.nested_defs.items, 0..) |def, index| {
+        for (self.source.nested_defs, 0..) |def, index| {
             try self.lowerNestedDef(self.nested_def_map[index] orelse
                 Common.invariant("Monotype nested definition was not reserved before lifting"), def);
         }
@@ -267,7 +314,7 @@ const Lifter = struct {
 
         try self.completeFunctionReferenceCaptures();
 
-        for (self.source.roots.items) |root| {
+        for (self.source.roots) |root| {
             const raw = @intFromEnum(root.def);
             if (raw >= self.def_map.len) Common.invariant("Monotype root references a missing definition");
             const fn_id = self.def_map[raw] orelse
@@ -278,7 +325,7 @@ const Lifter = struct {
             });
         }
 
-        for (self.source.layout_requests.items) |request| {
+        for (self.source.layout_requests) |request| {
             const fn_id = if (request.def) |def| blk: {
                 const raw = @intFromEnum(def);
                 if (raw >= self.def_map.len) Common.invariant("Monotype static data layout request references a missing definition");
@@ -310,7 +357,7 @@ const Lifter = struct {
                     } };
                 },
                 .call_proc => |call| {
-                    const fn_id = Ast.callProcCallee(call);
+                    const fn_id = Ast.localDirectCallee(call) orelse continue;
                     const captures = self.output.typedLocalSpan(self.output.fns.items[@intFromEnum(fn_id)].captures);
                     if (captures.len == call.captures.len) continue;
                     if (call.captures.len != 0) Common.invariant("direct call capture operands disagreed with finalized lifted captures");
@@ -441,16 +488,41 @@ const Lifter = struct {
                 for (self.output.exprSpan(call.args)) |arg| try self.rewriteExpr(arg);
             },
             .call_proc => |call| {
-                const fn_id = switch (call.callee) {
-                    .func => |mono_fn_id| self.liftedFn(mono_fn_id),
-                    .lifted => |fn_id| fn_id,
-                };
                 for (self.output.exprSpan(call.args)) |arg| try self.rewriteExpr(arg);
-                const captures = try self.captureExprSpanForFn(fn_id, expr_id);
+                for (self.output.exprSpan(call.captures)) |capture| try self.rewriteExpr(capture);
+                const RewrittenProcCall = struct {
+                    callee: Mono.ProcCallee,
+                    captures: Ast.Span(Ast.ExprId),
+                };
+                const rewritten: RewrittenProcCall = switch (call.callee) {
+                    .func => |slot| switch (slot) {
+                        .local => |mono_fn_id| blk: {
+                            const fn_id = self.liftedFn(mono_fn_id);
+                            break :blk .{
+                                .callee = .{ .lifted = fn_id },
+                                .captures = if (call.captures.len == 0)
+                                    try self.captureExprSpanForFn(fn_id, expr_id)
+                                else
+                                    call.captures,
+                            };
+                        },
+                        .imported => |imported| .{
+                            .callee = .{ .func = .{ .imported = imported } },
+                            .captures = call.captures,
+                        },
+                    },
+                    .lifted => |fn_id| .{
+                        .callee = .{ .lifted = fn_id },
+                        .captures = if (call.captures.len == 0)
+                            try self.captureExprSpanForFn(fn_id, expr_id)
+                        else
+                            call.captures,
+                    },
+                };
                 self.output.exprs.items[index].data = .{ .call_proc = .{
-                    .callee = .{ .lifted = fn_id },
+                    .callee = rewritten.callee,
                     .args = call.args,
-                    .captures = captures,
+                    .captures = rewritten.captures,
                     .is_cold = call.is_cold,
                 } };
             },
@@ -817,15 +889,25 @@ const BoundSet = struct {
 };
 
 fn explicitFnDefCaptureValue(program: *const Ast.Program, captures: []const Ast.FnDefCapture, local: Ast.LocalId) ?Ast.ExprId {
-    const target_binder = program.locals.items[@intFromEnum(local)].binder;
     for (captures) |capture| {
-        if (capture.local == local) return capture.value;
-        const capture_binder = program.locals.items[@intFromEnum(capture.local)].binder;
-        if (target_binder != null and capture_binder != null and target_binder.? == capture_binder.?) {
+        if (fnDefCaptureLocalMatches(program, local, capture.local)) {
             return capture.value;
         }
     }
     return null;
+}
+
+fn fnDefCaptureLocalMatches(program: *const Ast.Program, required: Ast.LocalId, explicit: Ast.LocalId) bool {
+    if (required == explicit) return true;
+
+    const required_local = program.locals.items[@intFromEnum(required)];
+    const explicit_local = program.locals.items[@intFromEnum(explicit)];
+
+    if (required_local.symbol == explicit_local.symbol) return true;
+    if (required_local.binder != null and explicit_local.binder != null and required_local.binder.? == explicit_local.binder.?) return true;
+    if (required_local.capture_id != null and explicit_local.capture_id != null and required_local.capture_id.? == explicit_local.capture_id.?) return true;
+
+    return false;
 }
 
 const CaptureSet = struct {
@@ -944,9 +1026,12 @@ const CaptureSet = struct {
             },
             .call_proc => |call| {
                 switch (call.callee) {
-                    .func => |mono_fn_id| {
-                        const lifter = self.lifter orelse Common.invariant("post-lift capture recomputation saw a pre-lift function call");
-                        try self.collectFnCaptures(lifter.liftedFn(mono_fn_id), bound);
+                    .func => |slot| switch (slot) {
+                        .local => |mono_fn_id| {
+                            const lifter = self.lifter orelse Common.invariant("post-lift capture recomputation saw a pre-lift function call");
+                            try self.collectFnCaptures(lifter.liftedFn(mono_fn_id), bound);
+                        },
+                        .imported => {},
                     },
                     .lifted => |fn_id| try self.collectFnCaptures(fn_id, bound),
                 }
@@ -1150,6 +1235,44 @@ fn shapeContent(types: *const MonoType.Store, ty: MonoType.TypeId) MonoType.Cont
             },
             else => |content| return content,
         }
+    }
+}
+
+test "monotype lifting preserves imported direct call slots" {
+    const allocator = std.testing.allocator;
+    var mono = Mono.Program.init(allocator);
+    errdefer mono.deinit();
+
+    const unit_ty = try mono.types.add(.zst);
+    const imported = try mono.addImportedFn(.{
+        .shard = @enumFromInt(1),
+        .fn_id = @enumFromInt(1),
+    });
+    const body = try mono.addExpr(.{ .ty = unit_ty, .data = .{ .call_proc = .{
+        .callee = Mono.importedProcCallee(imported),
+        .args = Mono.Span(Mono.ExprId).empty(),
+    } } });
+    try mono.defs.append(allocator, .{
+        .symbol = @enumFromInt(1),
+        .args = Mono.Span(Mono.TypedLocal).empty(),
+        .body = .{ .roc = body },
+        .ret = unit_ty,
+    });
+
+    var lifted = try run(allocator, mono);
+    defer lifted.deinit();
+
+    try std.testing.expectEqual(@as(usize, 1), lifted.imported_fns.items.len);
+    const call = switch (lifted.exprs.items[@intFromEnum(body)].data) {
+        .call_proc => |call| call,
+        else => return error.TestUnexpectedResult,
+    };
+    switch (call.callee) {
+        .func => |slot| switch (slot) {
+            .imported => |actual| try std.testing.expectEqual(imported, actual),
+            .local => return error.TestUnexpectedResult,
+        },
+        .lifted => return error.TestUnexpectedResult,
     }
 }
 
