@@ -45,6 +45,7 @@ pub const Problem = union(enum) {
     effectful_expect: EffectfulExpect,
     annotation_only_value: AnnotationOnlyValue,
     hosted_unboxed_function: HostedUnboxedFunction,
+    host_boundary_open_row: HostBoundaryOpenRow,
     platform_def_not_found: PlatformDefNotFound,
     platform_hosted_section: PlatformHostedSection,
     platform_alias_not_found: PlatformAliasNotFound,
@@ -107,6 +108,11 @@ pub const PlatformDefNotFound = struct {
 
 /// Hosted functions cannot accept or return unboxed functions.
 pub const HostedUnboxedFunction = struct {
+    region: base.Region,
+};
+
+/// Host-bound types must not contain open record or tag-union rows.
+pub const HostBoundaryOpenRow = struct {
     region: base.Region,
 };
 

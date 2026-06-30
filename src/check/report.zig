@@ -73,6 +73,7 @@ const PlatformAliasNotFound = problem_mod.PlatformAliasNotFound;
 const PlatformDefNotFound = problem_mod.PlatformDefNotFound;
 const PlatformHostedSection = problem_mod.PlatformHostedSection;
 const HostedUnboxedFunction = problem_mod.HostedUnboxedFunction;
+const HostBoundaryOpenRow = problem_mod.HostBoundaryOpenRow;
 const AnnotationOnlyValue = problem_mod.AnnotationOnlyValue;
 const PolymorphicVarAnnotation = problem_mod.PolymorphicVarAnnotation;
 const EffectfulTopLevel = problem_mod.EffectfulTopLevel;
@@ -859,6 +860,9 @@ pub const ReportBuilder = struct {
             },
             .hosted_unboxed_function => |data| {
                 return self.buildHostedUnboxedFunctionReport(data);
+            },
+            .host_boundary_open_row => |data| {
+                return self.buildHostBoundaryOpenRowReport(data);
             },
             .platform_alias_not_found => |data| {
                 return self.buildPlatformAliasNotFound(data);
@@ -3553,6 +3557,20 @@ pub const ReportBuilder = struct {
             D.bytes("Wrap function types in"),
             D.bytes("Box").withAnnotation(.inline_code),
             D.bytes("when crossing the host boundary."),
+        }, self, &report);
+        return report;
+    }
+
+    fn buildHostBoundaryOpenRowReport(self: *Self, data: HostBoundaryOpenRow) Allocator.Error!Report {
+        var report = try Report.init(self.gpa, "Host Boundary Requires Closed Rows", "Host-bound types cannot contain open record or tag-union rows.", .runtime_error);
+        errdefer report.deinit();
+
+        try self.addSourceHighlightRegion(&report, data.region);
+
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try D.renderSlice(&.{
+            D.bytes("Close every record and tag-union row in this type before it crosses the host boundary."),
         }, self, &report);
         return report;
     }

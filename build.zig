@@ -1670,9 +1670,11 @@ fn createAndRunBuiltinCompiler(
         .imports = &.{
             .{ .name = "base", .module = roc_modules.base },
             .{ .name = "build_options", .module = roc_modules.build_options },
+            .{ .name = "backend", .module = roc_modules.backend },
             .{ .name = "builtins", .module = roc_modules.builtins },
             .{ .name = "can", .module = roc_modules.can },
             .{ .name = "check", .module = roc_modules.check },
+            .{ .name = "collections", .module = roc_modules.collections },
             .{ .name = "layout", .module = roc_modules.layout },
             .{ .name = "lir", .module = roc_modules.lir },
             .{ .name = "sljmp", .module = roc_modules.sljmp },

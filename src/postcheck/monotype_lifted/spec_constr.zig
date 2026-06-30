@@ -1447,8 +1447,10 @@ const Cloner = struct {
         defer self.current_loc = saved_loc;
         const saved_region = self.current_region;
         defer self.current_region = saved_region;
-        self.current_loc = self.pass.program.exprLoc(expr_id);
-        self.current_region = self.pass.program.exprRegion(expr_id);
+        const expr_loc = self.pass.program.exprLoc(expr_id);
+        if (expr_loc.hasLocation()) self.current_loc = expr_loc;
+        const expr_region = self.pass.program.exprRegion(expr_id);
+        if (!expr_region.isEmpty()) self.current_region = expr_region;
         return try self.materialize(try self.cloneExprValue(expr_id));
     }
 
@@ -1457,8 +1459,10 @@ const Cloner = struct {
         defer self.current_loc = saved_loc;
         const saved_region = self.current_region;
         defer self.current_region = saved_region;
-        self.current_loc = self.pass.program.exprLoc(expr_id);
-        self.current_region = self.pass.program.exprRegion(expr_id);
+        const expr_loc = self.pass.program.exprLoc(expr_id);
+        if (expr_loc.hasLocation()) self.current_loc = expr_loc;
+        const expr_region = self.pass.program.exprRegion(expr_id);
+        if (!expr_region.isEmpty()) self.current_region = expr_region;
 
         const expr = self.pass.program.exprs.items[@intFromEnum(expr_id)];
         switch (expr.data) {
@@ -1685,8 +1689,10 @@ const Cloner = struct {
         defer self.current_loc = saved_loc;
         const saved_region = self.current_region;
         defer self.current_region = saved_region;
-        self.current_loc = self.pass.program.exprLoc(expr_id);
-        self.current_region = self.pass.program.exprRegion(expr_id);
+        const expr_loc = self.pass.program.exprLoc(expr_id);
+        if (expr_loc.hasLocation()) self.current_loc = expr_loc;
+        const expr_region = self.pass.program.exprRegion(expr_id);
+        if (!expr_region.isEmpty()) self.current_region = expr_region;
 
         const expr = self.pass.program.exprs.items[@intFromEnum(expr_id)];
         const data: Ast.ExprData = switch (expr.data) {
@@ -2877,8 +2883,10 @@ const Cloner = struct {
         defer self.current_loc = saved_loc;
         const saved_region = self.current_region;
         defer self.current_region = saved_region;
-        self.current_loc = self.pass.program.stmtLoc(stmt_id);
-        self.current_region = self.pass.program.stmtRegion(stmt_id);
+        const stmt_loc = self.pass.program.stmtLoc(stmt_id);
+        if (stmt_loc.hasLocation()) self.current_loc = stmt_loc;
+        const stmt_region = self.pass.program.stmtRegion(stmt_id);
+        if (!stmt_region.isEmpty()) self.current_region = stmt_region;
 
         const stmt = self.pass.program.stmts.items[@intFromEnum(stmt_id)];
         return try self.addStmt(switch (stmt) {
