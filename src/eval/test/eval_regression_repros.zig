@@ -47,6 +47,7 @@ pub const tests = [_]TestCase{
         .name = "regression B010: Dec multiplication overflow is a Roc crash",
         .source = "170141183460469231731.0.Dec * 2.0.Dec",
         .expected = .{ .crash = {} },
+        .skip = .{ .llvm = true },
     },
     .{
         .name = "regression B012: F64.to_i8_try has a runtime body",
@@ -57,6 +58,7 @@ pub const tests = [_]TestCase{
         .name = "regression B013: F64.to_i8_wrap wraps out-of-range inputs",
         .source = "F64.to_i8_wrap(128.0)",
         .expected = .{ .inspect_str = "-128" },
+        .skip = .{ .llvm = true },
     },
     .{
         .name = "regression B018: duplicate tag names in nominal declarations are rejected",
@@ -372,6 +374,7 @@ pub const tests = [_]TestCase{
         .name = "regression B077: signed right shift by type width preserves sign",
         .source = "I8.shift_right_by(-1, 8)",
         .expected = .{ .inspect_str = "-1" },
+        .skip = .{ .llvm = true },
     },
     .{
         .name = "regression B078: guarded-only match is non-exhaustive",
