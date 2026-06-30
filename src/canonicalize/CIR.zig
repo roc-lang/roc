@@ -26,7 +26,7 @@ pub const TypeAnno = @import("TypeAnnotation.zig").TypeAnno;
 pub const Diagnostic = @import("Diagnostic.zig").Diagnostic;
 
 /// Indices of builtin type declarations within the Builtin module.
-/// Loaded once at startup from builtin_indices.bin (generated at build time).
+/// Generated at build time into typed static data embedded in the compiler.
 /// Contains both statement indices (positions within Builtin.bin) and ident indices
 /// (interned identifiers for comparison without string lookups).
 pub const BuiltinIndices = struct {
@@ -96,21 +96,130 @@ pub const BuiltinIndices = struct {
     /// Convert a nominal type's ident to a NumKind, if it's a builtin numeric type.
     /// This allows direct ident comparison instead of string comparison for type identification.
     pub fn numKindFromIdent(self: BuiltinIndices, ident: Ident.Idx) ?NumKind {
-        if (ident.eql(self.u8_ident)) return .u8;
-        if (ident.eql(self.i8_ident)) return .i8;
-        if (ident.eql(self.u16_ident)) return .u16;
-        if (ident.eql(self.i16_ident)) return .i16;
-        if (ident.eql(self.u32_ident)) return .u32;
-        if (ident.eql(self.i32_ident)) return .i32;
-        if (ident.eql(self.u64_ident)) return .u64;
-        if (ident.eql(self.i64_ident)) return .i64;
-        if (ident.eql(self.u128_ident)) return .u128;
-        if (ident.eql(self.i128_ident)) return .i128;
-        if (ident.eql(self.f32_ident)) return .f32;
-        if (ident.eql(self.f64_ident)) return .f64;
-        if (ident.eql(self.dec_ident)) return .dec;
+        inline for (builtin_type_specs) |spec| {
+            if (spec.num_kind) |num_kind| {
+                if (ident.eql(@field(self, spec.ident_field))) return num_kind;
+            }
+        }
         return null;
     }
+};
+
+/// How the builtin compiler should locate a type declaration in Builtin.roc.
+pub const BuiltinTypeLookup = union(enum) {
+    top_level: []const u8,
+    nested: struct {
+        parent: []const u8,
+        name: []const u8,
+    },
+    qualified: []const u8,
+};
+
+/// Static registry entry describing one builtin type that the compiler needs by index.
+pub const BuiltinTypeSpec = struct {
+    display_name: []const u8,
+    qualified_name: []const u8,
+    type_field: []const u8,
+    ident_field: []const u8,
+    lookup: BuiltinTypeLookup,
+    num_kind: ?NumKind = null,
+    auto_import: bool = true,
+};
+
+/// Ordered builtin type registry shared by builtin generation and runtime validation.
+pub const builtin_type_specs = [_]BuiltinTypeSpec{
+    .{ .display_name = "Bool", .qualified_name = "Builtin.Bool", .type_field = "bool_type", .ident_field = "bool_ident", .lookup = .{ .top_level = "Bool" } },
+    .{ .display_name = "Try", .qualified_name = "Builtin.Try", .type_field = "try_type", .ident_field = "try_ident", .lookup = .{ .top_level = "Try" } },
+    .{ .display_name = "Dict", .qualified_name = "Builtin.Dict", .type_field = "dict_type", .ident_field = "dict_ident", .lookup = .{ .top_level = "Dict" } },
+    .{ .display_name = "Set", .qualified_name = "Builtin.Set", .type_field = "set_type", .ident_field = "set_ident", .lookup = .{ .top_level = "Set" } },
+    .{ .display_name = "Str", .qualified_name = "Builtin.Str", .type_field = "str_type", .ident_field = "str_ident", .lookup = .{ .top_level = "Str" } },
+    .{ .display_name = "Hasher", .qualified_name = "Builtin.Hasher", .type_field = "hasher_type", .ident_field = "hasher_ident", .lookup = .{ .top_level = "Hasher" } },
+    .{ .display_name = "Iter", .qualified_name = "Builtin.Iter", .type_field = "iter_type", .ident_field = "iter_ident", .lookup = .{ .top_level = "Iter" } },
+    .{ .display_name = "Stream", .qualified_name = "Builtin.Stream", .type_field = "stream_type", .ident_field = "stream_ident", .lookup = .{ .top_level = "Stream" } },
+    .{ .display_name = "List", .qualified_name = "Builtin.List", .type_field = "list_type", .ident_field = "list_ident", .lookup = .{ .top_level = "List" } },
+    .{ .display_name = "Box", .qualified_name = "Builtin.Box", .type_field = "box_type", .ident_field = "box_ident", .lookup = .{ .top_level = "Box" } },
+    .{ .display_name = "ParseTagUnionSpec", .qualified_name = "Builtin.Str.ParseTagUnionSpec", .type_field = "parse_tag_union_spec_type", .ident_field = "parse_tag_union_spec_ident", .lookup = .{ .nested = .{ .parent = "Str", .name = "ParseTagUnionSpec" } } },
+    .{ .display_name = "FieldNames", .qualified_name = "Builtin.Str.FieldName.FieldNames", .type_field = "fields_type", .ident_field = "fields_ident", .lookup = .{ .qualified = "Builtin.Str.FieldName.FieldNames" }, .auto_import = false },
+    .{ .display_name = "FieldName", .qualified_name = "Builtin.Str.FieldName", .type_field = "field_type", .ident_field = "field_ident", .lookup = .{ .qualified = "Builtin.Str.FieldName" }, .auto_import = false },
+    .{ .display_name = "Utf8Problem", .qualified_name = "Builtin.Str.Utf8Problem", .type_field = "utf8_problem_type", .ident_field = "utf8_problem_ident", .lookup = .{ .nested = .{ .parent = "Str", .name = "Utf8Problem" } } },
+    .{ .display_name = "U8", .qualified_name = "Builtin.Num.U8", .type_field = "u8_type", .ident_field = "u8_ident", .lookup = .{ .nested = .{ .parent = "Num", .name = "U8" } }, .num_kind = .u8 },
+    .{ .display_name = "I8", .qualified_name = "Builtin.Num.I8", .type_field = "i8_type", .ident_field = "i8_ident", .lookup = .{ .nested = .{ .parent = "Num", .name = "I8" } }, .num_kind = .i8 },
+    .{ .display_name = "U16", .qualified_name = "Builtin.Num.U16", .type_field = "u16_type", .ident_field = "u16_ident", .lookup = .{ .nested = .{ .parent = "Num", .name = "U16" } }, .num_kind = .u16 },
+    .{ .display_name = "I16", .qualified_name = "Builtin.Num.I16", .type_field = "i16_type", .ident_field = "i16_ident", .lookup = .{ .nested = .{ .parent = "Num", .name = "I16" } }, .num_kind = .i16 },
+    .{ .display_name = "U32", .qualified_name = "Builtin.Num.U32", .type_field = "u32_type", .ident_field = "u32_ident", .lookup = .{ .nested = .{ .parent = "Num", .name = "U32" } }, .num_kind = .u32 },
+    .{ .display_name = "I32", .qualified_name = "Builtin.Num.I32", .type_field = "i32_type", .ident_field = "i32_ident", .lookup = .{ .nested = .{ .parent = "Num", .name = "I32" } }, .num_kind = .i32 },
+    .{ .display_name = "U64", .qualified_name = "Builtin.Num.U64", .type_field = "u64_type", .ident_field = "u64_ident", .lookup = .{ .nested = .{ .parent = "Num", .name = "U64" } }, .num_kind = .u64 },
+    .{ .display_name = "I64", .qualified_name = "Builtin.Num.I64", .type_field = "i64_type", .ident_field = "i64_ident", .lookup = .{ .nested = .{ .parent = "Num", .name = "I64" } }, .num_kind = .i64 },
+    .{ .display_name = "U128", .qualified_name = "Builtin.Num.U128", .type_field = "u128_type", .ident_field = "u128_ident", .lookup = .{ .nested = .{ .parent = "Num", .name = "U128" } }, .num_kind = .u128 },
+    .{ .display_name = "I128", .qualified_name = "Builtin.Num.I128", .type_field = "i128_type", .ident_field = "i128_ident", .lookup = .{ .nested = .{ .parent = "Num", .name = "I128" } }, .num_kind = .i128 },
+    .{ .display_name = "Dec", .qualified_name = "Builtin.Num.Dec", .type_field = "dec_type", .ident_field = "dec_ident", .lookup = .{ .nested = .{ .parent = "Num", .name = "Dec" } }, .num_kind = .dec },
+    .{ .display_name = "F32", .qualified_name = "Builtin.Num.F32", .type_field = "f32_type", .ident_field = "f32_ident", .lookup = .{ .nested = .{ .parent = "Num", .name = "F32" } }, .num_kind = .f32 },
+    .{ .display_name = "F64", .qualified_name = "Builtin.Num.F64", .type_field = "f64_type", .ident_field = "f64_ident", .lookup = .{ .nested = .{ .parent = "Num", .name = "F64" } }, .num_kind = .f64 },
+    .{ .display_name = "Numeral", .qualified_name = "Builtin.Num.Numeral", .type_field = "numeral_type", .ident_field = "numeral_ident", .lookup = .{ .nested = .{ .parent = "Num", .name = "Numeral" } } },
+};
+
+/// Nominal declarations that only group nested builtin types rather than representing builtin types.
+pub const builtin_type_container_names = [_][]const u8{
+    "Builtin",
+    "Builtin.Num",
+};
+
+const hash_offset: u64 = 0xcbf29ce484222325;
+const hash_prime: u64 = 0x100000001b3;
+
+fn hashByte(hash: u64, byte: u8) u64 {
+    return (hash ^ byte) *% hash_prime;
+}
+
+fn hashBytes(hash: u64, bytes: []const u8) u64 {
+    var result = hash;
+    for (bytes) |byte| result = hashByte(result, byte);
+    return result;
+}
+
+fn hashInt(hash: u64, value: u64) u64 {
+    var result = hash;
+    inline for (0..8) |shift| {
+        result = hashByte(result, @intCast((value >> (shift * 8)) & 0xff));
+    }
+    return result;
+}
+
+/// Hash of the builtin type registry used to reject stale generated builtin index metadata.
+pub const BUILTIN_TYPE_REGISTRY_HASH: u64 = blk: {
+    @setEvalBranchQuota(10_000);
+    var hash = hashBytes(hash_offset, "roc-builtin-type-registry-v1");
+    for (builtin_type_specs) |spec| {
+        hash = hashBytes(hash, spec.display_name);
+        hash = hashBytes(hash, spec.qualified_name);
+        hash = hashBytes(hash, spec.type_field);
+        hash = hashBytes(hash, spec.ident_field);
+        hash = hashBytes(hash, @tagName(spec.lookup));
+        switch (spec.lookup) {
+            .top_level => |name| hash = hashBytes(hash, name),
+            .nested => |nested| {
+                hash = hashBytes(hash, nested.parent);
+                hash = hashBytes(hash, nested.name);
+            },
+            .qualified => |name| hash = hashBytes(hash, name),
+        }
+        hash = if (spec.num_kind) |num_kind| hashBytes(hash, @tagName(num_kind)) else hashBytes(hash, "-");
+        hash = hashBytes(hash, if (spec.auto_import) "auto" else "internal");
+    }
+    break :blk hash;
+};
+
+/// Hash of the BuiltinIndices field layout used to reject stale generated index values.
+pub const BUILTIN_INDICES_LAYOUT_HASH: u64 = blk: {
+    @setEvalBranchQuota(10_000);
+    var hash = hashBytes(hash_offset, "roc-builtin-indices-layout-v1");
+    hash = hashInt(hash, @sizeOf(BuiltinIndices));
+    hash = hashInt(hash, @alignOf(BuiltinIndices));
+    for (@typeInfo(BuiltinIndices).@"struct".fields) |field| {
+        hash = hashBytes(hash, field.name);
+        hash = hashBytes(hash, @typeName(field.type));
+    }
+    break :blk hash;
 };
 
 // Type definitions for module compilation

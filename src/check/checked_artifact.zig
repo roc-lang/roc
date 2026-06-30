@@ -41,10 +41,7 @@ fn typeDispatchOwnerVar(module: anytype, stmt_idx: CIR.Statement.Idx) Var {
 /// Public `ModuleEnvStorage` declaration.
 pub const ModuleEnvStorage = union(enum) {
     checked_source: *ModuleEnv,
-    compiled_buffer: struct {
-        env: *ModuleEnv,
-        buffer: []align(CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()) u8,
-    },
+    static_builtin: *ModuleEnv,
     cached_buffer: struct {
         env: *ModuleEnv,
         buffer: []align(CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()) u8,
@@ -54,7 +51,7 @@ pub const ModuleEnvStorage = union(enum) {
     pub fn env(self: *const ModuleEnvStorage) *ModuleEnv {
         return switch (self.*) {
             .checked_source => |module_env| module_env,
-            .compiled_buffer => |compiled| compiled.env,
+            .static_builtin => |module_env| module_env,
             .cached_buffer => |cached| cached.env,
         };
     }
@@ -72,12 +69,8 @@ pub const ModuleEnvStorage = union(enum) {
                 if (source.len > 0) env_alloc.free(@constCast(source));
                 env_alloc.destroy(module_env);
             },
-            .compiled_buffer => |compiled| {
-                const env_alloc = compiled.env.gpa;
-                compiled.env.common.idents.interner.deinit(env_alloc);
-                compiled.env.imports.deinitMapOnly(env_alloc);
-                env_alloc.destroy(compiled.env);
-                env_alloc.free(compiled.buffer);
+            .static_builtin => |module_env| {
+                module_env.gpa.destroy(module_env);
             },
             .cached_buffer => |cached| {
                 const env_alloc = cached.env.gpa;
@@ -24776,12 +24769,13 @@ pub const CheckedModuleArtifact = struct {
     const_templates: ConstTemplateTable,
     const_store: ConstStore,
     /// 16-byte-aligned buffer backing a relocated (frozen) artifact loaded from
-    /// the disk cache. When set, every sub-store's slices alias this buffer, so
-    /// `deinit` frees only this buffer plus the injected `module_env` storage and
-    /// must NOT run the per-sub-store frees (which would free into the buffer or
-    /// double-free). `null` for freshly published artifacts, which own their
-    /// sub-store allocations individually.
+    /// the disk cache or the compiler's static builtin data. When set, every
+    /// sub-store's slices alias this buffer, so `deinit` handles this buffer plus
+    /// the injected `module_env` storage and must NOT run the per-sub-store frees
+    /// (which would free into the buffer or double-free). `null` for freshly
+    /// published artifacts, which own their sub-store allocations individually.
     serialized_backing: ?[]align(CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()) u8 = null,
+    serialized_backing_is_static: bool = false,
 
     pub fn moduleEnv(self: *CheckedModuleArtifact) *ModuleEnv {
         return self.module_env.env();
@@ -25015,12 +25009,32 @@ pub const CheckedModuleArtifact = struct {
             gpa: Allocator,
             module_env: ModuleEnvStorage,
         ) CheckedModuleArtifact {
+            return self.deserializeWithBacking(backing, gpa, module_env, false);
+        }
+
+        pub fn deserializeStatic(
+            self: *const Serialized,
+            backing: []align(CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()) u8,
+            gpa: Allocator,
+            module_env: ModuleEnvStorage,
+        ) CheckedModuleArtifact {
+            return self.deserializeWithBacking(backing, gpa, module_env, true);
+        }
+
+        fn deserializeWithBacking(
+            self: *const Serialized,
+            backing: []align(CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()) u8,
+            gpa: Allocator,
+            module_env: ModuleEnvStorage,
+            backing_is_static: bool,
+        ) CheckedModuleArtifact {
             const base_addr = @intFromPtr(backing.ptr);
             return .{
                 .key = self.key,
                 .module_identity = self.module_identity.decode(),
                 .module_env = module_env,
                 .serialized_backing = backing,
+                .serialized_backing_is_static = backing_is_static,
                 .direct_import_artifact_keys = self.direct_import_artifact_keys.deserialize(base_addr),
                 .canonical_names = self.canonical_names.deserialize(base_addr, gpa),
                 .checking_context_identity = self.checking_context_identity.deserialize(base_addr),
@@ -25130,20 +25144,22 @@ pub const CheckedModuleArtifact = struct {
             // per-sub-store frees would free into the buffer (and the unconditional
             // `direct_import_artifact_keys` free below points into it too). Free
             // only the buffer and the injected env storage, mirroring how a
-            // `cached_buffer`/`compiled_buffer`-backed module is torn down.
+            // `cached_buffer`/`static_builtin`-backed module is torn down.
             if (deinit_module_env) {
                 self.module_env.deinit();
             } else {
                 self.module_env = undefined;
             }
-            // `deserialize` allocated `backing` with the same gpa it recorded in
-            // `canonical_names.allocator`, and every teardown site passes that
-            // allocator back here. Assert the coupling so a caller freeing the
-            // frozen buffer with a different allocator trips in Debug rather than
-            // corrupting an unrelated heap.
-            std.debug.assert(allocator.ptr == self.canonical_names.allocator.ptr and
-                allocator.vtable == self.canonical_names.allocator.vtable);
-            allocator.free(backing);
+            if (!self.serialized_backing_is_static) {
+                // `deserialize` allocated `backing` with the same gpa it recorded in
+                // `canonical_names.allocator`, and every teardown site passes that
+                // allocator back here. Assert the coupling so a caller freeing the
+                // frozen buffer with a different allocator trips in Debug rather than
+                // corrupting an unrelated heap.
+                std.debug.assert(allocator.ptr == self.canonical_names.allocator.ptr and
+                    allocator.vtable == self.canonical_names.allocator.vtable);
+                allocator.free(backing);
+            }
             self.* = undefined;
             return;
         }

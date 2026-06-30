@@ -39,7 +39,7 @@ const Can = can.Can;
 const Check = check.Check;
 const SExprTree = base.SExprTree;
 const ModuleEnv = can.ModuleEnv;
-const LoadedBuiltinModule = eval.builtin_loading.LoadedModule;
+const LoadedBuiltinModule = eval.builtin_static.BuiltinModuleView;
 const Allocator = std.mem.Allocator;
 const AST = parse.AST;
 
@@ -378,14 +378,6 @@ fn resetGlobalState() void {
         compiler_data = null;
     }
     cleanupReplState();
-    if (host_message_buffer) |buf| {
-        allocator.free(buf);
-        host_message_buffer = null;
-    }
-    if (host_response_buffer) |buf| {
-        allocator.free(buf);
-        host_response_buffer = null;
-    }
 }
 
 /// Writes a formatted string to the in-memory debug log.
@@ -415,8 +407,9 @@ fn logDebug(comptime format: []const u8, args: anytype) void {
         } else if (available_space > 0) {
             // Not even enough space for the full OOM message. Write what we can.
             const truncated_msg = "[OOM]";
-            @memcpy(target_slice[0..truncated_msg.len], truncated_msg);
-            debug_log_pos += truncated_msg.len;
+            const bytes_to_write = @min(available_space, truncated_msg.len);
+            @memcpy(target_slice[0..bytes_to_write], truncated_msg[0..bytes_to_write]);
+            debug_log_pos += bytes_to_write;
         }
         // If there's no space for even "[OOM]", we can't do anything.
         debug_log_oom = true;
@@ -455,16 +448,16 @@ export fn clearDebugLog() void {
     debug_log_oom = false;
 }
 
-fn getCachedBuiltinModule() (Allocator.Error || error{Internal})!*LoadedBuiltinModule {
+fn getCachedBuiltinModule() (Allocator.Error || error{ CorruptEmbeddedBuiltins, Internal })!*LoadedBuiltinModule {
     if (cached_builtin_module == null) {
-        logDebug("compileSource: Loading Builtin module\n", .{});
-        cached_builtin_module = try eval.builtin_loading.loadCompiledModule(
+        logDebug("compileSource: Creating Builtin module view\n", .{});
+        cached_builtin_module = try eval.builtin_static.moduleView(
             allocator,
-            compiled_builtins.builtin_bin,
+            compiled_builtins.builtin_bin[0..],
             "Builtin",
             compiled_builtins.builtin_source,
         );
-        logDebug("compileSource: Builtin module loaded\n", .{});
+        logDebug("compileSource: Builtin module view ready\n", .{});
     } else {
         logDebug("compileSource: Reusing cached Builtin module\n", .{});
     }
@@ -984,10 +977,7 @@ fn compileReplInspectedModule(source: []const u8) PlaygroundCompileError!ReplCom
         &typed_cir_modules,
         1,
         .{
-            .module_env_storage = .{ .compiled_buffer = .{
-                .env = builtin_module.env,
-                .buffer = builtin_module.buffer,
-            } },
+            .module_env_storage = .{ .static_builtin = builtin_module.env },
             .compile_time_finalizer = eval.CompileTimeFinalization.finalizer(),
         },
     );
@@ -1339,7 +1329,7 @@ fn compileSource(source: []const u8, module_name: []const u8) PlaygroundCompileE
     // compile consumes the same explicit Builtin module context.
 
     logDebug("compileSource: Loading builtin indices\n", .{});
-    const builtin_indices = try eval.builtin_loading.deserializeBuiltinIndices(allocator, compiled_builtins.builtin_indices_bin);
+    const builtin_indices = compiled_builtins.builtinIndices(can.CIR);
     logDebug("compileSource: Builtin indices loaded, bool_type={}\n", .{@intFromEnum(builtin_indices.bool_type)});
 
     const builtin_module = try getCachedBuiltinModule();

@@ -901,39 +901,11 @@ fn populateBuiltinAutoImportedTypes(
     // Note: builtin_indices.*_ident values are indices into the builtin module's ident store.
     // We need to get the text and re-insert into the calling module's store since
     // Ident.Idx values are not transferable between stores.
-    const builtin_types = .{
-        .{ "Bool", builtin_indices.bool_type, builtin_indices.bool_ident },
-        .{ "ParseTagUnionSpec", builtin_indices.parse_tag_union_spec_type, builtin_indices.parse_tag_union_spec_ident },
-        .{ "Try", builtin_indices.try_type, builtin_indices.try_ident },
-        .{ "Dict", builtin_indices.dict_type, builtin_indices.dict_ident },
-        .{ "Set", builtin_indices.set_type, builtin_indices.set_ident },
-        .{ "Str", builtin_indices.str_type, builtin_indices.str_ident },
-        .{ "Hasher", builtin_indices.hasher_type, builtin_indices.hasher_ident },
-        .{ "Iter", builtin_indices.iter_type, builtin_indices.iter_ident },
-        .{ "Stream", builtin_indices.stream_type, builtin_indices.stream_ident },
-        .{ "List", builtin_indices.list_type, builtin_indices.list_ident },
-        .{ "Box", builtin_indices.box_type, builtin_indices.box_ident },
-        .{ "Utf8Problem", builtin_indices.utf8_problem_type, builtin_indices.utf8_problem_ident },
-        .{ "U8", builtin_indices.u8_type, builtin_indices.u8_ident },
-        .{ "I8", builtin_indices.i8_type, builtin_indices.i8_ident },
-        .{ "U16", builtin_indices.u16_type, builtin_indices.u16_ident },
-        .{ "I16", builtin_indices.i16_type, builtin_indices.i16_ident },
-        .{ "U32", builtin_indices.u32_type, builtin_indices.u32_ident },
-        .{ "I32", builtin_indices.i32_type, builtin_indices.i32_ident },
-        .{ "U64", builtin_indices.u64_type, builtin_indices.u64_ident },
-        .{ "I64", builtin_indices.i64_type, builtin_indices.i64_ident },
-        .{ "U128", builtin_indices.u128_type, builtin_indices.u128_ident },
-        .{ "I128", builtin_indices.i128_type, builtin_indices.i128_ident },
-        .{ "Dec", builtin_indices.dec_type, builtin_indices.dec_ident },
-        .{ "F32", builtin_indices.f32_type, builtin_indices.f32_ident },
-        .{ "F64", builtin_indices.f64_type, builtin_indices.f64_ident },
-        .{ "Numeral", builtin_indices.numeral_type, builtin_indices.numeral_ident },
-    };
-
-    inline for (builtin_types) |type_info| {
-        const type_name = type_info[0];
-        const statement_idx = type_info[1];
-        const builtin_qualified_ident = type_info[2];
+    inline for (CIR.builtin_type_specs) |spec| {
+        if (!spec.auto_import) continue;
+        const type_name = spec.display_name;
+        const statement_idx = @field(builtin_indices, spec.type_field);
+        const builtin_qualified_ident = @field(builtin_indices, spec.ident_field);
 
         // Get the qualified ident text from the builtin module and re-insert into calling module
         const qualified_text = builtin_module_env.getIdent(builtin_qualified_ident);
@@ -956,39 +928,11 @@ pub fn populateModuleEnvs(
     builtin_module_env: *const ModuleEnv,
     builtin_indices: CIR.BuiltinIndices,
 ) Allocator.Error!void {
-    const builtin_types = .{
-        .{ "Bool", builtin_indices.bool_type, builtin_indices.bool_ident },
-        .{ "ParseTagUnionSpec", builtin_indices.parse_tag_union_spec_type, builtin_indices.parse_tag_union_spec_ident },
-        .{ "Try", builtin_indices.try_type, builtin_indices.try_ident },
-        .{ "Dict", builtin_indices.dict_type, builtin_indices.dict_ident },
-        .{ "Set", builtin_indices.set_type, builtin_indices.set_ident },
-        .{ "Str", builtin_indices.str_type, builtin_indices.str_ident },
-        .{ "Hasher", builtin_indices.hasher_type, builtin_indices.hasher_ident },
-        .{ "Iter", builtin_indices.iter_type, builtin_indices.iter_ident },
-        .{ "Stream", builtin_indices.stream_type, builtin_indices.stream_ident },
-        .{ "List", builtin_indices.list_type, builtin_indices.list_ident },
-        .{ "Box", builtin_indices.box_type, builtin_indices.box_ident },
-        .{ "Utf8Problem", builtin_indices.utf8_problem_type, builtin_indices.utf8_problem_ident },
-        .{ "U8", builtin_indices.u8_type, builtin_indices.u8_ident },
-        .{ "I8", builtin_indices.i8_type, builtin_indices.i8_ident },
-        .{ "U16", builtin_indices.u16_type, builtin_indices.u16_ident },
-        .{ "I16", builtin_indices.i16_type, builtin_indices.i16_ident },
-        .{ "U32", builtin_indices.u32_type, builtin_indices.u32_ident },
-        .{ "I32", builtin_indices.i32_type, builtin_indices.i32_ident },
-        .{ "U64", builtin_indices.u64_type, builtin_indices.u64_ident },
-        .{ "I64", builtin_indices.i64_type, builtin_indices.i64_ident },
-        .{ "U128", builtin_indices.u128_type, builtin_indices.u128_ident },
-        .{ "I128", builtin_indices.i128_type, builtin_indices.i128_ident },
-        .{ "Dec", builtin_indices.dec_type, builtin_indices.dec_ident },
-        .{ "F32", builtin_indices.f32_type, builtin_indices.f32_ident },
-        .{ "F64", builtin_indices.f64_type, builtin_indices.f64_ident },
-        .{ "Numeral", builtin_indices.numeral_type, builtin_indices.numeral_ident },
-    };
-
-    inline for (builtin_types) |type_info| {
-        const type_name = type_info[0];
-        const statement_idx = type_info[1];
-        const builtin_qualified_ident = type_info[2];
+    inline for (CIR.builtin_type_specs) |spec| {
+        if (!spec.auto_import) continue;
+        const type_name = spec.display_name;
+        const statement_idx = @field(builtin_indices, spec.type_field);
+        const builtin_qualified_ident = @field(builtin_indices, spec.ident_field);
 
         const qualified_text = builtin_module_env.getIdent(builtin_qualified_ident);
         const qualified_ident = try calling_module_env.insertIdent(base.Ident.for_text(qualified_text));
