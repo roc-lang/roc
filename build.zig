@@ -151,11 +151,11 @@ fn nativeSharedArchiveTarget(b: *std.Build, target: ResolvedTarget) NativeShared
     if (target.result.os.tag == .linux) {
         return switch (target.result.cpu.arch) {
             .x86_64 => .{
-                .resolved = b.resolveTargetQuery(.{ .cpu_arch = .x86_64, .os_tag = .linux, .abi = .gnu }),
+                .resolved = b.resolveTargetQuery(.{ .cpu_arch = .x86_64, .os_tag = .linux, .abi = .gnu, .cpu_model = stableHostCpuModel(.x86_64) }),
                 .roc_name = "x64glibc",
             },
             .aarch64 => .{
-                .resolved = b.resolveTargetQuery(.{ .cpu_arch = .aarch64, .os_tag = .linux, .abi = .gnu }),
+                .resolved = b.resolveTargetQuery(.{ .cpu_arch = .aarch64, .os_tag = .linux, .abi = .gnu, .cpu_model = stableHostCpuModel(.aarch64) }),
                 .roc_name = "arm64glibc",
             },
             else => .{
@@ -177,9 +177,25 @@ fn withRocMacosDeploymentTarget(b: *std.Build, target: ResolvedTarget) ResolvedT
     return b.resolveTargetQuery(roc_target.macos_deployment.query(target.result.cpu.arch));
 }
 
+/// CPU model for HOST-arch artifacts that one CI agent builds and another consumes (a build anchor →
+/// test leaf, or a restored cross-run tool-cache). Agents vary by CPU model, so leaving `cpu_model`
+/// unset bakes the *building* agent's native CPU into Zig's compile cache key — the artifact then
+/// never cache-hits on a differently-provisioned agent and the consumer recompiles it from scratch.
+/// We hit this twice: first as host-tool churn (see hostToolsTarget), then as arm test-binary
+/// OOM/timeouts. Pin a FIXED model anywhere such an artifact is built:
+///   - x86_64: x86_64_v3 (AVX2/BMI2, and AVX-512-free so Valgrind can emulate musl startup code)
+///   - else:   baseline (a subset of every agent's CPU, so the artifact still runs anywhere)
+/// Build-time-only host tools use the stricter all-baseline hostToolsTarget instead.
+fn stableHostCpuModel(arch: std.Target.Cpu.Arch) std.Target.Query.CpuModel {
+    return if (arch == .x86_64)
+        .{ .explicit = &std.Target.x86.cpu.x86_64_v3 }
+    else
+        .baseline;
+}
+
 /// Returns the optimal target query for release builds on the current host.
 /// - Linux: Uses musl for fully static binaries
-/// - x86_64: Uses x86_64_v3 for modern CPU features (AVX2, BMI2, etc.)
+/// - CPU model is pinned via stableHostCpuModel for cross-agent cache stability.
 fn getReleaseTargetQuery() std.Target.Query {
     var query: std.Target.Query = .{};
 
@@ -188,10 +204,7 @@ fn getReleaseTargetQuery() std.Target.Query {
         query.abi = .musl;
     }
 
-    // Use x86_64_v3 CPU model for x86_64 (enables AVX2, BMI2, etc.)
-    if (builtin.target.cpu.arch == .x86_64) {
-        query.cpu_model = .{ .explicit = &std.Target.x86.cpu.x86_64_v3 };
-    }
+    query.cpu_model = stableHostCpuModel(builtin.target.cpu.arch);
 
     return query;
 }
@@ -2355,12 +2368,12 @@ pub fn build(b: *std.Build) void {
             .abi = if (builtin.target.os.tag == .linux) .musl else null,
         };
 
-        // Use x86_64_v3 (AVX2, no AVX-512) for Valgrind compatibility.
-        // Valgrind 3.22 can't emulate AVX-512 EVEX instructions in musl startup code.
-        // This matches the release target (getReleaseTargetQuery) which also uses x86_64_v3.
-        if (builtin.target.cpu.arch == .x86_64) {
-            default_target_query.cpu_model = .{ .explicit = &std.Target.x86.cpu.x86_64_v3 };
-        }
+        // Pin a fixed CPU model (see stableHostCpuModel) so the compile cache key is stable across
+        // CI agents — otherwise test binaries the build anchor compiles never cache-hit on a
+        // differently-provisioned leaf agent and the leaf rebuilds the whole suite (Debug leaf OOMs,
+        // ReleaseFast leaf hits the 10-min timeout). On x86_64 this is x86_64_v3, which also keeps
+        // musl startup Valgrind-safe (no AVX-512 EVEX, which Valgrind 3.22 can't emulate).
+        default_target_query.cpu_model = stableHostCpuModel(builtin.target.cpu.arch);
 
         break :blk b.standardTargetOptions(.{ .default_target = default_target_query });
     };
@@ -4845,8 +4858,8 @@ pub fn build(b: *std.Build) void {
         const native_fx_target_dir = roc_target.RocTarget.fromStdTarget(target.result).toName();
         const fx_host_target, const fx_host_target_dir: ?[]const u8 = switch (target.result.os.tag) {
             .linux => switch (target.result.cpu.arch) {
-                .x86_64 => .{ b.resolveTargetQuery(.{ .cpu_arch = .x86_64, .os_tag = .linux, .abi = .musl }), "x64musl" },
-                .aarch64 => .{ b.resolveTargetQuery(.{ .cpu_arch = .aarch64, .os_tag = .linux, .abi = .musl }), "arm64musl" },
+                .x86_64 => .{ b.resolveTargetQuery(.{ .cpu_arch = .x86_64, .os_tag = .linux, .abi = .musl, .cpu_model = stableHostCpuModel(.x86_64) }), "x64musl" },
+                .aarch64 => .{ b.resolveTargetQuery(.{ .cpu_arch = .aarch64, .os_tag = .linux, .abi = .musl, .cpu_model = stableHostCpuModel(.aarch64) }), "arm64musl" },
                 else => .{ target, native_fx_target_dir },
             },
             .windows => switch (target.result.cpu.arch) {
@@ -4968,8 +4981,8 @@ pub fn build(b: *std.Build) void {
 
         const http_host_target, const http_host_target_dir: ?[]const u8 = switch (target.result.os.tag) {
             .linux => switch (target.result.cpu.arch) {
-                .x86_64 => .{ b.resolveTargetQuery(.{ .cpu_arch = .x86_64, .os_tag = .linux, .abi = .musl }), "x64musl" },
-                .aarch64 => .{ b.resolveTargetQuery(.{ .cpu_arch = .aarch64, .os_tag = .linux, .abi = .musl }), "arm64musl" },
+                .x86_64 => .{ b.resolveTargetQuery(.{ .cpu_arch = .x86_64, .os_tag = .linux, .abi = .musl, .cpu_model = stableHostCpuModel(.x86_64) }), "x64musl" },
+                .aarch64 => .{ b.resolveTargetQuery(.{ .cpu_arch = .aarch64, .os_tag = .linux, .abi = .musl, .cpu_model = stableHostCpuModel(.aarch64) }), "arm64musl" },
                 else => .{ target, null },
             },
             .windows => switch (target.result.cpu.arch) {
