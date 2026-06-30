@@ -527,6 +527,105 @@ The recommended migration order is:
 8. Verify with focused canonicalization tests, `zig build minici`, and
    parser/canonicalization benchmarks.
 
+## Canonicalization Policy Ownership
+
+Canonicalization owns source-name scope policy before checking. Any rule that
+decides whether a source type name is inserted, shadows another type, replaces
+an auto-imported type, redeclares an existing type, or repeats the same external
+type must live in one place. Callers may choose which source operation they are
+performing, but they must not duplicate the type-binding collision matrix.
+
+The `Scope.type_bindings` table has one ordinary mutation API for type names.
+It accepts the full scope slice, the target scope index, the introduced name,
+and the incoming binding:
+
+```zig
+const TypeBindingInput = union(enum) {
+    local_nominal: CIR.Statement.Idx,
+    local_alias: CIR.Statement.Idx,
+    associated_nominal: CIR.Statement.Idx,
+    external_nominal: Scope.ExternalTypeBinding,
+};
+
+const TypeBindingDecision = union(enum) {
+    inserted,
+    inserted_shadowing_parent: Scope.TypeBinding,
+    replaced_current_external: Scope.ExternalTypeBinding,
+    idempotent_current,
+    rejected_current_conflict: Scope.TypeBinding,
+    redeclared_current: Scope.TypeBinding,
+};
+```
+
+The exact names may change with implementation, but the shape must remain:
+one `Scope` function mutates `type_bindings`, and its return value carries the
+old binding that caused any warning or error. `Scope` does not push diagnostics,
+does not inspect source regions from `ModuleEnv`, and does not update import
+display mappings. `Can` maps the returned decision to diagnostics and performs
+the import-mapping side effects that are specific to external imports.
+
+Parent-scope shadowing must be computed by the same type-binding API. The
+function receives the scope slice and target index directly; it does not use an
+untyped callback or a callback without context. The parent walk chooses the
+nearest parent binding and returns that binding to the caller. This preserves
+regions for both local statements and external imports without reconstructing
+them at each call site.
+
+The current-scope collision matrix is:
+
+- A same statement already bound to the same name is idempotent.
+- A same external module/original-name pair already bound to the same name is
+  idempotent.
+- A local declaration replacing an external binding succeeds and returns the
+  replaced external binding so `Can` can report the shadowing region.
+- An external binding colliding with any different current binding is rejected
+  and returns the existing binding.
+- A local alias colliding with a current local alias reports alias
+  redeclaration.
+- A local nominal colliding with a current local nominal or associated nominal
+  reports type redeclaration.
+- A local declaration colliding with the other local kind reports the diagnostic
+  chosen by the existing binding, not by the incoming binding.
+
+Direct writes to `Scope.type_bindings` are allowed only for explicit
+initialization paths that prove the binding cannot collide, such as seeding the
+compiler-owned builtin scope before source declarations are introduced. If that
+proof stops being local and obvious, the initialization path must use the same
+type-binding API.
+
+Result suffix desugaring has a separate owner inside `Can`. The suffix forms
+`expr?`, `expr ? handler`, and `expr ?? default` all lower to a match over the
+same `Try` shape. They must share one concrete builder for the common structure:
+
+- resolve the compiler-owned `Try` nominal target once,
+- wrap `Ok` and `Err` tag patterns with that nominal target,
+- append the `Ok(#ok) => #ok` branch,
+- construct the `Err(...)` tag expression used by early return,
+- create the final match with the caller-selected `is_try_suffix` value.
+
+The builder must support both local and external nominal targets because the
+Builtin module may refer to its own `Try`, while ordinary modules use the
+compiler-owned external builtin. It must not silently fall back to bare `Ok` and
+`Err` patterns when `Try` is missing. A missing compiler-owned `Try` target is a
+compiler invariant violation after builtin setup, not an alternate
+canonicalization mode.
+
+The three suffix callers provide only the distinct error-branch body:
+
+- `expr?` returns the original error payload from the enclosing function, or
+  emits `e_expect_err` inside a top-level `expect`.
+- `expr ? handler` transforms the error payload and then returns `Err(...)`, or
+  emits `e_expect_err` inside a top-level `expect`.
+- `expr ?? default` uses the default expression and does not mark the match as a
+  try suffix.
+
+Do not introduce a generic desugaring interpreter for these cases. The helper
+should be a small set of concrete `Can` functions that emit the same CIR nodes
+and scratch spans as the current hand-written paths. This keeps
+canonicalization output explicit, keeps diagnostics in `Can`, and keeps release
+builds fast: the work runs once per source suffix or type declaration, with no
+runtime cost in the compiled program.
+
 ## Type Alias Invariant
 
 Source type aliases are transparent views of their backing type. An alias root
