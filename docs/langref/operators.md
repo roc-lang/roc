@@ -2,25 +2,15 @@
 
 ## Desugaring
 
-TODO
-
 ## Binary Infix Operations
 
 ### And
 
-TODO
-
 ### Or
-
-TODO
 
 ### Arithmetic Operators
 
-TODO
-
 ### Comparison Operators
-
-TODO
 
 ### `??` (default value on `Err`)
 
@@ -52,18 +42,10 @@ Unlike the `?` operator which propagates errors via early return, `??` handles t
 
 ### `-` (`.negate()`)
 
-TODO
-
 ### `!` (`.not()`)
-
-TODO
 
 ## Unary Postfix Operators
 
 ### `?` (unwrap if `Ok`; early `return` if `Err`)
 
-TODO
-
 ### `[…]` (subscript operator)
-
-TODO

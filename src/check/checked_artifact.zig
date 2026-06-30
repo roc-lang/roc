@@ -678,7 +678,7 @@ pub const ProvidedExportTable = struct {
 };
 
 /// Public `RootRequestKind` declaration.
-pub const RootRequestKind = enum {
+pub const RootRequestKind = enum(u8) {
     runtime_entrypoint,
     provided_export,
     platform_required_binding,
@@ -691,7 +691,7 @@ pub const RootRequestKind = enum {
 };
 
 /// Public `RootAbi` declaration.
-pub const RootAbi = enum {
+pub const RootAbi = enum(u8) {
     roc,
     platform,
     hosted,
@@ -700,7 +700,7 @@ pub const RootAbi = enum {
 };
 
 /// Public `RootExposure` declaration.
-pub const RootExposure = enum {
+pub const RootExposure = enum(u8) {
     private,
     exported,
     platform_required,
@@ -714,7 +714,7 @@ pub const HoistedRootSource = struct {
 };
 
 /// Source location of a checked root that must be published for later compiler stages.
-pub const RootSource = union(enum) {
+pub const RootSource = union(enum(u8)) {
     def: CIR.Def.Idx,
     expr: CIR.Expr.Idx,
     statement: CIR.Statement.Idx,
@@ -2244,7 +2244,7 @@ pub const CheckedBuiltinNominal = enum {
 };
 
 /// Public `CheckedPrimitive` declaration.
-pub const CheckedPrimitive = enum {
+pub const CheckedPrimitive = enum(u8) {
     bool,
     str,
     u8,
@@ -11304,7 +11304,7 @@ pub const ArtifactTopLevelProcedureBindingRef = struct {
 };
 
 /// Public `ProcedureBindingRef` declaration.
-pub const ProcedureBindingRef = union(enum) {
+pub const ProcedureBindingRef = union(enum(u8)) {
     top_level: ArtifactTopLevelProcedureBindingRef,
     imported: ImportedProcedureBindingRef,
     hosted: HostedProcRef,
@@ -27488,6 +27488,42 @@ test "platform app relation resolver returns empty roots before reserving normal
     try std.testing.expectEqual(CheckedTypePayload.empty_tag_union, store.payload(finalized_tags));
 }
 
+test "checked type store reuses closed equivalent payload roots" {
+    const allocator = std.testing.allocator;
+
+    var names = canonical.CanonicalNameStore.init(allocator);
+    defer names.deinit();
+
+    var store = CheckedTypeStore{};
+    defer store.deinit(allocator);
+
+    const first = try appendExplicitCheckedTypePayload(allocator, &names, &store, .empty_record);
+    const second = try appendExplicitCheckedTypePayload(allocator, &names, &store, .empty_record);
+
+    try std.testing.expectEqual(first, second);
+    try std.testing.expectEqual(@as(usize, 1), store.roots.items.len);
+    try std.testing.expectEqual(@as(usize, 1), store.payloads.items.len);
+    try std.testing.expectEqual(CheckedTypePayload.empty_record, store.payload(first));
+}
+
+test "checked type store preserves distinct identity roots with equal variable shape" {
+    const allocator = std.testing.allocator;
+
+    var store = CheckedTypeStore{};
+    defer store.deinit(allocator);
+
+    const first = try store.reserveSyntheticTypeRoot(allocator, testCanonicalTypeKey(70));
+    const second = try store.reserveSyntheticTypeRoot(allocator, testCanonicalTypeKey(71));
+
+    try store.fillSyntheticTypeRoot(allocator, first, .{ .flex = .{} });
+    try store.fillSyntheticTypeRoot(allocator, second, .{ .flex = .{} });
+
+    try std.testing.expect(first != second);
+    try std.testing.expectEqual(@as(usize, 2), store.roots.items.len);
+    try std.testing.expectEqual(@as(usize, 2), store.payloads.items.len);
+    try std.testing.expectEqualDeep(store.payload(first), store.payload(second));
+}
+
 test "provided callable-containing record constant is a data export, not a runtime root" {
     const source =
         \\platform ""
@@ -28004,8 +28040,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, bump `serialized_layout_version` and replace the golden bytes below with
     // the ones this assertion prints.
     const golden: [32]u8 = .{
-        0x55, 0x6A, 0xBA, 0x07, 0x35, 0x96, 0x79, 0xDE, 0x7A, 0xD3, 0xFB, 0xDD, 0x99, 0xAA, 0xBD, 0x15,
-        0x96, 0x0A, 0x0A, 0x31, 0x68, 0x83, 0x94, 0xDF, 0x8C, 0x50, 0x91, 0x14, 0x7F, 0x86, 0x88, 0xD5,
+        0x2D, 0xBF, 0x8E, 0x09, 0xB7, 0x8A, 0x18, 0x61, 0xC0, 0xF9, 0xA2, 0xFC, 0xB5, 0x5F, 0xF6, 0xA4,
+        0x53, 0xE3, 0x8D, 0x31, 0x64, 0xE3, 0xEA, 0x0D, 0x0E, 0xC6, 0x2E, 0x7D, 0x23, 0x61, 0x31, 0x9D,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

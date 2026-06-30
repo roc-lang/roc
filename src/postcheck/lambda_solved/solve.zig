@@ -47,10 +47,12 @@ pub fn run(
 const Solver = struct {
     allocator: Allocator,
     program: *Ast.Program,
+    lifted: Lifted.ProgramView,
     local_tys: []?Type.TypeVarId,
     expr_tys: []?Type.TypeVarId,
     pat_tys: []?Type.TypeVarId,
     expr_done: []bool,
+    generated_backing_pats: []bool,
     loop_results: std.ArrayList(Type.TypeVarId),
     loop_params: std.ArrayList(Type.Span),
     return_contexts: std.ArrayList(ReturnContext),
@@ -68,29 +70,37 @@ const Solver = struct {
     };
 
     fn init(allocator: Allocator, program: *Ast.Program) Allocator.Error!Solver {
-        const local_tys = try allocator.alloc(?Type.TypeVarId, program.lifted.locals.items.len);
+        const lifted = program.lifted.view();
+
+        const local_tys = try allocator.alloc(?Type.TypeVarId, lifted.locals.len);
         errdefer allocator.free(local_tys);
         @memset(local_tys, null);
 
-        const expr_tys = try allocator.alloc(?Type.TypeVarId, program.lifted.exprs.items.len);
+        const expr_tys = try allocator.alloc(?Type.TypeVarId, lifted.exprs.len);
         errdefer allocator.free(expr_tys);
         @memset(expr_tys, null);
 
-        const expr_done = try allocator.alloc(bool, program.lifted.exprs.items.len);
+        const expr_done = try allocator.alloc(bool, lifted.exprs.len);
         errdefer allocator.free(expr_done);
         @memset(expr_done, false);
 
-        const pat_tys = try allocator.alloc(?Type.TypeVarId, program.lifted.pats.items.len);
+        const pat_tys = try allocator.alloc(?Type.TypeVarId, lifted.pats.len);
         errdefer allocator.free(pat_tys);
         @memset(pat_tys, null);
+
+        const generated_backing_pats = try allocator.alloc(bool, lifted.pats.len);
+        errdefer allocator.free(generated_backing_pats);
+        @memset(generated_backing_pats, false);
 
         return .{
             .allocator = allocator,
             .program = program,
+            .lifted = lifted,
             .local_tys = local_tys,
             .expr_tys = expr_tys,
             .pat_tys = pat_tys,
             .expr_done = expr_done,
+            .generated_backing_pats = generated_backing_pats,
             .loop_results = .empty,
             .loop_params = .empty,
             .return_contexts = .empty,
@@ -103,6 +113,7 @@ const Solver = struct {
         self.return_contexts.deinit(self.allocator);
         self.loop_params.deinit(self.allocator);
         self.loop_results.deinit(self.allocator);
+        self.allocator.free(self.generated_backing_pats);
         self.allocator.free(self.expr_done);
         self.allocator.free(self.pat_tys);
         self.allocator.free(self.expr_tys);
@@ -110,14 +121,14 @@ const Solver = struct {
     }
 
     fn solve(self: *Solver) Allocator.Error!void {
-        for (self.program.lifted.locals.items, 0..) |local, index| {
+        for (self.lifted.locals, 0..) |local, index| {
             self.local_tys[index] = try self.lowerTypeFresh(local.ty);
         }
 
-        try self.program.fn_tys.ensureTotalCapacity(self.allocator, self.program.lifted.fns.items.len);
-        try self.program.defs.ensureTotalCapacity(self.allocator, self.program.lifted.fns.items.len);
+        try self.program.fn_tys.ensureTotalCapacity(self.allocator, self.lifted.fns.len);
+        try self.program.defs.ensureTotalCapacity(self.allocator, self.lifted.fns.len);
 
-        for (self.program.lifted.fns.items) |fn_| {
+        for (self.lifted.fns) |fn_| {
             const fn_ty = try self.functionType(fn_);
             try self.program.fn_tys.append(self.allocator, fn_ty);
             try self.program.defs.append(self.allocator, .{
@@ -130,13 +141,13 @@ const Solver = struct {
             });
         }
 
-        for (self.program.lifted.fns.items, 0..) |fn_, index| {
+        for (self.lifted.fns, 0..) |fn_, index| {
             const fn_id: Lifted.FnId = @enumFromInt(@as(u32, @intCast(index)));
             try self.solveFn(fn_id, fn_);
         }
 
-        try self.program.layout_requests.ensureTotalCapacity(self.allocator, self.program.lifted.layout_requests.items.len);
-        for (self.program.lifted.layout_requests.items) |request| {
+        try self.program.layout_requests.ensureTotalCapacity(self.allocator, self.lifted.layout_requests.len);
+        for (self.lifted.layout_requests) |request| {
             const ty = if (request.fn_id) |fn_id|
                 self.fnRetType(fn_id)
             else
@@ -149,8 +160,8 @@ const Solver = struct {
             });
         }
 
-        try self.program.runtime_schema_requests.ensureTotalCapacity(self.allocator, self.program.lifted.runtime_schema_requests.items.len);
-        for (self.program.lifted.runtime_schema_requests.items) |request| {
+        try self.program.runtime_schema_requests.ensureTotalCapacity(self.allocator, self.lifted.runtime_schema_requests.len);
+        for (self.lifted.runtime_schema_requests) |request| {
             const ty = try self.lowerTypeFresh(request.ty);
             try self.markErasedCallablesReachedByType(ty);
             try self.program.runtime_schema_requests.append(self.allocator, .{
@@ -163,13 +174,13 @@ const Solver = struct {
 
         try self.program.expr_tys.ensureTotalCapacity(self.allocator, self.expr_tys.len);
         for (self.expr_tys, 0..) |maybe_ty, index| {
-            const ty = maybe_ty orelse try self.lowerTypeFresh(self.program.lifted.exprs.items[index].ty);
+            const ty = maybe_ty orelse try self.lowerTypeFresh(self.lifted.exprs[index].ty);
             try self.program.expr_tys.append(self.allocator, self.program.types.root(ty));
         }
 
         try self.program.pat_tys.ensureTotalCapacity(self.allocator, self.pat_tys.len);
         for (self.pat_tys, 0..) |maybe_ty, index| {
-            const ty = maybe_ty orelse try self.lowerTypeFresh(self.program.lifted.pats.items[index].ty);
+            const ty = maybe_ty orelse try self.lowerTypeFresh(self.lifted.pats[index].ty);
             try self.program.pat_tys.append(self.allocator, self.program.types.root(ty));
         }
 
@@ -188,22 +199,22 @@ const Solver = struct {
     }
 
     fn functionType(self: *Solver, fn_: Lifted.Fn) Allocator.Error!Type.TypeVarId {
-        const arg_locals = self.program.lifted.typedLocalSpan(fn_.args);
+        const arg_locals = self.lifted.typedLocalSpan(fn_.args);
         const args = try self.allocator.alloc(Type.TypeVarId, arg_locals.len);
         defer self.allocator.free(args);
         for (arg_locals, 0..) |arg, i| {
-            const local = self.program.lifted.locals.items[@intFromEnum(arg.local)];
+            const local = self.lifted.locals[@intFromEnum(arg.local)];
             if (@import("builtin").mode == .Debug and local.ty != arg.ty) {
                 Common.invariant("Lambda Solved function argument type differed from its local type");
             }
             args[i] = self.localTy(arg.local);
         }
 
-        const capture_locals = self.program.lifted.typedLocalSpan(fn_.captures);
+        const capture_locals = self.lifted.typedLocalSpan(fn_.captures);
         const captures = try self.allocator.alloc(Type.Capture, capture_locals.len);
         defer self.allocator.free(captures);
         for (capture_locals, 0..) |capture, i| {
-            const local = self.program.lifted.locals.items[@intFromEnum(capture.local)];
+            const local = self.lifted.locals[@intFromEnum(capture.local)];
             captures[i] = .{
                 .local = capture.local,
                 .symbol = local.symbol,
@@ -245,7 +256,7 @@ const Solver = struct {
             else => Common.invariant("Lambda Solved function table contains a non-function type"),
         };
 
-        const arg_locals = self.program.lifted.typedLocalSpan(fn_.args);
+        const arg_locals = self.lifted.typedLocalSpan(fn_.args);
         if (func.args.count() != arg_locals.len) Common.invariant("Lambda Solved function arity changed after registration");
         for (arg_locals, 0..) |arg, i| {
             try self.unify(self.program.types.spanItem(func.args, i), self.localTy(arg.local));
@@ -377,7 +388,7 @@ const Solver = struct {
         if (self.expr_done[index]) return expected;
         self.expr_done[index] = true;
 
-        const expr = self.program.lifted.exprs.items[index];
+        const expr = self.lifted.exprs[index];
         switch (expr.data) {
             .local => |local| try self.unify(expected, self.localTy(local)),
             .unit,
@@ -393,13 +404,13 @@ const Solver = struct {
             => {},
             .list => |items| {
                 const elem_ty = try self.listElem(expected);
-                for (self.program.lifted.exprSpan(items)) |child| {
+                for (self.lifted.exprSpan(items)) |child| {
                     _ = try self.expectExpr(child, elem_ty);
                 }
             },
             .tuple => |items| {
                 const item_tys = try self.tupleItemsSpan(expected);
-                const children = self.program.lifted.exprSpan(items);
+                const children = self.lifted.exprSpan(items);
                 if (item_tys.count() != children.len) Common.invariant("tuple expression arity differs from its checked type");
                 for (children, 0..) |child, i| {
                     const item_ty = self.program.types.spanItem(item_tys, i);
@@ -407,13 +418,13 @@ const Solver = struct {
                 }
             },
             .record => |fields| {
-                for (self.program.lifted.fieldExprSpan(fields)) |field| {
+                for (self.lifted.fieldExprSpan(fields)) |field| {
                     _ = try self.expectExpr(field.value, try self.recordField(expected, field.name));
                 }
             },
             .tag => |tag| {
                 const payload_tys = try self.tagPayloadsSpan(expected, tag.name);
-                const payloads = self.program.lifted.exprSpan(tag.payloads);
+                const payloads = self.lifted.exprSpan(tag.payloads);
                 if (payload_tys.count() != payloads.len) Common.invariant("tag expression payload arity differs from its checked type");
                 for (payloads, 0..) |payload, i| {
                     const expected_payload_ty = self.program.types.spanItem(payload_tys, i);
@@ -443,7 +454,7 @@ const Solver = struct {
             .fn_ref => |fn_ref| {
                 try self.unify(expected, self.program.fn_tys.items[@intFromEnum(fn_ref.fn_id)]);
                 const captures = self.liftedCapturesForFn(fn_ref.fn_id);
-                const capture_exprs = self.program.lifted.exprSpan(fn_ref.captures);
+                const capture_exprs = self.lifted.exprSpan(fn_ref.captures);
                 if (captures.len != capture_exprs.len) {
                     Common.invariant("function reference capture count differs from its target");
                 }
@@ -453,7 +464,7 @@ const Solver = struct {
             },
             .call_value => |call| {
                 const func = try self.functionShape(try self.inferExpr(call.callee));
-                const args = self.program.lifted.exprSpan(call.args);
+                const args = self.lifted.exprSpan(call.args);
                 if (func.args.count() != args.len) Common.invariant("value call arity differs from its checked type");
                 try self.unify(expected, func.ret);
                 for (args, 0..) |arg, i| {
@@ -461,23 +472,32 @@ const Solver = struct {
                 }
             },
             .call_proc => |call| {
-                const callee = Lifted.callProcCallee(call);
-                const func = try self.functionShape(self.program.fn_tys.items[@intFromEnum(callee)]);
-                const args = self.program.lifted.exprSpan(call.args);
-                if (func.args.count() != args.len) Common.invariant("procedure call arity differs from its checked type");
-                try self.unify(expected, func.ret);
-                for (args, 0..) |arg, i| {
-                    _ = try self.expectExpr(arg, self.program.types.spanItem(func.args, i));
-                }
-                const captures = self.liftedCapturesForFn(callee);
-                const capture_exprs = self.program.lifted.exprSpan(call.captures);
-                if (captures.len != capture_exprs.len) Common.invariant("procedure call capture count differs from its callee");
-                for (captures, capture_exprs) |capture, capture_expr| {
-                    _ = try self.expectExpr(capture_expr, self.localTy(capture.local));
+                const args = self.lifted.exprSpan(call.args);
+                switch (Lifted.directCallee(call)) {
+                    .local => |callee| {
+                        const func = try self.functionShape(self.program.fn_tys.items[@intFromEnum(callee)]);
+                        if (func.args.count() != args.len) Common.invariant("procedure call arity differs from its checked type");
+                        try self.unify(expected, func.ret);
+                        for (args, 0..) |arg, i| {
+                            _ = try self.expectExpr(arg, self.program.types.spanItem(func.args, i));
+                        }
+                        const captures = self.liftedCapturesForFn(callee);
+                        const capture_exprs = self.lifted.exprSpan(call.captures);
+                        if (captures.len != capture_exprs.len) Common.invariant("procedure call capture count differs from its callee");
+                        for (captures, capture_exprs) |capture, capture_expr| {
+                            _ = try self.expectExpr(capture_expr, self.localTy(capture.local));
+                        }
+                    },
+                    .imported => {
+                        for (args) |arg| {
+                            _ = try self.inferExpr(arg);
+                        }
+                        if (call.captures.len != 0) Common.invariant("imported direct call carried local capture operands");
+                    },
                 }
             },
             .low_level => |call| {
-                const args = self.program.lifted.exprSpan(call.args);
+                const args = self.lifted.exprSpan(call.args);
                 const arg_tys = try self.allocator.alloc(Type.TypeVarId, args.len);
                 defer self.allocator.free(arg_tys);
                 for (args, 0..) |arg, i| {
@@ -509,14 +529,14 @@ const Solver = struct {
             },
             .match_ => |match| {
                 const scrutinee_ty = try self.inferExpr(match.scrutinee);
-                for (self.program.lifted.branchSpan(match.branches)) |branch| {
+                for (self.lifted.branchSpan(match.branches)) |branch| {
                     try self.bindPattern(branch.pat, scrutinee_ty);
                     if (branch.guard) |guard| _ = try self.inferExpr(guard);
                     _ = try self.expectExpr(branch.body, expected);
                 }
             },
             .if_ => |if_| {
-                for (self.program.lifted.ifBranchSpan(if_.branches)) |branch| {
+                for (self.lifted.ifBranchSpan(if_.branches)) |branch| {
                     _ = try self.inferExpr(branch.cond);
                     _ = try self.expectExpr(branch.body, expected);
                 }
@@ -536,7 +556,7 @@ const Solver = struct {
                 };
                 var ok_ty: ?Type.TypeVarId = null;
                 for (tags) |tag| {
-                    if (!std.mem.eql(u8, self.program.lifted.names.tagLabelText(tag.name), "Ok")) continue;
+                    if (!std.mem.eql(u8, self.lifted.names.tagLabelText(tag.name), "Ok")) continue;
                     const payloads = self.program.types.span(tag.payloads);
                     if (payloads.len != 1) Common.invariant("try_sequence Ok tag had unexpected payload arity");
                     ok_ty = payloads[0];
@@ -553,7 +573,7 @@ const Solver = struct {
                 };
                 var ok_ty: ?Type.TypeVarId = null;
                 for (tags) |tag| {
-                    if (!std.mem.eql(u8, self.program.lifted.names.tagLabelText(tag.name), "Ok")) continue;
+                    if (!std.mem.eql(u8, self.lifted.names.tagLabelText(tag.name), "Ok")) continue;
                     const payloads = self.program.types.span(tag.payloads);
                     if (payloads.len != 1) Common.invariant("try_record_sequence Ok tag had unexpected payload arity");
                     ok_ty = payloads[0];
@@ -565,12 +585,12 @@ const Solver = struct {
                 _ = try self.expectExpr(sequence.ok_body, expected);
             },
             .block => |block| {
-                for (self.program.lifted.stmtSpan(block.statements)) |stmt| try self.inferStmt(stmt);
+                for (self.lifted.stmtSpan(block.statements)) |stmt| try self.inferStmt(stmt);
                 _ = try self.expectExpr(block.final_expr, expected);
             },
             .loop_ => |loop| {
-                const params = self.program.lifted.typedLocalSpan(loop.params);
-                const initials = self.program.lifted.exprSpan(loop.initial_values);
+                const params = self.lifted.typedLocalSpan(loop.params);
+                const initials = self.lifted.exprSpan(loop.initial_values);
                 if (params.len != initials.len) Common.invariant("loop parameter count differs from initial value count");
                 const param_tys = try self.allocator.alloc(Type.TypeVarId, params.len);
                 defer self.allocator.free(param_tys);
@@ -591,14 +611,14 @@ const Solver = struct {
             },
             .continue_ => |continue_| {
                 const params = self.currentLoopParams();
-                const values = self.program.lifted.exprSpan(continue_.values);
+                const values = self.lifted.exprSpan(continue_.values);
                 if (params.count() != values.len) Common.invariant("continue value count differs from loop parameter count");
                 for (values, 0..) |value, i| {
                     const param_ty = self.program.types.spanItem(params, i);
                     _ = try self.expectExpr(value, param_ty);
                 }
             },
-            .return_ => |ret| _ = try self.expectExpr(ret.value, self.returnTargetTy(ret.target)),
+            .return_ => |ret| _ = try self.expectExpr(ret.value, try self.returnTargetTy(ret.target)),
             .dbg,
             .expect,
             => |child| _ = try self.inferExpr(child),
@@ -609,9 +629,9 @@ const Solver = struct {
     }
 
     fn inferStmt(self: *Solver, stmt_id: Lifted.StmtId) Allocator.Error!void {
-        switch (self.program.lifted.stmts.items[@intFromEnum(stmt_id)]) {
+        switch (self.lifted.stmts[@intFromEnum(stmt_id)]) {
             .uninitialized => |pat| {
-                const pat_ty = try self.lowerTypeFresh(self.program.lifted.pats.items[@intFromEnum(pat)].ty);
+                const pat_ty = try self.lowerTypeFresh(self.lifted.pats[@intFromEnum(pat)].ty);
                 try self.bindPattern(pat, pat_ty);
             },
             .let_ => |let_| {
@@ -622,7 +642,7 @@ const Solver = struct {
             .expect,
             .dbg,
             => |expr| _ = try self.inferExpr(expr),
-            .return_ => |ret| _ = try self.expectExpr(ret.value, self.returnTargetTy(ret.target)),
+            .return_ => |ret| _ = try self.expectExpr(ret.value, try self.returnTargetTy(ret.target)),
             .crash => {},
         }
     }
@@ -631,26 +651,26 @@ const Solver = struct {
         const index = @intFromEnum(expr_id);
         if (self.expr_done[index]) return;
 
-        const expr = self.program.lifted.exprs.items[index];
+        const expr = self.lifted.exprs[index];
         switch (expr.data) {
             .record => |fields| {
                 _ = try self.exprSlot(expr_id);
                 self.expr_done[index] = true;
-                for (self.program.lifted.fieldExprSpan(fields)) |field| {
+                for (self.lifted.fieldExprSpan(fields)) |field| {
                     _ = try self.inferExpr(field.value);
                 }
             },
             .tuple => |items| {
                 _ = try self.exprSlot(expr_id);
                 self.expr_done[index] = true;
-                for (self.program.lifted.exprSpan(items)) |item| {
+                for (self.lifted.exprSpan(items)) |item| {
                     _ = try self.inferExpr(item);
                 }
             },
             .tag => |tag| {
                 _ = try self.exprSlot(expr_id);
                 self.expr_done[index] = true;
-                for (self.program.lifted.exprSpan(tag.payloads)) |payload| {
+                for (self.lifted.exprSpan(tag.payloads)) |payload| {
                     _ = try self.inferExpr(payload);
                 }
             },
@@ -671,8 +691,18 @@ const Solver = struct {
     }
 
     fn bindPattern(self: *Solver, pat_id: Lifted.PatId, value_ty: Type.TypeVarId) Allocator.Error!void {
-        const pat = self.program.lifted.pats.items[@intFromEnum(pat_id)];
+        const index = @intFromEnum(pat_id);
+        if (self.generated_backing_pats[index]) {
+            const pat_ty = self.pat_tys[index] orelse Common.invariant("generated backing pattern was marked before its type was assigned");
+            try self.unifyGeneratedOpaqueBacking(pat_ty, value_ty);
+            return;
+        }
         const pat_ty = try self.expectPat(pat_id, value_ty);
+        try self.bindPatternAtType(pat_id, pat_ty);
+    }
+
+    fn bindPatternAtType(self: *Solver, pat_id: Lifted.PatId, pat_ty: Type.TypeVarId) Allocator.Error!void {
+        const pat = self.lifted.pats[@intFromEnum(pat_id)];
         switch (pat.data) {
             .bind => |local| try self.unify(self.localTy(local), pat_ty),
             .wildcard,
@@ -683,7 +713,7 @@ const Solver = struct {
             .str_lit,
             => {},
             .str_pattern => |str| {
-                for (self.program.lifted.strPatternStepSpan(str.steps)) |step| {
+                for (self.lifted.strPatternStepSpan(str.steps)) |step| {
                     if (step.capture) |capture| {
                         try self.bindPattern(capture, pat_ty);
                     }
@@ -694,13 +724,13 @@ const Solver = struct {
                 try self.bindPattern(as.pattern, pat_ty);
             },
             .record => |fields| {
-                for (self.program.lifted.recordDestructSpan(fields)) |field| {
+                for (self.lifted.recordDestructSpan(fields)) |field| {
                     try self.bindPattern(field.pattern, try self.recordField(pat_ty, field.name));
                 }
             },
             .tuple => |items| {
                 const item_tys = try self.tupleItemsSpan(pat_ty);
-                const pats = self.program.lifted.patSpan(items);
+                const pats = self.lifted.patSpan(items);
                 if (item_tys.count() != pats.len) Common.invariant("tuple pattern arity differs from its checked type");
                 for (pats, 0..) |child, i| {
                     const item_ty = self.program.types.spanItem(item_tys, i);
@@ -709,7 +739,7 @@ const Solver = struct {
             },
             .list => |list| {
                 const elem_ty = try self.listElem(pat_ty);
-                for (self.program.lifted.patSpan(list.patterns)) |child| {
+                for (self.lifted.patSpan(list.patterns)) |child| {
                     try self.bindPattern(child, elem_ty);
                 }
                 // A captured rest is itself a list with the same element type.
@@ -717,7 +747,7 @@ const Solver = struct {
             },
             .tag => |tag| {
                 const payload_tys = try self.tagPayloadsSpan(pat_ty, tag.name);
-                const payloads = self.program.lifted.patSpan(tag.payloads);
+                const payloads = self.lifted.patSpan(tag.payloads);
                 if (payload_tys.count() != payloads.len) Common.invariant("tag pattern payload arity differs from its checked type");
                 for (payloads, 0..) |child, i| {
                     const payload_ty = self.program.types.spanItem(payload_tys, i);
@@ -725,12 +755,55 @@ const Solver = struct {
                 }
             },
             .nominal => |backing| {
-                if (try self.namedBacking(pat_ty)) |backing_ty| {
-                    try self.bindPattern(backing, backing_ty);
+                if (self.hasGeneratedOpaquePatOwner(pat_id) or self.hasBuiltinOwner(pat_ty, .fields) or self.hasBuiltinOwner(pat_ty, .field)) {
+                    try self.bindGeneratedOpaqueBackingPattern(backing);
                 } else {
-                    try self.bindPattern(backing, pat_ty);
+                    if (try self.namedBacking(pat_ty)) |backing_ty| {
+                        try self.bindPattern(backing, backing_ty);
+                    } else {
+                        try self.bindPattern(backing, pat_ty);
+                    }
                 }
             },
+        }
+    }
+
+    fn hasGeneratedOpaquePatOwner(self: *Solver, pat_id: Lifted.PatId) bool {
+        return switch (self.lifted.types.get(self.lifted.pats[@intFromEnum(pat_id)].ty)) {
+            .named => |named| isGeneratedOpaqueEvidenceOwner(named.builtin_owner),
+            else => false,
+        };
+    }
+
+    fn bindGeneratedOpaqueBackingPattern(self: *Solver, pat_id: Lifted.PatId) Allocator.Error!void {
+        const index = @intFromEnum(pat_id);
+        if (self.generated_backing_pats[index]) return;
+        self.generated_backing_pats[index] = true;
+        const pat_ty = try self.lowerTypeFresh(self.lifted.pats[@intFromEnum(pat_id)].ty);
+        self.pat_tys[index] = pat_ty;
+        try self.bindPatternAtType(pat_id, pat_ty);
+    }
+
+    fn unifyGeneratedOpaqueBacking(self: *Solver, generated_ty: Type.TypeVarId, expected_ty: Type.TypeVarId) Allocator.Error!void {
+        const generated = self.program.types.root(generated_ty);
+        const expected = self.program.types.root(expected_ty);
+        if (generated == expected) return;
+
+        const generated_score = generatedBackingScore(self.program.types.get(generated)) orelse {
+            try self.unify(generated, expected);
+            return;
+        };
+        const expected_score = generatedBackingScore(self.program.types.get(expected)) orelse {
+            try self.unify(generated, expected);
+            return;
+        };
+
+        if (generated_score > expected_score) {
+            self.program.types.set(expected, .{ .link = generated });
+        } else if (expected_score > generated_score) {
+            self.program.types.set(generated, .{ .link = expected });
+        } else {
+            try self.unify(generated, expected);
         }
     }
 
@@ -745,11 +818,14 @@ const Solver = struct {
         const index = @intFromEnum(expr_id);
         if (self.expr_tys[index]) |ty| return ty;
 
-        const expr = self.program.lifted.exprs.items[index];
+        const expr = self.lifted.exprs[index];
         const ty = switch (expr.data) {
             .local => |local| self.localTy(local),
             .fn_ref => |fn_ref| self.program.fn_tys.items[@intFromEnum(fn_ref.fn_id)],
-            .call_proc => |call| (try self.functionShape(self.program.fn_tys.items[@intFromEnum(Lifted.callProcCallee(call))])).ret,
+            .call_proc => |call| switch (Lifted.directCallee(call)) {
+                .local => |callee| (try self.functionShape(self.program.fn_tys.items[@intFromEnum(callee)])).ret,
+                .imported => try self.lowerTypeFresh(expr.ty),
+            },
             else => try self.lowerTypeFresh(expr.ty),
         };
         self.expr_tys[index] = ty;
@@ -763,7 +839,7 @@ const Solver = struct {
             return self.program.types.root(ty);
         }
 
-        const expr = self.program.lifted.exprs.items[index];
+        const expr = self.lifted.exprs[index];
         const ty = switch (expr.data) {
             .local => |local| self.localTy(local),
             .fn_ref => |fn_ref| self.program.fn_tys.items[@intFromEnum(fn_ref.fn_id)],
@@ -781,7 +857,7 @@ const Solver = struct {
             return self.program.types.root(ty);
         }
 
-        const pat = self.program.lifted.pats.items[index];
+        const pat = self.lifted.pats[index];
         const ty = switch (pat.data) {
             .bind => |local| self.localTy(local),
             .as => |as| self.localTy(as.local),
@@ -800,27 +876,25 @@ const Solver = struct {
     }
 
     fn liftedCapturesForFn(self: *Solver, fn_id: Lifted.FnId) []const Lifted.TypedLocal {
-        return self.program.lifted.typedLocalSpan(self.program.lifted.fns.items[@intFromEnum(fn_id)].captures);
+        return self.lifted.typedLocalSpan(self.lifted.fns[@intFromEnum(fn_id)].captures);
     }
 
     fn localTy(self: *Solver, local: Lifted.LocalId) Type.TypeVarId {
         return self.local_tys[@intFromEnum(local)] orelse Common.invariant("Lambda Solved local reached solver without a type slot");
     }
 
-    fn returnTargetTy(self: *Solver, target: MonoType.TypeId) Type.TypeVarId {
+    fn returnTargetTy(self: *Solver, target: MonoType.TypeId) Allocator.Error!Type.TypeVarId {
         if (self.return_contexts.items.len == 0) Common.invariant("return expression reached Lambda Solved outside a function");
         const context = self.return_contexts.items[self.return_contexts.items.len - 1];
-        if (!self.sameMonoType(target, context.mono_ret)) {
+        if (!try self.sameMonoType(target, context.mono_ret)) {
             Common.invariant("return target type differed from enclosing function return type");
         }
         return context.solved_ret;
     }
 
-    fn sameMonoType(self: *Solver, a: MonoType.TypeId, b: MonoType.TypeId) bool {
+    fn sameMonoType(self: *Solver, a: MonoType.TypeId, b: MonoType.TypeId) Allocator.Error!bool {
         if (a == b) return true;
-        const a_digest = self.program.lifted.types.typeDigest(&self.program.lifted.names, a);
-        const b_digest = self.program.lifted.types.typeDigest(&self.program.lifted.names, b);
-        return std.mem.eql(u8, a_digest.bytes[0..], b_digest.bytes[0..]);
+        return try self.lifted.types.typeEql(self.allocator, self.lifted.names, a, b);
     }
 
     fn currentLoopResult(self: *Solver) Type.TypeVarId {
@@ -936,7 +1010,7 @@ const Solver = struct {
         return switch (try self.shapeContent(ty)) {
             .record => |fields| {
                 for (self.program.types.fieldSpan(fields)) |field| {
-                    if (std.mem.eql(u8, self.program.lifted.names.recordFieldLabelText(field.name), label)) return field.ty;
+                    if (std.mem.eql(u8, self.lifted.names.recordFieldLabelText(field.name), label)) return field.ty;
                 }
                 Common.invariant("low-level record result was missing a required field");
             },
@@ -970,6 +1044,13 @@ const Solver = struct {
             .named => |named| if (named.builtin_owner) |builtin_owner| builtin_owner == owner else false,
             else => false,
         };
+    }
+
+    fn generatedOpaqueEvidenceScore(self: *Solver, named: anytype) u8 {
+        if (!isGeneratedOpaqueEvidenceOwner(named.builtin_owner)) return 0;
+
+        const backing = named.backing orelse return 0;
+        return generatedBackingScore(self.program.types.rootContent(backing.ty)) orelse 2;
     }
 
     fn bindLowLevelTypes(
@@ -1245,7 +1326,19 @@ const Solver = struct {
                         Common.invariant("named type identity failed Lambda Solved unification");
                     }
                     try self.unifySpans(left_named.args, right_named.args, "named type arguments failed Lambda Solved unification");
-                    if (!sameBuiltinOwner(left_named.builtin_owner, right_named.builtin_owner, .fields)) {
+                    // Aliases have already been unwrapped above. Generated
+                    // opaque evidence uses its backing only to carry generated
+                    // compile-time evidence rows, so two values with the same nominal
+                    // identity may intentionally have different backing rows.
+                    if (isGeneratedOpaqueEvidenceOwner(left_named.builtin_owner) or
+                        isGeneratedOpaqueEvidenceOwner(right_named.builtin_owner))
+                    {
+                        if (self.generatedOpaqueEvidenceScore(right_named) > self.generatedOpaqueEvidenceScore(left_named)) {
+                            self.program.types.set(a, .{ .link = b });
+                        } else {
+                            self.program.types.set(b, .{ .link = a });
+                        }
+                    } else {
                         if (left_named.backing) |left_backing| {
                             const right_backing = right_named.backing orelse Common.invariant("named type backing differed during Lambda Solved unification");
                             if (left_backing.use != right_backing.use) Common.invariant("named type backing use differed during Lambda Solved unification");
@@ -1253,8 +1346,8 @@ const Solver = struct {
                         } else if (right_named.backing != null) {
                             Common.invariant("named type backing differed during Lambda Solved unification");
                         }
+                        self.program.types.set(b, .{ .link = a });
                     }
-                    self.program.types.set(b, .{ .link = a });
                 },
                 else => Common.invariant("named type failed Lambda Solved unification"),
             },
@@ -1395,7 +1488,7 @@ const Solver = struct {
                 const field_slice = self.program.types.fieldSpan(fields);
                 writeU32(hasher, @intCast(field_slice.len));
                 for (field_slice) |field| {
-                    writeBytes(hasher, self.program.lifted.names.recordFieldLabelText(field.name));
+                    writeBytes(hasher, self.lifted.names.recordFieldLabelText(field.name));
                     try self.writeSolvedTypeDigest(hasher, field.ty, active);
                 }
             },
@@ -1404,15 +1497,15 @@ const Solver = struct {
                 const tag_slice = self.program.types.tagSpan(tags);
                 writeU32(hasher, @intCast(tag_slice.len));
                 for (tag_slice) |tag| {
-                    writeBytes(hasher, self.program.lifted.names.tagLabelText(tag.name));
+                    writeBytes(hasher, self.lifted.names.tagLabelText(tag.name));
                     try self.writeSolvedTypeSpanDigest(hasher, tag.payloads, active);
                 }
             },
             .named => |named| {
                 writeBytes(hasher, "named");
                 hasher.update(&named.named_type.module.bytes);
-                writeBytes(hasher, self.program.lifted.names.moduleNameText(named.def.module_name));
-                writeBytes(hasher, self.program.lifted.names.typeNameText(named.def.type_name));
+                writeBytes(hasher, self.lifted.names.moduleNameText(named.def.module_name));
+                writeBytes(hasher, self.lifted.names.typeNameText(named.def.type_name));
                 writeBytes(hasher, @tagName(named.kind));
                 if (named.builtin_owner) |owner| {
                     writeBytes(hasher, "builtin");
@@ -1482,8 +1575,7 @@ const TypeCloner = struct {
         if (self.map.get(ty)) |cached| return cached;
         const reserved = try self.solver.program.types.add(.unbound);
         try self.map.put(ty, reserved);
-        const content = self.solver.program.lifted.types.get(ty);
-        self.solver.program.types.set(reserved, try self.lowerContent(content));
+        self.solver.program.types.set(reserved, try self.lowerContent(self.solver.lifted.types.get(ty)));
         return reserved;
     }
 
@@ -1491,7 +1583,7 @@ const TypeCloner = struct {
     /// declared-field store into the Lambda Solved store. Named entries copy the
     /// shared field-name id; padding entries re-lower their reserved type.
     fn lowerDeclaredOrder(self: *TypeCloner, span: MonoType.Span) Allocator.Error!Type.Span {
-        const source = self.solver.program.lifted.types.declaredFieldSpan(span);
+        const source = self.solver.lifted.types.declaredFieldSpan(span);
         if (source.len == 0) return Type.Span.empty();
         const lowered = try self.solver.allocator.alloc(Type.DeclaredField, source.len);
         defer self.solver.allocator.free(lowered);
@@ -1512,14 +1604,14 @@ const TypeCloner = struct {
             .list => |elem| .{ .list = try self.lower(elem) },
             .box => |elem| .{ .box = try self.lower(elem) },
             .tuple => |items| blk: {
-                const lowered = try self.lowerTypeSpan(self.solver.program.lifted.types.span(items));
+                const lowered = try self.lowerTypeSpan(self.solver.lifted.types.span(items));
                 defer self.solver.allocator.free(lowered);
                 break :blk .{ .tuple = try self.solver.program.types.addSpan(lowered) };
             },
             .record => |fields| blk: {
                 const lowered = try self.solver.allocator.alloc(Type.Field, fields.len);
                 defer self.solver.allocator.free(lowered);
-                for (self.solver.program.lifted.types.fieldSpan(fields), 0..) |field, i| {
+                for (self.solver.lifted.types.fieldSpan(fields), 0..) |field, i| {
                     lowered[i] = .{
                         .name = field.name,
                         .ty = try self.lower(field.ty),
@@ -1530,8 +1622,8 @@ const TypeCloner = struct {
             .tag_union => |tags| blk: {
                 const lowered = try self.solver.allocator.alloc(Type.Tag, tags.len);
                 defer self.solver.allocator.free(lowered);
-                for (self.solver.program.lifted.types.tagSpan(tags), 0..) |tag, i| {
-                    const payloads = try self.lowerTypeSpan(self.solver.program.lifted.types.span(tag.payloads));
+                for (self.solver.lifted.types.tagSpan(tags), 0..) |tag, i| {
+                    const payloads = try self.lowerTypeSpan(self.solver.lifted.types.span(tag.payloads));
                     defer self.solver.allocator.free(payloads);
                     lowered[i] = .{
                         .name = tag.name,
@@ -1542,7 +1634,7 @@ const TypeCloner = struct {
                 break :blk .{ .tag_union = try self.solver.program.types.addTags(lowered) };
             },
             .named => |named| blk: {
-                const args = try self.lowerTypeSpan(self.solver.program.lifted.types.span(named.args));
+                const args = try self.lowerTypeSpan(self.solver.lifted.types.span(named.args));
                 defer self.solver.allocator.free(args);
                 break :blk .{ .named = .{
                     .named_type = named.named_type,
@@ -1551,7 +1643,7 @@ const TypeCloner = struct {
                     .builtin_owner = named.builtin_owner,
                     .args = try self.solver.program.types.addSpan(args),
                     .backing = if (named.backing) |raw_backing| blk_backing: {
-                        const backing_ty = if (builtinBackingSpecializes(named.builtin_owner))
+                        const backing_ty = if (isGeneratedOpaqueEvidenceOwner(named.builtin_owner))
                             raw_backing.ty
                         else
                             try self.structuralBackingForNamed(named.def, raw_backing.ty);
@@ -1564,7 +1656,7 @@ const TypeCloner = struct {
                 } };
             },
             .func => |fn_ty| blk: {
-                const args = try self.lowerTypeSpan(self.solver.program.lifted.types.span(fn_ty.args));
+                const args = try self.lowerTypeSpan(self.solver.lifted.types.span(fn_ty.args));
                 defer self.solver.allocator.free(args);
                 break :blk .{ .func = .{
                     .args = try self.solver.program.types.addSpan(args),
@@ -1593,7 +1685,7 @@ const TypeCloner = struct {
         while (true) {
             if (seen.contains(current)) return current;
             try seen.put(current, {});
-            switch (self.solver.program.lifted.types.get(current)) {
+            switch (self.solver.lifted.types.get(current)) {
                 .named => |named| {
                     if (named.kind != .alias and !sameMonoTypeDef(named.def, owner_def)) return current;
                     const next = named.backing orelse return current;
@@ -1605,20 +1697,23 @@ const TypeCloner = struct {
     }
 };
 
-fn builtinBackingSpecializes(owner: ?static_dispatch.BuiltinOwner) bool {
-    return switch (owner orelse return false) {
+fn generatedBackingScore(content: Type.Content) ?u8 {
+    return switch (content) {
+        .record => |fields| if (fields.count() == 0) 1 else 2,
+        .zst => 1,
+        else => null,
+    };
+}
+
+fn isGeneratedOpaqueEvidenceOwner(owner: ?static_dispatch.BuiltinOwner) bool {
+    const actual = owner orelse return false;
+    return switch (actual) {
         .fields,
         .field,
         .parse_tag_union_spec,
         => true,
         else => false,
     };
-}
-
-fn sameBuiltinOwner(left: ?static_dispatch.BuiltinOwner, right: ?static_dispatch.BuiltinOwner, owner: static_dispatch.BuiltinOwner) bool {
-    const left_owner = left orelse return false;
-    const right_owner = right orelse return false;
-    return left_owner == owner and right_owner == owner;
 }
 
 fn sameMonoTypeDef(left: MonoType.TypeDef, right: MonoType.TypeDef) bool {

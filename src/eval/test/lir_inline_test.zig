@@ -12,6 +12,9 @@ const Allocator = std.mem.Allocator;
 const LIR = lir.LIR;
 const layout_mod = @import("layout");
 const LayoutIdx = layout_mod.Idx;
+const MonoAst = postcheck.Monotype.Ast;
+const MonoLower = postcheck.Monotype.Lower;
+const MonoType = postcheck.Monotype.Type;
 
 const TestError = helpers.TestHelperError || eval.BuiltinModules.InitError || error{
     TestExpectedEqual,
@@ -43,6 +46,16 @@ const LiftedSource = struct {
 
     fn deinit(self: *LiftedSource, allocator: Allocator) void {
         self.lifted.deinit();
+        helpers.cleanupParseAndCanonical(allocator, self.resources);
+    }
+};
+
+const MonotypeSource = struct {
+    resources: helpers.ParsedResources,
+    mono: postcheck.Monotype.Ast.Program,
+
+    fn deinit(self: *MonotypeSource, allocator: Allocator) void {
+        self.mono.deinit();
         helpers.cleanupParseAndCanonical(allocator, self.resources);
     }
 };
@@ -119,6 +132,249 @@ fn lowerModuleWithOptions(
         .resources = resources,
         .lowered = lowered,
     };
+}
+
+fn monotypeCountersForModule(
+    allocator: Allocator,
+    source: []const u8,
+) TestError!postcheck.Monotype.Lower.SpecializationCounters {
+    return monotypeCountersForModuleWithImports(allocator, source, &.{});
+}
+
+fn lowerMonotypeModule(
+    allocator: Allocator,
+    source: []const u8,
+) TestError!MonotypeSource {
+    return lowerMonotypeModuleWithOptions(allocator, source, .{});
+}
+
+const LowerMonotypeOptions = struct {
+    specialization_cache: MonoLower.SpecializationCacheControl = .{},
+    loaded_specialization_shards: []const MonoLower.LoadedSpecializationShard = &.{},
+    specialization_counters: ?*MonoLower.SpecializationCounters = null,
+};
+
+fn lowerMonotypeModuleWithOptions(
+    allocator: Allocator,
+    source: []const u8,
+    options: LowerMonotypeOptions,
+) TestError!MonotypeSource {
+    var resources = try helpers.parseAndCanonicalizeProgramWithBuiltin(allocator, .module, source, &.{}, try sharedPrePublishedBuiltin());
+    errdefer helpers.cleanupParseAndCanonical(allocator, resources);
+
+    const import_count = resources.import_artifacts.len + if (resources.borrowed_builtin_artifact == null) @as(usize, 0) else 1;
+    const import_views = try allocator.alloc(check.CheckedArtifact.ImportedModuleView, import_count);
+    defer allocator.free(import_views);
+
+    var view_index: usize = 0;
+    if (resources.borrowed_builtin_artifact) |builtin_artifact| {
+        import_views[view_index] = check.CheckedArtifact.importedView(builtin_artifact);
+        view_index += 1;
+    }
+    for (resources.import_artifacts) |*artifact| {
+        import_views[view_index] = check.CheckedArtifact.importedView(artifact);
+        view_index += 1;
+    }
+
+    var mono = try postcheck.Monotype.Lower.run(
+        allocator,
+        .{
+            .root = check.CheckedArtifact.loweringView(&resources.checked_artifact),
+            .imports = import_views,
+        },
+        .{ .requests = resources.checked_artifact.root_requests.requests },
+        .{
+            .specialization_cache = options.specialization_cache,
+            .loaded_specialization_shards = options.loaded_specialization_shards,
+            .specialization_counters = options.specialization_counters,
+        },
+    );
+    errdefer mono.deinit();
+
+    return .{
+        .resources = resources,
+        .mono = mono,
+    };
+}
+
+fn monotypeCountersForModuleWithImports(
+    allocator: Allocator,
+    source: []const u8,
+    imports: []const helpers.ModuleSource,
+) TestError!postcheck.Monotype.Lower.SpecializationCounters {
+    var resources = try helpers.parseAndCanonicalizeProgramWithBuiltin(allocator, .module, source, imports, try sharedPrePublishedBuiltin());
+    defer helpers.cleanupParseAndCanonical(allocator, resources);
+
+    const import_count = resources.import_artifacts.len + if (resources.borrowed_builtin_artifact == null) @as(usize, 0) else 1;
+    const import_views = try allocator.alloc(check.CheckedArtifact.ImportedModuleView, import_count);
+    defer allocator.free(import_views);
+
+    var view_index: usize = 0;
+    if (resources.borrowed_builtin_artifact) |builtin_artifact| {
+        import_views[view_index] = check.CheckedArtifact.importedView(builtin_artifact);
+        view_index += 1;
+    }
+    for (resources.import_artifacts) |*artifact| {
+        import_views[view_index] = check.CheckedArtifact.importedView(artifact);
+        view_index += 1;
+    }
+
+    var counters: postcheck.Monotype.Lower.SpecializationCounters = .{};
+    var mono = try postcheck.Monotype.Lower.run(
+        allocator,
+        .{
+            .root = check.CheckedArtifact.loweringView(&resources.checked_artifact),
+            .imports = import_views,
+        },
+        .{ .requests = resources.checked_artifact.root_requests.requests },
+        .{ .specialization_counters = &counters },
+    );
+    defer mono.deinit();
+
+    return counters;
+}
+
+fn expectEquivalentMonotypeProgramViews(lhs: postcheck.Monotype.Ast.ProgramView, rhs: postcheck.Monotype.Ast.ProgramView) error{TestExpectedEqual}!void {
+    try std.testing.expectEqual(lhs.next_symbol, rhs.next_symbol);
+
+    try std.testing.expectEqualSlices(postcheck.Monotype.Type.Content, lhs.types.types, rhs.types.types);
+    try std.testing.expectEqualSlices(?check.CheckedNames.TypeDigest, lhs.types.type_digests, rhs.types.type_digests);
+    try std.testing.expectEqualSlices(postcheck.Monotype.Type.TypeId, lhs.types.spans, rhs.types.spans);
+    try std.testing.expectEqualSlices(postcheck.Monotype.Type.Field, lhs.types.fields, rhs.types.fields);
+    try std.testing.expectEqualSlices(postcheck.Monotype.Type.Tag, lhs.types.tags, rhs.types.tags);
+    try std.testing.expectEqualSlices(postcheck.Monotype.Type.DeclaredField, lhs.types.declared_fields, rhs.types.declared_fields);
+
+    try std.testing.expectEqualSlices(postcheck.Monotype.Ast.SpecRecord, lhs.specs, rhs.specs);
+    try std.testing.expectEqualSlices(postcheck.Monotype.Ast.ImportedFn, lhs.imported_fns, rhs.imported_fns);
+    try std.testing.expectEqualSlices(postcheck.Monotype.Ast.Fn, lhs.fns, rhs.fns);
+    try std.testing.expectEqualSlices(postcheck.Monotype.Ast.Def, lhs.defs, rhs.defs);
+    try std.testing.expectEqualSlices(postcheck.Monotype.Ast.NestedDef, lhs.nested_defs, rhs.nested_defs);
+    try std.testing.expectEqualSlices(postcheck.Monotype.Ast.Expr, lhs.exprs, rhs.exprs);
+    try std.testing.expectEqualSlices(postcheck.Monotype.Ast.Pat, lhs.pats, rhs.pats);
+    try std.testing.expectEqualSlices(postcheck.Monotype.Ast.Stmt, lhs.stmts, rhs.stmts);
+    try std.testing.expectEqualSlices(postcheck.Monotype.Ast.Local, lhs.locals, rhs.locals);
+    try std.testing.expectEqualSlices(postcheck.Monotype.Ast.ExprId, lhs.expr_ids, rhs.expr_ids);
+    try std.testing.expectEqualSlices(postcheck.Monotype.Ast.PatId, lhs.pat_ids, rhs.pat_ids);
+    try std.testing.expectEqualSlices(postcheck.Monotype.Ast.TypedLocal, lhs.typed_locals, rhs.typed_locals);
+    try std.testing.expectEqualSlices(postcheck.Monotype.Ast.StmtId, lhs.stmt_ids, rhs.stmt_ids);
+    try std.testing.expectEqualSlices(postcheck.Monotype.Ast.FieldExpr, lhs.field_exprs, rhs.field_exprs);
+    try std.testing.expectEqualSlices(postcheck.Monotype.Ast.RecordDestruct, lhs.record_destructs, rhs.record_destructs);
+    try std.testing.expectEqualSlices(postcheck.Monotype.Ast.StrPatternStep, lhs.str_pattern_steps, rhs.str_pattern_steps);
+    try std.testing.expectEqualSlices(postcheck.Monotype.Ast.Branch, lhs.branches, rhs.branches);
+    try std.testing.expectEqualSlices(postcheck.Monotype.Ast.IfBranch, lhs.if_branches, rhs.if_branches);
+    try std.testing.expectEqualSlices(postcheck.Monotype.Ast.Root, lhs.roots, rhs.roots);
+    try std.testing.expectEqualSlices(postcheck.Monotype.Ast.LayoutRequest, lhs.layout_requests, rhs.layout_requests);
+    try std.testing.expectEqualSlices(postcheck.Monotype.Ast.RuntimeSchemaRequest, lhs.runtime_schema_requests, rhs.runtime_schema_requests);
+    try std.testing.expectEqualSlices(base.SourceLoc, lhs.expr_locs, rhs.expr_locs);
+    try std.testing.expectEqualSlices(base.Region, lhs.expr_regions, rhs.expr_regions);
+    try std.testing.expectEqualSlices(base.SourceLoc, lhs.stmt_locs, rhs.stmt_locs);
+    try std.testing.expectEqualSlices(base.Region, lhs.stmt_regions, rhs.stmt_regions);
+}
+
+const DurableTypeSnapshot = struct {
+    view: MonoType.DurableView,
+    type_digests: []check.CheckedNames.TypeDigest,
+
+    fn deinit(self: DurableTypeSnapshot, allocator: Allocator) void {
+        allocator.free(self.type_digests);
+    }
+};
+
+fn durableTypeSnapshot(allocator: Allocator, program: *const MonoAst.Program) Allocator.Error!DurableTypeSnapshot {
+    const store_view = program.types.view();
+    const type_digests = try allocator.alloc(check.CheckedNames.TypeDigest, store_view.types.len);
+    errdefer allocator.free(type_digests);
+
+    for (type_digests, 0..) |*digest, index| {
+        digest.* = store_view.type_digests[index] orelse
+            program.types.typeDigest(&program.names, @enumFromInt(@as(u32, @intCast(index))));
+    }
+
+    return .{
+        .view = .{
+            .types = store_view.types,
+            .type_digests = type_digests,
+            .spans = store_view.spans,
+            .fields = store_view.fields,
+            .tags = store_view.tags,
+            .declared_fields = store_view.declared_fields,
+        },
+        .type_digests = type_digests,
+    };
+}
+
+fn digestBytesEqual(lhs: check.CheckedNames.TypeDigest, rhs: check.CheckedNames.TypeDigest) bool {
+    return std.mem.eql(u8, lhs.bytes[0..], rhs.bytes[0..]);
+}
+
+fn specRecordMatches(
+    allocator: Allocator,
+    name_store: *const check.CheckedNames.NameStore,
+    candidate_types: anytype,
+    candidate: MonoAst.SpecRecord,
+    expected_types: anytype,
+    expected: MonoAst.SpecRecord,
+) Allocator.Error!bool {
+    if (!std.meta.eql(candidate.identity.callable, expected.identity.callable)) return false;
+    if (!digestBytesEqual(candidate.identity.source_fn_ty_digest, expected.identity.source_fn_ty_digest)) return false;
+    if (!digestBytesEqual(candidate.identity.mono_fn_ty_digest, expected.identity.mono_fn_ty_digest)) return false;
+    return try MonoType.typeEqlAcrossStores(
+        allocator,
+        name_store,
+        candidate_types,
+        candidate.identity.mono_fn_ty,
+        expected_types,
+        expected.identity.mono_fn_ty,
+    );
+}
+
+fn specCoveredByLocalOrLoaded(
+    allocator: Allocator,
+    cached: MonoAst.ProgramView,
+    loaded: MonoLower.LoadedSpecializationShard,
+    expected_types: anytype,
+    expected: MonoAst.SpecRecord,
+) Allocator.Error!bool {
+    for (cached.specs) |candidate| {
+        if (try specRecordMatches(allocator, cached.names, cached.types, candidate, expected_types, expected)) return true;
+    }
+
+    for (loaded.specs) |candidate| {
+        if (try specRecordMatches(allocator, cached.names, loaded.types, candidate, expected_types, expected)) return true;
+    }
+
+    return false;
+}
+
+fn expectSpecsCoveredByCachedOrLoaded(
+    allocator: Allocator,
+    no_cache: MonoAst.ProgramView,
+    cached: MonoAst.ProgramView,
+    loaded: MonoLower.LoadedSpecializationShard,
+) TestError!void {
+    for (no_cache.specs) |expected| {
+        if (!try specCoveredByLocalOrLoaded(allocator, cached, loaded, no_cache.types, expected)) {
+            return error.MissingProcSpec;
+        }
+    }
+}
+
+fn isUnaryPrimitiveFnSpec(view: MonoAst.ProgramView, record: MonoAst.SpecRecord, primitive: MonoType.Primitive) bool {
+    const func = switch (view.types.get(record.identity.mono_fn_ty)) {
+        .func => |func| func,
+        else => return false,
+    };
+    const args = view.types.span(func.args);
+    if (args.len != 1) return false;
+    const arg_matches = switch (view.types.get(args[0])) {
+        .primitive => |arg| arg == primitive,
+        else => false,
+    };
+    const ret_matches = switch (view.types.get(func.ret)) {
+        .primitive => |ret| ret == primitive,
+        else => false,
+    };
+    return arg_matches and ret_matches;
 }
 
 fn lowerModuleWithInlineExpects(
@@ -1115,6 +1371,375 @@ fn expectRootTargetHasCalls(
     defer allocator.free(target_calls);
 
     try std.testing.expect(target_calls.len > 0);
+}
+
+fn nestedSite(def: postcheck.Monotype.Ast.NestedDef) ?postcheck.Monotype.Ast.NestedFn {
+    return switch (def.fn_def.fn_def) {
+        .nested => |site| site,
+        else => null,
+    };
+}
+
+fn sameNestedSourceSite(
+    lhs: postcheck.Monotype.Ast.NestedFn,
+    rhs: postcheck.Monotype.Ast.NestedFn,
+) bool {
+    return std.mem.eql(u8, lhs.owner.artifact.bytes[0..], rhs.owner.artifact.bytes[0..]) and
+        lhs.owner.proc_base == rhs.owner.proc_base and
+        lhs.owner.template == rhs.owner.template and
+        lhs.site == rhs.site;
+}
+
+test "issue 9802 same-type map2 specialization counters are bounded" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\module [main]
+        \\
+        \\Boxed(a) := [Boxed(a)]
+        \\
+        \\const : a -> Boxed(a)
+        \\const = |value| Boxed(value)
+        \\
+        \\map2 : Boxed(a), Boxed(b), (a, b -> c) -> Boxed(c)
+        \\map2 = |Boxed(left), Boxed(right), f| Boxed(f(left, right))
+        \\
+        \\unwrap : Boxed(a) -> a
+        \\unwrap = |Boxed(value)| value
+        \\
+        \\main : I64
+        \\main = {
+        \\    v0 = const(0)
+        \\    v1 = map2(v0, const(1), |a, b| a + b)
+        \\    v2 = map2(v1, const(2), |a, b| a + b)
+        \\    v3 = map2(v2, const(3), |a, b| a + b)
+        \\    v4 = map2(v3, const(4), |a, b| a + b)
+        \\    v5 = map2(v4, const(5), |a, b| a + b)
+        \\    v6 = map2(v5, const(6), |a, b| a + b)
+        \\    v7 = map2(v6, const(7), |a, b| a + b)
+        \\    v8 = map2(v7, const(8), |a, b| a + b)
+        \\    unwrap(v8)
+        \\}
+    ;
+
+    const counters = try monotypeCountersForModule(allocator, source);
+
+    try std.testing.expectEqual(postcheck.Monotype.Lower.SpecializationCounters{
+        .template_requests = 53,
+        .template_hits = 22,
+        .template_misses = 5,
+        .nested_requests = 8,
+        .nested_hits = 0,
+        .nested_misses = 8,
+        .template_lookup_candidates = 22,
+        .nested_lookup_candidates = 0,
+        .specialization_type_digest_requests = 75,
+        .specialization_type_digest_cache_hits = 140,
+        .specialization_type_digest_cache_misses = 128,
+        .specialization_type_digest_nodes_visited = 128,
+        .exact_type_checks = 22,
+    }, counters);
+}
+
+test "issue 9802 growing-structural map2 specialization counters are bounded" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\module [main]
+        \\
+        \\Boxed(a) := [Boxed(a)]
+        \\
+        \\const : a -> Boxed(a)
+        \\const = |value| Boxed(value)
+        \\
+        \\map2 : Boxed(a), Boxed(b), (a, b -> c) -> Boxed(c)
+        \\map2 = |Boxed(left), Boxed(right), f| Boxed(f(left, right))
+        \\
+        \\unwrap : Boxed(a) -> a
+        \\unwrap = |Boxed(value)| value
+        \\
+        \\main : I64
+        \\main = {
+        \\    v0 = const(0)
+        \\    v1 = map2(v0, const(1), |acc, n| { acc, n1: n })
+        \\    v2 = map2(v1, const(2), |acc, n| { acc, n2: n })
+        \\    v3 = map2(v2, const(3), |acc, n| { acc, n3: n })
+        \\    v4 = map2(v3, const(4), |acc, n| { acc, n4: n })
+        \\    v5 = map2(v4, const(5), |acc, n| { acc, n5: n })
+        \\    v6 = map2(v5, const(6), |acc, n| { acc, n6: n })
+        \\    unwrap(v6).n6
+        \\}
+    ;
+
+    const counters = try monotypeCountersForModule(allocator, source);
+
+    try std.testing.expectEqual(postcheck.Monotype.Lower.SpecializationCounters{
+        .template_requests = 29,
+        .template_hits = 5,
+        .template_misses = 10,
+        .nested_requests = 6,
+        .nested_hits = 0,
+        .nested_misses = 6,
+        .template_lookup_candidates = 5,
+        .nested_lookup_candidates = 0,
+        .specialization_type_digest_requests = 52,
+        .specialization_type_digest_cache_hits = 245,
+        .specialization_type_digest_cache_misses = 290,
+        .specialization_type_digest_nodes_visited = 290,
+        .exact_type_checks = 5,
+    }, counters);
+}
+
+test "imported and local generic specialization counters reuse closed types" {
+    const allocator = std.testing.allocator;
+    const util_module =
+        \\module [identity]
+        \\
+        \\identity : a -> a
+        \\identity = |value| value
+    ;
+    const source =
+        \\module [main]
+        \\
+        \\import Util exposing [identity]
+        \\
+        \\Boxed(a) := [Boxed(a)]
+        \\
+        \\local_identity : a -> a
+        \\local_identity = |value| value
+        \\
+        \\main : { imported_a : Boxed(U64), imported_b : Boxed(U64), local_a : Boxed(U64), local_b : Boxed(U64) }
+        \\main = {
+        \\    value = Boxed(1)
+        \\    {
+        \\        imported_a: identity(value),
+        \\        imported_b: identity(value),
+        \\        local_a: local_identity(value),
+        \\        local_b: local_identity(value),
+        \\    }
+        \\}
+    ;
+
+    const counters = try monotypeCountersForModuleWithImports(allocator, source, &.{
+        .{ .name = "Util", .source = util_module },
+    });
+
+    try std.testing.expect(counters.template_requests >= 4);
+    try std.testing.expect(counters.template_misses >= 2);
+    try std.testing.expect(counters.template_hits >= 2);
+    try std.testing.expect(counters.template_lookup_candidates <= counters.template_requests);
+}
+
+test "disabling monotype specialization cache does not change monotype output" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\module [main]
+        \\
+        \\identity : a -> a
+        \\identity = |value| value
+        \\
+        \\main : { n : U64, flag : Bool }
+        \\main = {
+        \\    { n: identity(1), flag: identity(Bool.True) }
+        \\}
+    ;
+
+    var default = try lowerMonotypeModule(allocator, source);
+    defer default.deinit(allocator);
+
+    var disabled = try lowerMonotypeModuleWithOptions(allocator, source, .{
+        .specialization_cache = .disabled,
+    });
+    defer disabled.deinit(allocator);
+
+    try expectEquivalentMonotypeProgramViews(default.mono.view(), disabled.mono.view());
+}
+
+test "monotype specialization cache read reuses loaded hits and lowers fresh misses" {
+    const allocator = std.testing.allocator;
+    const mixed_source =
+        \\module [main]
+        \\
+        \\identity : a -> a
+        \\identity = |value| value
+        \\
+        \\main : { n : U64, flag : Bool }
+        \\main = {
+        \\    { n: identity(1), flag: identity(Bool.True) }
+        \\}
+    ;
+
+    var loaded_program = try lowerMonotypeModule(allocator, mixed_source);
+    defer loaded_program.deinit(allocator);
+    const loaded_program_view = loaded_program.mono.view();
+
+    const selected_loaded_spec = for (loaded_program_view.specs) |record| {
+        if (isUnaryPrimitiveFnSpec(loaded_program_view, record, .u64)) break record;
+    } else return error.MissingProcSpec;
+    const loaded_specs = [_]MonoAst.SpecRecord{selected_loaded_spec};
+
+    const loaded_types = try durableTypeSnapshot(allocator, &loaded_program.mono);
+    defer loaded_types.deinit(allocator);
+    const loaded_shards = [_]MonoLower.LoadedSpecializationShard{.{
+        .shard_id = @enumFromInt(1),
+        .types = loaded_types.view,
+        .specs = &loaded_specs,
+    }};
+
+    var no_cache = try lowerMonotypeModuleWithOptions(allocator, mixed_source, .{
+        .specialization_cache = .disabled,
+    });
+    defer no_cache.deinit(allocator);
+
+    var counters: MonoLower.SpecializationCounters = .{};
+    var cached = try lowerMonotypeModuleWithOptions(allocator, mixed_source, .{
+        .specialization_cache = .{},
+        .loaded_specialization_shards = &loaded_shards,
+        .specialization_counters = &counters,
+    });
+    defer cached.deinit(allocator);
+
+    try std.testing.expect(cached.mono.view().imported_fns.len > 0);
+    try std.testing.expect(cached.mono.view().specs.len < no_cache.mono.view().specs.len);
+    try std.testing.expect(counters.template_hits > 0);
+    try std.testing.expect(counters.template_misses > 0);
+    try expectSpecsCoveredByCachedOrLoaded(allocator, no_cache.mono.view(), cached.mono.view(), loaded_shards[0]);
+}
+
+test "nested function specializations keep equal types at different sites distinct" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\module [main]
+        \\
+        \\first : U64 -> U64
+        \\first = |n| {
+        \\    id = |x| x
+        \\    id(n)
+        \\}
+        \\
+        \\second : U64 -> U64
+        \\second = |n| {
+        \\    id = |x| x
+        \\    id(n)
+        \\}
+        \\
+        \\main : { first : U64, second : U64 }
+        \\main = { first: first(1), second: second(2) }
+    ;
+
+    var lowered = try lowerMonotypeModule(allocator, source);
+    defer lowered.deinit(allocator);
+
+    var found_distinct_sites = false;
+    for (lowered.mono.nested_defs.items, 0..) |lhs, lhs_index| {
+        const lhs_site = nestedSite(lhs) orelse continue;
+        for (lowered.mono.nested_defs.items[lhs_index + 1 ..]) |rhs| {
+            const rhs_site = nestedSite(rhs) orelse continue;
+            if (!sameNestedSourceSite(lhs_site, rhs_site) and
+                try lowered.mono.types.typeEql(&lowered.mono.names, lhs.fn_def.mono_fn_ty, rhs.fn_def.mono_fn_ty))
+            {
+                found_distinct_sites = true;
+            }
+        }
+    }
+
+    try std.testing.expect(found_distinct_sites);
+}
+
+test "one nested function site specializes at multiple closed function types" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\module [main]
+        \\
+        \\choose : a -> a
+        \\choose = |value| {
+        \\    id = |x| x
+        \\    id(value)
+        \\}
+        \\
+        \\main : { n : U64, s : Str }
+        \\main = { n: choose(1), s: choose("hi") }
+    ;
+
+    var lowered = try lowerMonotypeModule(allocator, source);
+    defer lowered.deinit(allocator);
+
+    var found_same_site_distinct_types = false;
+    for (lowered.mono.nested_defs.items, 0..) |lhs, lhs_index| {
+        const lhs_site = nestedSite(lhs) orelse continue;
+        for (lowered.mono.nested_defs.items[lhs_index + 1 ..]) |rhs| {
+            const rhs_site = nestedSite(rhs) orelse continue;
+            if (!sameNestedSourceSite(lhs_site, rhs_site)) continue;
+            if (lhs.fn_def.mono_fn_ty != rhs.fn_def.mono_fn_ty) {
+                found_same_site_distinct_types = true;
+            }
+        }
+    }
+
+    try std.testing.expect(found_same_site_distinct_types);
+}
+
+test "differently ordered source record rows produce normalized monotype rows" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\module [main]
+        \\
+        \\choose : Bool -> { a : U64, b : U64 }
+        \\choose = |flag| if flag { b: 2, a: 1 } else { a: 3, b: 4 }
+        \\
+        \\main : { a : U64, b : U64 }
+        \\main = choose(Bool.True)
+    ;
+
+    var resources = try helpers.parseAndCanonicalizeProgramWithBuiltin(allocator, .module, source, &.{}, try sharedPrePublishedBuiltin());
+    defer helpers.cleanupParseAndCanonical(allocator, resources);
+
+    const import_count = resources.import_artifacts.len + if (resources.borrowed_builtin_artifact == null) @as(usize, 0) else 1;
+    const import_views = try allocator.alloc(check.CheckedArtifact.ImportedModuleView, import_count);
+    defer allocator.free(import_views);
+
+    var view_index: usize = 0;
+    if (resources.borrowed_builtin_artifact) |builtin_artifact| {
+        import_views[view_index] = check.CheckedArtifact.importedView(builtin_artifact);
+        view_index += 1;
+    }
+    for (resources.import_artifacts) |*artifact| {
+        import_views[view_index] = check.CheckedArtifact.importedView(artifact);
+        view_index += 1;
+    }
+
+    var mono = try postcheck.Monotype.Lower.run(
+        allocator,
+        .{
+            .root = check.CheckedArtifact.loweringView(&resources.checked_artifact),
+            .imports = import_views,
+        },
+        .{ .requests = resources.checked_artifact.root_requests.requests },
+        .{},
+    );
+    defer mono.deinit();
+
+    try std.testing.expect(mono.specs.items.len > 0);
+    for (mono.specs.items) |spec| {
+        try std.testing.expectEqual(postcheck.Monotype.Ast.SpecStatus.ready, spec.status);
+    }
+
+    const a_name = try mono.names.internRecordFieldLabel("a");
+    const b_name = try mono.names.internRecordFieldLabel("b");
+    var normalized_rows: usize = 0;
+    for (mono.types.types.items) |content| {
+        const span = switch (content) {
+            .record => |fields| fields,
+            else => continue,
+        };
+        const fields = mono.types.fieldSpan(span);
+        if (fields.len != 2) continue;
+        if (fields[0].name == a_name and fields[1].name == b_name) {
+            normalized_rows += 1;
+        } else if (fields[0].name == b_name and fields[1].name == a_name) {
+            return error.TestUnexpectedResult;
+        }
+    }
+
+    try std.testing.expect(normalized_rows > 0);
 }
 
 test "direct call wrapper is inlined when inline mode is enabled" {
