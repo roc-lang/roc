@@ -615,3 +615,40 @@ test "differential: nested lambda (closure inside lambda body) matches" {
         \\main! = |_args| adder(3)(4)
     );
 }
+
+test "differential: record literal (plain, multiple fields) matches" {
+    // A plain record literal exercises the e_record PLAIN path: each field value
+    // is checked as a scheduled child, accumulated into scratch_record_fields,
+    // then sorted by field name and materialized in `.exit`.
+    try expectIterMatchesRecursive(
+        \\main! = |_args| {
+        \\    person = { name: "Ada", age: 36, active: Bool.True }
+        \\    person.age
+        \\}
+    );
+}
+
+test "differential: nested record literals (scratch accumulator spans children) match" {
+    // A record whose field values are themselves records: the inner record's
+    // scratch usage nests above the outer accumulator, exercising the
+    // span-across-children scratch_record_fields handling.
+    try expectIterMatchesRecursive(
+        \\main! = |_args| {
+        \\    config = { window: { width: 80, height: 24 }, title: "edit" }
+        \\    config.window.height
+        \\}
+    );
+}
+
+test "differential: record update (e.ext) matches" {
+    // A record update exercises the e_record UPDATE path: the record being
+    // updated is checked first, then each updated field drives a per-field
+    // `.record_update` unify, then the whole expr unifies with the updated var.
+    try expectIterMatchesRecursive(
+        \\main! = |_args| {
+        \\    base = { x: 1, y: 2, z: 3 }
+        \\    moved = { ..base, x: 10, y: 20 }
+        \\    moved.z
+        \\}
+    );
+}

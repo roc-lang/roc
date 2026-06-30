@@ -9749,6 +9749,20 @@ const CheckStep = enum {
     /// (looping back to `if_after_cond`) or the final-else body (advancing to
     /// `.exit`). Mirrors the post-body half of `checkIfElseExpr`'s branch loop.
     if_after_body,
+    /// `e_record` (UPDATE path only) resume step: the record-being-updated child
+    /// (`e.ext`) has been checked. Capture `record_being_updated_var`/`_name`
+    /// (used by every field's `.record_update` diagnostic context), then schedule
+    /// the first field value child (or fall through to `.exit` if there are no
+    /// fields). Runs between the updated-record child and the field children.
+    record_after_updated,
+    /// `e_record` resume step: the field value at `kind_state.record.cursor` has
+    /// been checked. UPDATE path: build a single-field unbound record and
+    /// `.record_update`-unify it with the record being updated. PLAIN path:
+    /// append `{name, varFrom(value)}` to the `scratch_record_fields`
+    /// accumulator. Then advance the cursor and schedule the next field value
+    /// child (or fall through to `.exit` once all fields are consumed). Mirrors
+    /// the per-field body of the recursive `e_record` field loop.
+    record_after_field,
 };
 
 /// Per-node-kind loop/scratch state for interleaving nodes. `none` for the
@@ -9836,6 +9850,23 @@ const CheckKindState = union(enum) {
         /// `enterLambdaExpr` and must be lowered in `exitLambdaExpr` (mirrors the
         /// recursive arm's `defer`).
         body_is_delayed_dependency: bool,
+    },
+    /// State for `e_record`. `is_update` picks the two paths. UPDATE path
+    /// (`e.ext != null`): `record_being_updated_var`/`_name` are captured in the
+    /// `record_after_updated` resume step (after the updated-record child) and
+    /// feed every field's `.record_update` unify context + the final
+    /// `unify(updated_var, expr_var)` in `.exit`. PLAIN path (`e.ext == null`):
+    /// `scratch_top` is the `scratch_record_fields` accumulator base captured in
+    /// `.enter` (spanning all field children, mirroring the recursive arm's
+    /// `defer clearFrom(record_fields_top)`); fields are appended in
+    /// `record_after_field` and sorted+materialized in `.exit`. `cursor` indexes
+    /// the current field in `e.fields`.
+    record: struct {
+        is_update: bool,
+        record_being_updated_var: Var,
+        record_being_updated_name: ?Ident.Idx,
+        scratch_top: u32,
+        cursor: usize,
     },
 };
 
@@ -12063,6 +12094,20 @@ fn checkExprIter(self: *Self, root_idx: CIR.Expr.Idx, root_env: *Env, root_expec
                     .e_lambda => {
                         try self.enterLambdaExpr(top);
                     },
+                    // INTERLEAVING: `e_record`. UPDATE path (`e.ext != null`)
+                    // schedules the record-being-updated child first
+                    // (`record_after_updated` then captures the updated var/name
+                    // and schedules the field children); PLAIN path parks the
+                    // `scratch_record_fields` accumulator top and schedules the
+                    // first field child directly. The `record_after_field` resume
+                    // step runs the per-field between-child unify (update) or
+                    // scratch append (plain); `.exit` runs the final unify.
+                    // Delegated to a helper (NOT inlined) so its scheduling locals
+                    // do not bloat `checkExprIter`'s native stack frame on the deep
+                    // statement-nesting spine (mirrors `enterIfExpr`).
+                    .e_record => {
+                        try self.enterRecordExpr(top);
+                    },
                     // Helper-delegating / per-child-state kinds: like the leaf
                     // kinds below, advance to `.exit` and run the recursive body
                     // verbatim there. Their child `checkExpr` calls re-enter the
@@ -12165,6 +12210,19 @@ fn checkExprIter(self: *Self, root_idx: CIR.Expr.Idx, root_env: *Env, root_expec
             },
             .if_after_body => {
                 try self.ifAfterBody(top);
+            },
+            // `e_record` resume steps. Each is delegated to a helper (NOT inlined)
+            // so its scheduling/constraint locals do not bloat `checkExprIter`'s
+            // native stack frame on the deep statement-nesting spine (mirrors the
+            // `e_if` resume helpers). `record_after_updated` captures the updated
+            // var/name and schedules the first field; `record_after_field` runs
+            // the per-field unify (update) or scratch append (plain) and schedules
+            // the next field.
+            .record_after_updated => {
+                try self.recordAfterUpdated(top);
+            },
+            .record_after_field => {
+                try self.recordAfterField(top);
             },
             .exit => {
                 const f = &self.check_frame_stack.items[top];
@@ -13308,6 +13366,20 @@ fn checkExprIter(self: *Self, root_idx: CIR.Expr.Idx, root_env: *Env, root_expec
                     .e_lambda => {
                         try self.exitLambdaExpr(top);
                     },
+                    // INTERLEAVING POST-FIELD body for `e_record`. All field
+                    // children (and, on the update path, the record-being-updated
+                    // child) have been checked via scheduled frames; their
+                    // `does_fx` was OR'd into `f.does_fx` on pop. Delegated to a
+                    // helper (NOT inlined) so its sort/constraint locals do not
+                    // bloat `checkExprIter`'s native stack frame on the deep
+                    // statement-nesting spine. The helper performs no `checkExpr`
+                    // re-entry and never appends to `check_frame_stack`, so `f`
+                    // stays valid; it runs the final unify (update:
+                    // `unify(updated_var, expr_var)`; plain: sort the scratch
+                    // fields, materialize them, and build+unify the record type).
+                    .e_record => {
+                        try self.exitRecordExpr(top);
+                    },
                     else => unreachable, // gated by isMigratedKind
                 }
                 const does_fx = try self.checkExitEpilogue(
@@ -13405,6 +13477,13 @@ fn isMigratedKind(expr: CIR.Expr) bool {
         // child; `.exit` runs the post-body close/anno-return unify, restores
         // the guard, processes return constraints, and builds the function type.
         .e_lambda,
+        // Interleaving record kind: `.enter` schedules the first child (the
+        // record-being-updated for the update path, else the first field value);
+        // `record_after_updated`/`record_after_field` run the per-field
+        // between-child unifies (update) or scratch appends (plain) and loop the
+        // field cursor; `.exit` runs the final unify (update:
+        // `unify(updated_var, expr_var)`; plain: sort+materialize+build).
+        .e_record,
         // Variable-arity multi-child kinds (this batch): schedule every child
         // as a frame in `.enter`, run the post-child body in `.exit`.
         .e_list,
@@ -17212,6 +17291,199 @@ fn exitLambdaExpr(self: *Self, top: usize) Allocator.Error!void {
 
     // A lambda value performs no effects itself: contribute `false` upward.
     self.check_frame_stack.items[top].does_fx = false;
+}
+
+/// `e_record` `.enter` (extracted from `checkExprIter` to keep its scheduling
+/// local off that function's native stack frame — mirrors `enterIfExpr`).
+///
+/// Inlines the front of the recursive `e_record` arm: parks the
+/// `scratch_record_fields` accumulator base (PLAIN path) and schedules the first
+/// child. UPDATE path (`e.ext != null`): schedule the record-being-updated child
+/// and advance to `record_after_updated`. PLAIN path: schedule the first field
+/// value child and advance to `record_after_field` (or fall straight through to
+/// `.exit` for a fieldless record). `top` indexes the record frame; the final
+/// `append` may realloc, so it is the last action (no `items[top]` writes after).
+fn enterRecordExpr(self: *Self, top: usize) Allocator.Error!void {
+    const e = self.cir.store.getExpr(self.check_frame_stack.items[top].expr_idx).e_record;
+    const env = self.check_frame_stack.items[top].env;
+    const child_expected = self.check_frame_stack.items[top].prologue.child_expected;
+
+    // Capture the scratch accumulator base up front (used by the PLAIN path,
+    // spanning all field children, mirroring the recursive arm's
+    // `defer clearFrom(record_fields_top)`).
+    const scratch_top = self.scratch_record_fields.top();
+
+    if (e.ext) |record_being_updated_expr| {
+        // UPDATE path: the record-being-updated child is checked first; its var
+        // and pattern ident are captured in `record_after_updated`.
+        self.check_frame_stack.items[top].kind_state = .{ .record = .{
+            .is_update = true,
+            .record_being_updated_var = undefined,
+            .record_being_updated_name = null,
+            .scratch_top = scratch_top,
+            .cursor = 0,
+        } };
+        self.check_frame_stack.items[top].step = .record_after_updated;
+        try self.check_frame_stack.append(self.gpa, makeEnterFrame(record_being_updated_expr, env, child_expected));
+        return;
+    }
+
+    // PLAIN path.
+    self.check_frame_stack.items[top].kind_state = .{ .record = .{
+        .is_update = false,
+        .record_being_updated_var = undefined,
+        .record_being_updated_name = null,
+        .scratch_top = scratch_top,
+        .cursor = 0,
+    } };
+
+    const fields = self.cir.store.sliceRecordFields(e.fields);
+    if (fields.len == 0) {
+        // Fieldless record: nothing to schedule; `.exit` materializes an empty
+        // field range (matching the recursive arm's zero-iteration loop).
+        self.check_frame_stack.items[top].step = .exit;
+        return;
+    }
+    self.check_frame_stack.items[top].step = .record_after_field;
+    const field = self.cir.store.getRecordField(fields[0]);
+    try self.check_frame_stack.append(self.gpa, makeEnterFrame(field.value, env, child_expected));
+}
+
+/// `e_record` `record_after_updated` resume step (UPDATE path only; extracted
+/// from `checkExprIter` to keep its scheduling local off that function's native
+/// stack frame — mirrors `ifAfterCond`).
+///
+/// The record-being-updated child (`e.ext`) has been checked. Capture
+/// `record_being_updated_var` (`varFrom(ext)`) and `record_being_updated_name`
+/// (`getExprPatternIdent(ext)`) — both feed every field's `.record_update`
+/// diagnostic context and the final `unify(updated_var, expr_var)` in `.exit` —
+/// then schedule the first field value child (or fall through to `.exit` for a
+/// fieldless update). The capture writes do not append to the frame stack, so
+/// `items[top]` stays valid until the final `append` (which may realloc).
+fn recordAfterUpdated(self: *Self, top: usize) Allocator.Error!void {
+    const e = self.cir.store.getExpr(self.check_frame_stack.items[top].expr_idx).e_record;
+    const env = self.check_frame_stack.items[top].env;
+    const child_expected = self.check_frame_stack.items[top].prologue.child_expected;
+
+    const record_being_updated_expr = e.ext.?;
+    const record_being_updated_var = ModuleEnv.varFrom(record_being_updated_expr);
+    const record_being_updated_name: ?Ident.Idx = self.getExprPatternIdent(record_being_updated_expr);
+
+    self.check_frame_stack.items[top].kind_state.record.record_being_updated_var = record_being_updated_var;
+    self.check_frame_stack.items[top].kind_state.record.record_being_updated_name = record_being_updated_name;
+
+    const fields = self.cir.store.sliceRecordFields(e.fields);
+    if (fields.len == 0) {
+        self.check_frame_stack.items[top].step = .exit;
+        return;
+    }
+    self.check_frame_stack.items[top].step = .record_after_field;
+    const field = self.cir.store.getRecordField(fields[0]);
+    try self.check_frame_stack.append(self.gpa, makeEnterFrame(field.value, env, child_expected));
+}
+
+/// `e_record` `record_after_field` resume step (extracted from `checkExprIter`
+/// to keep its scheduling/constraint local off that function's native stack
+/// frame — mirrors `ifAfterBody`).
+///
+/// The field value at `kind_state.record.cursor` has been checked. UPDATE path:
+/// build a single-field unbound record (`{name, varFrom(value)}`) and
+/// `.record_update`-unify it with the record being updated (per-field context
+/// region idxs derived exactly as in the recursive arm). PLAIN path: append
+/// `{name, varFrom(value)}` to the `scratch_record_fields` accumulator. Then
+/// advance the cursor and schedule the next field value child, or fall through
+/// to `.exit` once all fields are consumed. The unify/append calls do not append
+/// to the frame stack; the cursor write precedes the final `append` (which may
+/// realloc).
+fn recordAfterField(self: *Self, top: usize) Allocator.Error!void {
+    const e = self.cir.store.getExpr(self.check_frame_stack.items[top].expr_idx).e_record;
+    const env = self.check_frame_stack.items[top].env;
+    const child_expected = self.check_frame_stack.items[top].prologue.child_expected;
+    const expr_region = self.check_frame_stack.items[top].prologue.expr_region;
+    const st = self.check_frame_stack.items[top].kind_state.record;
+    const cursor = st.cursor;
+
+    const fields = self.cir.store.sliceRecordFields(e.fields);
+    const field = self.cir.store.getRecordField(fields[cursor]);
+
+    if (st.is_update) {
+        // Create an unbound record with this single field.
+        const single_field_record = try self.freshFromContent(.{ .structure = .{
+            .record_unbound = try self.types.appendRecordFields(&.{types_mod.RecordField{
+                .name = field.name,
+                .var_ = ModuleEnv.varFrom(field.value),
+            }}),
+        } }, env, expr_region);
+
+        // Unify this record update with the record we're updating.
+        _ = try self.unifyInContext(st.record_being_updated_var, single_field_record, env, .{ .record_update = .{
+            .field_name = field.name,
+            .field_region_idx = @enumFromInt(@intFromEnum(field.value)),
+            .record_region_idx = @enumFromInt(@intFromEnum(st.record_being_updated_var)),
+            .record_name = st.record_being_updated_name,
+        } });
+    } else {
+        // Append it to the scratch records array.
+        try self.scratch_record_fields.append(types_mod.RecordField{
+            .name = field.name,
+            .var_ = ModuleEnv.varFrom(field.value),
+        });
+    }
+
+    const next_cursor = cursor + 1;
+    if (next_cursor < fields.len) {
+        self.check_frame_stack.items[top].kind_state.record.cursor = next_cursor;
+        // `step` stays `.record_after_field`.
+        const next_field = self.cir.store.getRecordField(fields[next_cursor]);
+        try self.check_frame_stack.append(self.gpa, makeEnterFrame(next_field.value, env, child_expected));
+    } else {
+        self.check_frame_stack.items[top].step = .exit;
+    }
+}
+
+/// `e_record` `.exit` post-field body (extracted from `checkExprIter` to keep its
+/// sort/constraint locals off that function's native stack frame — mirrors
+/// `exitIfExpr`).
+///
+/// All field children have been checked. UPDATE path: tie the whole update
+/// expression to the record being updated (`unify(updated_var, expr_var)`).
+/// PLAIN path: copy the accumulated scratch fields into the types store (sorted
+/// by field-name text, matching the recursive arm's `std.mem.sort`), build the
+/// unbound `.record` content with a fresh `empty_record` ext, and unify it with
+/// `expr_var`; the `defer clearFrom(scratch_top)` releases the accumulator
+/// (mirroring the recursive arm's `defer`). No frame-stack append below, so
+/// `items[top]` stays valid throughout.
+fn exitRecordExpr(self: *Self, top: usize) Allocator.Error!void {
+    const env = self.check_frame_stack.items[top].env;
+    const expr_var = self.check_frame_stack.items[top].prologue.expr_var;
+    const expr_region = self.check_frame_stack.items[top].prologue.expr_region;
+    const st = self.check_frame_stack.items[top].kind_state.record;
+
+    if (st.is_update) {
+        // Then unify with the actual expression.
+        _ = try self.unify(st.record_being_updated_var, expr_var, env);
+        return;
+    }
+
+    // PLAIN path: materialize the accumulated fields.
+    const record_fields_top = st.scratch_top;
+    defer self.scratch_record_fields.clearFrom(record_fields_top);
+
+    // Copy the scratch fields into the types store.
+    const record_fields_scratch = self.scratch_record_fields.sliceFromStart(record_fields_top);
+    std.mem.sort(types_mod.RecordField, record_fields_scratch, self, struct {
+        fn less(checker: *const Self, a: types_mod.RecordField, b: types_mod.RecordField) bool {
+            return std.mem.order(u8, checker.cir.getIdentStoreConst().getText(a.name), checker.cir.getIdentStoreConst().getText(b.name)) == .lt;
+        }
+    }.less);
+    const record_fields_range = try self.types.appendRecordFields(record_fields_scratch);
+
+    // Create an unbound record with the provided fields.
+    const ext_var = try self.freshFromContent(.{ .structure = .empty_record }, env, expr_region);
+    try self.unifyWith(expr_var, .{ .structure = .{ .record = .{
+        .fields = record_fields_range,
+        .ext = ext_var,
+    } } }, env);
 }
 
 fn checkIteratorForLoop(
