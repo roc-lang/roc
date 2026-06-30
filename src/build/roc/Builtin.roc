@@ -365,9 +365,9 @@ Builtin :: [].{
 		## ```
 		to_utf8 : Str -> List(U8)
 
-        ## No-op: leave a [Str] unchanged as a [Str].
-        to_str : Str -> Str
-        to_str = |self| self
+		## No-op: leave a [Str] unchanged as a [Str].
+		to_str : Str -> Str
+		to_str = |self| self
 
 		## Converts a [List] of [U8] UTF-8 [code units](https://unicode.org/glossary/#code_unit) to a string.
 		## Any grouping of invalid byte sequences are replaced with a single unicode replacement character '�'.
@@ -3634,17 +3634,17 @@ Builtin :: [].{
 			## every [U8] value exactly.
 			to_i128 : U8 -> I128
 
-            ## No-op: leave a [U8] unchanged as a [U8].
-            to_u8 : U8 -> U8
-            to_u8 = |self| self
+			## No-op: leave a [U8] unchanged as a [U8].
+			to_u8 : U8 -> U8
+			to_u8 = |self| self
 
-            ## Leave a [U8] unchanged as a [U8]. Always succeeds.
-            to_u8_try : U8 -> Try(U8, _never_fails)
-            to_u8_try = |self| Ok(self)
+			## Leave a [U8] unchanged as a [U8]. Always succeeds.
+			to_u8_try : U8 -> Try(U8, _never_fails)
+			to_u8_try = |self| Ok(self)
 
-            ## No-op: leave a [U8] unchanged as a [U8].
-            to_u8_wrap : U8 -> U8
-            to_u8_wrap = |self| self
+			## No-op: leave a [U8] unchanged as a [U8].
+			to_u8_wrap : U8 -> U8
+			to_u8_wrap = |self| self
 
 			# Conversions to unsigned integers (all safe widening)
 			## Convert a [U8] to a [U16]. This widening conversion preserves
@@ -4271,17 +4271,17 @@ Builtin :: [].{
 			## ```
 			from_str : Str -> Try(I8, [BadNumStr, ..])
 
-            ## No-op: leave an [I8] unchanged as an [I8].
-            to_i8 : I8 -> I8
-            to_i8 = |self| self
+			## No-op: leave an [I8] unchanged as an [I8].
+			to_i8 : I8 -> I8
+			to_i8 = |self| self
 
-            ## Leave an [I8] unchanged as an [I8]. Always succeeds.
-            to_i8_try : I8 -> Try(I8, _never_fails)
-            to_i8_try = |self| Ok(self)
+			## Leave an [I8] unchanged as an [I8]. Always succeeds.
+			to_i8_try : I8 -> Try(I8, _never_fails)
+			to_i8_try = |self| Ok(self)
 
-            ## No-op: leave an [I8] unchanged as an [I8].
-            to_i8_wrap : I8 -> I8
-            to_i8_wrap = |self| self
+			## No-op: leave an [I8] unchanged as an [I8].
+			to_i8_wrap : I8 -> I8
+			to_i8_wrap = |self| self
 
 			# Conversions to signed integers (all safe widening)
 			## Convert an [I8] to an [I16]. This widening conversion preserves
@@ -5010,17 +5010,17 @@ Builtin :: [].{
 			## ```
 			to_u8_try : U16 -> Try(U8, [OutOfRange, ..])
 
-            ## No-op: leave a [U16] unchanged as a [U16].
-            to_u16 : U16 -> U16
-            to_u16 = |self| self
+			## No-op: leave a [U16] unchanged as a [U16].
+			to_u16 : U16 -> U16
+			to_u16 = |self| self
 
-            ## Leave a [U16] unchanged as a [U16]. Always succeeds.
-            to_u16_try : U16 -> Try(U16, _never_fails)
-            to_u16_try = |self| Ok(self)
+			## Leave a [U16] unchanged as a [U16]. Always succeeds.
+			to_u16_try : U16 -> Try(U16, _never_fails)
+			to_u16_try = |self| Ok(self)
 
-            ## No-op: leave a [U16] unchanged as a [U16].
-            to_u16_wrap : U16 -> U16
-            to_u16_wrap = |self| self
+			## No-op: leave a [U16] unchanged as a [U16].
+			to_u16_wrap : U16 -> U16
+			to_u16_wrap = |self| self
 
 			## Convert a [U16] to a [U32]. This widening conversion preserves
 			## every [U16] value exactly.
@@ -5663,17 +5663,17 @@ Builtin :: [].{
 			## ```
 			to_i8_try : I16 -> Try(I8, [OutOfRange, ..])
 
-            ## No-op: leave an [I16] unchanged as an [I16].
-            to_i16 : I16 -> I16
-            to_i16 = |self| self
+			## No-op: leave an [I16] unchanged as an [I16].
+			to_i16 : I16 -> I16
+			to_i16 = |self| self
 
-            ## Leave an [I16] unchanged as an [I16]. Always succeeds.
-            to_i16_try : I16 -> Try(I16, _never_fails)
-            to_i16_try = |self| Ok(self)
+			## Leave an [I16] unchanged as an [I16]. Always succeeds.
+			to_i16_try : I16 -> Try(I16, _never_fails)
+			to_i16_try = |self| Ok(self)
 
-            ## No-op: leave an [I16] unchanged as an [I16].
-            to_i16_wrap : I16 -> I16
-            to_i16_wrap = |self| self
+			## No-op: leave an [I16] unchanged as an [I16].
+			to_i16_wrap : I16 -> I16
+			to_i16_wrap = |self| self
 
 			## Convert an [I16] to an [I32]. This widening conversion preserves
 			## every [I16] value exactly.
@@ -6431,17 +6431,17 @@ Builtin :: [].{
 			## ```
 			to_u16_try : U32 -> Try(U16, [OutOfRange, ..])
 
-            ## No-op: leave a [U32] unchanged as a [U32].
-            to_u32 : U32 -> U32
-            to_u32 = |self| self
+			## No-op: leave a [U32] unchanged as a [U32].
+			to_u32 : U32 -> U32
+			to_u32 = |self| self
 
-            ## Leave a [U32] unchanged as a [U32]. Always succeeds.
-            to_u32_try : U32 -> Try(U32, _never_fails)
-            to_u32_try = |self| Ok(self)
+			## Leave a [U32] unchanged as a [U32]. Always succeeds.
+			to_u32_try : U32 -> Try(U32, _never_fails)
+			to_u32_try = |self| Ok(self)
 
-            ## No-op: leave a [U32] unchanged as a [U32].
-            to_u32_wrap : U32 -> U32
-            to_u32_wrap = |self| self
+			## No-op: leave a [U32] unchanged as a [U32].
+			to_u32_wrap : U32 -> U32
+			to_u32_wrap = |self| self
 
 			## Convert a [U32] to a [U64]. This widening conversion preserves
 			## every [U32] value exactly.
@@ -7100,17 +7100,17 @@ Builtin :: [].{
 			## ```
 			to_i16_try : I32 -> Try(I16, [OutOfRange, ..])
 
-            ## No-op: leave an [I32] unchanged as an [I32].
-            to_i32 : I32 -> I32
-            to_i32 = |self| self
+			## No-op: leave an [I32] unchanged as an [I32].
+			to_i32 : I32 -> I32
+			to_i32 = |self| self
 
-            ## Leave an [I32] unchanged as an [I32]. Always succeeds.
-            to_i32_try : I32 -> Try(I32, _never_fails)
-            to_i32_try = |self| Ok(self)
+			## Leave an [I32] unchanged as an [I32]. Always succeeds.
+			to_i32_try : I32 -> Try(I32, _never_fails)
+			to_i32_try = |self| Ok(self)
 
-            ## No-op: leave an [I32] unchanged as an [I32].
-            to_i32_wrap : I32 -> I32
-            to_i32_wrap = |self| self
+			## No-op: leave an [I32] unchanged as an [I32].
+			to_i32_wrap : I32 -> I32
+			to_i32_wrap = |self| self
 
 			## Convert an [I32] to an [I64]. This widening conversion preserves
 			## every [I32] value exactly.
@@ -7905,17 +7905,17 @@ Builtin :: [].{
 			## ```
 			to_u32_try : U64 -> Try(U32, [OutOfRange, ..])
 
-            ## No-op: leave a [U64] unchanged as a [U64].
-            to_u64 : U64 -> U64
-            to_u64 = |self| self
+			## No-op: leave a [U64] unchanged as a [U64].
+			to_u64 : U64 -> U64
+			to_u64 = |self| self
 
-            ## Leave a [U64] unchanged as a [U64]. Always succeeds.
-            to_u64_try : U64 -> Try(U64, _never_fails)
-            to_u64_try = |self| Ok(self)
+			## Leave a [U64] unchanged as a [U64]. Always succeeds.
+			to_u64_try : U64 -> Try(U64, _never_fails)
+			to_u64_try = |self| Ok(self)
 
-            ## No-op: leave a [U64] unchanged as a [U64].
-            to_u64_wrap : U64 -> U64
-            to_u64_wrap = |self| self
+			## No-op: leave a [U64] unchanged as a [U64].
+			to_u64_wrap : U64 -> U64
+			to_u64_wrap = |self| self
 
 			## Convert a [U64] to a [U128]. This widening conversion preserves
 			## every [U64] value exactly.
@@ -8601,17 +8601,17 @@ Builtin :: [].{
 			## ```
 			to_i32_try : I64 -> Try(I32, [OutOfRange, ..])
 
-            ## No-op: leave an [I64] unchanged as an [I64].
-            to_i64 : I64 -> I64
-            to_i64 = |self| self
+			## No-op: leave an [I64] unchanged as an [I64].
+			to_i64 : I64 -> I64
+			to_i64 = |self| self
 
-            ## Leave an [I64] unchanged as an [I64]. Always succeeds.
-            to_i64_try : I64 -> Try(I64, _never_fails)
-            to_i64_try = |self| Ok(self)
+			## Leave an [I64] unchanged as an [I64]. Always succeeds.
+			to_i64_try : I64 -> Try(I64, _never_fails)
+			to_i64_try = |self| Ok(self)
 
-            ## No-op: leave an [I64] unchanged as an [I64].
-            to_i64_wrap : I64 -> I64
-            to_i64_wrap = |self| self
+			## No-op: leave an [I64] unchanged as an [I64].
+			to_i64_wrap : I64 -> I64
+			to_i64_wrap = |self| self
 
 			## Convert an [I64] to an [I128]. This widening conversion preserves
 			## every [I64] value exactly.
@@ -9442,17 +9442,17 @@ Builtin :: [].{
 			## ```
 			to_u64_try : U128 -> Try(U64, [OutOfRange, ..])
 
-            ## No-op: leave a [U128] unchanged as a [U128].
-            to_u128 : U128 -> U128
-            to_u128 = |self| self
+			## No-op: leave a [U128] unchanged as a [U128].
+			to_u128 : U128 -> U128
+			to_u128 = |self| self
 
-            ## Leave a [U128] unchanged as a [U128]. Always succeeds.
-            to_u128_try : U128 -> Try(U128, _never_fails)
-            to_u128_try = |self| Ok(self)
+			## Leave a [U128] unchanged as a [U128]. Always succeeds.
+			to_u128_try : U128 -> Try(U128, _never_fails)
+			to_u128_try = |self| Ok(self)
 
-            ## No-op: leave a [U128] unchanged as a [U128].
-            to_u128_wrap : U128 -> U128
-            to_u128_wrap = |self| self
+			## No-op: leave a [U128] unchanged as a [U128].
+			to_u128_wrap : U128 -> U128
+			to_u128_wrap = |self| self
 
 			# Conversions to floating point (all safe)
 			## Convert a [U128] to an [F32]. This conversion may round, and the
@@ -10166,17 +10166,17 @@ Builtin :: [].{
 			## ```
 			to_i64_try : I128 -> Try(I64, [OutOfRange, ..])
 
-            ## No-op: leave an [I128] unchanged as an [I128].
-            to_i128 : I128 -> I128
-            to_i128 = |self| self
+			## No-op: leave an [I128] unchanged as an [I128].
+			to_i128 : I128 -> I128
+			to_i128 = |self| self
 
-            ## Leave an [I128] unchanged as an [I128]. Always succeeds.
-            to_i128_try : I128 -> Try(I128, _never_fails)
-            to_i128_try = |self| Ok(self)
+			## Leave an [I128] unchanged as an [I128]. Always succeeds.
+			to_i128_try : I128 -> Try(I128, _never_fails)
+			to_i128_try = |self| Ok(self)
 
-            ## No-op: leave an [I128] unchanged as an [I128].
-            to_i128_wrap : I128 -> I128
-            to_i128_wrap = |self| self
+			## No-op: leave an [I128] unchanged as an [I128].
+			to_i128_wrap : I128 -> I128
+			to_i128_wrap = |self| self
 
 			# Conversions to unsigned integers (all lossy for negative values)
 
