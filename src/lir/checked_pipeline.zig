@@ -52,6 +52,8 @@ pub const TargetConfig = struct {
     list_in_place_map: bool = false,
     /// Preserve source-level procedure names in LIR for runtime diagnostics.
     proc_debug_names: bool = false,
+    /// Control Monotype specialization cache reads and writes.
+    monotype_cache: MonotypeCacheControl = .{},
     /// Delete LIR switch edges whose tag discriminants are unreachable. This
     /// is enabled for optimized builds and kept off for dev and compile-time
     /// evaluation.
@@ -70,6 +72,7 @@ pub const RuntimeTagSchema = postcheck.SolvedLirLower.RuntimeTagSchema;
 pub const RuntimeTagUnionSchema = postcheck.SolvedLirLower.RuntimeTagUnionSchema;
 pub const InlineMode = postcheck.SolvedInline.Mode;
 pub const InlineExpectMode = postcheck.SolvedLirLower.InlineExpectMode;
+pub const MonotypeCacheControl = postcheck.Monotype.Lower.SpecializationCacheControl;
 
 /// Runtime record and tag-union schemas needed by dev tooling.
 pub const RuntimeValueSchemaStore = struct {
@@ -210,6 +213,7 @@ pub fn lowerCheckedModulesToLir(
         rootRequests(roots, layout_requests, static_data_requests),
         .{
             .proc_debug_names = target.proc_debug_names,
+            .specialization_cache = target.monotype_cache,
             .inline_expects = switch (target.inline_expects) {
                 .run => .run,
                 .omit => .omit,
@@ -228,6 +232,7 @@ pub fn lowerCheckedModulesToLir(
     if (target.inline_mode != .none) {
         try postcheck.MonotypeLifted.SpecConstr.run(allocator, &lifted);
     }
+    try postcheck.MonotypeLifted.Lift.recomputeCaptures(allocator, &lifted);
 
     var solved = try postcheck.LambdaSolved.Solve.run(allocator, lifted);
     lifted_owned = false;

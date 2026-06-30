@@ -602,6 +602,17 @@ Lambda Mono decisions, LIR, or any callable/layout representation derived from
 them as part of checked modules. Those structures are target/session products
 of the current root compilation.
 
+A post-check specialization cache is a separate boundary named
+`SpecializationCacheFile`. It is consumed only after immutable checked modules
+and explicit root requests are available. It is not embedded in checked modules,
+is not visible to importers as checked data, and does not change the checked
+module cache id. Its validity id is computed from exactly the checked modules,
+root requests, and Monotype configuration consumed by specialization. A
+Monotype-only cache file excludes target ABI, pointer width, layout ids, field
+offsets, backend choice, object format, ARC state, and code-generation options.
+If a later-stage cache needs those inputs, it must use a separate file format
+and a separate validity id.
+
 Monotype IR is target-independent, but it is still post-check and root-specific.
 It depends on the roots requested for the current compilation, the reachable
 monomorphic specializations, and the static-dispatch and source-loop lowering
@@ -1014,21 +1025,22 @@ functions:
 
 ```roc
 thing = Json.parse(json_str)?
-thing = Json.parse_trailing_commas(json_str)?
 thing = Json.Utf8.parse(json_bytes)?
 
 json_str = Json.encode(thing)?
 json_bytes = Json.Utf8.encode(thing)?
 
-headers = Encoding.HttpHeader.parse(raw_headers)?
+headers = Headers.parse(raw_headers)?
 ```
 
-The convenience functions construct the internal format state directly, call the
-value or type's ordinary method, validate the remaining state if the format
-requires it, and return the final `Try`. They do not need a required `init`,
-`finish`, or `default` hook. The runtime cursor types are implementation
-details of the builtin format module, not public `Json.State` or
-`Encoding.HttpHeader.State` APIs.
+The convenience functions construct the format state directly, call the value or
+type's ordinary method, validate the remaining state if the format requires it,
+and return the final `Try`. They do not need a required `init`, `finish`, or
+`default` hook. A header helper can build the initial state as ordinary Roc data:
+
+```roc
+state = Headers.{ raw }
+```
 
 The underlying parse method is public and callable. It is deliberately curried:
 
@@ -1045,37 +1057,37 @@ value, or other sub-shape has that nominal type.
 
 The `encoding` argument is the pure format/configuration value used to construct
 the specialized parser. It may represent choices such as JSON object field
-renaming, whether JSON accepts trailing commas, JSON tag representation, or a
-header matching mode. The `state`
+renaming, JSON tag representation, or a header matching mode. The `state`
 argument is the runtime cursor or output state. Keeping these separate matters:
 parser construction can transform the requested structural shape before the
 runtime scan starts, while the returned runtime function threads only the cursor
 state and parsed values.
 
-For example, the builtin HTTP header helper inside `Builtin.Encoding` has this
-shape:
+For example, a public HTTP header helper has this shape:
 
 ```roc
-HttpHeader := [MissingRequired, BadHeader].{
-	parse : Str -> Try(output, HttpHeader)
+Headers := { raw : Str }.{
+	DecodeErr := [MissingRequired, BadHeader].{}
+
+	parse : Str -> Try(output, DecodeErr)
 		where [
-			output.parser_for : HttpHeaderEncoding -> (HttpHeaderState -> Try({ value : output, rest : HttpHeaderState }, HttpHeader)),
+			output.parser_for : HeaderEncoding -> (Headers -> Try({ value : output, rest : Headers }, DecodeErr)),
 		]
 	parse = |raw| {
 		Output : output
 
-		parse_output = Output.parser_for(HttpHeaderEncoding.Caseless)
-		parsed = parse_output(HttpHeaderState.{ raw })?
+		parse_output = Output.parser_for(HeaderEncoding.Caseless)
+		parsed = parse_output(Headers.{ raw })?
 
 		Ok(parsed.value)
 	}
 }
 ```
 
-The important split is that `Output.parser_for(HttpHeaderEncoding.Caseless)`
-constructs the concrete parser and the hidden `HttpHeaderState.{ raw }` is the
-runtime input state. Formats with no configurable behavior can still use a
-zero-sized internal encoding value.
+The exact shape of `HeaderEncoding` is format-owned; it is not a compiler
+interface. The important split is that `Output.parser_for(HeaderEncoding.Caseless)`
+constructs the concrete parser and `Headers.{ raw }` is the runtime input state.
+Formats with no configurable behavior can still use a zero-sized encoding value.
 
 The error type is inferred from the format methods. All `Try` errors in one
 parse or encode operation unify with the public function's returned error type.
@@ -1127,33 +1139,33 @@ not expose raw field-slot indices, unsafe byte indexing, or unchecked memory
 primitives as part of the serialization method surface.
 
 Record parsing is driven by the compiler-generated structural `parser_for` method.
-The compiler creates a `Encoding.FieldName.FieldNames(_shape)` value for each
+The compiler creates a `Str.FieldName.FieldNames(_shape)` value for each
 concrete record shape:
 
 ```roc
-Encoding.FieldName(_shape) : opaque
-Encoding.FieldName.FieldNames(_shape) : opaque
+Str.FieldName(_shape) : opaque
+Str.FieldName.FieldNames(_shape) : opaque
 
-Encoding.FieldName.FieldNames.rename_fields : Encoding.FieldName.FieldNames(_shape), (Str -> Str) -> Encoding.FieldName.FieldNames(_shape)
-Encoding.FieldName.FieldNames.shortest_name : Encoding.FieldName.FieldNames(_shape) -> U64
-Encoding.FieldName.FieldNames.longest_name : Encoding.FieldName.FieldNames(_shape) -> U64
-Encoding.FieldName.FieldNames.iter : Encoding.FieldName.FieldNames(_shape) -> Iter(Encoding.FieldName(_shape))
-Encoding.FieldName.FieldNames.for_size : Encoding.FieldName.FieldNames(_shape), U64 -> Iter(Encoding.FieldName(_shape))
+Str.FieldName.FieldNames.rename_fields : Str.FieldName.FieldNames(_shape), (Str -> Str) -> Str.FieldName.FieldNames(_shape)
+Str.FieldName.FieldNames.shortest_name : Str.FieldName.FieldNames(_shape) -> U64
+Str.FieldName.FieldNames.longest_name : Str.FieldName.FieldNames(_shape) -> U64
+Str.FieldName.FieldNames.iter : Str.FieldName.FieldNames(_shape) -> Iter(Str.FieldName(_shape))
+Str.FieldName.FieldNames.for_size : Str.FieldName.FieldNames(_shape), U64 -> Iter(Str.FieldName(_shape))
 
-Encoding.FieldName.name : Encoding.FieldName(_shape) -> Str
+Str.FieldName.name : Str.FieldName(_shape) -> Str
 ```
 
-`Encoding.FieldName.FieldNames(_shape)` contains the requested field names and
+`Str.FieldName.FieldNames(_shape)` contains the requested field names and
 compiler-owned result positions for one concrete record shape.
-`Encoding.FieldName(_shape)` is an opaque handle to one field in that same shape. The
+`Str.FieldName(_shape)` is an opaque handle to one field in that same shape. The
 `_shape` parameter is a phantom type: it is not runtime data, but it ties a
 field handle to the exact field set that created it. A parser for
 `{ cache_control : Str, content_length : U64 }` cannot accept a
-`Encoding.FieldName` produced from `{ foo : Str }`, because the phantom types do not
+`Str.FieldName` produced from `{ foo : Str }`, because the phantom types do not
 unify. That type-level tie is what lets generated record parsers avoid runtime
 bounds checks on field handles. If the only way to obtain a
-`Encoding.FieldName(_shape)` is from the matching
-`Encoding.FieldName.FieldNames(_shape)`, then the compiler already knows every handle
+`Str.FieldName(_shape)` is from the matching
+`Str.FieldName.FieldNames(_shape)`, then the compiler already knows every handle
 is in range for that record. There is no user-exposed `U64` slot to validate at
 runtime.
 
@@ -1161,7 +1173,7 @@ The derived `parser_for` constructs field metadata before returning the runtime
 lambda:
 
 ```roc
-renamed_fields = Encoding.FieldName.FieldNames.rename_fields(original_fields, |name| encoding.rename_field(name))
+renamed_fields = Str.FieldName.FieldNames.rename_fields(original_fields, |name| encoding.rename_field(name))
 parse_nested = Nested.parser_for(encoding)
 ```
 
@@ -1169,11 +1181,11 @@ parse_nested = Nested.parser_for(encoding)
 method whose first argument is the encoding value. Every encoding provides it;
 identity is the normal implementation. Taking the encoding value as an argument
 lets one encoding type store parser-construction configuration such as JSON
-field naming style. `Encoding.FieldName.FieldNames.rename_fields` applies that
+field naming style. `Str.FieldName.FieldNames.rename_fields` applies that
 function to every requested record field, discards the original names from the
-returned `Encoding.FieldName.FieldNames`, and rebuilds the length buckets used by
-`Encoding.FieldName.FieldNames.for_size`, `Encoding.FieldName.FieldNames.shortest_name`,
-and `Encoding.FieldName.FieldNames.longest_name`. If parser construction is
+returned `Str.FieldName.FieldNames`, and rebuilds the length buckets used by
+`Str.FieldName.FieldNames.for_size`, `Str.FieldName.FieldNames.shortest_name`,
+and `Str.FieldName.FieldNames.longest_name`. If parser construction is
 compile-time evaluated, the renaming work is also compile-time work. For JSON
 camel-case decoding, the final runtime parser can contain only `camelCase`
 field names. For HTTP header decoding, the final runtime parser can contain only
@@ -1185,11 +1197,11 @@ parse strings, `U64`, tag unions, and records uses these method shapes:
 ```roc
 encoding.parse_str : encoding, state -> Try({ value : Str, rest : state }, err)
 encoding.parse_u64 : encoding, state -> Try({ value : U64, rest : state }, err)
-encoding.parse_tag_union : encoding, Encoding.ParseTagUnionSpec(a), state -> Try({ value : a, rest : state }, err)
+encoding.parse_tag_union : encoding, ParseTagUnionSpec(a), state -> Try({ value : a, rest : state }, err)
 
-encoding.parse_record_field : encoding, Encoding.FieldName.FieldNames(_shape), state -> Try(
+encoding.parse_record_field : encoding, Str.FieldName.FieldNames(_shape), state -> Try(
 	[
-		Field({ field : Encoding.FieldName(_shape), rest : state }),
+		Field({ field : Str.FieldName(_shape), rest : state }),
 		TryField({ name : Str, rest : state }),
 		TryFieldCaseless({ name : Str, rest : state }),
 		Continue({ rest : state }),
@@ -1224,8 +1236,8 @@ continues from that parser's returned state. When it sees `cache_control`, it
 calls the `Str` parser. The value parser owns value consumption.
 
 `Field` means the format already matched the input field name against the
-provided `Encoding.FieldName.FieldNames(_shape)`, usually by iterating
-`Encoding.FieldName.FieldNames.for_size(fields, len)`
+provided `Str.FieldName.FieldNames(_shape)`, usually by iterating
+`Str.FieldName.FieldNames.for_size(fields, len)`
 or another field iterator. `TryField` means the format parsed a field name and
 asks the generated record parser to exact-match it against the transformed
 fields. `TryFieldCaseless` is the same, but uses ASCII caseless matching. If a
@@ -1263,19 +1275,19 @@ construction time and then use `TryFieldCaseless("Cache-Control")` at runtime.
 JSON camel-case parsing can rename `user_id` to `userId` at parser construction
 time and then use `TryField("userId")` at runtime. The compiler does not know
 those policies; it only knows that it has a transformed
-`Encoding.FieldName.FieldNames(_shape)` value and a requested matching mode.
+`Str.FieldName.FieldNames(_shape)` value and a requested matching mode.
 
-`Encoding.FieldName.FieldNames.shortest_name` and
-`Encoding.FieldName.FieldNames.longest_name` are computed after renaming. Formats may
+`Str.FieldName.FieldNames.shortest_name` and
+`Str.FieldName.FieldNames.longest_name` are computed after renaming. Formats may
 use them to skip impossible fields before doing more expensive work. For
 example, if a header name is longer than
-`Encoding.FieldName.FieldNames.longest_name(fields)` and the format's `rename_field`
+`Str.FieldName.FieldNames.longest_name(fields)` and the format's `rename_field`
 never increases field length for headers, the format can consume the line and
 return `Continue` without constructing any temporary field name. This is not a
 parse failure: for formats such as HTTP headers and JSON objects, unknown fields
 remain ordinary input according to that format's rules. If the target record
 actually contains a long renamed field name, the long input field remains
-matchable through the same `Encoding.FieldName.FieldNames` iteration APIs.
+matchable through the same `Str.FieldName.FieldNames` iteration APIs.
 
 For small fields, generated record dispatch compares the packed small string
 representation directly. Roc zeroes unused SSO bytes, so equality can use
@@ -1307,7 +1319,7 @@ sake of generality.
 Nested records follow the same construction/runtime split. The outer derived
 `parser_for` method eagerly calls every nested parser constructor before
 returning its runtime lambda. A nested record gets its own
-`Encoding.FieldName.FieldNames(_nested_shape)` value, then renames and rebuckets that
+`Str.FieldName.FieldNames(_nested_shape)` value, then renames and rebuckets that
 field set through the same `encoding.rename_field` method. A custom nominal
 field calls that nominal type's explicit `parser_for` method during parser
 construction. At runtime the outer record parser dispatches to the
@@ -1356,8 +1368,8 @@ x_auth_token -> x-auth-token
 ```
 
 At runtime the header parser parses the input line name as a seamless slice. It
-may use `Encoding.FieldName.FieldNames.for_size` plus ASCII-caseless comparison
-against `Encoding.FieldName.name` to match the transformed field set directly and
+may use `Str.FieldName.FieldNames.for_size` plus ASCII-caseless comparison
+against `Str.FieldName.name` to match the transformed field set directly and
 return `Field({ field, rest: value_start })`. It may also return
 `TryFieldCaseless({ name, rest: value_start })` and let generated record
 dispatch perform the ASCII-caseless match. If the name cannot match any target
@@ -1380,8 +1392,8 @@ user_id -> userId
 cache_control -> cacheControl
 ```
 
-The runtime JSON scanner can use `Encoding.FieldName.FieldNames.for_size` and exact
-`Encoding.FieldName.name` comparison to match each object key against the
+The runtime JSON scanner can use `Str.FieldName.FieldNames.for_size` and exact
+`Str.FieldName.name` comparison to match each object key against the
 already-renamed field set and return `Field({ field, rest: value_start })` for
 known keys. It may also return `TryField({ name, rest: value_start })` and let
 generated record dispatch perform exact matching. For unknown keys, it skips the
@@ -1405,48 +1417,77 @@ and missing object fields are separate format conditions. They are surfaced only
 through field or value types that request them, such as `Try(Str, [Null])` or
 `Try(Str, [Missing])`; the plain `Str` method does not accept either condition.
 
-Concrete HTTP header parser code has this shape inside `Builtin.Encoding`:
+Concrete HTTP header parser code has this public shape:
 
 ```roc
-HttpHeaderState :: { raw : Str }
+Headers := { raw : Str }.{
+	DecodeErr := [MissingRequired, BadHeader].{}
 
-HttpHeaderEncoding :: [Caseless].{
-	rename_field : HttpHeaderEncoding, Str -> Str
-	parse_str : HttpHeaderEncoding, HttpHeaderState -> Try({ value : Str, rest : HttpHeaderState }, HttpHeader)
-	parse_u64 : HttpHeaderEncoding, HttpHeaderState -> Try({ value : U64, rest : HttpHeaderState }, HttpHeader)
-
-	parse_record_field : HttpHeaderEncoding, Encoding.FieldName.FieldNames(_shape), HttpHeaderState -> Try(
-		[
-			Field({ field : Encoding.FieldName(_shape), rest : HttpHeaderState }),
-			TryField({ name : Str, rest : HttpHeaderState }),
-			TryFieldCaseless({ name : Str, rest : HttpHeaderState }),
-			Continue({ rest : HttpHeaderState }),
-			Done({ rest : HttpHeaderState }),
-		],
-		HttpHeader,
-	)
-
-	skip_record_field : HttpHeaderEncoding, HttpHeaderState -> Try(HttpHeaderState, HttpHeader)
-	missing_record_field : HttpHeaderEncoding, Str, HttpHeaderState -> HttpHeader
-	missing_optional_field : HttpHeaderEncoding, Str, HttpHeaderState -> [Missing]
-}
-
-HttpHeader := [MissingRequired, BadHeader].{
-	parser_for : () -> (Str -> Try(output, HttpHeader))
+	parser_for : () -> (Headers -> Try({ value : output, rest : Headers }, DecodeErr))
 		where [
-			output.parser_for : HttpHeaderEncoding -> (HttpHeaderState -> Try({ value : output, rest : HttpHeaderState }, HttpHeader)),
+			output.parser_for : HeaderEncoding -> (Headers -> Try({ value : output, rest : Headers }, DecodeErr)),
 		]
 	parser_for = || {
 		Output : output
-		parse_output = Output.parser_for(HttpHeaderEncoding.Caseless)
+		Output.parser_for(HeaderEncoding.Caseless)
+	}
 
-		|raw| {
-			parsed = parse_output(HttpHeaderState.{ raw })?
-			Ok(parsed.value)
+	parse : Str -> Try(output, DecodeErr)
+		where [
+			output.parser_for : HeaderEncoding -> (Headers -> Try({ value : output, rest : Headers }, DecodeErr)),
+		]
+	parse = |raw| {
+		Output : output
+		parse_output = Output.parser_for(HeaderEncoding.Caseless)
+		parsed = parse_output(Headers.{ raw })?
+		Ok(parsed.value)
+	}
+}
+
+HeaderEncoding :: [Caseless].{
+	rename_field : HeaderEncoding, Str -> Str
+	rename_field = |_, name| underscores_to_dashes(name)
+
+	parse_str : HeaderEncoding, Headers -> Try({ value : Str, rest : Headers }, Headers.DecodeErr)
+	parse_str = |_, state| {
+		value_parts = take_header_value(state.raw)?
+		Ok({ value: value_parts.value, rest: { raw: value_parts.after } })
+	}
+
+	parse_u64 : HeaderEncoding, Headers -> Try({ value : U64, rest : Headers }, Headers.DecodeErr)
+	parse_u64 = |_, state| {
+		value_parts = take_header_value(state.raw)?
+
+		match U64.from_str(value_parts.value) {
+			Ok(value) => Ok({ value, rest: { raw: value_parts.after } })
+			Err(_) => Err(Headers.DecodeErr.BadHeader)
 		}
 	}
 
-	parse : Str -> Try(output, HttpHeader)
+	parse_record_field : HeaderEncoding, Str.FieldName.FieldNames(_shape), Headers -> Try(
+		[
+			Field({ field : Str.FieldName(_shape), rest : Headers }),
+			TryField({ name : Str, rest : Headers }),
+			TryFieldCaseless({ name : Str, rest : Headers }),
+			Continue({ rest : Headers }),
+			Done({ rest : Headers }),
+		],
+		Headers.DecodeErr,
+	)
+	parse_record_field = |_, fields, state|
+		parse_record_field_from_headers(fields, state.raw)
+
+	skip_record_field : HeaderEncoding, Headers -> Try(Headers, Headers.DecodeErr)
+	skip_record_field = |_, state| {
+		parts = take_header_value(state.raw)?
+		Ok({ raw: parts.after })
+	}
+
+	missing_record_field : HeaderEncoding, Str, Headers -> Headers.DecodeErr
+	missing_record_field = |_, _, _| Headers.DecodeErr.MissingRequired
+
+	missing_optional_field : HeaderEncoding, Str, Headers -> [Missing]
+	missing_optional_field = |_, _, _| Missing
 }
 ```
 
@@ -1457,73 +1498,74 @@ The exact derived parser type for a header record with mixed field shapes is:
 	cache_control : Str,
 	content_length : U64,
 	x_auth_token : Try(Str, [Missing]),
-}.parser_for : HttpHeaderEncoding -> (HttpHeaderState -> Try(
+}.parser_for : HeaderEncoding -> (Headers -> Try(
 	{
 		value : {
 			cache_control : Str,
 			content_length : U64,
 			x_auth_token : Try(Str, [Missing]),
 		},
-		rest : HttpHeaderState,
+		rest : Headers,
 	},
-	Encoding.HttpHeader,
+	Headers.DecodeErr,
 ))
 ```
 
-Because `Encoding.HttpHeader` does not define `parse_tag_union`, trying to parse a
+Because `HeaderEncoding` does not define `parse_tag_union`, trying to parse a
 header record that contains a tag union is a compile-time static-dispatch error:
 
 ```roc
-bad : Try({ mode : [On, Off] }, Encoding.HttpHeader)
-bad = Encoding.HttpHeader.parse("mode: On\r\n")
+bad : Try({ mode : [On, Off] }, Headers.DecodeErr)
+bad = Headers.parse("mode: On\r\n")
 ```
 
-The missing requirement is `HttpHeaderEncoding.parse_tag_union`; the compiler
-does not wait until runtime to discover that this format does not support tags.
+The missing requirement is `HeaderEncoding.parse_tag_union`; the compiler does
+not wait until runtime to discover that this format does not support tags.
 
 Concrete JSON parser code has this shape:
 
 ```roc
-JsonState :: [Input(Str)]
+JsonState := [Input(Str)]
 
-JsonEncoding :: [Default, CamelCase, TrailingCommas].{
+JsonEncoding :: [Default, CamelCase].{
 	rename_field : JsonEncoding, Str -> Str
 	rename_field = |encoding, name|
 		match encoding {
 			Default => name
-			TrailingCommas => name
 			CamelCase => snake_to_camel(name)
 		}
 
-	allows_trailing_commas : JsonEncoding -> Bool
-	allows_trailing_commas = |encoding|
-		match encoding {
-			Default => False
-			CamelCase => False
-			TrailingCommas => True
-		}
-
-	parse_str : JsonEncoding, JsonState -> Try({ value : Str, rest : JsonState }, Json)
-	parse_record_field : JsonEncoding, Encoding.FieldName.FieldNames(_shape), JsonState -> Try(
+	parse_str : JsonEncoding, JsonState -> Try({ value : Str, rest : JsonState }, Json.DecodeErr)
+	parse_record_field : JsonEncoding, Str.FieldName.FieldNames(_shape), JsonState -> Try(
 		[
-			Field({ field : Encoding.FieldName(_shape), rest : JsonState }),
+			Field({ field : Str.FieldName(_shape), rest : JsonState }),
 			TryField({ name : Str, rest : JsonState }),
 			TryFieldCaseless({ name : Str, rest : JsonState }),
 			Continue({ rest : JsonState }),
 			Done({ rest : JsonState }),
 		],
-		Json,
+		Json.DecodeErr,
 	)
-	skip_record_field : JsonEncoding, JsonState -> Try(JsonState, Json)
-	missing_record_field : JsonEncoding, Str, JsonState -> Json
+	skip_record_field : JsonEncoding, JsonState -> Try(JsonState, Json.DecodeErr)
+	missing_record_field : JsonEncoding, Str, JsonState -> Json.DecodeErr
 	missing_optional_field : JsonEncoding, Str, JsonState -> [Missing]
-	parse_tag_union : JsonEncoding, Encoding.ParseTagUnionSpec(a), JsonState -> Try({ value : a, rest : JsonState }, Json)
+	parse_tag_union : JsonEncoding, ParseTagUnionSpec(a), JsonState -> Try({ value : a, rest : JsonState }, Json.DecodeErr)
 }
 
-Json := [MissingRequired, InvalidJson].{
-	parse : Str -> Try(a, Json)
+Json :: [].{
+	DecodeErr := [MissingRequired, InvalidJson].{}
+
+	Token := { raw : Str }.{
+		parser_for : JsonEncoding -> (JsonState -> Try({ value : Token, rest : JsonState }, Json.DecodeErr))
+		parser_for = |encoding| |state| {
+			parsed = JsonEncoding.parse_str(encoding, state)?
+			Ok({ value: { raw: "custom-token" }, rest: parsed.rest })
+		}
+	}
+
+	parse : Str -> Try(a, Json.DecodeErr)
 		where [
-			a.parser_for : JsonEncoding -> (JsonState -> Try({ value : a, rest : JsonState }, Json)),
+			a.parser_for : JsonEncoding -> (JsonState -> Try({ value : a, rest : JsonState }, Json.DecodeErr)),
 		]
 	parse = |json| {
 		Shape : a
@@ -1535,33 +1577,14 @@ Json := [MissingRequired, InvalidJson].{
 				if Str.is_empty(Str.trim_start(rest)) {
 					Ok(parsed.value)
 				} else {
-					Err(Json.InvalidJson)
+					Err(Json.DecodeErr.InvalidJson)
 				}
 		}
 	}
 
-	parse_trailing_commas : Str -> Try(a, Json)
+	parser_camel : () -> (Str -> Try(a, Json.DecodeErr))
 		where [
-			a.parser_for : JsonEncoding -> (JsonState -> Try({ value : a, rest : JsonState }, Json)),
-		]
-	parse_trailing_commas = |json| {
-		Shape : a
-		parse_shape = Shape.parser_for(JsonEncoding.TrailingCommas)
-		parsed = parse_shape(JsonState.Input(json))?
-
-		match parsed.rest {
-			Input(rest) =>
-				if Str.is_empty(Str.trim_start(rest)) {
-					Ok(parsed.value)
-				} else {
-					Err(Json.InvalidJson)
-				}
-		}
-	}
-
-	parser_camel : () -> (Str -> Try(a, Json))
-		where [
-			a.parser_for : JsonEncoding -> (JsonState -> Try({ value : a, rest : JsonState }, Json)),
+			a.parser_for : JsonEncoding -> (JsonState -> Try({ value : a, rest : JsonState }, Json.DecodeErr)),
 		]
 	parser_camel = || {
 		Shape : a
@@ -1575,7 +1598,7 @@ Json := [MissingRequired, InvalidJson].{
 					if Str.is_empty(Str.trim_start(rest)) {
 						Ok(parsed.value)
 					} else {
-						Err(Json.InvalidJson)
+						Err(Json.DecodeErr.InvalidJson)
 					}
 			}
 		}
@@ -1599,7 +1622,7 @@ The exact derived parser type for a JSON record is:
 		},
 		rest : JsonState,
 	},
-	Json,
+	Json.DecodeErr,
 ))
 ```
 
@@ -1611,7 +1634,7 @@ The exact derived parser type for an externally tagged JSON union is:
 		value : [Admin({ name : Str }), Guest],
 		rest : JsonState,
 	},
-	Json,
+	Json.DecodeErr,
 ))
 ```
 
@@ -1706,8 +1729,11 @@ MyEncoding :: [Out(Str)].{
 ### Compile-Time Literal Conversions
 
 A numeric literal whose target type is a non-builtin nominal type converts
-through that type's `from_numeral` method, and a string literal converts
-through `from_quote` (receiving the literal's post-escape contents as `Str`).
+through that type's **own declared** `from_numeral` method, and a string literal
+converts through its declared `from_quote` (receiving the literal's post-escape
+contents as `Str`). The conversion is not inherited through the backing chain: a
+transparent newtype that declares no `from_` does not accept a bare literal —
+that is a type error; use explicit `Nominal.(value)` construction instead.
 Every such conversion with a concrete target type is a
 compile-time root (`numeral_conversion` / `quote_conversion`), no matter
 where the literal sits in the AST: checking finalization evaluates the raw
@@ -2133,9 +2159,11 @@ During Monotype construction, an open checked variable is an unresolved graph
 node carrying the variable's numeric and row defaults. Unification resolves it
 when call-site arguments, expected lambda types, numeric literals, or checked
 type relations provide concrete evidence; defaults apply only at
-materialization. A Monotype is a materialized view of a solved node: it is
-reserved at a stable id and its content is refilled in place when its node
-gains evidence, so every holder of the id observes the solved type. This is
+materialization. While solving is still active, users hold instantiation graph
+nodes rather than final Monotype type ids. Materialization turns solved graph
+nodes into immutable interned Monotype type nodes. Recursive groups may reserve
+their ids inside the type interner while the group is being sealed, but no type
+id that is visible in Monotype IR is later refilled or changed. This is
 ordinary type solving inside one stage. Once Monotype IR is output, no
 unresolved node remains reachable and no later stage may change a type.
 
@@ -2334,6 +2362,297 @@ communicate only through explicit checked type relations and Monotype types.
 This is why generic functions specialize predictably across module boundaries:
 the checked body remains immutable, and every monomorphic specialization records
 its own closed instantiation.
+
+The specialization store must make this lookup direct. It must not scan all
+specializations for a callable family and recompute recursive type digests while
+lowering a body. A specialization request is identified by:
+
+```zig
+const SpecIdentity = struct {
+    callable: CallableIdentity,
+    source_fn_ty_digest: TypeDigest,
+    mono_fn_ty_digest: TypeDigest,
+    mono_fn_ty: TypeId,
+};
+
+const CallableIdentity = union(enum) {
+    proc_template: struct {
+        module: CheckedModuleId,
+        proc: ProcTemplateId,
+    },
+    nested_site: struct {
+        module: CheckedModuleId,
+        owner_proc: ProcTemplateId,
+        owner_fn_digest: FnDigest,
+        site: NestedSiteId,
+    },
+    hosted: HostedId,
+    generated: GeneratedId,
+};
+
+const SpecStatus = enum {
+    reserved,
+    lowering,
+    ready,
+};
+
+const SpecRecord = struct {
+    identity: SpecIdentity,
+    fn: FnId,
+    status: SpecStatus,
+};
+```
+
+`source_fn_ty_digest` records the checked source function type after
+instantiation into the requesting graph. `mono_fn_ty_digest` records the closed
+requested function type. The digests make lookup fast, but they are not the only
+correctness check. When a digest match is found, the store must also verify
+the checked callable identity and exact structural equality of the closed
+Monotype function type. Digest collisions are therefore harmless.
+
+The in-memory builder owns a transient hash table from `SpecIdentity` to
+`SpecId`, plus the append-only `SpecRecord` array. The output program owns the
+records and the function bodies, not the hash table. A loaded cache file may
+build a transient hash table over the mapped records, but the file itself stores
+sorted records and fixed spans so it can be consumed without pointer fixups.
+
+Monotype type construction must feed the specialization store with immutable
+interned type nodes:
+
+```zig
+const MonoTypeStore = struct {
+    nodes: []const MonoTypeNode,
+    args: []const TypeId,
+    fields: []const Field,
+    tags: []const Tag,
+    payloads: []const TypeId,
+    declared_fields: []const DeclaredField,
+    digests: []const TypeDigest,
+};
+
+const MonoTypeNode = extern struct {
+    tag: MonoTypeTag,
+    first: u32,
+    len: u32,
+    extra: u32,
+};
+```
+
+The mutable instantiation graph may use union-find, row-extension links, and
+work queues while solving one specialization. Its final output is an immutable
+`TypeId` in `MonoTypeStore`. After that point, the type node is never refilled.
+Rows are normalized once, with field and tag names in explicit sorted order,
+and the type digest is stored beside the node when the node is interned. Parent
+digests are computed from child digests, so structurally growing records and
+function types do not repeatedly walk their whole prefix.
+
+The type interner enforces exact equality:
+
+```text
+same digest
+same tag
+same child count and metadata
+same ordered child ids, field names, tag names, and payload positions
+```
+
+The digest table is an acceleration structure only. Exact equality remains the
+authority for type identity. This gives generic higher-order code the desired
+shape: repeated calls at the same closed function type reuse one specialization
+after the first request, and growing structural accumulator types add only the
+new record/function nodes instead of redigesting every previous layer.
+
+Open instantiation graphs do not write directly into final Monotype body
+sections. While a specialization is being solved, lowering writes to a
+`BodyDraft` owned by that specialization graph. A draft mirrors the final
+Monotype sections enough for lowering to refer to expressions, patterns, locals,
+definitions, nested definitions, side-pool spans, and function signatures, but
+all type-bearing fields use a draft type cell:
+
+```zig
+const DraftTypeCell = union(enum) {
+    graph_node: InstNodeId,
+    sealed: TypeId,
+};
+```
+
+`graph_node` is used for any type cell owned by the active instantiation graph:
+expression types, pattern types, binder/local types, typed-local entries,
+function arguments, function returns, lambda and nested function signatures,
+specialization request function types, layout requests, and runtime schema
+requests. `sealed` is used only for closed Monotype types that were already
+materialized before this graph was opened, such as imported cache entries or
+builder-global primitive and hosted ABI types. If a sealed type must participate
+in the current specialization's constraints, the graph imports it and the draft
+stores the imported node instead of the original `TypeId`.
+
+A `BodyDraft` may contain ordinary lowering ids, spans, and side pools while it
+is active, but those ids are draft-local. They are not cache ids and no later
+post-check stage consumes them. The draft is sealed only after:
+
+1. all checked type evidence for the specialization has been applied;
+2. deferred procedure-template requests created by this graph have been drained
+   or reserved with stable closed request types;
+3. nested function bodies that share this graph have finished lowering;
+4. every unresolved graph node can be closed from checked data, or can be
+   proven to be a truly unconstrained empty tag union.
+
+Sealing performs the only transition from graph nodes to final Monotype
+`TypeId`s. It walks every draft type cell, materializes each graph node
+through the Monotype type interner, preserves recursive groups privately inside
+the interner, computes and stores type digests once, and then copies the fully
+sealed records into `MonoProgramBuilder`. This copy also turns draft-local ids
+and spans into final shard-local ids and spans. If sealing finds a graph node in
+any completed record after this step, that is a compiler bug.
+
+This split is required for future specialization caching. Cache files contain
+only sealed `MonoProgramView` sections: fixed-width records, ids, spans, and
+offsets into side pools. They never contain union-find nodes, mutable type
+views, allocator-owned arrays, hash maps, or draft-local ids. Because every
+interior relation in a sealed program is an id or span into the same shard, a
+mapped cache file can be read back as a read-only `MonoProgramView` with only
+top-level slice creation, shard assignment, and import-table resolution.
+
+The program store is split into a builder and a read-only view:
+
+```zig
+const MonoProgramBuilder = struct {
+    types: MonoTypeInterner,
+    specs: SpecBuilder,
+    fns: ArrayList(FnDef),
+    exprs: ArrayList(Expr),
+    pats: ArrayList(Pat),
+    names: NameStoreBuilder,
+};
+
+const MonoProgramView = struct {
+    types: MonoTypeStore,
+    specs: []const SpecRecord,
+    fns: []const FnDef,
+    exprs: []const Expr,
+    pats: []const Pat,
+    names: NameStoreView,
+};
+```
+
+Function slots are shard-aware so future cache files can be mapped directly:
+
+```zig
+const ShardId = enum(u32) { _ };
+const FnSlot = union(enum) {
+    local: FnId,
+    imported: ImportedFnId,
+};
+
+const ImportedFn = extern struct {
+    shard: ShardId,
+    fn: FnId,
+};
+```
+
+A newly built root program has one mutable local shard. A loaded specialization
+file is a read-only shard. Calls inside a shard use local `FnId` values when
+the target is stored in the same shard. Cross-shard calls use an `ImportedFnId`
+into an imports table. Loading resolves each import table entry to
+`ImportedFn { shard, fn }` once. Function bodies are not rewritten after the
+file is mapped.
+
+The durable format uses only plain old data records, offsets, lengths, and side
+pools. Hash maps, union-find nodes, temporary worklists, and allocator-owned
+arrays are transient builder data and are never written.
+
+```zig
+const SpecializationCacheHeader = extern struct {
+    magic: [8]u8,
+    format_version: u32,
+    compiler_layout_hash: [32]u8,
+    validity_id: [32]u8,
+
+    names: FileSlice,
+    type_nodes: FileSlice,
+    type_args: FileSlice,
+    fields: FileSlice,
+    tags: FileSlice,
+    payloads: FileSlice,
+    declared_fields: FileSlice,
+    type_digests: FileSlice,
+
+    specs: FileSlice,
+    fns: FileSlice,
+    defs: FileSlice,
+    nested_defs: FileSlice,
+    exprs: FileSlice,
+    pats: FileSlice,
+    stmts: FileSlice,
+    locals: FileSlice,
+    expr_ids: FileSlice,
+    pat_ids: FileSlice,
+    typed_locals: FileSlice,
+    stmt_ids: FileSlice,
+    field_exprs: FileSlice,
+    record_destructs: FileSlice,
+    str_pattern_steps: FileSlice,
+    branches: FileSlice,
+    if_branches: FileSlice,
+    string_literals: FileSlice,
+    imports: FileSlice,
+    roots: FileSlice,
+    layout_requests: FileSlice,
+    runtime_schema_requests: FileSlice,
+    comptime_sites: FileSlice,
+    source_files: FileSlice,
+    expr_locs: FileSlice,
+    expr_regions: FileSlice,
+    stmt_locs: FileSlice,
+    stmt_regions: FileSlice,
+    local_names: FileSlice,
+    debug_names: FileSlice,
+};
+
+const FileSlice = extern struct {
+    offset: u64,
+    len: u64,
+};
+```
+
+Any current in-memory field that contains a process pointer or slice must be
+converted to an offset record plus a byte or region side pool before it can be
+written to these sections. This applies to string literals, source-file names,
+local names, debug-name text, and compile-time site branch-region lists. A cache
+file must never store process pointers from `[]const u8`, `[]const Region`, hash
+maps, or allocator-owned arrays.
+
+The loader validates the header, `format_version`, `compiler_layout_hash`,
+`validity_id`, bounds, alignment, and section ordering. It then creates a
+`MonoProgramView` by adding the mapped base address to each `FileSlice`. The
+only required fixups are:
+
+- converting top-level file slices to process slices;
+- assigning a `ShardId` to the mapped file;
+- resolving each import-table entry to a loaded shard and function id.
+
+There are no per-expression, per-type, or per-function pointer rewrites. All
+interior relations are ids or spans into the same shard.
+
+`validity_id` for a Monotype specialization file includes:
+
+- the format version and compiler layout hash;
+- the root checked module id and all checked module ids read by the stored
+  specializations;
+- the explicit root request set;
+- the Monotype configuration that can affect reachable specializations;
+- builtin module data consumed by Monotype;
+- the source callable identities and source function type digests for the
+  stored specializations.
+
+It does not include data that Monotype does not consume. In particular, it does
+not include LIR layout decisions, ARC output, backend symbols, object-format
+choices, or code-generation options.
+
+Cache loading is an optimization of the same specialization store, not another
+lowering path. A loaded `SpecRecord` must pass the same identity and exact type
+checks as a freshly produced record before it can satisfy a request. If no
+loaded record matches, the builder creates the specialization normally and may
+append it to a new cache file after the program is complete.
 
 ### Static Dispatch In Monotype
 

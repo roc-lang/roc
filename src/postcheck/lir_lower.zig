@@ -15,6 +15,7 @@ const lir_core = @import("lir_core");
 const LIR = lir_core.LIR;
 const LirProgram = lir_core.Program;
 const RootMetadata = lir_core.RootMetadata.RootMetadata;
+const const_store = check.ConstStore;
 
 /// Runtime field order for a named record field.
 pub const RuntimeRecordFieldSchema = struct {
@@ -127,6 +128,7 @@ const Lowerer = struct {
     comptime_site_map: []?LIR.ComptimeSiteId,
     type_layouts: []?layout.Idx,
     const_plan_map: []?LirProgram.ConstPlanId,
+    const_type_map: []?check.ConstStore.ConstTypeId,
     next_join_point: u32 = 0,
     loop_stack: std.ArrayList(LoopContext),
     current_ret_ty: ?Type.TypeId = null,
@@ -166,6 +168,10 @@ const Lowerer = struct {
         errdefer allocator.free(const_plan_map);
         @memset(const_plan_map, null);
 
+        const const_type_map = try allocator.alloc(?check.ConstStore.ConstTypeId, program.types.types.items.len);
+        errdefer allocator.free(const_type_map);
+        @memset(const_type_map, null);
+
         return .{
             .allocator = allocator,
             .program = program,
@@ -176,12 +182,14 @@ const Lowerer = struct {
             .comptime_site_map = comptime_site_map,
             .type_layouts = type_layouts,
             .const_plan_map = const_plan_map,
+            .const_type_map = const_type_map,
             .loop_stack = .empty,
         };
     }
 
     fn deinit(self: *Lowerer) void {
         self.loop_stack.deinit(self.allocator);
+        self.allocator.free(self.const_type_map);
         self.allocator.free(self.const_plan_map);
         self.allocator.free(self.type_layouts);
         self.allocator.free(self.comptime_site_map);
@@ -197,6 +205,7 @@ const Lowerer = struct {
             .runtime_schemas = self.runtime_schemas,
         };
         self.loop_stack.deinit(self.allocator);
+        self.allocator.free(self.const_type_map);
         self.allocator.free(self.const_plan_map);
         self.allocator.free(self.type_layouts);
         self.allocator.free(self.local_map);
@@ -207,6 +216,7 @@ const Lowerer = struct {
         self.local_map = &.{};
         self.type_layouts = &.{};
         self.const_plan_map = &.{};
+        self.const_type_map = &.{};
         self.loop_stack = .empty;
         return output;
     }
@@ -485,6 +495,131 @@ const Lowerer = struct {
         };
     }
 
+    fn constTypeOfType(self: *Lowerer, ty: Type.TypeId) Common.LowerError!const_store.ConstTypeId {
+        const index = @intFromEnum(ty);
+        if (self.const_type_map[index]) |existing| return existing;
+
+        const id = try self.result.const_types.reserve();
+        self.const_type_map[index] = id;
+        errdefer {
+            if (self.const_type_map[index] == id) self.const_type_map[index] = null;
+        }
+
+        const stored = try self.buildConstType(ty);
+        self.result.const_types.fill(id, stored);
+        return id;
+    }
+
+    fn constRecordFieldName(self: *Lowerer, name: check.CheckedNames.RecordFieldNameId) std.mem.Allocator.Error!check.CheckedNames.RecordFieldNameId {
+        return self.result.const_type_names.internRecordFieldLabel(self.program.names.recordFieldLabelText(name));
+    }
+
+    fn constTagName(self: *Lowerer, name: check.CheckedNames.TagNameId) std.mem.Allocator.Error!check.CheckedNames.TagNameId {
+        return self.result.const_type_names.internTagLabel(self.program.names.tagLabelText(name));
+    }
+
+    fn constTypeDef(self: *Lowerer, def: MonoType.TypeDef) std.mem.Allocator.Error!const_store.TypeDef {
+        return .{
+            .module_name = try self.result.const_type_names.internModuleName(self.program.names.moduleNameText(def.module_name)),
+            .type_name = try self.result.const_type_names.internTypeName(self.program.names.typeNameText(def.type_name)),
+            .source_decl = def.source_decl,
+        };
+    }
+
+    fn buildConstType(self: *Lowerer, ty: Type.TypeId) Common.LowerError!const_store.ConstType {
+        return switch (self.program.types.get(ty)) {
+            .primitive => |primitive| .{ .primitive = constPrimitive(primitive) },
+            .zst => .zst,
+            .list => |elem| .{ .list = try self.constTypeOfType(elem) },
+            .box => |elem| .{ .box = try self.constTypeOfType(elem) },
+            .tuple => |items| blk: {
+                const source = self.program.types.span(items);
+                const out = try self.allocator.alloc(const_store.ConstTypeId, source.len);
+                defer self.allocator.free(out);
+                for (source, 0..) |item, i| out[i] = try self.constTypeOfType(item);
+                break :blk .{ .tuple = try self.result.const_types.appendTypeSpan(out) };
+            },
+            .record => |fields| blk: {
+                const source = self.program.types.fieldSpan(fields);
+                const out = try self.allocator.alloc(const_store.TypeField, source.len);
+                defer self.allocator.free(out);
+                for (source, 0..) |field, i| {
+                    out[i] = .{
+                        .name = try self.constRecordFieldName(field.name),
+                        .ty = try self.constTypeOfType(field.ty),
+                    };
+                }
+                break :blk .{ .record = try self.result.const_types.appendFieldSpan(out) };
+            },
+            .tag_union => |tags| blk: {
+                const source = self.program.types.tagSpan(tags);
+                const out = try self.allocator.alloc(const_store.TypeTag, source.len);
+                defer self.allocator.free(out);
+                for (source, 0..) |tag, i| {
+                    const payloads = self.program.types.span(tag.payloads);
+                    const stored_payloads = try self.allocator.alloc(const_store.ConstTypeId, payloads.len);
+                    defer self.allocator.free(stored_payloads);
+                    for (payloads, 0..) |payload, j| stored_payloads[j] = try self.constTypeOfType(payload);
+                    out[i] = .{
+                        .name = try self.constTagName(tag.name),
+                        .checked_name = try self.constTagName(tag.checked_name),
+                        .payloads = try self.result.const_types.appendTypeSpan(stored_payloads),
+                    };
+                }
+                break :blk .{ .tag_union = try self.result.const_types.appendTagSpan(out) };
+            },
+            .named => |named| blk: {
+                const args = self.program.types.span(named.args);
+                const stored_args = try self.allocator.alloc(const_store.ConstTypeId, args.len);
+                defer self.allocator.free(stored_args);
+                for (args, 0..) |arg, i| stored_args[i] = try self.constTypeOfType(arg);
+
+                const declared = self.program.types.declaredFieldSpan(named.declared_order);
+                const stored_declared = try self.allocator.alloc(const_store.TypeDeclaredField, declared.len);
+                defer self.allocator.free(stored_declared);
+                for (declared, 0..) |entry, i| {
+                    stored_declared[i] = switch (entry) {
+                        .named => |name| .{ .named = try self.constRecordFieldName(name) },
+                        .padding => |padding| .{ .padding = try self.constTypeOfType(padding) },
+                    };
+                }
+
+                break :blk .{ .named = .{
+                    .named_type = .{
+                        .module = named.named_type.module,
+                        .ty = named.named_type.ty,
+                    },
+                    .def = try self.constTypeDef(named.def),
+                    .kind = constNamedKind(named.kind),
+                    .builtin_owner = named.builtin_owner,
+                    .args = try self.result.const_types.appendTypeSpan(stored_args),
+                    .backing = if (named.backing) |backing| .{
+                        .ty = try self.constTypeOfType(backing.ty),
+                        .use = constBackingUse(backing.use),
+                    } else null,
+                    .declared_order = try self.result.const_types.appendDeclaredFieldSpan(stored_declared),
+                } };
+            },
+            .callable => |variants| self.constErasedCallableType(variants),
+            .erased_fn => |erased| self.constErasedCallableType(erased.members),
+            .capture_record => Common.invariant("capture record reached ConstStore type output as a captured value"),
+            .erased_capture_ptr => Common.invariant("erased capture pointer reached ConstStore type output as a captured value"),
+        };
+    }
+
+    fn constErasedCallableType(self: *Lowerer, variants_span: Type.Span) const_store.ConstType {
+        const variants = self.program.types.fnVariantSpan(variants_span);
+        if (variants.len == 0) Common.invariant("callable capture type had no function variants");
+        const first = self.fnTemplateForFn(variants[0].target);
+        for (variants[1..]) |variant| {
+            const template = self.fnTemplateForFn(variant.target);
+            if (!std.mem.eql(u8, first.source_fn_key.bytes[0..], template.source_fn_key.bytes[0..])) {
+                Common.invariant("callable capture variants had different checked source function keys");
+            }
+        }
+        return .{ .erased = first.source_fn_key };
+    }
+
     fn fnSetForType(self: *Lowerer, ty: Type.TypeId, variants_span: Type.Span) Common.LowerError!LirProgram.FnSetId {
         const type_variants = self.program.types.fnVariantSpan(variants_span);
         const value_layout = try self.layoutOfType(ty);
@@ -609,6 +744,7 @@ const Lowerer = struct {
                 else
                     .{ .generated = @intFromEnum(field.symbol) },
                 .slot = @intCast(index),
+                .ty = try self.constTypeOfType(field.ty),
                 .plan = try self.constPlanOfType(field.ty),
             };
         }
@@ -1215,9 +1351,13 @@ const Lowerer = struct {
         const args = self.program.exprSpan(call.args);
         const lowered = try self.lowerExprsToTemps(args);
         defer self.allocator.free(lowered.ids);
+        const proc = switch (call.target) {
+            .local => |fn_id| self.fn_map[@intFromEnum(fn_id)],
+            .imported => Common.invariant("LIR lowering requires imported Lambda Mono calls to be linked before this stage"),
+        };
         var current = try self.result.store.addCFStmt(.{ .assign_call = .{
             .target = target,
-            .proc = self.fn_map[@intFromEnum(call.target)],
+            .proc = proc,
             .args = try self.result.store.addLocalSpan(lowered.ids),
             .is_cold = call.is_cold,
             .next = next,
@@ -3966,6 +4106,26 @@ fn lirSymbol(symbol: Common.Symbol) LIR.Symbol {
     return LIR.Symbol.fromRaw(@intCast(@intFromEnum(symbol)));
 }
 
+fn constPrimitive(primitive: MonoType.Primitive) const_store.Primitive {
+    return std.meta.stringToEnum(const_store.Primitive, @tagName(primitive)) orelse
+        Common.invariant("monotype primitive had no ConstStore primitive equivalent");
+}
+
+fn constNamedKind(kind: MonoType.NamedKind) const_store.TypeNamedKind {
+    return switch (kind) {
+        .nominal => .nominal,
+        .@"opaque" => .@"opaque",
+        .alias => .alias,
+    };
+}
+
+fn constBackingUse(use: MonoType.BackingUse) const_store.TypeBackingUse {
+    return switch (use) {
+        .inspectable => .inspectable,
+        .runtime_layout_only => .runtime_layout_only,
+    };
+}
+
 fn constFnTemplateFromMono(template: Mono.FnTemplate) LirProgram.FnTemplate {
     return .{
         .fn_def = constFnDefFromMono(template.fn_def),
@@ -3981,6 +4141,7 @@ fn constFnDefFromMono(fn_def: Mono.FnDef) check.ConstStore.FnDef {
         .nested => |nested| .{ .nested = .{
             .owner = nested.owner,
             .site = nested.site,
+            .context_fn_key = nested.context_fn_key,
         } },
         .local_hosted => |hosted| .{ .local_hosted = hosted.template },
         .imported_hosted => |hosted| .{ .imported_hosted = hosted.template },

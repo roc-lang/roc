@@ -678,7 +678,7 @@ pub const ProvidedExportTable = struct {
 };
 
 /// Public `RootRequestKind` declaration.
-pub const RootRequestKind = enum {
+pub const RootRequestKind = enum(u8) {
     runtime_entrypoint,
     provided_export,
     platform_required_binding,
@@ -691,7 +691,7 @@ pub const RootRequestKind = enum {
 };
 
 /// Public `RootAbi` declaration.
-pub const RootAbi = enum {
+pub const RootAbi = enum(u8) {
     roc,
     platform,
     hosted,
@@ -700,7 +700,7 @@ pub const RootAbi = enum {
 };
 
 /// Public `RootExposure` declaration.
-pub const RootExposure = enum {
+pub const RootExposure = enum(u8) {
     private,
     exported,
     platform_required,
@@ -714,7 +714,7 @@ pub const HoistedRootSource = struct {
 };
 
 /// Source location of a checked root that must be published for later compiler stages.
-pub const RootSource = union(enum) {
+pub const RootSource = union(enum(u8)) {
     def: CIR.Def.Idx,
     expr: CIR.Expr.Idx,
     statement: CIR.Statement.Idx,
@@ -2114,8 +2114,14 @@ pub const CheckedStaticDispatchConstraint = struct {
     fn_name: canonical.MethodNameId,
     fn_ty: CheckedTypeId,
     origin: types.StaticDispatchConstraint.Origin,
-    binop_negated: bool = false,
-    num_literal: ?types.NumeralInfo = null,
+
+    pub fn binopNegated(self: @This()) bool {
+        return self.origin.binopNegated();
+    }
+
+    pub fn numeralInfo(self: @This()) ?types.NumeralInfo {
+        return self.origin.numeralInfo();
+    }
 };
 
 /// Public `NumericDefaultPhase` declaration.
@@ -2238,7 +2244,7 @@ pub const CheckedBuiltinNominal = enum {
 };
 
 /// Public `CheckedPrimitive` declaration.
-pub const CheckedPrimitive = enum {
+pub const CheckedPrimitive = enum(u8) {
     bool,
     str,
     u8,
@@ -3833,8 +3839,6 @@ pub const CheckedTypeStore = struct {
                 .fn_name = constraint.fn_name,
                 .fn_ty = try self.cloneCheckedTypeRootSubstituting(allocator, names, constraint.fn_ty, formals, actuals, active),
                 .origin = constraint.origin,
-                .binop_negated = constraint.origin.binopNegated(),
-                .num_literal = constraint.origin.numeralInfo(),
             };
         }
         return out;
@@ -5526,9 +5530,10 @@ const SubstitutedCheckedTypeKeyBuilder = struct {
             self.writeBytes(self.names.methodNameText(constraint.fn_name));
             try self.writeType(constraint.fn_ty);
             self.writeTag(@tagName(constraint.origin));
-            self.writeBool(constraint.binop_negated);
-            self.writeBool(constraint.num_literal != null);
-            if (constraint.num_literal) |num_literal| {
+            self.writeBool(constraint.binopNegated());
+            const maybe_num_literal = constraint.numeralInfo();
+            self.writeBool(maybe_num_literal != null);
+            if (maybe_num_literal) |num_literal| {
                 self.hasher.update(&num_literal.bytes);
                 self.writeBool(num_literal.is_u128);
                 self.writeBool(num_literal.is_negative);
@@ -5850,18 +5855,16 @@ fn numericDefaultPhaseForConstraints(
     constraints_range: types.StaticDispatchConstraint.SafeList.Range,
 ) ?NumericDefaultPhase {
     const constraints = module.typeStoreConst().sliceStaticDispatchConstraints(constraints_range);
-    var has_str_defaultable_literal = false;
+    const kind = types.StaticDispatchConstraint.dominantLiteralKind(constraints);
+    var has_arith = false;
     for (constraints) |constraint| {
-        switch (constraint.origin) {
-            .from_literal => |lit| switch (lit) {
-                .numeral => return .mono_specialization,
-                .quote, .interpolation => has_str_defaultable_literal = true,
-            },
-            else => {},
+        if (isDefaultableArithmeticConstraint(module, constraint)) {
+            has_arith = true;
+            break;
         }
-        if (isDefaultableArithmeticConstraint(module, constraint)) return .mono_specialization;
     }
-    if (has_str_defaultable_literal) return .mono_specialization_str;
+    if (kind == .numeral or has_arith) return .mono_specialization;
+    if (kind == .quote or kind == .interpolation) return .mono_specialization_str;
     return null;
 }
 
@@ -6045,8 +6048,6 @@ fn copyCheckedStaticDispatchConstraints(
             .fn_name = try names.internMethodIdent(module.identStoreConst(), constraint.fn_name),
             .fn_ty = try appendCheckedTypeRoot(allocator, module, names, imports, store, active, constraint.fn_var),
             .origin = constraint.origin,
-            .binop_negated = constraint.origin.binopNegated(),
-            .num_literal = constraint.origin.numeralInfo(),
         };
     }
     return out;
@@ -6155,9 +6156,9 @@ fn checkedBuiltinNominalForIdent(module_env: *const ModuleEnv, ident: base.Ident
     if (ident.eql(common.dec) or ident.eql(common.dec_type)) return .dec;
     if (ident.eql(common.list) or ident.eql(common.builtin_list)) return .list;
     if (ident.eql(common.box) or ident.eql(common.builtin_box)) return .box;
-    if (ident.eql(common.builtin_encoding_parse_tag_union_spec)) return .parse_tag_union_spec;
-    if (ident.eql(common.builtin_encoding_field_names)) return .fields;
-    if (ident.eql(common.builtin_encoding_field_name)) return .field;
+    if (ident.eql(common.builtin_parse_tag_union_spec)) return .parse_tag_union_spec;
+    if (ident.eql(common.builtin_str_field_names)) return .fields;
+    if (ident.eql(common.builtin_str_field_name)) return .field;
     return null;
 }
 
@@ -11303,7 +11304,7 @@ pub const ArtifactTopLevelProcedureBindingRef = struct {
 };
 
 /// Public `ProcedureBindingRef` declaration.
-pub const ProcedureBindingRef = union(enum) {
+pub const ProcedureBindingRef = union(enum(u8)) {
     top_level: ArtifactTopLevelProcedureBindingRef,
     imported: ImportedProcedureBindingRef,
     hosted: HostedProcRef,
@@ -18575,9 +18576,10 @@ const PlatformAppRelationTypeDigestBuilder = struct {
             self.writeBytes(self.names.methodNameText(constraint.fn_name));
             try self.writeSourceType(constraint.fn_ty);
             self.writeTag(@tagName(constraint.origin));
-            self.writeBool(constraint.binop_negated);
-            self.writeBool(constraint.num_literal != null);
-            if (constraint.num_literal) |num_literal| {
+            self.writeBool(constraint.origin.binopNegated());
+            const maybe_num_literal = constraint.numeralInfo();
+            self.writeBool(maybe_num_literal != null);
+            if (maybe_num_literal) |num_literal| {
                 self.hasher.update(&num_literal.bytes);
                 self.writeBool(num_literal.is_u128);
                 self.writeBool(num_literal.is_negative);
@@ -24097,7 +24099,7 @@ pub const CheckedModuleArtifact = struct {
             // `proc_bases`; `checked_types` includes its `var_names` interner = 3).
             // POD inline `key`/`module_identity` contribute 0. Fixed at compile time,
             // independent of stored data size.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 175);
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 180);
         }
 
         /// Append every sub-store's bytes to `writer` in field order, recording
@@ -24217,7 +24219,7 @@ pub const CheckedModuleArtifact = struct {
     /// Manual discriminant for `SERIALIZED_VERSION_HASH`: bump to force a cache /
     /// baked-blob invalidation for a layout change the structural fingerprint below
     /// cannot observe (e.g. a semantic change to how a field is interpreted).
-    const serialized_layout_version: u32 = 3;
+    const serialized_layout_version: u32 = 4;
 
     /// Comptime fingerprint of `Serialized`'s layout, mirroring
     /// `cache_module.MODULE_ENV_VERSION_HASH`. It is appended to the baked builtin
@@ -25221,8 +25223,6 @@ pub const CheckedTypeProjector = struct {
                 .fn_name = try self.remapViewMethodName(source_names, constraint.fn_name),
                 .fn_ty = try self.projectCheckedTypeViewRootInner(source, source_names, constraint.fn_ty, active),
                 .origin = constraint.origin,
-                .binop_negated = constraint.origin.binopNegated(),
-                .num_literal = constraint.origin.numeralInfo(),
             };
         }
         return out;
@@ -25473,8 +25473,6 @@ pub const CheckedTypeProjector = struct {
                 .fn_name = try self.remapMethodName(imported, constraint.fn_name),
                 .fn_ty = try self.projectImportedCheckedType(imported, constraint.fn_ty),
                 .origin = constraint.origin,
-                .binop_negated = constraint.origin.binopNegated(),
-                .num_literal = constraint.origin.numeralInfo(),
             };
         }
         return out;
@@ -25780,8 +25778,6 @@ const CheckedTypeStoreImportProjector = struct {
                 .fn_name = try self.remapMethodName(constraint.fn_name),
                 .fn_ty = try self.project(constraint.fn_ty),
                 .origin = constraint.origin,
-                .binop_negated = constraint.origin.binopNegated(),
-                .num_literal = constraint.origin.numeralInfo(),
             };
         }
         return out;
@@ -27492,6 +27488,42 @@ test "platform app relation resolver returns empty roots before reserving normal
     try std.testing.expectEqual(CheckedTypePayload.empty_tag_union, store.payload(finalized_tags));
 }
 
+test "checked type store reuses closed equivalent payload roots" {
+    const allocator = std.testing.allocator;
+
+    var names = canonical.CanonicalNameStore.init(allocator);
+    defer names.deinit();
+
+    var store = CheckedTypeStore{};
+    defer store.deinit(allocator);
+
+    const first = try appendExplicitCheckedTypePayload(allocator, &names, &store, .empty_record);
+    const second = try appendExplicitCheckedTypePayload(allocator, &names, &store, .empty_record);
+
+    try std.testing.expectEqual(first, second);
+    try std.testing.expectEqual(@as(usize, 1), store.roots.items.len);
+    try std.testing.expectEqual(@as(usize, 1), store.payloads.items.len);
+    try std.testing.expectEqual(CheckedTypePayload.empty_record, store.payload(first));
+}
+
+test "checked type store preserves distinct identity roots with equal variable shape" {
+    const allocator = std.testing.allocator;
+
+    var store = CheckedTypeStore{};
+    defer store.deinit(allocator);
+
+    const first = try store.reserveSyntheticTypeRoot(allocator, testCanonicalTypeKey(70));
+    const second = try store.reserveSyntheticTypeRoot(allocator, testCanonicalTypeKey(71));
+
+    try store.fillSyntheticTypeRoot(allocator, first, .{ .flex = .{} });
+    try store.fillSyntheticTypeRoot(allocator, second, .{ .flex = .{} });
+
+    try std.testing.expect(first != second);
+    try std.testing.expectEqual(@as(usize, 2), store.roots.items.len);
+    try std.testing.expectEqual(@as(usize, 2), store.payloads.items.len);
+    try std.testing.expectEqualDeep(store.payload(first), store.payload(second));
+}
+
 test "provided callable-containing record constant is a data export, not a runtime root" {
     const source =
         \\platform ""
@@ -28008,8 +28040,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, bump `serialized_layout_version` and replace the golden bytes below with
     // the ones this assertion prints.
     const golden: [32]u8 = .{
-        0xDC, 0xEE, 0xC1, 0xAC, 0xB4, 0xCE, 0x7E, 0xFD, 0x41, 0xFC, 0xDC, 0x67, 0x7A, 0x26, 0x0B, 0x8B,
-        0x41, 0xF6, 0x4C, 0x0A, 0x48, 0xEA, 0x2C, 0x23, 0x50, 0x9E, 0x28, 0xE3, 0x12, 0xFA, 0x16, 0xA0,
+        0x2D, 0xBF, 0x8E, 0x09, 0xB7, 0x8A, 0x18, 0x61, 0xC0, 0xF9, 0xA2, 0xFC, 0xB5, 0x5F, 0xF6, 0xA4,
+        0x53, 0xE3, 0x8D, 0x31, 0x64, 0xE3, 0xEA, 0x0D, 0x0E, 0xC6, 0x2E, 0x7D, 0x23, 0x61, 0x31, 0x9D,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

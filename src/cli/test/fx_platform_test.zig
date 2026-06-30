@@ -342,6 +342,23 @@ test "fx platform boxed erased callable host boundary (dev backend)" {
     try runIoSpecTest("--opt=dev", fx_test_specs.host_boxed_fn_boundary_test);
 }
 
+test "fx platform direct run preserves RocOps after F32.abs before list allocation" {
+    const allocator = testing.allocator;
+
+    // Repro for https://github.com/roc-lang/roc/issues/9846:
+    // direct-run should preserve RocOps across F32.abs and the later list allocation.
+    const result = try util.runRocCommand(std.testing.io, allocator, &.{
+        "test/fx/issue_9846_direct_abs_list.roc",
+        "--",
+        "--test",
+        "1>count 1",
+    });
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try util.checkTestSuccess(result);
+}
+
 test "provided static data exports are host-linkable readonly constants" {
     const allocator = testing.allocator;
 

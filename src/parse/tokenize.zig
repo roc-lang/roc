@@ -1094,11 +1094,16 @@ const StringKind = enum {
     multi_line,
 };
 
+const StringInterpolationState = struct {
+    kind: StringKind,
+    curly_depth: u32,
+};
+
 /// The tokenizer that uses a Cursor and produces a TokenizedBuffer.
 pub const Tokenizer = struct {
     cursor: Cursor,
     output: TokenizedBuffer,
-    string_interpolation_stack: std.array_list.Managed(StringKind),
+    string_interpolation_stack: std.array_list.Managed(StringInterpolationState),
     env: *CommonEnv,
 
     /// Creates a new Tokenizer.
@@ -1111,7 +1116,7 @@ pub const Tokenizer = struct {
         return Tokenizer{
             .cursor = cursor,
             .output = output,
-            .string_interpolation_stack = std.array_list.Managed(StringKind).init(gpa),
+            .string_interpolation_stack = std.array_list.Managed(StringInterpolationState).init(gpa),
             .env = env,
         };
     }
@@ -1454,6 +1459,10 @@ pub const Tokenizer = struct {
                 },
                 open_curly => {
                     self.cursor.pos += 1;
+                    if (self.string_interpolation_stack.items.len > 0) {
+                        const top = &self.string_interpolation_stack.items[self.string_interpolation_stack.items.len - 1];
+                        top.curly_depth += 1;
+                    }
                     try self.pushTokenNormalHere(gpa, .OpenCurly, start);
                 },
 
@@ -1467,11 +1476,19 @@ pub const Tokenizer = struct {
                 },
                 close_curly => {
                     self.cursor.pos += 1;
-                    if (self.string_interpolation_stack.pop()) |last| {
+                    if (self.string_interpolation_stack.items.len > 0) {
+                        const top = &self.string_interpolation_stack.items[self.string_interpolation_stack.items.len - 1];
+                        if (top.curly_depth > 0) {
+                            top.curly_depth -= 1;
+                            try self.pushTokenNormalHere(gpa, .CloseCurly, start);
+                            continue;
+                        }
+
+                        const last = self.string_interpolation_stack.pop() orelse unreachable;
                         try self.pushTokenNormalHere(gpa, .CloseStringInterpolation, start);
                         // For string interpolations, we don't have the original opening quote position
                         // so we use the current position as a fallback
-                        try self.tokenizeStringLikeLiteralBody(gpa, last, self.cursor.pos);
+                        try self.tokenizeStringLikeLiteralBody(gpa, last.kind, self.cursor.pos);
                     } else {
                         try self.pushTokenNormalHere(gpa, .CloseCurly, start);
                     }
@@ -1663,7 +1680,7 @@ pub const Tokenizer = struct {
                 const dollar_start = self.cursor.pos;
                 self.cursor.pos += 2;
                 try self.pushTokenNormalHere(gpa, .OpenStringInterpolation, dollar_start);
-                try self.string_interpolation_stack.append(kind);
+                try self.string_interpolation_stack.append(.{ .kind = kind, .curly_depth = 0 });
                 return;
             } else if (c == '\n') {
                 try self.pushTokenNormalHere(gpa, string_part_tag, start);
@@ -2426,6 +2443,23 @@ test "tokenizer" {
         .StringPart,
         .OpenStringInterpolation,
         .LowerIdent,
+        .CloseStringInterpolation,
+        .StringPart,
+        .StringEnd,
+    });
+    try testTokenization(gpa, "\"${Str.inspect({ two: 2 })}\"", &[_]Token.Tag{
+        .StringStart,
+        .StringPart,
+        .OpenStringInterpolation,
+        .UpperIdent,
+        .NoSpaceDotLowerIdent,
+        .NoSpaceOpenRound,
+        .OpenCurly,
+        .LowerIdent,
+        .OpColon,
+        .Int,
+        .CloseCurly,
+        .CloseRound,
         .CloseStringInterpolation,
         .StringPart,
         .StringEnd,
