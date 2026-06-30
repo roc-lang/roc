@@ -185,7 +185,7 @@ pub const MethodRegistry = struct {
         const module_name = try names.internModuleIdent(idents, module.qualifiedModuleIdent());
 
         for (module.methodDefEntries()) |entry| {
-            const method_ident = module_env.lookupMethodIdentForOwnerConst(entry.key.owner, entry.key.methodIdent()) orelse {
+            const method_ident = module_env.lookupMethodIdentForMethodOwnerConst(entry.key.ownerIdent(), entry.key.methodIdent()) orelse {
                 if (@import("builtin").mode == .Debug) {
                     std.debug.panic(
                         "checked static dispatch registry invariant violated: method def for owner {d} method {d} has no method ident",
@@ -220,7 +220,7 @@ pub const MethodRegistry = struct {
 
             try entries.append(allocator, .{
                 .key = .{
-                    .owner = try methodOwnerForRegistryEntry(module, module_name, entry.key.owner),
+                    .owner = try methodOwnerForRegistryEntry(module, names, entry.key.ownerIdent()),
                     .method = try names.internMethodIdent(idents, entry.key.methodIdent()),
                 },
                 .target = .{
@@ -306,15 +306,19 @@ fn localProcedureExpr(module: TypedCIR.Module, expr_idx: CIR.Expr.Idx) bool {
 
 fn methodOwnerForRegistryEntry(
     module: TypedCIR.Module,
-    module_name: canonical.ModuleNameId,
-    owner_stmt: CIR.Statement.Idx,
+    names: *canonical.CanonicalNameStore,
+    owner: ModuleEnv.MethodOwner,
 ) Allocator.Error!MethodOwner {
-    if (builtinOwnerForRegistryEntry(module, owner_stmt)) |owner| {
-        return .{ .builtin = owner };
+    if (owner.moduleIdent().eql(module.qualifiedModuleIdent())) {
+        if (builtinOwnerForRegistryEntry(module, owner.owner)) |builtin_owner| {
+            return .{ .builtin = builtin_owner };
+        }
     }
+
+    const idents = module.identStoreConst();
     return .{ .source_decl = .{
-        .module_name = module_name,
-        .statement = @intFromEnum(owner_stmt),
+        .module_name = try names.internModuleIdent(idents, owner.moduleIdent()),
+        .statement = @intFromEnum(owner.owner),
     } };
 }
 

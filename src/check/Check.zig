@@ -11686,6 +11686,61 @@ const OwnerEnvCandidate = struct {
     is_this_module: bool,
 };
 
+const StaticDispatchMethodBinding = struct {
+    env: *const ModuleEnv,
+    is_this_module: bool,
+    binding: ModuleEnv.MethodBinding,
+};
+
+fn lookupStaticDispatchMethodBinding(
+    self: *const Self,
+    owner_env: *const ModuleEnv,
+    owner_source_decl: ?u32,
+    method_source_env: *const ModuleEnv,
+    method_ident: Ident.Idx,
+) ?StaticDispatchMethodBinding {
+    if (self.lookupStaticDispatchMethodBindingInEnv(owner_env, owner_env, owner_source_decl, method_source_env, method_ident)) |found| {
+        return found;
+    }
+
+    if (owner_env != self.cir) {
+        if (self.lookupStaticDispatchMethodBindingInEnv(self.cir, owner_env, owner_source_decl, method_source_env, method_ident)) |found| {
+            return found;
+        }
+    }
+
+    for (self.imported_modules) |candidate_env| {
+        if (candidate_env == owner_env or candidate_env == self.cir) continue;
+        if (self.lookupStaticDispatchMethodBindingInEnv(candidate_env, owner_env, owner_source_decl, method_source_env, method_ident)) |found| {
+            return found;
+        }
+    }
+
+    return null;
+}
+
+fn lookupStaticDispatchMethodBindingInEnv(
+    self: *const Self,
+    candidate_env: *const ModuleEnv,
+    owner_env: *const ModuleEnv,
+    owner_source_decl: ?u32,
+    method_source_env: *const ModuleEnv,
+    method_ident: Ident.Idx,
+) ?StaticDispatchMethodBinding {
+    const binding = candidate_env.lookupMethodBindingFromOwnerAndMethodEnvsConst(
+        owner_env,
+        owner_source_decl,
+        method_source_env,
+        method_ident,
+    ) orelse return null;
+
+    return .{
+        .env = candidate_env,
+        .is_this_module = candidate_env == self.cir,
+        .binding = binding,
+    };
+}
+
 fn ownerEnvForOriginModule(
     self: *const Self,
     origin_module: Ident.Idx,
@@ -13794,7 +13849,7 @@ fn reportMissingNominalMethodForBinop(
         return false;
     }
     const original_env = self.getNominalOriginEnv(nominal_type);
-    if (original_env.lookupMethodBindingFromEnvAndDeclConst(self.cir, nominal_type.sourceDeclOptional(), method_name) == null) {
+    if (self.lookupStaticDispatchMethodBinding(original_env, nominal_type.sourceDeclOptional(), self.cir, method_name) == null) {
         try self.reportMissingNominalMethodForBinopConstraint(lhs_var, rhs_var, expr_var, method_name, env, region);
         return true;
     }
@@ -16259,7 +16314,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                 const original_module_ident = nominal_type.origin_module;
 
                 // Check if the nominal type in question is defined in this module
-                const original_env, const is_this_module = self.ownerEnvForOriginModule(
+                const original_env, _ = self.ownerEnvForOriginModule(
                     original_module_ident,
                     nominal_type.sourceDeclOptional(),
                     nominal_type.originIsBuiltin(),
@@ -16332,15 +16387,16 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         );
                         continue;
                     }
-                    const method_binding = if (constraint.fn_name.eql(self.cir.idents.is_eq) and
+                    const method_lookup = if (constraint.fn_name.eql(self.cir.idents.is_eq) and
                         try self.nominalSupportsStructuralDerive(nominal_type))
                     blk: {
-                        const exact_method_binding = original_env.lookupMethodBindingFromEnvAndDeclConst(
-                            self.cir,
+                        const exact_method_lookup = self.lookupStaticDispatchMethodBinding(
+                            original_env,
                             nominal_type.sourceDeclOptional(),
+                            self.cir,
                             constraint.fn_name,
                         );
-                        if (exact_method_binding == null and try self.nominalSupportsStructuralDerive(nominal_type)) {
+                        if (exact_method_lookup == null and try self.nominalSupportsStructuralDerive(nominal_type)) {
                             try self.satisfyDerivedIsEqConstraint(
                                 deferred_constraint.var_,
                                 constraint,
@@ -16350,7 +16406,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                             );
                             continue;
                         }
-                        break :blk exact_method_binding orelse {
+                        break :blk exact_method_lookup orelse {
                             try self.reportConstraintError(
                                 deferred_constraint.var_,
                                 constraint,
@@ -16363,12 +16419,13 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                     } else if (constraint.fn_name.eql(self.cir.idents.to_hash) and
                         try self.nominalSupportsStructuralDerive(nominal_type))
                     blk: {
-                        const exact_method_binding = original_env.lookupMethodBindingFromEnvAndDeclConst(
-                            self.cir,
+                        const exact_method_lookup = self.lookupStaticDispatchMethodBinding(
+                            original_env,
                             nominal_type.sourceDeclOptional(),
+                            self.cir,
                             constraint.fn_name,
                         );
-                        if (exact_method_binding == null) {
+                        if (exact_method_lookup == null) {
                             try self.satisfyDerivedToHashConstraint(
                                 deferred_constraint.var_,
                                 constraint,
@@ -16378,8 +16435,8 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                             );
                             continue;
                         }
-                        break :blk exact_method_binding.?;
-                    } else original_env.lookupMethodBindingFromEnvAndDeclConst(self.cir, nominal_type.sourceDeclOptional(), constraint.fn_name) orelse {
+                        break :blk exact_method_lookup.?;
+                    } else self.lookupStaticDispatchMethodBinding(original_env, nominal_type.sourceDeclOptional(), self.cir, constraint.fn_name) orelse {
                         // Method name doesn't exist in target module
                         try self.reportConstraintError(
                             deferred_constraint.var_,
@@ -16394,13 +16451,16 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         self.rewriteEqBinopAsMethodEq(constraint);
                     }
 
+                    const method_env = method_lookup.env;
+                    const method_is_this_module = method_lookup.is_this_module;
+                    const method_binding = method_lookup.binding;
                     const def_idx = method_binding.def_idx;
                     const method_type_var: Var = ModuleEnv.varFrom(method_binding.type_node_idx);
-                    const def = original_env.store.getDef(def_idx);
+                    const def = method_env.store.getDef(def_idx);
                     // Track whether we just processed or referenced a cycle participant.
                     var cycle_method_expr_var: ?Var = null;
 
-                    if (is_this_module) {
+                    if (method_is_this_module) {
                         // Check if we've processed this def already.
                         const mb_processing_def = self.top_level_ptrns.get(def.pattern);
                         if (mb_processing_def) |processing_def| {
@@ -16477,14 +16537,14 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         // Cycle participant or recursive self-dispatch: use the
                         // fresh flex var instead of def_var to avoid rank lowering.
                         break :blk expr_var_for_method;
-                    } else if (is_this_module) blk: {
+                    } else if (method_is_this_module) blk: {
                         if (self.types.resolveVar(method_type_var).desc.rank == .generalized) {
                             break :blk try self.instantiateVar(method_type_var, env, .use_last_var);
                         }
                         break :blk method_type_var;
                     } else blk: {
                         // Copy the method from the other module's type store
-                        const copied_var = try self.copyVar(method_type_var, original_env, region);
+                        const copied_var = try self.copyVar(method_type_var, method_env, region);
                         break :blk try self.instantiateVar(copied_var, env, .{ .explicit = region });
                     };
 
@@ -16539,7 +16599,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
 
                 // Get the module ident that this alias type was defined in
                 const original_module_ident = alias.origin_module;
-                const original_env, const is_this_module = self.ownerEnvForOriginModule(
+                const original_env, _ = self.ownerEnvForOriginModule(
                     original_module_ident,
                     alias.source_decl.toOptional(),
                     alias.source_decl.originIsBuiltin(),
@@ -16569,12 +16629,13 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         try self.ensureCustomInterpolationPartsChecked(constraint, env);
                     }
                     if (constraint.fn_name.eql(self.cir.idents.is_eq)) {
-                        const method_binding = original_env.lookupMethodBindingFromTwoEnvsAndDeclConst(
+                        const method_lookup = self.lookupStaticDispatchMethodBinding(
+                            original_env,
                             alias.source_decl.toOptional(),
                             self.cir,
                             constraint.fn_name,
                         );
-                        if (method_binding == null) {
+                        if (method_lookup == null) {
                             const backing_var = self.types.getAliasBackingVar(alias);
                             if (try self.varSupportsIsEq(backing_var)) {
                                 try self.satisfyDerivedIsEqConstraint(
@@ -16595,12 +16656,13 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         }
                     }
                     if (constraint.fn_name.eql(self.cir.idents.to_hash)) {
-                        const method_binding = original_env.lookupMethodBindingFromTwoEnvsAndDeclConst(
+                        const method_lookup = self.lookupStaticDispatchMethodBinding(
+                            original_env,
                             alias.source_decl.toOptional(),
                             self.cir,
                             constraint.fn_name,
                         );
-                        if (method_binding == null) {
+                        if (method_lookup == null) {
                             const backing_var = self.types.getAliasBackingVar(alias);
                             if (try self.varSupportsToHash(backing_var)) {
                                 try self.satisfyDerivedToHashConstraint(
@@ -16649,7 +16711,8 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         }
                     }
 
-                    const method_binding = original_env.lookupMethodBindingFromTwoEnvsAndDeclConst(
+                    const method_lookup = self.lookupStaticDispatchMethodBinding(
+                        original_env,
                         alias.source_decl.toOptional(),
                         self.cir,
                         constraint.fn_name,
@@ -16663,15 +16726,18 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         );
                         continue;
                     };
+                    const method_env = method_lookup.env;
+                    const method_is_this_module = method_lookup.is_this_module;
+                    const method_binding = method_lookup.binding;
                     const def_idx = method_binding.def_idx;
                     if (constraint.fn_name.eql(self.cir.idents.is_eq)) {
                         self.rewriteEqBinopAsMethodEq(constraint);
                     }
 
                     const method_type_var: Var = ModuleEnv.varFrom(method_binding.type_node_idx);
-                    const def = original_env.store.getDef(def_idx);
+                    const def = method_env.store.getDef(def_idx);
                     var cycle_method_expr_var: ?Var = null;
-                    if (is_this_module) {
+                    if (method_is_this_module) {
                         const mb_processing_def = self.top_level_ptrns.get(def.pattern);
                         if (mb_processing_def) |processing_def| {
                             std.debug.assert(processing_def.def_idx == def_idx);
@@ -16732,13 +16798,13 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
 
                     const method_var = if (cycle_method_expr_var) |expr_var_for_method| blk: {
                         break :blk expr_var_for_method;
-                    } else if (is_this_module) blk: {
+                    } else if (method_is_this_module) blk: {
                         if (self.types.resolveVar(method_type_var).desc.rank == .generalized) {
                             break :blk try self.instantiateVar(method_type_var, env, .use_last_var);
                         }
                         break :blk method_type_var;
                     } else blk: {
-                        const copied_var = try self.copyVar(method_type_var, original_env, region);
+                        const copied_var = try self.copyVar(method_type_var, method_env, region);
                         break :blk try self.instantiateVar(copied_var, env, .{ .explicit = region });
                     };
 
