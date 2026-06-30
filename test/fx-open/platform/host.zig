@@ -186,17 +186,6 @@ const RocStr = builtins.str.RocStr;
 const RocList = builtins.list.RocList;
 const RocOps = builtins.host_abi.RocOps;
 
-const FallibleIOErr = extern struct {
-    payload: RocStr,
-    discriminant: u8,
-};
-
-/// Hosted function: Fallible.line!
-const FallibleLineResult = extern struct {
-    payload: FallibleIOErr,
-    discriminant: u8,
-};
-
 // The host's private RocOps. Hosted functions have natural C ABIs with no ops
 // parameter, so they reach the host's allocator and std.Io through this
 // global, set by platform_main before any Roc code runs.
@@ -260,14 +249,6 @@ fn hostedStdoutLine(str: RocStr) callconv(.c) void {
     std.Io.File.stdout().writeStreamingAll(host.std_io, "\n") catch {};
 }
 
-fn hostedFallibleLine(str: RocStr) callconv(.c) FallibleLineResult {
-    hostedStdoutLine(str);
-    return .{
-        .payload = .{ .payload = RocStr.empty(), .discriminant = 0 },
-        .discriminant = 1,
-    };
-}
-
 // --- Symbol-ABI runtime exports
 // The fixed runtime symbols every symbol-ABI host defines, plus this
 // platform's hosted function symbols. All hidden: they are link-time plumbing
@@ -298,7 +279,6 @@ fn hostCrashed(bytes: [*]const u8, len: usize) callconv(.c) void {
 }
 
 comptime {
-    @export(&hostedFallibleLine, .{ .name = "roc_fallible_line", .visibility = .hidden });
     @export(&hostedStderrLine, .{ .name = "roc_stderr_line", .visibility = .hidden });
     @export(&hostedStdinLine, .{ .name = "roc_stdin_line", .visibility = .hidden });
     @export(&hostedStdoutLine, .{ .name = "roc_stdout_line", .visibility = .hidden });
