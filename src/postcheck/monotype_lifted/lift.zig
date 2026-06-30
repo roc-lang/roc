@@ -967,13 +967,20 @@ fn finalizeCaptureExprSpanFromOperands(
         const operand = (try findCaptureOperand(program, operands, identity)) orelse
             Common.invariant("function reference missing operand for finalized capture slot");
         const operand_ty = program.exprs.items[@intFromEnum(operand.value)].ty;
-        if (!try monotypeTypeEql(program, operand_ty, capture.ty)) {
+        if (!try captureTypesEql(program, operand_ty, capture.ty)) {
             Common.invariant("function reference capture operand type differed from finalized capture slot");
         }
         exprs[capture_index] = operand.value;
     }
 
     return try program.addExprSpan(exprs);
+}
+
+fn captureTypesEql(program: *const Ast.Program, lhs: MonoType.TypeId, rhs: MonoType.TypeId) Allocator.Error!bool {
+    if (lhs == rhs) return true;
+    // Specialization sealing can materialize identical closed types under
+    // different TypeIds; capture operands only require structural equality.
+    return try program.types.typeEql(&program.names, lhs, rhs);
 }
 
 fn assertUniqueOperandIdentities(program: *const Ast.Program, operands: []const CaptureOperand) Allocator.Error!void {
