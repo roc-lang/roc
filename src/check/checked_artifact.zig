@@ -3420,6 +3420,38 @@ pub const CheckedTypeStore = struct {
         return id;
     }
 
+    pub fn ensureEmptyRecordRoot(
+        self: *CheckedTypeStore,
+        allocator: Allocator,
+        names: *const canonical.CanonicalNameStore,
+    ) Allocator.Error!CheckedTypeId {
+        const key = try checkedTypePayloadKeyBuild(allocator, names, self, .empty_record);
+        if (self.rootForKey(key)) |existing| {
+            switch (self.payload(existing)) {
+                .empty_record => {},
+                else => try self.replaceTypeRootPayload(allocator, existing, .empty_record),
+            }
+            return existing;
+        }
+        return try self.appendSyntheticPayloadRoot(allocator, names, .empty_record);
+    }
+
+    pub fn ensureEmptyTagUnionRoot(
+        self: *CheckedTypeStore,
+        allocator: Allocator,
+        names: *const canonical.CanonicalNameStore,
+    ) Allocator.Error!CheckedTypeId {
+        const key = try checkedTypePayloadKeyBuild(allocator, names, self, .empty_tag_union);
+        if (self.rootForKey(key)) |existing| {
+            switch (self.payload(existing)) {
+                .empty_tag_union => {},
+                else => try self.replaceTypeRootPayload(allocator, existing, .empty_tag_union),
+            }
+            return existing;
+        }
+        return try self.appendSyntheticPayloadRoot(allocator, names, .empty_tag_union);
+    }
+
     /// Reserve a checked type root whose payload will be filled after recursive
     /// cloning has finished.
     pub fn reserveSyntheticTypeRoot(
@@ -3460,6 +3492,26 @@ pub const CheckedTypeStore = struct {
         const stored = try self.commitPayload(allocator, owned_payload);
         self.payloads.items[index] = stored;
         errdefer self.payloads.items[index] = .pending;
+        try self.ensureSyntheticSchemeForRoot(allocator, root, self.roots.items[index].key);
+    }
+
+    pub fn replaceTypeRootPayload(
+        self: *CheckedTypeStore,
+        allocator: Allocator,
+        root: CheckedTypeId,
+        build_payload: CheckedTypePayloadBuild,
+    ) Allocator.Error!void {
+        const index: usize = @intFromEnum(root);
+        if (index >= self.payloads.items.len) {
+            checkedArtifactInvariant("checked type payload replacement referenced a missing root", .{});
+        }
+
+        var owned_payload = build_payload;
+        var payload_owned = true;
+        errdefer if (payload_owned) deinitCheckedTypePayloadBuild(allocator, &owned_payload);
+        const stored = try self.commitPayload(allocator, owned_payload);
+        payload_owned = false;
+        self.payloads.items[index] = stored;
         try self.ensureSyntheticSchemeForRoot(allocator, root, self.roots.items[index].key);
     }
 
@@ -16581,7 +16633,14 @@ const PlatformAppRelationTypeResolver = struct {
             root,
             context,
         );
-        if (self.store.rootForKey(result_key)) |existing| return existing;
+        if (self.store.rootForKey(result_key)) |existing| {
+            try self.finalizing.put(finalize_input, existing);
+            errdefer _ = self.finalizing.remove(finalize_input);
+            const result_payload = try self.finalizePayload(root_payload);
+            try self.store.replaceTypeRootPayload(self.allocator, existing, result_payload);
+            _ = self.finalizing.remove(finalize_input);
+            return existing;
+        }
 
         const target = try self.store.reserveSyntheticTypeRoot(self.allocator, result_key);
         try self.finalizing.put(finalize_input, target);
@@ -17072,11 +17131,11 @@ const PlatformAppRelationTypeResolver = struct {
     }
 
     fn emptyRecordRoot(self: *PlatformAppRelationTypeResolver) Allocator.Error!CheckedTypeId {
-        return try self.store.appendSyntheticPayloadRoot(self.allocator, self.names, .empty_record);
+        return try self.store.ensureEmptyRecordRoot(self.allocator, self.names);
     }
 
     fn emptyTagUnionRoot(self: *PlatformAppRelationTypeResolver) Allocator.Error!CheckedTypeId {
-        return try self.store.appendSyntheticPayloadRoot(self.allocator, self.names, .empty_tag_union);
+        return try self.store.ensureEmptyTagUnionRoot(self.allocator, self.names);
     }
 
     fn typeSliceContainsIdentityVariables(
@@ -19214,6 +19273,7 @@ pub const HostedRepresentationCapability = struct {
     external_symbol_name: canonical.ExternalSymbolNameId,
     proc: canonical.ProcedureValueRef,
     template: canonical.ProcedureTemplateRef,
+    host_checked_fn_root: CheckedTypeId,
 };
 
 /// Public `PlatformRepresentationCapability` declaration.
@@ -19265,6 +19325,7 @@ pub const ModuleInterfaceCapabilities = struct {
         module: TypedCIR.Module,
         checked_types: *CheckedTypeStore,
         hosted_procs: *const HostedProcTable,
+        checked_procedure_templates: *const CheckedProcedureTemplateTable,
         platform_required_declarations: *const PlatformRequiredDeclarationTable,
         names: *const canonical.CanonicalNameStore,
     ) Allocator.Error!ModuleInterfaceCapabilities {
@@ -19392,12 +19453,19 @@ pub const ModuleInterfaceCapabilities = struct {
 
         const hosted_representations = try allocator.alloc(HostedRepresentationCapability, hosted_procs.procs.len);
         errdefer allocator.free(hosted_representations);
+        var relation_resolver = PlatformAppRelationTypeResolver.init(allocator, names, checked_types);
+        defer relation_resolver.deinit();
         for (hosted_procs.procs, 0..) |hosted, hosted_index| {
+            const template = checked_procedure_templates.get(hosted.template.template);
+            if (template.target != .hosted) {
+                checkedArtifactInvariant("hosted representation capability referenced a non-hosted procedure template", .{});
+            }
             hosted_representations[hosted_index] = .{
                 .id = @enumFromInt(@as(u32, @intCast(hosted_index))),
                 .external_symbol_name = hosted.external_symbol_name,
                 .proc = hosted.proc,
                 .template = hosted.template,
+                .host_checked_fn_root = try relation_resolver.finalize(template.checked_fn_root, .value),
             };
         }
 
@@ -24400,7 +24468,7 @@ pub const CheckedModuleArtifact = struct {
     /// Manual discriminant for `SERIALIZED_VERSION_HASH`: bump to force a cache /
     /// baked-blob invalidation for a layout change the structural fingerprint below
     /// cannot observe (e.g. a semantic change to how a field is interpreted).
-    const serialized_layout_version: u32 = 4;
+    const serialized_layout_version: u32 = 5;
 
     /// Comptime fingerprint of `Serialized`'s layout, mirroring
     /// `cache_module.MODULE_ENV_VERSION_HASH`. It is appended to the baked builtin
@@ -24997,6 +25065,11 @@ pub const CheckedModuleArtifact = struct {
         self.const_templates.verifySealed();
         try self.const_store.verifyComplete();
         self.interface_capabilities.verifyComplete();
+        for (self.interface_capabilities.hosted_representations) |entry| {
+            if (@intFromEnum(entry.host_checked_fn_root) >= self.checked_types.roots.items.len) {
+                std.debug.panic("checked artifact invariant violated: hosted representation references missing host checked function root", .{});
+            }
+        }
         for (self.resolved_value_refs.records) |record| {
             std.debug.assert(@intFromEnum(record.expr) < self.checked_bodies.exprCount());
             if (self.platform_required_bindings.bindings.len > 0) {
@@ -26823,6 +26896,7 @@ pub fn publishFromTypedModule(
         module,
         checked_types,
         &hosted_procs,
+        &checked_procedure_templates,
         &platform_required_declarations,
         &canonical_names,
     );
@@ -27730,6 +27804,52 @@ test "platform app relation resolver returns empty roots before reserving normal
     try std.testing.expectEqual(CheckedTypePayload.empty_tag_union, store.payload(finalized_tags));
 }
 
+test "platform app relation resolver finalizes self-extending empty record row to empty record" {
+    const allocator = std.testing.allocator;
+
+    var names = canonical.CanonicalNameStore.init(allocator);
+    defer names.deinit();
+
+    var store = CheckedTypeStore{};
+    defer store.deinit(allocator);
+
+    const root = try store.reserveSyntheticTypeRoot(allocator, testCanonicalTypeKey(70));
+    try store.fillSyntheticTypeRoot(allocator, root, .{ .record = .{
+        .fields = &.{},
+        .ext = root,
+    } });
+
+    var resolver = PlatformAppRelationTypeResolver.init(allocator, &names, &store);
+    defer resolver.deinit();
+
+    const finalized = try resolver.finalize(root, .value);
+    try std.testing.expectEqual(CheckedTypePayload.empty_record, store.payload(finalized));
+}
+
+test "platform app relation resolver normalizes existing empty-record-key row roots" {
+    const allocator = std.testing.allocator;
+
+    var names = canonical.CanonicalNameStore.init(allocator);
+    defer names.deinit();
+
+    var store = CheckedTypeStore{};
+    defer store.deinit(allocator);
+
+    const empty_key = try checkedTypePayloadKeyBuild(allocator, &names, &store, .empty_record);
+    const root = try store.reserveSyntheticTypeRoot(allocator, empty_key);
+    try store.fillSyntheticTypeRoot(allocator, root, .{ .record = .{
+        .fields = &.{},
+        .ext = root,
+    } });
+
+    var resolver = PlatformAppRelationTypeResolver.init(allocator, &names, &store);
+    defer resolver.deinit();
+
+    const finalized = try resolver.finalize(root, .value);
+    try std.testing.expectEqual(root, finalized);
+    try std.testing.expectEqual(CheckedTypePayload.empty_record, store.payload(finalized));
+}
+
 test "provided callable-containing record constant is a data export, not a runtime root" {
     const source =
         \\platform ""
@@ -28257,8 +28377,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, bump `serialized_layout_version` and replace the golden bytes below with
     // the ones this assertion prints.
     const golden: [32]u8 = .{
-        0x82, 0xA9, 0x2F, 0x23, 0xF9, 0x36, 0x81, 0xC6, 0x6F, 0x0C, 0xA9, 0x68, 0x8B, 0x1A, 0x8C, 0x89,
-        0x13, 0xDD, 0x3D, 0x99, 0xD2, 0x7E, 0x16, 0x46, 0x69, 0x6C, 0x1A, 0x85, 0x59, 0x56, 0x4A, 0x57,
+        0x57, 0xE0, 0xC9, 0x11, 0x53, 0x4D, 0x99, 0xA2, 0x53, 0xB7, 0x2F, 0x52, 0x59, 0x44, 0x51, 0x20,
+        0xF7, 0x43, 0x82, 0xB8, 0x0F, 0x5B, 0x89, 0x7F, 0xD2, 0x89, 0xF7, 0x10, 0x01, 0xCA, 0xD3, 0xBD,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

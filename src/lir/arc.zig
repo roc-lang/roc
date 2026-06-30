@@ -16,14 +16,17 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
+const base = @import("base");
 const core = @import("lir_core");
 const layout_mod = @import("layout");
 const arc_sig = @import("arc_sig.zig");
 const arc_solve = @import("arc_solve.zig");
 const arc_certify = @import("arc_certify.zig");
+const debug_print = @import("debug_print.zig");
 
 const LIR = core.LIR;
 const LirStore = core.LirStore;
+const StringLiteral = base.StringLiteral;
 
 pub const ResourceError = std.mem.Allocator.Error;
 
@@ -44,12 +47,13 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
         .store = store,
         .layouts = layouts,
     };
-    var local_contains_refcounted = try store.allocator.alloc(bool, store.locals.items.len);
+    const boxy_rc_descs = try computeBoxyRcDescs(store);
+    defer store.allocator.free(boxy_rc_descs);
+
+    const local_contains_refcounted = try computeLocalContainsRefcounted(store.allocator, store, layouts, boxy_rc_descs);
     defer store.allocator.free(local_contains_refcounted);
-    for (store.locals.items, 0..) |local, index| {
-        local_contains_refcounted[index] = layouts.layoutContainsRefcounted(layouts.getLayout(local.layout_idx));
-    }
     inserter.local_contains_refcounted = local_contains_refcounted;
+    inserter.boxy_rc_descs = boxy_rc_descs;
 
     var solution = try arc_solve.solve(store.allocator, store, local_contains_refcounted, options.roots);
     defer solution.deinit();
@@ -131,6 +135,7 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
 
         const body = original_bodies[@intFromEnum(source_proc)] orelse continue;
         const emit_args = store.getProcSpec(emit_proc).args;
+        inserter.current_proc = emit_proc;
         inserter.current_sig = emit_sig;
         inserter.current_proc_body = body;
         inserter.clearReadsBeforeRebindCache();
@@ -209,8 +214,271 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
             else
                 variants.sigs.items[proc_index - solution.sigs.len];
         }
-        try arc_certify.certifyStoreOrPanic(store.allocator, store, layouts, .{ .sigs = all_sigs }, options.roots);
+        try arc_certify.certifyStoreOrPanic(store.allocator, store, layouts, boxy_rc_descs, .{ .sigs = all_sigs }, options.roots);
     }
+
+    if (builtin.mode == .Debug and store.proc_specs.items.len > 97) {
+        var buffer: std.Io.Writer.Allocating = .init(store.allocator);
+        defer buffer.deinit();
+        debug_print.writeProc(store.allocator, store, layouts, @enumFromInt(94), &buffer.writer) catch {};
+        std.debug.print("\n{s}\n", .{buffer.written()});
+        buffer.clearRetainingCapacity();
+        debug_print.writeProc(store.allocator, store, layouts, @enumFromInt(97), &buffer.writer) catch {};
+        std.debug.print("\n{s}\n", .{buffer.written()});
+    }
+}
+
+fn computeBoxyRcDescs(store: *const LirStore) ResourceError![]?LIR.BoxyDescRef {
+    const descs = try store.allocator.alloc(?LIR.BoxyDescRef, store.locals.items.len);
+    @memset(descs, null);
+    const origins = try store.allocator.alloc(?LIR.CFStmt, store.locals.items.len);
+    defer store.allocator.free(origins);
+    @memset(origins, null);
+    for (store.locals.items, 0..) |local, index| {
+        if (local.boxy_desc) |desc| descs[index] = desc;
+    }
+
+    var changed = true;
+    while (changed) {
+        changed = false;
+        for (store.cf_stmts.items) |stmt| {
+            switch (stmt) {
+                .assign_boxy_box => |assign| {
+                    const desc = assign.payload_desc orelse
+                        arcInvariant("boxy dynamic box target reached ARC without a payload descriptor");
+                    changed = setBoxyRcDesc(descs, origins, assign.target, desc, stmt) or changed;
+                },
+                .assign_boxy_reuse_box => |assign| {
+                    changed = setBoxyRcDesc(descs, origins, assign.target, assign.desc, stmt) or changed;
+                    changed = setBoxyRcDesc(descs, origins, assign.source, assign.desc, stmt) or changed;
+                },
+                .assign_boxy_unbox => |assign| {
+                    changed = setBoxyRcDesc(descs, origins, assign.source, assign.source_desc, stmt) or changed;
+                    if (assign.target_desc) |target_desc| {
+                        changed = setBoxyRcDesc(descs, origins, assign.target, target_desc, stmt) or changed;
+                    }
+                },
+                .assign_boxy_inspect => |assign| {
+                    _ = assign;
+                },
+                .assign_boxy_eq => |assign| {
+                    _ = assign;
+                },
+                .boxy_tag_match => |tag_match| {
+                    _ = tag_match;
+                },
+                .assign_boxy_tag => |assign| {
+                    changed = setBoxyRcDesc(descs, origins, assign.target, assign.target_desc, stmt) or changed;
+                },
+                .assign_boxy_tag_payload => |assign| {
+                    changed = setBoxyRcDesc(descs, origins, assign.source, assign.source_desc, stmt) or changed;
+                    if (assign.target_desc) |target_desc| {
+                        changed = propagateBoxyRcDesc(store, descs, origins, assign.target, .{ .local = target_desc }, stmt) or changed;
+                    }
+                },
+                .assign_tag => |assign| {
+                    if (assign.target_desc) |target_desc| {
+                        changed = setBoxyRcDesc(descs, origins, assign.target, target_desc, stmt) or changed;
+                    }
+                },
+                .assign_call => |assign| {
+                    if (assign.result_desc) |result_desc| {
+                        changed = setBoxyRcDesc(descs, origins, assign.target, result_desc, stmt) or changed;
+                    }
+                },
+                .assign_call_dict => |assign| {
+                    if (assign.result_desc) |result_desc| {
+                        changed = setBoxyRcDesc(descs, origins, assign.target, result_desc, stmt) or changed;
+                    }
+                },
+                .assign_call_erased => |assign| {
+                    if (assign.result_desc) |result_desc| {
+                        changed = setBoxyRcDesc(descs, origins, assign.target, result_desc, stmt) or changed;
+                    }
+                },
+                .assign_ref => |assign| switch (assign.op) {
+                    .local => |source| changed = propagateSameValueBoxyRcDesc(store, descs, origins, assign.target, source, stmt) or changed,
+                    .list_reinterpret => |op| changed = propagateSameValueBoxyRcDesc(store, descs, origins, assign.target, op.backing_ref, stmt) or changed,
+                    .nominal => |op| changed = propagateSameValueBoxyRcDesc(store, descs, origins, assign.target, op.backing_ref, stmt) or changed,
+                    .discriminant, .field, .tag_payload, .tag_payload_struct => {},
+                },
+                .set_local => |assign| changed = propagateSameValueBoxyRcDesc(store, descs, origins, assign.target, assign.value, stmt) or changed,
+                else => {},
+            }
+        }
+    }
+
+    return descs;
+}
+
+fn boxyDescForLocal(descs: []const ?LIR.BoxyDescRef, local: LIR.LocalId) ?LIR.BoxyDescRef {
+    const index = @intFromEnum(local);
+    if (index >= descs.len) return null;
+    return descs[index];
+}
+
+fn computeLocalContainsRefcounted(
+    allocator: Allocator,
+    store: *const LirStore,
+    layouts: *const layout_mod.Store,
+    boxy_rc_descs: []const ?LIR.BoxyDescRef,
+) ResourceError![]bool {
+    const contains = try allocator.alloc(bool, store.locals.items.len);
+    for (store.locals.items, 0..) |local, index| {
+        contains[index] = layouts.layoutContainsRefcounted(layouts.getLayout(local.layout_idx)) or
+            boxy_rc_descs[index] != null;
+    }
+
+    var changed = true;
+    while (changed) {
+        changed = false;
+        for (store.cf_stmts.items) |stmt| {
+            switch (stmt) {
+                .assign_ref => |assign| switch (assign.op) {
+                    .local => |source| changed = markLocalRcIfSourceRc(contains, assign.target, source) or changed,
+                    .nominal => |op| changed = markLocalRcIfSourceRc(contains, assign.target, op.backing_ref) or changed,
+                    .list_reinterpret => |op| changed = markLocalRcIfSourceRc(contains, assign.target, op.backing_ref) or changed,
+                    .field,
+                    .tag_payload,
+                    .tag_payload_struct,
+                    .discriminant,
+                    => {},
+                },
+                .assign_list => |assign| changed = markLocalRcIfSpanContainsRc(store, contains, assign.target, assign.elems) or changed,
+                .assign_struct => |assign| changed = markLocalRcIfSpanContainsRc(store, contains, assign.target, assign.fields) or changed,
+                .assign_tag => |assign| {
+                    if (assign.payload) |payload| {
+                        changed = markLocalRcIfSourceRc(contains, assign.target, payload) or changed;
+                    }
+                    if (assign.target_desc != null) {
+                        changed = markLocalRc(contains, assign.target) or changed;
+                    }
+                },
+                .assign_boxy_box => |assign| changed = markLocalRc(contains, assign.target) or changed,
+                .assign_boxy_reuse_box => |assign| changed = markLocalRc(contains, assign.target) or changed,
+                .assign_boxy_tag => |assign| changed = markLocalRc(contains, assign.target) or changed,
+                .assign_call_dict => |assign| if (assign.result_desc != null) {
+                    changed = markLocalRc(contains, assign.target) or changed;
+                },
+                .assign_call_erased => |assign| if (assign.result_desc != null) {
+                    changed = markLocalRc(contains, assign.target) or changed;
+                },
+                else => {},
+            }
+        }
+    }
+
+    return contains;
+}
+
+fn layoutMayContainBoxyDynamic(layouts: *const layout_mod.Store, layout_idx: layout_mod.Idx) bool {
+    const layout_val = layouts.getLayout(layout_idx);
+    return switch (layout_val.tag) {
+        .box_of_zst => true,
+        .box => layoutMayContainBoxyDynamic(layouts, layout_val.getIdx()),
+        .list => layoutMayContainBoxyDynamic(layouts, layout_val.getIdx()),
+        .list_of_zst => false,
+        .struct_ => blk: {
+            const info = layouts.getStructInfo(layout_val);
+            for (0..info.fields.len) |index| {
+                const field = info.fields.get(@intCast(index));
+                if (layoutMayContainBoxyDynamic(layouts, field.layout)) break :blk true;
+            }
+            break :blk false;
+        },
+        .tag_union => blk: {
+            const info = layouts.getTagUnionInfo(layout_val);
+            for (0..info.variants.len) |index| {
+                const payload_layout = info.variants.get(@intCast(index)).payload_layout;
+                if (layoutMayContainBoxyDynamic(layouts, payload_layout)) break :blk true;
+            }
+            break :blk false;
+        },
+        .closure => layoutMayContainBoxyDynamic(layouts, layout_val.getClosure().captures_layout_idx),
+        .zst, .scalar, .erased_callable, .ptr => false,
+    };
+}
+
+fn markLocalRc(contains: []bool, local: LIR.LocalId) bool {
+    const index = @intFromEnum(local);
+    if (index >= contains.len or contains[index]) return false;
+    contains[index] = true;
+    return true;
+}
+
+fn markLocalRcIfSourceRc(contains: []bool, target: LIR.LocalId, source: LIR.LocalId) bool {
+    const source_index = @intFromEnum(source);
+    if (source_index >= contains.len or !contains[source_index]) return false;
+    return markLocalRc(contains, target);
+}
+
+fn markLocalRcIfSpanContainsRc(store: *const LirStore, contains: []bool, target: LIR.LocalId, span: LIR.LocalSpan) bool {
+    for (store.getLocalSpan(span)) |local| {
+        const index = @intFromEnum(local);
+        if (index < contains.len and contains[index]) return markLocalRc(contains, target);
+    }
+    return false;
+}
+
+fn setBoxyRcDesc(
+    descs: []?LIR.BoxyDescRef,
+    origins: []?LIR.CFStmt,
+    local: LIR.LocalId,
+    desc: LIR.BoxyDescRef,
+    origin: LIR.CFStmt,
+) bool {
+    const index = @intFromEnum(local);
+    const existing = descs[index] orelse {
+        descs[index] = desc;
+        origins[index] = origin;
+        return true;
+    };
+    if (!std.meta.eql(existing, desc)) {
+        if (@import("builtin").mode == .Debug) {
+            std.debug.panic(
+                "boxy dynamic local {d} was assigned values with different descriptors: existing={any} existing_origin={any} new={any} new_origin={any}",
+                .{ @intFromEnum(local), existing, origins[index], desc, origin },
+            );
+        }
+        unreachable;
+    }
+    return false;
+}
+
+fn propagateBoxyRcDesc(
+    store: *const LirStore,
+    descs: []?LIR.BoxyDescRef,
+    origins: []?LIR.CFStmt,
+    local: LIR.LocalId,
+    desc: LIR.BoxyDescRef,
+    origin: LIR.CFStmt,
+) bool {
+    const index = @intFromEnum(local);
+    if (descs[index] == null) {
+        descs[index] = desc;
+        origins[index] = origin;
+        return true;
+    }
+    _ = store;
+    return false;
+}
+
+fn propagateSameValueBoxyRcDesc(
+    store: *const LirStore,
+    descs: []?LIR.BoxyDescRef,
+    origins: []?LIR.CFStmt,
+    target: LIR.LocalId,
+    source: LIR.LocalId,
+    origin: LIR.CFStmt,
+) bool {
+    var changed = false;
+    if (boxyDescForLocal(descs, source)) |desc| {
+        changed = propagateBoxyRcDesc(store, descs, origins, target, desc, origin) or changed;
+    }
+    if (boxyDescForLocal(descs, target)) |desc| {
+        changed = propagateBoxyRcDesc(store, descs, origins, source, desc, origin) or changed;
+    }
+    return changed;
 }
 
 const VariantSelector = struct {
@@ -398,6 +666,7 @@ const Inserter = struct {
     store: *LirStore,
     layouts: *const layout_mod.Store,
     local_contains_refcounted: []const bool = &.{},
+    boxy_rc_descs: []const ?LIR.BoxyDescRef = &.{},
     solution: *const arc_solve.Solution = undefined,
     /// Mode-specialized variant table (shared across the emission worklist).
     variants: *VariantTable = undefined,
@@ -430,7 +699,9 @@ const Inserter = struct {
     /// and the map entry is removed before the keep-set storage is destroyed.
     active_loop_keep_ids: *std.AutoHashMap(usize, u32) = undefined,
     next_loop_keep_id: u32 = 1,
+    current_proc: LIR.LirProcSpecId = @enumFromInt(0),
     current_proc_body: LIR.CFStmtId = undefined,
+    current_rewrite_stmt: ?LIR.CFStmtId = null,
     join_bodies: ?*const JoinBodyMap = null,
     rewritten_joins: ?*RewrittenJoinMap = null,
     join_body_memo: ?*JoinBodyMemo = null,
@@ -457,6 +728,7 @@ const Inserter = struct {
         initialized_payload_switch: *RewriteInitializedPayloadSwitchTask,
         str_match: *RewriteStrMatchTask,
         str_match_set: *RewriteStrMatchSetTask,
+        boxy_tag_match: *RewriteBoxyTagMatchTask,
     };
 
     const RewritePathTask = struct {
@@ -548,6 +820,17 @@ const Inserter = struct {
         result: *LIR.CFStmtId,
     };
 
+    const RewriteBoxyTagMatchTask = struct {
+        start: LIR.CFStmtId,
+        source: LIR.LocalId,
+        source_desc: LIR.BoxyDescRef,
+        tag_name: StringLiteral.Idx,
+        on_match: LIR.CFStmtId = undefined,
+        on_miss: LIR.CFStmtId = undefined,
+        frames: std.ArrayList(LinearRewriteFrame),
+        result: *LIR.CFStmtId,
+    };
+
     const AnalysisTask = union(enum) {
         path: *AnalysisPathTask,
         resume_switch_continuation: *AnalysisSwitchContinuationTask,
@@ -592,6 +875,7 @@ const Inserter = struct {
                 .initialized_payload_switch => |switch_| try self.finishRewriteInitializedPayloadSwitch(switch_),
                 .str_match => |str_match| try self.finishRewriteStrMatch(str_match),
                 .str_match_set => |str_match_set| try self.finishRewriteStrMatchSet(str_match_set),
+                .boxy_tag_match => |tag_match| try self.finishRewriteBoxyTagMatch(tag_match),
             }
         }
         return result;
@@ -703,6 +987,22 @@ const Inserter = struct {
                 },
                 .assign_call => |assign| {
                     const callee_sig = self.solution.sigOf(assign.proc);
+                    if (@intFromEnum(assign.proc) == 24 or @intFromEnum(assign.proc) == 94) {
+                        std.debug.print(
+                            "ARC call proc={d} stmt={d} target={d} callee={d} sig_borrowed=0x{x} ret_mode={s} ret_lenders=0x{x} target_borrowed={} target_rc={}\n",
+                            .{
+                                @intFromEnum(self.current_proc),
+                                @intFromEnum(path.cursor),
+                                @intFromEnum(assign.target),
+                                @intFromEnum(assign.proc),
+                                callee_sig.borrowed_params,
+                                @tagName(callee_sig.ret_mode),
+                                callee_sig.ret_lenders,
+                                self.isBindingBorrowed(assign.target),
+                                self.localContainsRefcounted(assign.target),
+                            },
+                        );
+                    }
                     // Unique demands clone variants, so they exist only when
                     // specialization is on, and never for pinned callees,
                     // whose vectors are ABI contracts.
@@ -775,15 +1075,212 @@ const Inserter = struct {
                     });
                     path.cursor = assign.next;
                 },
-                .assign_boxy_desc_ref,
-                .assign_boxy_dict_ref,
-                .assign_boxy_box,
-                .assign_boxy_reuse_box,
-                .assign_boxy_unbox,
-                .assign_boxy_adapt,
-                .assign_boxy_inspect,
-                .assign_call_dict,
-                => arcInvariant("boxy LIR statement reached ARC insertion before boxy ARC constraints are implemented"),
+                .assign_boxy_desc_ref => |assign| {
+                    current_start = try self.releaseOldTargetIfNeeded(assign.target, &path.owned, current_start);
+                    self.addOwnedIfRc(&path.owned, assign.target);
+                    var deaths: std.ArrayList(LIR.LocalId) = .empty;
+                    errdefer deaths.deinit(self.store.allocator);
+                    const desc_local = assign.desc.localOrNull() orelse assign.target;
+                    const singles = [_]LIR.LocalId{ desc_local, assign.target };
+                    try self.postStmtDeaths(&path.owned, &singles, assign.captures, assign.next, path.options.loop_keep, &deaths);
+                    try path.frames.append(self.store.allocator, .{
+                        .stmt = path.cursor,
+                        .head = current_start,
+                        .post_release = try self.takePostReleases(&deaths),
+                    });
+                    path.cursor = assign.next;
+                },
+                .assign_boxy_dict_ref => |assign| {
+                    current_start = try self.releaseOldTargetIfNeeded(assign.target, &path.owned, current_start);
+                    self.addOwnedIfRc(&path.owned, assign.target);
+                    var deaths: std.ArrayList(LIR.LocalId) = .empty;
+                    errdefer deaths.deinit(self.store.allocator);
+                    const dict_local = assign.dict.localOrNull() orelse assign.target;
+                    const singles = [_]LIR.LocalId{ dict_local, assign.target };
+                    try self.postStmtDeaths(&path.owned, &singles, null, assign.next, path.options.loop_keep, &deaths);
+                    try path.frames.append(self.store.allocator, .{
+                        .stmt = path.cursor,
+                        .head = current_start,
+                        .post_release = try self.takePostReleases(&deaths),
+                    });
+                    path.cursor = assign.next;
+                },
+                .assign_boxy_box => |assign| {
+                    const transfer_single = if (assign.payload_mode == .move)
+                        try self.singleTransfer(assign.payload, assign.next, assign.target, &path.owned, path.options.loop_keep)
+                    else
+                        false;
+                    current_start = try self.releaseOldTargetIfNeeded(assign.target, &path.owned, current_start);
+                    self.addOwnedIfRc(&path.owned, assign.target);
+                    var deaths: std.ArrayList(LIR.LocalId) = .empty;
+                    errdefer deaths.deinit(self.store.allocator);
+                    const singles = [_]LIR.LocalId{ assign.payload, assign.target };
+                    try self.postStmtDeaths(&path.owned, &singles, null, assign.next, path.options.loop_keep, &deaths);
+                    try path.frames.append(self.store.allocator, .{
+                        .stmt = path.cursor,
+                        .head = current_start,
+                        .transfer_single = transfer_single,
+                        .post_release = try self.takePostReleases(&deaths),
+                    });
+                    path.cursor = assign.next;
+                },
+                .assign_boxy_reuse_box => |assign| {
+                    const transfer_single = try self.singleTransfer(assign.source, assign.next, assign.target, &path.owned, path.options.loop_keep);
+                    current_start = try self.releaseOldTargetIfNeeded(assign.target, &path.owned, current_start);
+                    self.addOwnedIfRc(&path.owned, assign.target);
+                    var deaths: std.ArrayList(LIR.LocalId) = .empty;
+                    errdefer deaths.deinit(self.store.allocator);
+                    const singles = [_]LIR.LocalId{ assign.source, assign.target };
+                    try self.postStmtDeaths(&path.owned, &singles, null, assign.next, path.options.loop_keep, &deaths);
+                    try path.frames.append(self.store.allocator, .{
+                        .stmt = path.cursor,
+                        .head = current_start,
+                        .transfer_single = transfer_single,
+                        .post_release = try self.takePostReleases(&deaths),
+                    });
+                    path.cursor = assign.next;
+                },
+                .assign_boxy_unbox => |assign| {
+                    const transfer_single = if (assign.source_mode == .move)
+                        try self.singleTransfer(assign.source, assign.next, assign.target, &path.owned, path.options.loop_keep)
+                    else
+                        false;
+                    current_start = try self.releaseOldTargetIfNeeded(assign.target, &path.owned, current_start);
+                    self.addOwnedIfRc(&path.owned, assign.target);
+                    var deaths: std.ArrayList(LIR.LocalId) = .empty;
+                    errdefer deaths.deinit(self.store.allocator);
+                    const singles = [_]LIR.LocalId{ assign.source, assign.target };
+                    try self.postStmtDeaths(&path.owned, &singles, null, assign.next, path.options.loop_keep, &deaths);
+                    try path.frames.append(self.store.allocator, .{
+                        .stmt = path.cursor,
+                        .head = current_start,
+                        .transfer_single = transfer_single,
+                        .post_release = try self.takePostReleases(&deaths),
+                    });
+                    path.cursor = assign.next;
+                },
+                .assign_boxy_adapt => |assign| {
+                    const transfer_single = if (assign.source_mode == .move)
+                        try self.singleTransfer(assign.source, assign.next, assign.target, &path.owned, path.options.loop_keep)
+                    else
+                        false;
+                    current_start = try self.releaseOldTargetIfNeeded(assign.target, &path.owned, current_start);
+                    self.addOwnedIfRc(&path.owned, assign.target);
+                    var deaths: std.ArrayList(LIR.LocalId) = .empty;
+                    errdefer deaths.deinit(self.store.allocator);
+                    const singles = [_]LIR.LocalId{ assign.source, assign.target };
+                    try self.postStmtDeaths(&path.owned, &singles, null, assign.next, path.options.loop_keep, &deaths);
+                    try path.frames.append(self.store.allocator, .{
+                        .stmt = path.cursor,
+                        .head = current_start,
+                        .transfer_single = transfer_single,
+                        .post_release = try self.takePostReleases(&deaths),
+                    });
+                    path.cursor = assign.next;
+                },
+                .assign_boxy_inspect => |assign| {
+                    const transfer_single = if (assign.source_mode == .move)
+                        try self.singleTransfer(assign.source, assign.next, assign.target, &path.owned, path.options.loop_keep)
+                    else
+                        false;
+                    current_start = try self.releaseOldTargetIfNeeded(assign.target, &path.owned, current_start);
+                    self.addOwnedIfRc(&path.owned, assign.target);
+                    var deaths: std.ArrayList(LIR.LocalId) = .empty;
+                    errdefer deaths.deinit(self.store.allocator);
+                    const singles = [_]LIR.LocalId{ assign.source, assign.target };
+                    try self.postStmtDeaths(&path.owned, &singles, null, assign.next, path.options.loop_keep, &deaths);
+                    try path.frames.append(self.store.allocator, .{
+                        .stmt = path.cursor,
+                        .head = current_start,
+                        .transfer_single = transfer_single,
+                        .post_release = try self.takePostReleases(&deaths),
+                    });
+                    path.cursor = assign.next;
+                },
+                .assign_boxy_eq => |assign| {
+                    const transfer_single = false;
+                    if (assign.source_mode == .move) {
+                        _ = try self.singleTransfer(assign.lhs, assign.next, assign.target, &path.owned, path.options.loop_keep);
+                        _ = try self.singleTransfer(assign.rhs, assign.next, assign.target, &path.owned, path.options.loop_keep);
+                    }
+                    current_start = try self.releaseOldTargetIfNeeded(assign.target, &path.owned, current_start);
+                    self.addOwnedIfRc(&path.owned, assign.target);
+                    var deaths: std.ArrayList(LIR.LocalId) = .empty;
+                    errdefer deaths.deinit(self.store.allocator);
+                    const singles = [_]LIR.LocalId{ assign.lhs, assign.rhs, assign.target };
+                    try self.postStmtDeaths(&path.owned, &singles, null, assign.next, path.options.loop_keep, &deaths);
+                    try path.frames.append(self.store.allocator, .{
+                        .stmt = path.cursor,
+                        .head = current_start,
+                        .transfer_single = transfer_single,
+                        .post_release = try self.takePostReleases(&deaths),
+                    });
+                    path.cursor = assign.next;
+                },
+                .assign_boxy_tag => |assign| {
+                    var transfer_single = false;
+                    if (assign.payload) |payload| {
+                        if (assign.payload_mode == .move) {
+                            transfer_single = try self.singleTransfer(payload, assign.next, assign.target, &path.owned, path.options.loop_keep);
+                        }
+                    }
+                    current_start = try self.releaseOldTargetIfNeeded(assign.target, &path.owned, current_start);
+                    self.addOwnedIfRc(&path.owned, assign.target);
+                    var deaths: std.ArrayList(LIR.LocalId) = .empty;
+                    errdefer deaths.deinit(self.store.allocator);
+                    const singles = [_]LIR.LocalId{ assign.payload orelse assign.target, assign.target };
+                    try self.postStmtDeaths(&path.owned, &singles, null, assign.next, path.options.loop_keep, &deaths);
+                    try path.frames.append(self.store.allocator, .{
+                        .stmt = path.cursor,
+                        .head = current_start,
+                        .transfer_single = transfer_single,
+                        .post_release = try self.takePostReleases(&deaths),
+                    });
+                    path.cursor = assign.next;
+                },
+                .assign_boxy_tag_payload => |assign| {
+                    const transfer_single = if (assign.source_mode == .move)
+                        try self.singleTransfer(assign.source, assign.next, assign.target, &path.owned, path.options.loop_keep)
+                    else
+                        false;
+                    const retain_assign_ref_target = assign.source_mode == .borrow and !self.isBindingBorrowed(assign.target);
+                    current_start = try self.releaseOldTargetIfNeeded(assign.target, &path.owned, current_start);
+                    if (!self.isBindingBorrowed(assign.target)) self.addOwnedIfRc(&path.owned, assign.target);
+                    var deaths: std.ArrayList(LIR.LocalId) = .empty;
+                    errdefer deaths.deinit(self.store.allocator);
+                    const singles = [_]LIR.LocalId{ assign.source, assign.target };
+                    try self.postStmtDeaths(&path.owned, &singles, null, assign.next, path.options.loop_keep, &deaths);
+                    try path.frames.append(self.store.allocator, .{
+                        .stmt = path.cursor,
+                        .head = current_start,
+                        .transfer_single = transfer_single,
+                        .retain_assign_ref_target = retain_assign_ref_target,
+                        .post_release = try self.takePostReleases(&deaths),
+                    });
+                    path.cursor = assign.next;
+                },
+                .boxy_tag_match => |tag_match| {
+                    try self.scheduleRewriteBoxyTagMatch(tasks, path, path.cursor, tag_match);
+                    self.destroyRewritePath(path);
+                    return;
+                },
+                .assign_call_dict => |assign| {
+                    const transfer_mask = try self.spanTransferMask(assign.args, ~@as(u64, 0), assign.next, assign.target, &path.owned, path.options.loop_keep);
+                    current_start = try self.releaseOldTargetIfNeeded(assign.target, &path.owned, current_start);
+                    self.addOwnedIfRc(&path.owned, assign.target);
+                    var deaths: std.ArrayList(LIR.LocalId) = .empty;
+                    errdefer deaths.deinit(self.store.allocator);
+                    const singles = [_]LIR.LocalId{assign.target};
+                    try self.postStmtDeaths(&path.owned, &singles, assign.args, assign.next, path.options.loop_keep, &deaths);
+                    try self.postStmtDeaths(&path.owned, &.{}, assign.hidden_args, assign.next, path.options.loop_keep, &deaths);
+                    try path.frames.append(self.store.allocator, .{
+                        .stmt = path.cursor,
+                        .head = current_start,
+                        .transfer_mask = transfer_mask,
+                        .post_release = try self.takePostReleases(&deaths),
+                    });
+                    path.cursor = assign.next;
+                },
                 .assign_low_level => |assign| {
                     if ((assign.rc_effect.result_aliases_consumed_args & ~assign.rc_effect.consume_args) != 0) {
                         arcInvariant("ARC low-level result-token metadata referenced a non-consumed argument");
@@ -811,12 +1308,7 @@ const Inserter = struct {
                     if (assign.rc_effect.consume_args != 0) {
                         self.unsetMaskedArgsExcept(&path.owned, assign.args, assign.rc_effect.consume_args & ~preserve_consumed_args, assign.target);
                     }
-                    // Retained positions whose group dies here move their
-                    // unit into the result instead of paying a retain.
-                    var transfer_mask: u64 = 0;
-                    if (assign.rc_effect.retain_args != 0) {
-                        transfer_mask = try self.spanTransferMask(assign.args, assign.rc_effect.retain_args, assign.next, assign.target, &path.owned, path.options.loop_keep);
-                    }
+                    const transfer_mask: u64 = 0;
                     self.addOwnedIfRc(&path.owned, assign.target);
                     if (assign.rc_effect.consume_args != 0) {
                         current_start = try self.retainMaskedArgs(assign.args, preserve_consumed_args, current_start);
@@ -1082,6 +1574,9 @@ const Inserter = struct {
         defer self.store.current_loc = saved_loc;
         const saved_region = self.store.current_region;
         defer self.store.current_region = saved_region;
+        const saved_rewrite_stmt = self.current_rewrite_stmt;
+        defer self.current_rewrite_stmt = saved_rewrite_stmt;
+        self.current_rewrite_stmt = frame.stmt;
         self.store.current_loc = self.store.stmtLoc(frame.stmt);
         self.store.current_region = self.store.stmtRegion(frame.stmt);
         var next = tail_start;
@@ -1131,6 +1626,7 @@ const Inserter = struct {
                     .target = assign.target,
                     .proc = frame.call_target_override orelse assign.proc,
                     .args = assign.args,
+                    .result_desc = assign.result_desc,
                     .is_cold = assign.is_cold,
                     .next = next,
                 } });
@@ -1141,6 +1637,7 @@ const Inserter = struct {
                     .target = assign.target,
                     .closure = assign.closure,
                     .args = assign.args,
+                    .result_desc = assign.result_desc,
                     .next = next,
                 } });
             },
@@ -1159,15 +1656,149 @@ const Inserter = struct {
                     .next = next,
                 } });
             },
-            .assign_boxy_desc_ref,
-            .assign_boxy_dict_ref,
-            .assign_boxy_box,
-            .assign_boxy_reuse_box,
-            .assign_boxy_unbox,
-            .assign_boxy_adapt,
-            .assign_boxy_inspect,
-            .assign_call_dict,
-            => arcInvariant("boxy LIR statement reached ARC clone before boxy ARC constraints are implemented"),
+            .assign_boxy_desc_ref => |assign| {
+                cloned = try self.store.addCFStmt(.{ .assign_boxy_desc_ref = .{
+                    .target = assign.target,
+                    .desc = assign.desc,
+                    .nested_index = assign.nested_index,
+                    .captures = assign.captures,
+                    .next = next,
+                } });
+            },
+            .assign_boxy_dict_ref => |assign| {
+                cloned = try self.store.addCFStmt(.{ .assign_boxy_dict_ref = .{
+                    .target = assign.target,
+                    .dict = assign.dict,
+                    .next = next,
+                } });
+            },
+            .assign_boxy_box => |assign| {
+                if (assign.payload_mode == .move and !frame.transfer_single) {
+                    next = try self.retainLocalIfRc(assign.payload, next);
+                }
+                cloned = try self.store.addCFStmt(.{ .assign_boxy_box = .{
+                    .target = assign.target,
+                    .payload = assign.payload,
+                    .payload_layout = assign.payload_layout,
+                    .payload_desc = assign.payload_desc,
+                    .payload_mode = assign.payload_mode,
+                    .next = next,
+                } });
+            },
+            .assign_boxy_reuse_box => |assign| {
+                if (!frame.transfer_single) {
+                    next = try self.retainLocalIfRc(assign.source, next);
+                }
+                cloned = try self.store.addCFStmt(.{ .assign_boxy_reuse_box = .{
+                    .target = assign.target,
+                    .source = assign.source,
+                    .desc = assign.desc,
+                    .next = next,
+                } });
+            },
+            .assign_boxy_unbox => |assign| {
+                if (assign.source_mode == .move and !frame.transfer_single) {
+                    next = try self.retainLocalIfRc(assign.source, next);
+                } else if (assign.source_mode != .move and self.localMayNeedBoxyRc(assign.target)) {
+                    next = try self.retainLocalIfRc(assign.target, next);
+                }
+                cloned = try self.store.addCFStmt(.{ .assign_boxy_unbox = .{
+                    .target = assign.target,
+                    .source = assign.source,
+                    .source_desc = assign.source_desc,
+                    .target_desc = assign.target_desc,
+                    .target_layout = assign.target_layout,
+                    .source_mode = assign.source_mode,
+                    .next = next,
+                } });
+            },
+            .assign_boxy_adapt => |assign| {
+                if (assign.source_mode == .move and !frame.transfer_single) {
+                    next = try self.retainLocalIfRc(assign.source, next);
+                }
+                cloned = try self.store.addCFStmt(.{ .assign_boxy_adapt = .{
+                    .target = assign.target,
+                    .source = assign.source,
+                    .adapter = assign.adapter,
+                    .source_mode = assign.source_mode,
+                    .next = next,
+                } });
+            },
+            .assign_boxy_inspect => |assign| {
+                if (assign.source_mode == .move and !frame.transfer_single) {
+                    next = try self.retainLocalIfRc(assign.source, next);
+                }
+                cloned = try self.store.addCFStmt(.{ .assign_boxy_inspect = .{
+                    .target = assign.target,
+                    .source = assign.source,
+                    .source_desc = assign.source_desc,
+                    .source_mode = assign.source_mode,
+                    .next = next,
+                } });
+            },
+            .assign_boxy_eq => |assign| {
+                if (assign.source_mode == .move and !frame.transfer_single) {
+                    next = try self.retainLocalIfRc(assign.rhs, next);
+                    next = try self.retainLocalIfRc(assign.lhs, next);
+                }
+                cloned = try self.store.addCFStmt(.{ .assign_boxy_eq = .{
+                    .target = assign.target,
+                    .lhs = assign.lhs,
+                    .rhs = assign.rhs,
+                    .source_desc = assign.source_desc,
+                    .source_mode = assign.source_mode,
+                    .next = next,
+                } });
+            },
+            .assign_boxy_tag => |assign| {
+                if (assign.payload) |payload| {
+                    if (assign.payload_mode == .move and !frame.transfer_single) {
+                        next = try self.retainLocalIfRc(payload, next);
+                    }
+                }
+                cloned = try self.store.addCFStmt(.{ .assign_boxy_tag = .{
+                    .target = assign.target,
+                    .target_desc = assign.target_desc,
+                    .tag_name = assign.tag_name,
+                    .payload = assign.payload,
+                    .payload_layout = assign.payload_layout,
+                    .payload_desc = assign.payload_desc,
+                    .payload_mode = assign.payload_mode,
+                    .next = next,
+                } });
+            },
+            .assign_boxy_tag_payload => |assign| {
+                if (assign.source_mode == .move and !frame.transfer_single) {
+                    next = try self.retainLocalIfRc(assign.source, next);
+                }
+                if (frame.retain_assign_ref_target) {
+                    next = try self.retainLocalIfRc(assign.target, next);
+                }
+                cloned = try self.store.addCFStmt(.{ .assign_boxy_tag_payload = .{
+                    .target = assign.target,
+                    .target_desc = assign.target_desc,
+                    .source = assign.source,
+                    .source_desc = assign.source_desc,
+                    .tag_name = assign.tag_name,
+                    .payload_index = assign.payload_index,
+                    .source_mode = assign.source_mode,
+                    .next = next,
+                } });
+            },
+            .boxy_tag_match => arcInvariant("boxy tag match reached linear ARC clone"),
+            .assign_call_dict => |assign| {
+                next = try self.retainSpanExcept(assign.args, frame.transfer_mask, next);
+                cloned = try self.store.addCFStmt(.{ .assign_call_dict = .{
+                    .target = assign.target,
+                    .dict = assign.dict,
+                    .method_slot = assign.method_slot,
+                    .args = assign.args,
+                    .hidden_args = assign.hidden_args,
+                    .result_desc = assign.result_desc,
+                    .is_cold = assign.is_cold,
+                    .next = next,
+                } });
+            },
             .assign_low_level => |assign| {
                 if (assign.rc_effect.retain_args != 0) {
                     next = try self.retainMaskedArgs(assign.args, assign.rc_effect.retain_args & ~frame.transfer_mask, next);
@@ -1209,6 +1840,7 @@ const Inserter = struct {
                 }
                 cloned = try self.store.addCFStmt(.{ .assign_tag = .{
                     .target = assign.target,
+                    .target_desc = assign.target_desc,
                     .variant_index = assign.variant_index,
                     .discriminant = assign.discriminant,
                     .payload = assign.payload,
@@ -1808,6 +2440,46 @@ const Inserter = struct {
         self.destroyRewriteStrMatchSet(state);
     }
 
+    fn scheduleRewriteBoxyTagMatch(
+        self: *Inserter,
+        tasks: *std.ArrayList(RewriteTask),
+        path: *RewritePathTask,
+        start: LIR.CFStmtId,
+        tag_match: anytype,
+    ) ResourceError!void {
+        const state = try self.store.allocator.create(RewriteBoxyTagMatchTask);
+        var queued = false;
+        errdefer if (!queued) self.store.allocator.destroy(state);
+        state.* = .{
+            .start = start,
+            .source = tag_match.source,
+            .source_desc = tag_match.source_desc,
+            .tag_name = tag_match.tag_name,
+            .frames = takeRewriteFrames(path),
+            .result = path.result,
+        };
+        errdefer if (!queued) state.frames.deinit(self.store.allocator);
+
+        try tasks.append(self.store.allocator, .{ .boxy_tag_match = state });
+        queued = true;
+
+        try self.pushRewritePath(tasks, tag_match.on_miss, &path.owned, path.options, &state.on_miss);
+        try self.pushRewritePath(tasks, tag_match.on_match, &path.owned, path.options, &state.on_match);
+    }
+
+    fn finishRewriteBoxyTagMatch(self: *Inserter, state: *RewriteBoxyTagMatchTask) ResourceError!void {
+        errdefer self.destroyRewriteBoxyTagMatch(state);
+        const tag_match = try self.store.addCFStmt(.{ .boxy_tag_match = .{
+            .source = state.source,
+            .source_desc = state.source_desc,
+            .tag_name = state.tag_name,
+            .on_match = state.on_match,
+            .on_miss = state.on_miss,
+        } });
+        state.result.* = try self.finishLinearRewrite(&state.frames, tag_match);
+        self.destroyRewriteBoxyTagMatch(state);
+    }
+
     fn analyzeUntil(
         self: *Inserter,
         start: LIR.CFStmtId,
@@ -1960,15 +2632,107 @@ const Inserter = struct {
                     try self.postStmtDeaths(&path.owned, &singles, null, assign.next, path.loop_keep, null);
                     path.cursor = assign.next;
                 },
-                .assign_boxy_desc_ref,
-                .assign_boxy_dict_ref,
-                .assign_boxy_box,
-                .assign_boxy_reuse_box,
-                .assign_boxy_unbox,
-                .assign_boxy_adapt,
-                .assign_boxy_inspect,
-                .assign_call_dict,
-                => arcInvariant("boxy LIR statement reached ARC inference before boxy ARC constraints are implemented"),
+                .assign_boxy_desc_ref => |assign| {
+                    self.addOwnedIfRc(&path.owned, assign.target);
+                    const desc_local = assign.desc.localOrNull() orelse assign.target;
+                    const singles = [_]LIR.LocalId{ desc_local, assign.target };
+                    try self.postStmtDeaths(&path.owned, &singles, assign.captures, assign.next, path.loop_keep, null);
+                    path.cursor = assign.next;
+                },
+                .assign_boxy_dict_ref => |assign| {
+                    self.addOwnedIfRc(&path.owned, assign.target);
+                    const dict_local = assign.dict.localOrNull() orelse assign.target;
+                    const singles = [_]LIR.LocalId{ dict_local, assign.target };
+                    try self.postStmtDeaths(&path.owned, &singles, null, assign.next, path.loop_keep, null);
+                    path.cursor = assign.next;
+                },
+                .assign_boxy_box => |assign| {
+                    if (assign.payload_mode == .move) {
+                        _ = try self.singleTransfer(assign.payload, assign.next, assign.target, &path.owned, path.loop_keep);
+                    }
+                    self.addOwnedIfRc(&path.owned, assign.target);
+                    const singles = [_]LIR.LocalId{ assign.payload, assign.target };
+                    try self.postStmtDeaths(&path.owned, &singles, null, assign.next, path.loop_keep, null);
+                    path.cursor = assign.next;
+                },
+                .assign_boxy_reuse_box => |assign| {
+                    _ = try self.singleTransfer(assign.source, assign.next, assign.target, &path.owned, path.loop_keep);
+                    self.addOwnedIfRc(&path.owned, assign.target);
+                    const singles = [_]LIR.LocalId{ assign.source, assign.target };
+                    try self.postStmtDeaths(&path.owned, &singles, null, assign.next, path.loop_keep, null);
+                    path.cursor = assign.next;
+                },
+                .assign_boxy_unbox => |assign| {
+                    if (assign.source_mode == .move) {
+                        _ = try self.singleTransfer(assign.source, assign.next, assign.target, &path.owned, path.loop_keep);
+                    }
+                    self.addOwnedIfRc(&path.owned, assign.target);
+                    const singles = [_]LIR.LocalId{ assign.source, assign.target };
+                    try self.postStmtDeaths(&path.owned, &singles, null, assign.next, path.loop_keep, null);
+                    path.cursor = assign.next;
+                },
+                .assign_boxy_adapt => |assign| {
+                    if (assign.source_mode == .move) {
+                        _ = try self.singleTransfer(assign.source, assign.next, assign.target, &path.owned, path.loop_keep);
+                    }
+                    self.addOwnedIfRc(&path.owned, assign.target);
+                    const singles = [_]LIR.LocalId{ assign.source, assign.target };
+                    try self.postStmtDeaths(&path.owned, &singles, null, assign.next, path.loop_keep, null);
+                    path.cursor = assign.next;
+                },
+                .assign_boxy_inspect => |assign| {
+                    if (assign.source_mode == .move) {
+                        _ = try self.singleTransfer(assign.source, assign.next, assign.target, &path.owned, path.loop_keep);
+                    }
+                    self.addOwnedIfRc(&path.owned, assign.target);
+                    const singles = [_]LIR.LocalId{ assign.source, assign.target };
+                    try self.postStmtDeaths(&path.owned, &singles, null, assign.next, path.loop_keep, null);
+                    path.cursor = assign.next;
+                },
+                .assign_boxy_eq => |assign| {
+                    if (assign.source_mode == .move) {
+                        _ = try self.singleTransfer(assign.lhs, assign.next, assign.target, &path.owned, path.loop_keep);
+                        _ = try self.singleTransfer(assign.rhs, assign.next, assign.target, &path.owned, path.loop_keep);
+                    }
+                    self.addOwnedIfRc(&path.owned, assign.target);
+                    const singles = [_]LIR.LocalId{ assign.lhs, assign.rhs, assign.target };
+                    try self.postStmtDeaths(&path.owned, &singles, null, assign.next, path.loop_keep, null);
+                    path.cursor = assign.next;
+                },
+                .assign_boxy_tag => |assign| {
+                    if (assign.payload) |payload| {
+                        if (assign.payload_mode == .move) {
+                            _ = try self.singleTransfer(payload, assign.next, assign.target, &path.owned, path.loop_keep);
+                        }
+                    }
+                    self.addOwnedIfRc(&path.owned, assign.target);
+                    const singles = [_]LIR.LocalId{ assign.payload orelse assign.target, assign.target };
+                    try self.postStmtDeaths(&path.owned, &singles, null, assign.next, path.loop_keep, null);
+                    path.cursor = assign.next;
+                },
+                .assign_boxy_tag_payload => |assign| {
+                    if (assign.source_mode == .move) {
+                        _ = try self.singleTransfer(assign.source, assign.next, assign.target, &path.owned, path.loop_keep);
+                    }
+                    if (!self.isBindingBorrowed(assign.target)) self.addOwnedIfRc(&path.owned, assign.target);
+                    const singles = [_]LIR.LocalId{ assign.source, assign.target };
+                    try self.postStmtDeaths(&path.owned, &singles, null, assign.next, path.loop_keep, null);
+                    path.cursor = assign.next;
+                },
+                .boxy_tag_match => |tag_match| {
+                    try self.pushAnalysisPath(tasks, tag_match.on_match, path.stop, &path.owned, path.exits, path.loop_keep, path.scoped_joins, path.seen);
+                    try self.pushAnalysisPath(tasks, tag_match.on_miss, path.stop, &path.owned, path.exits, path.loop_keep, path.scoped_joins, path.seen);
+                    self.destroyAnalysisPath(path);
+                    return;
+                },
+                .assign_call_dict => |assign| {
+                    _ = try self.spanTransferMask(assign.args, ~@as(u64, 0), assign.next, assign.target, &path.owned, path.loop_keep);
+                    self.addOwnedIfRc(&path.owned, assign.target);
+                    const singles = [_]LIR.LocalId{assign.target};
+                    try self.postStmtDeaths(&path.owned, &singles, assign.args, assign.next, path.loop_keep, null);
+                    try self.postStmtDeaths(&path.owned, &.{}, assign.hidden_args, assign.next, path.loop_keep, null);
+                    path.cursor = assign.next;
+                },
                 .assign_low_level => |assign| {
                     const preserve_consumed_args = try self.preserveConsumedArgMask(
                         assign.args,
@@ -2249,6 +3013,7 @@ const Inserter = struct {
             .initialized_payload_switch => |switch_| self.destroyRewriteInitializedPayloadSwitch(switch_),
             .str_match => |str_match| self.destroyRewriteStrMatch(str_match),
             .str_match_set => |str_match_set| self.destroyRewriteStrMatchSet(str_match_set),
+            .boxy_tag_match => |tag_match| self.destroyRewriteBoxyTagMatch(tag_match),
         }
     }
 
@@ -2305,6 +3070,11 @@ const Inserter = struct {
     fn destroyRewriteStrMatchSet(self: *Inserter, state: *RewriteStrMatchSetTask) void {
         self.destroyFrames(&state.frames);
         self.store.allocator.free(state.on_matches);
+        self.store.allocator.destroy(state);
+    }
+
+    fn destroyRewriteBoxyTagMatch(self: *Inserter, state: *RewriteBoxyTagMatchTask) void {
+        self.destroyFrames(&state.frames);
         self.store.allocator.destroy(state);
     }
 
@@ -2931,6 +3701,10 @@ const Inserter = struct {
                     try stack.append(self.store.allocator, str_match.on_match);
                     try stack.append(self.store.allocator, str_match.on_miss);
                 },
+                .boxy_tag_match => |tag_match| {
+                    try stack.append(self.store.allocator, tag_match.on_match);
+                    try stack.append(self.store.allocator, tag_match.on_miss);
+                },
                 .str_match_set => |str_match_set| {
                     for (self.store.getStrMatchArms(str_match_set.arms)) |arm| {
                         try stack.append(self.store.allocator, arm.on_match);
@@ -2954,6 +3728,9 @@ const Inserter = struct {
                 .assign_boxy_unbox,
                 .assign_boxy_adapt,
                 .assign_boxy_inspect,
+                .assign_boxy_eq,
+                .assign_boxy_tag,
+                .assign_boxy_tag_payload,
                 .assign_call_dict,
                 .assign_list,
                 .assign_struct,
@@ -3195,6 +3972,9 @@ const Inserter = struct {
                 .assign_boxy_unbox => |assign| try stack.append(self.store.allocator, assign.next),
                 .assign_boxy_adapt => |assign| try stack.append(self.store.allocator, assign.next),
                 .assign_boxy_inspect => |assign| try stack.append(self.store.allocator, assign.next),
+                .assign_boxy_eq => |assign| try stack.append(self.store.allocator, assign.next),
+                .assign_boxy_tag => |assign| try stack.append(self.store.allocator, assign.next),
+                .assign_boxy_tag_payload => |assign| try stack.append(self.store.allocator, assign.next),
                 .assign_call_dict => |assign| try stack.append(self.store.allocator, assign.next),
                 .assign_low_level => |assign| try stack.append(self.store.allocator, assign.next),
                 .assign_list => |assign| try stack.append(self.store.allocator, assign.next),
@@ -3221,6 +4001,10 @@ const Inserter = struct {
                 .str_match => |str_match| {
                     try stack.append(self.store.allocator, str_match.on_match);
                     try stack.append(self.store.allocator, str_match.on_miss);
+                },
+                .boxy_tag_match => |tag_match| {
+                    try stack.append(self.store.allocator, tag_match.on_match);
+                    try stack.append(self.store.allocator, tag_match.on_miss);
                 },
                 .str_match_set => |str_match_set| {
                     for (self.store.getStrMatchArms(str_match_set.arms)) |arm| {
@@ -3301,6 +4085,13 @@ const Inserter = struct {
                 .assign_boxy_unbox => |assign| try stack.append(self.store.allocator, assign.next),
                 .assign_boxy_adapt => |assign| try stack.append(self.store.allocator, assign.next),
                 .assign_boxy_inspect => |assign| try stack.append(self.store.allocator, assign.next),
+                .assign_boxy_eq => |assign| try stack.append(self.store.allocator, assign.next),
+                .assign_boxy_tag => |assign| try stack.append(self.store.allocator, assign.next),
+                .assign_boxy_tag_payload => |assign| try stack.append(self.store.allocator, assign.next),
+                .boxy_tag_match => |tag_match| {
+                    try stack.append(self.store.allocator, tag_match.on_match);
+                    try stack.append(self.store.allocator, tag_match.on_miss);
+                },
                 .assign_call_dict => |assign| try stack.append(self.store.allocator, assign.next),
                 .assign_low_level => |assign| try stack.append(self.store.allocator, assign.next),
                 .assign_list => |assign| try stack.append(self.store.allocator, assign.next),
@@ -3514,6 +4305,9 @@ const Inserter = struct {
                 .assign_call_erased => |assign| {
                     noteReadBeforeRebindLocal(&graph.nodes.items[node_index].reads, assign.closure);
                     self.noteReadBeforeRebindSpan(&graph.nodes.items[node_index].reads, assign.args);
+                    if (assign.result_desc) |result_desc| {
+                        if (result_desc.localOrNull()) |local| noteReadBeforeRebindLocal(&graph.nodes.items[node_index].reads, local);
+                    }
                     setReadBeforeRebindDef(&graph, node_index, assign.target);
                     try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
                 },
@@ -3524,6 +4318,7 @@ const Inserter = struct {
                 },
                 .assign_boxy_desc_ref => |assign| {
                     if (assign.desc.localOrNull()) |local| noteReadBeforeRebindLocal(&graph.nodes.items[node_index].reads, local);
+                    self.noteReadBeforeRebindSpan(&graph.nodes.items[node_index].reads, assign.captures);
                     setReadBeforeRebindDef(&graph, node_index, assign.target);
                     try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
                 },
@@ -3547,6 +4342,7 @@ const Inserter = struct {
                 .assign_boxy_unbox => |assign| {
                     noteReadBeforeRebindLocal(&graph.nodes.items[node_index].reads, assign.source);
                     if (assign.source_desc.localOrNull()) |local| noteReadBeforeRebindLocal(&graph.nodes.items[node_index].reads, local);
+                    if (assign.target_desc) |desc| if (desc.localOrNull()) |local| noteReadBeforeRebindLocal(&graph.nodes.items[node_index].reads, local);
                     setReadBeforeRebindDef(&graph, node_index, assign.target);
                     try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
                 },
@@ -3561,8 +4357,38 @@ const Inserter = struct {
                     setReadBeforeRebindDef(&graph, node_index, assign.target);
                     try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
                 },
+                .assign_boxy_eq => |assign| {
+                    noteReadBeforeRebindLocal(&graph.nodes.items[node_index].reads, assign.lhs);
+                    noteReadBeforeRebindLocal(&graph.nodes.items[node_index].reads, assign.rhs);
+                    if (assign.source_desc.localOrNull()) |local| noteReadBeforeRebindLocal(&graph.nodes.items[node_index].reads, local);
+                    setReadBeforeRebindDef(&graph, node_index, assign.target);
+                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
+                },
+                .assign_boxy_tag => |assign| {
+                    if (assign.target_desc.localOrNull()) |local| noteReadBeforeRebindLocal(&graph.nodes.items[node_index].reads, local);
+                    if (assign.payload) |payload| noteReadBeforeRebindLocal(&graph.nodes.items[node_index].reads, payload);
+                    if (assign.payload_desc) |desc| if (desc.localOrNull()) |local| noteReadBeforeRebindLocal(&graph.nodes.items[node_index].reads, local);
+                    setReadBeforeRebindDef(&graph, node_index, assign.target);
+                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
+                },
+                .assign_boxy_tag_payload => |assign| {
+                    noteReadBeforeRebindLocal(&graph.nodes.items[node_index].reads, assign.source);
+                    if (assign.source_desc.localOrNull()) |local| noteReadBeforeRebindLocal(&graph.nodes.items[node_index].reads, local);
+                    setReadBeforeRebindDef(&graph, node_index, assign.target);
+                    if (assign.target_desc) |target_desc| setReadBeforeRebindDef(&graph, node_index, target_desc);
+                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
+                },
+                .boxy_tag_match => |tag_match| {
+                    noteReadBeforeRebindLocal(&graph.nodes.items[node_index].reads, tag_match.source);
+                    if (tag_match.source_desc.localOrNull()) |local| noteReadBeforeRebindLocal(&graph.nodes.items[node_index].reads, local);
+                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, tag_match.on_match);
+                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, tag_match.on_miss);
+                },
                 .assign_call_dict => |assign| {
                     if (assign.dict.localOrNull()) |local| noteReadBeforeRebindLocal(&graph.nodes.items[node_index].reads, local);
+                    if (assign.result_desc) |result_desc| {
+                        if (result_desc.localOrNull()) |local| noteReadBeforeRebindLocal(&graph.nodes.items[node_index].reads, local);
+                    }
                     self.noteReadBeforeRebindSpan(&graph.nodes.items[node_index].reads, assign.args);
                     self.noteReadBeforeRebindSpan(&graph.nodes.items[node_index].reads, assign.hidden_args);
                     setReadBeforeRebindDef(&graph, node_index, assign.target);
@@ -3584,6 +4410,9 @@ const Inserter = struct {
                     try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
                 },
                 .assign_tag => |assign| {
+                    if (assign.target_desc) |target_desc| {
+                        if (target_desc.localOrNull()) |local| noteReadBeforeRebindLocal(&graph.nodes.items[node_index].reads, local);
+                    }
                     if (assign.payload) |payload| noteReadBeforeRebindLocal(&graph.nodes.items[node_index].reads, payload);
                     setReadBeforeRebindDef(&graph, node_index, assign.target);
                     try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
@@ -3803,6 +4632,7 @@ const Inserter = struct {
                 },
                 .assign_call_erased => |assign| {
                     if (assign.closure == needle or self.spanUsesLocal(assign.args, needle)) return true;
+                    if (assign.result_desc) |result_desc| if (result_desc.localOrNull()) |local| if (local == needle) return true;
                     if (assign.target == needle) continue;
                     try stack.append(self.store.allocator, assign.next);
                 },
@@ -3813,6 +4643,7 @@ const Inserter = struct {
                 },
                 .assign_boxy_desc_ref => |assign| {
                     if (assign.desc.localOrNull()) |local| if (local == needle) return true;
+                    if (self.spanUsesLocal(assign.captures, needle)) return true;
                     if (assign.target == needle) continue;
                     try stack.append(self.store.allocator, assign.next);
                 },
@@ -3836,6 +4667,7 @@ const Inserter = struct {
                 .assign_boxy_unbox => |assign| {
                     if (assign.source == needle) return true;
                     if (assign.source_desc.localOrNull()) |local| if (local == needle) return true;
+                    if (assign.target_desc) |desc| if (desc.localOrNull()) |local| if (local == needle) return true;
                     if (assign.target == needle) continue;
                     try stack.append(self.store.allocator, assign.next);
                 },
@@ -3850,8 +4682,34 @@ const Inserter = struct {
                     if (assign.target == needle) continue;
                     try stack.append(self.store.allocator, assign.next);
                 },
+                .assign_boxy_eq => |assign| {
+                    if (assign.lhs == needle or assign.rhs == needle) return true;
+                    if (assign.source_desc.localOrNull()) |local| if (local == needle) return true;
+                    if (assign.target == needle) continue;
+                    try stack.append(self.store.allocator, assign.next);
+                },
+                .assign_boxy_tag => |assign| {
+                    if (assign.target_desc.localOrNull()) |local| if (local == needle) return true;
+                    if (assign.payload != null and assign.payload.? == needle) return true;
+                    if (assign.payload_desc) |desc| if (desc.localOrNull()) |local| if (local == needle) return true;
+                    if (assign.target == needle) continue;
+                    try stack.append(self.store.allocator, assign.next);
+                },
+                .assign_boxy_tag_payload => |assign| {
+                    if (assign.source == needle) return true;
+                    if (assign.source_desc.localOrNull()) |local| if (local == needle) return true;
+                    if (assign.target == needle or (assign.target_desc != null and assign.target_desc.? == needle)) continue;
+                    try stack.append(self.store.allocator, assign.next);
+                },
+                .boxy_tag_match => |tag_match| {
+                    if (tag_match.source == needle) return true;
+                    if (tag_match.source_desc.localOrNull()) |local| if (local == needle) return true;
+                    try stack.append(self.store.allocator, tag_match.on_match);
+                    try stack.append(self.store.allocator, tag_match.on_miss);
+                },
                 .assign_call_dict => |assign| {
                     if (assign.dict.localOrNull()) |local| if (local == needle) return true;
+                    if (assign.result_desc) |result_desc| if (result_desc.localOrNull()) |local| if (local == needle) return true;
                     if (self.spanUsesLocal(assign.args, needle) or self.spanUsesLocal(assign.hidden_args, needle)) return true;
                     if (assign.target == needle) continue;
                     try stack.append(self.store.allocator, assign.next);
@@ -3872,6 +4730,9 @@ const Inserter = struct {
                     try stack.append(self.store.allocator, assign.next);
                 },
                 .assign_tag => |assign| {
+                    if (assign.target_desc) |target_desc| {
+                        if (target_desc.localOrNull()) |local| if (local == needle) return true;
+                    }
                     if (assign.payload != null and assign.payload.? == needle) return true;
                     if (assign.target == needle) continue;
                     try stack.append(self.store.allocator, assign.next);
@@ -4050,6 +4911,7 @@ const Inserter = struct {
                 },
                 .assign_call_erased => |assign| {
                     if (needles.contains(assign.closure) or self.spanUsesAny(assign.args, needles)) return true;
+                    if (assign.result_desc) |result_desc| if (result_desc.localOrNull()) |local| if (needles.contains(local)) return true;
                     try stack.append(self.store.allocator, assign.next);
                 },
                 .assign_packed_erased_fn => |assign| {
@@ -4058,6 +4920,7 @@ const Inserter = struct {
                 },
                 .assign_boxy_desc_ref => |assign| {
                     if (assign.desc.localOrNull()) |local| if (needles.contains(local)) return true;
+                    if (self.spanUsesAny(assign.captures, needles)) return true;
                     try stack.append(self.store.allocator, assign.next);
                 },
                 .assign_boxy_dict_ref => |assign| {
@@ -4077,6 +4940,7 @@ const Inserter = struct {
                 .assign_boxy_unbox => |assign| {
                     if (needles.contains(assign.source)) return true;
                     if (assign.source_desc.localOrNull()) |local| if (needles.contains(local)) return true;
+                    if (assign.target_desc) |desc| if (desc.localOrNull()) |local| if (needles.contains(local)) return true;
                     try stack.append(self.store.allocator, assign.next);
                 },
                 .assign_boxy_adapt => |assign| {
@@ -4088,8 +4952,31 @@ const Inserter = struct {
                     if (assign.source_desc.localOrNull()) |local| if (needles.contains(local)) return true;
                     try stack.append(self.store.allocator, assign.next);
                 },
+                .assign_boxy_eq => |assign| {
+                    if (needles.contains(assign.lhs) or needles.contains(assign.rhs)) return true;
+                    if (assign.source_desc.localOrNull()) |local| if (needles.contains(local)) return true;
+                    try stack.append(self.store.allocator, assign.next);
+                },
+                .assign_boxy_tag => |assign| {
+                    if (assign.target_desc.localOrNull()) |local| if (needles.contains(local)) return true;
+                    if (assign.payload) |payload| if (needles.contains(payload)) return true;
+                    if (assign.payload_desc) |desc| if (desc.localOrNull()) |local| if (needles.contains(local)) return true;
+                    try stack.append(self.store.allocator, assign.next);
+                },
+                .assign_boxy_tag_payload => |assign| {
+                    if (needles.contains(assign.source)) return true;
+                    if (assign.source_desc.localOrNull()) |local| if (needles.contains(local)) return true;
+                    try stack.append(self.store.allocator, assign.next);
+                },
+                .boxy_tag_match => |tag_match| {
+                    if (needles.contains(tag_match.source)) return true;
+                    if (tag_match.source_desc.localOrNull()) |local| if (needles.contains(local)) return true;
+                    try stack.append(self.store.allocator, tag_match.on_match);
+                    try stack.append(self.store.allocator, tag_match.on_miss);
+                },
                 .assign_call_dict => |assign| {
                     if (assign.dict.localOrNull()) |local| if (needles.contains(local)) return true;
+                    if (assign.result_desc) |result_desc| if (result_desc.localOrNull()) |local| if (needles.contains(local)) return true;
                     if (self.spanUsesAny(assign.args, needles) or self.spanUsesAny(assign.hidden_args, needles)) return true;
                     try stack.append(self.store.allocator, assign.next);
                 },
@@ -4106,6 +4993,9 @@ const Inserter = struct {
                     try stack.append(self.store.allocator, assign.next);
                 },
                 .assign_tag => |assign| {
+                    if (assign.target_desc) |target_desc| {
+                        if (target_desc.localOrNull()) |local| if (needles.contains(local)) return true;
+                    }
                     if (assign.payload != null and needles.contains(assign.payload.?)) return true;
                     try stack.append(self.store.allocator, assign.next);
                 },
@@ -4232,6 +5122,16 @@ const Inserter = struct {
         return try self.retainLocalIfRcCount(local, 1, next);
     }
 
+    fn retainLocalWithRc(self: *Inserter, local: LIR.LocalId, rc: LIR.RcHelper, next: LIR.CFStmtId) ResourceError!LIR.CFStmtId {
+        return try self.store.addCFStmt(.{ .incref = .{
+            .value = local,
+            .rc = rc,
+            .count = 1,
+            .atomicity = self.rcAtomicity(local),
+            .next = next,
+        } });
+    }
+
     fn retainLocalIfRcCount(self: *Inserter, local: LIR.LocalId, count: u16, next: LIR.CFStmtId) ResourceError!LIR.CFStmtId {
         if (count == 0) return next;
         if (!self.localContainsRefcounted(local)) return next;
@@ -4292,10 +5192,42 @@ const Inserter = struct {
     }
 
     fn rcHelperForLocal(self: *const Inserter, op: layout_mod.RcOp, local: LIR.LocalId) LIR.RcHelper {
+        const local_index = @intFromEnum(local);
+        if (local_index < self.boxy_rc_descs.len) {
+            if (self.boxy_rc_descs[local_index]) |desc| {
+                return .{ .boxy = desc };
+            }
+        }
+
         const local_layout = self.store.getLocal(local).layout_idx;
         const helper = self.rcHelperForLayout(op, local_layout);
         if (self.layouts.rcHelperPlan(helper) == .noop) {
-            arcInvariant("ARC attempted to emit a noop RC helper for a refcounted local");
+            if (@import("builtin").mode == .Debug) {
+                var buffer: std.Io.Writer.Allocating = .init(self.store.allocator);
+                defer buffer.deinit();
+                debug_print.writeProc(self.store.allocator, self.store, self.layouts, self.current_proc, &buffer.writer) catch {};
+                std.debug.print("\n{s}\n", .{buffer.written()});
+                const ref_source: ?LIR.LocalId = if (self.current_rewrite_stmt) |stmt_id| switch (self.store.getCFStmt(stmt_id)) {
+                    .assign_ref => |assign| refOpSource(assign.op),
+                    else => null,
+                } else null;
+                const ref_source_layout: ?layout_mod.Idx = if (ref_source) |source| self.store.getLocal(source).layout_idx else null;
+                const ref_source_desc: ?LIR.BoxyDescRef = if (ref_source) |source| boxyDescForLocal(self.boxy_rc_descs, source) else null;
+                std.debug.panic("ARC attempted to emit a noop RC helper for refcounted local {d} layout={d} layout_data={any} desc={?} proc={d} stmt={?d} ref_source={?d} ref_source_layout={?d} ref_source_layout_data={any} ref_source_desc={?} stmt_data={any}", .{
+                    @intFromEnum(local),
+                    @intFromEnum(local_layout),
+                    self.layouts.getLayout(local_layout),
+                    boxyDescForLocal(self.boxy_rc_descs, local),
+                    @intFromEnum(self.current_proc),
+                    if (self.current_rewrite_stmt) |stmt_id| @intFromEnum(stmt_id) else null,
+                    if (ref_source) |source| @intFromEnum(source) else null,
+                    if (ref_source_layout) |source_layout| @intFromEnum(source_layout) else null,
+                    if (ref_source_layout) |source_layout| self.layouts.getLayout(source_layout) else null,
+                    ref_source_desc,
+                    if (self.current_rewrite_stmt) |stmt_id| self.store.getCFStmt(stmt_id) else null,
+                });
+            }
+            unreachable;
         }
         return LIR.RcHelper.fromConcrete(helper);
     }
@@ -4305,6 +5237,38 @@ const Inserter = struct {
         return switch (layout_val.tag) {
             .closure => self.rcHelperForLayout(nestedDropOp(op), layout_val.getClosure().captures_layout_idx),
             else => .{ .op = op, .layout_idx = layout_idx },
+        };
+    }
+
+    fn localMayNeedBoxyRc(self: *const Inserter, local: LIR.LocalId) bool {
+        return self.localContainsRefcounted(local) or self.layoutMayContainBoxyDynamic(self.store.getLocal(local).layout_idx);
+    }
+
+    fn layoutMayContainBoxyDynamic(self: *const Inserter, layout_idx: layout_mod.Idx) bool {
+        const layout_val = self.layouts.getLayout(layout_idx);
+        return switch (layout_val.tag) {
+            .box_of_zst => true,
+            .box => self.layoutMayContainBoxyDynamic(layout_val.getIdx()),
+            .list => self.layoutMayContainBoxyDynamic(layout_val.getIdx()),
+            .list_of_zst => false,
+            .struct_ => blk: {
+                const info = self.layouts.getStructInfo(layout_val);
+                for (0..info.fields.len) |index| {
+                    const field = info.fields.get(@intCast(index));
+                    if (self.layoutMayContainBoxyDynamic(field.layout)) break :blk true;
+                }
+                break :blk false;
+            },
+            .tag_union => blk: {
+                const info = self.layouts.getTagUnionInfo(layout_val);
+                for (0..info.variants.len) |index| {
+                    const payload_layout = info.variants.get(@intCast(index)).payload_layout;
+                    if (self.layoutMayContainBoxyDynamic(payload_layout)) break :blk true;
+                }
+                break :blk false;
+            },
+            .closure => self.layoutMayContainBoxyDynamic(layout_val.getClosure().captures_layout_idx),
+            .zst, .scalar, .erased_callable, .ptr => false,
         };
     }
 
@@ -4851,11 +5815,15 @@ const ArcTest = struct {
                     }
                     try stack.append(self.allocator, s.on_miss);
                 },
+                .boxy_tag_match => |s| {
+                    try stack.append(self.allocator, s.on_match);
+                    try stack.append(self.allocator, s.on_miss);
+                },
                 .join => |j| {
                     try stack.append(self.allocator, j.body);
                     try stack.append(self.allocator, j.remainder);
                 },
-                inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_call_dict, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |s| {
+                inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |s| {
                     try stack.append(self.allocator, s.next);
                 },
                 .ret, .jump, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
@@ -4916,6 +5884,9 @@ const ArcTest = struct {
                 .assign_boxy_unbox => |assign| cursor = assign.next,
                 .assign_boxy_adapt => |assign| cursor = assign.next,
                 .assign_boxy_inspect => |assign| cursor = assign.next,
+                .assign_boxy_eq => |assign| cursor = assign.next,
+                .assign_boxy_tag => |assign| cursor = assign.next,
+                .assign_boxy_tag_payload => |assign| cursor = assign.next,
                 .assign_call_dict => |assign| cursor = assign.next,
                 .assign_low_level => |assign| cursor = assign.next,
                 .assign_list => |assign| cursor = assign.next,
@@ -4933,7 +5904,7 @@ const ArcTest = struct {
                     if (before == .crash) return error.ExpectedRcBeforeStop;
                     return;
                 },
-                .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .loop_continue, .loop_break, .join, .jump => return error.NonLinearPath,
+                .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .boxy_tag_match, .loop_continue, .loop_break, .join, .jump => return error.NonLinearPath,
             }
         }
         return error.CyclicPath;
@@ -4976,6 +5947,9 @@ const ArcTest = struct {
                 .assign_boxy_unbox => |assign| cursor = assign.next,
                 .assign_boxy_adapt => |assign| cursor = assign.next,
                 .assign_boxy_inspect => |assign| cursor = assign.next,
+                .assign_boxy_eq => |assign| cursor = assign.next,
+                .assign_boxy_tag => |assign| cursor = assign.next,
+                .assign_boxy_tag_payload => |assign| cursor = assign.next,
                 .assign_call_dict => |assign| cursor = assign.next,
                 .assign_low_level => |assign| cursor = assign.next,
                 .assign_list => |assign| cursor = assign.next,
@@ -4985,7 +5959,7 @@ const ArcTest = struct {
                 .expect => |expect_stmt| cursor = expect_stmt.next,
                 .comptime_branch_taken => |marker| cursor = marker.next,
                 .ret, .jump, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => return error.ExpectedConditionalDecref,
-                .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join => return error.NonLinearPath,
+                .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .boxy_tag_match, .join => return error.NonLinearPath,
             }
         }
         return error.CyclicPath;
@@ -6581,6 +7555,9 @@ fn expectDecrefBeforeStmt(f: *const ArcTest, start: LIR.CFStmtId, local: LIR.Loc
             .assign_boxy_unbox => |a| cursor = a.next,
             .assign_boxy_adapt => |a| cursor = a.next,
             .assign_boxy_inspect => |a| cursor = a.next,
+            .assign_boxy_eq => |a| cursor = a.next,
+            .assign_boxy_tag => |a| cursor = a.next,
+            .assign_boxy_tag_payload => |a| cursor = a.next,
             .assign_call_dict => |a| cursor = a.next,
             .assign_low_level => |a| cursor = a.next,
             .assign_list => |a| cursor = a.next,

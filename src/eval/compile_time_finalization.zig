@@ -469,10 +469,11 @@ fn lowerEvalAndFinishRoots(
     var host = CompilerHost.init(allocator);
     defer host.deinit();
 
-    var interpreter = try Interpreter.init(
+    var interpreter = try Interpreter.initWithBoxyTables(
         allocator,
         &lowered.lir_result.store,
         &lowered.lir_result.layouts,
+        Interpreter.BoxyTables.fromResult(&lowered.lir_result),
         host.ops(),
     );
     defer interpreter.deinit();

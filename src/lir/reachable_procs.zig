@@ -165,7 +165,11 @@ const Pass = struct {
                     try self.markProc(s.proc);
                     try self.pushStmt(s.next);
                 },
-                inline .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_call_dict, .assign_low_level => |s| try self.pushStmt(s.next),
+                inline .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level => |s| try self.pushStmt(s.next),
+                .boxy_tag_match => |s| {
+                    try self.pushStmt(s.on_match);
+                    try self.pushStmt(s.on_miss);
+                },
                 .assign_list => |s| try self.pushStmt(s.next),
                 .assign_struct => |s| try self.pushStmt(s.next),
                 .assign_tag => |s| try self.pushStmt(s.next),
@@ -379,6 +383,9 @@ const Pass = struct {
                 .assign_boxy_unbox,
                 .assign_boxy_adapt,
                 .assign_boxy_inspect,
+                .assign_boxy_eq,
+                .assign_boxy_tag,
+                .assign_boxy_tag_payload,
                 .assign_call_dict,
                 .assign_low_level,
                 .assign_list,
@@ -396,6 +403,14 @@ const Pass = struct {
                     const next = s.next;
                     s.next = self.remapStmt(next);
                     try self.pushStmt(next);
+                },
+                .boxy_tag_match => |*s| {
+                    const on_match = s.on_match;
+                    const on_miss = s.on_miss;
+                    s.on_match = self.remapStmt(on_match);
+                    s.on_miss = self.remapStmt(on_miss);
+                    try self.pushStmt(on_match);
+                    try self.pushStmt(on_miss);
                 },
                 .ret,
                 .jump,
@@ -586,6 +601,9 @@ const Pass = struct {
             .assign_boxy_unbox,
             .assign_boxy_adapt,
             .assign_boxy_inspect,
+            .assign_boxy_eq,
+            .assign_boxy_tag,
+            .assign_boxy_tag_payload,
             .assign_call_dict,
             .assign_low_level,
             .assign_list,
@@ -612,6 +630,10 @@ const Pass = struct {
                 self.verifyStmtRef(s.uninitialized_branch, stmt_count);
             },
             .str_match => |s| {
+                self.verifyStmtRef(s.on_match, stmt_count);
+                self.verifyStmtRef(s.on_miss, stmt_count);
+            },
+            .boxy_tag_match => |s| {
                 self.verifyStmtRef(s.on_match, stmt_count);
                 self.verifyStmtRef(s.on_miss, stmt_count);
             },

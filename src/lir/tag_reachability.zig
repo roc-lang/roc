@@ -304,9 +304,13 @@ const Pass = struct {
                 if (self.localInfoMut(s.target).markAll(self.allocator)) changed = true;
                 try self.pushStmt(s.next);
             },
-            inline .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_call_dict, .assign_low_level => |s| {
+            inline .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level => |s| {
                 if (self.localInfoMut(s.target).markAll(self.allocator)) changed = true;
                 try self.pushStmt(s.next);
+            },
+            .boxy_tag_match => |s| {
+                try self.pushStmt(s.on_match);
+                try self.pushStmt(s.on_miss);
             },
             .assign_list => |s| {
                 if (self.localInfoMut(s.target).markAll(self.allocator)) changed = true;
@@ -438,7 +442,10 @@ const Pass = struct {
                     .nominal => |ref| self.noteUse(ref.backing_ref),
                 }
             },
-            .assign_call => |s| for (self.store.getLocalSpan(s.args)) |arg| self.noteUse(arg),
+            .assign_call => |s| {
+                if (s.result_desc) |desc| if (desc.localOrNull()) |local| self.noteUse(local);
+                for (self.store.getLocalSpan(s.args)) |arg| self.noteUse(arg);
+            },
             .assign_call_erased => |s| {
                 self.noteUse(s.closure);
                 for (self.store.getLocalSpan(s.args)) |arg| self.noteUse(arg);
@@ -446,6 +453,7 @@ const Pass = struct {
             .assign_packed_erased_fn => |s| if (s.capture) |capture| self.noteUse(capture),
             .assign_boxy_desc_ref => |s| {
                 if (s.desc.localOrNull()) |local| self.noteUse(local);
+                for (self.store.getLocalSpan(s.captures)) |local| self.noteUse(local);
             },
             .assign_boxy_dict_ref => |s| {
                 if (s.dict.localOrNull()) |local| self.noteUse(local);
@@ -461,9 +469,28 @@ const Pass = struct {
             .assign_boxy_unbox => |s| {
                 self.noteUse(s.source);
                 if (s.source_desc.localOrNull()) |local| self.noteUse(local);
+                if (s.target_desc) |desc| if (desc.localOrNull()) |local| self.noteUse(local);
             },
             .assign_boxy_adapt => |s| self.noteUse(s.source),
             .assign_boxy_inspect => |s| {
+                self.noteUse(s.source);
+                if (s.source_desc.localOrNull()) |local| self.noteUse(local);
+            },
+            .assign_boxy_eq => |s| {
+                self.noteUse(s.lhs);
+                self.noteUse(s.rhs);
+                if (s.source_desc.localOrNull()) |local| self.noteUse(local);
+            },
+            .assign_boxy_tag => |s| {
+                if (s.target_desc.localOrNull()) |local| self.noteUse(local);
+                if (s.payload) |payload| self.noteUse(payload);
+                if (s.payload_desc) |desc| if (desc.localOrNull()) |local| self.noteUse(local);
+            },
+            .assign_boxy_tag_payload => |s| {
+                self.noteUse(s.source);
+                if (s.source_desc.localOrNull()) |local| self.noteUse(local);
+            },
+            .boxy_tag_match => |s| {
                 self.noteUse(s.source);
                 if (s.source_desc.localOrNull()) |local| self.noteUse(local);
             },
@@ -475,7 +502,10 @@ const Pass = struct {
             .assign_low_level => |s| for (self.store.getLocalSpan(s.args)) |arg| self.noteUse(arg),
             .assign_list => |s| for (self.store.getLocalSpan(s.elems)) |elem| self.noteUse(elem),
             .assign_struct => |s| for (self.store.getLocalSpan(s.fields)) |field| self.noteUse(field),
-            .assign_tag => |s| if (s.payload) |payload| self.noteUse(payload),
+            .assign_tag => |s| {
+                if (s.target_desc) |desc| if (desc.localOrNull()) |local| self.noteUse(local);
+                if (s.payload) |payload| self.noteUse(payload);
+            },
             .set_local => |s| self.noteUse(s.value),
             .debug => |s| self.noteUse(s.message),
             .expect => |s| self.noteUse(s.condition),
@@ -608,6 +638,13 @@ const Pass = struct {
                 .assign_boxy_unbox => |*s| s.next = self.resolveRedirect(s.next),
                 .assign_boxy_adapt => |*s| s.next = self.resolveRedirect(s.next),
                 .assign_boxy_inspect => |*s| s.next = self.resolveRedirect(s.next),
+                .assign_boxy_eq => |*s| s.next = self.resolveRedirect(s.next),
+                .assign_boxy_tag => |*s| s.next = self.resolveRedirect(s.next),
+                .assign_boxy_tag_payload => |*s| s.next = self.resolveRedirect(s.next),
+                .boxy_tag_match => |*s| {
+                    s.on_match = self.resolveRedirect(s.on_match);
+                    s.on_miss = self.resolveRedirect(s.on_miss);
+                },
                 .assign_call_dict => |*s| s.next = self.resolveRedirect(s.next),
                 .assign_low_level => |*s| s.next = self.resolveRedirect(s.next),
                 .assign_list => |*s| s.next = self.resolveRedirect(s.next),

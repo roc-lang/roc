@@ -166,10 +166,11 @@ fn evaluateEntrypointInView(
     };
     defer gpa.free(arg_layouts);
 
-    var interpreter = eval.LirInterpreter.init(
+    var interpreter = eval.LirInterpreter.initWithBoxyTables(
         gpa,
         &view.store,
         &view.layouts,
+        eval.LirInterpreter.BoxyTables.fromImageView(view),
         ops,
     ) catch {
         ops.crash("LIR shim could not initialize the LIR interpreter");

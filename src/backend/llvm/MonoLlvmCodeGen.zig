@@ -1984,6 +1984,9 @@ pub const MonoLlvmCodeGen = struct {
                 .assign_boxy_unbox,
                 .assign_boxy_adapt,
                 .assign_boxy_inspect,
+                .assign_boxy_eq,
+                .assign_boxy_tag,
+                .assign_boxy_tag_payload,
                 .assign_call_dict,
                 .assign_low_level,
                 .assign_list,
@@ -2014,6 +2017,10 @@ pub const MonoLlvmCodeGen = struct {
                 .str_match => |str_match| {
                     try self.noteStmtIncoming(&stack, str_match.on_match);
                     try self.noteStmtIncoming(&stack, str_match.on_miss);
+                },
+                .boxy_tag_match => |tag_match| {
+                    try self.noteStmtIncoming(&stack, tag_match.on_match);
+                    try self.noteStmtIncoming(&stack, tag_match.on_miss);
                 },
                 .str_match_set => |str_match_set| {
                     for (self.store.getStrMatchArms(str_match_set.arms)) |arm| {
@@ -2170,6 +2177,10 @@ pub const MonoLlvmCodeGen = struct {
             .assign_boxy_unbox,
             .assign_boxy_adapt,
             .assign_boxy_inspect,
+            .assign_boxy_eq,
+            .assign_boxy_tag,
+            .assign_boxy_tag_payload,
+            .boxy_tag_match,
             .assign_call_dict,
             => return error.CompilationFailed,
             .assign_low_level => |assign| {

@@ -5910,6 +5910,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     .assign_literal => |assign| try stack.append(sa, assign.next),
                     .init_uninitialized => |uninit| try stack.append(sa, uninit.next),
                     .assign_call => |assign| {
+                        if (assign.result_desc) |result_desc| {
+                            if (result_desc.localOrNull()) |local| try locals.put(localKey(local), local);
+                        }
                         for (self.store.getLocalSpan(assign.args)) |arg| {
                             try locals.put(localKey(arg), arg);
                         }
@@ -5917,6 +5920,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     },
                     .assign_call_erased => |assign| {
                         try locals.put(localKey(assign.closure), assign.closure);
+                        if (assign.result_desc) |result_desc| {
+                            if (result_desc.localOrNull()) |local| try locals.put(localKey(local), local);
+                        }
                         for (self.store.getLocalSpan(assign.args)) |arg| {
                             try locals.put(localKey(arg), arg);
                         }
@@ -5930,6 +5936,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     },
                     .assign_boxy_desc_ref => |assign| {
                         if (assign.desc.localOrNull()) |local| try locals.put(localKey(local), local);
+                        for (self.store.getLocalSpan(assign.captures)) |local| try locals.put(localKey(local), local);
                         try stack.append(sa, assign.next);
                     },
                     .assign_boxy_dict_ref => |assign| {
@@ -5951,6 +5958,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     .assign_boxy_unbox => |assign| {
                         try locals.put(localKey(assign.source), assign.source);
                         if (assign.source_desc.localOrNull()) |local| try locals.put(localKey(local), local);
+                        if (assign.target_desc) |desc| if (desc.localOrNull()) |local| try locals.put(localKey(local), local);
                         try stack.append(sa, assign.next);
                     },
                     .assign_boxy_adapt => |assign| {
@@ -5962,8 +5970,37 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         if (assign.source_desc.localOrNull()) |local| try locals.put(localKey(local), local);
                         try stack.append(sa, assign.next);
                     },
+                    .assign_boxy_eq => |assign| {
+                        try locals.put(localKey(assign.lhs), assign.lhs);
+                        try locals.put(localKey(assign.rhs), assign.rhs);
+                        if (assign.source_desc.localOrNull()) |local| try locals.put(localKey(local), local);
+                        try stack.append(sa, assign.next);
+                    },
+                    .assign_boxy_tag => |assign| {
+                        if (assign.target_desc.localOrNull()) |local| try locals.put(localKey(local), local);
+                        if (assign.payload) |payload| try locals.put(localKey(payload), payload);
+                        if (assign.payload_desc) |desc| {
+                            if (desc.localOrNull()) |local| try locals.put(localKey(local), local);
+                        }
+                        try stack.append(sa, assign.next);
+                    },
+                    .assign_boxy_tag_payload => |assign| {
+                        try locals.put(localKey(assign.source), assign.source);
+                        if (assign.source_desc.localOrNull()) |local| try locals.put(localKey(local), local);
+                        if (assign.target_desc) |target_desc| try locals.put(localKey(target_desc), target_desc);
+                        try stack.append(sa, assign.next);
+                    },
+                    .boxy_tag_match => |tag_match| {
+                        try locals.put(localKey(tag_match.source), tag_match.source);
+                        if (tag_match.source_desc.localOrNull()) |local| try locals.put(localKey(local), local);
+                        try stack.append(sa, tag_match.on_match);
+                        try stack.append(sa, tag_match.on_miss);
+                    },
                     .assign_call_dict => |assign| {
                         if (assign.dict.localOrNull()) |local| try locals.put(localKey(local), local);
+                        if (assign.result_desc) |result_desc| {
+                            if (result_desc.localOrNull()) |local| try locals.put(localKey(local), local);
+                        }
                         for (self.store.getLocalSpan(assign.args)) |arg| {
                             try locals.put(localKey(arg), arg);
                         }
@@ -6099,6 +6136,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     },
                     .assign_call => |assign| {
                         try locals.put(localKey(assign.target), assign.target);
+                        if (assign.result_desc) |result_desc| {
+                            if (result_desc.localOrNull()) |local| try locals.put(localKey(local), local);
+                        }
                         for (self.store.getLocalSpan(assign.args)) |arg| {
                             try locals.put(localKey(arg), arg);
                         }
@@ -6107,6 +6147,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     .assign_call_erased => |assign| {
                         try locals.put(localKey(assign.target), assign.target);
                         try locals.put(localKey(assign.closure), assign.closure);
+                        if (assign.result_desc) |result_desc| {
+                            if (result_desc.localOrNull()) |local| try locals.put(localKey(local), local);
+                        }
                         for (self.store.getLocalSpan(assign.args)) |arg| {
                             try locals.put(localKey(arg), arg);
                         }
@@ -6120,6 +6163,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     .assign_boxy_desc_ref => |assign| {
                         try locals.put(localKey(assign.target), assign.target);
                         if (assign.desc.localOrNull()) |local| try locals.put(localKey(local), local);
+                        for (self.store.getLocalSpan(assign.captures)) |local| try locals.put(localKey(local), local);
                         try stack.append(sa, assign.next);
                     },
                     .assign_boxy_dict_ref => |assign| {
@@ -6145,6 +6189,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try locals.put(localKey(assign.target), assign.target);
                         try locals.put(localKey(assign.source), assign.source);
                         if (assign.source_desc.localOrNull()) |local| try locals.put(localKey(local), local);
+                        if (assign.target_desc) |desc| if (desc.localOrNull()) |local| try locals.put(localKey(local), local);
                         try stack.append(sa, assign.next);
                     },
                     .assign_boxy_adapt => |assign| {
@@ -6158,9 +6203,41 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         if (assign.source_desc.localOrNull()) |local| try locals.put(localKey(local), local);
                         try stack.append(sa, assign.next);
                     },
+                    .assign_boxy_eq => |assign| {
+                        try locals.put(localKey(assign.target), assign.target);
+                        try locals.put(localKey(assign.lhs), assign.lhs);
+                        try locals.put(localKey(assign.rhs), assign.rhs);
+                        if (assign.source_desc.localOrNull()) |local| try locals.put(localKey(local), local);
+                        try stack.append(sa, assign.next);
+                    },
+                    .assign_boxy_tag => |assign| {
+                        try locals.put(localKey(assign.target), assign.target);
+                        if (assign.target_desc.localOrNull()) |local| try locals.put(localKey(local), local);
+                        if (assign.payload) |payload| try locals.put(localKey(payload), payload);
+                        if (assign.payload_desc) |desc| {
+                            if (desc.localOrNull()) |local| try locals.put(localKey(local), local);
+                        }
+                        try stack.append(sa, assign.next);
+                    },
+                    .assign_boxy_tag_payload => |assign| {
+                        try locals.put(localKey(assign.target), assign.target);
+                        if (assign.target_desc) |target_desc| try locals.put(localKey(target_desc), target_desc);
+                        try locals.put(localKey(assign.source), assign.source);
+                        if (assign.source_desc.localOrNull()) |local| try locals.put(localKey(local), local);
+                        try stack.append(sa, assign.next);
+                    },
+                    .boxy_tag_match => |tag_match| {
+                        try locals.put(localKey(tag_match.source), tag_match.source);
+                        if (tag_match.source_desc.localOrNull()) |local| try locals.put(localKey(local), local);
+                        try stack.append(sa, tag_match.on_match);
+                        try stack.append(sa, tag_match.on_miss);
+                    },
                     .assign_call_dict => |assign| {
                         try locals.put(localKey(assign.target), assign.target);
                         if (assign.dict.localOrNull()) |local| try locals.put(localKey(local), local);
+                        if (assign.result_desc) |result_desc| {
+                            if (result_desc.localOrNull()) |local| try locals.put(localKey(local), local);
+                        }
                         for (self.store.getLocalSpan(assign.args)) |arg| {
                             try locals.put(localKey(arg), arg);
                         }
@@ -15074,6 +15151,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         .assign_boxy_unbox,
                         .assign_boxy_adapt,
                         .assign_boxy_inspect,
+                        .assign_boxy_eq,
+                        .assign_boxy_tag,
+                        .assign_boxy_tag_payload,
+                        .boxy_tag_match,
                         .assign_call_dict,
                         => std.debug.panic(
                             "Dev/codegen invariant violated: boxy LIR statement reached dev codegen before boxy codegen is implemented",

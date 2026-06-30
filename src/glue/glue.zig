@@ -435,10 +435,11 @@ fn runGlueSpecInterpreter(
     result_ptr: [*]u8,
     roc_ops: *builtins.host_abi.RocOps,
 ) GlueError!void {
-    var interpreter = eval_mod.LirInterpreter.init(
+    var interpreter = eval_mod.LirInterpreter.initWithBoxyTables(
         gpa,
         &lowered.lir_result.store,
         &lowered.lir_result.layouts,
+        eval_mod.LirInterpreter.BoxyTables.fromResult(&lowered.lir_result),
         roc_ops,
     ) catch return error.OutOfMemory;
     defer interpreter.deinit();

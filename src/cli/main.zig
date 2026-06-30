@@ -5417,7 +5417,13 @@ fn evaluateLirImageEntrypoint(
     ret_ptr: ?*anyopaque,
     arg_ptr: ?*anyopaque,
 ) Allocator.Error!void {
-    var interpreter = try eval.LirInterpreter.init(allocator, &view.store, &view.layouts, ops);
+    var interpreter = try eval.LirInterpreter.initWithBoxyTables(
+        allocator,
+        &view.store,
+        &view.layouts,
+        eval.LirInterpreter.BoxyTables.fromImageView(view),
+        ops,
+    );
     defer interpreter.deinit();
 
     _ = interpreter.runEntrypoint(view, ordinal, arg_ptr, ret_ptr) catch |err| switch (err) {
@@ -9746,10 +9752,11 @@ fn runInterpreterTestRoots(
     var echo_env_test = echo_platform.EchoEnv{ .std_io = ctx.io.std_io };
     var roc_ops = echo_platform.makeDefaultRocOps(&echo_env_test, &hosted_fn_array);
     echo_platform.g_roc_ops = &roc_ops;
-    var interpreter = try eval.LirInterpreter.init(
+    var interpreter = try eval.LirInterpreter.initWithBoxyTables(
         ctx.gpa,
         &lowered.lir_result.store,
         &lowered.lir_result.layouts,
+        eval.LirInterpreter.BoxyTables.fromResult(&lowered.lir_result),
         &roc_ops,
     );
     defer interpreter.deinit();

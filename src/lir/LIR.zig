@@ -72,10 +72,11 @@ pub const BoxyAdapterId = enum(u32) { _ };
 pub const BoxyDescRef = union(enum) {
     static: BoxyTypeDescId,
     local: LocalId,
+    runtime: u32,
 
     pub fn localOrNull(self: BoxyDescRef) ?LocalId {
         return switch (self) {
-            .static => null,
+            .static, .runtime => null,
             .local => |local| local,
         };
     }
@@ -130,6 +131,7 @@ pub const JoinPointId = enum(u32) {
 /// One explicitly typed LIR local.
 pub const Local = struct {
     layout_idx: layout.Idx,
+    boxy_desc: ?BoxyDescRef = null,
 };
 
 /// Span into flat local-id storage.
@@ -544,6 +546,7 @@ pub const CFStmt = union(enum) {
         target: LocalId,
         proc: LirProcSpecId,
         args: LocalSpan,
+        result_desc: ?BoxyDescRef = null,
         is_cold: bool = false,
         next: CFStmtId,
     },
@@ -551,6 +554,7 @@ pub const CFStmt = union(enum) {
         target: LocalId,
         closure: LocalId,
         args: LocalSpan,
+        result_desc: ?BoxyDescRef = null,
         next: CFStmtId,
     },
     assign_packed_erased_fn: struct {
@@ -564,6 +568,8 @@ pub const CFStmt = union(enum) {
     assign_boxy_desc_ref: struct {
         target: LocalId,
         desc: BoxyDescRef,
+        nested_index: ?u32 = null,
+        captures: LocalSpan = .{ .start = 0, .len = 0 },
         next: CFStmtId,
     },
     assign_boxy_dict_ref: struct {
@@ -575,6 +581,7 @@ pub const CFStmt = union(enum) {
         target: LocalId,
         payload: LocalId,
         payload_layout: layout.Idx,
+        source_desc: ?BoxyDescRef = null,
         payload_desc: ?BoxyDescRef = null,
         payload_mode: BoxyTransferMode = .move,
         next: CFStmtId,
@@ -589,6 +596,7 @@ pub const CFStmt = union(enum) {
         target: LocalId,
         source: LocalId,
         source_desc: BoxyDescRef,
+        target_desc: ?BoxyDescRef = null,
         target_layout: layout.Idx,
         source_mode: BoxyTransferMode = .borrow,
         next: CFStmtId,
@@ -607,12 +615,48 @@ pub const CFStmt = union(enum) {
         source_mode: BoxyTransferMode = .borrow,
         next: CFStmtId,
     },
+    assign_boxy_eq: struct {
+        target: LocalId,
+        lhs: LocalId,
+        rhs: LocalId,
+        source_desc: BoxyDescRef,
+        source_mode: BoxyTransferMode = .borrow,
+        next: CFStmtId,
+    },
+    assign_boxy_tag: struct {
+        target: LocalId,
+        target_desc: BoxyDescRef,
+        tag_name: StringLiteral.Idx,
+        payload: ?LocalId = null,
+        payload_layout: layout.Idx = .zst,
+        payload_desc: ?BoxyDescRef = null,
+        payload_mode: BoxyTransferMode = .move,
+        next: CFStmtId,
+    },
+    assign_boxy_tag_payload: struct {
+        target: LocalId,
+        target_desc: ?LocalId = null,
+        source: LocalId,
+        source_desc: BoxyDescRef,
+        tag_name: StringLiteral.Idx,
+        payload_index: u32,
+        source_mode: BoxyTransferMode = .borrow,
+        next: CFStmtId,
+    },
+    boxy_tag_match: struct {
+        source: LocalId,
+        source_desc: BoxyDescRef,
+        tag_name: StringLiteral.Idx,
+        on_match: CFStmtId,
+        on_miss: CFStmtId,
+    },
     assign_call_dict: struct {
         target: LocalId,
         dict: BoxyDictRef,
         method_slot: u32,
         args: LocalSpan,
         hidden_args: LocalSpan = .empty(),
+        result_desc: ?BoxyDescRef = null,
         is_cold: bool = false,
         next: CFStmtId,
     },
@@ -650,6 +694,7 @@ pub const CFStmt = union(enum) {
     },
     assign_tag: struct {
         target: LocalId,
+        target_desc: ?BoxyDescRef = null,
         variant_index: u16,
         discriminant: u16,
         payload: ?LocalId,

@@ -665,6 +665,10 @@ fn retLenders(
                 try solver.stack.append(allocator, s.on_match);
                 try solver.stack.append(allocator, s.on_miss);
             },
+            .boxy_tag_match => |s| {
+                try solver.stack.append(allocator, s.on_match);
+                try solver.stack.append(allocator, s.on_miss);
+            },
             .str_match_set => |s| {
                 for (store.getStrMatchArms(s.arms)) |arm| {
                     try solver.stack.append(allocator, arm.on_match);
@@ -675,7 +679,7 @@ fn retLenders(
                 try solver.stack.append(allocator, j.body);
                 try solver.stack.append(allocator, j.remainder);
             },
-            inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |s| {
+            inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |s| {
                 try solver.stack.append(allocator, s.next);
             },
             .jump, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
@@ -730,6 +734,10 @@ fn retAllUnique(
                 try solver.stack.append(allocator, s.on_match);
                 try solver.stack.append(allocator, s.on_miss);
             },
+            .boxy_tag_match => |s| {
+                try solver.stack.append(allocator, s.on_match);
+                try solver.stack.append(allocator, s.on_miss);
+            },
             .str_match_set => |s| {
                 for (store.getStrMatchArms(s.arms)) |arm| {
                     try solver.stack.append(allocator, arm.on_match);
@@ -740,7 +748,7 @@ fn retAllUnique(
                 try solver.stack.append(allocator, j.body);
                 try solver.stack.append(allocator, j.remainder);
             },
-            inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |s| {
+            inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |s| {
                 try solver.stack.append(allocator, s.next);
             },
             .jump, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
@@ -825,6 +833,13 @@ fn noteDemand(solver: *Solver, local: LIR.LocalId) void {
     solver.demand[@intFromEnum(local)] = true;
 }
 
+fn noteTransferDemand(solver: *Solver, local: LIR.LocalId, mode: LIR.BoxyTransferMode) void {
+    switch (mode) {
+        .move => noteDemand(solver, local),
+        .borrow, .copy => {},
+    }
+}
+
 fn collectStmt(
     solver: *Solver,
     proc_index: u32,
@@ -869,6 +884,9 @@ fn collectStmt(
         .assign_call => |assign| {
             const callee_sig = solver.sigs[@intFromEnum(assign.proc)];
             const args = store.getLocalSpan(assign.args);
+            if (assign.result_desc) |result_desc| {
+                if (result_desc.localOrNull()) |local| noteDemand(solver, local);
+            }
 
             // Tail-position calls within one call-graph component demand
             // ownership of their arguments so emission never needs a
@@ -896,6 +914,9 @@ fn collectStmt(
         .assign_call_erased => |assign| {
             noteDef(solver.defs, assign.target, .fresh);
             noteDemand(solver, assign.closure);
+            if (assign.result_desc) |result_desc| {
+                if (result_desc.localOrNull()) |local| noteDemand(solver, local);
+            }
             for (store.getLocalSpan(assign.args)) |arg| {
                 if (!solver.rc_local[@intFromEnum(arg)]) continue;
                 noteDemand(solver, arg);
@@ -907,15 +928,79 @@ fn collectStmt(
             if (assign.capture) |capture| noteDemand(solver, capture);
             try solver.stack.append(allocator, assign.next);
         },
-        .assign_boxy_desc_ref,
-        .assign_boxy_dict_ref,
-        .assign_boxy_box,
-        .assign_boxy_reuse_box,
-        .assign_boxy_unbox,
-        .assign_boxy_adapt,
-        .assign_boxy_inspect,
-        .assign_call_dict,
-        => solveInvariant("boxy LIR statement reached ARC solver before boxy ARC constraints are implemented"),
+        .assign_boxy_desc_ref => |assign| {
+            noteDef(solver.defs, assign.target, .fresh);
+            if (assign.desc.localOrNull()) |local| noteDemand(solver, local);
+            for (store.getLocalSpan(assign.captures)) |local| {
+                noteDemand(solver, local);
+            }
+            try solver.stack.append(allocator, assign.next);
+        },
+        .assign_boxy_dict_ref => |assign| {
+            noteDef(solver.defs, assign.target, .fresh);
+            try solver.stack.append(allocator, assign.next);
+        },
+        .assign_boxy_box => |assign| {
+            noteDef(solver.defs, assign.target, .fresh);
+            noteTransferDemand(solver, assign.payload, assign.payload_mode);
+            try solver.stack.append(allocator, assign.next);
+        },
+        .assign_boxy_reuse_box => |assign| {
+            noteDef(solver.defs, assign.target, .fresh);
+            noteDemand(solver, assign.source);
+            try solver.stack.append(allocator, assign.next);
+        },
+        .assign_boxy_unbox => |assign| {
+            noteDef(solver.defs, assign.target, .fresh);
+            noteTransferDemand(solver, assign.source, assign.source_mode);
+            if (assign.target_desc) |desc| if (desc.localOrNull()) |local| noteDemand(solver, local);
+            try solver.stack.append(allocator, assign.next);
+        },
+        .assign_boxy_adapt => |assign| {
+            noteDef(solver.defs, assign.target, .fresh);
+            noteTransferDemand(solver, assign.source, assign.source_mode);
+            try solver.stack.append(allocator, assign.next);
+        },
+        .assign_boxy_inspect => |assign| {
+            noteDef(solver.defs, assign.target, .fresh);
+            noteTransferDemand(solver, assign.source, assign.source_mode);
+            try solver.stack.append(allocator, assign.next);
+        },
+        .assign_boxy_eq => |assign| {
+            noteDef(solver.defs, assign.target, .fresh);
+            noteTransferDemand(solver, assign.lhs, assign.source_mode);
+            noteTransferDemand(solver, assign.rhs, assign.source_mode);
+            try solver.stack.append(allocator, assign.next);
+        },
+        .assign_boxy_tag => |assign| {
+            noteDef(solver.defs, assign.target, .fresh);
+            if (assign.payload) |payload| noteTransferDemand(solver, payload, assign.payload_mode);
+            try solver.stack.append(allocator, assign.next);
+        },
+        .assign_boxy_tag_payload => |assign| {
+            switch (assign.source_mode) {
+                .borrow => noteDef(solver.defs, assign.target, .{ .borrow_capable = @intFromEnum(assign.source) }),
+                .copy, .move => noteDef(solver.defs, assign.target, .fresh),
+            }
+            if (assign.target_desc) |target_desc| noteDef(solver.defs, target_desc, .fresh);
+            noteTransferDemand(solver, assign.source, assign.source_mode);
+            try solver.stack.append(allocator, assign.next);
+        },
+        .assign_call_dict => |assign| {
+            noteDef(solver.defs, assign.target, .fresh);
+            if (assign.result_desc) |result_desc| {
+                if (result_desc.localOrNull()) |local| noteDemand(solver, local);
+            }
+            for (store.getLocalSpan(assign.args)) |arg| {
+                if (!solver.rc_local[@intFromEnum(arg)]) continue;
+                noteDemand(solver, arg);
+            }
+            for (store.getLocalSpan(assign.hidden_args)) |arg| {
+                if (!solver.rc_local[@intFromEnum(arg)]) continue;
+                noteDemand(solver, arg);
+            }
+            try solver.stack.append(allocator, assign.next);
+        },
         .assign_low_level => |assign| {
             const args = store.getLocalSpan(assign.args);
             const borrow_source = lowLevelBorrowSource(solver.rc_local, assign.rc_effect, args);
@@ -955,6 +1040,7 @@ fn collectStmt(
         },
         .assign_tag => |assign| {
             noteDef(solver.defs, assign.target, .fresh);
+            if (assign.target_desc) |target_desc| if (target_desc.localOrNull()) |local| noteDemand(solver, local);
             if (assign.payload) |payload| noteDemand(solver, payload);
             try solver.stack.append(allocator, assign.next);
         },
@@ -997,6 +1083,10 @@ fn collectStmt(
             }
             try solver.stack.append(allocator, str_match.on_match);
             try solver.stack.append(allocator, str_match.on_miss);
+        },
+        .boxy_tag_match => |tag_match| {
+            try solver.stack.append(allocator, tag_match.on_match);
+            try solver.stack.append(allocator, tag_match.on_miss);
         },
         .str_match_set => |str_match_set| {
             for (store.getStrMatchArms(str_match_set.arms)) |arm| {
@@ -1187,6 +1277,10 @@ pub fn computeVisibility(
                     try stack.append(allocator, stmt.on_match);
                     try stack.append(allocator, stmt.on_miss);
                 },
+                .boxy_tag_match => |stmt| {
+                    try stack.append(allocator, stmt.on_match);
+                    try stack.append(allocator, stmt.on_miss);
+                },
                 .str_match_set => |stmt| {
                     for (store.getStrMatchArms(stmt.arms)) |arm| {
                         try stack.append(allocator, arm.on_match);
@@ -1197,7 +1291,7 @@ pub fn computeVisibility(
                     try stack.append(allocator, stmt.body);
                     try stack.append(allocator, stmt.remainder);
                 },
-                inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |stmt| {
+                inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |stmt| {
                     try stack.append(allocator, stmt.next);
                 },
                 .jump, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
@@ -1277,6 +1371,9 @@ pub fn computeVisibility(
                 }
             },
             .assign_tag => |assign| {
+                if (assign.target_desc) |target_desc| if (target_desc.localOrNull()) |local| {
+                    try addEdge(&edges, allocator, rc_local, @intFromEnum(assign.target), @intFromEnum(local));
+                };
                 if (assign.payload) |payload| {
                     try addEdge(&edges, allocator, rc_local, @intFromEnum(assign.target), @intFromEnum(payload));
                 }
@@ -1310,6 +1407,11 @@ pub fn computeVisibility(
             .assign_call => |assign| {
                 const callee = store.proc_specs.items[@intFromEnum(assign.proc)];
                 const args = store.getLocalSpan(assign.args);
+                if (assign.result_desc) |result_desc| {
+                    if (result_desc.localOrNull()) |local| {
+                        try seedLocal(&visible, &work, allocator, rc_local, @intFromEnum(local));
+                    }
+                }
                 if (callee.body == null) {
                     // No body to flow through: everything at the boundary is
                     // host-visible.
@@ -1332,6 +1434,11 @@ pub fn computeVisibility(
                 // The callee is unknown; the boundary is treated like a
                 // pinned signature.
                 try seedLocal(&visible, &work, allocator, rc_local, @intFromEnum(assign.closure));
+                if (assign.result_desc) |result_desc| {
+                    if (result_desc.localOrNull()) |local| {
+                        try seedLocal(&visible, &work, allocator, rc_local, @intFromEnum(local));
+                    }
+                }
                 for (store.getLocalSpan(assign.args)) |arg| {
                     try seedLocal(&visible, &work, allocator, rc_local, @intFromEnum(arg));
                 }
@@ -1549,6 +1656,21 @@ pub fn computeUniqueness(
                 once.set(index);
             }
         }
+
+        fn transfer(
+            self: @This(),
+            once: *std.bit_set.DynamicBitSetUnmanaged,
+            dead: *std.bit_set.DynamicBitSetUnmanaged,
+            reads: *std.bit_set.DynamicBitSetUnmanaged,
+            local: LIR.LocalId,
+            mode: LIR.BoxyTransferMode,
+        ) void {
+            switch (mode) {
+                .move => self.consume(once, dead, local),
+                .copy => self.destroy(dead, local),
+                .borrow => self.noteUse(reads, local),
+            }
+        }
     };
     const marks = Marks{ .rc = rc_local };
 
@@ -1630,6 +1752,9 @@ pub fn computeUniqueness(
             },
             .assign_call => |assign| {
                 marks.trackDef(&has_def, &multi_def, assign.target);
+                if (assign.result_desc) |result_desc| {
+                    if (result_desc.localOrNull()) |local| marks.noteUse(&borrow_used, local);
+                }
                 const callee_sig = sigs.get(assign.proc);
                 if (callee_sig.ret_unique) {
                     marks.noteBirth(&born, assign.target);
@@ -1654,6 +1779,9 @@ pub fn computeUniqueness(
                 marks.trackDef(&has_def, &multi_def, assign.target);
                 marks.destroy(&foreign_def, assign.target);
                 marks.destroy(&destroyed, assign.closure);
+                if (assign.result_desc) |result_desc| {
+                    if (result_desc.localOrNull()) |local| marks.noteUse(&borrow_used, local);
+                }
                 for (store.getLocalSpan(assign.args)) |arg| {
                     marks.destroy(&destroyed, arg);
                 }
@@ -1663,15 +1791,86 @@ pub fn computeUniqueness(
                 marks.destroy(&foreign_def, assign.target);
                 if (assign.capture) |capture| marks.destroy(&destroyed, capture);
             },
-            .assign_boxy_desc_ref,
-            .assign_boxy_dict_ref,
-            .assign_boxy_box,
-            .assign_boxy_reuse_box,
-            .assign_boxy_unbox,
-            .assign_boxy_adapt,
-            .assign_boxy_inspect,
-            .assign_call_dict,
-            => solveInvariant("boxy LIR statement reached ARC unique analysis before boxy ARC constraints are implemented"),
+            .assign_boxy_desc_ref => |assign| {
+                marks.trackDef(&has_def, &multi_def, assign.target);
+                marks.destroy(&foreign_def, assign.target);
+                if (assign.desc.localOrNull()) |local| marks.noteUse(&borrow_used, local);
+                for (store.getLocalSpan(assign.captures)) |local| {
+                    marks.noteUse(&borrow_used, local);
+                }
+            },
+            .assign_boxy_dict_ref => |assign| {
+                marks.trackDef(&has_def, &multi_def, assign.target);
+                marks.destroy(&foreign_def, assign.target);
+                if (assign.dict.localOrNull()) |local| marks.noteUse(&borrow_used, local);
+            },
+            .assign_boxy_box => |assign| {
+                marks.trackDef(&has_def, &multi_def, assign.target);
+                marks.noteBirth(&born, assign.target);
+                marks.transfer(&consumed_once, &destroyed, &borrow_used, assign.payload, assign.payload_mode);
+                if (assign.payload_desc) |desc| if (desc.localOrNull()) |local| marks.noteUse(&borrow_used, local);
+            },
+            .assign_boxy_reuse_box => |assign| {
+                marks.trackDef(&has_def, &multi_def, assign.target);
+                marks.destroy(&foreign_def, assign.target);
+                marks.consume(&consumed_once, &destroyed, assign.source);
+                if (assign.desc.localOrNull()) |local| marks.noteUse(&borrow_used, local);
+            },
+            .assign_boxy_unbox => |assign| {
+                marks.trackDef(&has_def, &multi_def, assign.target);
+                marks.destroy(&foreign_def, assign.target);
+                marks.transfer(&consumed_once, &destroyed, &borrow_used, assign.source, assign.source_mode);
+                if (assign.source_desc.localOrNull()) |local| marks.noteUse(&borrow_used, local);
+                if (assign.target_desc) |desc| if (desc.localOrNull()) |local| marks.noteUse(&borrow_used, local);
+            },
+            .assign_boxy_adapt => |assign| {
+                marks.trackDef(&has_def, &multi_def, assign.target);
+                marks.destroy(&foreign_def, assign.target);
+                marks.transfer(&consumed_once, &destroyed, &borrow_used, assign.source, assign.source_mode);
+            },
+            .assign_boxy_inspect => |assign| {
+                marks.trackDef(&has_def, &multi_def, assign.target);
+                marks.noteBirth(&born, assign.target);
+                marks.transfer(&consumed_once, &destroyed, &borrow_used, assign.source, assign.source_mode);
+                if (assign.source_desc.localOrNull()) |local| marks.noteUse(&borrow_used, local);
+            },
+            .assign_boxy_eq => |assign| {
+                marks.trackDef(&has_def, &multi_def, assign.target);
+                marks.noteBirth(&born, assign.target);
+                marks.transfer(&consumed_once, &destroyed, &borrow_used, assign.lhs, assign.source_mode);
+                marks.transfer(&consumed_once, &destroyed, &borrow_used, assign.rhs, assign.source_mode);
+                if (assign.source_desc.localOrNull()) |local| marks.noteUse(&borrow_used, local);
+            },
+            .assign_boxy_tag => |assign| {
+                marks.trackDef(&has_def, &multi_def, assign.target);
+                marks.noteBirth(&born, assign.target);
+                if (assign.target_desc.localOrNull()) |local| marks.noteUse(&borrow_used, local);
+                if (assign.payload) |payload| marks.transfer(&consumed_once, &destroyed, &borrow_used, payload, assign.payload_mode);
+                if (assign.payload_desc) |desc| if (desc.localOrNull()) |local| marks.noteUse(&borrow_used, local);
+            },
+            .assign_boxy_tag_payload => |assign| {
+                marks.trackDef(&has_def, &multi_def, assign.target);
+                marks.destroy(&foreign_def, assign.target);
+                if (assign.target_desc) |local| marks.trackDef(&has_def, &multi_def, local);
+                marks.transfer(&consumed_once, &destroyed, &borrow_used, assign.source, assign.source_mode);
+                if (assign.source_desc.localOrNull()) |local| marks.noteUse(&borrow_used, local);
+            },
+            .boxy_tag_match => |tag_match| {
+                marks.noteUse(&borrow_used, tag_match.source);
+                if (tag_match.source_desc.localOrNull()) |local| marks.noteUse(&borrow_used, local);
+            },
+            .assign_call_dict => |assign| {
+                marks.trackDef(&has_def, &multi_def, assign.target);
+                marks.destroy(&foreign_def, assign.target);
+                if (assign.dict.localOrNull()) |local| marks.noteUse(&borrow_used, local);
+                if (assign.result_desc) |result_desc| if (result_desc.localOrNull()) |local| marks.noteUse(&borrow_used, local);
+                for (store.getLocalSpan(assign.args)) |arg| {
+                    marks.destroy(&destroyed, arg);
+                }
+                for (store.getLocalSpan(assign.hidden_args)) |arg| {
+                    marks.destroy(&destroyed, arg);
+                }
+            },
             .str_match => |str_match| {
                 marks.noteUse(&borrow_used, str_match.source);
                 for (store.getStrMatchSteps(str_match.steps)) |step| {
@@ -1740,6 +1939,7 @@ pub fn computeUniqueness(
                 }
             },
             .assign_tag => |assign| {
+                if (assign.target_desc) |target_desc| if (target_desc.localOrNull()) |local| marks.noteUse(&borrow_used, local);
                 marks.trackDef(&has_def, &multi_def, assign.target);
                 marks.noteBirth(&born, assign.target);
                 if (assign.payload) |payload| marks.destroy(&destroyed, payload);
@@ -1869,6 +2069,10 @@ fn computeSccs(solver: *Solver) SolveError!void {
                     try solver.stack.append(allocator, s.on_match);
                     try solver.stack.append(allocator, s.on_miss);
                 },
+                .boxy_tag_match => |s| {
+                    try solver.stack.append(allocator, s.on_match);
+                    try solver.stack.append(allocator, s.on_miss);
+                },
                 .str_match_set => |s| {
                     for (store.getStrMatchArms(s.arms)) |arm| {
                         try solver.stack.append(allocator, arm.on_match);
@@ -1879,7 +2083,7 @@ fn computeSccs(solver: *Solver) SolveError!void {
                     try solver.stack.append(allocator, j.body);
                     try solver.stack.append(allocator, j.remainder);
                 },
-                inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |s| {
+                inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |s| {
                     try solver.stack.append(allocator, s.next);
                 },
                 .jump, .ret, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},

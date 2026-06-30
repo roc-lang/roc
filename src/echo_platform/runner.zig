@@ -286,10 +286,11 @@ fn runEchoView(
     var cli_args_list = try echo_platform.buildCliArgs(&.{}, &roc_ops);
     var result_buf: [16]u8 align(16) = undefined;
 
-    var interpreter = eval.LirInterpreter.init(
+    var interpreter = eval.LirInterpreter.initWithBoxyTables(
         allocator,
         &view.store,
         &view.layouts,
+        eval.LirInterpreter.BoxyTables.fromImageView(view),
         &roc_ops,
     ) catch |err| {
         diag.step("LirInterpreter.init", err);

@@ -322,6 +322,86 @@ pub fn getLocalPtr(self: *Self, id: LocalId) *Local {
     return &self.locals.items[@intFromEnum(id)];
 }
 
+/// Records the boxy descriptor governing a local's runtime payload.
+pub fn setLocalBoxyDesc(self: *Self, id: LocalId, desc: lir_defs.BoxyDescRef) void {
+    const local = self.getLocalPtr(id);
+    if (local.boxy_desc) |existing| {
+        if (!std.meta.eql(existing, desc)) {
+            std.debug.panic("LIR store invariant violated: local {d} was assigned two different boxy descriptors", .{@intFromEnum(id)});
+        }
+        return;
+    }
+    local.boxy_desc = desc;
+}
+
+/// Replaces a local's descriptor after lowering has produced a more specific
+/// runtime descriptor local for a constructed boxy value.
+pub fn replaceLocalBoxyDesc(self: *Self, id: LocalId, desc: lir_defs.BoxyDescRef) void {
+    self.getLocalPtr(id).boxy_desc = desc;
+    for (self.cf_stmts.items) |*stmt| {
+        switch (stmt.*) {
+            .assign_call => |*assign| {
+                if (assign.target == id) assign.result_desc = desc;
+            },
+            .assign_call_erased => |*assign| {
+                if (assign.target == id) assign.result_desc = desc;
+            },
+            .assign_ref => |*assign| {
+                switch (assign.op) {
+                    .local => |source| {
+                        if (source == id and assign.target != id) {
+                            self.replaceLocalBoxyDesc(assign.target, desc);
+                        }
+                    },
+                    else => {},
+                }
+            },
+            .assign_boxy_box => |*assign| {
+                if (assign.target == id or assign.payload == id) assign.payload_desc = desc;
+                if (assign.payload == id and assign.target != id) {
+                    self.replaceLocalBoxyDesc(assign.target, desc);
+                }
+            },
+            .assign_boxy_reuse_box => |*assign| {
+                if (assign.target == id or assign.source == id) assign.desc = desc;
+            },
+            .assign_boxy_unbox => |*assign| {
+                if (assign.source == id) assign.source_desc = desc;
+                if (assign.target == id) assign.target_desc = desc;
+            },
+            .assign_boxy_inspect => |*assign| {
+                if (assign.source == id) assign.source_desc = desc;
+            },
+            .assign_boxy_eq => |*assign| {
+                if (assign.lhs == id or assign.rhs == id) assign.source_desc = desc;
+            },
+            .assign_boxy_tag => |*assign| {
+                if (assign.target == id) assign.target_desc = desc;
+                if (assign.payload != null and assign.payload.? == id) assign.payload_desc = desc;
+            },
+            .assign_boxy_tag_payload => |*assign| {
+                if (assign.source == id) assign.source_desc = desc;
+            },
+            .boxy_tag_match => |*tag_match| {
+                if (tag_match.source == id) tag_match.source_desc = desc;
+            },
+            .assign_call_dict => |*assign| {
+                if (assign.target == id) assign.result_desc = desc;
+            },
+            .assign_tag => |*assign| {
+                if (assign.target == id and assign.target_desc != null) assign.target_desc = desc;
+            },
+            else => {},
+        }
+    }
+}
+
+/// Replaces only the compile-time descriptor metadata for a local. Existing LIR
+/// statements keep the descriptor they were explicitly emitted with.
+pub fn replaceLocalBoxyDescMetadataOnly(self: *Self, id: LocalId, desc: lir_defs.BoxyDescRef) void {
+    self.getLocalPtr(id).boxy_desc = desc;
+}
+
 /// Stores local ids and returns the corresponding flat-storage span.
 pub fn addLocalSpan(self: *Self, ids: []const LocalId) Allocator.Error!LocalSpan {
     if (ids.len == 0) return LocalSpan.empty();
@@ -394,6 +474,10 @@ pub fn addCFStmt(self: *Self, stmt: CFStmt) Allocator.Error!CFStmtId {
         .assign_boxy_unbox,
         .assign_boxy_adapt,
         .assign_boxy_inspect,
+        .assign_boxy_eq,
+        .assign_boxy_tag,
+        .assign_boxy_tag_payload,
+        .boxy_tag_match,
         .assign_call_dict,
         .assign_low_level,
         .assign_list,

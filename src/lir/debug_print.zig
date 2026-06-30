@@ -107,6 +107,10 @@ const Printer = struct {
                     try writer.print("call p{d}(", .{@intFromEnum(s.proc)});
                     try self.writeLocals(s.args, writer);
                     try writer.writeByte(')');
+                    if (s.result_desc) |result_desc| {
+                        try writer.writeAll(" result_desc=");
+                        try writeBoxyDescRef(result_desc, writer);
+                    }
                     if (s.is_cold) try writer.writeAll(" cold");
                     try writer.writeByte('\n');
                     current = s.next;
@@ -115,7 +119,12 @@ const Printer = struct {
                     try self.writeTarget(s.target, indent, writer);
                     try writer.print("call_erased l{d}(", .{@intFromEnum(s.closure)});
                     try self.writeLocals(s.args, writer);
-                    try writer.writeAll(")\n");
+                    try writer.writeByte(')');
+                    if (s.result_desc) |result_desc| {
+                        try writer.writeAll(" result_desc=");
+                        try writeBoxyDescRef(result_desc, writer);
+                    }
+                    try writer.writeByte('\n');
                     current = s.next;
                 },
                 .assign_packed_erased_fn => |s| {
@@ -127,6 +136,14 @@ const Printer = struct {
                     try self.writeTarget(s.target, indent, writer);
                     try writer.writeAll("boxy_desc_ref ");
                     try writeBoxyDescRef(s.desc, writer);
+                    if (s.nested_index) |nested_index| {
+                        try writer.print(" nested={d}", .{nested_index});
+                    }
+                    if (s.captures.len != 0) {
+                        try writer.writeAll(" captures=[");
+                        try self.writeLocals(s.captures, writer);
+                        try writer.writeAll("]");
+                    }
                     try writer.writeAll("\n");
                     current = s.next;
                 },
@@ -159,6 +176,10 @@ const Printer = struct {
                     try self.writeTarget(s.target, indent, writer);
                     try writer.print("boxy_unbox source=l{d} desc=", .{@intFromEnum(s.source)});
                     try writeBoxyDescRef(s.source_desc, writer);
+                    if (s.target_desc) |target_desc| {
+                        try writer.writeAll(" target_desc=");
+                        try writeBoxyDescRef(target_desc, writer);
+                    }
                     try writer.writeAll(" target_layout=");
                     try writeLayout(self.layouts, s.target_layout, writer);
                     try writer.print(" mode={s}\n", .{@tagName(s.source_mode)});
@@ -180,6 +201,57 @@ const Printer = struct {
                     try writer.print(" mode={s}\n", .{@tagName(s.source_mode)});
                     current = s.next;
                 },
+                .assign_boxy_eq => |s| {
+                    try self.writeTarget(s.target, indent, writer);
+                    try writer.print("boxy_eq lhs=l{d} rhs=l{d} desc=", .{
+                        @intFromEnum(s.lhs),
+                        @intFromEnum(s.rhs),
+                    });
+                    try writeBoxyDescRef(s.source_desc, writer);
+                    try writer.print(" mode={s}\n", .{@tagName(s.source_mode)});
+                    current = s.next;
+                },
+                .assign_boxy_tag => |s| {
+                    try self.writeTarget(s.target, indent, writer);
+                    try writer.writeAll("boxy_tag desc=");
+                    try writeBoxyDescRef(s.target_desc, writer);
+                    try writer.print(" tag={s}", .{self.store.getString(s.tag_name)});
+                    if (s.payload) |payload| {
+                        try writer.print(" payload=l{d} layout=", .{@intFromEnum(payload)});
+                        try writeLayout(self.layouts, s.payload_layout, writer);
+                        if (s.payload_desc) |desc| {
+                            try writer.writeAll(" payload_desc=");
+                            try writeBoxyDescRef(desc, writer);
+                        }
+                        try writer.print(" mode={s}", .{@tagName(s.payload_mode)});
+                    }
+                    try writer.writeAll("\n");
+                    current = s.next;
+                },
+                .assign_boxy_tag_payload => |s| {
+                    try self.writeTarget(s.target, indent, writer);
+                    try writer.print("boxy_tag_payload source=l{d} desc=", .{@intFromEnum(s.source)});
+                    try writeBoxyDescRef(s.source_desc, writer);
+                    try writer.print(" tag={s} payload={d}", .{ self.store.getString(s.tag_name), s.payload_index });
+                    if (s.target_desc) |target_desc| {
+                        try writer.print(" target_desc=l{d}", .{@intFromEnum(target_desc)});
+                    }
+                    try writer.print(" mode={s}\n", .{@tagName(s.source_mode)});
+                    current = s.next;
+                },
+                .boxy_tag_match => |s| {
+                    try writeIndent(indent, writer);
+                    try writer.print("boxy_tag_match l{d} desc=", .{@intFromEnum(s.source)});
+                    try writeBoxyDescRef(s.source_desc, writer);
+                    try writer.print(" tag={s}\n", .{self.store.getString(s.tag_name)});
+                    try writeIndent(indent, writer);
+                    try writer.writeAll("on_match:\n");
+                    try self.writeChainInner(gpa, s.on_match, indent + 1, writer);
+                    try writeIndent(indent, writer);
+                    try writer.writeAll("on_miss:\n");
+                    try self.writeChainInner(gpa, s.on_miss, indent + 1, writer);
+                    return;
+                },
                 .assign_call_dict => |s| {
                     try self.writeTarget(s.target, indent, writer);
                     try writer.writeAll("call_dict ");
@@ -188,7 +260,12 @@ const Printer = struct {
                     try self.writeLocals(s.args, writer);
                     try writer.writeAll("] hidden=[");
                     try self.writeLocals(s.hidden_args, writer);
-                    try writer.print("] cold={}\n", .{s.is_cold});
+                    try writer.writeAll("]");
+                    if (s.result_desc) |result_desc| {
+                        try writer.writeAll(" result_desc=");
+                        try writeBoxyDescRef(result_desc, writer);
+                    }
+                    try writer.print(" cold={}\n", .{s.is_cold});
                     current = s.next;
                 },
                 .assign_low_level => |s| {
@@ -215,6 +292,10 @@ const Printer = struct {
                 .assign_tag => |s| {
                     try self.writeTarget(s.target, indent, writer);
                     try writer.print("tag v{d} d{d}", .{ s.variant_index, s.discriminant });
+                    if (s.target_desc) |target_desc| {
+                        try writer.writeAll(" desc=");
+                        try writeBoxyDescRef(target_desc, writer);
+                    }
                     if (s.payload) |payload| try writer.print(" (l{d})", .{@intFromEnum(payload)});
                     try writer.writeAll("\n");
                     current = s.next;
@@ -478,6 +559,7 @@ fn writeBoxyDescRef(desc: LIR.BoxyDescRef, writer: *std.Io.Writer) Error!void {
     switch (desc) {
         .static => |id| try writer.print("desc#{d}", .{@intFromEnum(id)}),
         .local => |local| try writer.print("desc=l{d}", .{@intFromEnum(local)}),
+        .runtime => |id| try writer.print("desc@runtime#{d}", .{id}),
     }
 }
 
@@ -550,6 +632,7 @@ test "debug print includes boxy statement surface" {
         .method_slot = 2,
         .args = call_args,
         .hidden_args = hidden_args,
+        .result_desc = .{ .local = desc },
         .is_cold = true,
         .next = ret,
     } });
@@ -560,12 +643,20 @@ test "debug print includes boxy statement surface" {
         .source_mode = .borrow,
         .next = call,
     } });
+    const eq = try store.addCFStmt(.{ .assign_boxy_eq = .{
+        .target = result,
+        .lhs = adapted,
+        .rhs = boxed,
+        .source_desc = .{ .local = desc },
+        .source_mode = .borrow,
+        .next = inspect,
+    } });
     const adapt = try store.addCFStmt(.{ .assign_boxy_adapt = .{
         .target = adapted,
         .source = unboxed,
         .adapter = @enumFromInt(5),
         .source_mode = .move,
-        .next = inspect,
+        .next = eq,
     } });
     const unbox = try store.addCFStmt(.{ .assign_boxy_unbox = .{
         .target = unboxed,
@@ -617,6 +708,7 @@ test "debug print includes boxy statement surface" {
     try std.testing.expect(std.mem.indexOf(u8, printed, "l4:opaque_ptr = boxy_reuse_box source=l3 desc=desc=l1\n") != null);
     try std.testing.expect(std.mem.indexOf(u8, printed, "l5:str = boxy_unbox source=l4 desc=desc=l1 target_layout=str mode=borrow\n") != null);
     try std.testing.expect(std.mem.indexOf(u8, printed, "l6:opaque_ptr = boxy_adapt source=l5 adapter=5 mode=move\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, printed, "l7:u64 = boxy_eq lhs=l6 rhs=l3 desc=desc=l1 mode=borrow\n") != null);
     try std.testing.expect(std.mem.indexOf(u8, printed, "l7:u64 = boxy_inspect source=l6 desc=desc=l1 mode=borrow\n") != null);
-    try std.testing.expect(std.mem.indexOf(u8, printed, "l7:u64 = call_dict dict=l2 slot=2 args=[l6] hidden=[l1] cold=true\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, printed, "l7:u64 = call_dict dict=l2 slot=2 args=[l6] hidden=[l1] result_desc=desc=l1 cold=true\n") != null);
 }

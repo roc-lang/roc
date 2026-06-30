@@ -529,6 +529,7 @@ pub const IteratorDispatchCall = struct {
     dispatcher_arg_index: u32,
     /// Range into `StaticDispatchPlanTable.iter_operand_pool` (transform B).
     args: artifact_serialize.Span = .{},
+    resolution: StaticDispatchResolution = .unresolved_checked_plan,
 
     pub fn argsSlice(self: IteratorDispatchCall, table: *const StaticDispatchPlanTable) []const IteratorDispatchOperand {
         return table.iter_operand_pool[self.args.start .. self.args.start + self.args.len];
@@ -886,21 +887,24 @@ pub const StaticDispatchPlanTable = struct {
                 var next_args = [_]IteratorDispatchOperand{.loop_iterator_state};
                 const next_ar = try pushOperands(IteratorDispatchOperand, &iter_operand_pool, allocator, &next_args);
 
+                const iter_call = IteratorDispatchCall{
+                    .method = try names.internMethodName("iter"),
+                    .dispatcher_ty = try checkedTypeIdForVar(allocator, module, checked_types, module.exprType(iterable_idx)),
+                    .callable_ty = iter_callable_ty,
+                    .dispatcher_arg_index = 0,
+                    .args = iter_ar,
+                };
+                const next_call = IteratorDispatchCall{
+                    .method = try names.internMethodName("next"),
+                    .dispatcher_ty = iterator_ty,
+                    .callable_ty = next_callable_ty,
+                    .dispatcher_arg_index = 0,
+                    .args = next_ar,
+                };
+
                 try iterator_for_plans.append(allocator, .{
-                    .iter = .{
-                        .method = try names.internMethodName("iter"),
-                        .dispatcher_ty = try checkedTypeIdForVar(allocator, module, checked_types, module.exprType(iterable_idx)),
-                        .callable_ty = iter_callable_ty,
-                        .dispatcher_arg_index = 0,
-                        .args = iter_ar,
-                    },
-                    .next = .{
-                        .method = try names.internMethodName("next"),
-                        .dispatcher_ty = iterator_ty,
-                        .callable_ty = next_callable_ty,
-                        .dispatcher_arg_index = 0,
-                        .args = next_ar,
-                    },
+                    .iter = resolveIteratorDispatchCall(names, checked_types, local_method_registry, imported_views, iter_call),
+                    .next = resolveIteratorDispatchCall(names, checked_types, local_method_registry, imported_views, next_call),
                     .iterable = iterable_expr,
                     .item_ty = item_ty,
                     .iterator_ty = iterator_ty,
@@ -1167,6 +1171,21 @@ fn resolveStaticDispatchPlan(
     };
 
     var resolved = plan;
+    resolved.resolution = .{ .resolved_target = target };
+    return resolved;
+}
+
+fn resolveIteratorDispatchCall(
+    names: *canonical.CanonicalNameStore,
+    checked_types: anytype,
+    local_method_registry: *const MethodRegistry,
+    imported_views: anytype,
+    call: IteratorDispatchCall,
+) IteratorDispatchCall {
+    const owner = methodOwnerForCheckedType(checked_types, call.dispatcher_ty) orelse return call;
+    const target = lookupCheckedMethodTarget(names, local_method_registry, imported_views, owner, call.method) orelse return call;
+
+    var resolved = call;
     resolved.resolution = .{ .resolved_target = target };
     return resolved;
 }

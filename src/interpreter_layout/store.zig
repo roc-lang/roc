@@ -1184,20 +1184,21 @@ pub const Store = struct {
     /// Check if a layout contains any refcounted data (directly or transitively).
     /// This is more comprehensive than Layout.isRefcounted() which only checks if
     /// the layout itself is heap-allocated. This function also returns true for
-    /// tuples/records that contain strings, lists, or boxes.
+    /// tuples/records that contain strings, lists, or heap-allocated boxes.
     ///
     /// For struct/tag-union layouts the answer is read from a bit precomputed when
     /// the layout was committed (`StructData.contains_refcounted`), so this is O(1)
     /// and never allocates. Recursive nominals are materialized as box layouts
     /// (placeholders are boxes too), which short-circuit to `true` here, so the
     /// committed struct/tag graph is acyclic and a layout's bit only ever depends
-    /// on already-committed child bits.
+    /// on already-committed child bits. `box_of_zst` is the exception: it uses a
+    /// null pointer value and has no refcount header.
     pub fn layoutContainsRefcounted(self: *const Self, l: Layout) bool {
         return switch (l.tag) {
             .scalar => l.getScalar().tag == .str,
-            .list, .list_of_zst, .box, .box_of_zst, .erased_callable => true,
+            .list, .list_of_zst, .box, .erased_callable => true,
             // Compiler-internal pointers are never refcounted (TRMC holes).
-            .ptr => false,
+            .ptr, .box_of_zst => false,
             .zst => false,
             .struct_ => self.getStructData(l.getStruct().idx).contains_refcounted,
             .tag_union => self.getTagUnionData(l.getTagUnion().idx).contains_refcounted,

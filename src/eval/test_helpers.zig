@@ -2114,10 +2114,11 @@ pub fn lirInterpreterStrWithStats(allocator: Allocator, lowered: *const LoweredP
     var runtime_env = RuntimeHostEnv.init(allocator);
     defer runtime_env.deinit();
 
-    var interp = try Interpreter.init(
+    var interp = try Interpreter.initWithBoxyTables(
         allocator,
         &lowered.view.store,
         &lowered.view.layouts,
+        Interpreter.BoxyTables.fromImageView(&lowered.view),
         runtime_env.get_ops(),
     );
     defer interp.deinit();

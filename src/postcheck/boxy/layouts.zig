@@ -51,6 +51,8 @@ pub const WorkerLayouts = struct {
     worker: Plan.WorkerPlanId,
     args: Plan.Span = .{},
     hidden_descs: Plan.Span = .{},
+    hidden_dicts: Plan.Span = .{},
+    erased_capture_layout: layout.Idx = .zst,
     ret: ?RuntimeLayout = null,
     value: RuntimeLayout,
 };
@@ -235,8 +237,34 @@ const Builder = struct {
             }
             worker_layout.hidden_descs = self.layoutSpanFrom(hidden_start, @intCast(hidden_descs.len));
         }
+        const hidden_dicts = self.program.hiddenDictionaryParamSlice(worker.hidden_dicts);
+        if (hidden_dicts.len != 0) {
+            const hidden_start = self.layoutValueStart(&self.worker_layout_values);
+            for (hidden_dicts) |_| {
+                try self.worker_layout_values.append(self.allocator, .{ .concrete = .opaque_ptr });
+            }
+            worker_layout.hidden_dicts = self.layoutSpanFrom(hidden_start, @intCast(hidden_dicts.len));
+        }
+        worker_layout.erased_capture_layout = try self.erasedCaptureLayout(worker.erased_captures);
 
         return worker_layout;
+    }
+
+    fn erasedCaptureLayout(self: *Builder, span: Plan.Span) Allocator.Error!layout.Idx {
+        const captures = self.program.erasedCaptureSlice(span);
+        if (captures.len == 0) return .zst;
+
+        const fields = try self.allocator.alloc(layout.StructField, captures.len);
+        defer self.allocator.free(fields);
+        for (captures, fields, 0..) |capture, *field, index| {
+            const field_layout: layout.Idx = switch (capture.kind) {
+                .captured_value => (try self.runtimeLayoutForRep(.worker, capture.rep)).layoutIdx(),
+                .hidden_desc => .opaque_ptr,
+                .hidden_dict => .opaque_ptr,
+            };
+            field.* = .{ .index = @intCast(index), .layout = field_layout };
+        }
+        return try self.store.putStructFields(fields);
     }
 
     fn appendRoot(self: *Builder, root: Plan.RootPlan) Allocator.Error!void {
@@ -422,7 +450,75 @@ const Builder = struct {
     fn descriptorPayloadLayout(self: *Builder, rep_id: Plan.TypeRepId) Allocator.Error!?layout.Idx {
         const rep = self.program.representations.items[@intFromEnum(rep_id)];
         if (rep.descriptor == null) return null;
+        switch (rep.kind) {
+            .alias => return try self.backingDescriptorPayloadLayout(self.requiredSingleChild(rep_id, .alias_backing).rep),
+            .nominal => |kind| switch (kind) {
+                .transparent => if (rep.declared_fields.len == 0) {
+                    return try self.backingDescriptorPayloadLayout(self.requiredSingleChild(rep_id, .nominal_backing).rep);
+                },
+                .opaque_nominal, .builtin_other => {},
+            },
+            else => {},
+        }
+        if (rep.kind == .dynamic and rep.tag_variants.len != 0) {
+            return try self.tagUnionPayloadLayout(rep_id);
+        }
+        if (rep.kind == .dynamic and repHasRecordFields(self.program, rep)) {
+            return try self.recordPayloadLayout(rep_id);
+        }
         return (try self.runtimeLayoutForRep(.worker, rep_id)).layoutIdx();
+    }
+
+    fn backingDescriptorPayloadLayout(self: *Builder, rep_id: Plan.TypeRepId) Allocator.Error!layout.Idx {
+        return (try self.descriptorPayloadLayout(rep_id)) orelse (try self.runtimeLayoutForRep(.worker, rep_id)).layoutIdx();
+    }
+
+    fn recordPayloadLayout(self: *Builder, rep_id: Plan.TypeRepId) Allocator.Error!layout.Idx {
+        var graph = layout.Graph{};
+        defer graph.deinit(self.allocator);
+
+        const local_nodes = try self.allocator.alloc(?layout.GraphNodeId, self.program.representations.items.len);
+        defer self.allocator.free(local_nodes);
+        @memset(local_nodes, null);
+
+        var graph_builder = GraphBuilder{
+            .parent = self,
+            .mode = .worker,
+            .descriptor_payload = true,
+            .graph = &graph,
+            .local_nodes = local_nodes,
+        };
+        const root = try graph.reserveNode(self.allocator);
+        local_nodes[@intFromEnum(rep_id)] = root;
+        graph.setNode(root, .{ .struct_ = try graph_builder.recordFields(self.program.representations.items[@intFromEnum(rep_id)]) });
+
+        var commit = try self.store.commitGraph(&graph, .{ .local = root });
+        defer commit.deinit(self.allocator);
+        return commit.value_layouts[@intFromEnum(root)];
+    }
+
+    fn tagUnionPayloadLayout(self: *Builder, rep_id: Plan.TypeRepId) Allocator.Error!layout.Idx {
+        var graph = layout.Graph{};
+        defer graph.deinit(self.allocator);
+
+        const local_nodes = try self.allocator.alloc(?layout.GraphNodeId, self.program.representations.items.len);
+        defer self.allocator.free(local_nodes);
+        @memset(local_nodes, null);
+
+        var graph_builder = GraphBuilder{
+            .parent = self,
+            .mode = .worker,
+            .descriptor_payload = true,
+            .graph = &graph,
+            .local_nodes = local_nodes,
+        };
+        const root = try graph.reserveNode(self.allocator);
+        local_nodes[@intFromEnum(rep_id)] = root;
+        graph.setNode(root, .{ .tag_union = try graph_builder.tagPayloads(self.program.representations.items[@intFromEnum(rep_id)], .descriptor_payload) });
+
+        var commit = try self.store.commitGraph(&graph, .{ .local = root });
+        defer commit.deinit(self.allocator);
+        return commit.value_layouts[@intFromEnum(root)];
     }
 
     fn dynamicStorageLayout(self: *Builder) Allocator.Error!layout.Idx {
@@ -448,19 +544,50 @@ const Builder = struct {
 const GraphBuilder = struct {
     parent: *Builder,
     mode: LayoutMode,
+    descriptor_payload: bool = false,
     graph: *layout.Graph,
     local_nodes: []?layout.GraphNodeId,
 
     fn inputForRep(self: *GraphBuilder, rep_id: Plan.TypeRepId) Allocator.Error!layout.GraphInput {
         const index = @intFromEnum(rep_id);
+        if (self.local_nodes[index]) |node| return .{ .local = node };
+
+        const rep = self.parent.program.representations.items[index];
+        if (self.descriptor_payload) {
+            switch (rep.kind) {
+                .alias => return try self.inputForRep(self.parent.requiredSingleChild(rep_id, .alias_backing).rep),
+                .nominal => |kind| switch (kind) {
+                    .transparent => {
+                        if (rep.declared_fields.len == 0) {
+                            return try self.inputForRep(self.parent.requiredSingleChild(rep_id, .nominal_backing).rep);
+                        }
+                    },
+                    .opaque_nominal, .builtin_other => {},
+                },
+                .dynamic => if (rep.descriptor != null) {
+                    if (rep.tag_variants.len != 0) {
+                        const node = try self.graph.reserveNode(self.parent.allocator);
+                        self.local_nodes[index] = node;
+                        self.graph.setNode(node, .{ .tag_union = try self.tagPayloads(rep, .descriptor_payload) });
+                        return .{ .local = node };
+                    }
+                    if (repHasRecordFields(self.parent.program, rep)) {
+                        const node = try self.graph.reserveNode(self.parent.allocator);
+                        self.local_nodes[index] = node;
+                        self.graph.setNode(node, .{ .struct_ = try self.recordFields(rep) });
+                        return .{ .local = node };
+                    }
+                },
+                else => {},
+            }
+        }
+
         if (self.parent.caches[index].get(self.mode)) |runtime| return .{ .canonical = runtime.layoutIdx() };
         if (try self.parent.immediateRuntimeLayout(self.mode, rep_id)) |runtime| {
             self.parent.caches[index].set(self.mode, runtime);
             return .{ .canonical = runtime.layoutIdx() };
         }
-        if (self.local_nodes[index]) |node| return .{ .local = node };
 
-        const rep = self.parent.program.representations.items[index];
         switch (rep.kind) {
             .alias => return try self.inputForRep(self.parent.requiredSingleChild(rep_id, .alias_backing).rep),
             .nominal => |kind| switch (kind) {
@@ -492,7 +619,7 @@ const GraphBuilder = struct {
             .tuple => .{ .struct_ = try self.tupleFields(rep) },
             .list => .{ .list = try self.inputForRep(self.parent.requiredSingleChild(rep_id, .list_elem).rep) },
             .box => .{ .box = try self.inputForRep(self.parent.requiredSingleChild(rep_id, .box_payload).rep) },
-            .tag_union => .{ .tag_union = try self.tagPayloads(rep) },
+            .tag_union => .{ .tag_union = try self.tagPayloads(rep, .concrete_runtime) },
             .nominal => |kind| switch (kind) {
                 .transparent => .{ .nominal = try self.inputForRep(self.parent.requiredSingleChild(rep_id, .nominal_backing).rep) },
                 .opaque_nominal, .builtin_other => boxyLayoutInvariant("opaque or unsupported builtin nominal reached graph layout"),
@@ -570,9 +697,13 @@ const GraphBuilder = struct {
         return try self.graph.appendFields(self.parent.allocator, fields.items);
     }
 
-    fn tagPayloads(self: *GraphBuilder, rep: Plan.TypeRepresentation) Allocator.Error!layout.GraphRefSpan {
+    const TagPayloadMode = enum {
+        concrete_runtime,
+        descriptor_payload,
+    };
+
+    fn tagPayloads(self: *GraphBuilder, rep: Plan.TypeRepresentation, mode: TagPayloadMode) Allocator.Error!layout.GraphRefSpan {
         const children = self.parent.program.childSlice(rep.children);
-        try self.requireClosedTagUnion(children);
 
         var refs = std.ArrayList(layout.GraphInput).empty;
         defer refs.deinit(self.parent.allocator);
@@ -594,18 +725,25 @@ const GraphBuilder = struct {
             }
             try refs.append(self.parent.allocator, try self.payloadInput(payloads.items));
         }
+        if (self.tagExtensionPayload(children)) |ext_rep| {
+            _ = ext_rep;
+            switch (mode) {
+                .concrete_runtime => boxyLayoutInvariant("open tag-union layout reached concrete boxy layout planning"),
+                .descriptor_payload => try refs.append(self.parent.allocator, .{ .canonical = try self.parent.dynamicStorageLayout() }),
+            }
+        }
 
         return try self.graph.appendRefs(self.parent.allocator, refs.items);
     }
 
-    fn requireClosedTagUnion(self: *GraphBuilder, children: []const Plan.RepChild) Allocator.Error!void {
+    fn tagExtensionPayload(self: *GraphBuilder, children: []const Plan.RepChild) ?Plan.TypeRepId {
         for (children) |child| {
             if (child.role != .tag_ext) continue;
             const ext_rep = self.parent.program.representations.items[@intFromEnum(child.rep)];
-            if (ext_rep.kind != .empty_tag_union) {
-                boxyLayoutInvariant("open tag-union layout reached boxy layout planning without an explicit closed row");
-            }
+            if (ext_rep.kind == .empty_tag_union) return null;
+            return child.rep;
         }
+        return null;
     }
 
     fn payloadInput(self: *GraphBuilder, payloads: []const Plan.TypeRepId) Allocator.Error!layout.GraphInput {
@@ -644,6 +782,16 @@ fn primitiveLayout(primitive: checked.CheckedPrimitive) layout.Idx {
         .f64 => .f64,
         .dec => .dec,
     };
+}
+
+fn repHasRecordFields(program: *const Plan.ProgramPlan, rep: Plan.TypeRepresentation) bool {
+    for (program.childSlice(rep.children)) |child| {
+        switch (child.role) {
+            .record_field => return true,
+            else => {},
+        }
+    }
+    return false;
 }
 
 fn sameChildRole(a: Plan.ChildRole, b: Plan.ChildRole) bool {
@@ -782,6 +930,48 @@ test "boxy layout planner preserves zero-payload tag variants" {
     try std.testing.expectEqual(@as(usize, 2), info.variants.len);
     try std.testing.expectEqual(layout.Idx.zst, info.variants.get(0).payload_layout);
     try std.testing.expectEqual(layout.Idx.u64, info.variants.get(1).payload_layout);
+}
+
+test "boxy layout planner gives open tag descriptors a row-extension payload layout" {
+    const gpa = std.testing.allocator;
+
+    const tag_exit: TagLabelId = @enumFromInt(1);
+    const type_pool = [_]checked.CheckedTypeId{@enumFromInt(0)};
+    const tags = [_]checked.CheckedTag{
+        .{ .name = tag_exit, .args_start = 0, .args_len = 1 },
+    };
+    const payloads = [_]checked.StoredCheckedTypePayload{
+        .{ .nominal = builtinNominal(.i64, @enumFromInt(0), .{}) },
+        .{ .flex = .{} },
+        .{ .tag_union = .{ .tags = .{ .start = 0, .len = tags.len }, .ext = @enumFromInt(1) } },
+    };
+    const view = checked.CheckedTypeStoreView{
+        .stored_payloads = &payloads,
+        .type_id_pool = &type_pool,
+        .tag_pool = &tags,
+    };
+
+    var program = try Plan.analyzeCheckedTypes(gpa, view, &.{@as(checked.CheckedTypeId, @enumFromInt(2))}, .{});
+    defer program.deinit();
+
+    var store = try layout.Store.init(gpa, .u64);
+    defer store.deinit();
+
+    var layouts = try build(gpa, &program, &store, .{});
+    defer layouts.deinit();
+
+    const rep_layouts = layouts.rep_layouts[@intFromEnum(program.root_reps.items[0])];
+    try std.testing.expectEqual(std.meta.Tag(RuntimeLayout).dynamic_box, std.meta.activeTag(rep_layouts.worker));
+    try std.testing.expectEqual(layout.LayoutTag.box_of_zst, store.getLayout(rep_layouts.worker.layoutIdx()).tag);
+
+    const payload_layout = rep_layouts.descriptor_payload_layout orelse return error.TestExpectedEqual;
+    const tag_layout = store.getLayout(payload_layout);
+    try std.testing.expectEqual(layout.LayoutTag.tag_union, tag_layout.tag);
+
+    const info = store.getTagUnionInfo(tag_layout);
+    try std.testing.expectEqual(@as(usize, 2), info.variants.len);
+    try std.testing.expectEqual(layout.Idx.i64, info.variants.get(0).payload_layout);
+    try std.testing.expectEqual(layout.LayoutTag.box_of_zst, store.getLayout(info.variants.get(1).payload_layout).tag);
 }
 
 test "boxy layout planner records private worker function arg and return layouts" {

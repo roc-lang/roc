@@ -95,6 +95,20 @@ pub const BoxyAdaptStep = LIR.BoxyAdaptStep;
 pub const BoxyPayloadOp = LIR.BoxyPayloadOp;
 pub const BoxyPayloadStep = LIR.BoxyPayloadStep;
 
+/// Runtime metadata for one tag in a boxy tag-union descriptor.
+pub const BoxyTagVariant = struct {
+    name: base.StringLiteral.Idx,
+    discriminant: u16,
+    payload_layout: layout.Idx,
+    payload_descs: BoxySpan = .{},
+};
+
+/// Descriptor metadata for one dynamic payload in a boxy tag variant.
+pub const BoxyTagPayloadDesc = struct {
+    payload_index: u32,
+    desc: BoxyDescRef,
+};
+
 /// Purpose of one explicit boxy representation adapter.
 pub const BoxyAdapterKind = enum {
     host_to_boxy,
@@ -124,6 +138,8 @@ pub const BoxyTypeDesc = struct {
     payload_layout: layout.Idx,
     contains_refcounted: bool,
     nested_descs: BoxySpan = .{},
+    tag_variants: BoxySpan = .{},
+    tag_ext_desc: ?BoxyDescRef = null,
     copy_plan: BoxySpan = .{},
     drop_plan: BoxySpan = .{},
     structural_eq: ?LIR.LirProcSpecId = null,
@@ -139,12 +155,20 @@ pub const BoxyMethodAdapter = struct {
     arg_descs: BoxySpan = .{},
     ret_desc: ?BoxyDescRef = null,
     nested_dicts: BoxySpan = .{},
+    hidden_desc_sources: BoxySpan = .{},
+};
+
+pub const BoxyMethodHiddenDescSource = union(enum) {
+    slot: u32,
+    call: u32,
 };
 
 /// One callable slot in a boxy dictionary.
 pub const BoxyMethodSlot = struct {
     method: names.MethodNameId,
     proc: LIR.LirProcSpecId,
+    hidden_descs: BoxySpan = .{},
+    nested_dicts: BoxySpan = .{},
     adapter: BoxyMethodAdapter = .{},
 };
 
@@ -206,10 +230,13 @@ pub const Result = struct {
     boxy_adapters: std.ArrayList(BoxyAdapter),
     boxy_desc_refs: std.ArrayList(BoxyDescRef),
     boxy_dict_refs: std.ArrayList(BoxyDictRef),
+    boxy_tag_variants: std.ArrayList(BoxyTagVariant),
+    boxy_tag_payload_descs: std.ArrayList(BoxyTagPayloadDesc),
     boxy_adapt_steps: std.ArrayList(BoxyAdaptStep),
     boxy_payload_steps: std.ArrayList(BoxyPayloadStep),
     boxy_method_slots: std.ArrayList(BoxyMethodSlot),
     boxy_method_arg_layouts: std.ArrayList(layout.Idx),
+    boxy_method_hidden_desc_sources: std.ArrayList(BoxyMethodHiddenDescSource),
     const_plans: std.ArrayList(ConstPlan),
     const_roots: std.ArrayList(ConstRootPlan),
     comptime_sites: std.ArrayList(LIR.ComptimeSite),
@@ -228,10 +255,13 @@ pub const Result = struct {
             .boxy_adapters = .empty,
             .boxy_desc_refs = .empty,
             .boxy_dict_refs = .empty,
+            .boxy_tag_variants = .empty,
+            .boxy_tag_payload_descs = .empty,
             .boxy_adapt_steps = .empty,
             .boxy_payload_steps = .empty,
             .boxy_method_slots = .empty,
             .boxy_method_arg_layouts = .empty,
+            .boxy_method_hidden_desc_sources = .empty,
             .const_plans = .empty,
             .const_roots = .empty,
             .comptime_sites = .empty,
@@ -249,10 +279,13 @@ pub const Result = struct {
         self.const_plans.deinit(allocator);
         deinitFnSets(allocator, self.fn_sets.items);
         deinitErasedFns(allocator, self.erased_fns.items);
+        self.boxy_method_hidden_desc_sources.deinit(allocator);
         self.boxy_method_arg_layouts.deinit(allocator);
         self.boxy_method_slots.deinit(allocator);
         self.boxy_payload_steps.deinit(allocator);
         self.boxy_adapt_steps.deinit(allocator);
+        self.boxy_tag_payload_descs.deinit(allocator);
+        self.boxy_tag_variants.deinit(allocator);
         self.boxy_dict_refs.deinit(allocator);
         self.boxy_desc_refs.deinit(allocator);
         self.boxy_adapters.deinit(allocator);
@@ -358,6 +391,7 @@ test "boxy side tables initialize empty and use flat pools" {
     try std.testing.expectEqual(@as(usize, 0), result.boxy_payload_steps.items.len);
     try std.testing.expectEqual(@as(usize, 0), result.boxy_method_slots.items.len);
     try std.testing.expectEqual(@as(usize, 0), result.boxy_method_arg_layouts.items.len);
+    try std.testing.expectEqual(@as(usize, 0), result.boxy_method_hidden_desc_sources.items.len);
 
     const desc_refs_start = result.boxy_desc_refs.items.len;
     try result.boxy_desc_refs.append(allocator, .{ .static = @enumFromInt(0) });
@@ -397,6 +431,10 @@ test "boxy side tables initialize empty and use flat pools" {
     try result.boxy_dict_refs.append(allocator, .{ .static = @enumFromInt(0) });
     const nested_dicts = BoxySpan{ .start = @intCast(nested_dicts_start), .len = 1 };
 
+    const hidden_desc_sources_start = result.boxy_method_hidden_desc_sources.items.len;
+    try result.boxy_method_hidden_desc_sources.append(allocator, .{ .slot = 0 });
+    const hidden_desc_sources = BoxySpan{ .start = @intCast(hidden_desc_sources_start), .len = 1 };
+
     const method_slots_start = result.boxy_method_slots.items.len;
     try result.boxy_method_slots.append(allocator, .{
         .method = @enumFromInt(0),
@@ -405,6 +443,7 @@ test "boxy side tables initialize empty and use flat pools" {
             .arg_layouts = arg_layouts,
             .arg_descs = arg_descs,
             .nested_dicts = nested_dicts,
+            .hidden_desc_sources = hidden_desc_sources,
         },
     });
     const method_slots = BoxySpan{ .start = @intCast(method_slots_start), .len = 1 };
@@ -448,6 +487,7 @@ test "boxy side tables initialize empty and use flat pools" {
     try std.testing.expectEqual(@as(usize, 2), result.boxy_payload_steps.items.len);
     try std.testing.expectEqual(@as(usize, 1), result.boxy_method_slots.items.len);
     try std.testing.expectEqual(@as(usize, 1), result.boxy_method_arg_layouts.items.len);
+    try std.testing.expectEqual(@as(usize, 1), result.boxy_method_hidden_desc_sources.items.len);
 }
 
 test "program declarations are referenced" {

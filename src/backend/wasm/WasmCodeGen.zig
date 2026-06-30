@@ -3281,6 +3281,9 @@ fn collectProcLocals(
             .assign_call_erased => |assign| {
                 try recordProcLocal(locals, assign.target);
                 try recordProcLocal(locals, assign.closure);
+                if (assign.result_desc) |result_desc| {
+                    if (result_desc.localOrNull()) |local| try recordProcLocal(locals, local);
+                }
                 for (self.store.getLocalSpan(assign.args)) |arg| try recordProcLocal(locals, arg);
                 try work.append(wa, assign.next);
             },
@@ -3292,6 +3295,7 @@ fn collectProcLocals(
             .assign_boxy_desc_ref => |assign| {
                 try recordProcLocal(locals, assign.target);
                 if (assign.desc.localOrNull()) |local| try recordProcLocal(locals, local);
+                for (self.store.getLocalSpan(assign.captures)) |local| try recordProcLocal(locals, local);
                 try work.append(wa, assign.next);
             },
             .assign_boxy_dict_ref => |assign| {
@@ -3317,6 +3321,7 @@ fn collectProcLocals(
                 try recordProcLocal(locals, assign.target);
                 try recordProcLocal(locals, assign.source);
                 if (assign.source_desc.localOrNull()) |local| try recordProcLocal(locals, local);
+                if (assign.target_desc) |desc| if (desc.localOrNull()) |local| try recordProcLocal(locals, local);
                 try work.append(wa, assign.next);
             },
             .assign_boxy_adapt => |assign| {
@@ -3330,9 +3335,41 @@ fn collectProcLocals(
                 if (assign.source_desc.localOrNull()) |local| try recordProcLocal(locals, local);
                 try work.append(wa, assign.next);
             },
+            .assign_boxy_eq => |assign| {
+                try recordProcLocal(locals, assign.target);
+                try recordProcLocal(locals, assign.lhs);
+                try recordProcLocal(locals, assign.rhs);
+                if (assign.source_desc.localOrNull()) |local| try recordProcLocal(locals, local);
+                try work.append(wa, assign.next);
+            },
+            .assign_boxy_tag => |assign| {
+                try recordProcLocal(locals, assign.target);
+                if (assign.target_desc.localOrNull()) |local| try recordProcLocal(locals, local);
+                if (assign.payload) |payload| try recordProcLocal(locals, payload);
+                if (assign.payload_desc) |desc| {
+                    if (desc.localOrNull()) |local| try recordProcLocal(locals, local);
+                }
+                try work.append(wa, assign.next);
+            },
+            .assign_boxy_tag_payload => |assign| {
+                try recordProcLocal(locals, assign.target);
+                if (assign.target_desc) |target_desc| try recordProcLocal(locals, target_desc);
+                try recordProcLocal(locals, assign.source);
+                if (assign.source_desc.localOrNull()) |local| try recordProcLocal(locals, local);
+                try work.append(wa, assign.next);
+            },
+            .boxy_tag_match => |tag_match| {
+                try recordProcLocal(locals, tag_match.source);
+                if (tag_match.source_desc.localOrNull()) |local| try recordProcLocal(locals, local);
+                try work.append(wa, tag_match.on_match);
+                try work.append(wa, tag_match.on_miss);
+            },
             .assign_call_dict => |assign| {
                 try recordProcLocal(locals, assign.target);
                 if (assign.dict.localOrNull()) |local| try recordProcLocal(locals, local);
+                if (assign.result_desc) |result_desc| {
+                    if (result_desc.localOrNull()) |local| try recordProcLocal(locals, local);
+                }
                 for (self.store.getLocalSpan(assign.args)) |arg| try recordProcLocal(locals, arg);
                 for (self.store.getLocalSpan(assign.hidden_args)) |arg| try recordProcLocal(locals, arg);
                 try work.append(wa, assign.next);
@@ -7447,6 +7484,10 @@ fn generateCFStmtNode(self: *Self, work: *std.ArrayList(StmtWork), wa: Allocator
         .assign_boxy_unbox,
         .assign_boxy_adapt,
         .assign_boxy_inspect,
+        .assign_boxy_eq,
+        .assign_boxy_tag,
+        .assign_boxy_tag_payload,
+        .boxy_tag_match,
         .assign_call_dict,
         => std.debug.panic(
             "Wasm/codegen invariant violated: boxy LIR statement reached wasm codegen before boxy codegen is implemented",

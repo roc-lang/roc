@@ -514,6 +514,7 @@ pub fn decrefDataPtr(
     }
 
     const unmasked_ptr = data_ptr & ~tag_mask;
+    if (unmasked_ptr == 0) return;
 
     // Verify alignment before @ptrFromInt
     if (comptime builtin.mode == .Debug) {
@@ -569,6 +570,7 @@ pub fn increfDataPtr(
     // Strip tag bits from the pointer - recursive tag unions may store tag IDs in low bits
     const tag_mask: usize = if (@sizeOf(usize) == 8) 0b111 else 0b11;
     const masked_ptr = ptr & ~tag_mask;
+    if (masked_ptr == 0) return;
     const rc_addr = masked_ptr - @sizeOf(usize);
 
     // Verify alignment before @ptrFromInt
@@ -619,6 +621,7 @@ pub fn freeDataPtrC(
     const ptr = @intFromPtr(bytes);
     const tag_mask: usize = if (@sizeOf(usize) == 8) 0b111 else 0b11;
     const masked_ptr = ptr & ~tag_mask;
+    if (masked_ptr == 0) return;
 
     const isizes: [*]isize = @as([*]isize, @ptrFromInt(masked_ptr));
 
@@ -761,6 +764,7 @@ pub fn isUnique(
     const ptr = @intFromPtr(bytes);
     const tag_mask: usize = if (@sizeOf(usize) == 8) 0b111 else 0b11;
     const masked_ptr = ptr & ~tag_mask;
+    if (masked_ptr == 0) return true;
 
     const isizes: [*]isize = @as([*]isize, @ptrFromInt(masked_ptr));
 
