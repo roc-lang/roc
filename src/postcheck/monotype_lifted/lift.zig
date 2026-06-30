@@ -212,10 +212,15 @@ const MonoFnBody = struct {
     body: Mono.FnBody,
 };
 
-const CaptureIdentity = union(enum) {
+const CaptureIdentityKind = union(enum) {
     binder: checked.PatternBinderId,
     generated: u32,
     local: Ast.LocalId,
+};
+
+const CaptureIdentity = struct {
+    kind: CaptureIdentityKind,
+    ty_digest: MonoType.MonoTypeDigest,
 };
 
 const CaptureOperand = struct {
@@ -750,7 +755,7 @@ const Lifter = struct {
                 .data = .{ .local = capture.local },
             });
             operands[index] = .{
-                .identity = captureIdentityForLocal(self.output, capture.local),
+                .identity = captureIdentityForTypedLocal(self.output, capture),
                 .value = exprs[index],
             };
         }
@@ -785,7 +790,7 @@ const Lifter = struct {
         const operands = try self.allocator.alloc(CaptureOperand, captures.len);
         defer self.allocator.free(operands);
         for (captures, 0..) |capture, index| {
-            if (explicitFnDefCaptureValue(self.output, explicit, capture.local)) |value| {
+            if (explicitFnDefCaptureValue(self.output, explicit, capture)) |value| {
                 exprs[index] = value;
             } else {
                 exprs[index] = try self.output.addExpr(.{
@@ -794,7 +799,7 @@ const Lifter = struct {
                 });
             }
             operands[index] = .{
-                .identity = captureIdentityForLocal(self.output, capture.local),
+                .identity = captureIdentityForTypedLocal(self.output, capture),
                 .value = exprs[index],
             };
         }
@@ -941,7 +946,7 @@ fn captureOperandsFromPositionals(
     errdefer allocator.free(operands);
     for (captures, exprs, 0..) |capture, expr, index| {
         operands[index] = .{
-            .identity = captureIdentityForLocal(program, capture.local),
+            .identity = captureIdentityForTypedLocal(program, capture),
             .value = expr,
         };
     }
@@ -963,7 +968,7 @@ fn finalizeCaptureExprSpanFromOperands(
     defer allocator.free(exprs);
 
     for (captures, 0..) |capture, capture_index| {
-        const identity = captureIdentityForLocal(program, capture.local);
+        const identity = captureIdentityForTypedLocal(program, capture);
         const operand = findCaptureOperand(operands, identity) orelse
             Common.invariant("function reference missing operand for finalized capture slot");
         const operand_ty = program.exprs.items[@intFromEnum(operand.value)].ty;
@@ -988,9 +993,9 @@ fn assertUniqueOperandIdentities(operands: []const CaptureOperand) void {
 
 fn assertUniqueCaptureIdentities(program: *const Ast.Program, captures: []const Ast.TypedLocal) void {
     for (captures, 0..) |capture, index| {
-        const identity = captureIdentityForLocal(program, capture.local);
+        const identity = captureIdentityForTypedLocal(program, capture);
         for (captures[index + 1 ..]) |other| {
-            if (captureIdentityEql(identity, captureIdentityForLocal(program, other.local))) {
+            if (captureIdentityEql(identity, captureIdentityForTypedLocal(program, other))) {
                 Common.invariant("lifted function declared duplicate capture identities");
             }
         }
@@ -1004,28 +1009,51 @@ fn findCaptureOperand(operands: []const CaptureOperand, identity: CaptureIdentit
     return null;
 }
 
-fn captureIdentityForLocal(program: *const Ast.Program, local: Ast.LocalId) CaptureIdentity {
+fn captureIdentityForTypedLocal(program: *const Ast.Program, capture: Ast.TypedLocal) CaptureIdentity {
+    return captureIdentityForLocalAtType(program, capture.local, capture.ty);
+}
+
+fn captureIdentityForExplicitCapture(program: *const Ast.Program, capture: Ast.FnDefCapture) CaptureIdentity {
+    const value_ty = program.exprs.items[@intFromEnum(capture.value)].ty;
+    return captureIdentityForLocalAtType(program, capture.local, value_ty);
+}
+
+fn captureIdentityForLocalAtType(program: *const Ast.Program, local: Ast.LocalId, ty: MonoType.TypeId) CaptureIdentity {
     const local_data = program.locals.items[@intFromEnum(local)];
-    if (local_data.binder) |binder| return .{ .binder = binder };
-    if (local_data.capture_id) |capture_id| return .{ .generated = capture_id };
-    return .{ .local = local };
+    if (local_data.binder) |binder| return .{
+        .kind = .{ .binder = binder },
+        .ty_digest = monotypeDigest(program, ty),
+    };
+    if (local_data.capture_id) |capture_id| return .{
+        .kind = .{ .generated = capture_id },
+        .ty_digest = monotypeDigest(program, ty),
+    };
+    return .{
+        .kind = .{ .local = local },
+        .ty_digest = monotypeDigest(program, ty),
+    };
 }
 
 fn captureIdentityEql(left: CaptureIdentity, right: CaptureIdentity) bool {
-    return switch (left) {
-        .binder => |left_binder| switch (right) {
+    if (!std.mem.eql(u8, left.ty_digest.bytes[0..], right.ty_digest.bytes[0..])) return false;
+    return switch (left.kind) {
+        .binder => |left_binder| switch (right.kind) {
             .binder => |right_binder| left_binder == right_binder,
             else => false,
         },
-        .generated => |left_capture| switch (right) {
+        .generated => |left_capture| switch (right.kind) {
             .generated => |right_capture| left_capture == right_capture,
             else => false,
         },
-        .local => |left_local| switch (right) {
+        .local => |left_local| switch (right.kind) {
             .local => |right_local| left_local == right_local,
             else => false,
         },
     };
+}
+
+fn monotypeDigest(program: *const Ast.Program, ty: MonoType.TypeId) MonoType.MonoTypeDigest {
+    return program.types.typeDigest(&program.names, ty);
 }
 
 fn solveCaptureFixpoint(
@@ -1124,26 +1152,14 @@ const BoundSet = struct {
     }
 };
 
-fn explicitFnDefCaptureValue(program: *const Ast.Program, captures: []const Ast.FnDefCapture, local: Ast.LocalId) ?Ast.ExprId {
+fn explicitFnDefCaptureValue(program: *const Ast.Program, captures: []const Ast.FnDefCapture, required: Ast.TypedLocal) ?Ast.ExprId {
+    const required_identity = captureIdentityForTypedLocal(program, required);
     for (captures) |capture| {
-        if (fnDefCaptureLocalMatches(program, local, capture.local)) {
+        if (captureIdentityEql(required_identity, captureIdentityForExplicitCapture(program, capture))) {
             return capture.value;
         }
     }
     return null;
-}
-
-fn fnDefCaptureLocalMatches(program: *const Ast.Program, required: Ast.LocalId, explicit: Ast.LocalId) bool {
-    if (required == explicit) return true;
-
-    const required_local = program.locals.items[@intFromEnum(required)];
-    const explicit_local = program.locals.items[@intFromEnum(explicit)];
-
-    if (required_local.symbol == explicit_local.symbol) return true;
-    if (required_local.binder != null and explicit_local.binder != null and required_local.binder.? == explicit_local.binder.?) return true;
-    if (required_local.capture_id != null and explicit_local.capture_id != null and required_local.capture_id.? == explicit_local.capture_id.?) return true;
-
-    return false;
 }
 
 const CaptureSet = struct {
@@ -1370,7 +1386,8 @@ const CaptureSet = struct {
         const raw = @intFromEnum(fn_id);
         if (raw >= self.fn_captures.len) Common.invariant("capture collection referenced a function without a solved capture set");
         for (self.fn_captures[raw].items) |capture| {
-            if (explicitFnDefCaptureValue(self.program, explicit, capture.local) != null) continue;
+            const explicit_value = explicitFnDefCaptureValue(self.program, explicit, capture);
+            if (explicit_value != null) continue;
             try self.addIfFree(capture.local, caller_bound);
         }
     }
