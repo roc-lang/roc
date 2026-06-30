@@ -1734,7 +1734,7 @@ fn printHelp() void {
         \\
         \\TIMING:
         \\  Every test is instrumented with per-phase monotonic timing (std.time.Timer):
-        \\    parse    - builtin loading + source parsing
+        \\    parse    - builtin view setup + source parsing
         \\    can      - canonicalization (CIR generation)
         \\    check    - type checking / constraint solving
         \\    interp   - interpreter evaluation
