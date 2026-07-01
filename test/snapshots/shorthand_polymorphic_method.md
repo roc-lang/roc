@@ -5,8 +5,6 @@ type=file
 ~~~
 # SOURCE
 ~~~roc
-module [main]
-
 FooBar := {}.{
     myfunc : List(a) -> U64
     myfunc = |list| list.len()
@@ -21,26 +19,11 @@ main = {
 }
 ~~~
 # EXPECTED
-MODULE HEADER DEPRECATED - shorthand_polymorphic_method.md:1:1:1:14
+NIL
 # PROBLEMS
-
-┌──────────────────────────┐
-│ MODULE HEADER DEPRECATED ├─ The `module` header is deprecated. ─────────────┐
-└┬─────────────────────────┘                                                  │
- │                                                                            │
- │  module [main]                                                             │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾‾                                                             │
- └─────────────────────────────────────── shorthand_polymorphic_method.md:1:1 ┘
-
-    Type modules (headerless files with a top-level type matching the filename)
-    are now the preferred way to define modules.
-
-    Remove the `module` header and ensure your file defines a type that matches
-    the filename.
-
+NIL
 # TOKENS
 ~~~zig
-KwModule,OpenSquare,LowerIdent,CloseSquare,
 UpperIdent,OpColonEqual,OpenCurly,CloseCurly,Dot,OpenCurly,
 LowerIdent,OpColon,UpperIdent,NoSpaceOpenRound,LowerIdent,CloseRound,OpArrow,UpperIdent,
 LowerIdent,OpAssign,OpBar,LowerIdent,OpBar,LowerIdent,NoSpaceDotLowerIdent,NoSpaceOpenRound,CloseRound,
@@ -56,10 +39,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(module
-		(exposes
-			(exposed-lower-ident
-				(text "main"))))
+	(type-module)
 	(statements
 		(s-type-decl
 			(header (name "FooBar")
@@ -113,8 +93,6 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-module [main]
-
 FooBar := {}.{
 	myfunc : List(a) -> U64
 	myfunc = |list| list.len()
@@ -136,7 +114,7 @@ main = {
 		(e-lambda
 			(args
 				(p-assign (ident "list")))
-			(e-dispatch-call (method "len") (constraint-fn-var 65)
+			(e-dispatch-call (method "len") (constraint-fn-var 64)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "list"))))
@@ -155,7 +133,7 @@ main = {
 		(e-block
 			(s-let
 				(p-assign (ident "int_list"))
-				(e-call (constraint-fn-var 190)
+				(e-call (constraint-fn-var 189)
 					(e-lookup-local
 						(p-assign (ident "shorthand")))
 					(e-list
@@ -165,7 +143,7 @@ main = {
 							(e-num (value "3"))))))
 			(s-let
 				(p-assign (ident "string_list"))
-				(e-call (constraint-fn-var 244)
+				(e-call (constraint-fn-var 243)
 					(e-lookup-local
 						(p-assign (ident "shorthand")))
 					(e-list

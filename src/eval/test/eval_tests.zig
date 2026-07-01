@@ -1,7 +1,7 @@
 //! Data-driven eval test definitions for the inspect-only parallel runner.
 
 const TestCase = @import("parallel_runner.zig").TestCase;
-const bughunt_repros = @import("eval_bughunt_repros.zig");
+const regression_repros = @import("eval_regression_repros.zig");
 const trmc_tests = @import("eval_trmc_tests.zig");
 const closure_recursion_tests = @import("eval_closure_recursion_tests.zig");
 const comptime_finalization_tests = @import("eval_comptime_finalization_tests.zig");
@@ -4612,9 +4612,9 @@ const core_tests = [_]TestCase{
             .{
                 .name = "Helpers",
                 .source =
-                \\module [read]
-                \\
-                \\read = |value| value.get()
+                \\Helpers := [].{
+                \\  read = |value| value.get()
+                \\}
                 ,
             },
         },
@@ -4651,12 +4651,12 @@ const core_tests = [_]TestCase{
             .{
                 .name = "Helpers",
                 .source =
-                \\module [read]
-                \\
                 \\import CrateMod
                 \\
-                \\read : item -> U64 where [item.get : item -> U64]
-                \\read = |value| value.get()
+                \\Helpers := [].{
+                \\  read : item -> U64 where [item.get : item -> U64]
+                \\  read = |value| value.get()
+                \\}
                 ,
             },
         },
@@ -4856,4 +4856,4 @@ const core_tests = [_]TestCase{
     },
 };
 
-pub const tests = core_tests ++ comptime_finalization_tests.tests ++ crypto_tests.tests ++ closure_recursion_tests.tests ++ recursive_data_tests.tests ++ low_level_tests.tests ++ highest_lowest_tests.tests ++ polymorphism_tests.tests ++ issue_tests.tests ++ interpreter_style_tests.tests ++ bughunt_repros.tests ++ trmc_tests.tests;
+pub const tests = core_tests ++ comptime_finalization_tests.tests ++ crypto_tests.tests ++ closure_recursion_tests.tests ++ recursive_data_tests.tests ++ low_level_tests.tests ++ highest_lowest_tests.tests ++ polymorphism_tests.tests ++ issue_tests.tests ++ interpreter_style_tests.tests ++ regression_repros.tests ++ trmc_tests.tests;

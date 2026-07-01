@@ -675,8 +675,6 @@ pub const tests = [_]TestCase{
         .name = "inspect: cross module capture factory",
         .source_kind = .module,
         .source =
-        \\module []
-        \\
         \\import A
         \\
         \\main = A.make_adder(40.I64)(2.I64)
@@ -685,9 +683,9 @@ pub const tests = [_]TestCase{
             .{
                 .name = "A",
                 .source =
-                \\module [make_adder]
-                \\
-                \\make_adder = |captured| |n| captured + n
+                \\A := [].{
+                \\    make_adder = |captured| |n| captured + n
+                \\}
                 ,
             },
         },
@@ -697,8 +695,6 @@ pub const tests = [_]TestCase{
         .name = "inspect: cross module recursive path",
         .source_kind = .module,
         .source =
-        \\module []
-        \\
         \\import A
         \\
         \\main = A.sum_to(5.I64)
@@ -707,13 +703,13 @@ pub const tests = [_]TestCase{
             .{
                 .name = "A",
                 .source =
-                \\module [sum_to]
-                \\
-                \\sum_to = |n|
-                \\    if n == 0.I64
-                \\        0.I64
-                \\    else
-                \\        n + sum_to(n - 1.I64)
+                \\A := [].{
+                \\    sum_to = |n|
+                \\        if n == 0.I64
+                \\            0.I64
+                \\        else
+                \\            n + sum_to(n - 1.I64)
+                \\}
                 ,
             },
         },
@@ -828,9 +824,7 @@ pub const tests = [_]TestCase{
         .name = "inspect: tag union payload matching inside function cross module",
         .source_kind = .module,
         .source =
-        \\module []
-        \\
-        \\import A exposing [MyTag]
+        \\import MyTag exposing [MyTag]
         \\
         \\lookup = |items, idx| {
         \\    match List.get(items, idx) {
@@ -853,10 +847,8 @@ pub const tests = [_]TestCase{
         ,
         .imports = &.{
             .{
-                .name = "A",
+                .name = "MyTag",
                 .source =
-                \\module [MyTag]
-                \\
                 \\MyTag := [Foo({x: U64, y: U64}), Bar, Baz(Str)]
                 ,
             },

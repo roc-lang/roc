@@ -257,6 +257,7 @@ pub const Tag = enum {
     diag_unused_variable,
     diag_used_underscore_variable,
     diag_duplicate_record_field,
+    diag_duplicate_tag,
     diag_crash_expects_string,
     diag_f64_pattern_literal,
     diag_unused_type_var_name,
@@ -1075,7 +1076,7 @@ pub const Payload = extern union {
     };
 
     /// Diagnostics with an identifier and inline region offsets.
-    /// Used by: diag_shadowing_warning, diag_type_redeclared, diag_duplicate_record_field, etc.
+    /// Used by: diag_shadowing_warning, diag_type_redeclared, diag_duplicate_record_field, diag_duplicate_tag, etc.
     pub const DiagIdentWithRegion = extern struct {
         ident: u32, // @bitCast(Ident.Idx)
         region_start: u32, // offset

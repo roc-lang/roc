@@ -52,6 +52,7 @@ const Solver = struct {
     expr_tys: []?Type.TypeVarId,
     pat_tys: []?Type.TypeVarId,
     expr_done: []bool,
+    generated_backing_pats: []bool,
     loop_results: std.ArrayList(Type.TypeVarId),
     loop_params: std.ArrayList(Type.Span),
     return_contexts: std.ArrayList(ReturnContext),
@@ -87,6 +88,10 @@ const Solver = struct {
         errdefer allocator.free(pat_tys);
         @memset(pat_tys, null);
 
+        const generated_backing_pats = try allocator.alloc(bool, lifted.pats.len);
+        errdefer allocator.free(generated_backing_pats);
+        @memset(generated_backing_pats, false);
+
         return .{
             .allocator = allocator,
             .program = program,
@@ -95,6 +100,7 @@ const Solver = struct {
             .expr_tys = expr_tys,
             .pat_tys = pat_tys,
             .expr_done = expr_done,
+            .generated_backing_pats = generated_backing_pats,
             .loop_results = .empty,
             .loop_params = .empty,
             .return_contexts = .empty,
@@ -107,6 +113,7 @@ const Solver = struct {
         self.return_contexts.deinit(self.allocator);
         self.loop_params.deinit(self.allocator);
         self.loop_results.deinit(self.allocator);
+        self.allocator.free(self.generated_backing_pats);
         self.allocator.free(self.expr_done);
         self.allocator.free(self.pat_tys);
         self.allocator.free(self.expr_tys);
@@ -426,8 +433,8 @@ const Solver = struct {
             },
             .nominal => |backing| {
                 if (try self.namedBacking(expected)) |backing_ty| {
-                    if (self.hasBuiltinOwner(expected, .fields)) {
-                        _ = try self.inferExpr(backing);
+                    if (self.hasBuiltinOwner(expected, .fields) or self.hasBuiltinOwner(expected, .field)) {
+                        try self.inferGeneratedOpaqueBacking(backing);
                     } else {
                         _ = try self.expectExpr(backing, backing_ty);
                     }
@@ -640,9 +647,62 @@ const Solver = struct {
         }
     }
 
+    fn inferGeneratedOpaqueBacking(self: *Solver, expr_id: Lifted.ExprId) Allocator.Error!void {
+        const index = @intFromEnum(expr_id);
+        if (self.expr_done[index]) return;
+
+        const expr = self.lifted.exprs[index];
+        switch (expr.data) {
+            .record => |fields| {
+                _ = try self.exprSlot(expr_id);
+                self.expr_done[index] = true;
+                for (self.lifted.fieldExprSpan(fields)) |field| {
+                    _ = try self.inferExpr(field.value);
+                }
+            },
+            .tuple => |items| {
+                _ = try self.exprSlot(expr_id);
+                self.expr_done[index] = true;
+                for (self.lifted.exprSpan(items)) |item| {
+                    _ = try self.inferExpr(item);
+                }
+            },
+            .tag => |tag| {
+                _ = try self.exprSlot(expr_id);
+                self.expr_done[index] = true;
+                for (self.lifted.exprSpan(tag.payloads)) |payload| {
+                    _ = try self.inferExpr(payload);
+                }
+            },
+            .nominal => |backing| {
+                _ = try self.exprSlot(expr_id);
+                self.expr_done[index] = true;
+                try self.inferGeneratedOpaqueBacking(backing);
+            },
+            .let_ => |let_| {
+                _ = try self.exprSlot(expr_id);
+                self.expr_done[index] = true;
+                const value_ty = try self.inferExpr(let_.value);
+                try self.bindPattern(let_.bind, value_ty);
+                try self.inferGeneratedOpaqueBacking(let_.rest);
+            },
+            else => _ = try self.inferExpr(expr_id),
+        }
+    }
+
     fn bindPattern(self: *Solver, pat_id: Lifted.PatId, value_ty: Type.TypeVarId) Allocator.Error!void {
-        const pat = self.lifted.pats[@intFromEnum(pat_id)];
+        const index = @intFromEnum(pat_id);
+        if (self.generated_backing_pats[index]) {
+            const pat_ty = self.pat_tys[index] orelse Common.invariant("generated backing pattern was marked before its type was assigned");
+            try self.unifyGeneratedOpaqueBacking(pat_ty, value_ty);
+            return;
+        }
         const pat_ty = try self.expectPat(pat_id, value_ty);
+        try self.bindPatternAtType(pat_id, pat_ty);
+    }
+
+    fn bindPatternAtType(self: *Solver, pat_id: Lifted.PatId, pat_ty: Type.TypeVarId) Allocator.Error!void {
+        const pat = self.lifted.pats[@intFromEnum(pat_id)];
         switch (pat.data) {
             .bind => |local| try self.unify(self.localTy(local), pat_ty),
             .wildcard,
@@ -695,12 +755,55 @@ const Solver = struct {
                 }
             },
             .nominal => |backing| {
-                if (try self.namedBacking(pat_ty)) |backing_ty| {
-                    try self.bindPattern(backing, backing_ty);
+                if (self.hasGeneratedOpaquePatOwner(pat_id) or self.hasBuiltinOwner(pat_ty, .fields) or self.hasBuiltinOwner(pat_ty, .field)) {
+                    try self.bindGeneratedOpaqueBackingPattern(backing);
                 } else {
-                    try self.bindPattern(backing, pat_ty);
+                    if (try self.namedBacking(pat_ty)) |backing_ty| {
+                        try self.bindPattern(backing, backing_ty);
+                    } else {
+                        try self.bindPattern(backing, pat_ty);
+                    }
                 }
             },
+        }
+    }
+
+    fn hasGeneratedOpaquePatOwner(self: *Solver, pat_id: Lifted.PatId) bool {
+        return switch (self.lifted.types.get(self.lifted.pats[@intFromEnum(pat_id)].ty)) {
+            .named => |named| isGeneratedOpaqueEvidenceOwner(named.builtin_owner),
+            else => false,
+        };
+    }
+
+    fn bindGeneratedOpaqueBackingPattern(self: *Solver, pat_id: Lifted.PatId) Allocator.Error!void {
+        const index = @intFromEnum(pat_id);
+        if (self.generated_backing_pats[index]) return;
+        self.generated_backing_pats[index] = true;
+        const pat_ty = try self.lowerTypeFresh(self.lifted.pats[@intFromEnum(pat_id)].ty);
+        self.pat_tys[index] = pat_ty;
+        try self.bindPatternAtType(pat_id, pat_ty);
+    }
+
+    fn unifyGeneratedOpaqueBacking(self: *Solver, generated_ty: Type.TypeVarId, expected_ty: Type.TypeVarId) Allocator.Error!void {
+        const generated = self.program.types.root(generated_ty);
+        const expected = self.program.types.root(expected_ty);
+        if (generated == expected) return;
+
+        const generated_score = generatedBackingScore(self.program.types.get(generated)) orelse {
+            try self.unify(generated, expected);
+            return;
+        };
+        const expected_score = generatedBackingScore(self.program.types.get(expected)) orelse {
+            try self.unify(generated, expected);
+            return;
+        };
+
+        if (generated_score > expected_score) {
+            self.program.types.set(expected, .{ .link = generated });
+        } else if (expected_score > generated_score) {
+            self.program.types.set(generated, .{ .link = expected });
+        } else {
+            try self.unify(generated, expected);
         }
     }
 
@@ -947,11 +1050,7 @@ const Solver = struct {
         if (!isGeneratedOpaqueEvidenceOwner(named.builtin_owner)) return 0;
 
         const backing = named.backing orelse return 0;
-        return switch (self.program.types.rootContent(backing.ty)) {
-            .record => |fields| if (fields.count() == 0) 1 else 2,
-            .zst => 1,
-            else => 2,
-        };
+        return generatedBackingScore(self.program.types.rootContent(backing.ty)) orelse 2;
     }
 
     fn bindLowLevelTypes(
@@ -1554,9 +1653,15 @@ const TypeCloner = struct {
                     .kind = named.kind,
                     .builtin_owner = named.builtin_owner,
                     .args = try self.solver.program.types.addSpan(args),
-                    .backing = if (named.backing) |raw_backing| .{
-                        .ty = try self.lower(try self.structuralBackingForNamed(named.def, raw_backing.ty)),
-                        .use = raw_backing.use,
+                    .backing = if (named.backing) |raw_backing| blk_backing: {
+                        const backing_ty = if (isGeneratedOpaqueEvidenceOwner(named.builtin_owner))
+                            raw_backing.ty
+                        else
+                            try self.structuralBackingForNamed(named.def, raw_backing.ty);
+                        break :blk_backing .{
+                            .ty = try self.lower(backing_ty),
+                            .use = raw_backing.use,
+                        };
                     } else null,
                     .declared_order = try self.lowerDeclaredOrder(named.declared_order),
                 } };
@@ -1603,10 +1708,19 @@ const TypeCloner = struct {
     }
 };
 
+fn generatedBackingScore(content: Type.Content) ?u8 {
+    return switch (content) {
+        .record => |fields| if (fields.count() == 0) 1 else 2,
+        .zst => 1,
+        else => null,
+    };
+}
+
 fn isGeneratedOpaqueEvidenceOwner(owner: ?static_dispatch.BuiltinOwner) bool {
     const actual = owner orelse return false;
     return switch (actual) {
         .fields,
+        .field,
         .parse_tag_union_spec,
         => true,
         else => false,

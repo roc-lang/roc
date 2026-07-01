@@ -212,15 +212,15 @@ const MonoFnBody = struct {
     body: Mono.FnBody,
 };
 
-const CaptureIdentityKind = union(enum) {
-    binder: checked.PatternBinderId,
-    generated: u32,
-    local: Ast.LocalId,
-};
-
 const CaptureIdentity = struct {
-    kind: CaptureIdentityKind,
-    ty_digest: MonoType.MonoTypeDigest,
+    const Origin = union(enum) {
+        binder: checked.PatternBinderId,
+        generated: u32,
+        local: Ast.LocalId,
+    };
+
+    origin: Origin,
+    ty: MonoType.TypeId,
 };
 
 const CaptureOperand = struct {
@@ -496,17 +496,19 @@ const Lifter = struct {
                 if (raw >= self.def_map.len) Common.invariant("Monotype definition reference was outside the definition table");
                 const fn_id = self.def_map[raw] orelse
                     Common.invariant("Monotype definition reference reached lifting before its function was registered");
+                const captures = try self.captureExprSpanForFn(fn_id, expr_id);
                 self.output.exprs.items[index].data = .{ .fn_ref = .{
                     .fn_id = fn_id,
-                    .captures = try self.captureExprSpanForFn(fn_id, expr_id),
+                    .captures = captures,
                 } };
             },
             .fn_def => |fn_def| {
                 for (self.output.fnDefCaptureSpan(fn_def.captures)) |capture| try self.rewriteExpr(capture.value);
                 const lifted = self.liftedFn(fn_def.fn_id);
+                const captures = try self.fnRefCaptureExprSpanForFnDef(lifted, fn_def.captures, expr_id);
                 self.output.exprs.items[index].data = .{ .fn_ref = .{
                     .fn_id = lifted,
-                    .captures = try self.fnRefCaptureExprSpanForFnDef(lifted, fn_def.captures, expr_id),
+                    .captures = captures,
                 } };
             },
             .call_value => |call| {
@@ -606,9 +608,10 @@ const Lifter = struct {
     fn liftLambda(self: *Lifter, expr_id: Mono.ExprId, ty: @import("../monotype/type.zig").TypeId, lambda: Mono.LambdaExpr) Allocator.Error!void {
         const fn_id = try self.reserveFn(lambda.fn_id);
         if (self.nested_fn_ids.contains(fn_id) or self.initialized_fns.contains(fn_id)) {
+            const captures = try self.captureExprSpanForFn(fn_id, expr_id);
             self.output.exprs.items[@intFromEnum(expr_id)].data = .{ .fn_ref = .{
                 .fn_id = fn_id,
-                .captures = try self.captureExprSpanForFn(fn_id, expr_id),
+                .captures = captures,
             } };
             return;
         }
@@ -627,9 +630,10 @@ const Lifter = struct {
         try bindTypedLocals(self.output, &bound, self.output.typedLocalSpan(lambda.args));
         try captures.collectExpr(lambda.body, &bound);
 
+        const capture_exprs = try self.captureExprSpanFromTypedLocals(captures.items.items, expr_id);
         self.output.exprs.items[@intFromEnum(expr_id)].data = .{ .fn_ref = .{
             .fn_id = fn_id,
-            .captures = try self.captureExprSpanFromTypedLocals(captures.items.items, expr_id),
+            .captures = capture_exprs,
         } };
 
         try self.rewriteExpr(lambda.body);
@@ -754,10 +758,7 @@ const Lifter = struct {
                 .ty = capture.ty,
                 .data = .{ .local = capture.local },
             });
-            operands[index] = .{
-                .identity = captureIdentityForTypedLocal(self.output, capture),
-                .value = exprs[index],
-            };
+            operands[index] = .{ .identity = try captureIdentityForTypedLocal(self.output, capture), .value = exprs[index] };
         }
         const expr_span = try self.output.addExprSpan(exprs);
         try self.recordCaptureOperands(call_expr, operands);
@@ -790,7 +791,7 @@ const Lifter = struct {
         const operands = try self.allocator.alloc(CaptureOperand, captures.len);
         defer self.allocator.free(operands);
         for (captures, 0..) |capture, index| {
-            if (explicitFnDefCaptureValue(self.output, explicit, capture)) |value| {
+            if (try explicitFnDefCaptureValue(self.output, explicit, capture)) |value| {
                 exprs[index] = value;
             } else {
                 exprs[index] = try self.output.addExpr(.{
@@ -798,10 +799,7 @@ const Lifter = struct {
                     .data = .{ .local = capture.local },
                 });
             }
-            operands[index] = .{
-                .identity = captureIdentityForTypedLocal(self.output, capture),
-                .value = exprs[index],
-            };
+            operands[index] = .{ .identity = try captureIdentityForTypedLocal(self.output, capture), .value = exprs[index] };
         }
         const expr_span = try self.output.addExprSpan(exprs);
         try self.recordCaptureOperands(call_expr, operands);
@@ -945,10 +943,7 @@ fn captureOperandsFromPositionals(
     const operands = try allocator.alloc(CaptureOperand, captures.len);
     errdefer allocator.free(operands);
     for (captures, exprs, 0..) |capture, expr, index| {
-        operands[index] = .{
-            .identity = captureIdentityForTypedLocal(program, capture),
-            .value = expr,
-        };
+        operands[index] = .{ .identity = try captureIdentityForTypedLocal(program, capture), .value = expr };
     }
     return operands;
 }
@@ -961,18 +956,18 @@ fn finalizeCaptureExprSpanFromOperands(
 ) Allocator.Error!Ast.Span(Ast.ExprId) {
     if (captures.len == 0) return .empty();
 
-    assertUniqueOperandIdentities(operands);
-    assertUniqueCaptureIdentities(program, captures);
+    try assertUniqueOperandIdentities(program, operands);
+    try assertUniqueCaptureIdentities(program, captures);
 
     const exprs = try allocator.alloc(Ast.ExprId, captures.len);
     defer allocator.free(exprs);
 
     for (captures, 0..) |capture, capture_index| {
-        const identity = captureIdentityForTypedLocal(program, capture);
-        const operand = findCaptureOperand(operands, identity) orelse
+        const identity = try captureIdentityForTypedLocal(program, capture);
+        const operand = (try findCaptureOperand(program, operands, identity)) orelse
             Common.invariant("function reference missing operand for finalized capture slot");
         const operand_ty = program.exprs.items[@intFromEnum(operand.value)].ty;
-        if (!try program.types.typeEql(&program.names, operand_ty, capture.ty)) {
+        if (!try monotypeTypeEql(program, operand_ty, capture.ty)) {
             Common.invariant("function reference capture operand type differed from finalized capture slot");
         }
         exprs[capture_index] = operand.value;
@@ -981,79 +976,69 @@ fn finalizeCaptureExprSpanFromOperands(
     return try program.addExprSpan(exprs);
 }
 
-fn assertUniqueOperandIdentities(operands: []const CaptureOperand) void {
+fn assertUniqueOperandIdentities(program: *const Ast.Program, operands: []const CaptureOperand) Allocator.Error!void {
     for (operands, 0..) |operand, index| {
         for (operands[index + 1 ..]) |other| {
-            if (captureIdentityEql(operand.identity, other.identity)) {
+            if (try captureIdentityEql(program, operand.identity, other.identity)) {
                 Common.invariant("function reference carried duplicate keyed capture operands");
             }
         }
     }
 }
 
-fn assertUniqueCaptureIdentities(program: *const Ast.Program, captures: []const Ast.TypedLocal) void {
+fn assertUniqueCaptureIdentities(program: *const Ast.Program, captures: []const Ast.TypedLocal) Allocator.Error!void {
     for (captures, 0..) |capture, index| {
-        const identity = captureIdentityForTypedLocal(program, capture);
+        const identity = try captureIdentityForTypedLocal(program, capture);
         for (captures[index + 1 ..]) |other| {
-            if (captureIdentityEql(identity, captureIdentityForTypedLocal(program, other))) {
+            if (try captureIdentityEql(program, identity, try captureIdentityForTypedLocal(program, other))) {
                 Common.invariant("lifted function declared duplicate capture identities");
             }
         }
     }
 }
 
-fn findCaptureOperand(operands: []const CaptureOperand, identity: CaptureIdentity) ?CaptureOperand {
+fn findCaptureOperand(program: *const Ast.Program, operands: []const CaptureOperand, identity: CaptureIdentity) Allocator.Error!?CaptureOperand {
     for (operands) |operand| {
-        if (captureIdentityEql(operand.identity, identity)) return operand;
+        if (try captureIdentityEql(program, operand.identity, identity)) return operand;
     }
     return null;
 }
 
-fn captureIdentityForTypedLocal(program: *const Ast.Program, capture: Ast.TypedLocal) CaptureIdentity {
-    return captureIdentityForLocalAtType(program, capture.local, capture.ty);
+fn captureIdentityForTypedLocal(program: *const Ast.Program, capture: Ast.TypedLocal) Allocator.Error!CaptureIdentity {
+    const local_data = program.locals.items[@intFromEnum(capture.local)];
+    if (!try monotypeTypeEql(program, local_data.ty, capture.ty)) {
+        Common.invariant("typed capture local disagreed with its local type");
+    }
+    const origin: CaptureIdentity.Origin = if (local_data.binder) |binder|
+        .{ .binder = binder }
+    else if (local_data.capture_id) |capture_id|
+        .{ .generated = capture_id }
+    else
+        .{ .local = capture.local };
+    return .{ .origin = origin, .ty = capture.ty };
 }
 
-fn captureIdentityForExplicitCapture(program: *const Ast.Program, capture: Ast.FnDefCapture) CaptureIdentity {
-    const value_ty = program.exprs.items[@intFromEnum(capture.value)].ty;
-    return captureIdentityForLocalAtType(program, capture.local, value_ty);
+fn monotypeTypeEql(program: *const Ast.Program, lhs: MonoType.TypeId, rhs: MonoType.TypeId) Allocator.Error!bool {
+    if (lhs == rhs) return true;
+    return try program.types.typeEql(&program.names, lhs, rhs);
 }
 
-fn captureIdentityForLocalAtType(program: *const Ast.Program, local: Ast.LocalId, ty: MonoType.TypeId) CaptureIdentity {
-    const local_data = program.locals.items[@intFromEnum(local)];
-    if (local_data.binder) |binder| return .{
-        .kind = .{ .binder = binder },
-        .ty_digest = monotypeDigest(program, ty),
-    };
-    if (local_data.capture_id) |capture_id| return .{
-        .kind = .{ .generated = capture_id },
-        .ty_digest = monotypeDigest(program, ty),
-    };
-    return .{
-        .kind = .{ .local = local },
-        .ty_digest = monotypeDigest(program, ty),
-    };
-}
-
-fn captureIdentityEql(left: CaptureIdentity, right: CaptureIdentity) bool {
-    if (!std.mem.eql(u8, left.ty_digest.bytes[0..], right.ty_digest.bytes[0..])) return false;
-    return switch (left.kind) {
-        .binder => |left_binder| switch (right.kind) {
+fn captureIdentityEql(program: *const Ast.Program, left: CaptureIdentity, right: CaptureIdentity) Allocator.Error!bool {
+    if (!try monotypeTypeEql(program, left.ty, right.ty)) return false;
+    return switch (left.origin) {
+        .binder => |left_binder| switch (right.origin) {
             .binder => |right_binder| left_binder == right_binder,
             else => false,
         },
-        .generated => |left_capture| switch (right.kind) {
+        .generated => |left_capture| switch (right.origin) {
             .generated => |right_capture| left_capture == right_capture,
             else => false,
         },
-        .local => |left_local| switch (right.kind) {
+        .local => |left_local| switch (right.origin) {
             .local => |right_local| left_local == right_local,
             else => false,
         },
     };
-}
-
-fn monotypeDigest(program: *const Ast.Program, ty: MonoType.TypeId) MonoType.MonoTypeDigest {
-    return program.types.typeDigest(&program.names, ty);
 }
 
 fn solveCaptureFixpoint(
@@ -1152,14 +1137,29 @@ const BoundSet = struct {
     }
 };
 
-fn explicitFnDefCaptureValue(program: *const Ast.Program, captures: []const Ast.FnDefCapture, required: Ast.TypedLocal) ?Ast.ExprId {
-    const required_identity = captureIdentityForTypedLocal(program, required);
+fn explicitFnDefCaptureValue(program: *const Ast.Program, captures: []const Ast.FnDefCapture, required: Ast.TypedLocal) Allocator.Error!?Ast.ExprId {
     for (captures) |capture| {
-        if (captureIdentityEql(required_identity, captureIdentityForExplicitCapture(program, capture))) {
+        if (try fnDefCaptureLocalMatches(program, required, capture.local)) {
             return capture.value;
         }
     }
     return null;
+}
+
+fn fnDefCaptureLocalMatches(program: *const Ast.Program, required: Ast.TypedLocal, explicit: Ast.LocalId) Allocator.Error!bool {
+    const required_local = program.locals.items[@intFromEnum(required.local)];
+    const explicit_local = program.locals.items[@intFromEnum(explicit)];
+
+    if (!try monotypeTypeEql(program, required.ty, required_local.ty)) {
+        Common.invariant("typed explicit capture local disagreed with its local type");
+    }
+    if (!try monotypeTypeEql(program, required.ty, explicit_local.ty)) return false;
+    if (required.local == explicit) return true;
+    if (required_local.symbol == explicit_local.symbol) return true;
+    if (required_local.binder != null and explicit_local.binder != null and required_local.binder.? == explicit_local.binder.?) return true;
+    if (required_local.capture_id != null and explicit_local.capture_id != null and required_local.capture_id.? == explicit_local.capture_id.?) return true;
+
+    return false;
 }
 
 const CaptureSet = struct {
@@ -1386,8 +1386,7 @@ const CaptureSet = struct {
         const raw = @intFromEnum(fn_id);
         if (raw >= self.fn_captures.len) Common.invariant("capture collection referenced a function without a solved capture set");
         for (self.fn_captures[raw].items) |capture| {
-            const explicit_value = explicitFnDefCaptureValue(self.program, explicit, capture);
-            if (explicit_value != null) continue;
+            if (try explicitFnDefCaptureValue(self.program, explicit, capture) != null) continue;
             try self.addIfFree(capture.local, caller_bound);
         }
     }

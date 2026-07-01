@@ -10,30 +10,28 @@ app [main] { pf: platform "./platform.roc" }
 
 import Color
 
-main = Color.to_str(Color.red)
+main = Color.to_str(Color.red({}))
 ~~~
 ## Color.roc
 ~~~roc
-module [Color, red, green, blue, to_str]
+Color := [Red, Green, Blue].{
+    red : {} -> Color
+    red = |{}| Red
 
-Color : [Red, Green, Blue]
+    green : {} -> Color
+    green = |{}| Green
 
-red : Color
-red = Red
+    blue : {} -> Color
+    blue = |{}| Blue
 
-green : Color
-green = Green
-
-blue : Color
-blue = Blue
-
-to_str : Color -> Str
-to_str = |color|
-    match color {
-        Red => "red"
-        Green => "green"
-        Blue => "blue"
-    }
+    to_str : Color -> Str
+    to_str = |color|
+        match color {
+            Red => "red"
+            Green => "green"
+            Blue => "blue"
+        }
+}
 ~~~
 ## platform.roc
 ~~~roc
@@ -56,17 +54,17 @@ main_for_host = main
 main_for_host = <required>
 
 # Color
-red = Red
-green = Green
-blue = Blue
-to_str = |color| match color {
+Color.red = |{}| Red
+Color.green = |{}| Green
+Color.blue = |{}| Blue
+Color.to_str = |color| match color {
 	Red => "red"
 	Green => "green"
 	Blue => "blue"
 }
 
 # app
-main = to_str(red)
+main = to_str(red({}))
 
 ~~~
 # DEV OUTPUT
