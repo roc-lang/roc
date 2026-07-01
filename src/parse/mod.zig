@@ -116,12 +116,26 @@ fn statementRootNode(parser: *Parser) Allocator.Error!u32 {
     return @intFromEnum(idx);
 }
 
+fn topLevelStatementRootNode(parser: *Parser) Allocator.Error!u32 {
+    const idx = try parser.runTopLevelStatement();
+    return @intFromEnum(idx);
+}
+
 /// Parses a single Roc statement - for use in REPL and snapshots.
 ///
 /// The caller must call `ast.deinit()` when done, which frees all internal
 /// allocations AND the AST struct itself.
 pub fn statement(gpa: Allocator, env: *CommonEnv) Allocator.Error!*AST {
     return try runTokenDispatch(gpa, env, statementRootNode);
+}
+
+/// Parses a single top-level Roc statement - for use in the REPL, which
+/// synthesizes a module and so accepts top-level-only statements like `import`.
+///
+/// The caller must call `ast.deinit()` when done, which frees all internal
+/// allocations AND the AST struct itself.
+pub fn statementTopLevel(gpa: Allocator, env: *CommonEnv) Allocator.Error!*AST {
+    return try runTokenDispatch(gpa, env, topLevelStatementRootNode);
 }
 
 test "parser tests" {

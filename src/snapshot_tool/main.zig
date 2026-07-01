@@ -4416,6 +4416,7 @@ fn compileSnapshotReplInspectedModule(
                 .indices = bm.builtin_indices,
                 .artifact = &bm.checked_artifact,
             },
+            null,
         );
     }
     return eval_mod.test_helpers.compileInspectedProgram(allocator, app_io, .module, source, &.{});

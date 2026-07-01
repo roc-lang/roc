@@ -8538,7 +8538,27 @@ const BodyContext = struct {
                 return try self.lowerNumeralCall(expr.ty, quote.plan, ty);
             },
             .str_segment => |str| .{ .str_lit = try self.lowerStringLiteral(str) },
-            .bytes_literal => |str| .{ .str_lit = try self.lowerStringLiteral(str) },
+            .bytes_literal => |str| blk: {
+                // `import "path" as x : List(U8)` yields the file's raw bytes typed
+                // as `List(U8)`. Lower it to an actual list of `U8` elements rather
+                // than a `str_lit`: a RocStr's layout does not match the `List(U8)`
+                // type, so reusing the string representation corrupts the list
+                // length and refcounting at runtime.
+                const bytes = self.view.bodies.stringLiteral(str);
+                const elem_ty = switch (self.builder.shapeContent(ty)) {
+                    .list => |elem| elem,
+                    else => Common.invariant("bytes literal had a non-list monotype"),
+                };
+                const elems = try self.allocator.alloc(DraftExprId, bytes.len);
+                defer self.allocator.free(elems);
+                for (bytes, 0..) |byte, i| {
+                    elems[i] = try self.addExpr(.{
+                        .ty = elem_ty,
+                        .data = .{ .int_lit = unsignedIntLiteral(byte) },
+                    });
+                }
+                break :blk .{ .list = try self.addExprSpan(elems) };
+            },
             .empty_list => .{ .list = .empty() },
             .empty_record => .{ .record = .empty() },
             .str => |segments| try self.lowerStr(segments),
