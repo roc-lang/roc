@@ -473,6 +473,7 @@ fn buildCheckOwnerEnvs(
     imported_envs: []const *ModuleEnv,
     imported_artifacts: []const CheckedArtifact.PublishImportArtifact,
     available_artifacts: []const CheckedArtifact.ImportedModuleView,
+    platform_requirement_artifact: ?CheckedArtifact.ImportedModuleView,
 ) Allocator.Error![]const *const ModuleEnv {
     var owner_envs = std.ArrayList(*const ModuleEnv).empty;
     errdefer owner_envs.deinit(allocator);
@@ -491,6 +492,16 @@ fn buildCheckOwnerEnvs(
             available_artifacts,
             &seen_public_dependencies,
             imported_artifact.view,
+        );
+    }
+    if (platform_requirement_artifact) |platform| {
+        try appendCheckOwnerEnvIfMissing(allocator, &owner_envs, platform.module_env);
+        try appendCheckOwnerEnvPublicDependencies(
+            allocator,
+            &owner_envs,
+            available_artifacts,
+            &seen_public_dependencies,
+            platform,
         );
     }
 
@@ -1764,6 +1775,8 @@ pub const PackageEnv = struct {
         imported_envs: []const *ModuleEnv,
         imported_artifacts: []const CheckedArtifact.PublishImportArtifact,
         available_artifacts: []const CheckedArtifact.ImportedModuleView,
+        platform_requirement_artifact: ?CheckedArtifact.ImportedModuleView,
+        platform_requirement_context: ?CheckedArtifact.PlatformRequirementContextKey,
         explicit_roots: []const CheckedArtifact.ExplicitRootRequestInput,
         ctfe_options: eval.CompileTimeFinalization.Options,
     ) TypeCheckModuleError!TypeCheckOutput {
@@ -1782,7 +1795,7 @@ pub const PackageEnv = struct {
         var module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(check_alloc);
         errdefer module_envs_map.deinit();
 
-        const owner_envs = try buildCheckOwnerEnvs(check_alloc, imported_envs, imported_artifacts, available_artifacts);
+        const owner_envs = try buildCheckOwnerEnvs(check_alloc, imported_envs, imported_artifacts, available_artifacts, platform_requirement_artifact);
         defer check_alloc.free(owner_envs);
 
         var checker = try Check.initWithOwnerModules(
@@ -1798,11 +1811,11 @@ pub const PackageEnv = struct {
         checker.fixupTypeWriter();
         errdefer checker.deinit();
 
-        // For app modules with platform requirements, defer finalizing numeric defaults
-        // until after platform requirements are checked, so numeric literals can be
-        // constrained by platform types (e.g., I64) before defaulting to Dec.
-        // TODO: re-enable defer_numeric_defaults once ModuleEnv has the field
-        try checker.checkFile();
+        if (platform_requirement_artifact) |platform| {
+            try checker.checkFileWithPlatformRequirements(.{ .module_env = platform.module_env });
+        } else {
+            try checker.checkFile();
+        }
 
         module_envs_map.deinit();
 
@@ -1836,7 +1849,8 @@ pub const PackageEnv = struct {
             imported_envs,
             imported_artifacts,
             .{
-                .platform_requirement_context = null,
+                .platform_requirement_artifact = platform_requirement_artifact,
+                .platform_requirement_context = platform_requirement_context,
                 .platform_app_relation = null,
                 .explicit_roots = explicit_roots,
                 .hoisted_roots = checker.selectedHoistedRoots(),
@@ -2003,6 +2017,8 @@ pub const PackageEnv = struct {
             imported_envs.items,
             imported_artifacts.items,
             available_artifacts,
+            null,
+            null,
             &.{},
             compileTimeFinalizationOptions(self.max_threads, &self.roc_ctx),
         );

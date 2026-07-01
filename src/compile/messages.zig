@@ -114,6 +114,10 @@ pub const TypeCheckTask = struct {
     imported_artifacts: []const CheckedArtifact.PublishImportArtifact,
     /// Published checked artifacts currently available for exact-key lookup during checking finalization
     available_artifacts: []const CheckedArtifact.ImportedModuleView,
+    /// Platform declaration artifact whose `requires` entries constrain this app module.
+    platform_requirement_artifact: ?*const CheckedArtifact.CheckedModuleArtifact = null,
+    /// Stable identity for the platform `requires` context applied during checking.
+    platform_requirement_context: ?CheckedArtifact.PlatformRequirementContextKey = null,
     /// Additional checked roots requested by package-level metadata.
     explicit_roots: []const CheckedArtifact.ExplicitRootRequestInput,
 };

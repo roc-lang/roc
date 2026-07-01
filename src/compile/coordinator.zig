@@ -118,7 +118,6 @@ const Thread = threading.Thread;
 const CheckedModuleArtifact = check.CheckedArtifact.CheckedModuleArtifact;
 const CheckedArtifact = check.CheckedArtifact;
 const canonical = check.CanonicalNames;
-const CanonicalTypeKey = canonical.CanonicalTypeKey;
 
 fn destroyCheckedArtifact(artifact: *CheckedModuleArtifact, retain_module_env: bool) void {
     const allocator = artifact.canonical_names.allocator;
@@ -350,6 +349,8 @@ pub const ModuleState = struct {
     imports: std.ArrayList(ModuleId),
     /// External imports (qualified names like "pf.Stdout")
     external_imports: std.ArrayList([]const u8),
+    /// Platform root whose requires entries constrain this app before checking.
+    platform_requirement_dependency: ?ModuleRef,
     /// Modules that depend on this one (for waking dependents)
     dependents: std.ArrayList(ModuleId),
     /// Transitive local imports known for this module.
@@ -381,6 +382,7 @@ pub const ModuleState = struct {
             .phase = .Parse,
             .imports = std.ArrayList(ModuleId).empty,
             .external_imports = std.ArrayList([]const u8).empty,
+            .platform_requirement_dependency = null,
             .dependents = std.ArrayList(ModuleId).empty,
             .reachable_local_imports = .{},
             .reports = std.ArrayList(Report).empty,
@@ -776,102 +778,6 @@ pub const PackageState = struct {
 pub const ModuleRef = struct {
     pkg_name: []const u8,
     module_id: ModuleId,
-};
-
-const PlatformRequiredValidationSnapshot = struct {
-    dispatch_dispatcher_keys: []CanonicalTypeKey = &.{},
-    dispatch_callable_keys: []CanonicalTypeKey = &.{},
-    iterator_iter_dispatcher_keys: []CanonicalTypeKey = &.{},
-    iterator_next_dispatcher_keys: []CanonicalTypeKey = &.{},
-    pattern_type_keys: []CanonicalTypeKey = &.{},
-
-    fn init(
-        allocator: Allocator,
-        artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
-    ) Allocator.Error!PlatformRequiredValidationSnapshot {
-        var snapshot = PlatformRequiredValidationSnapshot{};
-        errdefer snapshot.deinit(allocator);
-
-        snapshot.dispatch_dispatcher_keys = try allocator.alloc(CanonicalTypeKey, artifact.static_dispatch_plans.plans.len);
-        snapshot.dispatch_callable_keys = try allocator.alloc(CanonicalTypeKey, artifact.static_dispatch_plans.plans.len);
-        for (artifact.static_dispatch_plans.plans, 0..) |plan, i| {
-            snapshot.dispatch_dispatcher_keys[i] = check.CheckedArtifact.checkedTypeRootKey(artifact, plan.dispatcher_ty);
-            snapshot.dispatch_callable_keys[i] = check.CheckedArtifact.checkedTypeRootKey(artifact, plan.callable_ty);
-        }
-
-        snapshot.iterator_iter_dispatcher_keys = try allocator.alloc(CanonicalTypeKey, artifact.static_dispatch_plans.iterator_for_plans.len);
-        snapshot.iterator_next_dispatcher_keys = try allocator.alloc(CanonicalTypeKey, artifact.static_dispatch_plans.iterator_for_plans.len);
-        for (artifact.static_dispatch_plans.iterator_for_plans, 0..) |plan, i| {
-            snapshot.iterator_iter_dispatcher_keys[i] = check.CheckedArtifact.checkedTypeRootKey(artifact, plan.iter.dispatcher_ty);
-            snapshot.iterator_next_dispatcher_keys[i] = check.CheckedArtifact.checkedTypeRootKey(artifact, plan.next.dispatcher_ty);
-        }
-
-        snapshot.pattern_type_keys = try allocator.alloc(CanonicalTypeKey, artifact.checked_bodies.patternCount());
-        for (snapshot.pattern_type_keys, 0..) |*key, i| {
-            const pattern_id: check.CheckedArtifact.CheckedPatternId = @enumFromInt(i);
-            key.* = check.CheckedArtifact.checkedTypeRootKey(artifact, artifact.checked_bodies.pattern(pattern_id).ty);
-        }
-
-        return snapshot;
-    }
-
-    fn deinit(self: *PlatformRequiredValidationSnapshot, allocator: Allocator) void {
-        allocator.free(self.dispatch_dispatcher_keys);
-        allocator.free(self.dispatch_callable_keys);
-        allocator.free(self.iterator_iter_dispatcher_keys);
-        allocator.free(self.iterator_next_dispatcher_keys);
-        allocator.free(self.pattern_type_keys);
-        self.* = .{};
-    }
-
-    fn dispatchPlanChanged(
-        self: *const PlatformRequiredValidationSnapshot,
-        artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
-        plan_index: usize,
-        plan: check.StaticDispatchRegistry.StaticDispatchCallPlan,
-    ) bool {
-        if (plan_index >= self.dispatch_dispatcher_keys.len or
-            plan_index >= self.dispatch_callable_keys.len)
-        {
-            return false;
-        }
-        return !typeKeyMatchesArtifactRoot(self.dispatch_dispatcher_keys[plan_index], artifact, plan.dispatcher_ty) or
-            !typeKeyMatchesArtifactRoot(self.dispatch_callable_keys[plan_index], artifact, plan.callable_ty);
-    }
-
-    fn iteratorPlanChanged(
-        self: *const PlatformRequiredValidationSnapshot,
-        artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
-        plan_index: usize,
-        plan: check.StaticDispatchRegistry.IteratorForPlan,
-    ) bool {
-        if (plan_index >= self.iterator_iter_dispatcher_keys.len or
-            plan_index >= self.iterator_next_dispatcher_keys.len)
-        {
-            return false;
-        }
-        return !typeKeyMatchesArtifactRoot(self.iterator_iter_dispatcher_keys[plan_index], artifact, plan.iter.dispatcher_ty) or
-            !typeKeyMatchesArtifactRoot(self.iterator_next_dispatcher_keys[plan_index], artifact, plan.next.dispatcher_ty);
-    }
-
-    fn patternTypeChanged(
-        self: *const PlatformRequiredValidationSnapshot,
-        artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
-        pattern_index: usize,
-        pattern: check.CheckedArtifact.CheckedPattern,
-    ) bool {
-        if (pattern_index >= self.pattern_type_keys.len) return false;
-        return !typeKeyMatchesArtifactRoot(self.pattern_type_keys[pattern_index], artifact, pattern.ty);
-    }
-
-    fn typeKeyMatchesArtifactRoot(
-        key: CanonicalTypeKey,
-        artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
-        root: check.CheckedArtifact.CheckedTypeId,
-    ) bool {
-        const current = check.CheckedArtifact.checkedTypeRootKey(artifact, root);
-        return std.meta.eql(key.bytes, current.bytes);
-    }
 };
 
 /// Coordinator manages all compilation state and coordinates workers
@@ -1298,7 +1204,25 @@ pub const Coordinator = struct {
         pf_pkg.modules.items[pf_module_id].depth = 1;
         pf_pkg.remaining_modules += 1;
         self.total_remaining += 1;
+
+        try self.setPlatformRequirementDependency(app_pkg, pf_pkg, pf_module_id);
+
         try self.enqueueParseTask("pf", pf_module_id);
+    }
+
+    pub fn setPlatformRequirementDependency(
+        self: *Coordinator,
+        app_pkg: *PackageState,
+        platform_pkg: *PackageState,
+        platform_module_id: ModuleId,
+    ) Allocator.Error!void {
+        const app_root_module_id = app_pkg.root_module_id orelse return;
+        const app_root = app_pkg.getModule(app_root_module_id).?;
+        app_root.platform_requirement_dependency = .{
+            .pkg_name = platform_pkg.name,
+            .module_id = platform_module_id,
+        };
+        try self.registerCrossPackageDependent(platform_pkg.name, platform_module_id, app_pkg.name, app_root_module_id);
     }
 
     /// Register a non-platform package and (optionally) wire a shorthand on
@@ -1602,6 +1526,25 @@ pub const Coordinator = struct {
         }
 
         return try views.toOwnedSlice(allocator);
+    }
+
+    fn platformRequirementArtifactForTypecheck(
+        self: *Coordinator,
+        mod: *ModuleState,
+    ) ?*const check.CheckedArtifact.CheckedModuleArtifact {
+        const env = mod.moduleEnv() orelse return null;
+        switch (env.module_kind) {
+            .app, .default_app => {},
+            .type_module,
+            .package,
+            .platform,
+            .hosted,
+            .module,
+            .malformed,
+            => return null,
+        }
+        const platform_root = self.findRootModule(.platform) orelse return null;
+        return platform_root.mod.checkedArtifact();
     }
 
     fn appendTypecheckAvailablePublicApiClosure(
@@ -2223,27 +2166,8 @@ pub const Coordinator = struct {
         const platform_declaration_artifact = platform_root.mod.checkedArtifact() orelse return;
         const requirement_context = check.CheckedArtifact.platformRequirementContextKey(platform_declaration_artifact);
 
-        const original_app_artifact = app_root.mod.checkedArtifact() orelse return;
-        var validation_snapshot = try PlatformRequiredValidationSnapshot.init(self.gpa, original_app_artifact);
-        defer validation_snapshot.deinit(self.gpa);
-
-        try self.appendPlatformRequiredInvalidNumericExpressionReports(app_root.mod, original_app_artifact, platform_declaration_artifact);
-        if (self.hasUserErrors() and !allow_user_errors) return;
-
-        try self.republishCheckedArtifact(app_root.pkg, app_root.mod, .{
-            .platform_requirement_artifact = check.CheckedArtifact.importedView(platform_declaration_artifact),
-            .platform_requirement_context = requirement_context,
-        });
-
-        const app_artifact = app_root.mod.checkedArtifact() orelse {
-            if (builtin.mode == .Debug) {
-                std.debug.panic("compile.coordinator.finalizeExecutableArtifacts missing app artifact after co-finalization", .{});
-            }
-            unreachable;
-        };
-        try self.appendPlatformRequiredUnresolvedDispatchReports(app_root.mod, app_artifact, &validation_snapshot);
-        try self.appendPlatformRequiredInvalidNumericPatternReports(app_root.mod, app_artifact, &validation_snapshot);
-        if (self.hasUserErrors() and !allow_user_errors) return;
+        const app_artifact = app_root.mod.checkedArtifact() orelse return;
+        self.assertAppCheckedWithPlatformRequirement(app_artifact, requirement_context);
 
         var relation_result = try check.CheckedArtifact.buildPlatformAppRelation(
             self.gpa,
@@ -2273,6 +2197,13 @@ pub const Coordinator = struct {
                 return;
             },
         };
+        try self.appendPlatformRequiredInvalidNumericExpressionReports(
+            app_root.mod,
+            app_artifact,
+            platform_declaration_artifact,
+        );
+        if (self.hasUserErrors() and !allow_user_errors) return error.HasUserErrors;
+
         const relation_artifacts = [_]check.CheckedArtifact.ImportedModuleView{
             check.CheckedArtifact.importedView(app_artifact),
         };
@@ -2300,27 +2231,8 @@ pub const Coordinator = struct {
         const platform_declaration_artifact = platform_root.mod.checkedArtifact() orelse return;
         const requirement_context = check.CheckedArtifact.platformRequirementContextKey(platform_declaration_artifact);
 
-        const original_app_artifact = app_root.mod.checkedArtifact() orelse return;
-        var validation_snapshot = try PlatformRequiredValidationSnapshot.init(self.gpa, original_app_artifact);
-        defer validation_snapshot.deinit(self.gpa);
-
-        try self.appendPlatformRequiredInvalidNumericExpressionReports(app_root.mod, original_app_artifact, platform_declaration_artifact);
-        if (self.hasUserErrors()) return;
-
-        try self.republishCheckedArtifact(app_root.pkg, app_root.mod, .{
-            .platform_requirement_artifact = check.CheckedArtifact.importedView(platform_declaration_artifact),
-            .platform_requirement_context = requirement_context,
-        });
-
-        const app_artifact = app_root.mod.checkedArtifact() orelse {
-            if (builtin.mode == .Debug) {
-                std.debug.panic("compile.coordinator.validatePlatformAppRelationsForCheck missing app artifact after co-finalization", .{});
-            }
-            unreachable;
-        };
-        try self.appendPlatformRequiredUnresolvedDispatchReports(app_root.mod, app_artifact, &validation_snapshot);
-        try self.appendPlatformRequiredInvalidNumericPatternReports(app_root.mod, app_artifact, &validation_snapshot);
-        if (self.hasUserErrors()) return;
+        const app_artifact = app_root.mod.checkedArtifact() orelse return;
+        self.assertAppCheckedWithPlatformRequirement(app_artifact, requirement_context);
 
         var relation_result = try check.CheckedArtifact.buildPlatformAppRelation(
             self.gpa,
@@ -2331,7 +2243,11 @@ pub const Coordinator = struct {
         defer relation_result.deinit(self.gpa);
 
         switch (relation_result) {
-            .relation => {},
+            .relation => try self.appendPlatformRequiredInvalidNumericExpressionReports(
+                app_root.mod,
+                app_artifact,
+                platform_declaration_artifact,
+            ),
             .type_mismatch => |mismatch| try self.appendPlatformRequirementTypeMismatchReport(
                 app_root.mod,
                 platform_declaration_artifact,
@@ -2343,6 +2259,19 @@ pub const Coordinator = struct {
                 platform_declaration_artifact,
                 missing,
             ),
+        }
+    }
+
+    fn assertAppCheckedWithPlatformRequirement(
+        _: *Coordinator,
+        app_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+        requirement_context: check.CheckedArtifact.PlatformRequirementContextKey,
+    ) void {
+        const artifact_context = app_artifact.checking_context_identity.platform_requirement_context orelse {
+            coordinatorInvariant("app artifact was not checked with the platform-required signature", .{});
+        };
+        if (!std.mem.eql(u8, &artifact_context.bytes, &requirement_context.bytes)) {
+            coordinatorInvariant("app artifact was checked with a different platform-required signature", .{});
         }
     }
 
@@ -2393,311 +2322,6 @@ pub const Coordinator = struct {
         try self.appendNonLowerableReport(app_mod, report);
     }
 
-    fn appendPlatformRequiredUnresolvedDispatchReports(
-        self: *Coordinator,
-        app_mod: *ModuleState,
-        app_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
-        validation_snapshot: *const PlatformRequiredValidationSnapshot,
-    ) Allocator.Error!void {
-        for (app_artifact.static_dispatch_plans.plans, 0..) |plan, plan_index| {
-            if (plan.result_mode != .value) continue;
-
-            if (try self.appendPlatformRequiredInvalidNumeralDispatchReportIfNeeded(
-                app_mod,
-                app_artifact,
-                plan,
-            )) continue;
-
-            const plan_changed = validation_snapshot.dispatchPlanChanged(app_artifact, plan_index, plan);
-            switch (plan.resolution) {
-                .resolved_target => |target| {
-                    if (!plan_changed) continue;
-
-                    const target_artifact = switch (target.kind) {
-                        .procedure => |procedure| blk: {
-                            const target_key = checkedArtifactKeyFromArtifactRef(procedure.template.artifact);
-                            break :blk self.checkedArtifactByKey(target_key) orelse {
-                                if (builtin.mode == .Debug) {
-                                    std.debug.panic("compile.coordinator missing checked artifact for resolved dispatch target", .{});
-                                }
-                                unreachable;
-                            };
-                        },
-                        .local_proc => app_artifact,
-                    };
-                    if (!try check.CheckedArtifact.checkedTypesCompatible(
-                        self.gpa,
-                        target_artifact,
-                        target.callable_ty,
-                        app_artifact,
-                        plan.callable_ty,
-                    )) {
-                        try self.appendPlatformRequiredDispatchTargetMismatchReport(
-                            app_mod,
-                            app_artifact,
-                            target_artifact,
-                            plan.method,
-                            target.callable_ty,
-                            plan.callable_ty,
-                        );
-                    }
-                    continue;
-                },
-                .unresolved_checked_plan => {},
-            }
-            if (!plan_changed) continue;
-            const dispatcher = self.platformRequiredDispatchReportDispatcherType(app_artifact, plan) orelse continue;
-            try self.appendPlatformRequiredUnresolvedDispatchReport(
-                app_mod,
-                app_artifact,
-                plan.method,
-                dispatcher.artifact,
-                dispatcher.ty,
-            );
-        }
-        for (app_artifact.static_dispatch_plans.iterator_for_plans, 0..) |plan, plan_index| {
-            if (!validation_snapshot.iteratorPlanChanged(app_artifact, plan_index, plan)) continue;
-            const dispatcher = self.platformRequiredIteratorReportDispatcherType(app_artifact, plan.iter) orelse continue;
-
-            try self.appendPlatformRequiredUnresolvedDispatchReport(
-                app_mod,
-                app_artifact,
-                plan.iter.method,
-                dispatcher.artifact,
-                dispatcher.ty,
-            );
-        }
-    }
-
-    const PlatformRequiredDispatchReportType = struct {
-        artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
-        ty: check.CheckedIds.CheckedTypeId,
-    };
-
-    fn platformRequiredDispatchReportDispatcherType(
-        self: *Coordinator,
-        app_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
-        plan: check.StaticDispatchRegistry.StaticDispatchCallPlan,
-    ) ?PlatformRequiredDispatchReportType {
-        if (!check.CheckedArtifact.checkedTypeRootIsIdentity(app_artifact, plan.dispatcher_ty)) {
-            return .{ .artifact = app_artifact, .ty = plan.dispatcher_ty };
-        }
-        const dispatcher_expr = staticDispatchPlanDispatcherExpr(app_artifact, plan) orelse return null;
-        return self.platformRequiredConcreteExprType(app_artifact, dispatcher_expr);
-    }
-
-    fn platformRequiredIteratorReportDispatcherType(
-        self: *Coordinator,
-        app_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
-        plan: check.StaticDispatchRegistry.IteratorDispatchCall,
-    ) ?PlatformRequiredDispatchReportType {
-        if (!check.CheckedArtifact.checkedTypeRootIsIdentity(app_artifact, plan.dispatcher_ty)) {
-            return .{ .artifact = app_artifact, .ty = plan.dispatcher_ty };
-        }
-        const dispatcher_expr = iteratorDispatchPlanDispatcherExpr(app_artifact, plan) orelse return null;
-        return self.platformRequiredConcreteExprType(app_artifact, dispatcher_expr);
-    }
-
-    fn staticDispatchPlanDispatcherExpr(
-        app_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
-        plan: check.StaticDispatchRegistry.StaticDispatchCallPlan,
-    ) ?check.CheckedArtifact.CheckedExprId {
-        const index = switch (plan.dispatcher) {
-            .arg => |arg| arg,
-            .type_only => return null,
-        };
-        const args = plan.argsSlice(&app_artifact.static_dispatch_plans);
-        if (index >= args.len) return null;
-        return switch (args[index]) {
-            .checked_expr => |expr| expr,
-            .generated_interpolation_iter,
-            .generated_numeral,
-            .generated_quote,
-            => null,
-        };
-    }
-
-    fn iteratorDispatchPlanDispatcherExpr(
-        app_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
-        plan: check.StaticDispatchRegistry.IteratorDispatchCall,
-    ) ?check.CheckedArtifact.CheckedExprId {
-        const args = plan.argsSlice(&app_artifact.static_dispatch_plans);
-        if (plan.dispatcher_arg_index >= args.len) return null;
-        return switch (args[plan.dispatcher_arg_index]) {
-            .checked_expr => |expr| expr,
-            .loop_iterator_state => null,
-        };
-    }
-
-    fn platformRequiredConcreteExprType(
-        self: *Coordinator,
-        app_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
-        expr_id: check.CheckedArtifact.CheckedExprId,
-    ) ?PlatformRequiredDispatchReportType {
-        const expr = app_artifact.checked_bodies.expr(expr_id);
-        const expr_ty: ?PlatformRequiredDispatchReportType = if (check.CheckedArtifact.checkedTypeRootIsIdentity(app_artifact, expr.ty))
-            null
-        else
-            .{ .artifact = app_artifact, .ty = expr.ty };
-        return switch (expr.data) {
-            .dispatch_call => |plan_id| if (plan_id) |id| self.platformRequiredResolvedDispatchReturnType(app_artifact, id) orelse expr_ty else expr_ty,
-            .method_eq => |plan_id| if (plan_id) |id| self.platformRequiredResolvedDispatchReturnType(app_artifact, id) orelse expr_ty else expr_ty,
-            .num_from_numeral,
-            .typed_num_from_numeral,
-            => |plan_id| if (plan_id) |id| self.platformRequiredResolvedDispatchReturnType(app_artifact, id) orelse expr_ty else expr_ty,
-            .str_from_quote => |quote| if (quote.plan) |id| self.platformRequiredResolvedDispatchReturnType(app_artifact, id) orelse expr_ty else expr_ty,
-            .match_ => |match| blk: {
-                if (!match.is_try_suffix) break :blk expr_ty;
-                const cond = self.platformRequiredConcreteExprType(app_artifact, match.cond) orelse {
-                    const cond_expr = app_artifact.checked_bodies.expr(match.cond);
-                    if (check.CheckedArtifact.checkedTypeRootIsIdentity(app_artifact, cond_expr.ty)) break :blk expr_ty;
-                    break :blk platformRequiredTryOkType(app_artifact, cond_expr.ty);
-                };
-                break :blk if (platformRequiredTryOkType(cond.artifact, cond.ty)) |ok| ok else expr_ty;
-            },
-            else => expr_ty,
-        };
-    }
-
-    fn platformRequiredTryOkType(
-        artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
-        root: check.CheckedArtifact.CheckedTypeId,
-    ) ?PlatformRequiredDispatchReportType {
-        var current = root;
-        var remaining = artifact.checked_types.payloads.items.len;
-        while (true) {
-            const payload = artifact.checked_types.payload(current);
-            switch (payload) {
-                .alias => |alias| current = alias.backing,
-                .nominal => |nominal| current = nominal.backing,
-                .tag_union => |tag_union| {
-                    if (platformRequiredOkTagPayload(artifact, tag_union.tags)) |ok| return .{ .artifact = artifact, .ty = ok };
-                    current = tag_union.ext;
-                },
-                .empty_tag_union => return null,
-                else => return null,
-            }
-            if (remaining == 0) {
-                coordinatorInvariant("platform-required Try success type lookup reached a cyclic checked type", .{});
-            }
-            remaining -= 1;
-        }
-    }
-
-    fn platformRequiredOkTagPayload(
-        artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
-        tags: []const check.CheckedArtifact.CheckedTag,
-    ) ?check.CheckedArtifact.CheckedTypeId {
-        for (tags) |tag| {
-            if (!std.mem.eql(u8, artifact.canonical_names.tagLabelText(tag.name), "Ok")) continue;
-            const args = tag.argsSlice(&artifact.checked_types);
-            if (args.len != 1) return null;
-            return args[0];
-        }
-        return null;
-    }
-
-    fn platformRequiredResolvedDispatchReturnType(
-        self: *Coordinator,
-        app_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
-        plan_id: check.StaticDispatchRegistry.StaticDispatchPlanId,
-    ) ?PlatformRequiredDispatchReportType {
-        const raw = @intFromEnum(plan_id);
-        if (raw >= app_artifact.static_dispatch_plans.plans.len) return null;
-        const plan = app_artifact.static_dispatch_plans.plans[raw];
-        const target = switch (plan.resolution) {
-            .resolved_target => |target| target,
-            .unresolved_checked_plan => return null,
-        };
-        const plan_ret = checkedFunctionReturnType(app_artifact, plan.callable_ty) orelse return null;
-        if (!check.CheckedArtifact.checkedTypeRootIsIdentity(app_artifact, plan_ret)) {
-            return .{ .artifact = app_artifact, .ty = plan_ret };
-        }
-        const target_artifact = self.platformRequiredDispatchTargetArtifact(app_artifact, target);
-        if (checkedFunctionReturnType(target_artifact, target.callable_ty)) |target_ret| {
-            if (!check.CheckedArtifact.checkedTypeRootIsIdentity(target_artifact, target_ret)) {
-                return .{ .artifact = target_artifact, .ty = target_ret };
-            }
-        }
-        return null;
-    }
-
-    fn platformRequiredDispatchTargetArtifact(
-        self: *Coordinator,
-        app_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
-        target: check.StaticDispatchRegistry.MethodTarget,
-    ) *const check.CheckedArtifact.CheckedModuleArtifact {
-        return switch (target.kind) {
-            .local_proc => app_artifact,
-            .procedure => |procedure| blk: {
-                const target_key = checkedArtifactKeyFromArtifactRef(procedure.template.artifact);
-                break :blk self.checkedArtifactByKey(target_key) orelse {
-                    coordinatorInvariant("platform-required dispatch target artifact was not available", .{});
-                };
-            },
-        };
-    }
-
-    fn checkedFunctionReturnType(
-        app_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
-        callable_ty: check.CheckedIds.CheckedTypeId,
-    ) ?check.CheckedIds.CheckedTypeId {
-        return switch (app_artifact.checked_types.payload(callable_ty)) {
-            .function => |function| function.ret,
-            else => null,
-        };
-    }
-
-    fn appendPlatformRequiredInvalidNumeralDispatchReportIfNeeded(
-        self: *Coordinator,
-        app_mod: *ModuleState,
-        app_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
-        plan: check.StaticDispatchRegistry.StaticDispatchCallPlan,
-    ) Allocator.Error!bool {
-        const method_name = app_artifact.canonical_names.methodNameText(plan.method);
-        if (!std.mem.eql(u8, method_name, "from_numeral")) return false;
-
-        const builtin_nominal = check.CheckedArtifact.checkedTypeBuiltinNominal(
-            app_artifact,
-            plan.dispatcher_ty,
-        ) orelse return false;
-        if (!check.CheckedArtifact.builtinNominalAcceptsNumeralLiteral(builtin_nominal)) return false;
-
-        const args = plan.argsSlice(&app_artifact.static_dispatch_plans);
-        if (args.len != 1) return false;
-        const literal = switch (args[0]) {
-            .generated_numeral => |literal| literal,
-            else => return false,
-        };
-
-        const expr = app_artifact.checked_bodies.expr(plan.expr);
-        const has_suffix = switch (expr.data) {
-            .typed_num_from_numeral => true,
-            else => false,
-        };
-
-        const module_env = app_mod.moduleEnv() orelse {
-            if (builtin.mode == .Debug) {
-                std.debug.panic("compile.coordinator missing module env for platform-required numeral validation", .{});
-            }
-            unreachable;
-        };
-        if (try check.CheckedArtifact.numeralLiteralFitsBuiltin(
-            self.gpa,
-            module_env,
-            literal,
-            builtin_nominal,
-            has_suffix,
-        )) return false;
-
-        try self.appendPlatformRequiredInvalidNumericExpressionReport(
-            app_mod,
-            expr,
-            builtin_nominal,
-        );
-        return true;
-    }
-
     fn appendPlatformRequiredInvalidNumericExpressionReports(
         self: *Coordinator,
         app_mod: *ModuleState,
@@ -2734,70 +2358,6 @@ pub const Coordinator = struct {
                 );
                 break;
             }
-        }
-    }
-
-    fn appendPlatformRequiredDispatchTargetMismatchReport(
-        self: *Coordinator,
-        app_mod: *ModuleState,
-        app_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
-        target_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
-        method: check.CanonicalNames.MethodNameId,
-        expected_ty: check.CheckedIds.CheckedTypeId,
-        actual_ty: check.CheckedIds.CheckedTypeId,
-    ) Allocator.Error!void {
-        const method_name = app_artifact.canonical_names.methodNameText(method);
-        const expected = try check.CheckedArtifact.formatCheckedTypeAlloc(self.gpa, target_artifact, expected_ty);
-        defer self.gpa.free(expected);
-        const actual = try check.CheckedArtifact.formatCheckedTypeAlloc(self.gpa, app_artifact, actual_ty);
-        defer self.gpa.free(actual);
-
-        var report = try Report.init(self.gpa, "Type Mismatch", "", .runtime_error);
-        errdefer report.deinit();
-
-        try report.document.addText("This ");
-        try report.document.addAnnotated(method_name, .emphasized);
-        try report.document.addText(" method call does not match the method it resolves to after applying the platform-required signature.");
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
-        try report.document.addText("The resolved method has type:");
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
-        try report.document.addCodeBlock(expected);
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
-        try report.document.addText("But this call was inferred as:");
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
-        try report.document.addCodeBlock(actual);
-
-        try self.appendNonLowerableReport(app_mod, report);
-    }
-
-    fn appendPlatformRequiredInvalidNumericPatternReports(
-        self: *Coordinator,
-        app_mod: *ModuleState,
-        app_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
-        validation_snapshot: *const PlatformRequiredValidationSnapshot,
-    ) Allocator.Error!void {
-        var raw_pattern: usize = 0;
-        while (raw_pattern < app_artifact.checked_bodies.patternCount()) : (raw_pattern += 1) {
-            const pattern_id: check.CheckedArtifact.CheckedPatternId = @enumFromInt(raw_pattern);
-            const pattern = app_artifact.checked_bodies.pattern(pattern_id);
-            if (!validation_snapshot.patternTypeChanged(app_artifact, raw_pattern, pattern)) continue;
-            if (!checkedPatternIsNumericLiteral(pattern.data)) continue;
-
-            const builtin_nominal = check.CheckedArtifact.checkedTypeBuiltinNominal(
-                app_artifact,
-                pattern.ty,
-            ) orelse continue;
-            if (check.CheckedArtifact.builtinNominalAcceptsNumeralLiteral(builtin_nominal)) continue;
-
-            try self.appendPlatformRequiredNumericPatternTypeMismatchReport(
-                app_mod,
-                app_artifact,
-                pattern.ty,
-            );
         }
     }
 
@@ -2856,87 +2416,6 @@ pub const Coordinator = struct {
             .fields => "Builtin.Fields",
             .field => "Builtin.Field",
         };
-    }
-
-    fn appendPlatformRequiredNumericPatternTypeMismatchReport(
-        self: *Coordinator,
-        app_mod: *ModuleState,
-        app_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
-        pattern_ty: check.CheckedArtifact.CheckedTypeId,
-    ) Allocator.Error!void {
-        const actual = try check.CheckedArtifact.formatCheckedTypeAlloc(self.gpa, app_artifact, pattern_ty);
-        defer self.gpa.free(actual);
-
-        var report = try Report.init(self.gpa, "Type Mismatch", "", .runtime_error);
-        errdefer report.deinit();
-
-        try report.document.addText("This numeric pattern cannot match the type required by the platform.");
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
-        try report.document.addText("The platform-required signature expects:");
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
-        try report.document.addCodeBlock(actual);
-
-        try self.appendNonLowerableReport(app_mod, report);
-    }
-
-    fn checkedPatternIsNumericLiteral(data: check.CheckedArtifact.CheckedPatternData) bool {
-        return switch (data) {
-            .num_literal,
-            .small_dec_literal,
-            .dec_literal,
-            .frac_f32_literal,
-            .frac_f64_literal,
-            => true,
-            else => false,
-        };
-    }
-
-    fn appendPlatformRequiredUnresolvedDispatchReport(
-        self: *Coordinator,
-        app_mod: *ModuleState,
-        method_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
-        method: check.CanonicalNames.MethodNameId,
-        dispatcher_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
-        dispatcher_ty: check.CheckedIds.CheckedTypeId,
-    ) Allocator.Error!void {
-        if (check.CheckedArtifact.checkedTypeRootIsIdentity(dispatcher_artifact, dispatcher_ty)) return;
-
-        const method_name = method_artifact.canonical_names.methodNameText(method);
-        const dispatcher_type = try check.CheckedArtifact.formatCheckedTypeAlloc(self.gpa, dispatcher_artifact, dispatcher_ty);
-        defer self.gpa.free(dispatcher_type);
-
-        if (std.mem.eql(u8, method_name, "from_numeral")) {
-            var report = try Report.init(self.gpa, "Type Mismatch", "", .runtime_error);
-            errdefer report.deinit();
-
-            try report.document.addText("This number is being used where a non-number type is needed.");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
-            try report.document.addText("The platform-required signature expects:");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
-            try report.document.addCodeBlock(dispatcher_type);
-
-            try self.appendNonLowerableReport(app_mod, report);
-            return;
-        }
-
-        var report = try Report.init(self.gpa, "Missing Method", "", .runtime_error);
-        errdefer report.deinit();
-
-        try report.document.addText("This ");
-        try report.document.addAnnotated(method_name, .emphasized);
-        try report.document.addText(" method is being called on a value whose type doesn't have that method.");
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
-        try report.document.addText("The value's type is:");
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
-        try report.document.addCodeBlock(dispatcher_type);
-
-        try self.appendNonLowerableReport(app_mod, report);
     }
 
     pub fn hasUserErrors(self: *const Coordinator) bool {
@@ -3726,6 +3205,7 @@ pub const Coordinator = struct {
         env: *ModuleEnv,
         imported_envs: []const *ModuleEnv,
         imported_artifacts: []const check.CheckedArtifact.PublishImportArtifact,
+        platform_requirement_context: ?check.CheckedArtifact.PlatformRequirementContextKey,
         explicit_roots: []const check.CheckedArtifact.ExplicitRootRequestInput,
     ) Allocator.Error!check.CheckedArtifact.CheckedModuleArtifactKey {
         var typed = try CheckedModules.initForRootModule(self.gpa, env, imported_envs);
@@ -3737,6 +3217,7 @@ pub const Coordinator = struct {
             typed.module_idx,
             .{
                 .imports = imported_artifacts,
+                .platform_requirement_context = platform_requirement_context,
                 .explicit_roots = explicit_roots,
             },
         );
@@ -3818,6 +3299,7 @@ pub const Coordinator = struct {
         mod: *ModuleState,
         imported_envs: []const *ModuleEnv,
         imported_artifacts: []const check.CheckedArtifact.PublishImportArtifact,
+        platform_requirement_context: ?check.CheckedArtifact.PlatformRequirementContextKey,
         explicit_roots: []const check.CheckedArtifact.ExplicitRootRequestInput,
     ) bool {
         const manager = self.cache_manager orelse return false;
@@ -3825,7 +3307,13 @@ pub const Coordinator = struct {
 
         const current_env = mod.moduleEnv() orelse return false;
         if (!resolvedDirectImportsHaveCheckedOutput(current_env, imported_artifacts)) return false;
-        const cache_key = self.checkedModuleCacheKey(current_env, imported_envs, imported_artifacts, explicit_roots) catch return false;
+        const cache_key = self.checkedModuleCacheKey(
+            current_env,
+            imported_envs,
+            imported_artifacts,
+            platform_requirement_context,
+            explicit_roots,
+        ) catch return false;
 
         return self.installCachedCheckedArtifact(pkg, mod, cache_key, current_env);
     }
@@ -4258,13 +3746,39 @@ pub const Coordinator = struct {
         errdefer task_payload_alloc.free(imported_envs);
         const imported_artifacts = try self.buildTypecheckImportedArtifacts(pkg, mod, task_payload_alloc);
         errdefer task_payload_alloc.free(imported_artifacts);
-        const available_artifacts = try self.collectTypecheckAvailableArtifactViews(task_payload_alloc, imported_artifacts);
+        var available_artifacts = try self.collectTypecheckAvailableArtifactViews(task_payload_alloc, imported_artifacts);
         errdefer task_payload_alloc.free(available_artifacts);
         const explicit_roots = try buildExplicitRootRequests(mod, task_payload_alloc);
         errdefer task_payload_alloc.free(explicit_roots);
 
+        var platform_requirement_artifact: ?*const check.CheckedArtifact.CheckedModuleArtifact = null;
+        var platform_requirement_context: ?check.CheckedArtifact.PlatformRequirementContextKey = null;
+        if (self.platformRequirementArtifactForTypecheck(mod)) |platform_artifact| {
+            const platform_view = check.CheckedArtifact.importedView(platform_artifact);
+            var extended_available = std.ArrayList(check.CheckedArtifact.ImportedModuleView).empty;
+            errdefer extended_available.deinit(task_payload_alloc);
+            try extended_available.appendSlice(task_payload_alloc, available_artifacts);
+            try self.appendTypecheckAvailablePublicApiClosure(
+                &extended_available,
+                task_payload_alloc,
+                platform_view,
+            );
+            const old_available = available_artifacts;
+            available_artifacts = try extended_available.toOwnedSlice(task_payload_alloc);
+            task_payload_alloc.free(old_available);
+            platform_requirement_artifact = platform_artifact;
+            platform_requirement_context = check.CheckedArtifact.platformRequirementContextKey(platform_artifact);
+        }
+
         if (mod.reports.items.len == 0 and
-            self.tryLoadCachedCheckedModule(pkg, mod, imported_envs, imported_artifacts, explicit_roots))
+            self.tryLoadCachedCheckedModule(
+                pkg,
+                mod,
+                imported_envs,
+                imported_artifacts,
+                platform_requirement_context,
+                explicit_roots,
+            ))
         {
             task_payload_alloc.free(imported_envs);
             task_payload_alloc.free(imported_artifacts);
@@ -4286,6 +3800,8 @@ pub const Coordinator = struct {
                 .imported_envs = imported_envs,
                 .imported_artifacts = imported_artifacts,
                 .available_artifacts = available_artifacts,
+                .platform_requirement_artifact = platform_requirement_artifact,
+                .platform_requirement_context = platform_requirement_context,
                 .explicit_roots = explicit_roots,
             },
         });
@@ -4739,6 +4255,17 @@ pub const Coordinator = struct {
             if (!self.isExternalReady(pkg.name, ext_name)) {
                 if (comptime trace_build) {
                     std.debug.print("[COORD] UNBLOCK WAIT: pkg={s} module={s} waiting on external {s}\n", .{ pkg.name, mod.name, ext_name });
+                }
+                return;
+            }
+        }
+
+        if (mod.platform_requirement_dependency) |dependency| {
+            const dependency_pkg = self.packages.get(dependency.pkg_name) orelse return;
+            const dependency_mod = dependency_pkg.getModule(dependency.module_id) orelse return;
+            if (dependency_mod.phase != .Done) {
+                if (comptime trace_build) {
+                    std.debug.print("[COORD] UNBLOCK WAIT: pkg={s} module={s} waiting on platform requirement {s}:{}\n", .{ pkg.name, mod.name, dependency.pkg_name, dependency.module_id });
                 }
                 return;
             }
@@ -5211,6 +4738,10 @@ pub const Coordinator = struct {
         // Keep those allocations with the published result instead of the
         // task-local scratch arena, which is reset after the worker task.
         const check_alloc = result_alloc;
+        const platform_requirement_artifact = if (task.platform_requirement_artifact) |artifact|
+            check.CheckedArtifact.importedView(artifact)
+        else
+            null;
         var typecheck_output = try compile_package.PackageEnv.typeCheckModule(
             check_alloc,
             result_alloc,
@@ -5219,6 +4750,8 @@ pub const Coordinator = struct {
             task.imported_envs,
             task.imported_artifacts,
             task.available_artifacts,
+            platform_requirement_artifact,
+            task.platform_requirement_context,
             task.explicit_roots,
             compile_package.compileTimeFinalizationOptions(self.max_threads, &self.roc_ctx),
         );

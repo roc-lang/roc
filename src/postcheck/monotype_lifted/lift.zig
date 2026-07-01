@@ -1097,8 +1097,10 @@ const BoundSet = struct {
         self.locals.deinit();
     }
 
-    fn contains(self: *const BoundSet, local: Mono.LocalId) bool {
-        return self.locals.contains(local);
+    fn contains(self: *const BoundSet, input: *const Ast.Program, local: Mono.LocalId) bool {
+        if (self.locals.contains(local)) return true;
+        const local_data = input.locals.items[@intFromEnum(local)];
+        return if (local_data.binder) |binder| self.binders.contains(binder) else false;
     }
 
     fn put(self: *BoundSet, input: *const Ast.Program, local: Mono.LocalId) Allocator.Error!void {
@@ -1208,7 +1210,7 @@ const CaptureSet = struct {
     }
 
     fn addIfFree(self: *CaptureSet, local: Mono.LocalId, bound: *const BoundSet) Allocator.Error!void {
-        if (bound.contains(local) or self.seen.contains(local)) return;
+        if (bound.contains(self.program, local) or self.seen.contains(local)) return;
         const local_data = self.program.locals.items[@intFromEnum(local)];
         try self.seen.put(local, {});
         try self.items.append(self.allocator, .{

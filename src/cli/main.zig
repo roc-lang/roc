@@ -5573,6 +5573,7 @@ fn lowerLirWithCoordinator(
                     coord.total_remaining += 1;
                     try coord.enqueueParseTask(target_name, pf_module_id);
                 }
+                try coord.setPlatformRequirementDependency(app_pkg, pf_pkg, pf_pkg.root_module_id.?);
             }
         }
     }

@@ -45,6 +45,11 @@ const Self = @This();
 
 const InterpolationConstraintId = enum(u32) { _ };
 
+/// Platform `requires` declarations that constrain app definitions during checking.
+pub const PlatformRequirements = struct {
+    module_env: *const ModuleEnv,
+};
+
 const InterpolationConstraintMetadata = struct {
     expr_idx: CIR.Expr.Idx,
     item_var: Var,
@@ -134,6 +139,9 @@ constraint_expr_by_fn_var: std.AutoHashMap(Var, CIR.Expr.Idx),
 /// method call resolves to a record field function, the checker rewrites the
 /// method call to an ordinary call using this field access as the callee.
 method_field_access_exprs: std.AutoHashMapUnmanaged(CIR.Expr.Idx, CIR.Expr.Idx),
+/// Platform-required signatures copied into this module, keyed by the app def
+/// that must be checked against the required type.
+platform_required_expected_types: std.AutoHashMap(CIR.Def.Idx, PlatformRequiredExpectedType),
 /// Interpolation metadata records keyed by their static dispatch constraint function.
 interpolation_constraint_ids_by_fn_var: std.AutoHashMap(Var, InterpolationConstraintId),
 /// Metadata produced when checking interpolation expressions and consumed when
@@ -953,6 +961,22 @@ const DeferredDefUnification = struct {
     expr_var: Var,
 };
 
+const PlatformRequiredExpectedMode = enum {
+    exact,
+    function_input,
+};
+
+const PlatformRequiredExpectedType = struct {
+    var_: Var,
+    required_ident: Ident.Idx,
+    mode: PlatformRequiredExpectedMode,
+};
+
+const ExpectedFunctionInput = struct {
+    func: Func,
+    context: problem.Context,
+};
+
 const ValueLookupEntry = struct {
     expr_idx: CIR.Expr.Idx,
     pattern_idx: CIR.Pattern.Idx,
@@ -1151,6 +1175,7 @@ fn initAssumePrepared(
         .ident_to_var_map = std.AutoHashMap(Ident.Idx, Var).init(gpa),
         .constraint_expr_by_fn_var = std.AutoHashMap(Var, CIR.Expr.Idx).init(gpa),
         .method_field_access_exprs = .{},
+        .platform_required_expected_types = std.AutoHashMap(CIR.Def.Idx, PlatformRequiredExpectedType).init(gpa),
         .interpolation_constraint_ids_by_fn_var = std.AutoHashMap(Var, InterpolationConstraintId).init(gpa),
         .interpolation_constraint_metadata = .empty,
         .reported_constraint_errors = std.AutoHashMap(ReportedConstraintError, void).init(gpa),
@@ -1314,6 +1339,7 @@ pub fn deinit(self: *Self) void {
     self.ident_to_var_map.deinit();
     self.constraint_expr_by_fn_var.deinit();
     self.method_field_access_exprs.deinit(self.gpa);
+    self.platform_required_expected_types.deinit();
     self.interpolation_constraint_ids_by_fn_var.deinit();
     for (self.interpolation_constraint_metadata.items) |meta| {
         self.gpa.free(meta.interpolated_vars);
@@ -4531,10 +4557,22 @@ fn copyBuiltinTypes(self: *Self) Allocator.Error!void {
 
 /// Public `checkFile` function.
 pub fn checkFile(self: *Self) std.mem.Allocator.Error!void {
-    return self.checkFileInternal(false);
+    return self.checkFileInternal(null, false);
 }
 
-fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator.Error!void {
+/// Check an app module while applying relation-independent platform `requires` signatures.
+pub fn checkFileWithPlatformRequirements(
+    self: *Self,
+    platform_requirements: PlatformRequirements,
+) std.mem.Allocator.Error!void {
+    return self.checkFileInternal(platform_requirements, false);
+}
+
+fn checkFileInternal(
+    self: *Self,
+    platform_requirements: ?PlatformRequirements,
+    skip_numeric_defaults: bool,
+) std.mem.Allocator.Error!void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -4644,6 +4682,9 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
     // Process requires_types annotations for platforms
     // This ensures the type store has the actual types for platform requirements
     try self.processRequiresTypes(&env);
+
+    self.platform_required_expected_types.clearRetainingCapacity();
+    try self.collectPlatformRequiredExpectedTypes(platform_requirements, &env);
 
     // Then, iterate over defs again, inferring types
     for (0..self.cir.all_defs.span.len) |def_offset| {
@@ -7329,6 +7370,63 @@ fn processRequiresTypes(self: *Self, env: *Env) std.mem.Allocator.Error!void {
     }
 }
 
+fn collectPlatformRequiredExpectedTypes(
+    self: *Self,
+    platform_requirements: ?PlatformRequirements,
+    env: *Env,
+) std.mem.Allocator.Error!void {
+    const platform = platform_requirements orelse return;
+    std.debug.assert(env.rank() == .outermost);
+
+    for (platform.module_env.requires_types.items.items) |required_type| {
+        if (platform.module_env.for_clause_aliases.sliceRange(required_type.type_aliases).len > 0) {
+            continue;
+        }
+
+        const required_ident = try self.cir.common.insertIdentFrom(self.gpa, &platform.module_env.common, required_type.ident);
+        const app_def = self.appDefByRequiredIdent(required_ident) orelse continue;
+        const app_def_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(app_def));
+        const copied_required_type = try self.copyVar(
+            ModuleEnv.varFrom(required_type.type_anno),
+            platform.module_env,
+            app_def_region,
+        );
+        try self.platform_required_expected_types.put(app_def, .{
+            .var_ = copied_required_type,
+            .required_ident = required_ident,
+            .mode = self.platformRequiredExpectedMode(copied_required_type),
+        });
+    }
+}
+
+fn platformRequiredExpectedMode(
+    self: *Self,
+    copied_required_type: Var,
+) PlatformRequiredExpectedMode {
+    var current = copied_required_type;
+    var guard = types_mod.debug.IterationGuard.init("Check.platformRequiredExpectedMode");
+    while (true) {
+        guard.tick();
+        switch (self.types.resolveVar(current).desc.content) {
+            .alias => |alias| current = self.types.getAliasBackingVar(alias),
+            .structure => |flat| switch (flat) {
+                .fn_pure, .fn_unbound, .fn_effectful => return .function_input,
+                else => return .exact,
+            },
+            else => return .exact,
+        }
+    }
+}
+
+fn appDefByRequiredIdent(self: *const Self, required_ident: Ident.Idx) ?CIR.Def.Idx {
+    for (self.cir.store.sliceDefs(self.cir.global_value_defs)) |def_idx| {
+        const def = self.cir.store.getDef(def_idx);
+        const name = self.getPatternIdent(def.pattern) orelse continue;
+        if (name.eql(required_ident)) return def_idx;
+    }
+    return null;
+}
+
 /// Check if a statement index is a for-clause alias statement.
 /// For-clause alias statements are created during platform header processing
 /// for type aliases like [Model : model] in the requires clause.
@@ -7580,13 +7678,23 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx, env: *Env) std.mem.Allocator.Erro
     defer self.enclosing_func_name = saved_func_name;
 
     // Check the annotation, if it exists
-    const expectation = blk: {
+    var expectation = blk: {
         if (def.annotation) |annotation_idx| {
             break :blk Expected.fromAnnotation(annotation_idx);
         } else {
             break :blk Expected.none();
         }
     };
+    if (self.platform_required_expected_types.get(def_idx)) |required| {
+        const required_type = Expected.Type{
+            .var_ = required.var_,
+            .context = .{ .platform_requirement = .{ .required_ident = required.required_ident } },
+        };
+        expectation = switch (required.mode) {
+            .exact => expectation.withType(required_type),
+            .function_input => expectation.withFunctionInput(required_type),
+        };
+    }
 
     self.empirical_exhaustiveness_depth += 1;
     defer self.empirical_exhaustiveness_depth -= 1;
@@ -8933,7 +9041,14 @@ fn setBuiltinTypeContent(
 // types //
 
 const Expected = struct {
+    const Type = struct {
+        var_: Var,
+        context: problem.Context,
+    };
+
     annotation: ?CIR.Annotation.Idx = null,
+    type_: ?Type = null,
+    function_input: ?Type = null,
     branch_result: ?Var = null,
     return_result: ?Var = null,
     comptime_condition_warnings: enum { emit, suppress } = .emit,
@@ -8949,6 +9064,30 @@ const Expected = struct {
     fn withAnnotation(self: Expected, annotation_idx: CIR.Annotation.Idx) Expected {
         return .{
             .annotation = annotation_idx,
+            .type_ = self.type_,
+            .function_input = self.function_input,
+            .branch_result = self.branch_result,
+            .return_result = self.return_result,
+            .comptime_condition_warnings = self.comptime_condition_warnings,
+        };
+    }
+
+    fn withType(self: Expected, type_: Type) Expected {
+        return .{
+            .annotation = self.annotation,
+            .type_ = type_,
+            .function_input = self.function_input,
+            .branch_result = self.branch_result,
+            .return_result = self.return_result,
+            .comptime_condition_warnings = self.comptime_condition_warnings,
+        };
+    }
+
+    fn withFunctionInput(self: Expected, function_input: Type) Expected {
+        return .{
+            .annotation = self.annotation,
+            .type_ = self.type_,
+            .function_input = function_input,
             .branch_result = self.branch_result,
             .return_result = self.return_result,
             .comptime_condition_warnings = self.comptime_condition_warnings,
@@ -8958,6 +9097,8 @@ const Expected = struct {
     fn withBranchResult(self: Expected, branch_result: Var) Expected {
         return .{
             .annotation = self.annotation,
+            .type_ = self.type_,
+            .function_input = self.function_input,
             .branch_result = branch_result,
             .return_result = self.return_result orelse branch_result,
             .comptime_condition_warnings = self.comptime_condition_warnings,
@@ -8991,6 +9132,8 @@ const Expected = struct {
     fn suppressComptimeConditionWarnings(self: Expected) Expected {
         return .{
             .annotation = self.annotation,
+            .type_ = self.type_,
+            .function_input = self.function_input,
             .branch_result = self.branch_result,
             .return_result = self.return_result,
             .comptime_condition_warnings = .suppress,
@@ -9444,6 +9587,21 @@ fn getPatternIdent(self: *const Self, ptrn_idx: CIR.Pattern.Idx) ?Ident.Idx {
     }
 }
 
+fn expectedFunctionInputIsPlatform(input: ExpectedFunctionInput) bool {
+    return switch (input.context) {
+        .platform_requirement => true,
+        else => false,
+    };
+}
+
+fn patternIsSimpleIgnoredArg(self: *const Self, ptrn_idx: CIR.Pattern.Idx) bool {
+    return switch (self.cir.store.getPattern(ptrn_idx)) {
+        .underscore => true,
+        .assign => |assign| assign.ident.attributes.ignored,
+        else => false,
+    };
+}
+
 fn patternNeedsExhaustiveness(self: *const Self, pattern_idx: CIR.Pattern.Idx) bool {
     const pattern = self.cir.store.getPattern(pattern_idx);
     return switch (pattern) {
@@ -9768,10 +9926,24 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             break :blk .{ expr_var_raw, null };
         }
 
+        const expected_type_var: ?Var = if (expected.type_) |expected_type|
+            try self.instantiateVarOrphan(
+                expected_type.var_,
+                env,
+                env.rank(),
+                .use_last_var,
+            )
+        else
+            null;
+
         if (expected.annotation) |annotation_idx| {
             // Generate the type for the annotation
             try self.generateAnnotationType(annotation_idx, env);
             const anno_var = ModuleEnv.varFrom(annotation_idx);
+
+            if (expected_type_var) |type_var| {
+                _ = try self.unifyInContext(type_var, anno_var, env, expected.type_.?.context);
+            }
 
             // Copy/paste the variable. This will be used if the expr errors to
             // preserve the type annotation for places that reference this def.
@@ -9784,7 +9956,28 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
 
             break :blk .{
                 try self.fresh(env, expr_region),
-                .{ .anno_var = anno_var, .anno_var_backup = anno_var_backup },
+                .{
+                    .anno_var = anno_var,
+                    .anno_var_backup = anno_var_backup,
+                    .context = .type_annotation,
+                },
+            };
+        } else if (expected.type_) |expected_type| {
+            const type_var = expected_type_var.?;
+            const type_var_backup = try self.instantiateVarOrphan(
+                type_var,
+                env,
+                env.rank(),
+                .use_last_var,
+            );
+
+            break :blk .{
+                try self.fresh(env, expr_region),
+                .{
+                    .anno_var = type_var,
+                    .anno_var_backup = type_var_backup,
+                    .context = expected_type.context,
+                },
             };
         } else {
             break :blk .{ expr_var_raw, null };
@@ -10648,6 +10841,33 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     break :blk null;
                 }
             };
+            const mb_expected_func: ?ExpectedFunctionInput = if (mb_anno_func) |func|
+                .{
+                    .func = func,
+                    .context = if (mb_anno_vars) |anno_vars| anno_vars.context else .type_annotation,
+                }
+            else blk: {
+                const function_input = expected.function_input orelse break :blk null;
+                var var_ = function_input.var_;
+                var guard = types_mod.debug.IterationGuard.init("checkExpr.lambda.unwrapExpectedFunctionInput");
+                while (true) {
+                    guard.tick();
+                    switch (self.types.resolveVar(var_).desc.content) {
+                        .structure => |flat_type| {
+                            switch (flat_type) {
+                                .fn_pure => |func| break :blk .{ .func = func, .context = function_input.context },
+                                .fn_unbound => |func| break :blk .{ .func = func, .context = function_input.context },
+                                .fn_effectful => |func| break :blk .{ .func = func, .context = function_input.context },
+                                else => break :blk null,
+                            }
+                        },
+                        .alias => |alias| {
+                            var_ = self.types.getAliasBackingVar(alias);
+                        },
+                        else => break :blk null,
+                    }
+                }
+            };
 
             // Check the argument patterns
             // This must happen *before* checking against the expected type so
@@ -10657,7 +10877,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             const arg_vars_alloc = arg_vars_sfa.get();
             const arg_vars = try arg_vars_alloc.alloc(Var, arg_count);
             defer arg_vars_alloc.free(arg_vars);
-            const pattern_ctx: PatternCtx = if (mb_anno_func != null) .from_annotation else .fn_arg;
+            const pattern_ctx: PatternCtx = if (mb_expected_func != null) .from_annotation else .fn_arg;
             for (0..arg_count) |i| {
                 const pattern_idx = self.cir.store.patternAt(lambda.args, i);
                 arg_vars[i] = ModuleEnv.varFrom(pattern_idx);
@@ -10665,7 +10885,8 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             }
 
             // Now, check if we have an expected function to validate against
-            if (mb_anno_func) |anno_func| {
+            if (mb_expected_func) |expected_func| {
+                const anno_func = expected_func.func;
                 // Use index-based iteration instead of slices because unifyInContext
                 // may trigger reallocations that would invalidate slice pointers
                 const anno_func_args_range = anno_func.args;
@@ -10690,11 +10911,21 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                         if (anno_resolved_1.desc.content != .rigid) {
                             continue;
                         }
+                        if (expectedFunctionInputIsPlatform(expected_func) and
+                            self.patternIsSimpleIgnoredArg(self.cir.store.patternAt(lambda.args, i)))
+                        {
+                            continue;
+                        }
 
                         // Look for other arguments with the same type variable
                         for (i + 1..anno_func_args_len) |j| for_blk: {
                             const anno_arg_2 = self.types.getVarAt(anno_func_args_range, @intCast(j));
                             const anno_resolved_2 = self.types.resolveVar(anno_arg_2);
+                            if (expectedFunctionInputIsPlatform(expected_func) and
+                                self.patternIsSimpleIgnoredArg(self.cir.store.patternAt(lambda.args, j)))
+                            {
+                                continue;
+                            }
                             if (anno_resolved_1.var_ == anno_resolved_2.var_) {
                                 // These two argument indexes in the called *function's*
                                 // type have the same rigid variable! So, we unify
@@ -10726,8 +10957,12 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     // Then, lastly, we unify the annotation types against the
                     // actual type
                     for (arg_vars, 0..) |arg_var, i| {
+                        const pattern_idx = self.cir.store.patternAt(lambda.args, i);
+                        if (expectedFunctionInputIsPlatform(expected_func) and self.patternIsSimpleIgnoredArg(pattern_idx)) {
+                            continue;
+                        }
                         const expected_arg_var = self.types.getVarAt(anno_func_args_range, @intCast(i));
-                        _ = try self.unifyInContext(expected_arg_var, arg_var, env, .type_annotation);
+                        _ = try self.unifyInContext(expected_arg_var, arg_var, env, expected_func.context);
                     }
                 } else {
                     // This means the expected type and the actual lambda have
@@ -10753,7 +10988,8 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             const body_does_fx = if (mb_anno_func) |expected_func| blk: {
                 const lambda_body_does_fx = try self.checkExpr(lambda.body, env, Expected.none().withBranchResult(expected_func.ret));
                 try self.closeAbsentConstructedPayloadVars(lambda.body, body_var);
-                _ = try self.unifyInContext(expected_func.ret, body_var, env, .type_annotation);
+                const context = if (mb_anno_vars) |anno_vars| anno_vars.context else .type_annotation;
+                _ = try self.unifyInContext(expected_func.ret, body_var, env, context);
                 break :blk lambda_body_does_fx;
             } else blk: {
                 const lambda_body_does_fx = try self.checkExpr(lambda.body, env, Expected.none());
@@ -11504,7 +11740,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
     // Check if we have an annotation
     if (mb_anno_vars) |anno_vars| {
         // Unify the anno with the expr var
-        _ = try self.unifyInContext(anno_vars.anno_var, expr_var, env, .type_annotation);
+        _ = try self.unifyInContext(anno_vars.anno_var, expr_var, env, anno_vars.context);
 
         // Check if the expression type contains any errors anywhere in its
         // structure. If it does and we have an annotation, use the annotation
@@ -11998,7 +12234,11 @@ fn isExprNodeTag(tag: CIR.Node.Tag) bool {
     return Ident.textStartsWith(@tagName(tag), "expr_");
 }
 
-const AnnoVars = struct { anno_var: Var, anno_var_backup: Var };
+const AnnoVars = struct {
+    anno_var: Var,
+    anno_var_backup: Var,
+    context: problem.Context,
+};
 
 /// Check if an expression represents a function definition that should be generalized.
 /// This includes lambdas and function declarations (even those without bodies).
