@@ -1145,54 +1145,51 @@ Builtin :: [].{
 		release_excess_capacity = |list| list_release_excess_capacity(list)
 
 		## Sort a list using a custom comparison function. The comparator receives two
-		## elements and returns `LT`, `EQ`, or `GT` to indicate their relative order.
+		## elements and returns `FirstBeforeSecond`, `Equivalent`, `SecondBeforeFirst` to indicate their relative order.
 		## ```roc
-		## expect [3, 1, 2].sort_with(|a, b| if a < b LT else if a > b GT else EQ) == [1, 2, 3]
+		## expect [3, 1, 2].sort(|a, b| if a < b FirstBeforeSecond else if a > b SecondBeforeFirst else Equivalent) == [1, 2, 3]
 		##
-		## # Sort in descending order by swapping the LT and GT
-		## expect [3, 1, 2].sort_with(|a, b| if a > b LT else if a < b GT else EQ) == [3, 2, 1]
+		## # Sort in descending order by swapping the tags
+		## expect [3, 1, 2].sort(|a, b| if a < b SecondBeforeFirst else if a > b SecondBeforeFirst else Equivalent) == [3, 2, 1]
 		## ```
-		sort_with : List(item), (item, item -> [LT, EQ, GT]) -> List(item)
-		sort_with = |list, order| {
-			list_len = List.len(list)
-
-			if list_len < 2 {
-				list
-			} else {
-				match List.first(list) {
-					Ok(pivot) => {
-						rest = List.drop_first(list, 1)
-						less_or_equal = 
-							List.keep_if(
-								rest,
-								|item|
-									match order(item, pivot) {
-										LT => True
-										EQ => True
-										GT => False
-									},
-							)
-						greater = 
-							List.keep_if(
-								rest,
-								|item|
-									match order(item, pivot) {
-										LT => False
-										EQ => False
-										GT => True
-									},
-							)
-
-						List.concat(
-							List.sort_with(less_or_equal, order),
-							List.concat(List.single(pivot), List.sort_with(greater, order)),
-						)
-					}
-
-					Err(_) => list
-				}
-			}
+		sort : List(item), (item, item -> [FirstBeforeSecond, Equivalent, SecondBeforeFirst]) -> List(item)
+		sort = |list, order| {
+            is_leq = |a, b| {
+                match order(a, b) {
+                    FirstBeforeSecond => True
+                    Equivalent => True
+                    SecondBeforeFirst => False
+                }
+            }
+            sort_impl(list, is_leq)
 		}
+
+		## Sort a list using the default comparison function defined by the element's type.
+		## This function must take two elements and return one of `FirstBeforeSecond`,
+        ## `Equivalent`, `SecondBeforeFirst` to indicate their relative order.
+		## ```roc
+		## expect [3, 1, 2].sort_with_default() == [1, 2, 3]
+		## ```
+		sort_with_default : List(item) -> List(item)
+            where [item.default_cmp : item, item -> [FirstBeforeSecond, Equivalent, SecondBeforeFirst]]
+		sort_with_default = |list| {
+            # TODO - is there syntax for looking up the function for the module?
+            cmp = |a, b| a.default_cmp(b)
+            list.sort(cmp)
+		}
+
+		## Sort a list according to a key function.
+        ## The key function must return a type that can be compared by default.
+		## ```roc
+		## expect [3, 1, 2].sort_with_default() == [1, 2, 3]
+		## ```
+		sort_by : List(item), (item -> key) -> List(item)
+            where [key.default_cmp : key, key -> [FirstBeforeSecond, Equivalent, SecondBeforeFirst]]
+		sort_by = |list, key_fn| {
+            cmp = |a, b| key_fn(a).default_cmp(key_fn(b))
+            list.sort(cmp)
+		}
+
 
 		## Returns `True` if the two lists have the same length and their elements are pairwise equal.
 		is_eq : List(item), List(item) -> Bool
@@ -13606,6 +13603,31 @@ bytes_to_str = |bytes|
 		Ok(str) => Ok(str)
 		Err(_) => Err(OutOfRange)
 	}
+
+sort_impl : List(a), (a, a -> Bool) -> List(a)
+sort_impl = |list, is_leq| {
+    list_len = List.len(list)
+
+    if list_len < 2 {
+        list
+    } else {
+        match List.first(list) {
+            Ok(pivot) => {
+                rest = List.drop_first(list, 1)
+
+                less_or_equal = List.keep_if(rest, |item| is_leq(item, pivot))
+                greater = List.keep_if(rest, |item| !is_leq(item, pivot))
+
+                List.concat(
+                    sort_impl(less_or_equal, is_leq),
+                    List.concat(List.single(pivot), sort_impl(greater, is_leq)),
+                )
+            }
+
+            Err(_) => list
+        }
+	}
+}
 
 unsigned_add_try : item, item, item -> Try(item, [Overflow, ..])
 	where [item.is_gt : item, item -> Bool, item.minus : item, item -> item, item.plus : item, item -> item]

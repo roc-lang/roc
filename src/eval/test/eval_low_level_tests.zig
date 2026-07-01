@@ -3833,10 +3833,10 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "13" },
     },
     .{
-        .name = "low_level - List.sort_with basic ascending sort",
+        .name = "low_level - List.sort basic ascending sort",
         .source =
         \\{
-        \\x = List.sort_with([3, 1, 2], |a, b| if a < b LT else if a > b GT else EQ)
+        \\x = List.sort([3, 1, 2], |a, b| if a < b FirstBeforeSecond else if a > b SecondBeforeFirst else Equivalent)
         \\first = List.first(x)
         \\first
         \\}
@@ -3844,10 +3844,10 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "Ok(1.0)" },
     },
     .{
-        .name = "low_level - List.sort_with preserves length",
+        .name = "low_level - List.sort preserves length",
         .source =
         \\{
-        \\x = List.sort_with([5, 2, 8, 1, 9], |a, b| if a < b LT else if a > b GT else EQ)
+        \\x = List.sort([5, 2, 8, 1, 9], |a, b| if a < b FirstBeforeSecond else if a > b SecondBeforeFirst else Equivalent)
         \\len = List.len(x)
         \\len
         \\}
@@ -3855,19 +3855,19 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "5" },
     },
     .{
-        .name = "low_level - List.sort_with nested in len defaults literal item type",
+        .name = "low_level - List.sort nested in len defaults literal item type",
         .source =
         \\{
-        \\List.len(List.sort_with([3, 1, 2], |a, b| if a < b LT else if a > b GT else EQ))
+        \\List.len(List.sort([3, 1, 2], |a, b| if a < b FirstBeforeSecond else if a > b SecondBeforeFirst else Equivalent))
         \\}
         ,
         .expected = .{ .inspect_str = "3" },
     },
     .{
-        .name = "low_level - List.sort_with with larger list",
+        .name = "low_level - List.sort with larger list",
         .source =
         \\{
-        \\x = List.sort_with([5, 2, 8, 1, 9, 3, 7, 4, 6], |a, b| if a < b LT else if a > b GT else EQ)
+        \\x = List.sort([5, 2, 8, 1, 9, 3, 7, 4, 6], |a, b| if a < b FirstBeforeSecond else if a > b SecondBeforeFirst else Equivalent)
         \\first = List.first(x)
         \\first
         \\}
@@ -3875,10 +3875,10 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "Ok(1.0)" },
     },
     .{
-        .name = "low_level - List.sort_with with two elements",
+        .name = "low_level - List.sort with two elements",
         .source =
         \\{
-        \\x = List.sort_with([2, 1], |a, b| if a < b LT else if a > b GT else EQ)
+        \\x = List.sort([2, 1], |a, b| if a < b FirstBeforeSecond else if a > b SecondBeforeFirst else Equivalent)
         \\first = List.first(x)
         \\first
         \\}
@@ -3886,10 +3886,10 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "Ok(1.0)" },
     },
     .{
-        .name = "low_level - List.sort_with descending order",
+        .name = "low_level - List.sort descending order",
         .source =
         \\{
-        \\x = List.sort_with([1, 3, 2], |a, b| if a > b LT else if a < b GT else EQ)
+        \\x = List.sort([1, 3, 2], |a, b| if a > b FirstBeforeSecond else if a < b SecondBeforeFirst else Equivalent)
         \\first = List.first(x)
         \\first
         \\}
@@ -3897,11 +3897,11 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "Ok(3.0)" },
     },
     .{
-        .name = "low_level - List.sort_with empty list",
+        .name = "low_level - List.sort empty list",
         .source =
         \\{
         \\x : List(U64)
-        \\x = List.sort_with([], |a, b| if a < b LT else if a > b GT else EQ)
+        \\x = List.sort([], |a, b| if a < b FirstBeforeSecond else if a > b SecondBeforeFirst else Equivalent)
         \\len = List.len(x)
         \\len
         \\}
@@ -3909,10 +3909,10 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "0" },
     },
     .{
-        .name = "low_level - List.sort_with single element",
+        .name = "low_level - List.sort single element",
         .source =
         \\{
-        \\x = List.sort_with([42], |a, b| if a < b LT else if a > b GT else EQ)
+        \\x = List.sort([42], |a, b| if a < b FirstBeforeSecond else if a > b SecondBeforeFirst else Equivalent)
         \\first = List.first(x)
         \\first
         \\}
@@ -3920,10 +3920,10 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "Ok(42.0)" },
     },
     .{
-        .name = "low_level - List.sort_with already sorted",
+        .name = "low_level - List.sort already sorted",
         .source =
         \\{
-        \\x = List.sort_with([1, 2, 3, 4, 5], |a, b| if a < b LT else if a > b GT else EQ)
+        \\x = List.sort([1, 2, 3, 4, 5], |a, b| if a < b FirstBeforeSecond else if a > b SecondBeforeFirst else Equivalent)
         \\first = List.first(x)
         \\first
         \\}
@@ -3931,10 +3931,10 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "Ok(1.0)" },
     },
     .{
-        .name = "low_level - List.sort_with reverse sorted",
+        .name = "low_level - List.sort reverse sorted",
         .source =
         \\{
-        \\x = List.sort_with([5, 4, 3, 2, 1], |a, b| if a < b LT else if a > b GT else EQ)
+        \\x = List.sort([5, 4, 3, 2, 1], |a, b| if a < b FirstBeforeSecond else if a > b SecondBeforeFirst else Equivalent)
         \\first = List.first(x)
         \\first
         \\}
