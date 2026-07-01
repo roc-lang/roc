@@ -30,6 +30,23 @@ jobs:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # ratchet:actions/checkout@v6.0.2
 
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # 2.2.1
+        with:
+          version: 0.16.0
+          use-cache: true
+
+      - name: Restore Zig dependency packages
+        id: zig-deps-cache
+        uses: actions/cache/restore@v4 # ratchet:actions/cache/restore@v4
+        with:
+          # Keep this key and path in sync with ci_zig.yml. Scheduled runs of
+          # this workflow execute on main, so new PRs can restore these package
+          # downloads instead of refetching them from GitHub.
+          path: ${{ env.ZIG_GLOBAL_CACHE_DIR }}/p
+          key: zig-deps-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('build.zig.zon') }}
+          restore-keys: |
+            zig-deps-${{ runner.os }}-${{ runner.arch }}-
+
       - uses: cachix/install-nix-action@02a151ada4993995686f9ed4f1be7cfbb229e56f # ratchet:cachix/install-nix-action@v31
         with:
           nix_path: nixpkgs=channel:nixos-25.05
@@ -44,6 +61,24 @@ jobs:
           command: 'nix develop ./src/ -c bash ci/zig_nix_ci.sh ${{ matrix.nix_ci_mode }} ${{ matrix.target_flag }}'
           error_string_contains: "build.zig.zon|HttpConnectionClosing|TemporaryNameServerFailure|error: cannot download|EndOfStream|WriteFailed|503|Timeout|bad HTTP response code"
           retry_count: 3
+
+      - name: Check Zig dependency package cache contents
+        id: zig-deps-cache-contents
+        if: always() && steps.zig-deps-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          if [ -d "$ZIG_GLOBAL_CACHE_DIR/p" ] && find "$ZIG_GLOBAL_CACHE_DIR/p" -mindepth 1 -print -quit | grep -q .; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Save Zig dependency packages
+        if: always() && steps.zig-deps-cache.outputs.cache-hit != 'true' && steps.zig-deps-cache-contents.outputs.present == 'true'
+        uses: actions/cache/save@v4 # ratchet:actions/cache/save@v4
+        with:
+          path: ${{ env.ZIG_GLOBAL_CACHE_DIR }}/p
+          key: zig-deps-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('build.zig.zon') }}
 
       - name: Build Nix package
         if: ${{ runner.os == 'Linux'  }}
