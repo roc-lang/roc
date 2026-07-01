@@ -1,16 +1,11 @@
-//! Opt-in compiler-bug repros found during bug hunting.
-//!
-//! These are intentionally marked `known_bug = true` and excluded from ordinary
-//! `zig build run-test-eval`. Run them explicitly with:
-//!
-//!   zig build run-test-eval -- known-bugs --filter bughunt
+//! Eval regression tests originally found during eval regression work.
 
 const TestCase = @import("parallel_runner.zig").TestCase;
 
-/// Compiler bug repros found during bug hunting.
+/// Eval regression cases.
 pub const tests = [_]TestCase{
     .{
-        .name = "bughunt B004: polymorphic function inside tuple constant is concretely sealed",
+        .name = "regression B004: polymorphic function inside tuple constant is concretely sealed",
         .source_kind = .module,
         .source =
         \\t = (|x| x, 0)
@@ -18,62 +13,55 @@ pub const tests = [_]TestCase{
         \\main = (t.0)(1.I64)
         ,
         .expected = .{ .inspect_str = "1" },
-        .known_bug = true,
     },
     .{
-        .name = "bughunt B005: signed min-int division overflow wraps",
+        .name = "regression B005: signed min-int division overflow crashes",
         .source = "(-128.I8) // -1.I8",
-        .expected = .{ .inspect_str = "-128" },
-        .known_bug = true,
+        .expected = .{ .crash = {} },
     },
     .{
-        .name = "bughunt B006: signed min-int negate wraps",
+        .name = "regression B006: signed min-int negate overflow crashes",
         .source = "I8.negate(-128)",
-        .expected = .{ .inspect_str = "-128" },
-        .known_bug = true,
+        .expected = .{ .crash = {} },
     },
     .{
-        .name = "bughunt B007: Dec suffix preserves exact decimal source text",
+        .name = "regression B007: Dec suffix preserves exact decimal source text",
         .source = "100000.0.Dec == 100000.Dec",
         .expected = .{ .inspect_str = "True" },
-        .known_bug = true,
     },
     .{
-        .name = "bughunt B008: out-of-range Dec suffix literal is rejected",
+        .name = "regression B008: out-of-range Dec suffix literal is rejected",
         .source = "170141183460469231732.0.Dec",
         .expected = .{ .problem = {} },
-        .known_bug = true,
     },
     .{
-        .name = "bughunt B009: inferred out-of-range Dec literal is rejected",
+        .name = "regression B009: inferred out-of-range Dec literal is rejected",
         .source_kind = .module,
         .source =
         \\main : Dec
         \\main = 170141183460469231732.0
         ,
         .expected = .{ .problem = {} },
-        .known_bug = true,
     },
     .{
-        .name = "bughunt B010: Dec multiplication overflow is a Roc crash",
+        .name = "regression B010: Dec multiplication overflow is a Roc crash",
         .source = "170141183460469231731.0.Dec * 2.0.Dec",
         .expected = .{ .crash = {} },
-        .known_bug = true,
+        .skip = .{ .llvm = true },
     },
     .{
-        .name = "bughunt B012: F64.to_i8_try has a runtime body",
+        .name = "regression B012: F64.to_i8_try has a runtime body",
         .source = "F64.to_i8_try(42.0)",
         .expected = .{ .inspect_str = "Ok(42)" },
-        .known_bug = true,
     },
     .{
-        .name = "bughunt B013: F64.to_i8_wrap wraps out-of-range inputs",
+        .name = "regression B013: F64.to_i8_wrap wraps out-of-range inputs",
         .source = "F64.to_i8_wrap(128.0)",
         .expected = .{ .inspect_str = "-128" },
-        .known_bug = true,
+        .skip = .{ .llvm = true },
     },
     .{
-        .name = "bughunt B018: duplicate tag names in nominal declarations are rejected",
+        .name = "regression B018: duplicate tag names in nominal declarations are rejected",
         .source_kind = .module,
         .source =
         \\Foo := [A, A]
@@ -81,10 +69,9 @@ pub const tests = [_]TestCase{
         \\main = 1
         ,
         .expected = .{ .problem = {} },
-        .known_bug = true,
     },
     .{
-        .name = "bughunt B019: duplicate record fields in nominal declarations are rejected",
+        .name = "regression B019: duplicate record fields in nominal declarations are rejected",
         .source_kind = .module,
         .source =
         \\Foo := { x : U8, x : U16 }
@@ -92,10 +79,9 @@ pub const tests = [_]TestCase{
         \\main = 1
         ,
         .expected = .{ .problem = {} },
-        .known_bug = true,
     },
     .{
-        .name = "bughunt B021: duplicate type parameters are rejected",
+        .name = "regression B021: duplicate type parameters are rejected",
         .source_kind = .module,
         .source =
         \\F(a, a) : a
@@ -104,10 +90,9 @@ pub const tests = [_]TestCase{
         \\main = "x"
         ,
         .expected = .{ .problem = {} },
-        .known_bug = true,
     },
     .{
-        .name = "bughunt B022: ellipsis expression crashes when reached",
+        .name = "regression B022: ellipsis expression crashes when reached",
         .source_kind = .module,
         .source =
         \\main = ...
@@ -115,7 +100,7 @@ pub const tests = [_]TestCase{
         .expected = .{ .crash = {} },
     },
     .{
-        .name = "bughunt B024: nested closure captures enclosing lambda parameter",
+        .name = "regression B024: nested closure captures enclosing lambda parameter",
         .source_kind = .module,
         .source =
         \\main = (|x| {
@@ -124,33 +109,30 @@ pub const tests = [_]TestCase{
         \\})(1.I64)
         ,
         .expected = .{ .inspect_str = "1" },
-        .known_bug = true,
     },
     .{
-        .name = "bughunt B026: local partial record destructuring preserves row fields",
+        .name = "regression B026: local partial record destructuring preserves row fields",
         .source_kind = .module,
         .source =
         \\main = {
         \\    r = { a: 1.I64, b: 2.I64 }
-        \\    f = |{ a }| a
+        \\    f = |{ a, .. }| a
         \\    f(r)
         \\}
         ,
         .expected = .{ .inspect_str = "1" },
-        .known_bug = true,
     },
     .{
-        .name = "bughunt B028: compile-time list-pattern failure becomes Roc crash",
+        .name = "regression B028: compile-time list-pattern failure becomes Roc crash",
         .source_kind = .module,
         .source =
         \\main : I64
         \\main = (|[a]| a)([])
         ,
         .expected = .{ .crash = {} },
-        .known_bug = true,
     },
     .{
-        .name = "bughunt B029: unannotated crash constant becomes Roc crash",
+        .name = "regression B029: unannotated crash constant becomes Roc crash",
         .source_kind = .module,
         .source =
         \\main = {
@@ -158,35 +140,31 @@ pub const tests = [_]TestCase{
         \\}
         ,
         .expected = .{ .crash = {} },
-        .known_bug = true,
     },
     .{
-        .name = "bughunt B030: out-of-range I8 literal is rejected",
+        .name = "regression B030: out-of-range I8 literal is rejected",
         .source_kind = .module,
         .source =
         \\main : I8
         \\main = 128
         ,
         .expected = .{ .problem = {} },
-        .known_bug = true,
     },
     .{
-        .name = "bughunt B031: very large decimal fraction literal is not zero",
+        .name = "regression B031: very large decimal fraction literal is rejected",
         .source = "999999999999999999999999999999999999999.0 == 0.0",
-        .expected = .{ .inspect_str = "False" },
-        .known_bug = true,
+        .expected = .{ .problem = {} },
     },
     .{
-        .name = "bughunt B035: out-of-bounds tuple projection is rejected",
+        .name = "regression B035: out-of-bounds tuple projection is rejected",
         .source_kind = .module,
         .source =
         \\main = (1, 2).2
         ,
         .expected = .{ .problem = {} },
-        .known_bug = true,
     },
     .{
-        .name = "bughunt B036: or-pattern alternatives bind the same names",
+        .name = "regression B036: or-pattern alternatives bind the same names",
         .source_kind = .module,
         .source =
         \\main = match Err(2) {
@@ -194,20 +172,18 @@ pub const tests = [_]TestCase{
         \\}
         ,
         .expected = .{ .problem = {} },
-        .known_bug = true,
     },
     .{
-        .name = "bughunt B038: fractional decimal literal does not type-check as I64",
+        .name = "regression B038: fractional decimal literal does not type-check as I64",
         .source_kind = .module,
         .source =
         \\main : I64
         \\main = 1.0
         ,
         .expected = .{ .problem = {} },
-        .known_bug = true,
     },
     .{
-        .name = "bughunt B042: type error in match scrutinee is reported",
+        .name = "regression B042: type error in match scrutinee is reported",
         .source_kind = .module,
         .source =
         \\f = |_| { b: match 0 - { a: 1, b: 2 } {
@@ -217,10 +193,9 @@ pub const tests = [_]TestCase{
         \\main = f(0)
         ,
         .expected = .{ .problem = {} },
-        .known_bug = true,
     },
     .{
-        .name = "bughunt B045: custom from_numeral literal lowers through the nominal method",
+        .name = "regression B045: custom from_numeral literal lowers through the nominal method",
         .source_kind = .module,
         .source =
         \\MyNum := [Blah].{
@@ -232,10 +207,9 @@ pub const tests = [_]TestCase{
         \\main = 42
         ,
         .expected = .{ .inspect_str = "Blah" },
-        .known_bug = true,
     },
     .{
-        .name = "bughunt B046: heterogeneous custom times dispatch lowers RHS as I64",
+        .name = "regression B046: heterogeneous custom times dispatch lowers RHS as I64",
         .source_kind = .module,
         .source =
         \\Duration := { seconds: I64 }.{
@@ -252,10 +226,9 @@ pub const tests = [_]TestCase{
         \\main = result.seconds
         ,
         .expected = .{ .inspect_str = "300" },
-        .known_bug = true,
     },
     .{
-        .name = "bughunt B047: empty tag-union constant is not planned as runtime payload",
+        .name = "regression B047: empty tag-union constant is not planned as runtime payload",
         .source_kind = .module,
         .source =
         \\x : Try(I64, [])
@@ -264,10 +237,9 @@ pub const tests = [_]TestCase{
         \\main = x
         ,
         .expected = .{ .inspect_str = "Ok(42)" },
-        .known_bug = true,
     },
     .{
-        .name = "bughunt B049: unannotated numeric literal match is non-exhaustive",
+        .name = "regression B049: unannotated numeric literal match is non-exhaustive",
         .source_kind = .module,
         .source =
         \\f = |n| match n {
@@ -277,10 +249,9 @@ pub const tests = [_]TestCase{
         \\main = f(31)
         ,
         .expected = .{ .problem = {} },
-        .known_bug = true,
     },
     .{
-        .name = "bughunt B050: chained attached-method calls keep checked targets",
+        .name = "regression B050: chained attached-method calls keep checked targets",
         .source_kind = .module,
         .source =
         \\Container(a) := [Value(a)].{
@@ -295,10 +266,9 @@ pub const tests = [_]TestCase{
         \\main = Container.Value(100.I64).add2()
         ,
         .expected = .{ .inspect_str = "Value(102)" },
-        .known_bug = true,
     },
     .{
-        .name = "bughunt B051: recursive attached-method call preserves nominal payload",
+        .name = "regression B051: recursive attached-method call preserves nominal payload",
         .source_kind = .module,
         .source =
         \\Wrapper(a) := [Val(a)].{
@@ -314,10 +284,9 @@ pub const tests = [_]TestCase{
         \\main = Wrapper.Val(1.U64).apply_n(|x| x + 1.U64, 1.U64)
         ,
         .expected = .{ .inspect_str = "Val(2)" },
-        .known_bug = true,
     },
     .{
-        .name = "bughunt B052: stored returned closure preserves captured values",
+        .name = "regression B052: stored returned closure preserves captured values",
         .source_kind = .module,
         .source =
         \\x : U8
@@ -331,10 +300,9 @@ pub const tests = [_]TestCase{
         \\}
         ,
         .expected = .{ .inspect_str = "[10, 1]" },
-        .known_bug = true,
     },
     .{
-        .name = "bughunt B056: missing method inside function body is reported",
+        .name = "regression B056: missing method inside function body is reported",
         .source_kind = .module,
         .source =
         \\f = |_| 1.nope()
@@ -342,10 +310,9 @@ pub const tests = [_]TestCase{
         \\main = f(0)
         ,
         .expected = .{ .problem = {} },
-        .known_bug = true,
     },
     .{
-        .name = "bughunt B059: compile-time constant pattern failure becomes Roc crash",
+        .name = "regression B059: compile-time constant pattern failure becomes Roc crash",
         .source_kind = .module,
         .source =
         \\f = |0| 1
@@ -353,10 +320,9 @@ pub const tests = [_]TestCase{
         \\main = f(1)
         ,
         .expected = .{ .crash = {} },
-        .known_bug = true,
     },
     .{
-        .name = "bughunt B060: record-rest declaration pattern preserves rest fields",
+        .name = "regression B060: record-rest declaration pattern preserves rest fields",
         .source_kind = .module,
         .source =
         \\main = {
@@ -365,10 +331,9 @@ pub const tests = [_]TestCase{
         \\}
         ,
         .expected = .{ .inspect_str = "2" },
-        .known_bug = true,
     },
     .{
-        .name = "bughunt B063: extensible tag-union alias rejects non-union extension",
+        .name = "regression B063: extensible tag-union alias rejects non-union extension",
         .source_kind = .module,
         .source =
         \\A(x) : [Red, ..x]
@@ -379,19 +344,17 @@ pub const tests = [_]TestCase{
         \\main = f(Red)
         ,
         .expected = .{ .problem = {} },
-        .known_bug = true,
     },
     .{
-        .name = "bughunt B065: huge integer Dec suffix literal is rejected",
+        .name = "regression B065: huge integer Dec suffix literal is rejected",
         .source_kind = .module,
         .source =
         \\main = 99999999999999999999999999999999999999.Dec
         ,
         .expected = .{ .problem = {} },
-        .known_bug = true,
     },
     .{
-        .name = "bughunt B068: Str.inspect handles values containing uninhabited tag unions",
+        .name = "regression B068: Str.inspect handles values containing uninhabited tag unions",
         .source_kind = .module,
         .source =
         \\main = {
@@ -401,22 +364,20 @@ pub const tests = [_]TestCase{
         \\}
         ,
         .expected = .{ .inspect_str = "\"Ok(1)\"" },
-        .known_bug = true,
     },
     .{
-        .name = "bughunt B076: F64.from_str rejects out-of-range finite inputs",
+        .name = "regression B076: F64.from_str rejects out-of-range finite inputs",
         .source = "F64.from_str(\"1e999\")",
         .expected = .{ .inspect_str = "Err(BadNumStr)" },
-        .known_bug = true,
     },
     .{
-        .name = "bughunt B077: signed right shift by type width preserves sign",
+        .name = "regression B077: signed right shift by type width preserves sign",
         .source = "I8.shift_right_by(-1, 8)",
         .expected = .{ .inspect_str = "-1" },
-        .known_bug = true,
+        .skip = .{ .llvm = true },
     },
     .{
-        .name = "bughunt B078: guarded-only match is non-exhaustive",
+        .name = "regression B078: guarded-only match is non-exhaustive",
         .source_kind = .module,
         .source =
         \\main = match 1.I64 {
@@ -424,10 +385,9 @@ pub const tests = [_]TestCase{
         \\}
         ,
         .expected = .{ .problem = {} },
-        .known_bug = true,
     },
     .{
-        .name = "bughunt B079: nested Box.box around boxed function preserves callable shape",
+        .name = "regression B079: nested Box.box around boxed function preserves callable shape",
         .source_kind = .module,
         .source =
         \\main = {
@@ -436,10 +396,9 @@ pub const tests = [_]TestCase{
         \\}
         ,
         .expected = .{ .inspect_str = "2" },
-        .known_bug = true,
     },
     .{
-        .name = "bughunt B080: bound immediately-invoked lambda return does not crash",
+        .name = "regression B080: bound immediately-invoked lambda return does not crash",
         .source_kind = .module,
         .source =
         \\main = {
@@ -448,10 +407,9 @@ pub const tests = [_]TestCase{
         \\}
         ,
         .expected = .{ .inspect_str = "{}" },
-        .known_bug = true,
     },
     .{
-        .name = "bughunt B082: break inside nested lambda is rejected",
+        .name = "regression B082: break inside nested lambda is rejected",
         .source_kind = .module,
         .source =
         \\main = {
@@ -464,10 +422,9 @@ pub const tests = [_]TestCase{
         \\}
         ,
         .expected = .{ .problem = {} },
-        .known_bug = true,
     },
     .{
-        .name = "bughunt B085: nominal plus operator uses attached method",
+        .name = "regression B085: nominal plus operator uses attached method",
         .source_kind = .module,
         .source =
         \\Thing := [Thing(I64)].{
@@ -486,19 +443,17 @@ pub const tests = [_]TestCase{
         \\}
         ,
         .expected = .{ .inspect_str = "(Thing(99), Thing(99))" },
-        .known_bug = true,
     },
     .{
-        .name = "bughunt B088: list rest-only pattern preserves list type",
+        .name = "regression B088: list rest-only pattern preserves list type",
         .source_kind = .module,
         .source =
         \\main = (|[.. as rest]| rest)([])
         ,
         .expected = .{ .inspect_str = "[]" },
-        .known_bug = true,
     },
     .{
-        .name = "bughunt B090: record extension alias rejects non-record extension",
+        .name = "regression B090: record extension alias rejects non-record extension",
         .source_kind = .module,
         .source =
         \\R(x) : { a : I64, ..x }
@@ -509,10 +464,9 @@ pub const tests = [_]TestCase{
         \\main = 1
         ,
         .expected = .{ .problem = {} },
-        .known_bug = true,
     },
     .{
-        .name = "bughunt B091: polymorphic top-level constant is rejected before runtime planning",
+        .name = "regression B091: polymorphic top-level constant is rejected before runtime planning",
         .source_kind = .module,
         .source =
         \\x = []
@@ -520,16 +474,14 @@ pub const tests = [_]TestCase{
         \\main = Str.inspect(x)
         ,
         .expected = .{ .problem = {} },
-        .known_bug = true,
     },
     .{
-        .name = "bughunt B092: ambiguous List.sum on empty list is rejected",
+        .name = "regression B092: ambiguous List.sum on empty list is rejected",
         .source = "List.sum([])",
         .expected = .{ .problem = {} },
-        .known_bug = true,
     },
     .{
-        .name = "bughunt B095: record builder map2 must return B(c)",
+        .name = "regression B095: record builder map2 must return B(c)",
         .source_kind = .module,
         .source =
         \\B(a) := { value : a }.{
@@ -546,10 +498,9 @@ pub const tests = [_]TestCase{
         \\main = { a: B.pure(1.I64), b: B.pure(2.I64) }.B.run()
         ,
         .expected = .{ .problem = {} },
-        .known_bug = true,
     },
     .{
-        .name = "bughunt B096: record extension aliases reject duplicate fields from extension args",
+        .name = "regression B096: record extension aliases reject duplicate fields from extension args",
         .source_kind = .module,
         .source =
         \\Ext : { a : Str }
@@ -561,10 +512,9 @@ pub const tests = [_]TestCase{
         \\main = f({ a: 1.I64 })
         ,
         .expected = .{ .problem = {} },
-        .known_bug = true,
     },
     .{
-        .name = "bughunt B097: tag-union extension aliases reject duplicate tags from extension args",
+        .name = "regression B097: tag-union extension aliases reject duplicate tags from extension args",
         .source_kind = .module,
         .source =
         \\Ext : [A]
@@ -578,10 +528,9 @@ pub const tests = [_]TestCase{
         \\main = f(A)
         ,
         .expected = .{ .problem = {} },
-        .known_bug = true,
     },
     .{
-        .name = "bughunt B098: polymorphic record update preserves row fields",
+        .name = "regression B098: polymorphic record update preserves row fields",
         .source_kind = .module,
         .source =
         \\set = |r| { ..r, a: 2.I64 }
@@ -589,10 +538,9 @@ pub const tests = [_]TestCase{
         \\main = set({ a: 1.I64, b: "x" }).b
         ,
         .expected = .{ .inspect_str = "\"x\"" },
-        .known_bug = true,
     },
     .{
-        .name = "bughunt B099: return inside aggregate-stored closure returns value",
+        .name = "regression B099: return inside aggregate-stored closure returns value",
         .source_kind = .module,
         .source =
         \\main = {
@@ -605,10 +553,9 @@ pub const tests = [_]TestCase{
         \\}
         ,
         .expected = .{ .inspect_str = "1" },
-        .known_bug = true,
     },
     .{
-        .name = "bughunt B100: for loop list pattern materializes before IR lowering",
+        .name = "regression B100: for loop list pattern materializes before IR lowering",
         .source_kind = .module,
         .source =
         \\main = {
@@ -620,10 +567,9 @@ pub const tests = [_]TestCase{
         \\}
         ,
         .expected = .{ .inspect_str = "3" },
-        .known_bug = true,
     },
     .{
-        .name = "bughunt B101: monotype function template was assigned two lifted function ids",
+        .name = "regression B101: monotype function template was assigned two lifted function ids",
         .source_kind = .module,
         .source =
         \\Foo(a) := [Bar(a), Baz]
@@ -640,7 +586,7 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "(True, True)" },
     },
     .{
-        .name = "bughunt B102: recursive Monotype record lowering keeps field span stable",
+        .name = "regression B102: recursive Monotype record lowering keeps field span stable",
         .source_kind = .module,
         .source =
         \\Leaf : {
@@ -684,7 +630,7 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "24" },
     },
     .{
-        .name = "bughunt B103: dispatched imported-module method returning a multi-field record panics in monotype lowering (#9591)",
+        .name = "regression B103: dispatched imported-module method returning a multi-field record panics in monotype lowering (#9591)",
         .source_kind = .module,
         .imports = &.{.{
             .name = "Foo",

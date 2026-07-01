@@ -164,7 +164,7 @@ test "ModuleEnv.Serialized roundtrip" {
 
 test "ModuleEnv.Serialized finalizes method metadata tables before writing" {
     const gpa = std.testing.allocator;
-    const source = "module []\n";
+    const source = "";
 
     var original = try ModuleEnv.init(gpa, source);
     defer original.deinit();
@@ -211,7 +211,7 @@ test "ModuleEnv.Serialized finalizes method metadata tables before writing" {
 
 test "ModuleEnv.Serialized roundtrip preserves file dependency states" {
     const gpa = std.testing.allocator;
-    const source = "module []\n";
+    const source = "";
 
     var original = try ModuleEnv.init(gpa, source);
     defer original.deinit();
