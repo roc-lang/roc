@@ -176,6 +176,15 @@ pub const GenerationMode = enum {
     }
 };
 
+/// Compiler-internal callbacks emitted only for native compile-time evaluation.
+pub const ComptimeHooks = struct {
+    branch_taken: *const fn (*RocOps, u32, u32) callconv(.c) void,
+    exhaustiveness_failed: *const fn (*RocOps, u32) callconv(.c) void,
+    failure_region: *const fn (*RocOps, u32, u32) callconv(.c) void,
+    call_enter: *const fn (*RocOps, u32, u32) callconv(.c) void,
+    call_exit: *const fn (*RocOps) callconv(.c) void,
+};
+
 /// Builtin function identifiers for the dev backend.
 /// These map to exported symbols in dev_wrappers.zig for object file generation.
 pub const BuiltinFn = enum {
@@ -766,6 +775,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         const incoming_stack_arg_base_offset: i32 = if (arch == .x86_64) 16 + abi_shadow_space else 0;
         const outgoing_stack_arg_base_offset: i32 = abi_shadow_space;
         const max_arg_regs: u8 = @intCast(EmitType.CC.PARAM_REGS.len);
+        const pass_by_ptr_arg_regs: u8 = @intCast(EmitType.CC.PARAM_REGS.len + 1);
 
         allocator: Allocator,
 
@@ -916,6 +926,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Whether object-file entrypoints should use the synthetic default
         /// platform runtime contract.
         enable_default_platform_runtime: bool = false,
+
+        /// Compiler-internal hooks enabled only for native compile-time
+        /// evaluation. Normal dev backend output leaves these null.
+        comptime_hooks: ?ComptimeHooks = null,
 
         /// Scratch buffer for argument locations during lambda body inlining
         scratch_arg_locs: base.Scratch(ValueLocation),
@@ -1188,6 +1202,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .scratch_pass_by_ptr = try base.Scratch(bool).init(allocator),
                 .scratch_param_num_regs = try base.Scratch(u8).init(allocator),
             };
+        }
+
+        pub fn setComptimeHooks(self: *Self, hooks: ?ComptimeHooks) void {
+            self.comptime_hooks = hooks;
         }
 
         /// Clean up resources
@@ -10982,11 +11000,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const ret_size = self.layout_store.layoutSizeAlign(self.layout_store.getLayout(runtime_ret_layout)).size;
             const ret_buffer_offset = if (ret_size == 0) 0 else self.codegen.allocStackSlot(ret_size);
 
-            const closure_ptr_reg: GeneralReg = if (comptime target.toCpuArch() == .aarch64) .X11 else .R11;
-            const fn_ptr_reg: GeneralReg = if (comptime target.toCpuArch() == .aarch64) .X10 else .RAX;
-            try self.emitLoad(.w64, closure_ptr_reg, frame_ptr, closure_ptr_slot);
-            try self.emitLoad(.w64, fn_ptr_reg, closure_ptr_reg, 0);
-
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
             try builder.addRegArg(roc_ops_reg);
             if (ret_size == 0) {
@@ -11000,10 +11013,25 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try builder.addLeaArg(frame_ptr, args_slot);
             }
             try builder.addMemArg(frame_ptr, capture_stack_offset);
+
+            const comptime_call_entered = if (self.comptime_hooks) |hooks|
+                try self.emitComptimeCallEnter(hooks)
+            else
+                false;
+            const closure_ptr_reg: GeneralReg = if (comptime target.toCpuArch() == .aarch64) .X11 else .R11;
+            const fn_ptr_reg: GeneralReg = if (comptime target.toCpuArch() == .aarch64) .X10 else .RAX;
+            try self.emitLoad(.w64, closure_ptr_reg, frame_ptr, closure_ptr_slot);
+            try self.emitLoad(.w64, fn_ptr_reg, closure_ptr_reg, 0);
             try builder.callReg(fn_ptr_reg);
 
-            if (ret_size == 0) return .{ .immediate_i64 = 0 };
-            return self.stackLocationForLayout(runtime_ret_layout, ret_buffer_offset);
+            const result: ValueLocation = if (ret_size == 0)
+                .{ .immediate_i64 = 0 }
+            else
+                self.stackLocationForLayout(runtime_ret_layout, ret_buffer_offset);
+            if (comptime_call_entered) {
+                try self.emitComptimeCallExit(self.comptime_hooks.?);
+            }
+            return result;
         }
 
         fn generatePackedErasedFn(
@@ -11212,6 +11240,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 }
             }
 
+            const comptime_call_entered = if (self.comptime_hooks) |hooks|
+                try self.emitComptimeCallEnter(hooks)
+            else
+                false;
+
             // Object-file output calls the host's linker symbol directly;
             // RocOps-threaded modes dispatch through the hosted table.
             if (self.generation_mode.threadsRocOps()) {
@@ -11332,10 +11365,17 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
 
             if (ret_size == 0) {
+                if (comptime_call_entered) {
+                    try self.emitComptimeCallExit(self.comptime_hooks.?);
+                }
                 return .{ .immediate_i64 = 0 };
             }
 
-            return self.stackLocationForLayout(ret_layout, ret_slot);
+            const result = self.stackLocationForLayout(ret_layout, ret_slot);
+            if (comptime_call_entered) {
+                try self.emitComptimeCallExit(self.comptime_hooks.?);
+            }
+            return result;
         }
 
         /// Store hosted-call float result register `index` (0 or 1) into the return slot.
@@ -11531,11 +11571,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const emit_roc_ops = self.generation_mode.threadsRocOps();
             const pbp_plan = try self.computePassByPtrPlan(arg_infos, initial_arg_reg_idx, emit_roc_ops);
             defer self.scratch_pass_by_ptr.clearFrom(pbp_plan.start);
-            const stack_spill_size = try self.placeCallArguments(arg_infos, .{
+            const placed_call = try self.placeCallArguments(arg_infos, .{
                 .needs_ret_ptr = needs_ret_ptr,
                 .ret_buffer_offset = ret_buffer_offset,
                 .pass_by_ptr = pbp_plan.slice,
                 .emit_roc_ops = emit_roc_ops,
+                .comptime_call_hooks = self.comptime_hooks,
             });
             if (proc.code_start == unresolved_proc_code_start) {
                 try self.emitPendingCallToProc(proc.id);
@@ -11543,11 +11584,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try self.emitCallToOffset(proc.code_start);
             }
 
-            if (stack_spill_size > 0) {
-                try self.emitAddStackPtr(stack_spill_size);
+            if (placed_call.stack_spill_size > 0) {
+                try self.emitAddStackPtr(placed_call.stack_spill_size);
             }
 
-            return self.saveCallReturnValue(ret_layout, needs_ret_ptr, ret_buffer_offset);
+            const result = try self.saveCallReturnValue(ret_layout, needs_ret_ptr, ret_buffer_offset);
+            if (placed_call.comptime_call_entered) {
+                try self.emitComptimeCallExit(self.comptime_hooks.?);
+            }
+            return result;
         }
 
         fn emitPendingCallToProc(self: *Self, target_proc: lir.LIR.LirProcSpecId) Allocator.Error!void {
@@ -11665,6 +11710,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             };
         }
 
+        fn aggregateArgRegisterPressure(size: u32) u8 {
+            if (size <= 8) return 1;
+            const regs = (size + 7) / 8;
+            if (regs > max_arg_regs) return pass_by_ptr_arg_regs;
+            return @intCast(regs);
+        }
+
         /// Calculate the number of registers an argument needs based on its location and layout.
         fn calcArgRegCount(self: *Self, arg_loc: ValueLocation, arg_layout: ?layout.Idx) u8 {
             const is_i128_arg = self.argNeedsI128Abi(arg_loc, arg_layout);
@@ -11683,7 +11735,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     // Check for aggregate values > 8 bytes
                     if (layout_val.tag == .struct_ or layout_val.tag == .tag_union) {
                         const size = ls.layoutSizeAlign(layout_val).size;
-                        if (size > 8) return @intCast((size + 7) / 8);
+                        return aggregateArgRegisterPressure(size);
                     }
                 }
             }
@@ -13866,6 +13918,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             pass_by_ptr: ?[]const bool = null,
             /// If true, append roc_ops as the final argument.
             emit_roc_ops: bool = false,
+            /// CTFE-only call-frame hooks. Emitted after argument values are
+            /// frozen to stack slots, before ABI argument registers are loaded.
+            comptime_call_hooks: ?ComptimeHooks = null,
+        };
+
+        const PlacedCall = struct {
+            stack_spill_size: i32,
+            comptime_call_entered: bool,
         };
 
         const FrozenCallArg = struct {
@@ -14074,7 +14134,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Handles i128 even-alignment on aarch64, 3-reg list/str, multi-reg structs,
         /// lambda_code addressing, pass-by-pointer conversion, and stack spilling.
         /// Returns the stack_spill_size allocated (caller must clean up after the call).
-        fn placeCallArguments(self: *Self, arg_infos: []const ArgInfo, config: CallConfig) Allocator.Error!i32 {
+        fn placeCallArguments(self: *Self, arg_infos: []const ArgInfo, config: CallConfig) Allocator.Error!PlacedCall {
             // Compute stack_spill_size.
             // When pass_by_ptr is provided, multi-reg args that would overflow are
             // already converted to pointers — account for that.
@@ -14117,11 +14177,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 ));
             }
 
-            // Allocate stack space for spilled arguments
-            if (stack_space_size > 0) {
-                try self.emitSubImm(.w64, stack_ptr, stack_ptr, stack_space_size);
-            }
-
             const frozen_args = try self.allocator.alloc(FrozenCallArg, arg_infos.len);
             defer self.allocator.free(frozen_args);
             for (arg_infos, 0..) |info, i| {
@@ -14136,6 +14191,17 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                 const pbp = if (config.pass_by_ptr) |p| p[i] else false;
                 frozen_args[i] = try self.freezeCallArg(info, pbp);
+            }
+
+            const comptime_call_entered = if (config.comptime_call_hooks) |hooks|
+                try self.emitComptimeCallEnter(hooks)
+            else
+                false;
+
+            // Allocate stack space for the callee's spilled arguments only after
+            // CTFE hooks have run. The hook call has its own C ABI stack setup.
+            if (stack_space_size > 0) {
+                try self.emitSubImm(.w64, stack_ptr, stack_ptr, stack_space_size);
             }
 
             // Place arguments in registers or on stack
@@ -14235,7 +14301,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 }
             }
 
-            return stack_space_size;
+            return .{
+                .stack_spill_size = stack_space_size,
+                .comptime_call_entered = comptime_call_entered,
+            };
         }
 
         /// Bind lambda parameters from argument registers.
@@ -14259,7 +14328,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     // Aggregate parameters may need multiple registers
                     if (layout_val.tag == .struct_ or layout_val.tag == .tag_union) {
                         const size = ls.layoutSizeAlign(layout_val).size;
-                        if (size > 8) return @intCast((size + 7) / 8);
+                        return aggregateArgRegisterPressure(size);
                     }
                 }
             }
@@ -14474,14 +14543,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     }
 
                     const temp_reg: GeneralReg = if (ptr_reg == scratch_reg) ret_reg_0 else scratch_reg;
-                    const size: u32 = @as(u32, num_regs) * 8;
+                    const size = self.getLayoutSize(self.localLayout(local));
                     const stack_offset = self.codegen.allocStackSlot(@intCast(size));
-                    var ri: u8 = 0;
-                    while (ri < num_regs) : (ri += 1) {
-                        const off: i32 = @as(i32, ri) * 8;
-                        try self.emitLoad(.w64, temp_reg, ptr_reg, off);
-                        try self.emitStore(.w64, frame_ptr, stack_offset + off, temp_reg);
-                    }
+                    try self.copyChunked(temp_reg, ptr_reg, 0, frame_ptr, stack_offset, size);
                     const stable_loc = self.stackLocationForLayout(self.localLayout(local), stack_offset);
                     try self.local_locations.put(localKey(local), stable_loc);
                     continue;
@@ -15048,12 +15112,19 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             try self.emitTrap();
                         },
 
-                        .comptime_exhaustiveness_failed => {
-                            try self.emitRocCrash("compile-time exhaustiveness failure reached runtime code");
+                        .comptime_exhaustiveness_failed => |marker| {
+                            if (self.comptime_hooks) |hooks| {
+                                try self.emitComptimeExhaustivenessFailed(hooks, marker.site);
+                            } else {
+                                try self.emitRocCrash("compile-time exhaustiveness failure reached runtime code");
+                            }
                             try self.emitTrap();
                         },
 
                         .comptime_branch_taken => |marker| {
+                            if (self.comptime_hooks) |hooks| {
+                                try self.emitComptimeBranchTaken(hooks, marker.site, marker.branch_index);
+                            }
                             try work.append(wa, .{ .node = marker.next });
                         },
 
@@ -16062,8 +16133,74 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.emitRocStaticMessageCall(@offsetOf(RocOps, "roc_expect_failed"), "expect failed");
         }
 
+        fn emitComptimeBranchTaken(
+            self: *Self,
+            hooks: ComptimeHooks,
+            site: lir.LIR.ComptimeSiteId,
+            branch_index: u32,
+        ) Allocator.Error!void {
+            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            try builder.addRegArg(self.roc_ops_reg orelse unreachable);
+            try builder.addImmArg(@intCast(@intFromEnum(site)));
+            try builder.addImmArg(@intCast(branch_index));
+            try builder.call(@intFromPtr(hooks.branch_taken));
+        }
+
+        fn emitComptimeExhaustivenessFailed(
+            self: *Self,
+            hooks: ComptimeHooks,
+            site: lir.LIR.ComptimeSiteId,
+        ) Allocator.Error!void {
+            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            try builder.addRegArg(self.roc_ops_reg orelse unreachable);
+            try builder.addImmArg(@intCast(@intFromEnum(site)));
+            try builder.call(@intFromPtr(hooks.exhaustiveness_failed));
+        }
+
+        fn emitComptimeFailureRegion(
+            self: *Self,
+            hooks: ComptimeHooks,
+        ) Allocator.Error!void {
+            const stmt_id = self.current_stmt_id orelse return;
+            const roc_ops_reg = self.roc_ops_reg orelse return;
+            const region = self.store.stmtRegion(stmt_id);
+            if (region.isEmpty()) return;
+            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            try builder.addRegArg(roc_ops_reg);
+            try builder.addImmArg(@intCast(region.start.offset));
+            try builder.addImmArg(@intCast(region.end.offset));
+            try builder.call(@intFromPtr(hooks.failure_region));
+        }
+
+        fn emitComptimeCallEnter(
+            self: *Self,
+            hooks: ComptimeHooks,
+        ) Allocator.Error!bool {
+            const stmt_id = self.current_stmt_id orelse return false;
+            const roc_ops_reg = self.roc_ops_reg orelse return false;
+            const region = self.store.stmtRegion(stmt_id);
+            if (region.isEmpty()) return false;
+            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            try builder.addRegArg(roc_ops_reg);
+            try builder.addImmArg(@intCast(region.start.offset));
+            try builder.addImmArg(@intCast(region.end.offset));
+            try builder.call(@intFromPtr(hooks.call_enter));
+            return true;
+        }
+
+        fn emitComptimeCallExit(
+            self: *Self,
+            hooks: ComptimeHooks,
+        ) Allocator.Error!void {
+            const roc_ops_reg = self.roc_ops_reg orelse return;
+            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            try builder.addRegArg(roc_ops_reg);
+            try builder.call(@intFromPtr(hooks.call_exit));
+        }
+
         /// Emit a roc_crashed call via RocOps with a static message.
         fn emitRocCrash(self: *Self, msg: []const u8) Allocator.Error!void {
+            if (self.comptime_hooks) |hooks| try self.emitComptimeFailureRegion(hooks);
             try self.emitRocStaticMessageCall(@offsetOf(RocOps, "roc_crashed"), msg);
         }
 
@@ -16071,6 +16208,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Only safe from debug-assertion paths, where at most one fires per
         /// run (the program exits immediately after).
         fn emitRocCrashShared(self: *Self, msg: []const u8) Allocator.Error!void {
+            if (self.comptime_hooks) |hooks| try self.emitComptimeFailureRegion(hooks);
             try self.emitRocStaticDebugMessageCall(@offsetOf(RocOps, "roc_crashed"), msg);
         }
 
@@ -16443,7 +16581,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const pbp_plan = try self.computePassByPtrPlan(arg_infos, if (needs_ret_ptr) 1 else 0, emit_roc_ops);
             defer self.scratch_pass_by_ptr.clearFrom(pbp_plan.start);
 
-            const stack_spill_size = try self.placeCallArguments(arg_infos, .{
+            const placed_call = try self.placeCallArguments(arg_infos, .{
                 .needs_ret_ptr = needs_ret_ptr,
                 .ret_buffer_offset = ret_buffer_offset,
                 .pass_by_ptr = pbp_plan.slice,
@@ -16451,8 +16589,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             });
             try self.emitCallToOffset(code_offset);
 
-            if (stack_spill_size > 0) {
-                try self.emitAddStackPtr(stack_spill_size);
+            if (placed_call.stack_spill_size > 0) {
+                try self.emitAddStackPtr(placed_call.stack_spill_size);
             }
 
             return self.saveCallReturnValue(ret_layout, needs_ret_ptr, ret_buffer_offset);

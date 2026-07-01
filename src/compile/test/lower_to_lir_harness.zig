@@ -22,6 +22,7 @@ pub const LowerToLirHarnessError = std.mem.Allocator.Error ||
     std.Io.Dir.RealPathFileAllocError ||
     std.Io.Dir.WriteFileError ||
     Coordinator.AppDiscoveryError ||
+    check.CheckedArtifact.CompileTimeFinalizer.Error ||
     eval.BuiltinModules.InitError ||
     std.Thread.SpawnError ||
     error{

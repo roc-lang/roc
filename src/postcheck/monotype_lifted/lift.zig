@@ -739,8 +739,10 @@ const Lifter = struct {
         defer self.output.current_loc = saved_loc;
         const saved_region = self.output.current_region;
         defer self.output.current_region = saved_region;
-        self.output.current_loc = self.output.exprLoc(call_expr);
-        self.output.current_region = self.output.exprRegion(call_expr);
+        const call_loc = self.output.exprLoc(call_expr);
+        if (call_loc.hasLocation()) self.output.current_loc = call_loc;
+        const call_region = self.output.exprRegion(call_expr);
+        if (!call_region.isEmpty()) self.output.current_region = call_region;
 
         const exprs = try self.allocator.alloc(Ast.ExprId, captures.len);
         defer self.allocator.free(exprs);
@@ -776,8 +778,10 @@ const Lifter = struct {
         defer self.output.current_loc = saved_loc;
         const saved_region = self.output.current_region;
         defer self.output.current_region = saved_region;
-        self.output.current_loc = self.output.exprLoc(call_expr);
-        self.output.current_region = self.output.exprRegion(call_expr);
+        const call_loc = self.output.exprLoc(call_expr);
+        if (call_loc.hasLocation()) self.output.current_loc = call_loc;
+        const call_region = self.output.exprRegion(call_expr);
+        if (!call_region.isEmpty()) self.output.current_region = call_region;
 
         const explicit = self.output.fnDefCaptureSpan(explicit_span);
         const exprs = try self.allocator.alloc(Ast.ExprId, captures.len);
@@ -967,7 +971,7 @@ fn finalizeCaptureExprSpanFromOperands(
         const operand = findCaptureOperand(operands, identity) orelse
             Common.invariant("function reference missing operand for finalized capture slot");
         const operand_ty = program.exprs.items[@intFromEnum(operand.value)].ty;
-        if (operand_ty != capture.ty and !try program.types.typeEql(&program.names, operand_ty, capture.ty)) {
+        if (!try program.types.typeEql(&program.names, operand_ty, capture.ty)) {
             Common.invariant("function reference capture operand type differed from finalized capture slot");
         }
         exprs[capture_index] = operand.value;

@@ -2285,7 +2285,7 @@ pub const Coordinator = struct {
         });
     }
 
-    pub fn validatePlatformAppRelationsForCheck(self: *Coordinator) (Allocator.Error || error{CompileTimeProblem})!void {
+    pub fn validatePlatformAppRelationsForCheck(self: *Coordinator) compile_package.PublishError!void {
         if (self.hasUserErrors()) {
             if (builtin.mode == .Debug) {
                 std.debug.panic("compile.coordinator.validatePlatformAppRelationsForCheck called after user-facing errors", .{});
@@ -5270,6 +5270,7 @@ pub const Coordinator = struct {
             task.imported_artifacts,
             task.available_artifacts,
             task.explicit_roots,
+            compile_package.compileTimeFinalizationOptions(self.max_threads, &self.roc_ctx),
         );
         defer typecheck_output.deinit();
 
