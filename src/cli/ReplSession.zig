@@ -119,6 +119,11 @@ pub fn stepWithConfig(self: *ReplSession, input: []const u8, report_config: repo
     if (line.len == 0) return .none;
 
     if (std.mem.eql(u8, line, ":help")) return .{ .output = try self.helpText() };
+    if (std.mem.eql(u8, line, ":defs")) return .{ .output = try self.printDefs() };
+    if (std.mem.startsWith(u8, line, ":t ")) {
+        const rest = std.mem.trim(u8, line[3..], " \t");
+        return .{ .output = try self.printTypeOfVar(rest) };
+    }
     if (std.mem.eql(u8, line, ":exit") or
         std.mem.eql(u8, line, ":quit") or
         std.mem.eql(u8, line, ":q") or
@@ -273,8 +278,95 @@ fn helpText(self: *ReplSession) Allocator.Error![]u8 {
         \\Commands:
         \\  :help               Show this help
         \\  :quit, :q, :exit    Exit the REPL
+        \\  :defs               Print the currently known definitions
+        \\  :t <identifier>     Print the type of a given identifier
         \\
     );
+}
+
+fn printDefs(self: *ReplSession) anyerror![]u8 {
+    var out = std.ArrayList(u8).empty;
+    errdefer out.deinit(self.allocator);
+
+    var ret = try self.initParsedResources();
+    defer ret.deinit(self.allocator);
+    const env = ret.module_env;
+
+    var tw = try env.initTypeWriter();
+    defer tw.deinit();
+
+    for (self.definitions.items.items) |item| {
+        switch (item.kind) {
+            .value => {
+                const name = item.name;
+                const def_idx = getDefOfName(env, name) orelse continue;
+                try tw.write(ModuleEnv.varFrom(def_idx), .one_line);
+
+                try out.print(
+                    self.allocator,
+                    "\x1b[3m\x1b[90m{s} : {s}\x1b[0m\n{s}\n\n",
+                    .{ name, tw.get(), item.source },
+                );
+            },
+            .annotation => {
+                // italics, usually succeeded by a .value let-binding
+                try out.print(self.allocator, "\x1b[3m{s}\x1b[0m\n", .{item.source});
+            },
+            .type_decl, .import => {
+                try out.print(self.allocator, "\x1b[3m{s}\x1b[0m\n\n", .{item.source});
+            },
+        }
+    }
+
+    return try out.toOwnedSlice(self.allocator);
+}
+
+fn printTypeOfVar(self: *ReplSession, name: []const u8) anyerror![]u8 {
+    var out = std.ArrayList(u8).empty;
+    defer out.deinit(self.allocator);
+
+    var ret = try self.initParsedResources();
+    defer ret.deinit(self.allocator);
+    var env = ret.module_env;
+
+    var tw = try env.initTypeWriter();
+    defer tw.deinit();
+
+    if (getDefOfName(env, name)) |def_idx| {
+        try tw.write(ModuleEnv.varFrom(def_idx), .one_line);
+        try out.print(self.allocator, "\x1b[3m\x1b[90m{s} : {s}\x1b[0m\n", .{ name, tw.get() });
+    } else {
+        try out.print(self.allocator, "Did not find a definition for `{s}`\n", .{name});
+    }
+
+    return out.toOwnedSlice(self.allocator);
+}
+
+fn initParsedResources(self: *ReplSession) anyerror!eval.test_helpers.ParsedResources {
+    const definitions = try self.definitionsSource();
+    defer self.allocator.free(definitions);
+
+    const source = try std.fmt.allocPrint(self.allocator, "{s}\nmain = \"\"\n", .{definitions});
+    defer self.allocator.free(source);
+
+    return try eval.test_helpers.parseAndCanonicalizeProgramPublishedRootsWithBuiltin(
+        self.allocator,
+        .module,
+        source,
+        &.{},
+        self.prePublishedBuiltin(),
+    );
+}
+
+fn getDefOfName(env: *ModuleEnv, name: []const u8) ?can.CIR.Def.Idx {
+    for (env.store.sliceDefs(env.all_defs)) |def_idx| {
+        const def = env.store.getDef(def_idx);
+        const pat = env.store.getPattern(def.pattern);
+        if (pat == .assign and std.mem.eql(u8, env.getIdent(pat.assign.ident), name)) {
+            return def_idx;
+        }
+    }
+    return null;
 }
 
 const DefinitionValidation = struct {
