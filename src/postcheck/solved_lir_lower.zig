@@ -6872,33 +6872,35 @@ const Lowerer = struct {
                         return layout.localGraphInput(node);
                     }
 
-                    if (self.lowerer.knownLayoutForType(backing.ty)) |layout_idx| return layout.committedGraphInput(layout_idx);
-
-                    const backing_index = @intFromEnum(backing.ty);
-                    if (self.local_nodes[backing_index]) |node| {
-                        self.local_nodes[index] = node;
-                        return layout.localGraphInput(node);
-                    }
-
-                    const node = try self.graph.reserveNode(self.lowerer.allocator);
-                    self.local_nodes[index] = node;
-                    self.local_nodes[backing_index] = node;
-
                     // A nominal or opaque record lays out its fields in declared
                     // order. The declared-order channel carries that order (the
                     // backing row stays lexicographic for name resolution); build
                     // the struct node from it and mark it nominal so the shared
                     // commit keeps declared order, repaired only for padding.
-                    if (named.kind != .alias and named.declared_order.len != 0) {
+                    // Reserve the node first (mapping both the named type and its
+                    // backing) so a recursive backing field resolves to it.
+                    if (named.kind != .alias and named.declared_order.len != 0 and
+                        self.lowerer.types.get(backing.ty) == .record)
+                    {
+                        const node = try self.graph.reserveNode(self.lowerer.allocator);
+                        self.local_nodes[index] = node;
+                        self.local_nodes[@intFromEnum(backing.ty)] = node;
                         if (try self.declaredOrderStructFields(named.declared_order, backing.ty)) |field_span| {
                             self.graph.setNode(node, .{ .struct_ = field_span });
                             try self.graph.markNominalStruct(self.lowerer.allocator, node);
-                            return layout.localGraphInput(node);
+                        } else {
+                            self.graph.setNode(node, try self.nodeForType(backing.ty));
                         }
+                        return layout.localGraphInput(node);
                     }
 
-                    self.graph.setNode(node, try self.nodeForType(backing.ty));
-                    return layout.localGraphInput(node);
+                    const backing_input = try self.inputForType(backing.ty);
+                    if (layout.graphInputCommitted(backing_input)) |layout_idx| return layout.committedGraphInput(layout_idx);
+                    if (layout.graphInputLocal(backing_input)) |node| {
+                        self.local_nodes[index] = node;
+                        return layout.localGraphInput(node);
+                    }
+                    Common.invariant("named backing layout input was neither committed nor local");
                 },
                 else => {},
             }
@@ -7652,6 +7654,96 @@ fn constFnDefFromMono(fn_def: Mono.FnDef) check.ConstStore.FnDef {
             .expr = runtime.expr,
         } },
     };
+}
+
+fn emptySolvedProgramForTest(allocator: std.mem.Allocator) Solved.Program {
+    const lifted = Lifted.Program.init(
+        allocator,
+        NameStore.init(allocator),
+        MonoType.Store.init(allocator),
+        .empty,
+        .empty,
+        .empty,
+        .empty,
+        .empty,
+        .empty,
+        .empty,
+        .empty,
+        .empty,
+        .empty,
+        .empty,
+        .empty,
+        .empty,
+        .empty,
+        .empty,
+        .empty,
+        Mono.ProcDebugNameMap.init(allocator),
+        .empty,
+        .empty,
+        .empty,
+        .empty,
+        .empty,
+        .empty,
+        .empty,
+        0,
+    );
+    return Solved.Program.init(allocator, lifted);
+}
+
+test "layout lowering accepts tag payload alias backed by primitive" {
+    const allocator = std.testing.allocator;
+
+    var solved = emptySolvedProgramForTest(allocator);
+    defer solved.deinit();
+
+    const module_name = try solved.lifted.names.internModuleName("Repro");
+    const repro_name = try solved.lifted.names.internTypeName("Repro");
+    const alias_name = try solved.lifted.names.internTypeName("Alias");
+    const wrap_name = try solved.lifted.names.internTagLabel("Wrap");
+
+    var lowerer = try Lowerer.init(allocator, .u64, &solved, .{});
+    defer lowerer.deinit();
+
+    const u32_ty = try lowerer.types.add(.{ .primitive = .u32 });
+    const alias_ty = try lowerer.types.add(.{
+        .named = .{
+            // Layout lowering does not read checked type ids for this synthetic type.
+            .named_type = .{ .module = .{}, .ty = undefined },
+            .def = .{ .module_name = module_name, .type_name = alias_name },
+            .kind = .alias,
+            .args = .empty(),
+            .backing = .{ .ty = u32_ty, .use = .inspectable },
+        },
+    });
+
+    const payloads = try lowerer.types.addSpan(&.{alias_ty});
+    const tags = try lowerer.types.addTags(&.{.{
+        .name = wrap_name,
+        .checked_name = wrap_name,
+        .payloads = payloads,
+    }});
+    const tag_union_ty = try lowerer.types.add(.{ .tag_union = tags });
+
+    const repro_ty = try lowerer.types.add(.{
+        .named = .{
+            // Layout lowering does not read checked type ids for this synthetic type.
+            .named_type = .{ .module = .{}, .ty = undefined },
+            .def = .{ .module_name = module_name, .type_name = repro_name },
+            .kind = .nominal,
+            .args = .empty(),
+            .backing = .{ .ty = tag_union_ty, .use = .inspectable },
+        },
+    });
+
+    // Regression for #9878: the primitive-backed alias payload lowers to the
+    // primitive payload layout instead of requiring a graph node for U32.
+    const repro_layout_idx = try lowerer.layoutOfType(repro_ty);
+    const repro_layout = lowerer.result.layouts.getLayout(repro_layout_idx);
+    try std.testing.expectEqual(layout.LayoutTag.tag_union, repro_layout.tag);
+
+    const tag_union_info = lowerer.result.layouts.getTagUnionInfo(repro_layout);
+    try std.testing.expectEqual(@as(usize, 1), tag_union_info.variants.len);
+    try std.testing.expectEqual(layout.Idx.u32, tag_union_info.variants.get(0).payload_layout);
 }
 
 test "direct LIR lower declarations are referenced" {
