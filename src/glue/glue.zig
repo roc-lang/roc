@@ -183,6 +183,7 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
         return error.BuildEnvInit;
     };
     defer build_env.deinit();
+    build_env.setSyntheticRootPackageIdentity();
 
     build_env.build(synthetic_app_path) catch {
         _ = try build_env.renderDiagnostics(stderr);

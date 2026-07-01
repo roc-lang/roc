@@ -52,6 +52,7 @@ const compile_build = @import("compile_build.zig");
 const module_discovery = @import("module_discovery.zig");
 const cache_manager_mod = @import("cache_manager.zig");
 const package_source = @import("package_source.zig");
+const package_identity = @import("package_identity.zig");
 const watch_inputs = @import("watch_inputs.zig");
 const CacheManager = cache_manager_mod.CacheManager;
 const CacheConfig = @import("cache_config.zig").CacheConfig;
@@ -910,6 +911,11 @@ pub const Coordinator = struct {
     /// Total modules remaining across all packages
     total_remaining: usize,
 
+    /// The package identity for the current app root, when this coordinator is
+    /// compiling an app. This is role metadata; package identity itself still
+    /// comes from package_identity.zig.
+    app_package_name: ?[]const u8,
+
     /// Shared read-only builtin modules
     builtin_modules: *const BuiltinModules,
 
@@ -1010,6 +1016,7 @@ pub const Coordinator = struct {
             .shutting_down = std.atomic.Value(bool).init(false),
             .worker_oom = std.atomic.Value(bool).init(false),
             .total_remaining = 0,
+            .app_package_name = null,
             .builtin_modules = builtin_modules,
             .roc_ctx = roc_ctx,
             .compiler_version = compiler_version,
@@ -1106,6 +1113,10 @@ pub const Coordinator = struct {
         self.track_watch_inputs = enabled;
     }
 
+    pub fn markAppPackage(self: *Coordinator, package_name: []const u8) void {
+        self.app_package_name = package_name;
+    }
+
     /// Set the I/O / core context implementation. Callers must supply a fully
     /// initialised `CoreCtx` — it must not create a replacement
     /// `CoreCtx.default(...)` here because the existing context may have been
@@ -1195,6 +1206,10 @@ pub const Coordinator = struct {
         entry_path: []const u8,
         /// Optional override for the app module's `source_dir_override`.
         source_dir_override: ?[]const u8 = null,
+        /// Use the synthetic app identity for compiler-generated default-app roots.
+        synthetic_root_identity: bool = false,
+        /// Use the synthetic platform identity for compiler-generated default platforms.
+        synthetic_platform_identity: bool = false,
     };
 
     pub const AppDiscoveryError = error{
@@ -1202,7 +1217,7 @@ pub const Coordinator = struct {
         AbsolutePlatformPath,
         UnsupportedPlatformSpec,
         UnsupportedPackageSpec,
-    } || app_header_mod.Error || Allocator.Error;
+    } || app_header_mod.Error || package_identity.PackageIdentityError;
 
     /// Read an app `.roc` file's header, register the app + platform +
     /// non-platform packages, and enqueue the app's parse task. After this
@@ -1228,7 +1243,15 @@ pub const Coordinator = struct {
 
         const app_dir = std.fs.path.dirname(opts.entry_path) orelse ".";
 
-        const app_pkg = try self.ensurePackage("app", app_dir);
+        const app_identity = try package_identity.packageIdentityFor(
+            self.gpa,
+            self.roc_ctx,
+            if (opts.synthetic_root_identity) .synthetic_app else .{ .local_path = opts.entry_path },
+        );
+        defer self.gpa.free(@constCast(app_identity));
+
+        const app_pkg = try self.ensurePackage(app_identity, app_dir);
+        self.markAppPackage(app_pkg.name);
         const app_module_name = base.module_path.getModuleName(opts.entry_path);
         const app_module_id = try app_pkg.ensureModule(self.gpa, app_module_name, opts.entry_path);
         if (opts.source_dir_override) |source_dir| {
@@ -1249,7 +1272,9 @@ pub const Coordinator = struct {
             const platform_main_path = try std.fs.path.join(arena, &.{ app_dir, header_info.platform_spec });
             const platform_dir = std.fs.path.dirname(platform_main_path) orelse return error.InvalidPlatformPath;
 
-            try self.registerPlatformPackage(app_pkg, platform_dir, platform_main_path, header_info.platform_qualifier);
+            try self.registerPlatformPackageWithOptions(app_pkg, platform_dir, platform_main_path, header_info.platform_qualifier, null, .{
+                .synthetic_identity = opts.synthetic_platform_identity,
+            });
         }
 
         for (header_info.non_platform_packages) |entry| {
@@ -1258,22 +1283,26 @@ pub const Coordinator = struct {
             }
             const pkg_main_path = try std.fs.path.join(arena, &.{ app_dir, entry.spec });
             const pkg_dir = std.fs.path.dirname(pkg_main_path) orelse ".";
-            _ = try self.registerInlinePackage(entry.shorthand, pkg_dir, app_pkg, entry.shorthand);
+            _ = try self.registerInlinePackageWithRootFile(pkg_main_path, pkg_dir, app_pkg, entry.shorthand);
         }
 
-        try self.enqueueParseTask("app", app_module_id);
+        try self.enqueueParseTask(app_pkg.name, app_module_id);
     }
 
-    /// Register the platform package (named "pf"), wire the app's shorthand
-    /// for it, ensure the platform's main module, and enqueue its parse task.
+    const PlatformIdentityOptions = struct {
+        synthetic_identity: bool = false,
+    };
+
+    /// Register the platform package, wire the app's shorthand for it, ensure
+    /// the platform's main module, and enqueue its parse task.
     pub fn registerPlatformPackage(
         self: *Coordinator,
         app_pkg: *PackageState,
         platform_dir: []const u8,
         platform_main_path: []const u8,
         qualifier: ?[]const u8,
-    ) Allocator.Error!void {
-        return self.registerPlatformPackageWithUrl(app_pkg, platform_dir, platform_main_path, qualifier, null);
+    ) package_identity.PackageIdentityError!void {
+        return self.registerPlatformPackageWithOptions(app_pkg, platform_dir, platform_main_path, qualifier, null, .{});
     }
 
     pub fn registerPlatformPackageWithUrl(
@@ -1283,13 +1312,37 @@ pub const Coordinator = struct {
         platform_main_path: []const u8,
         qualifier: ?[]const u8,
         url: ?package_source.UrlSourceView,
-    ) Allocator.Error!void {
-        const pf_pkg = try self.ensurePackageWithUrl("pf", platform_dir, url);
+    ) package_identity.PackageIdentityError!void {
+        return self.registerPlatformPackageWithOptions(app_pkg, platform_dir, platform_main_path, qualifier, url, .{});
+    }
+
+    fn registerPlatformPackageWithOptions(
+        self: *Coordinator,
+        app_pkg: *PackageState,
+        platform_dir: []const u8,
+        platform_main_path: []const u8,
+        qualifier: ?[]const u8,
+        url: ?package_source.UrlSourceView,
+        options: PlatformIdentityOptions,
+    ) package_identity.PackageIdentityError!void {
+        const platform_identity = try package_identity.packageIdentityFor(
+            self.gpa,
+            self.roc_ctx,
+            if (options.synthetic_identity)
+                .synthetic_platform
+            else if (url) |url_view|
+                .{ .url = url_view.url }
+            else
+                .{ .local_path = platform_main_path },
+        );
+        defer self.gpa.free(@constCast(platform_identity));
+
+        const pf_pkg = try self.ensurePackageWithUrl(platform_identity, platform_dir, url);
 
         if (qualifier) |qual| {
             try app_pkg.shorthands.put(
                 try self.gpa.dupe(u8, qual),
-                try self.gpa.dupe(u8, "pf"),
+                try self.gpa.dupe(u8, pf_pkg.name),
             );
         }
 
@@ -1298,7 +1351,7 @@ pub const Coordinator = struct {
         pf_pkg.modules.items[pf_module_id].depth = 1;
         pf_pkg.remaining_modules += 1;
         self.total_remaining += 1;
-        try self.enqueueParseTask("pf", pf_module_id);
+        try self.enqueueParseTask(pf_pkg.name, pf_module_id);
     }
 
     /// Register a non-platform package and (optionally) wire a shorthand on
@@ -1308,32 +1361,50 @@ pub const Coordinator = struct {
     /// Returns the new (or existing) package state.
     pub fn registerInlinePackage(
         self: *Coordinator,
-        package_name: []const u8,
+        package_identity_value: []const u8,
         package_root_dir: []const u8,
         app_pkg: ?*PackageState,
         shorthand_on_app: ?[]const u8,
-    ) Allocator.Error!*PackageState {
-        return self.registerInlinePackageWithUrl(package_name, package_root_dir, app_pkg, shorthand_on_app, null);
+    ) package_identity.PackageIdentityError!*PackageState {
+        return self.registerInlinePackageWithUrl(package_identity_value, package_root_dir, app_pkg, shorthand_on_app, null);
     }
 
     pub fn registerInlinePackageWithUrl(
         self: *Coordinator,
-        package_name: []const u8,
+        package_identity_value: []const u8,
         package_root_dir: []const u8,
         app_pkg: ?*PackageState,
         shorthand_on_app: ?[]const u8,
         url: ?package_source.UrlSourceView,
-    ) Allocator.Error!*PackageState {
-        const pkg = try self.ensurePackageWithUrl(package_name, package_root_dir, url);
+    ) package_identity.PackageIdentityError!*PackageState {
+        const identity = if (url) |url_view|
+            try package_identity.packageIdentityFor(self.gpa, self.roc_ctx, .{ .url = url_view.url })
+        else
+            try self.gpa.dupe(u8, package_identity_value);
+        defer self.gpa.free(@constCast(identity));
+
+        const pkg = try self.ensurePackageWithUrl(identity, package_root_dir, url);
         if (app_pkg) |a| {
             if (shorthand_on_app) |sh| {
                 try a.shorthands.put(
                     try self.gpa.dupe(u8, sh),
-                    try self.gpa.dupe(u8, package_name),
+                    try self.gpa.dupe(u8, pkg.name),
                 );
             }
         }
         return pkg;
+    }
+
+    pub fn registerInlinePackageWithRootFile(
+        self: *Coordinator,
+        package_root_file: []const u8,
+        package_root_dir: []const u8,
+        app_pkg: ?*PackageState,
+        shorthand_on_app: ?[]const u8,
+    ) package_identity.PackageIdentityError!*PackageState {
+        const identity = try package_identity.packageIdentityFor(self.gpa, self.roc_ctx, .{ .local_path = package_root_file });
+        defer self.gpa.free(@constCast(identity));
+        return self.registerInlinePackage(identity, package_root_dir, app_pkg, shorthand_on_app);
     }
 
     fn isRelativeSpec(spec: []const u8) bool {
@@ -3041,7 +3112,12 @@ pub const Coordinator = struct {
                 }
             }
         }
-        return self.rootCheckedArtifact("app");
+        return self.appRootCheckedArtifact();
+    }
+
+    pub fn appRootCheckedArtifact(self: *Coordinator) *const check.CheckedArtifact.CheckedModuleArtifact {
+        const app_package_name = self.app_package_name orelse package_identity.synthetic_app_identity;
+        return self.rootCheckedArtifact(app_package_name);
     }
 
     pub fn collectRelationArtifactViews(
@@ -4213,9 +4289,8 @@ pub const Coordinator = struct {
             if (can.BuiltinLowLevel.isBuiltinModule(env)) {
                 try can.BuiltinLowLevel.apply(env);
             } else if (self.enable_hosted_transform) {
-                // Only run for platform modules (packages other than "app")
-                // The app package doesn't need hosted lambdas
-                if (!std.mem.eql(u8, result.package_name, "app")) {
+                // The app package doesn't need hosted lambdas.
+                if (self.app_package_name == null or !std.mem.eql(u8, result.package_name, self.app_package_name.?)) {
                     if (can.HostedCompiler.replaceAnnoOnlyWithHosted(env)) |modified_defs| {
                         var defs = modified_defs;
                         defs.deinit(env.gpa);
@@ -5762,6 +5837,7 @@ test "Coordinator basic initialization" {
 
 test "Coordinator package creation" {
     const allocator = std.testing.allocator;
+    const app_identity = package_identity.synthetic_app_identity;
 
     var coord = try Coordinator.init(
         allocator,
@@ -5776,14 +5852,14 @@ test "Coordinator package creation" {
     defer coord.deinit();
 
     // Create a package
-    const pkg = try coord.ensurePackage("app", "/test/app");
-    try std.testing.expectEqualStrings("app", pkg.name);
+    const pkg = try coord.ensurePackage(app_identity, "/test/app");
+    try std.testing.expectEqualStrings(app_identity, pkg.name);
     try std.testing.expectEqualStrings("/test/app", pkg.root_dir);
 
     // Verify package is stored
-    const retrieved = coord.packages.get("app");
+    const retrieved = coord.packages.get(app_identity);
     try std.testing.expect(retrieved != null);
-    try std.testing.expectEqualStrings("app", retrieved.?.name);
+    try std.testing.expectEqualStrings(app_identity, retrieved.?.name);
 }
 
 test "Coordinator collectWatchInputStates includes package root state" {
@@ -5900,6 +5976,7 @@ test "Coordinator collectWatchInputStates includes module source file state" {
 
 test "Coordinator module creation" {
     const allocator = std.testing.allocator;
+    const app_identity = package_identity.synthetic_app_identity;
 
     var coord = try Coordinator.init(
         allocator,
@@ -5914,7 +5991,7 @@ test "Coordinator module creation" {
     defer coord.deinit();
 
     // Create package and module
-    const pkg = try coord.ensurePackage("app", "/test/app");
+    const pkg = try coord.ensurePackage(app_identity, "/test/app");
     const module_id = try pkg.ensureModule(allocator, "Main", "/test/app/Main.roc");
 
     try std.testing.expectEqual(@as(ModuleId, 0), module_id);
@@ -5928,6 +6005,7 @@ test "Coordinator module creation" {
 
 test "Coordinator task queue" {
     const allocator = std.testing.allocator;
+    const app_identity = package_identity.synthetic_app_identity;
 
     var coord = try Coordinator.init(
         allocator,
@@ -5942,13 +6020,13 @@ test "Coordinator task queue" {
     defer coord.deinit();
 
     // Create package and module
-    const pkg = try coord.ensurePackage("app", "/test/app");
+    const pkg = try coord.ensurePackage(app_identity, "/test/app");
     _ = try pkg.ensureModule(allocator, "Main", "/test/app/Main.roc");
 
     // Enqueue a task directly
     try coord.enqueueTask(.{
         .parse = .{
-            .package_name = "app",
+            .package_name = app_identity,
             .module_id = 0,
             .module_name = "Main",
             .path = "/test/app/Main.roc",
@@ -5964,7 +6042,7 @@ test "Coordinator task queue" {
     const task = coord.task_channel.tryRecv();
     try std.testing.expect(task != null);
     try std.testing.expect(task.? == .parse);
-    try std.testing.expectEqualStrings("app", task.?.parse.package_name);
+    try std.testing.expectEqualStrings(app_identity, task.?.parse.package_name);
 }
 
 test "Coordinator isComplete logic" {
@@ -6195,6 +6273,7 @@ test "Channel in coordinator context" {
 
 test "Coordinator enqueueParseTask flow" {
     const allocator = std.testing.allocator;
+    const app_identity = package_identity.synthetic_app_identity;
 
     var coord = try Coordinator.init(
         allocator,
@@ -6209,7 +6288,7 @@ test "Coordinator enqueueParseTask flow" {
     defer coord.deinit();
 
     // Create package
-    const pkg = try coord.ensurePackage("app", "/test/app");
+    const pkg = try coord.ensurePackage(app_identity, "/test/app");
 
     // Create module
     const module_id = try pkg.ensureModule(allocator, "Main", "/test/app/Main.roc");
@@ -6219,7 +6298,7 @@ test "Coordinator enqueueParseTask flow" {
     coord.total_remaining = 1;
 
     // Enqueue parse task
-    try coord.enqueueParseTask("app", module_id);
+    try coord.enqueueParseTask(app_identity, module_id);
 
     // Verify task was queued
     try std.testing.expectEqual(@as(usize, 1), coord.task_channel.len());
@@ -6227,13 +6306,14 @@ test "Coordinator enqueueParseTask flow" {
     // Verify it's a parse task for the right module
     const task = coord.task_channel.tryRecv().?;
     try std.testing.expect(task == .parse);
-    try std.testing.expectEqualStrings("app", task.parse.package_name);
+    try std.testing.expectEqualStrings(app_identity, task.parse.package_name);
     try std.testing.expectEqual(@as(ModuleId, 0), task.parse.module_id);
     try std.testing.expectEqualStrings("Main", task.parse.module_name);
 }
 
 test "Coordinator single-threaded loop with mock result" {
     const allocator = std.testing.allocator;
+    const app_identity = package_identity.synthetic_app_identity;
 
     var coord = try Coordinator.init(
         allocator,
@@ -6248,7 +6328,7 @@ test "Coordinator single-threaded loop with mock result" {
     defer coord.deinit();
 
     // Create package and module
-    const pkg = try coord.ensurePackage("app", "/test/app");
+    const pkg = try coord.ensurePackage(app_identity, "/test/app");
     const module_id = try pkg.ensureModule(allocator, "Main", "/test/app/Main.roc");
 
     // Set up remaining count
@@ -6280,6 +6360,8 @@ test "Coordinator CI failure scenario - app with platform cross-package imports"
     // for this exact structure.
 
     const allocator = std.testing.allocator;
+    const app_identity = package_identity.synthetic_app_identity;
+    const platform_identity = package_identity.synthetic_platform_identity;
 
     var coord = try Coordinator.init(
         allocator,
@@ -6293,20 +6375,20 @@ test "Coordinator CI failure scenario - app with platform cross-package imports"
     );
     defer coord.deinit();
 
-    // Set up "app" package
-    const app_pkg = try coord.ensurePackage("app", "/test/app");
+    // Set up synthetic app package
+    const app_pkg = try coord.ensurePackage(app_identity, "/test/app");
 
-    // Set up shorthand: app's "pf" -> package "pf"
+    // Set up shorthand: app's "pf" alias -> synthetic platform package
     const sh_key = try allocator.dupe(u8, "pf");
-    const sh_val = try allocator.dupe(u8, "pf");
+    const sh_val = try allocator.dupe(u8, platform_identity);
     try app_pkg.shorthands.put(sh_key, sh_val);
 
     const app_mod_id = try app_pkg.ensureModule(allocator, "expect_with_main", "/test/app/expect_with_main.roc");
     app_pkg.remaining_modules = 1;
     coord.total_remaining = 1;
 
-    // Set up "pf" package
-    const pf_pkg = try coord.ensurePackage("pf", "/test/pf");
+    // Set up synthetic platform package
+    const pf_pkg = try coord.ensurePackage(platform_identity, "/test/pf");
     const pf_main_id = try pf_pkg.ensureModule(allocator, "main", "/test/pf/main.roc");
     const pf_stdout_id = try pf_pkg.ensureModule(allocator, "Stdout", "/test/pf/Stdout.roc");
     const pf_stderr_id = try pf_pkg.ensureModule(allocator, "Stderr", "/test/pf/Stderr.roc");
@@ -6363,8 +6445,8 @@ test "Coordinator CI failure scenario - app with platform cross-package imports"
 
     // Verify external import readiness via the public isExternalReady API
     // pf.Stdout and pf.Stderr should be ready (they're Done)
-    try std.testing.expect(coord.isExternalReady("app", "pf.Stdout"));
-    try std.testing.expect(coord.isExternalReady("app", "pf.Stderr"));
+    try std.testing.expect(coord.isExternalReady(app_identity, "pf.Stdout"));
+    try std.testing.expect(coord.isExternalReady(app_identity, "pf.Stderr"));
 
     // Now simulate completing pf.main
     pf_pkg.getModule(pf_main_id).?.phase = .Done;
@@ -6401,6 +6483,7 @@ test "Coordinator handleParseFailed advances module to Done" {
     // If the package/module lookup silently returned, the module would
     // stay in Parsing forever — exactly the bug from CI.
     const allocator = std.testing.allocator;
+    const app_identity = package_identity.synthetic_app_identity;
 
     var coord = try Coordinator.init(
         allocator,
@@ -6415,7 +6498,7 @@ test "Coordinator handleParseFailed advances module to Done" {
     defer coord.deinit();
 
     // Create package and module
-    const pkg = try coord.ensurePackage("app", "/test/app");
+    const pkg = try coord.ensurePackage(app_identity, "/test/app");
     const module_id = try pkg.ensureModule(allocator, "Builder", "/test/app/Builder.roc");
     pkg.remaining_modules = 1;
     coord.total_remaining = 1;
@@ -6428,7 +6511,7 @@ test "Coordinator handleParseFailed advances module to Done" {
     // This exercises the package/module lookup that previously used orelse return.
     const result: WorkerResult = .{
         .parse_failed = .{
-            .package_name = "app",
+            .package_name = app_identity,
             .module_id = module_id,
             .module_name = "Builder",
             .path = "/test/app/Builder.roc",
