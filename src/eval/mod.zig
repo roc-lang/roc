@@ -30,13 +30,15 @@ pub const ExecutableMemory = backend.ExecutableMemory;
 /// Layout module (re-exported for result type information)
 pub const layout = @import("layout");
 /// Utilities for loading compiled builtin modules
-pub const builtin_loading = @import("builtin_loading.zig");
+pub const builtin_static = @import("can").BuiltinStatic;
 /// Centralized loading and management of builtin modules
 pub const BuiltinModules = @import("BuiltinModules.zig").BuiltinModules;
 /// Checked-artifact compile-time evaluation finalizer
 pub const CompileTimeFinalization = @import("compile_time_finalization.zig");
 /// Compiler-owned RocOps environment for compile-time evaluation
 pub const CompilerHost = @import("compiler_host.zig");
+/// Dev-backend RocOps environment for native compile-time evaluation
+pub const CompileTimeHost = @import("compile_time_host.zig");
 /// Stores compile-time interpreter results in ConstStore
 pub const ConstStoreWriter = @import("const_store_writer.zig");
 /// Builtin types for type checking
@@ -115,6 +117,7 @@ test "eval tests" {
     std.testing.refAllDecls(@import("host_trampoline.zig"));
     std.testing.refAllDecls(@import("compile_time_finalization.zig"));
     std.testing.refAllDecls(@import("compiler_host.zig"));
+    std.testing.refAllDecls(@import("compile_time_host.zig"));
     std.testing.refAllDecls(@import("const_store_writer.zig"));
     std.testing.refAllDecls(@import("stack.zig"));
     std.testing.refAllDecls(@import("test_helpers.zig"));

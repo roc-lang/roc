@@ -218,21 +218,16 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
 
     const target_usize = base.target.TargetUsize.native;
 
-    // Index every platform artifact by its own module name so a nominal type
-    // declared in one platform module can have its declared field order read
-    // from that module's CIR, even when referenced from another module.
-    var module_artifacts = ModuleArtifactMap.init(gpa);
-    defer module_artifacts.deinit();
+    // Index every checked artifact by key so nominal representations can resolve
+    // their declaration owners without reconstructing ownership from names.
+    var artifacts_by_key = ArtifactKeyMap.init(gpa);
+    defer artifacts_by_key.deinit();
     for (modules) |mod| {
-        if (!(mod.is_platform_sibling or mod.is_platform_main)) continue;
         const artifact = mod.semantic.checked_artifact orelse continue;
-        // Key on the qualified module name: a nominal's `origin_module` text
-        // resolves to that qualified form, not the short module name.
-        const module_name = artifact.canonical_names.moduleNameText(artifact.module_identity.qualified_module_name);
-        try module_artifacts.put(module_name, artifact);
+        try artifacts_by_key.put(artifact.key, artifact);
     }
 
-    var type_table = TypeTable.init(gpa, target_usize, &module_artifacts);
+    var type_table = TypeTable.init(gpa, target_usize, &artifacts_by_key);
     defer type_table.deinit();
 
     for (modules) |mod| {
@@ -1023,33 +1018,37 @@ const CollectedTagInfo = struct {
     payload_alignment: u64,
 };
 
-/// Maps a platform module's name text to its checked artifact, so a nominal
-/// declared in one module can have its declared field order read from the CIR
-/// of the module that declares it (its `source_decl` indexes that module's
-/// statements). Populated once from the compiled module list before collection.
-const ModuleArtifactMap = std.StringHashMap(*const CheckedArtifact.CheckedModuleArtifact);
+/// Maps checked artifact keys to artifacts. Populated once from the compiled
+/// module list before collection so nominal representation refs can resolve
+/// their declaration owners directly.
+const ArtifactKeyMap = std.AutoHashMap(CheckedArtifact.CheckedModuleArtifactKey, *const CheckedArtifact.CheckedModuleArtifact);
+
+const TypeTableKey = struct {
+    artifact_key: CheckedArtifact.CheckedModuleArtifactKey,
+    checked_type: CheckedArtifact.CheckedTypeId,
+};
 
 /// Builds a type table from artifact-owned checked type payloads.
 const TypeTable = struct {
     entries: std.ArrayList(CollectedTypeRepr),
-    var_map: std.AutoHashMap(CheckedArtifact.CheckedTypeId, u64),
+    var_map: std.AutoHashMap(TypeTableKey, u64),
     target_usize: base.target.TargetUsize,
     gpa: std.mem.Allocator,
-    /// Lookup from module name text to declaring artifact, for cross-module
-    /// declared-field-order reads. Borrowed; not owned by the type table.
-    module_artifacts: *const ModuleArtifactMap,
+    /// Lookup from checked artifact key to artifact. Borrowed; not owned by the
+    /// type table.
+    artifacts_by_key: *const ArtifactKeyMap,
 
     fn init(
         gpa: std.mem.Allocator,
         target_usize: base.target.TargetUsize,
-        module_artifacts: *const ModuleArtifactMap,
+        artifacts_by_key: *const ArtifactKeyMap,
     ) TypeTable {
         return .{
             .entries = std.ArrayList(CollectedTypeRepr).empty,
-            .var_map = std.AutoHashMap(CheckedArtifact.CheckedTypeId, u64).init(gpa),
+            .var_map = std.AutoHashMap(TypeTableKey, u64).init(gpa),
             .target_usize = target_usize,
             .gpa = gpa,
-            .module_artifacts = module_artifacts,
+            .artifacts_by_key = artifacts_by_key,
         };
     }
 
@@ -1135,13 +1134,14 @@ const TypeTable = struct {
         artifact: *const CheckedArtifact.CheckedModuleArtifact,
         checked_type: CheckedArtifact.CheckedTypeId,
     ) Allocator.Error!u64 {
-        if (self.var_map.get(checked_type)) |idx| {
+        const key = TypeTableKey{ .artifact_key = artifact.key, .checked_type = checked_type };
+        if (self.var_map.get(key)) |idx| {
             return idx;
         }
 
         const idx: u64 = @intCast(self.entries.items.len);
         try self.entries.append(self.gpa, .{ .unknown = "" });
-        try self.var_map.put(checked_type, idx);
+        try self.var_map.put(key, idx);
 
         const repr = try self.convertCheckedType(artifact, checked_type);
 
@@ -1352,14 +1352,73 @@ const TypeTable = struct {
         alignment: u64,
     };
 
-    /// Reconstructs a nominal record in DECLARED source order, with nonzero
-    /// unnamed `_` / `_name` fields reinstated as padding spacers and C-style
-    /// padding inserted between fields, matching the layout store's
-    /// `putNominalStructFields`.
-    /// Returns `null` — so the caller falls back to the structural backing order —
-    /// when the record has no `_` field (it then lays out structurally), or when
-    /// the declaration is unavailable (no `source_decl`, declaring module not
-    /// found, or the annotation is not a record). `backing` provides each named
+    const NominalDeclarationLookup = struct {
+        artifact: *const CheckedArtifact.CheckedModuleArtifact,
+        declaration: CheckedArtifact.CheckedNominalDeclaration,
+        padding_field_types: []const CheckedArtifact.CheckedTypeId,
+    };
+
+    fn artifactByKey(
+        self: *TypeTable,
+        key: CheckedArtifact.CheckedModuleArtifactKey,
+    ) *const CheckedArtifact.CheckedModuleArtifact {
+        return self.artifacts_by_key.get(key) orelse
+            glueInvariant("nominal representation referenced an artifact that glue did not load", .{});
+    }
+
+    fn nominalDeclarationFor(
+        self: *TypeTable,
+        artifact: *const CheckedArtifact.CheckedModuleArtifact,
+        nominal: CheckedArtifact.CheckedNominalType,
+    ) ?NominalDeclarationLookup {
+        return switch (nominal.representation) {
+            .local_declaration => |declaration_id| .{
+                .artifact = artifact,
+                .declaration = artifact.checked_types.nominalDeclarationById(declaration_id),
+                .padding_field_types = artifact.checked_types.nominalDeclarationById(declaration_id).paddingFieldTypes(&artifact.checked_types),
+            },
+            .imported_declaration => |imported| blk: {
+                const owner = self.artifactByKey(CheckedArtifact.importedNominalDeclarationModuleId(imported));
+                const declaration = owner.checked_types.nominalDeclarationById(imported.declaration);
+                break :blk .{
+                    .artifact = owner,
+                    .declaration = declaration,
+                    .padding_field_types = declaration.paddingFieldTypes(&owner.checked_types),
+                };
+            },
+            .local_box_payload_capability => |capability_ref| blk: {
+                const capability = artifact.interface_capabilities.boxPayloadCapability(capability_ref.capability);
+                const declaration = artifact.checked_types.nominalDeclaration(capability.nominal) orelse
+                    glueInvariant("boxed payload capability referenced a nominal declaration that is not in the owner artifact", .{});
+                break :blk .{
+                    .artifact = artifact,
+                    .declaration = declaration,
+                    .padding_field_types = capability.paddingFieldTys(&artifact.interface_capabilities),
+                };
+            },
+            .imported_box_payload_capability => |capability_ref| blk: {
+                const owner = self.artifactByKey(CheckedArtifact.importedBoxPayloadCapabilityModuleId(capability_ref));
+                const capability = owner.interface_capabilities.boxPayloadCapability(capability_ref.capability);
+                const declaration = owner.checked_types.nominalDeclaration(capability.nominal) orelse
+                    glueInvariant("imported boxed payload capability referenced a nominal declaration that is not in the owner artifact", .{});
+                break :blk .{
+                    .artifact = owner,
+                    .declaration = declaration,
+                    .padding_field_types = capability.paddingFieldTys(&owner.interface_capabilities),
+                };
+            },
+            .builtin,
+            .opaque_without_backing,
+            => null,
+        };
+    }
+
+    /// Builds a nominal record in DECLARED source order from checked artifact
+    /// metadata, with nonzero unnamed `_` / `_name` fields reinstated as padding
+    /// spacers and C-style padding inserted between fields, matching the layout
+    /// store's `putNominalStructFields`.
+    /// Returns `null` only when the declaration has no `_` field; such records
+    /// intentionally use structural backing order. `backing` provides each named
     /// field's already converted `type_id`/size/alignment, matched by name text.
     fn nominalRecordInDeclaredOrder(
         self: *TypeTable,
@@ -1367,94 +1426,70 @@ const TypeTable = struct {
         nominal: CheckedArtifact.CheckedNominalType,
         backing: anytype,
     ) Allocator.Error!?NominalRecordLayout {
-        const source_decl = nominal.source_decl orelse return null;
+        const lookup = self.nominalDeclarationFor(artifact, nominal) orelse return null;
+        const declared_fields = lookup.declaration.declaredRecordFields(&lookup.artifact.checked_types);
+        if (declared_fields.len == 0) return null;
+        const padding_types = lookup.padding_field_types;
 
-        // The nominal's declared field order lives in the CIR of the module that
-        // declares it. `source_decl` indexes that module's statements.
-        const origin_text = artifact.canonical_names.moduleNameText(nominal.origin_module);
-        const decl_artifact = self.module_artifacts.get(origin_text) orelse artifact;
-        const module_env = decl_artifact.moduleEnvConst();
-
-        const anno_idx = switch (module_env.store.getStatement(@enumFromInt(source_decl))) {
-            .s_nominal_decl => |decl| decl.anno,
-            else => return null,
-        };
-        // The backing record annotation may be wrapped in parentheses.
-        var record_anno = anno_idx;
-        const record = while (true) {
-            switch (module_env.store.getTypeAnno(record_anno)) {
-                .parens => |parens| record_anno = parens.anno,
-                .record => |record| break record,
-                else => return null,
-            }
-        };
-        const anno_fields = module_env.store.sliceAnnoRecordFields(record.fields);
-        if (anno_fields.len == 0) return null;
-
-        // The unnamed fields' resolved types live on the nominal declaration in
-        // the declaring artifact (the nominal *reference* in a signature carries
-        // an empty padding list), indexing that artifact's checked type store.
-        const padding_types = nominalDeclarationPaddingTypes(decl_artifact, source_decl) orelse return null;
-
-        // Each named declared field recovers its converted shape from the backing
+        // Each named declared field reads its converted shape from the backing
         // record (matched by name); each nonzero unnamed field becomes a padding
         // spacer whose size is its declared type's size and whose alignment is 1.
-        const collected = try self.gpa.alloc(CollectedRecordField, anno_fields.len);
+        const collected = try self.gpa.alloc(CollectedRecordField, declared_fields.len);
         var populated: usize = 0;
         errdefer self.freeCollectedRecordFields(collected, populated);
 
         var padding_cursor: usize = 0;
         var pad_index: usize = 0;
         var saw_unnamed_field = false;
-        for (anno_fields) |field_idx| {
-            const field = module_env.store.getAnnoRecordField(field_idx);
-            if (field.is_unnamed) {
-                saw_unnamed_field = true;
-                if (padding_cursor >= padding_types.len) {
-                    self.freeCollectedRecordFields(collected, populated);
-                    return null;
-                }
-                // Padding field types index the declaring artifact's type store.
-                const padding_ty = padding_types[padding_cursor];
-                padding_cursor += 1;
-                const padding_type_id = try self.getOrInsert(decl_artifact, padding_ty);
-                const sa = self.getSizeAlign(padding_type_id);
-                if (sa.size == 0) continue;
+        for (declared_fields) |field| {
+            switch (field) {
+                .padding => {
+                    saw_unnamed_field = true;
+                    if (padding_cursor >= padding_types.len) {
+                        glueInvariant("nominal declaration had more padding fields than padding types", .{});
+                    }
+                    const padding_ty = padding_types[padding_cursor];
+                    padding_cursor += 1;
+                    const padding_type_id = try self.getOrInsert(lookup.artifact, padding_ty);
+                    const sa = self.getSizeAlign(padding_type_id);
+                    if (sa.size == 0) continue;
 
-                const name = try std.fmt.allocPrint(self.gpa, "_pad{d}", .{pad_index});
-                pad_index += 1;
-                collected[populated] = .{
-                    .name = name,
-                    .type_id = 0,
-                    .size = sa.size,
-                    .alignment = 1,
-                    .is_padding = true,
-                };
-                populated += 1;
-            } else {
-                const field_name = module_env.getIdentText(field.name);
-                const match = backingFieldByName(backing, field_name) orelse {
-                    self.freeCollectedRecordFields(collected, populated);
-                    return null;
-                };
-                const name = try self.gpa.dupe(u8, field_name);
-                collected[populated] = .{
-                    .name = name,
-                    .type_id = match.type_id,
-                    .size = match.size,
-                    .alignment = match.alignment,
-                    .is_padding = false,
-                };
-                populated += 1;
+                    const name = try std.fmt.allocPrint(self.gpa, "_pad{d}", .{pad_index});
+                    pad_index += 1;
+                    collected[populated] = .{
+                        .name = name,
+                        .type_id = 0,
+                        .size = sa.size,
+                        .alignment = 1,
+                        .is_padding = true,
+                    };
+                    populated += 1;
+                },
+                .named => |field_name_id| {
+                    const field_name = lookup.artifact.canonical_names.recordFieldLabelText(field_name_id);
+                    const match = backingFieldByName(backing, field_name) orelse
+                        glueInvariant("nominal declaration field '{s}' missing from backing record", .{field_name});
+                    const name = try self.gpa.dupe(u8, field_name);
+                    collected[populated] = .{
+                        .name = name,
+                        .type_id = match.type_id,
+                        .size = match.size,
+                        .alignment = match.alignment,
+                        .is_padding = false,
+                    };
+                    populated += 1;
+                },
             }
         }
 
         // A nominal record keeps its declared order only when it opts in with an
-        // unnamed `_` field. Without one it lays out like a structural record, so
-        // fall back to the structural backing order.
+        // unnamed `_` field. Without one it lays out like a structural record.
         if (!saw_unnamed_field) {
             self.freeCollectedRecordFields(collected, populated);
             return null;
+        }
+        if (padding_cursor != padding_types.len) {
+            glueInvariant("nominal declaration had more padding types than padding fields", .{});
         }
         const collected_fields = if (populated == collected.len)
             collected
@@ -1489,23 +1524,6 @@ const TypeTable = struct {
         for (backing.fields) |field| {
             if (std.mem.eql(u8, field.name, name)) {
                 return .{ .type_id = field.type_id, .size = field.size, .alignment = field.alignment };
-            }
-        }
-        return null;
-    }
-
-    /// Resolved types of a nominal's unnamed (`_`) padding fields, in declared
-    /// order, read from the declaration in `decl_artifact` identified by its
-    /// `source_decl` statement index. The returned ids index `decl_artifact`'s
-    /// checked type store. `null` when no matching declaration is found.
-    fn nominalDeclarationPaddingTypes(
-        decl_artifact: *const CheckedArtifact.CheckedModuleArtifact,
-        source_decl: u32,
-    ) ?[]const CheckedArtifact.CheckedTypeId {
-        for (decl_artifact.checked_types.nominal_declarations.items) |declaration| {
-            const decl_source = declaration.nominal.source_decl orelse continue;
-            if (decl_source == source_decl) {
-                return declaration.paddingFieldTypes(&decl_artifact.checked_types);
             }
         }
         return null;

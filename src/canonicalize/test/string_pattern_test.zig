@@ -16,8 +16,6 @@ test "adjacent string pattern captures emit warnings" {
     defer builtin_ctx.deinit();
 
     const source =
-        \\module [classify]
-        \\
         \\classify : Str -> Str
         \\classify = |s| match s {
         \\    "${foo}${bar}" => foo

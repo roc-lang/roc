@@ -45,6 +45,11 @@ const Self = @This();
 
 const InterpolationConstraintId = enum(u32) { _ };
 
+/// Platform `requires` declarations that constrain app definitions during checking.
+pub const PlatformRequirements = struct {
+    module_env: *const ModuleEnv,
+};
+
 const InterpolationConstraintMetadata = struct {
     expr_idx: CIR.Expr.Idx,
     item_var: Var,
@@ -134,6 +139,9 @@ constraint_expr_by_fn_var: std.AutoHashMap(Var, CIR.Expr.Idx),
 /// method call resolves to a record field function, the checker rewrites the
 /// method call to an ordinary call using this field access as the callee.
 method_field_access_exprs: std.AutoHashMapUnmanaged(CIR.Expr.Idx, CIR.Expr.Idx),
+/// Platform-required signatures copied into this module, keyed by the app def
+/// that must be checked against the required type.
+platform_required_expected_types: std.AutoHashMap(CIR.Def.Idx, PlatformRequiredExpectedType),
 /// Interpolation metadata records keyed by their static dispatch constraint function.
 interpolation_constraint_ids_by_fn_var: std.AutoHashMap(Var, InterpolationConstraintId),
 /// Metadata produced when checking interpolation expressions and consumed when
@@ -286,6 +294,10 @@ hoist_selected_exprs: std.AutoHashMapUnmanaged(CIR.Expr.Idx, u32),
 /// Sparse roots selected during checking. Publication consumes this slice and
 /// turns the entries into checked compile-time roots.
 selected_hoisted_roots: std.ArrayListUnmanaged(hoist_roots.SelectedHoistedRoot),
+/// Top-level defs whose zero-arg function result will be observed as an
+/// executable/eval root. Ordinary thunks may stay polymorphic; these roots may
+/// not leave static-dispatch obligations in their immediate result.
+executable_root_defs: std.ArrayListUnmanaged(CIR.Def.Idx),
 /// Most recently completed expression's temporary hoist result. This lets
 /// statement checking record a local binding candidate without storing a result
 /// on the checked expression itself.
@@ -949,6 +961,22 @@ const DeferredDefUnification = struct {
     expr_var: Var,
 };
 
+const PlatformRequiredExpectedMode = enum {
+    exact,
+    function_input,
+};
+
+const PlatformRequiredExpectedType = struct {
+    var_: Var,
+    required_ident: Ident.Idx,
+    mode: PlatformRequiredExpectedMode,
+};
+
+const ExpectedFunctionInput = struct {
+    func: Func,
+    context: problem.Context,
+};
+
 const ValueLookupEntry = struct {
     expr_idx: CIR.Expr.Idx,
     pattern_idx: CIR.Pattern.Idx,
@@ -1147,6 +1175,7 @@ fn initAssumePrepared(
         .ident_to_var_map = std.AutoHashMap(Ident.Idx, Var).init(gpa),
         .constraint_expr_by_fn_var = std.AutoHashMap(Var, CIR.Expr.Idx).init(gpa),
         .method_field_access_exprs = .{},
+        .platform_required_expected_types = std.AutoHashMap(CIR.Def.Idx, PlatformRequiredExpectedType).init(gpa),
         .interpolation_constraint_ids_by_fn_var = std.AutoHashMap(Var, InterpolationConstraintId).init(gpa),
         .interpolation_constraint_metadata = .empty,
         .reported_constraint_errors = std.AutoHashMap(ReportedConstraintError, void).init(gpa),
@@ -1173,6 +1202,7 @@ fn initAssumePrepared(
         .hoist_selected_bindings = .{},
         .hoist_selected_exprs = .{},
         .selected_hoisted_roots = .empty,
+        .executable_root_defs = .empty,
         .last_hoist_result = null,
         .hoist_suppressed_depth = 0,
         .hoist_selection_suppressed_depth = 0,
@@ -1291,6 +1321,7 @@ pub fn deinit(self: *Self) void {
         hoist_roots.deinitSelectedRoot(self.gpa, root);
     }
     self.selected_hoisted_roots.deinit(self.gpa);
+    self.executable_root_defs.deinit(self.gpa);
     self.env_pool.deinit();
     self.generalizer.deinit(self.gpa);
     self.var_map.deinit();
@@ -1308,6 +1339,7 @@ pub fn deinit(self: *Self) void {
     self.ident_to_var_map.deinit();
     self.constraint_expr_by_fn_var.deinit();
     self.method_field_access_exprs.deinit(self.gpa);
+    self.platform_required_expected_types.deinit();
     self.interpolation_constraint_ids_by_fn_var.deinit();
     for (self.interpolation_constraint_metadata.items) |meta| {
         self.gpa.free(meta.interpolated_vars);
@@ -1356,6 +1388,13 @@ pub fn deinit(self: *Self) void {
 /// Returns the hoisted roots selected while checking this module.
 pub fn selectedHoistedRoots(self: *const Self) []const hoist_roots.SelectedHoistedRoot {
     return self.selected_hoisted_roots.items;
+}
+
+/// Record a top-level root that will be evaluated as a zero-arg executable
+/// thunk. This must be explicit producer metadata from canonicalization or the
+/// caller; the checker never recovers roots from names or source shape.
+pub fn addExecutableRootDef(self: *Self, def_idx: CIR.Def.Idx) Allocator.Error!void {
+    try self.executable_root_defs.append(self.gpa, def_idx);
 }
 
 fn beginHoistFrame(self: *Self, expr: CIR.Expr.Idx, binding_rhs: bool) Allocator.Error!HoistFrameGuard {
@@ -3408,22 +3447,10 @@ fn builtinNumTypeIdent(self: *const Self, num_kind: CIR.NumKind) Ident.Idx {
 }
 
 fn builtinNumStmtFromIndices(indices: CIR.BuiltinIndices, num_kind: CIR.NumKind) CIR.Statement.Idx {
-    return switch (num_kind) {
-        .u8 => indices.u8_type,
-        .i8 => indices.i8_type,
-        .u16 => indices.u16_type,
-        .i16 => indices.i16_type,
-        .u32 => indices.u32_type,
-        .i32 => indices.i32_type,
-        .u64 => indices.u64_type,
-        .i64 => indices.i64_type,
-        .u128 => indices.u128_type,
-        .i128 => indices.i128_type,
-        .f32 => indices.f32_type,
-        .f64 => indices.f64_type,
-        .dec => indices.dec_type,
-        else => unreachable,
-    };
+    inline for (CIR.builtin_type_specs) |spec| {
+        if (spec.num_kind == num_kind) return @field(indices, spec.type_field);
+    }
+    unreachable;
 }
 
 fn builtinNominalIdent(self: *const Self, decl: BuiltinNominalDecl) Ident.Idx {
@@ -4530,10 +4557,22 @@ fn copyBuiltinTypes(self: *Self) Allocator.Error!void {
 
 /// Public `checkFile` function.
 pub fn checkFile(self: *Self) std.mem.Allocator.Error!void {
-    return self.checkFileInternal(false);
+    return self.checkFileInternal(null, false);
 }
 
-fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator.Error!void {
+/// Check an app module while applying relation-independent platform `requires` signatures.
+pub fn checkFileWithPlatformRequirements(
+    self: *Self,
+    platform_requirements: PlatformRequirements,
+) std.mem.Allocator.Error!void {
+    return self.checkFileInternal(platform_requirements, false);
+}
+
+fn checkFileInternal(
+    self: *Self,
+    platform_requirements: ?PlatformRequirements,
+    skip_numeric_defaults: bool,
+) std.mem.Allocator.Error!void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -4643,6 +4682,9 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
     // Process requires_types annotations for platforms
     // This ensures the type store has the actual types for platform requirements
     try self.processRequiresTypes(&env);
+
+    self.platform_required_expected_types.clearRetainingCapacity();
+    try self.collectPlatformRequiredExpectedTypes(platform_requirements, &env);
 
     // Then, iterate over defs again, inferring types
     for (0..self.cir.all_defs.span.len) |def_offset| {
@@ -4768,6 +4810,8 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
 
     try self.reportAmbiguousStaticDispatchPerInstantiation(&self.reported_dispatch_vars, &self.pinnable_vars, &self.external_pinnable);
     try self.reportAmbiguousStaticDispatch(&self.reported_dispatch_vars, &self.pinnable_vars);
+
+    try self.reportPolymorphicExecutableRootResults();
 
     try self.reportNonExhaustiveLambdaParams(&env);
 
@@ -6758,6 +6802,20 @@ fn reportPolymorphicTopLevelValues(self: *Self) std.mem.Allocator.Error!void {
     }
 }
 
+fn reportPolymorphicExecutableRootResults(self: *Self) std.mem.Allocator.Error!void {
+    for (self.executable_root_defs.items) |def_idx| {
+        const def = self.cir.store.getDef(def_idx);
+        if (self.erroneous_value_patterns.contains(def.pattern)) continue;
+
+        const result_var = self.zeroArgFunctionReturnVar(ModuleEnv.varFrom(def_idx)) orelse continue;
+
+        self.var_set.clearRetainingCapacity();
+        if (!try self.varHasUnresolvedNonLiteralStaticDispatchConstraints(result_var, &self.var_set)) continue;
+
+        try self.reportPolymorphicValueProblem(result_var, ModuleEnv.varFrom(def.pattern), self.getPatternIdent(def.pattern));
+    }
+}
+
 fn reportPolymorphicConstrainedExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!void {
     const expr_var = ModuleEnv.varFrom(expr_idx);
     if (self.varIsFunctionType(expr_var)) return;
@@ -6810,6 +6868,24 @@ fn varIsFunctionType(self: *Self, var_: Var) bool {
                 else => false,
             },
             .err, .flex, .rigid => return false,
+        }
+    }
+}
+
+fn zeroArgFunctionReturnVar(self: *Self, var_: Var) ?Var {
+    var current = var_;
+    while (true) {
+        const resolved = self.types.resolveVar(current);
+        switch (resolved.desc.content) {
+            .alias => |alias| {
+                current = self.types.getAliasBackingVar(alias);
+                continue;
+            },
+            .structure => |flat| return switch (flat) {
+                .fn_pure, .fn_effectful, .fn_unbound => |func| if (func.args.len() == 0) func.ret else null,
+                else => null,
+            },
+            .err, .flex, .rigid => return null,
         }
     }
 }
@@ -6948,6 +7024,64 @@ fn varsHaveUnresolvedStaticDispatchConstraints(
     return false;
 }
 
+fn varHasUnresolvedNonLiteralStaticDispatchConstraints(
+    self: *Self,
+    var_: Var,
+    visited: *std.AutoHashMap(Var, void),
+) std.mem.Allocator.Error!bool {
+    const resolved = self.types.resolveVar(var_);
+    if (visited.contains(resolved.var_)) return false;
+    try visited.put(resolved.var_, {});
+
+    return switch (resolved.desc.content) {
+        .flex => |flex| self.rangeHasNonLiteralConstraint(flex.constraints),
+        .rigid => |rigid| self.rangeHasNonLiteralConstraint(rigid.constraints),
+        .err => false,
+        .alias => |alias| try self.varHasUnresolvedNonLiteralStaticDispatchConstraints(self.types.getAliasBackingVar(alias), visited),
+        .structure => |flat_type| try self.flatTypeHasUnresolvedNonLiteralStaticDispatchConstraints(flat_type, visited),
+    };
+}
+
+fn flatTypeHasUnresolvedNonLiteralStaticDispatchConstraints(
+    self: *Self,
+    flat_type: FlatType,
+    visited: *std.AutoHashMap(Var, void),
+) std.mem.Allocator.Error!bool {
+    return switch (flat_type) {
+        .tuple => |tuple| try self.varsHaveUnresolvedNonLiteralStaticDispatchConstraints(self.types.sliceVars(tuple.elems), visited),
+        .nominal_type => |nominal| try self.varsHaveUnresolvedNonLiteralStaticDispatchConstraints(self.types.sliceNominalArgs(nominal), visited),
+        .fn_pure, .fn_effectful, .fn_unbound => false,
+        .record => |record| blk: {
+            const fields = self.types.getRecordFieldsSlice(record.fields);
+            if (try self.varsHaveUnresolvedNonLiteralStaticDispatchConstraints(fields.items(.var_), visited)) break :blk true;
+            break :blk try self.varHasUnresolvedNonLiteralStaticDispatchConstraints(record.ext, visited);
+        },
+        .record_unbound => |fields_range| blk: {
+            const fields = self.types.getRecordFieldsSlice(fields_range);
+            break :blk try self.varsHaveUnresolvedNonLiteralStaticDispatchConstraints(fields.items(.var_), visited);
+        },
+        .tag_union => |tag_union| blk: {
+            const tags = self.types.getTagsSlice(tag_union.tags);
+            for (tags.items(.args)) |args| {
+                if (try self.varsHaveUnresolvedNonLiteralStaticDispatchConstraints(self.types.sliceVars(args), visited)) break :blk true;
+            }
+            break :blk try self.varHasUnresolvedNonLiteralStaticDispatchConstraints(tag_union.ext, visited);
+        },
+        .empty_record, .empty_tag_union => false,
+    };
+}
+
+fn varsHaveUnresolvedNonLiteralStaticDispatchConstraints(
+    self: *Self,
+    vars: []const Var,
+    visited: *std.AutoHashMap(Var, void),
+) std.mem.Allocator.Error!bool {
+    for (vars) |var_| {
+        if (try self.varHasUnresolvedNonLiteralStaticDispatchConstraints(var_, visited)) return true;
+    }
+    return false;
+}
+
 /// Validate a platform module's hosted section against the hosted functions
 /// its imported type modules declare: every hosted function must appear
 /// exactly once, every entry must name a real hosted function, linker symbols
@@ -7009,6 +7143,7 @@ fn checkPlatformHostedSection(self: *Self) std.mem.Allocator.Error!void {
     for (self.cir.provides_entries.items.items) |provides_entry| {
         const symbol_text = self.cir.getString(provides_entry.ffi_symbol);
         try self.checkHostSymbol(symbol_text, &symbols);
+        try self.checkProvidesEntryHostBoundaryRows(provides_entry);
     }
 
     for (section) |entry| {
@@ -7051,6 +7186,22 @@ fn checkPlatformHostedSection(self: *Self) std.mem.Allocator.Error!void {
         _ = try self.problems.appendProblem(self.gpa, .{ .platform_hosted_section = .{
             .name = name_idx,
             .reason = .function_not_in_section,
+        } });
+    }
+}
+
+fn checkProvidesEntryHostBoundaryRows(
+    self: *Self,
+    provides_entry: ModuleEnv.ProvidesEntry,
+) std.mem.Allocator.Error!void {
+    const def_node_idx = self.cir.getExposedValueNodeIndexById(provides_entry.ident) orelse return;
+    const def_idx: CIR.Def.Idx = @enumFromInt(@as(u32, @intCast(def_node_idx)));
+    const def = self.cir.store.getDef(def_idx);
+    const def_var = ModuleEnv.varFrom(def_idx);
+
+    if (try self.varContainsOpenRowInHostBoundary(def_var)) {
+        _ = try self.problems.appendProblem(self.gpa, .{ .host_boundary_open_row = .{
+            .region = self.cir.store.getPatternRegion(def.pattern),
         } });
     }
 }
@@ -7217,6 +7368,63 @@ fn processRequiresTypes(self: *Self, env: *Env) std.mem.Allocator.Error!void {
         //                                ^^^^^^^^^^^^^^^^^^^^^^
         try self.generateAnnoTypeInPlace(required_type.type_anno, env, .annotation);
     }
+}
+
+fn collectPlatformRequiredExpectedTypes(
+    self: *Self,
+    platform_requirements: ?PlatformRequirements,
+    env: *Env,
+) std.mem.Allocator.Error!void {
+    const platform = platform_requirements orelse return;
+    std.debug.assert(env.rank() == .outermost);
+
+    for (platform.module_env.requires_types.items.items) |required_type| {
+        if (platform.module_env.for_clause_aliases.sliceRange(required_type.type_aliases).len > 0) {
+            continue;
+        }
+
+        const required_ident = try self.cir.common.insertIdentFrom(self.gpa, &platform.module_env.common, required_type.ident);
+        const app_def = self.appDefByRequiredIdent(required_ident) orelse continue;
+        const app_def_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(app_def));
+        const copied_required_type = try self.copyVar(
+            ModuleEnv.varFrom(required_type.type_anno),
+            platform.module_env,
+            app_def_region,
+        );
+        try self.platform_required_expected_types.put(app_def, .{
+            .var_ = copied_required_type,
+            .required_ident = required_ident,
+            .mode = self.platformRequiredExpectedMode(copied_required_type),
+        });
+    }
+}
+
+fn platformRequiredExpectedMode(
+    self: *Self,
+    copied_required_type: Var,
+) PlatformRequiredExpectedMode {
+    var current = copied_required_type;
+    var guard = types_mod.debug.IterationGuard.init("Check.platformRequiredExpectedMode");
+    while (true) {
+        guard.tick();
+        switch (self.types.resolveVar(current).desc.content) {
+            .alias => |alias| current = self.types.getAliasBackingVar(alias),
+            .structure => |flat| switch (flat) {
+                .fn_pure, .fn_unbound, .fn_effectful => return .function_input,
+                else => return .exact,
+            },
+            else => return .exact,
+        }
+    }
+}
+
+fn appDefByRequiredIdent(self: *const Self, required_ident: Ident.Idx) ?CIR.Def.Idx {
+    for (self.cir.store.sliceDefs(self.cir.global_value_defs)) |def_idx| {
+        const def = self.cir.store.getDef(def_idx);
+        const name = self.getPatternIdent(def.pattern) orelse continue;
+        if (name.eql(required_ident)) return def_idx;
+    }
+    return null;
 }
 
 /// Check if a statement index is a for-clause alias statement.
@@ -7470,13 +7678,23 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx, env: *Env) std.mem.Allocator.Erro
     defer self.enclosing_func_name = saved_func_name;
 
     // Check the annotation, if it exists
-    const expectation = blk: {
+    var expectation = blk: {
         if (def.annotation) |annotation_idx| {
             break :blk Expected.fromAnnotation(annotation_idx);
         } else {
             break :blk Expected.none();
         }
     };
+    if (self.platform_required_expected_types.get(def_idx)) |required| {
+        const required_type = Expected.Type{
+            .var_ = required.var_,
+            .context = .{ .platform_requirement = .{ .required_ident = required.required_ident } },
+        };
+        expectation = switch (required.mode) {
+            .exact => expectation.withType(required_type),
+            .function_input => expectation.withFunctionInput(required_type),
+        };
+    }
 
     self.empirical_exhaustiveness_depth += 1;
     defer self.empirical_exhaustiveness_depth -= 1;
@@ -8823,7 +9041,14 @@ fn setBuiltinTypeContent(
 // types //
 
 const Expected = struct {
+    const Type = struct {
+        var_: Var,
+        context: problem.Context,
+    };
+
     annotation: ?CIR.Annotation.Idx = null,
+    type_: ?Type = null,
+    function_input: ?Type = null,
     branch_result: ?Var = null,
     return_result: ?Var = null,
     comptime_condition_warnings: enum { emit, suppress } = .emit,
@@ -8839,6 +9064,30 @@ const Expected = struct {
     fn withAnnotation(self: Expected, annotation_idx: CIR.Annotation.Idx) Expected {
         return .{
             .annotation = annotation_idx,
+            .type_ = self.type_,
+            .function_input = self.function_input,
+            .branch_result = self.branch_result,
+            .return_result = self.return_result,
+            .comptime_condition_warnings = self.comptime_condition_warnings,
+        };
+    }
+
+    fn withType(self: Expected, type_: Type) Expected {
+        return .{
+            .annotation = self.annotation,
+            .type_ = type_,
+            .function_input = self.function_input,
+            .branch_result = self.branch_result,
+            .return_result = self.return_result,
+            .comptime_condition_warnings = self.comptime_condition_warnings,
+        };
+    }
+
+    fn withFunctionInput(self: Expected, function_input: Type) Expected {
+        return .{
+            .annotation = self.annotation,
+            .type_ = self.type_,
+            .function_input = function_input,
             .branch_result = self.branch_result,
             .return_result = self.return_result,
             .comptime_condition_warnings = self.comptime_condition_warnings,
@@ -8848,6 +9097,8 @@ const Expected = struct {
     fn withBranchResult(self: Expected, branch_result: Var) Expected {
         return .{
             .annotation = self.annotation,
+            .type_ = self.type_,
+            .function_input = self.function_input,
             .branch_result = branch_result,
             .return_result = self.return_result orelse branch_result,
             .comptime_condition_warnings = self.comptime_condition_warnings,
@@ -8881,6 +9132,8 @@ const Expected = struct {
     fn suppressComptimeConditionWarnings(self: Expected) Expected {
         return .{
             .annotation = self.annotation,
+            .type_ = self.type_,
+            .function_input = self.function_input,
             .branch_result = self.branch_result,
             .return_result = self.return_result,
             .comptime_condition_warnings = .suppress,
@@ -9334,6 +9587,21 @@ fn getPatternIdent(self: *const Self, ptrn_idx: CIR.Pattern.Idx) ?Ident.Idx {
     }
 }
 
+fn expectedFunctionInputIsPlatform(input: ExpectedFunctionInput) bool {
+    return switch (input.context) {
+        .platform_requirement => true,
+        else => false,
+    };
+}
+
+fn patternIsSimpleIgnoredArg(self: *const Self, ptrn_idx: CIR.Pattern.Idx) bool {
+    return switch (self.cir.store.getPattern(ptrn_idx)) {
+        .underscore => true,
+        .assign => |assign| assign.ident.attributes.ignored,
+        else => false,
+    };
+}
+
 fn patternNeedsExhaustiveness(self: *const Self, pattern_idx: CIR.Pattern.Idx) bool {
     const pattern = self.cir.store.getPattern(pattern_idx);
     return switch (pattern) {
@@ -9658,10 +9926,24 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             break :blk .{ expr_var_raw, null };
         }
 
+        const expected_type_var: ?Var = if (expected.type_) |expected_type|
+            try self.instantiateVarOrphan(
+                expected_type.var_,
+                env,
+                env.rank(),
+                .use_last_var,
+            )
+        else
+            null;
+
         if (expected.annotation) |annotation_idx| {
             // Generate the type for the annotation
             try self.generateAnnotationType(annotation_idx, env);
             const anno_var = ModuleEnv.varFrom(annotation_idx);
+
+            if (expected_type_var) |type_var| {
+                _ = try self.unifyInContext(type_var, anno_var, env, expected.type_.?.context);
+            }
 
             // Copy/paste the variable. This will be used if the expr errors to
             // preserve the type annotation for places that reference this def.
@@ -9674,7 +9956,28 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
 
             break :blk .{
                 try self.fresh(env, expr_region),
-                .{ .anno_var = anno_var, .anno_var_backup = anno_var_backup },
+                .{
+                    .anno_var = anno_var,
+                    .anno_var_backup = anno_var_backup,
+                    .context = .type_annotation,
+                },
+            };
+        } else if (expected.type_) |expected_type| {
+            const type_var = expected_type_var.?;
+            const type_var_backup = try self.instantiateVarOrphan(
+                type_var,
+                env,
+                env.rank(),
+                .use_last_var,
+            );
+
+            break :blk .{
+                try self.fresh(env, expr_region),
+                .{
+                    .anno_var = type_var,
+                    .anno_var_backup = type_var_backup,
+                    .context = expected_type.context,
+                },
             };
         } else {
             break :blk .{ expr_var_raw, null };
@@ -10538,6 +10841,33 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     break :blk null;
                 }
             };
+            const mb_expected_func: ?ExpectedFunctionInput = if (mb_anno_func) |func|
+                .{
+                    .func = func,
+                    .context = if (mb_anno_vars) |anno_vars| anno_vars.context else .type_annotation,
+                }
+            else blk: {
+                const function_input = expected.function_input orelse break :blk null;
+                var var_ = function_input.var_;
+                var guard = types_mod.debug.IterationGuard.init("checkExpr.lambda.unwrapExpectedFunctionInput");
+                while (true) {
+                    guard.tick();
+                    switch (self.types.resolveVar(var_).desc.content) {
+                        .structure => |flat_type| {
+                            switch (flat_type) {
+                                .fn_pure => |func| break :blk .{ .func = func, .context = function_input.context },
+                                .fn_unbound => |func| break :blk .{ .func = func, .context = function_input.context },
+                                .fn_effectful => |func| break :blk .{ .func = func, .context = function_input.context },
+                                else => break :blk null,
+                            }
+                        },
+                        .alias => |alias| {
+                            var_ = self.types.getAliasBackingVar(alias);
+                        },
+                        else => break :blk null,
+                    }
+                }
+            };
 
             // Check the argument patterns
             // This must happen *before* checking against the expected type so
@@ -10547,7 +10877,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             const arg_vars_alloc = arg_vars_sfa.get();
             const arg_vars = try arg_vars_alloc.alloc(Var, arg_count);
             defer arg_vars_alloc.free(arg_vars);
-            const pattern_ctx: PatternCtx = if (mb_anno_func != null) .from_annotation else .fn_arg;
+            const pattern_ctx: PatternCtx = if (mb_expected_func != null) .from_annotation else .fn_arg;
             for (0..arg_count) |i| {
                 const pattern_idx = self.cir.store.patternAt(lambda.args, i);
                 arg_vars[i] = ModuleEnv.varFrom(pattern_idx);
@@ -10555,7 +10885,8 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             }
 
             // Now, check if we have an expected function to validate against
-            if (mb_anno_func) |anno_func| {
+            if (mb_expected_func) |expected_func| {
+                const anno_func = expected_func.func;
                 // Use index-based iteration instead of slices because unifyInContext
                 // may trigger reallocations that would invalidate slice pointers
                 const anno_func_args_range = anno_func.args;
@@ -10580,11 +10911,21 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                         if (anno_resolved_1.desc.content != .rigid) {
                             continue;
                         }
+                        if (expectedFunctionInputIsPlatform(expected_func) and
+                            self.patternIsSimpleIgnoredArg(self.cir.store.patternAt(lambda.args, i)))
+                        {
+                            continue;
+                        }
 
                         // Look for other arguments with the same type variable
                         for (i + 1..anno_func_args_len) |j| for_blk: {
                             const anno_arg_2 = self.types.getVarAt(anno_func_args_range, @intCast(j));
                             const anno_resolved_2 = self.types.resolveVar(anno_arg_2);
+                            if (expectedFunctionInputIsPlatform(expected_func) and
+                                self.patternIsSimpleIgnoredArg(self.cir.store.patternAt(lambda.args, j)))
+                            {
+                                continue;
+                            }
                             if (anno_resolved_1.var_ == anno_resolved_2.var_) {
                                 // These two argument indexes in the called *function's*
                                 // type have the same rigid variable! So, we unify
@@ -10616,8 +10957,12 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     // Then, lastly, we unify the annotation types against the
                     // actual type
                     for (arg_vars, 0..) |arg_var, i| {
+                        const pattern_idx = self.cir.store.patternAt(lambda.args, i);
+                        if (expectedFunctionInputIsPlatform(expected_func) and self.patternIsSimpleIgnoredArg(pattern_idx)) {
+                            continue;
+                        }
                         const expected_arg_var = self.types.getVarAt(anno_func_args_range, @intCast(i));
-                        _ = try self.unifyInContext(expected_arg_var, arg_var, env, .type_annotation);
+                        _ = try self.unifyInContext(expected_arg_var, arg_var, env, expected_func.context);
                     }
                 } else {
                     // This means the expected type and the actual lambda have
@@ -10643,7 +10988,8 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             const body_does_fx = if (mb_anno_func) |expected_func| blk: {
                 const lambda_body_does_fx = try self.checkExpr(lambda.body, env, Expected.none().withBranchResult(expected_func.ret));
                 try self.closeAbsentConstructedPayloadVars(lambda.body, body_var);
-                _ = try self.unifyInContext(expected_func.ret, body_var, env, .type_annotation);
+                const context = if (mb_anno_vars) |anno_vars| anno_vars.context else .type_annotation;
+                _ = try self.unifyInContext(expected_func.ret, body_var, env, context);
                 break :blk lambda_body_does_fx;
             } else blk: {
                 const lambda_body_does_fx = try self.checkExpr(lambda.body, env, Expected.none());
@@ -11365,6 +11711,12 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                         .region = region,
                     } });
                 }
+                if (try self.varContainsOpenRowInHostBoundary(annotation_var)) {
+                    const region = self.cir.store.getAnnotationRegion(annotation_idx);
+                    _ = try self.problems.appendProblem(self.gpa, .{ .host_boundary_open_row = .{
+                        .region = region,
+                    } });
+                }
                 // The expr will be unified with the expected type below
                 // expr_var is a flex var by default, so no action is need here
             } else {
@@ -11388,7 +11740,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
     // Check if we have an annotation
     if (mb_anno_vars) |anno_vars| {
         // Unify the anno with the expr var
-        _ = try self.unifyInContext(anno_vars.anno_var, expr_var, env, .type_annotation);
+        _ = try self.unifyInContext(anno_vars.anno_var, expr_var, env, anno_vars.context);
 
         // Check if the expression type contains any errors anywhere in its
         // structure. If it does and we have an annotation, use the annotation
@@ -11937,7 +12289,11 @@ fn isExprNodeTag(tag: CIR.Node.Tag) bool {
     return Ident.textStartsWith(@tagName(tag), "expr_");
 }
 
-const AnnoVars = struct { anno_var: Var, anno_var_backup: Var };
+const AnnoVars = struct {
+    anno_var: Var,
+    anno_var_backup: Var,
+    context: problem.Context,
+};
 
 /// Check if an expression represents a function definition that should be generalized.
 /// This includes lambdas and function declarations (even those without bodies).
@@ -15784,12 +16140,11 @@ fn rangeHasNonLiteralConstraint(self: *Self, range: StaticDispatchConstraint.Saf
 /// ones are pre-filtered by digit-fit inside `tryCommitNumeralCandidate` via
 /// `literalInfoAcceptsBuiltinNumKind`):
 ///
-/// 1. Method lookup miss: the candidate's owner env has no method for the
-///    constraint's `fn_name`. The probe performs the IDENTICAL lookup
-///    (`staticDispatchConstraintAcceptsCandidate` resolves the candidate nominal's
-///    origin/source-decl — the very values computed here without minting the
-///    candidate var — and calls `lookupMethodBindingFromEnvAndDeclConst`, a pure
-///    read of finalized tables) and returns false on a miss, failing the probe.
+/// 1. Method lookup miss: the candidate's owner env plus the current method name
+///    env have no matching method binding. The probe performs the IDENTICAL
+///    lookup (`staticDispatchConstraintAcceptsCandidate` resolves the candidate
+///    nominal's origin/source-decl — the very values computed here without
+///    minting the candidate var) and returns false on a miss, failing the probe.
 ///    This fact does not depend on any mutable type state, so it refutes
 ///    unconditionally.
 ///
@@ -15826,13 +16181,12 @@ fn numeralCandidateStructurallyRefuted(
     // would mint.
     const candidate_source_decl = self.sourceDeclForBuiltinNominal(.{ .num = candidate_kind });
     const candidate_origin_module = self.builtinOriginModule();
-    const original_env, const is_this_module = self.ownerEnvForOriginModule(
+    const owner_env, _ = self.ownerEnvForOriginModule(
         candidate_origin_module,
         candidate_source_decl,
         true,
         "static dispatch candidate",
     );
-    const method_types: *const types_mod.Store = if (is_this_module) self.types else &original_env.types;
 
     var found_refuting_pair = false;
     for (self.types.sliceStaticDispatchConstraints(constraint_range)) |constraint| {
@@ -15840,12 +16194,14 @@ fn numeralCandidateStructurallyRefuted(
 
         // Method lookup short of instantiation — same env, owner decl, and method
         // ident the probe's lookup uses, via the same const lookup.
-        const method_binding = original_env.lookupMethodBindingFromEnvAndDeclConst(
-            self.cir,
+        const method_lookup = self.lookupStaticDispatchMethodBinding(
+            owner_env,
             candidate_source_decl,
+            self.cir,
             constraint.fn_name,
         ) orelse return true;
-        const def_var: Var = ModuleEnv.varFrom(method_binding.type_node_idx);
+        const method_types: *const types_mod.Store = if (method_lookup.is_this_module) self.types else &method_lookup.env.types;
+        const def_var: Var = ModuleEnv.varFrom(method_lookup.binding.type_node_idx);
 
         // From here on, refutation needs the closed-world structural walk;
         // any uncertainty falls through to the probe (return false).
@@ -15949,27 +16305,29 @@ fn staticDispatchConstraintAcceptsCandidate(
     // Scope-proof token only; not otherwise consulted.
     const candidate_resolved = self.types.resolveVar(candidate_var);
     const nominal_type = candidate_resolved.desc.content.unwrapNominalType() orelse return false;
-    const original_env, const is_this_module = self.ownerEnvForOriginModule(
+    const owner_env, _ = self.ownerEnvForOriginModule(
         nominal_type.origin_module,
         nominal_type.sourceDeclOptional(),
         nominal_type.originIsBuiltin(),
         "static dispatch candidate",
     );
 
-    const method_binding = original_env.lookupMethodBindingFromEnvAndDeclConst(
-        self.cir,
+    const method_lookup = self.lookupStaticDispatchMethodBinding(
+        owner_env,
         nominal_type.sourceDeclOptional(),
+        self.cir,
         constraint.fn_name,
     ) orelse return false;
-    const def_var: Var = ModuleEnv.varFrom(method_binding.type_node_idx);
+    const method_env = method_lookup.env;
+    const def_var: Var = ModuleEnv.varFrom(method_lookup.binding.type_node_idx);
 
-    const method_var = if (is_this_module) blk: {
+    const method_var = if (method_lookup.is_this_module) blk: {
         if (self.types.resolveVar(def_var).desc.rank == .generalized) {
             break :blk try self.instantiateVar(def_var, env, .use_last_var);
         }
         break :blk def_var;
     } else blk: {
-        const copied_var = try self.copyVar(def_var, original_env, self.getRegionAt(candidate_var));
+        const copied_var = try self.copyVar(def_var, method_env, self.getRegionAt(candidate_var));
         break :blk try self.instantiateVar(copied_var, env, .{ .explicit = self.getRegionAt(candidate_var) });
     };
 
@@ -17212,6 +17570,165 @@ fn nominalIsBoxType(self: *Self, nominal_type: types_mod.NominalType) bool {
 fn varContainsUnboxedFunctionInHostedSignature(self: *Self, var_: Var) std.mem.Allocator.Error!bool {
     self.var_set.clearRetainingCapacity();
     return try self.varContainsUnboxedFunctionInHostedSignatureInternal(var_, true, &self.var_set);
+}
+
+fn varContainsOpenRowInHostBoundary(self: *Self, var_: Var) std.mem.Allocator.Error!bool {
+    self.var_set.clearRetainingCapacity();
+    return try self.varContainsOpenRowInHostBoundaryInternal(var_, &self.var_set);
+}
+
+fn varContainsOpenRowInHostBoundaryInternal(
+    self: *Self,
+    var_: Var,
+    visited: *std.AutoHashMap(Var, void),
+) std.mem.Allocator.Error!bool {
+    const resolved = self.types.resolveVar(var_);
+    switch (resolved.desc.content) {
+        .flex, .rigid, .err => return false,
+        else => {},
+    }
+    if (visited.contains(resolved.var_)) return false;
+    try visited.put(resolved.var_, {});
+
+    return switch (resolved.desc.content) {
+        .structure => |flat_type| try self.flatTypeContainsOpenRowInHostBoundary(flat_type, visited),
+        .alias => |alias| blk: {
+            if (try self.varsContainOpenRowInHostBoundary(self.types.sliceAliasArgs(alias), visited)) break :blk true;
+            break :blk try self.varContainsOpenRowInHostBoundaryInternal(self.types.getAliasBackingVar(alias), visited);
+        },
+        .flex, .rigid, .err => unreachable,
+    };
+}
+
+fn varsContainOpenRowInHostBoundary(
+    self: *Self,
+    vars: []const Var,
+    visited: *std.AutoHashMap(Var, void),
+) std.mem.Allocator.Error!bool {
+    for (vars) |var_| {
+        if (try self.varContainsOpenRowInHostBoundaryInternal(var_, visited)) return true;
+    }
+    return false;
+}
+
+fn recordFieldsContainOpenRowInHostBoundary(
+    self: *Self,
+    fields: types_mod.RecordField.SafeMultiList.Range,
+    visited: *std.AutoHashMap(Var, void),
+) std.mem.Allocator.Error!bool {
+    const fields_slice = self.types.getRecordFieldsSlice(fields);
+    return try self.varsContainOpenRowInHostBoundary(fields_slice.items(.var_), visited);
+}
+
+fn tagsContainOpenRowInHostBoundary(
+    self: *Self,
+    tags: types_mod.Tag.SafeMultiList.Range,
+    visited: *std.AutoHashMap(Var, void),
+) std.mem.Allocator.Error!bool {
+    const tags_slice = self.types.getTagsSlice(tags);
+    for (tags_slice.items(.args)) |args| {
+        if (try self.varsContainOpenRowInHostBoundary(self.types.sliceVars(args), visited)) return true;
+    }
+    return false;
+}
+
+fn flatTypeContainsOpenRowInHostBoundary(
+    self: *Self,
+    flat_type: types_mod.FlatType,
+    visited: *std.AutoHashMap(Var, void),
+) std.mem.Allocator.Error!bool {
+    return switch (flat_type) {
+        .empty_record, .empty_tag_union => false,
+        .record => |record| blk: {
+            if (try self.recordFieldsContainOpenRowInHostBoundary(record.fields, visited)) break :blk true;
+            break :blk !try self.recordExtIsClosedForHostBoundary(record.ext, visited);
+        },
+        .record_unbound => |fields| blk: {
+            _ = try self.recordFieldsContainOpenRowInHostBoundary(fields, visited);
+            break :blk true;
+        },
+        .tuple => |tuple| try self.varsContainOpenRowInHostBoundary(self.types.sliceVars(tuple.elems), visited),
+        .tag_union => |tag_union| blk: {
+            if (try self.tagsContainOpenRowInHostBoundary(tag_union.tags, visited)) break :blk true;
+            break :blk !try self.tagUnionExtIsClosedForHostBoundary(tag_union.ext, visited);
+        },
+        .fn_pure, .fn_effectful, .fn_unbound => |func| blk: {
+            if (try self.varsContainOpenRowInHostBoundary(self.types.sliceVars(func.args), visited)) break :blk true;
+            break :blk try self.varContainsOpenRowInHostBoundaryInternal(func.ret, visited);
+        },
+        .nominal_type => |nominal| blk: {
+            if (try self.varsContainOpenRowInHostBoundary(self.types.sliceNominalArgs(nominal), visited)) break :blk true;
+            break :blk try self.varContainsOpenRowInHostBoundaryInternal(self.types.getNominalBackingVar(nominal), visited);
+        },
+    };
+}
+
+fn recordExtIsClosedForHostBoundary(
+    self: *Self,
+    ext_var: Var,
+    visited: *std.AutoHashMap(Var, void),
+) std.mem.Allocator.Error!bool {
+    var current = ext_var;
+    var guard = types_mod.debug.IterationGuard.init("recordExtIsClosedForHostBoundary");
+    while (true) {
+        guard.tick();
+        const resolved = self.types.resolveVar(current);
+        if (visited.contains(resolved.var_)) return true;
+        try visited.put(resolved.var_, {});
+
+        switch (resolved.desc.content) {
+            .alias => |alias| {
+                if (try self.varsContainOpenRowInHostBoundary(self.types.sliceAliasArgs(alias), visited)) return false;
+                current = self.types.getAliasBackingVar(alias);
+            },
+            .structure => |flat_type| switch (flat_type) {
+                .record => |record| {
+                    if (try self.recordFieldsContainOpenRowInHostBoundary(record.fields, visited)) return false;
+                    current = record.ext;
+                },
+                .record_unbound => |fields| {
+                    _ = try self.recordFieldsContainOpenRowInHostBoundary(fields, visited);
+                    return false;
+                },
+                .empty_record => return true,
+                else => return false,
+            },
+            .flex, .rigid => return false,
+            .err => return true,
+        }
+    }
+}
+
+fn tagUnionExtIsClosedForHostBoundary(
+    self: *Self,
+    ext_var: Var,
+    visited: *std.AutoHashMap(Var, void),
+) std.mem.Allocator.Error!bool {
+    var current = ext_var;
+    var guard = types_mod.debug.IterationGuard.init("tagUnionExtIsClosedForHostBoundary");
+    while (true) {
+        guard.tick();
+        const resolved = self.types.resolveVar(current);
+        if (visited.contains(resolved.var_)) return true;
+        try visited.put(resolved.var_, {});
+
+        switch (resolved.desc.content) {
+            .alias => |alias| {
+                if (try self.varsContainOpenRowInHostBoundary(self.types.sliceAliasArgs(alias), visited)) return false;
+                current = self.types.getAliasBackingVar(alias);
+            },
+            .structure => |flat_type| switch (flat_type) {
+                .tag_union => |tag_union| {
+                    if (try self.tagsContainOpenRowInHostBoundary(tag_union.tags, visited)) return false;
+                    current = tag_union.ext;
+                },
+                .empty_tag_union => return true,
+                else => return false,
+            },
+            .flex, .rigid => return false,
+            .err => return true,
+        }
+    }
 }
 
 fn varContainsUnboxedFunctionInHostedSignatureInternal(
@@ -19387,61 +19904,57 @@ pub fn createImportMapping(
     // Step 1: Add auto-imported builtin types
     if (builtin_module) |builtin_env| {
         if (builtin_indices) |indices| {
-            const fields = @typeInfo(CIR.BuiltinIndices).@"struct".fields;
-            inline for (fields) |field| {
-                // Only process Statement.Idx fields (skip Ident.Idx fields)
-                if (field.type == CIR.Statement.Idx) {
-                    const stmt_idx: CIR.Statement.Idx = @field(indices, field.name);
+            inline for (CIR.builtin_type_specs) |spec| {
+                const stmt_idx: CIR.Statement.Idx = @field(indices, spec.type_field);
 
-                    // Skip invalid statement indices (index 0 is typically invalid/sentinel)
-                    if (@intFromEnum(stmt_idx) != 0) {
-                        const stmt = builtin_env.store.getStatement(stmt_idx);
-                        const header_idx = switch (stmt) {
-                            .s_nominal_decl => |decl| decl.header,
-                            .s_alias_decl => |alias| alias.header,
-                            else => null,
+                // Skip invalid statement indices (index 0 is typically invalid/sentinel)
+                if (@intFromEnum(stmt_idx) != 0) {
+                    const stmt = builtin_env.store.getStatement(stmt_idx);
+                    const header_idx = switch (stmt) {
+                        .s_nominal_decl => |decl| decl.header,
+                        .s_alias_decl => |alias| alias.header,
+                        else => null,
+                    };
+                    if (header_idx) |hdr_idx| {
+                        const header = builtin_env.store.getTypeHeader(hdr_idx);
+                        const qualified_name = builtin_env.getIdentText(header.name);
+                        const relative_name = builtin_env.getIdentText(header.relative_name);
+
+                        // Extract display name (last component after dots)
+                        const display_name = blk: {
+                            var last_dot: usize = 0;
+                            for (qualified_name, 0..) |c, i| {
+                                if (c == '.') last_dot = i + 1;
+                            }
+                            break :blk qualified_name[last_dot..];
                         };
-                        if (header_idx) |hdr_idx| {
-                            const header = builtin_env.store.getTypeHeader(hdr_idx);
-                            const qualified_name = builtin_env.getIdentText(header.name);
-                            const relative_name = builtin_env.getIdentText(header.relative_name);
 
-                            // Extract display name (last component after dots)
-                            const display_name = blk: {
-                                var last_dot: usize = 0;
-                                for (qualified_name, 0..) |c, i| {
-                                    if (c == '.') last_dot = i + 1;
-                                }
-                                break :blk qualified_name[last_dot..];
-                            };
+                        const qualified_ident = try idents.insert(gpa, Ident.for_text(qualified_name));
+                        const relative_ident = try idents.insert(gpa, Ident.for_text(relative_name));
+                        const display_ident = try idents.insert(gpa, Ident.for_text(display_name));
 
-                            const qualified_ident = try idents.insert(gpa, Ident.for_text(qualified_name));
-                            const relative_ident = try idents.insert(gpa, Ident.for_text(relative_name));
-                            const display_ident = try idents.insert(gpa, Ident.for_text(display_name));
-
-                            // Add mapping for qualified_name -> display_name
-                            if (mapping.get(qualified_ident)) |existing_ident| {
-                                const existing_name = idents.getText(existing_ident);
-                                if (displayNameIsBetter(display_name, existing_name)) {
-                                    try mapping.put(qualified_ident, display_ident);
-                                }
-                            } else {
+                        // Add mapping for qualified_name -> display_name
+                        if (mapping.get(qualified_ident)) |existing_ident| {
+                            const existing_name = idents.getText(existing_ident);
+                            if (displayNameIsBetter(display_name, existing_name)) {
                                 try mapping.put(qualified_ident, display_ident);
                             }
+                        } else {
+                            try mapping.put(qualified_ident, display_ident);
+                        }
 
-                            // Also add mapping for relative_name -> display_name
-                            // This ensures types stored with relative_name (like "Num.Numeral") also map to display_name
-                            if (mapping.get(relative_ident)) |existing_ident| {
-                                const existing_name = idents.getText(existing_ident);
-                                if (displayNameIsBetter(display_name, existing_name)) {
-                                    try mapping.put(relative_ident, display_ident);
-                                }
-                            } else {
+                        // Also add mapping for relative_name -> display_name
+                        // This ensures types stored with relative_name (like "Num.Numeral") also map to display_name
+                        if (mapping.get(relative_ident)) |existing_ident| {
+                            const existing_name = idents.getText(existing_ident);
+                            if (displayNameIsBetter(display_name, existing_name)) {
                                 try mapping.put(relative_ident, display_ident);
                             }
+                        } else {
+                            try mapping.put(relative_ident, display_ident);
                         }
-                        // else: Skip non-nominal/alias statements (e.g., nested types that aren't directly importable)
                     }
+                    // else: Skip non-nominal/alias statements (e.g., nested types that aren't directly importable)
                 }
             }
         }

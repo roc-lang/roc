@@ -65,6 +65,7 @@ pub const PlatformAliasNotFound = types.PlatformAliasNotFound;
 pub const PlatformDefNotFound = types.PlatformDefNotFound;
 pub const PlatformHostedSection = types.PlatformHostedSection;
 pub const HostedUnboxedFunction = types.HostedUnboxedFunction;
+pub const HostBoundaryOpenRow = types.HostBoundaryOpenRow;
 pub const AnnotationOnlyValue = types.AnnotationOnlyValue;
 pub const PolymorphicVarAnnotation = types.PolymorphicVarAnnotation;
 pub const EffectfulTopLevel = types.EffectfulTopLevel;

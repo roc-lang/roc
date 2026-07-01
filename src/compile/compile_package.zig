@@ -21,7 +21,6 @@ const can = @import("can");
 const check = @import("check");
 const reporting = @import("reporting");
 const eval = @import("eval");
-const builtin_loading = eval.builtin_loading;
 const compiled_builtins = @import("compiled_builtins");
 const build_options = @import("build_options");
 
@@ -76,6 +75,23 @@ const Condition = threading.Condition;
 const stage_timers_supported = !threading.is_freestanding;
 
 const StageTimer = if (stage_timers_supported) std.Io.Timestamp else void;
+
+/// Build CTFE finalization options from the package compiler context.
+pub fn compileTimeFinalizationOptions(max_threads: usize, roc_ctx: *CoreCtx) eval.CompileTimeFinalization.Options {
+    return .{
+        .max_threads = max_threads,
+        .std_io = roc_ctx.std_io,
+        .stderr = .{
+            .context = @ptrCast(roc_ctx),
+            .write = writeCtfeStderr,
+        },
+    };
+}
+
+fn writeCtfeStderr(raw: ?*anyopaque, bytes: []const u8) void {
+    const roc_ctx: *CoreCtx = @ptrCast(@alignCast(raw.?));
+    roc_ctx.writeStderr(bytes) catch {};
+}
 
 fn startStageTimer(io: std.Io) ?StageTimer {
     if (comptime !stage_timers_supported) return null;
@@ -346,6 +362,7 @@ pub const ArtifactPublicationInputs = struct {
     explicit_roots: []const CheckedArtifact.ExplicitRootRequestInput = &.{},
     hoisted_roots: []const check.HoistRoots.SelectedHoistedRoot = &.{},
     problem_store: ?*check.problem.Store = null,
+    ctfe_options: eval.CompileTimeFinalization.Options = .{},
 };
 
 fn problemBlocksCheckedArtifact(problem: check.problem.Problem) bool {
@@ -456,6 +473,7 @@ fn buildCheckOwnerEnvs(
     imported_envs: []const *ModuleEnv,
     imported_artifacts: []const CheckedArtifact.PublishImportArtifact,
     available_artifacts: []const CheckedArtifact.ImportedModuleView,
+    platform_requirement_artifact: ?CheckedArtifact.ImportedModuleView,
 ) Allocator.Error![]const *const ModuleEnv {
     var owner_envs = std.ArrayList(*const ModuleEnv).empty;
     errdefer owner_envs.deinit(allocator);
@@ -474,6 +492,16 @@ fn buildCheckOwnerEnvs(
             available_artifacts,
             &seen_public_dependencies,
             imported_artifact.view,
+        );
+    }
+    if (platform_requirement_artifact) |platform| {
+        try appendCheckOwnerEnvIfMissing(allocator, &owner_envs, platform.module_env);
+        try appendCheckOwnerEnvPublicDependencies(
+            allocator,
+            &owner_envs,
+            available_artifacts,
+            &seen_public_dependencies,
+            platform,
         );
     }
 
@@ -1747,10 +1775,12 @@ pub const PackageEnv = struct {
         imported_envs: []const *ModuleEnv,
         imported_artifacts: []const CheckedArtifact.PublishImportArtifact,
         available_artifacts: []const CheckedArtifact.ImportedModuleView,
+        platform_requirement_artifact: ?CheckedArtifact.ImportedModuleView,
+        platform_requirement_context: ?CheckedArtifact.PlatformRequirementContextKey,
         explicit_roots: []const CheckedArtifact.ExplicitRootRequestInput,
+        ctfe_options: eval.CompileTimeFinalization.Options,
     ) TypeCheckModuleError!TypeCheckOutput {
-        // Load builtin indices from the binary data generated at build time
-        const builtin_indices = try builtin_loading.deserializeBuiltinIndices(check_alloc, compiled_builtins.builtin_indices_bin);
+        const builtin_indices = compiled_builtins.builtinIndices(can.CIR);
 
         const module_builtin_ctx: Check.BuiltinContext = .{
             .module_name = env.qualified_module_ident,
@@ -1765,7 +1795,7 @@ pub const PackageEnv = struct {
         var module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(check_alloc);
         errdefer module_envs_map.deinit();
 
-        const owner_envs = try buildCheckOwnerEnvs(check_alloc, imported_envs, imported_artifacts, available_artifacts);
+        const owner_envs = try buildCheckOwnerEnvs(check_alloc, imported_envs, imported_artifacts, available_artifacts, platform_requirement_artifact);
         defer check_alloc.free(owner_envs);
 
         var checker = try Check.initWithOwnerModules(
@@ -1781,11 +1811,11 @@ pub const PackageEnv = struct {
         checker.fixupTypeWriter();
         errdefer checker.deinit();
 
-        // For app modules with platform requirements, defer finalizing numeric defaults
-        // until after platform requirements are checked, so numeric literals can be
-        // constrained by platform types (e.g., I64) before defaulting to Dec.
-        // TODO: re-enable defer_numeric_defaults once ModuleEnv has the field
-        try checker.checkFile();
+        if (platform_requirement_artifact) |platform| {
+            try checker.checkFileWithPlatformRequirements(.{ .module_env = platform.module_env });
+        } else {
+            try checker.checkFile();
+        }
 
         module_envs_map.deinit();
 
@@ -1819,12 +1849,14 @@ pub const PackageEnv = struct {
             imported_envs,
             imported_artifacts,
             .{
-                .platform_requirement_context = null,
+                .platform_requirement_artifact = platform_requirement_artifact,
+                .platform_requirement_context = platform_requirement_context,
                 .platform_app_relation = null,
                 .explicit_roots = explicit_roots,
                 .hoisted_roots = checker.selectedHoistedRoots(),
                 .available_artifacts = available_artifacts,
                 .problem_store = &checker.problems,
+                .ctfe_options = ctfe_options,
             },
         ) catch |err| switch (err) {
             error.CompileTimeProblem => {
@@ -1888,6 +1920,7 @@ pub const PackageEnv = struct {
         imported_artifacts: []const CheckedArtifact.PublishImportArtifact,
         publication: ArtifactPublicationInputs,
     ) PublishError!CheckedArtifact.CheckedModuleArtifact {
+        var ctfe_options = publication.ctfe_options;
         return try CheckedArtifact.publishFromTypedModule(
             gpa,
             modules,
@@ -1902,7 +1935,7 @@ pub const PackageEnv = struct {
                 .platform_app_relation = publication.platform_app_relation,
                 .explicit_roots = publication.explicit_roots,
                 .hoisted_roots = publication.hoisted_roots,
-                .compile_time_finalizer = eval.CompileTimeFinalization.finalizer(),
+                .compile_time_finalizer = eval.CompileTimeFinalization.finalizerWithOptions(&ctfe_options),
                 .problem_store = publication.problem_store,
             },
         );
@@ -1984,7 +2017,10 @@ pub const PackageEnv = struct {
             imported_envs.items,
             imported_artifacts.items,
             available_artifacts,
+            null,
+            null,
             &.{},
+            compileTimeFinalizationOptions(self.max_threads, &self.roc_ctx),
         );
         defer typecheck_output.deinit();
         if (typecheck_output.checked_artifact != null) {

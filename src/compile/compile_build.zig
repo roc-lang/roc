@@ -33,7 +33,7 @@ pub const BuildError = Allocator.Error || std.Thread.SpawnError || error{ Expect
 /// Errors that can occur while initializing build inputs.
 pub const InitError = Allocator.Error || BuiltinModules.InitError;
 /// Errors that can occur while compiling discovered modules.
-pub const CompileDiscoveredError = Allocator.Error || std.Thread.SpawnError || error{ UnsupportedBuiltinAnnotationOnly, BuiltinLowLevelAnnotationMustBeFunction, LowLevelOperationsNotFound, HasUserErrors, CompileTimeProblem };
+pub const CompileDiscoveredError = compile_package.PublishError || error{ UnsupportedBuiltinAnnotationOnly, BuiltinLowLevelAnnotationMustBeFunction, LowLevelOperationsNotFound, HasUserErrors };
 /// Errors that can occur while building a root module.
 pub const BuildRootError = BuildError || CompileDiscoveredError;
 /// Errors that can occur while building an app module.
@@ -752,7 +752,7 @@ pub const BuildEnv = struct {
         // Also queue the platform's root module if this is an app
         // The platform's root module contains the `requires` clause which must be compiled
         // for type checking against the app's exports
-        var platform_root_queued = false;
+        const root_is_app = root_pkg.kind == .app or root_pkg.kind == .default_app;
         var pf_it = self.packages.iterator();
         while (pf_it.next()) |pf_entry| {
             const pf_pkg = pf_entry.value_ptr.*;
@@ -767,10 +767,12 @@ pub const BuildEnv = struct {
                         platform_coord_pkg.remaining_modules += 1;
                         coord.total_remaining += 1;
                         try coord.enqueueParseTask(pf_entry.key_ptr.*, plat_root_id);
-                        platform_root_queued = true;
                         if (comptime trace_build) {
                             std.debug.print("[BUILD] Queued platform root module: {s} in package {s}\n", .{ plat_module_name, pf_entry.key_ptr.* });
                         }
+                    }
+                    if (root_is_app) {
+                        try coord.setPlatformRequirementDependency(coord_pkg, platform_coord_pkg, plat_root_id);
                     }
                 }
             }
@@ -3301,7 +3303,7 @@ test "BuildEnv collectWatchInputStates resolves file dependencies from module so
     try env.transferCoordinatorResults();
     try testing.expectEqualStrings(real_src_dir, sched_mod.source_dir_override.?);
 
-    const source = try allocator.dupe(u8, "module [main]\n");
+    const source = try allocator.dupe(u8, "main = 1\n");
     const module_env = try allocator.create(ModuleEnv);
     module_env.* = try ModuleEnv.init(allocator, source);
     try module_env.initCIRFields("App");
@@ -3335,7 +3337,7 @@ test "BuildEnv header watch state hashes raw CRLF source bytes" {
     const tmp_root = try tmp.dir.realPathFileAlloc(testing.io, ".", allocator);
     defer allocator.free(tmp_root);
 
-    const source = "module [main]\r\n\r\nmain = 1\r\n";
+    const source = "main = 1\r\n";
     try tmp.dir.writeFile(testing.io, .{ .sub_path = "main.roc", .data = source });
 
     const main_path = try std.fs.path.join(allocator, &.{ tmp_root, "main.roc" });

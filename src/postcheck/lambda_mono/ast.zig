@@ -127,9 +127,15 @@ pub const TryRecordSequence = struct {
     ok_body: ExprId,
 };
 
-/// Direct call to a known Lambda Mono function.
+/// Direct call target after Lambda Mono lowering.
+pub const DirectCallTarget = union(enum(u8)) {
+    local: FnId,
+    imported: Lifted.ImportedFnId,
+};
+
+/// Direct call to a known Lambda Mono function or loaded specialization shard.
 pub const DirectCall = struct {
-    target: FnId,
+    target: DirectCallTarget,
     args: Span(ExprId),
     /// Explicit cold-call provenance from generated code. This prevents later
     /// stages from inlining or laying out this call as if it were on a hot path.

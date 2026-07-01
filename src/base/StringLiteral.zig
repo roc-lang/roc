@@ -7,6 +7,7 @@ const collections = @import("collections");
 const testing = std.testing;
 
 const CompactWriter = collections.CompactWriter;
+const InternedBytes = @import("InternedBytes.zig");
 
 /// The index of this string in a `Store`.
 pub const Idx = enum(u32) {
@@ -18,12 +19,7 @@ pub const Idx = enum(u32) {
     }
 };
 
-/// An interner for string literals.
-///
-/// String literals are deduplicated so that identical strings receive the same Idx.
-/// This enables direct index comparison for equality checking (e.g., in exhaustiveness).
-/// The deduplication uses a linear search through existing strings, which is acceptable
-/// because the number of unique string literals in pattern matching is typically small.
+/// Durable storage for string literals.
 pub const Store = struct {
     /// An Idx points to the first byte of the string. The entry immediately
     /// before it stores a static refcount word, and the entry header stores
@@ -251,19 +247,8 @@ pub const Store = struct {
         };
     }
 
-    /// Insert a new string into a `Store`.
-    ///
-    /// Deduplicates: if an identical string already exists, returns its index.
-    /// This enables direct index comparison for equality checking.
-    pub fn insert(self: *Store, gpa: std.mem.Allocator, string: []const u8) std.mem.Allocator.Error!Idx {
-        // Search for an existing identical string
-        if (self.findExisting(string)) |existing_idx| {
-            return existing_idx;
-        }
-
-        // String not found, insert it
-        const str_len: u32 = @truncate(string.len);
-
+    fn appendFresh(self: *Store, gpa: std.mem.Allocator, string: []const u8) std.mem.Allocator.Error!Idx {
+        const str_len = checkedU32(string.len, "string literal length");
         try self.alignBufferForEntry(gpa);
 
         const str_len_bytes = std.mem.asBytes(&str_len);
@@ -285,6 +270,7 @@ pub const Store = struct {
         }
 
         const string_content_start = self.buffer.len();
+        const idx = checkedU32(string_content_start, "string literal content offset");
 
         {
             const expected_start = self.buffer.items.items.len;
@@ -292,36 +278,7 @@ pub const Store = struct {
             assertAppendRange(expected_start, string.len, start, string.len);
         }
 
-        return @enumFromInt(@as(u32, @intCast(string_content_start)));
-    }
-
-    /// Search for an existing string in the store and return its index if found.
-    fn findExisting(self: *const Store, string: []const u8) ?Idx {
-        const buffer_items = self.buffer.items.items;
-        var pos: usize = 0;
-
-        while (true) {
-            pos = std.mem.alignForward(usize, pos, static_refcount_alignment);
-            if (pos + entry_header_size > buffer_items.len) break;
-
-            // Read the length (4 bytes)
-            const str_len = std.mem.bytesAsValue(u32, buffer_items[pos .. pos + len_size]).*;
-            const content_start = pos + entry_header_size;
-            const content_end = content_start + str_len;
-
-            if (content_end > buffer_items.len) break;
-
-            // Compare with the target string
-            const existing = buffer_items[content_start..content_end];
-            if (std.mem.eql(u8, existing, string)) {
-                return @enumFromInt(@as(u32, @intCast(content_start)));
-            }
-
-            // Move to next string
-            pos = content_end;
-        }
-
-        return null;
+        return @enumFromInt(idx);
     }
 
     /// Get a string literal's text from this `Store`.
@@ -389,6 +346,70 @@ pub const Store = struct {
     };
 };
 
+/// Transient dedup state for constructing a `StringLiteral.Store`.
+pub const BuilderState = struct {
+    index: InternedBytes.Index(StringLiteralPolicy) = .{},
+
+    pub fn deinit(self: *BuilderState, gpa: std.mem.Allocator) void {
+        self.index.deinit(gpa);
+    }
+
+    pub fn clone(self: *const BuilderState, gpa: std.mem.Allocator) std.mem.Allocator.Error!BuilderState {
+        return .{ .index = try self.index.clone(gpa) };
+    }
+
+    pub fn insert(self: *BuilderState, store: *Store, gpa: std.mem.Allocator, string: []const u8) std.mem.Allocator.Error!Idx {
+        var owner = BuilderOwner{ .store = store };
+        return self.index.insert(&owner, gpa, string);
+    }
+};
+
+const BuilderOwner = struct {
+    store: *Store,
+};
+
+const StringLiteralPolicy = struct {
+    pub const Id = Idx;
+    pub const Cell = Idx;
+    pub const empty_cell: Cell = .none;
+    pub const initial_index_capacity: usize = 16;
+    pub const use_fingerprints = true;
+
+    pub fn cellForId(id: Id) Cell {
+        return id;
+    }
+
+    pub fn idFromCell(cell: Cell) Id {
+        return cell;
+    }
+
+    pub fn textForId(owner: anytype, id: Id) []const u8 {
+        return owner.store.get(id);
+    }
+
+    pub fn appendEntry(owner: anytype, gpa: std.mem.Allocator, string: []const u8) std.mem.Allocator.Error!Id {
+        return owner.store.appendFresh(gpa, string);
+    }
+
+    pub fn entryCount(_: anytype, index: *const InternedBytes.Index(StringLiteralPolicy)) u32 {
+        return index.len;
+    }
+
+    pub fn hash(string: []const u8) u64 {
+        return InternedBytes.hash(string);
+    }
+};
+
+fn checkedU32(value: usize, comptime invariant_name: []const u8) u32 {
+    if (value > std.math.maxInt(u32)) {
+        if (comptime builtin.mode == .Debug) {
+            std.debug.panic("{s} exceeded u32 storage invariant", .{invariant_name});
+        }
+        unreachable;
+    }
+    return @intCast(value);
+}
+
 fn assertAppendRange(expected_start: usize, expected_len: usize, actual_start: usize, actual_len: usize) void {
     if (comptime builtin.mode == .Debug) {
         std.debug.assert(actual_start == expected_start);
@@ -416,14 +437,38 @@ test "insert" {
 
     var interner = Store{};
     defer interner.deinit(gpa);
+    var builder = BuilderState{};
+    defer builder.deinit(gpa);
 
     const str_1 = "abc".*;
     const str_2 = "defg".*;
-    const idx_1 = try interner.insert(gpa, &str_1);
-    const idx_2 = try interner.insert(gpa, &str_2);
+    const idx_1 = try builder.insert(&interner, gpa, &str_1);
+    const idx_2 = try builder.insert(&interner, gpa, &str_2);
 
     try std.testing.expectEqualStrings("abc", interner.get(idx_1));
     try std.testing.expectEqualStrings("defg", interner.get(idx_2));
+}
+
+test "builder deduplicates exact string literal bytes" {
+    const gpa = std.testing.allocator;
+
+    var store = Store{};
+    defer store.deinit(gpa);
+    var builder = BuilderState{};
+    defer builder.deinit(gpa);
+
+    const empty1 = try builder.insert(&store, gpa, "");
+    const empty2 = try builder.insert(&store, gpa, "");
+    const binary1 = try builder.insert(&store, gpa, "\x00\x01abc");
+    const binary2 = try builder.insert(&store, gpa, "\x00\x01abc");
+    const binary3 = try builder.insert(&store, gpa, "\x00\x01abd");
+
+    try testing.expectEqual(empty1, empty2);
+    try testing.expectEqual(binary1, binary2);
+    try testing.expect(binary1 != binary3);
+    try testing.expectEqualStrings("", store.get(empty1));
+    try testing.expectEqualStrings("\x00\x01abc", store.get(binary1));
+    try testing.expectEqualStrings("\x00\x01abd", store.get(binary3));
 }
 
 test "insert stores static refcount immediately before bytes" {
@@ -431,8 +476,10 @@ test "insert stores static refcount immediately before bytes" {
 
     var interner = Store{};
     defer interner.deinit(gpa);
+    var builder = BuilderState{};
+    defer builder.deinit(gpa);
 
-    const idx = try interner.insert(gpa, "aaaaaaaaaaaaaaaaaaaaaaaa");
+    const idx = try builder.insert(&interner, gpa, "aaaaaaaaaaaaaaaaaaaaaaaa");
     const bytes = interner.get(idx);
 
     try testing.expectEqualStrings("aaaaaaaaaaaaaaaaaaaaaaaa", bytes);
@@ -488,10 +535,12 @@ test "Store basic CompactWriter roundtrip" {
     // Create original store and add some strings
     var original = Store{};
     defer original.deinit(gpa);
+    var builder = BuilderState{};
+    defer builder.deinit(gpa);
 
-    const idx1 = try original.insert(gpa, "hello");
-    const idx2 = try original.insert(gpa, "world");
-    const idx3 = try original.insert(gpa, "foo bar baz");
+    const idx1 = try builder.insert(&original, gpa, "hello");
+    const idx2 = try builder.insert(&original, gpa, "world");
+    const idx3 = try builder.insert(&original, gpa, "foo bar baz");
 
     // Verify original values
     try std.testing.expectEqualStrings("hello", original.get(idx1));
@@ -541,6 +590,8 @@ test "Store comprehensive CompactWriter roundtrip" {
 
     var original = Store{};
     defer original.deinit(gpa);
+    var builder = BuilderState{};
+    defer builder.deinit(gpa);
 
     // Test various string types
     const test_strings = [_][]const u8{
@@ -560,7 +611,7 @@ test "Store comprehensive CompactWriter roundtrip" {
     defer indices.deinit(gpa);
 
     for (test_strings) |str| {
-        const idx = try original.insert(gpa, str);
+        const idx = try builder.insert(&original, gpa, str);
         try indices.append(gpa, idx);
     }
 
@@ -610,9 +661,11 @@ test "Store CompactWriter roundtrip" {
     // Create and populate store
     var original = Store{};
     defer original.deinit(gpa);
+    var builder = BuilderState{};
+    defer builder.deinit(gpa);
 
-    const idx1 = try original.insert(gpa, "test1");
-    const idx2 = try original.insert(gpa, "test2");
+    const idx1 = try builder.insert(&original, gpa, "test1");
+    const idx2 = try builder.insert(&original, gpa, "test2");
     try std.testing.expect(@intFromEnum(idx1) < @intFromEnum(idx2));
 
     // Create a temp file
@@ -654,10 +707,12 @@ test "Store.Serialized roundtrip" {
     // Create original store and add some strings
     var original = Store{};
     defer original.deinit(gpa);
+    var builder = BuilderState{};
+    defer builder.deinit(gpa);
 
-    const idx1 = try original.insert(gpa, "hello");
-    const idx2 = try original.insert(gpa, "world");
-    const idx3 = try original.insert(gpa, "foo bar baz");
+    const idx1 = try builder.insert(&original, gpa, "hello");
+    const idx2 = try builder.insert(&original, gpa, "world");
+    const idx3 = try builder.insert(&original, gpa, "foo bar baz");
 
     // Create a CompactWriter and arena
     var arena = collections.SingleThreadArena.init(gpa);
@@ -701,22 +756,24 @@ test "Store edge case indices CompactWriter roundtrip" {
 
     var original = Store{};
     defer original.deinit(gpa);
+    var builder = BuilderState{};
+    defer builder.deinit(gpa);
 
     // The index returned points to the first byte of the string content.
     // Test various scenarios that might stress the index calculation.
     var previous_end: usize = 0;
 
-    const idx1 = try original.insert(gpa, "first");
+    const idx1 = try builder.insert(&original, gpa, "first");
     try std.testing.expectEqual(expectedNextStringContentStart(&previous_end, "first".len), @intFromEnum(idx1));
 
-    const idx2 = try original.insert(gpa, "second");
+    const idx2 = try builder.insert(&original, gpa, "second");
     try std.testing.expectEqual(expectedNextStringContentStart(&previous_end, "second".len), @intFromEnum(idx2));
 
-    const idx3 = try original.insert(gpa, "");
+    const idx3 = try builder.insert(&original, gpa, "");
     try std.testing.expectEqual(expectedNextStringContentStart(&previous_end, "".len), @intFromEnum(idx3));
 
     const long_str = "x" ** 1000;
-    const idx4 = try original.insert(gpa, long_str);
+    const idx4 = try builder.insert(&original, gpa, long_str);
     try std.testing.expectEqual(expectedNextStringContentStart(&previous_end, long_str.len), @intFromEnum(idx4));
 
     // Create a temp file

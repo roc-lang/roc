@@ -1,5 +1,6 @@
 //! Regression tests for specific bug fixes.
 
+const std = @import("std");
 const TestEnv = @import("./TestEnv.zig");
 
 test "check - repro - issue 8764" {
@@ -819,4 +820,14 @@ test "check - repro - issue 9491 follow-up - top-level mutually recursive parame
     defer test_env.deinit();
 
     try test_env.assertNoErrors();
+}
+
+test "check - repro - B092 - ambiguous List.sum on empty list is rejected" {
+    const src =
+        \\main = || (List.sum([]))
+    ;
+    var test_env = try TestEnv.initWithExecutableRootNames("Test", src, &.{"main"});
+    defer test_env.deinit();
+
+    try std.testing.expect(test_env.checker.problems.problems.items.len > 0);
 }

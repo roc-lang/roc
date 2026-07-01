@@ -70,7 +70,7 @@ pub const MethodOwner = union(enum) {
 };
 
 /// Public `BuiltinOwner` declaration.
-pub const BuiltinOwner = enum {
+pub const BuiltinOwner = enum(u8) {
     list,
     box,
     fields,

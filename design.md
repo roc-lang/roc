@@ -527,6 +527,105 @@ The recommended migration order is:
 8. Verify with focused canonicalization tests, `zig build minici`, and
    parser/canonicalization benchmarks.
 
+## Canonicalization Policy Ownership
+
+Canonicalization owns source-name scope policy before checking. Any rule that
+decides whether a source type name is inserted, shadows another type, replaces
+an auto-imported type, redeclares an existing type, or repeats the same external
+type must live in one place. Callers may choose which source operation they are
+performing, but they must not duplicate the type-binding collision matrix.
+
+The `Scope.type_bindings` table has one ordinary mutation API for type names.
+It accepts the full scope slice, the target scope index, the introduced name,
+and the incoming binding:
+
+```zig
+const TypeBindingInput = union(enum) {
+    local_nominal: CIR.Statement.Idx,
+    local_alias: CIR.Statement.Idx,
+    associated_nominal: CIR.Statement.Idx,
+    external_nominal: Scope.ExternalTypeBinding,
+};
+
+const TypeBindingDecision = union(enum) {
+    inserted,
+    inserted_shadowing_parent: Scope.TypeBinding,
+    replaced_current_external: Scope.ExternalTypeBinding,
+    idempotent_current,
+    rejected_current_conflict: Scope.TypeBinding,
+    redeclared_current: Scope.TypeBinding,
+};
+```
+
+The exact names may change with implementation, but the shape must remain:
+one `Scope` function mutates `type_bindings`, and its return value carries the
+old binding that caused any warning or error. `Scope` does not push diagnostics,
+does not inspect source regions from `ModuleEnv`, and does not update import
+display mappings. `Can` maps the returned decision to diagnostics and performs
+the import-mapping side effects that are specific to external imports.
+
+Parent-scope shadowing must be computed by the same type-binding API. The
+function receives the scope slice and target index directly; it does not use an
+untyped callback or a callback without context. The parent walk chooses the
+nearest parent binding and returns that binding to the caller. This preserves
+regions for both local statements and external imports without reconstructing
+them at each call site.
+
+The current-scope collision matrix is:
+
+- A same statement already bound to the same name is idempotent.
+- A same external module/original-name pair already bound to the same name is
+  idempotent.
+- A local declaration replacing an external binding succeeds and returns the
+  replaced external binding so `Can` can report the shadowing region.
+- An external binding colliding with any different current binding is rejected
+  and returns the existing binding.
+- A local alias colliding with a current local alias reports alias
+  redeclaration.
+- A local nominal colliding with a current local nominal or associated nominal
+  reports type redeclaration.
+- A local declaration colliding with the other local kind reports the diagnostic
+  chosen by the existing binding, not by the incoming binding.
+
+Direct writes to `Scope.type_bindings` are allowed only for explicit
+initialization paths that prove the binding cannot collide, such as seeding the
+compiler-owned builtin scope before source declarations are introduced. If that
+proof stops being local and obvious, the initialization path must use the same
+type-binding API.
+
+Result suffix desugaring has a separate owner inside `Can`. The suffix forms
+`expr?`, `expr ? handler`, and `expr ?? default` all lower to a match over the
+same `Try` shape. They must share one concrete builder for the common structure:
+
+- resolve the compiler-owned `Try` nominal target once,
+- wrap `Ok` and `Err` tag patterns with that nominal target,
+- append the `Ok(#ok) => #ok` branch,
+- construct the `Err(...)` tag expression used by early return,
+- create the final match with the caller-selected `is_try_suffix` value.
+
+The builder must support both local and external nominal targets because the
+Builtin module may refer to its own `Try`, while ordinary modules use the
+compiler-owned external builtin. It must not silently fall back to bare `Ok` and
+`Err` patterns when `Try` is missing. A missing compiler-owned `Try` target is a
+compiler invariant violation after builtin setup, not an alternate
+canonicalization mode.
+
+The three suffix callers provide only the distinct error-branch body:
+
+- `expr?` returns the original error payload from the enclosing function, or
+  emits `e_expect_err` inside a top-level `expect`.
+- `expr ? handler` transforms the error payload and then returns `Err(...)`, or
+  emits `e_expect_err` inside a top-level `expect`.
+- `expr ?? default` uses the default expression and does not mark the match as a
+  try suffix.
+
+Do not introduce a generic desugaring interpreter for these cases. The helper
+should be a small set of concrete `Can` functions that emit the same CIR nodes
+and scratch spans as the current hand-written paths. This keeps
+canonicalization output explicit, keeps diagnostics in `Can`, and keeps release
+builds fast: the work runs once per source suffix or type declaration, with no
+runtime cost in the compiled program.
+
 ## Type Alias Invariant
 
 Source type aliases are transparent views of their backing type. An alias root
@@ -576,6 +675,49 @@ Correctness belongs to the producer path that writes the cache entry, and
 invalidation belongs to the cache key and explicit cache/selection format
 versions.
 
+`ModuleEnv` contains `CommonEnv.strings`, a `base.StringLiteral.Store`. That
+store is part of the checked module cache data. A cache hit materializes it as a
+view of its byte buffer and stops. Cache reads must not scan the string entries,
+rebuild a string interning table, check every string length header, check every
+static refcount word, or check every entry alignment. This design adds no
+store-specific release-build validation; cache reads perform only the existing
+cache-entry admission and decode checks before trusting the blob. Once those
+pass, the internal string buffer structure is a producer invariant. Debug builds
+may assert this invariant while constructing fresh stores and in focused store
+tests; optimized cache reads consume the store directly.
+
+String literal deduplication is a build-time concern. The durable
+`StringLiteral.Store` owns only the static-refcounted byte buffer plus `get` and
+iteration by `StringLiteral.Idx`. It has no insert API and no dedup index.
+Fresh construction uses `StringLiteral.Builder` state paired with a `Store`.
+That state may live in a wrapper or in the build owner that owns the store, but
+it is always transient. The builder index is never serialized, never stored in
+LirImage, and never rebuilt on a cache hit. If a later phase needs a mutable
+string-literal builder, it must request an explicit fresh builder from source
+data or another builder-owned input; it must not reopen a cached store on the
+normal cache path.
+
+The byte interning algorithm has one owner shared by identifier names, checked
+name stores, and string-literal builders. Storage policies own only id encoding,
+text lookup, and append layout. For string literals, appending a new entry writes
+exactly the current static-data layout:
+
+```text
+len: u32 | padding to isize | static refcount: isize(0) | bytes
+```
+
+and returns the content byte offset as `StringLiteral.Idx`. Duplicate input
+bytes must return the existing content offset. The hash table is an accelerator
+only: hash matches must still compare exact byte length and contents before an
+existing id is reused. The shared interning algorithm is comptime-policy
+specialized, so string literals, identifier names, and checked name stores do
+not pay a runtime storage-kind branch.
+
+The string-literal builder must reject impossible `u32` length or content-offset
+overflow as a compiler invariant: debug builds assert or panic with the
+invariant, and optimized builds mark the path unreachable. It must never silently
+truncate a string length or offset.
+
 The checked module cache id is target-independent:
 
 ```text
@@ -601,6 +743,17 @@ The compiler does not cache Monotype IR, Monotype Lifted IR, Lambda Solved IR,
 Lambda Mono decisions, LIR, or any callable/layout representation derived from
 them as part of checked modules. Those structures are target/session products
 of the current root compilation.
+
+A post-check specialization cache is a separate boundary named
+`SpecializationCacheFile`. It is consumed only after immutable checked modules
+and explicit root requests are available. It is not embedded in checked modules,
+is not visible to importers as checked data, and does not change the checked
+module cache id. Its validity id is computed from exactly the checked modules,
+root requests, and Monotype configuration consumed by specialization. A
+Monotype-only cache file excludes target ABI, pointer width, layout ids, field
+offsets, backend choice, object format, ARC state, and code-generation options.
+If a later-stage cache needs those inputs, it must use a separate file format
+and a separate validity id.
 
 Monotype IR is target-independent, but it is still post-check and root-specific.
 It depends on the roots requested for the current compilation, the reachable
@@ -2148,9 +2301,11 @@ During Monotype construction, an open checked variable is an unresolved graph
 node carrying the variable's numeric and row defaults. Unification resolves it
 when call-site arguments, expected lambda types, numeric literals, or checked
 type relations provide concrete evidence; defaults apply only at
-materialization. A Monotype is a materialized view of a solved node: it is
-reserved at a stable id and its content is refilled in place when its node
-gains evidence, so every holder of the id observes the solved type. This is
+materialization. While solving is still active, users hold instantiation graph
+nodes rather than final Monotype type ids. Materialization turns solved graph
+nodes into immutable interned Monotype type nodes. Recursive groups may reserve
+their ids inside the type interner while the group is being sealed, but no type
+id that is visible in Monotype IR is later refilled or changed. This is
 ordinary type solving inside one stage. Once Monotype IR is output, no
 unresolved node remains reachable and no later stage may change a type.
 
@@ -2349,6 +2504,297 @@ communicate only through explicit checked type relations and Monotype types.
 This is why generic functions specialize predictably across module boundaries:
 the checked body remains immutable, and every monomorphic specialization records
 its own closed instantiation.
+
+The specialization store must make this lookup direct. It must not scan all
+specializations for a callable family and recompute recursive type digests while
+lowering a body. A specialization request is identified by:
+
+```zig
+const SpecIdentity = struct {
+    callable: CallableIdentity,
+    source_fn_ty_digest: TypeDigest,
+    mono_fn_ty_digest: TypeDigest,
+    mono_fn_ty: TypeId,
+};
+
+const CallableIdentity = union(enum) {
+    proc_template: struct {
+        module: CheckedModuleId,
+        proc: ProcTemplateId,
+    },
+    nested_site: struct {
+        module: CheckedModuleId,
+        owner_proc: ProcTemplateId,
+        owner_fn_digest: FnDigest,
+        site: NestedSiteId,
+    },
+    hosted: HostedId,
+    generated: GeneratedId,
+};
+
+const SpecStatus = enum {
+    reserved,
+    lowering,
+    ready,
+};
+
+const SpecRecord = struct {
+    identity: SpecIdentity,
+    fn: FnId,
+    status: SpecStatus,
+};
+```
+
+`source_fn_ty_digest` records the checked source function type after
+instantiation into the requesting graph. `mono_fn_ty_digest` records the closed
+requested function type. The digests make lookup fast, but they are not the only
+correctness check. When a digest match is found, the store must also verify
+the checked callable identity and exact structural equality of the closed
+Monotype function type. Digest collisions are therefore harmless.
+
+The in-memory builder owns a transient hash table from `SpecIdentity` to
+`SpecId`, plus the append-only `SpecRecord` array. The output program owns the
+records and the function bodies, not the hash table. A loaded cache file may
+build a transient hash table over the mapped records, but the file itself stores
+sorted records and fixed spans so it can be consumed without pointer fixups.
+
+Monotype type construction must feed the specialization store with immutable
+interned type nodes:
+
+```zig
+const MonoTypeStore = struct {
+    nodes: []const MonoTypeNode,
+    args: []const TypeId,
+    fields: []const Field,
+    tags: []const Tag,
+    payloads: []const TypeId,
+    declared_fields: []const DeclaredField,
+    digests: []const TypeDigest,
+};
+
+const MonoTypeNode = extern struct {
+    tag: MonoTypeTag,
+    first: u32,
+    len: u32,
+    extra: u32,
+};
+```
+
+The mutable instantiation graph may use union-find, row-extension links, and
+work queues while solving one specialization. Its final output is an immutable
+`TypeId` in `MonoTypeStore`. After that point, the type node is never refilled.
+Rows are normalized once, with field and tag names in explicit sorted order,
+and the type digest is stored beside the node when the node is interned. Parent
+digests are computed from child digests, so structurally growing records and
+function types do not repeatedly walk their whole prefix.
+
+The type interner enforces exact equality:
+
+```text
+same digest
+same tag
+same child count and metadata
+same ordered child ids, field names, tag names, and payload positions
+```
+
+The digest table is an acceleration structure only. Exact equality remains the
+authority for type identity. This gives generic higher-order code the desired
+shape: repeated calls at the same closed function type reuse one specialization
+after the first request, and growing structural accumulator types add only the
+new record/function nodes instead of redigesting every previous layer.
+
+Open instantiation graphs do not write directly into final Monotype body
+sections. While a specialization is being solved, lowering writes to a
+`BodyDraft` owned by that specialization graph. A draft mirrors the final
+Monotype sections enough for lowering to refer to expressions, patterns, locals,
+definitions, nested definitions, side-pool spans, and function signatures, but
+all type-bearing fields use a draft type cell:
+
+```zig
+const DraftTypeCell = union(enum) {
+    graph_node: InstNodeId,
+    sealed: TypeId,
+};
+```
+
+`graph_node` is used for any type cell owned by the active instantiation graph:
+expression types, pattern types, binder/local types, typed-local entries,
+function arguments, function returns, lambda and nested function signatures,
+specialization request function types, layout requests, and runtime schema
+requests. `sealed` is used only for closed Monotype types that were already
+materialized before this graph was opened, such as imported cache entries or
+builder-global primitive and hosted ABI types. If a sealed type must participate
+in the current specialization's constraints, the graph imports it and the draft
+stores the imported node instead of the original `TypeId`.
+
+A `BodyDraft` may contain ordinary lowering ids, spans, and side pools while it
+is active, but those ids are draft-local. They are not cache ids and no later
+post-check stage consumes them. The draft is sealed only after:
+
+1. all checked type evidence for the specialization has been applied;
+2. deferred procedure-template requests created by this graph have been drained
+   or reserved with stable closed request types;
+3. nested function bodies that share this graph have finished lowering;
+4. every unresolved graph node can be closed from checked data, or can be
+   proven to be a truly unconstrained empty tag union.
+
+Sealing performs the only transition from graph nodes to final Monotype
+`TypeId`s. It walks every draft type cell, materializes each graph node
+through the Monotype type interner, preserves recursive groups privately inside
+the interner, computes and stores type digests once, and then copies the fully
+sealed records into `MonoProgramBuilder`. This copy also turns draft-local ids
+and spans into final shard-local ids and spans. If sealing finds a graph node in
+any completed record after this step, that is a compiler bug.
+
+This split is required for future specialization caching. Cache files contain
+only sealed `MonoProgramView` sections: fixed-width records, ids, spans, and
+offsets into side pools. They never contain union-find nodes, mutable type
+views, allocator-owned arrays, hash maps, or draft-local ids. Because every
+interior relation in a sealed program is an id or span into the same shard, a
+mapped cache file can be read back as a read-only `MonoProgramView` with only
+top-level slice creation, shard assignment, and import-table resolution.
+
+The program store is split into a builder and a read-only view:
+
+```zig
+const MonoProgramBuilder = struct {
+    types: MonoTypeInterner,
+    specs: SpecBuilder,
+    fns: ArrayList(FnDef),
+    exprs: ArrayList(Expr),
+    pats: ArrayList(Pat),
+    names: NameStoreBuilder,
+};
+
+const MonoProgramView = struct {
+    types: MonoTypeStore,
+    specs: []const SpecRecord,
+    fns: []const FnDef,
+    exprs: []const Expr,
+    pats: []const Pat,
+    names: NameStoreView,
+};
+```
+
+Function slots are shard-aware so future cache files can be mapped directly:
+
+```zig
+const ShardId = enum(u32) { _ };
+const FnSlot = union(enum) {
+    local: FnId,
+    imported: ImportedFnId,
+};
+
+const ImportedFn = extern struct {
+    shard: ShardId,
+    fn: FnId,
+};
+```
+
+A newly built root program has one mutable local shard. A loaded specialization
+file is a read-only shard. Calls inside a shard use local `FnId` values when
+the target is stored in the same shard. Cross-shard calls use an `ImportedFnId`
+into an imports table. Loading resolves each import table entry to
+`ImportedFn { shard, fn }` once. Function bodies are not rewritten after the
+file is mapped.
+
+The durable format uses only plain old data records, offsets, lengths, and side
+pools. Hash maps, union-find nodes, temporary worklists, and allocator-owned
+arrays are transient builder data and are never written.
+
+```zig
+const SpecializationCacheHeader = extern struct {
+    magic: [8]u8,
+    format_version: u32,
+    compiler_layout_hash: [32]u8,
+    validity_id: [32]u8,
+
+    names: FileSlice,
+    type_nodes: FileSlice,
+    type_args: FileSlice,
+    fields: FileSlice,
+    tags: FileSlice,
+    payloads: FileSlice,
+    declared_fields: FileSlice,
+    type_digests: FileSlice,
+
+    specs: FileSlice,
+    fns: FileSlice,
+    defs: FileSlice,
+    nested_defs: FileSlice,
+    exprs: FileSlice,
+    pats: FileSlice,
+    stmts: FileSlice,
+    locals: FileSlice,
+    expr_ids: FileSlice,
+    pat_ids: FileSlice,
+    typed_locals: FileSlice,
+    stmt_ids: FileSlice,
+    field_exprs: FileSlice,
+    record_destructs: FileSlice,
+    str_pattern_steps: FileSlice,
+    branches: FileSlice,
+    if_branches: FileSlice,
+    string_literals: FileSlice,
+    imports: FileSlice,
+    roots: FileSlice,
+    layout_requests: FileSlice,
+    runtime_schema_requests: FileSlice,
+    comptime_sites: FileSlice,
+    source_files: FileSlice,
+    expr_locs: FileSlice,
+    expr_regions: FileSlice,
+    stmt_locs: FileSlice,
+    stmt_regions: FileSlice,
+    local_names: FileSlice,
+    debug_names: FileSlice,
+};
+
+const FileSlice = extern struct {
+    offset: u64,
+    len: u64,
+};
+```
+
+Any current in-memory field that contains a process pointer or slice must be
+converted to an offset record plus a byte or region side pool before it can be
+written to these sections. This applies to string literals, source-file names,
+local names, debug-name text, and compile-time site branch-region lists. A cache
+file must never store process pointers from `[]const u8`, `[]const Region`, hash
+maps, or allocator-owned arrays.
+
+The loader validates the header, `format_version`, `compiler_layout_hash`,
+`validity_id`, bounds, alignment, and section ordering. It then creates a
+`MonoProgramView` by adding the mapped base address to each `FileSlice`. The
+only required fixups are:
+
+- converting top-level file slices to process slices;
+- assigning a `ShardId` to the mapped file;
+- resolving each import-table entry to a loaded shard and function id.
+
+There are no per-expression, per-type, or per-function pointer rewrites. All
+interior relations are ids or spans into the same shard.
+
+`validity_id` for a Monotype specialization file includes:
+
+- the format version and compiler layout hash;
+- the root checked module id and all checked module ids read by the stored
+  specializations;
+- the explicit root request set;
+- the Monotype configuration that can affect reachable specializations;
+- builtin module data consumed by Monotype;
+- the source callable identities and source function type digests for the
+  stored specializations.
+
+It does not include data that Monotype does not consume. In particular, it does
+not include LIR layout decisions, ARC output, backend symbols, object-format
+choices, or code-generation options.
+
+Cache loading is an optimization of the same specialization store, not another
+lowering path. A loaded `SpecRecord` must pass the same identity and exact type
+checks as a freshly produced record before it can satisfy a request. If no
+loaded record matches, the builder creates the specialization normally and may
+append it to a new cache file after the program is complete.
 
 ### Static Dispatch In Monotype
 
@@ -3650,25 +4096,81 @@ checked CIR
   -> Lambda Mono decisions
   -> LIR
   -> ARC insertion
-  -> LIR interpreter
+  -> native dev backend on native compiler hosts
   -> store eval result in ConstStore
 ```
 
-The compile-time evaluator is an LIR interpreter. It does not interpret
-Monotype IR, Lambda Solved IR, logical Lambda Mono expressions, or any
-source-level IR.
+On native compiler hosts, every `compile_time_*` root uses the dev backend for
+compile-time evaluation: ordinary constants, selected hoisted constants,
+expects, callable eval roots, numeral conversions, and quote conversions. The
+compile-time evaluator does not interpret Monotype IR, Lambda Solved IR,
+logical Lambda Mono expressions, or any source-level IR.
+
+The only interpreter path is for compiler hosts that cannot run generated native
+code, currently wasm32 and freestanding compiler builds. This decision is made
+from the compiler's own build target. The Roc program target selected by
+`roc --target` does not affect the compile-time evaluation strategy. A native
+compiler host without host dev-backend code generation support is unsupported for
+compile-time evaluation; it must not silently use the interpreter.
+
+Diagnostic behavior must be identical between the dev-backend evaluator and the
+host-restricted LIR interpreter. A mismatch in crashes, expect failures,
+empirical exhaustiveness diagnostics, branch coverage, literal conversion
+diagnostics, or stored constants is a compiler bug in one of the evaluators or
+in the data they consume.
 
 Compile-time ARC insertion runs the same borrow-inference solver as runtime
 ARC insertion in its single-variant form: one proc per solved `RcSig`, no
 mode specialization. Compile-time evaluation pays for solving once per
 evaluated root and never for variant cloning.
 
-The LIR interpreter produces a runtime value. Checking then stores that eval
+The evaluator produces a runtime value. Checking then stores that eval
 result as checked-stage data in the checked module's `ConstStore`. `ConstStore`
 stores checked Roc values only. It does not contain Monotype nodes, Lambda
 Solved data, Lambda Mono decision data, runtime addresses, allocation identity,
 layout ids, runtime discriminants, field offsets, LIR locals, LIR procedure
 ids, backend symbols, backend bytes, or host handles.
+
+Compile-time finalization evaluates dependency-ready roots in batches. Each
+batch is lowered to LIR once, ARC is inserted once, the dev backend emits native
+code for the reachable proc specs, and a generated wrapper is emitted for each
+root. Roots in the same batch are independent pure computations and may run on a
+work queue. The finalizer still commits stored values, diagnostics, coverage
+updates, and root completion in sorted request order.
+
+Each root job owns its compile-time host state: `RocOps`, a root-local arena for
+Roc allocations, allocation tracking needed by RocOps, branch-hit records,
+expect/dbg/crash event lists, failure region state, a call-region stack, a crash
+boundary, and its result buffer. Roc runtime allocations are arena allocations
+and are bulk-freed after the result has been copied into `ConstStore`. Host
+events and failure state stay root-local until deterministic replay.
+
+A crash or empirical exhaustiveness failure in one root records that root's
+result and must not change the result of any other root in the same batch. Root
+jobs do not write diagnostics, stderr output, checked problems, or `ConstStore`
+entries directly. They write root-local event lists and branch-hit data; after
+all jobs in the batch finish, checking finalization replays those lists in the
+sorted root order.
+
+Slow-root progress reporting observes the same root job state without changing
+evaluation. By default, a root that has been running for more than three seconds
+may be reported periodically on both TTY and non-TTY stderr. The message names
+the one-line source snippet for the root, truncated with `…` if needed, plus the
+module, line, column, and elapsed seconds. If the root belongs to a binding, the
+snippet should include enough of that binding line to identify the binding.
+
+Progress reporting must not add a fixed latency penalty to fast compile-time
+evaluation. A reporting worker may be started when stderr/std_io reporting is
+configured, but every wait in that worker must be interruptible by the
+finalizer. The worker waits for the earliest running root's slow-report
+deadline, normally `root_start + 3s`, or for a stop signal, whichever comes
+first. When a root starts, the worker is signaled so it can recompute the next
+deadline without polling. When finalization finishes, it signals the worker and
+joins it immediately; it must never wait for a plain sleep interval to expire.
+Roots that finish before the slow threshold therefore pay only monitor setup and
+signaling overhead, not the reporting period. Roots that exceed the threshold
+are reported, then the worker waits interruptibly until the next per-root report
+deadline or finalization stop.
 
 `ConstStore` uses node ids so stored constants can preserve sharing without
 duplicating large values. Multiple fields may reference the same `ConstNodeId`.

@@ -36,6 +36,19 @@ pub const RuntimeSchemaRequest = struct {
     ty: Type.TypeVarId,
 };
 
+/// Read-only Lambda Solved program view.
+pub const ProgramView = struct {
+    lifted: Lifted.ProgramView,
+    types: Type.Store.View,
+    defs: []const Def,
+    local_tys: []const Type.TypeVarId,
+    expr_tys: []const Type.TypeVarId,
+    pat_tys: []const Type.TypeVarId,
+    fn_tys: []const Type.TypeVarId,
+    layout_requests: []const LayoutRequest,
+    runtime_schema_requests: []const RuntimeSchemaRequest,
+};
+
 /// Lambda Solved program plus the solved type store.
 pub const Program = struct {
     allocator: std.mem.Allocator,
@@ -74,6 +87,20 @@ pub const Program = struct {
         self.defs.deinit(self.allocator);
         self.types.deinit();
         self.lifted.deinit();
+    }
+
+    pub fn view(self: *const Program) ProgramView {
+        return .{
+            .lifted = self.lifted.view(),
+            .types = self.types.view(),
+            .defs = self.defs.items,
+            .local_tys = self.local_tys.items,
+            .expr_tys = self.expr_tys.items,
+            .pat_tys = self.pat_tys.items,
+            .fn_tys = self.fn_tys.items,
+            .layout_requests = self.layout_requests.items,
+            .runtime_schema_requests = self.runtime_schema_requests.items,
+        };
     }
 };
 

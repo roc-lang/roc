@@ -718,13 +718,14 @@ const top_level_expect_type_error =
 ;
 
 const import_crash_module =
-    \\module [safe]
-    \\hidden_bad : {} -> I64
-    \\hidden_bad = |_| {
-    \\    crash "import crash"
-    \\    0
+    \\Util := [].{
+    \\    hidden_bad : {} -> I64
+    \\    hidden_bad = |_| {
+    \\        crash "import crash"
+    \\        0
+    \\    }
+    \\    safe = 42
     \\}
-    \\safe = 42
 ;
 
 const crash_other_defs =
@@ -756,10 +757,10 @@ pub const tests = [_]TestCase{
     .{ .name = "comptime eval - crash in if branch taken", .source = crash_branch_taken, .expected = .{ .problem_and_crash = {} } },
     .{ .name = "comptime eval - lambda is skipped", .source_kind = .module, .source = lambda_skipped, .expected = .{ .inspect_str = "42.0" } },
     .{ .name = "comptime eval - multiple declarations with mixed results", .source_kind = .module, .source = mixed_declarations, .expected = .{ .inspect_str = "42.0" } },
-    .{ .name = "comptime eval - cross-module constant works", .source_kind = .module, .imports = &.{.{ .name = "Util", .source = "module [x]\nx = 40\n" }}, .source = "import Util\nmain = Util.x + 2", .expected = .{ .inspect_str = "42.0" } },
-    .{ .name = "comptime imported-module helper auto-imports builtin typed suffix types", .source_kind = .module, .imports = &.{.{ .name = "Util", .source = "module [x]\nx : U8\nx = 41\n" }}, .source = "import Util\nmain = Util.x + 1", .expected = .{ .inspect_str = "42" } },
+    .{ .name = "comptime eval - cross-module constant works", .source_kind = .module, .imports = &.{.{ .name = "Util", .source = "Util := [].{\n    x = 40\n}\n" }}, .source = "import Util\nmain = Util.x + 2", .expected = .{ .inspect_str = "42.0" } },
+    .{ .name = "comptime imported-module helper auto-imports builtin typed suffix types", .source_kind = .module, .imports = &.{.{ .name = "Util", .source = "Util := [].{\n    x : U8\n    x = 41\n}\n" }}, .source = "import Util\nmain = Util.x + 1", .expected = .{ .inspect_str = "42" } },
     .{ .name = "comptime eval - cross-module crash is detected", .source_kind = .module, .imports = &.{.{ .name = "Util", .source = import_crash_module }}, .source = "import Util\nmain = Util.safe", .expected = .{ .inspect_str = "42.0" } },
-    .{ .name = "comptime eval - unexposed constant cannot be accessed", .source_kind = .module, .imports = &.{.{ .name = "Util", .source = "module [shown]\nhidden = 1\nshown = 2\n" }}, .source = "import Util\nmain = Util.hidden", .expected = .{ .problem = {} } },
+    .{ .name = "comptime eval - imported constant can be accessed from headerless module", .source_kind = .module, .imports = &.{.{ .name = "Util", .source = "Util := [].{\n    hidden = 1\n    shown = 2\n}\n" }}, .source = "import Util\nmain = Util.hidden", .expected = .{ .inspect_str = "1.0" } },
     .{ .name = "comptime eval - expect success does not report", .source_kind = .module, .source = expect_success, .expected = .{ .inspect_str = "42.0" } },
     .{ .name = "comptime eval - expect failure is reported but does not halt within def", .source_kind = .module, .source = expect_failure, .expected = .{ .problem = {} } },
     .{ .name = "comptime eval - multiple expect failures are reported", .source_kind = .module, .source = expect_failure, .expected = .{ .problem = {} } },
@@ -906,9 +907,9 @@ pub const tests = [_]TestCase{
     .{
         .name = "tag union matching with payload inside function - cross module",
         .source_kind = .module,
-        .imports = &.{.{ .name = "A", .source = "module [MyTag]\nMyTag := [Foo({x: U64, y: U64}), Bar, Baz(Str)]\n" }},
+        .imports = &.{.{ .name = "MyTag", .source = "MyTag := [Foo({x: U64, y: U64}), Bar, Baz(Str)]\n" }},
         .source =
-        \\import A exposing [MyTag]
+        \\import MyTag exposing [MyTag]
         \\
         \\lookup = |items, idx| {
         \\    match List.get(items, idx) {
@@ -933,15 +934,14 @@ pub const tests = [_]TestCase{
             .{
                 .name = "Elem",
                 .source =
-                \\module [Elem, div, text]
+                \\Elem := [Div(List(Elem)), Text(Str)].{
                 \\
-                \\Elem := [Div(List(Elem)), Text(Str)]
+                \\    div : List(Elem) -> Elem
+                \\    div = |children| Div(children)
                 \\
-                \\div : List(Elem) -> Elem
-                \\div = |children| Div(children)
-                \\
-                \\text : Str -> Elem
-                \\text = |s| Text(s)
+                \\    text : Str -> Elem
+                \\    text = |s| Text(s)
+                \\}
                 ,
             },
         },

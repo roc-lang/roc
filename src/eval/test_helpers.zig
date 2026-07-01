@@ -14,7 +14,7 @@ const compiled_builtins = @import("compiled_builtins");
 const lir = @import("lir");
 const reporting = @import("reporting");
 
-const builtin_loading = @import("builtin_loading.zig");
+const builtin_static = can.BuiltinStatic;
 const eval_loader = @import("vendor_eval_loader");
 const native_runtime_libcalls = builtins.native_runtime_libcalls;
 const CompileTimeFinalization = @import("compile_time_finalization.zig");
@@ -42,6 +42,7 @@ pub const TestHelperError = Allocator.Error || std.DynLib.Error || std.Io.File.O
     WasmExecFailed,
     TypeCheckError,
     ParseError,
+    CorruptEmbeddedBuiltins,
     Crash,
     RuntimeError,
     DivisionByZero,
@@ -295,7 +296,7 @@ pub const ProblemResources = struct {
     /// Locally-loaded Builtin; null when the caller supplied a pre-published
     /// Builtin via `parseAndCheckProgramForProblemsWithBuiltin` and retains
     /// ownership of the borrowed env.
-    builtin_module: ?builtin_loading.LoadedModule,
+    builtin_module: ?builtin_static.BuiltinModuleView,
     extra_modules: []CheckedModule,
 
     pub fn deinit(self: *ProblemResources, allocator: Allocator) void {
@@ -326,7 +327,7 @@ pub const ParsedResources = struct {
     import_artifacts: []check.CheckedArtifact.CheckedModuleArtifact,
     /// Locally-loaded Builtin; null when a pre-published Builtin was supplied
     /// and ownership stays with the caller.
-    builtin_module: ?builtin_loading.LoadedModule,
+    builtin_module: ?builtin_static.BuiltinModuleView,
     /// Borrowed Builtin artifact when the caller pre-published it. Used during
     /// lowering to build import views; never deinit'd here.
     borrowed_builtin_artifact: ?*check.CheckedArtifact.CheckedModuleArtifact = null,
@@ -579,12 +580,12 @@ fn parseAndCheckProgramForProblemsImpl(
     const builtin_indices: CIR.BuiltinIndices = if (pre_published_builtin) |ppb|
         ppb.indices
     else
-        try builtin_loading.deserializeBuiltinIndices(allocator, compiled_builtins.builtin_indices_bin);
+        compiled_builtins.builtinIndices(CIR);
 
-    var loaded_builtin: ?builtin_loading.LoadedModule = if (pre_published_builtin == null)
-        try builtin_loading.loadCompiledModule(
+    var loaded_builtin: ?builtin_static.BuiltinModuleView = if (pre_published_builtin == null)
+        try builtin_static.moduleView(
             allocator,
-            compiled_builtins.builtin_bin,
+            compiled_builtins.builtin_bin[0..],
             "Builtin",
             compiled_builtins.builtin_source,
         )
@@ -640,6 +641,16 @@ fn parseAndCheckProgramForProblemsImpl(
         };
     }
 
+    var explicit_problem_root_names_storage: [1][]const u8 = undefined;
+    var explicit_problem_root_names: []const []const u8 = &.{};
+    switch (source_kind) {
+        .expr => {
+            explicit_problem_root_names_storage[0] = evalRootName(source_kind, false);
+            explicit_problem_root_names = explicit_problem_root_names_storage[0..];
+        },
+        .module => {},
+    }
+
     const main_checked = try parseCheckModule(
         allocator,
         "Test",
@@ -648,7 +659,7 @@ fn parseAndCheckProgramForProblemsImpl(
         false,
         false,
         .checked_artifact,
-        &.{},
+        explicit_problem_root_names,
         builtin_env,
         builtin_indices,
         main_imports,
@@ -927,6 +938,28 @@ pub fn publishProgramForComptimeProblems(
     source: []const u8,
     imports: []const ModuleSource,
 ) TestHelperError!ComptimePublishOutcome {
+    return publishProgramForComptimeProblemsImpl(allocator, source_kind, source, imports, null);
+}
+
+/// Same as `publishProgramForComptimeProblems` but reuses a Builtin artifact
+/// the caller has already published.
+pub fn publishProgramForComptimeProblemsWithBuiltin(
+    allocator: Allocator,
+    source_kind: SourceKind,
+    source: []const u8,
+    imports: []const ModuleSource,
+    pre_published_builtin: PrePublishedBuiltin,
+) TestHelperError!ComptimePublishOutcome {
+    return publishProgramForComptimeProblemsImpl(allocator, source_kind, source, imports, pre_published_builtin);
+}
+
+fn publishProgramForComptimeProblemsImpl(
+    allocator: Allocator,
+    source_kind: SourceKind,
+    source: []const u8,
+    imports: []const ModuleSource,
+    pre_published_builtin: ?PrePublishedBuiltin,
+) TestHelperError!ComptimePublishOutcome {
     const resources = parseAndCanonicalizeProgramWithRootModeReporting(
         allocator,
         source_kind,
@@ -934,7 +967,7 @@ pub fn publishProgramForComptimeProblems(
         imports,
         false,
         .published_roots_only,
-        null,
+        pre_published_builtin,
         .report_comptime_problems,
     ) catch |err| switch (err) {
         error.CompileTimeProblem => return .comptime_problems,
@@ -1006,20 +1039,20 @@ fn parseAndCanonicalizeProgramWithRootModeReporting(
     const builtin_indices: CIR.BuiltinIndices = if (pre_published_builtin) |ppb|
         ppb.indices
     else
-        try builtin_loading.deserializeBuiltinIndices(allocator, compiled_builtins.builtin_indices_bin);
+        compiled_builtins.builtinIndices(CIR);
 
-    var loaded_builtin: ?builtin_loading.LoadedModule = if (pre_published_builtin == null)
-        try builtin_loading.loadCompiledModule(
+    var loaded_builtin: ?builtin_static.BuiltinModuleView = if (pre_published_builtin == null)
+        try builtin_static.moduleView(
             allocator,
-            compiled_builtins.builtin_bin,
+            compiled_builtins.builtin_bin[0..],
             "Builtin",
             compiled_builtins.builtin_source,
         )
     else
         null;
-    // Tracks whether `loaded_builtin`'s env/buffer ownership has transferred to
+    // Tracks whether `loaded_builtin`'s env-wrapper ownership has transferred to
     // an import artifact (`publishImportArtifacts`). Once transferred, the
-    // errdefer must not deinit the LoadedModule.
+    // errdefer must not deinit the view.
     var builtin_module_owned_by_artifact = false;
     errdefer if (loaded_builtin) |*lm| {
         if (!builtin_module_owned_by_artifact) lm.deinit();
@@ -1315,6 +1348,15 @@ pub fn parseCheckModule(
         builtin_ctx,
     );
     checker.fixupTypeWriter();
+    for (explicit_root_names) |root_name| {
+        const root_def_idx = czer.explicitRootDefByName(root_name) orelse {
+            if (@import("builtin").mode == .Debug) {
+                std.debug.panic("eval helper invariant violated: explicit executable root `{s}` was not found", .{root_name});
+            }
+            unreachable;
+        };
+        try checker.addExecutableRootDef(root_def_idx);
+    }
     errdefer checker.deinit();
     var check_timer = try StageTimer.start();
     try checker.checkFile();
@@ -1428,7 +1470,7 @@ fn evalRootName(source_kind: SourceKind, inspect_wrap: bool) []const u8 {
 fn publishImportArtifacts(
     allocator: Allocator,
     typed_cir_modules: *const check.TypedCIR.Modules,
-    builtin_module: ?*builtin_loading.LoadedModule,
+    builtin_module: ?*builtin_static.BuiltinModuleView,
     extra_modules: []CheckedModule,
     builtin_module_owned_by_artifact: *bool,
     pre_published_builtin: ?PrePublishedBuiltin,
@@ -1455,10 +1497,7 @@ fn publishImportArtifacts(
             typed_cir_modules,
             1,
             .{
-                .module_env_storage = .{ .compiled_buffer = .{
-                    .env = builtin_module.?.env,
-                    .buffer = builtin_module.?.buffer,
-                } },
+                .module_env_storage = .{ .static_builtin = builtin_module.?.env },
                 .compile_time_finalizer = CompileTimeFinalization.finalizer(),
             },
         );
