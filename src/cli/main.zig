@@ -11324,8 +11324,11 @@ fn rocRepl(ctx: *CliCtx, repl_args: cli_args.ReplArgs) CliMainError!void {
                     continue;
                 }
 
+                try reader.history.append(raw_line);
+
                 if (pending.items.len == 0 and std.mem.findAny(u8, raw_line, "\n\r") != null) {
                     should_exit = try processReplInput(ctx, &session, raw_line, report_config, &had_diagnostics);
+                    ctx.io.flush();
                     continue;
                 }
 

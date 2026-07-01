@@ -16,6 +16,8 @@ pub fn init() Error!Unix {
     var new_termios = old_termios;
     new_termios.lflag.ICANON = false;
     new_termios.lflag.ECHO = false;
+    new_termios.lflag.ISIG = false;
+    new_termios.lflag.IEXTEN = false;
 
     new_termios.cc[@intFromEnum(std.posix.V.INTR)] = 0;
 
