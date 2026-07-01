@@ -397,6 +397,7 @@ const Solver = struct {
             .frac_f64_lit,
             .dec_lit,
             .str_lit,
+            .bytes_lit,
             .uninitialized,
             .uninitialized_payload,
             .crash,

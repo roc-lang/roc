@@ -1084,6 +1084,7 @@ fn markReachableLiftedExpr(
         .frac_f64_lit,
         .dec_lit,
         .str_lit,
+        .bytes_lit,
         .crash,
         .comptime_exhaustiveness_failed,
         .uninitialized,

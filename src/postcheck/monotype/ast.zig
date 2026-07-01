@@ -474,6 +474,7 @@ pub const ExprData = union(enum(u8)) {
     frac_f64_lit: f64,
     dec_lit: builtins.dec.RocDec,
     str_lit: StringLiteralId,
+    bytes_lit: StringLiteralId,
     list: Span(ExprId),
     tuple: Span(ExprId),
     record: Span(FieldExpr),

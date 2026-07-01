@@ -506,6 +506,7 @@ pub const MappedProgramView = struct {
             .frac_f64_lit,
             .dec_lit,
             .str_lit,
+            .bytes_lit,
             .uninitialized,
             .crash,
             .comptime_exhaustiveness_failed,

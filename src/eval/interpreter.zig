@@ -1796,7 +1796,7 @@ pub const Interpreter = struct {
                     current = assign.next;
                 },
                 .assign_literal => |assign| {
-                    self.setLocalChecked(frame, current, assign.target, try self.evalLiteral(assign.value));
+                    self.setLocalChecked(frame, current, assign.target, try self.evalLiteral(assign.value, self.store.getLocal(assign.target).layout_idx));
                     current = assign.next;
                 },
                 .init_uninitialized => |uninit| {
@@ -2683,7 +2683,7 @@ pub const Interpreter = struct {
         };
     }
 
-    fn evalLiteral(self: *LirInterpreter, literal: LIR.LiteralValue) Error!Value {
+    fn evalLiteral(self: *LirInterpreter, literal: LIR.LiteralValue, target_layout: layout_mod.Idx) Error!Value {
         return switch (literal) {
             .i64_literal => |lit| self.evalI64Literal(lit.value, lit.layout_idx),
             .i128_literal => |lit| self.evalI128Literal(lit.value, lit.layout_idx),
@@ -2691,6 +2691,7 @@ pub const Interpreter = struct {
             .f32_literal => |value| self.evalF32Literal(value),
             .dec_literal => |value| self.evalDecLiteral(value),
             .str_literal => |idx| self.evalStrLiteral(idx),
+            .bytes_literal => |idx| self.evalBytesLiteral(idx, target_layout),
             .null_ptr => self.evalNullPtrLiteral(),
             .proc_ref => |proc_id| self.evalProcRefLiteral(proc_id),
         };
@@ -3401,6 +3402,15 @@ pub const Interpreter = struct {
         );
     }
 
+    fn evalBytesLiteral(self: *LirInterpreter, literal: LIR.StrLiteral, target_layout: layout_mod.Idx) Error!Value {
+        return self.makeStaticRocListLiteralView(
+            self.store.getStringLiteralBacking(literal),
+            literal.offset,
+            literal.len,
+            target_layout,
+        );
+    }
+
     // String helpers (RocStr construction)
 
     fn makeStaticRocStrLiteralView(self: *LirInterpreter, backing: []const u8, offset: u32, len: u32) Error!Value {
@@ -3443,6 +3453,47 @@ pub const Interpreter = struct {
             .length = bytes.len,
         };
         return self.rocStrToValue(rs, .str);
+    }
+
+    fn makeStaticRocListLiteralView(self: *LirInterpreter, backing: []const u8, offset: u32, len: u32, target_layout: layout_mod.Idx) Error!Value {
+        const offset_usize: usize = offset;
+        const len_usize: usize = len;
+        if (offset_usize > backing.len or len_usize > backing.len - offset_usize) {
+            self.invariantFailed("LIR/interpreter invariant violated: byte-list literal view exceeded backing bytes", .{});
+        }
+
+        if (len_usize == 0) {
+            return self.rocListToValue(RocList.empty(), target_layout);
+        }
+
+        if (builtin.mode == .Debug) {
+            const data_addr = @intFromPtr(backing.ptr);
+            if (data_addr % @alignOf(isize) != 0) {
+                self.invariantFailed(
+                    "LIR/interpreter invariant violated: static byte-list literal backing is not refcount-aligned",
+                    .{},
+                );
+            }
+            const refcount_ptr: *const isize = @ptrCast(@alignCast(backing.ptr - @sizeOf(isize)));
+            if (refcount_ptr.* != builtins.utils.REFCOUNT_STATIC_DATA) {
+                self.invariantFailed(
+                    "LIR/interpreter invariant violated: static byte-list literal missing static refcount",
+                    .{},
+                );
+            }
+        }
+
+        const bytes = backing[offset_usize..][0..len_usize];
+        const whole_backing = offset_usize == 0 and len_usize == backing.len;
+        const rl = RocList{
+            .bytes = @ptrCast(@constCast(bytes.ptr)),
+            .length = bytes.len,
+            .capacity_or_alloc_ptr = if (whole_backing)
+                RocList.encodeCapacity(bytes.len)
+            else
+                RocList.encodeSliceAllocationPtr(@ptrCast(@constCast(backing.ptr))),
+        };
+        return self.rocListToValue(rl, target_layout);
     }
 
     fn makeRocStr(self: *LirInterpreter, bytes: []const u8) Error!Value {
