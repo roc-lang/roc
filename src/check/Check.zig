@@ -10128,77 +10128,14 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             does_fx = try self.checkExpr(tuple_access.tuple, env, child_expected) or does_fx;
 
             const tuple_var = ModuleEnv.varFrom(tuple_access.tuple);
-            const resolved = self.types.resolveVar(tuple_var);
-
-            switch (resolved.desc.content) {
-                .structure => |s| switch (s) {
-                    .tuple => |t| {
-                        // Access the element at the given index
-                        const elem_index = tuple_access.elem_index;
-                        const elems = self.types.sliceVars(t.elems);
-                        if (elem_index < elems.len) {
-                            const elem_var = elems[elem_index];
-                            _ = try self.unify(expr_var, elem_var, env);
-                        } else {
-                            const min_elems = elem_index + 1;
-                            const scratch_vars_top = self.scratch_vars.top();
-                            defer self.scratch_vars.clearFrom(scratch_vars_top);
-
-                            for (0..min_elems) |_| {
-                                const fresh_var = try self.fresh(env, expr_region);
-                                try self.scratch_vars.append(fresh_var);
-                            }
-                            const expected_elems = try self.types.appendVars(self.scratch_vars.sliceFromStart(scratch_vars_top));
-                            const expected_tuple_var = try self.freshFromContent(.{ .structure = .{
-                                .tuple = .{ .elems = expected_elems },
-                            } }, env, expr_region);
-
-                            _ = try self.unify(expected_tuple_var, tuple_var, env);
-                            try self.unifyWith(expr_var, .err, env);
-                        }
-                    },
-                    else => {
-                        // Not a tuple - create a flex var with expected tuple constraint
-                        // The elem_index + 1 gives us the minimum tuple size needed
-                        const min_elems = tuple_access.elem_index + 1;
-                        const scratch_vars_top = self.scratch_vars.top();
-                        defer self.scratch_vars.clearFrom(scratch_vars_top);
-
-                        for (0..min_elems) |_| {
-                            const fresh_var = try self.fresh(env, expr_region);
-                            try self.scratch_vars.append(fresh_var);
-                        }
-                        const elem_vars = try self.types.appendVars(self.scratch_vars.sliceFromStart(scratch_vars_top));
-
-                        const expected_tuple_var = try self.freshFromContent(.{ .structure = .{
-                            .tuple = .{ .elems = elem_vars },
-                        } }, env, expr_region);
-
-                        // A non-tuple structure can never satisfy a tuple access,
-                        // so this unify reports the mismatch. Poison the result to
-                        // `.err` (like the out-of-bounds branch above) rather than
-                        // leaving it a fresh flex var, so conflicting downstream
-                        // uses of the result don't produce cascading errors.
-                        _ = try self.unify(tuple_var, expected_tuple_var, env);
-                        try self.unifyWith(expr_var, .err, env);
-                    },
-                },
-                .flex => {
-                    try self.pending_tuple_accesses.append(self.gpa, .{
-                        .tuple_var = resolved.var_,
-                        .result_var = expr_var,
-                        .elem_index = tuple_access.elem_index,
-                        .region = expr_region,
-                    });
-                },
-                .err => {
-                    // Propagate error
-                    try self.unifyWith(expr_var, .err, env);
-                },
-                else => {
-                    // Not a tuple
-                    try self.unifyWith(expr_var, .err, env);
-                },
+            const pending = PendingTupleAccess{
+                .tuple_var = self.types.resolveVar(tuple_var).var_,
+                .result_var = expr_var,
+                .elem_index = tuple_access.elem_index,
+                .region = expr_region,
+            };
+            if (!try self.resolvePendingTupleAccess(pending, env, false)) {
+                try self.pending_tuple_accesses.append(self.gpa, pending);
             }
         },
         // record //
