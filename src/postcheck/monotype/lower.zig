@@ -2104,12 +2104,12 @@ const Builder = struct {
             try ctx.constrainTypeToMono(checked_arg, mono_arg);
         }
         if (ctx.nominalInstantiationSource(nominal)) |source| {
-            if (source.declaration.formalArgs(ctx.view.types).len != mono_args.len) {
-                Common.invariant("checked nominal declaration arity differed from nominal type use");
+            const arg_nodes = try graph.arena().alloc(NodeId, mono_args.len);
+            for (mono_args, 0..) |mono_arg, index| {
+                arg_nodes[index] = try graph.importMono(mono_arg);
             }
-            for (source.declaration.formalArgs(ctx.view.types), mono_args) |formal, mono_arg| {
-                try ctx.constrainTypeToMono(ctx.checkedTypeInCurrentView(source.view, formal), mono_arg);
-            }
+            const backing = try graph.sealNode(try ctx.instNominalDeclarationBackingNode(source, arg_nodes));
+            return try self.structuralBackingForNominal(view, nominal, mono_args, backing);
         }
         const backing = try graph.sealNode(try ctx.instNode(ctx.nominalBackingRoot(nominal)));
         return try self.structuralBackingForNominal(view, nominal, mono_args, backing);
@@ -2357,7 +2357,16 @@ const Builder = struct {
                 const decl = sv.types.nominalDeclaration(capability.nominal) orelse break :blk null;
                 break :blk .{ .view = sv, .declaration = decl, .padding_field_tys = capability.paddingFieldTys(sv.interface_capabilities) };
             },
-            .builtin, .opaque_without_backing => null,
+            .builtin => blk: {
+                const source_view = self.moduleForDigest(self.moduleDigestForOrigin(view, nominal.origin_module));
+                const source_decl = nominal.source_decl orelse break :blk null;
+                for (source_view.types.nominal_declarations) |decl| {
+                    if (decl.nominal.source_decl != source_decl) continue;
+                    break :blk .{ .view = source_view, .declaration = decl, .padding_field_tys = decl.paddingFieldTypes(source_view.types) };
+                }
+                break :blk null;
+            },
+            .opaque_without_backing => null,
         };
     }
 
@@ -7569,6 +7578,7 @@ const BodyContext = struct {
             index -= 1;
             if (self.decl_scopes.items[index].get(address)) |existing| return existing;
         }
+        if (self.decl_scopes.items.len != 0) return null;
         return self.node_map.get(address);
     }
 
@@ -7748,12 +7758,12 @@ const BodyContext = struct {
         return entries;
     }
 
-    /// Instantiate a nominal instance's backing. A local declaration's
-    /// formals and backing share one set of checked roots across every
-    /// instance of the nominal, so the backing instantiates inside a fresh
-    /// scope seeded with this instance's argument nodes: two instances of the
-    /// same nominal at different arguments stay independent, and the
-    /// recursive uses inside the backing resolve through the scope chain.
+    /// Instantiate a nominal instance's backing. A declaration-backed nominal's
+    /// formals and backing share one set of checked roots across every instance
+    /// of the nominal, so the backing instantiates inside a fresh scope seeded
+    /// with this instance's argument nodes: two instances of the same nominal at
+    /// different arguments stay independent, and the recursive uses inside the
+    /// backing resolve through the scope chain.
     fn instNominalBackingNode(
         self: *BodyContext,
         nominal: checked.CheckedNominalType,
@@ -7761,17 +7771,41 @@ const BodyContext = struct {
     ) Allocator.Error!NodeId {
         const source = self.nominalInstantiationSource(nominal) orelse
             return try self.instNode(self.nominalBackingRoot(nominal));
-        if (source.declaration.formalArgs(self.view.types).len != args.len) {
+        return try self.instNominalDeclarationBackingNode(source, args);
+    }
+
+    fn instNominalDeclarationBackingNode(
+        self: *BodyContext,
+        source: NominalInstantiationSource,
+        args: []NodeId,
+    ) Allocator.Error!NodeId {
+        if (moduleBytesEqual(source.view.key.bytes, self.view.key.bytes)) {
+            return try self.instNominalDeclarationBackingNodeInCurrentView(source.declaration, args);
+        }
+        var source_ctx = try BodyContext.init(self.allocator, self.builder, source.view, self.owner_template, self.graph, self.draft);
+        defer source_ctx.deinit();
+        source_ctx.owner_context_fn_key = self.owner_context_fn_key;
+        source_ctx.current_fn_key = self.current_fn_key;
+        return try source_ctx.instNominalDeclarationBackingNodeInCurrentView(source.declaration, args);
+    }
+
+    fn instNominalDeclarationBackingNodeInCurrentView(
+        self: *BodyContext,
+        declaration: checked.CheckedNominalDeclaration,
+        args: []NodeId,
+    ) Allocator.Error!NodeId {
+        const formal_args = declaration.formalArgs(self.view.types);
+        if (formal_args.len != args.len) {
             Common.invariant("checked nominal declaration arity differed from nominal type use");
         }
         var scope = std.AutoHashMap(CheckedTypeAddress, NodeId).init(self.allocator);
         defer scope.deinit();
-        for (source.declaration.formalArgs(self.view.types), args) |formal, arg| {
-            try scope.put(self.typeAddress(self.checkedTypeInCurrentView(source.view, formal)), arg);
+        for (formal_args, args) |formal, arg| {
+            try scope.put(self.typeAddress(formal), arg);
         }
         try self.decl_scopes.append(self.allocator, &scope);
         defer _ = self.decl_scopes.pop();
-        return try self.instNode(self.nominalBackingRoot(nominal));
+        return try self.instNode(declaration.backing);
     }
 
     const NominalInstantiationSource = struct {
@@ -7788,13 +7822,37 @@ const BodyContext = struct {
                 .view = self.view,
                 .declaration = self.view.types.nominalDeclarationById(id),
             },
-            .local_box_payload_capability,
-            .imported_declaration,
-            .imported_box_payload_capability,
-            => null,
-            .builtin,
-            .opaque_without_backing,
-            => null,
+            .local_box_payload_capability => blk: {
+                const lookup = self.builder.nominalDeclarationFor(self.view, nominal) orelse
+                    Common.invariant("local box-payload nominal had no declaration source");
+                break :blk .{
+                    .view = lookup.view,
+                    .declaration = lookup.declaration,
+                };
+            },
+            .imported_declaration => |imported| blk: {
+                const source_view = self.builder.moduleForId(checked.importedNominalDeclarationModuleId(imported));
+                break :blk .{
+                    .view = source_view,
+                    .declaration = source_view.types.nominalDeclarationById(imported.declaration),
+                };
+            },
+            .imported_box_payload_capability => blk: {
+                const lookup = self.builder.nominalDeclarationFor(self.view, nominal) orelse
+                    Common.invariant("imported box-payload nominal had no declaration source");
+                break :blk .{
+                    .view = lookup.view,
+                    .declaration = lookup.declaration,
+                };
+            },
+            .builtin => blk: {
+                const lookup = self.builder.nominalDeclarationFor(self.view, nominal) orelse break :blk null;
+                break :blk .{
+                    .view = lookup.view,
+                    .declaration = lookup.declaration,
+                };
+            },
+            .opaque_without_backing => null,
         };
     }
 
@@ -15791,6 +15849,7 @@ const BodyContext = struct {
             .builtin_owner = template.builtin_owner,
             .args = try self.builder.program.types.addSpan(args),
             .backing = .{ .ty = backing_ty, .use = template.backing.?.use },
+            .declared_order = template.declared_order,
         } });
     }
 
