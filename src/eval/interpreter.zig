@@ -4232,6 +4232,10 @@ pub const Interpreter = struct {
         value_layout: layout_mod.Idx,
         desc: *const LirProgram.BoxyTypeDesc,
     ) Error!void {
+        if (desc.inspect_opaque) {
+            try out.appendSlice(self.evalAllocator(), "<opaque>");
+            return;
+        }
         const value_layout_val = self.layout_store.getLayout(value_layout);
         if (value_layout_val.tag == .box_of_zst) {
             const payload_desc = try self.boxyBoxAllocationPayloadDesc(frame, value_layout, desc) orelse {
@@ -4261,6 +4265,12 @@ pub const Interpreter = struct {
         layout_idx: layout_mod.Idx,
         desc: ?*const LirProgram.BoxyTypeDesc,
     ) Error!void {
+        if (desc) |opaque_desc| {
+            if (opaque_desc.inspect_opaque) {
+                try out.appendSlice(self.evalAllocator(), "<opaque>");
+                return;
+            }
+        }
         const layout_val = self.layout_store.getLayout(layout_idx);
         switch (layout_val.tag) {
             .zst => {
@@ -9315,6 +9325,7 @@ pub const Interpreter = struct {
         // Field names are immutable static-pool data; runtime copies keep the
         // static span.
         target.field_names = source.field_names;
+        target.inspect_opaque = source.inspect_opaque;
 
         return .{ .runtime = runtime_id };
     }

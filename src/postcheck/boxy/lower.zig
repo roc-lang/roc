@@ -1658,6 +1658,7 @@ const ProcedureBuilder = struct {
             .tag_variants = tag_variants,
             .tag_ext_desc = tag_ext_desc,
             .field_names = try self.staticFieldNamesForRep(canonical_worker),
+            .inspect_opaque = self.repInspectsOpaque(canonical_worker),
             .debug_checked_type = worker_rep.source_type.ty,
         };
         return desc_id;
@@ -2145,6 +2146,7 @@ const ProcedureBuilder = struct {
             .tag_variants = tag_variants,
             .tag_ext_desc = tag_ext_desc,
             .field_names = try self.staticFieldNamesForRep(rep_id),
+            .inspect_opaque = self.repInspectsOpaque(rep_id),
             .debug_checked_type = rep.source_type.ty,
         };
         return desc_id;
@@ -2749,6 +2751,10 @@ const ProcedureBuilder = struct {
     fn tagVariantNameText(self: *const ProcedureBuilder, variant: Plan.TagVariant) []const u8 {
         const module = procedureModuleById(self.modules, variant.name_module);
         return module.canonical_names.tagLabelText(variant.name);
+    }
+
+    fn repInspectsOpaque(self: *const ProcedureBuilder, rep_id: Plan.TypeRepId) bool {
+        return self.plan.representations.items[@intFromEnum(rep_id)].inspect_opaque;
     }
 
     /// Record field names for a record-shaped representation, in payload field
@@ -9977,6 +9983,7 @@ const ProcBodyBuilder = struct {
             .tag_variants = tag_variants,
             .tag_ext_desc = tag_ext_desc,
             .field_names = try self.parent.staticFieldNamesForRep(rep_id),
+            .inspect_opaque = self.parent.repInspectsOpaque(rep_id),
             .debug_checked_type = rep.source_type.ty,
         };
         return desc_id;

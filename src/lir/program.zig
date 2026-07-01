@@ -143,6 +143,9 @@ pub const BoxyTypeDesc = struct {
     /// Record field names in payload field order, one per field. Empty for
     /// non-record payloads (including tuples, which print positionally).
     field_names: BoxySpan = .{},
+    /// The described value is an opaque nominal type: inspect must not
+    /// reveal its backing structure.
+    inspect_opaque: bool = false,
     copy_plan: BoxySpan = .{},
     drop_plan: BoxySpan = .{},
     structural_eq: ?LIR.LirProcSpecId = null,

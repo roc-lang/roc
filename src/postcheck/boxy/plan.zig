@@ -148,6 +148,9 @@ pub const TypeRepresentation = struct {
     dictionaries: Span = .{},
     descriptor: ?DescriptorRequirementId = null,
     contains_dynamic: bool = false,
+    /// The source nominal type declared itself opaque: inspect must not
+    /// reveal the backing structure.
+    inspect_opaque: bool = false,
 };
 
 pub const DescriptorReason = enum {
@@ -860,6 +863,7 @@ const Builder = struct {
                 .transparent },
             .children = try self.commitPendingChildren(children.items),
             .declared_fields = declared_fields,
+            .inspect_opaque = nominal.is_opaque,
         };
     }
 
