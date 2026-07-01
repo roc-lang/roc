@@ -451,6 +451,13 @@ test "fx platform expect with numeric literal (dev backend)" {
     try testRocTestSinglePass("--opt=dev", "test/fx/expect_with_literal.roc");
 }
 
+test "fx platform byte-list file import finalizes bytes correctly" {
+    // Repro for https://github.com/roc-lang/roc/issues/9866: importing a
+    // source-relative file as List(U8) should produce a byte list with the
+    // imported file length during compile-time finalization.
+    try testRocTestSinglePass("--opt=dev", "test/fx/file_import_bytes_check_crash.roc");
+}
+
 test "fx platform match returning string" {
     // Tests that match expressions with string returns work correctly
     const allocator = testing.allocator;

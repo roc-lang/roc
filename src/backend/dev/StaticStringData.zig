@@ -1,4 +1,4 @@
-//! Readonly data records for non-SSO LIR string literals.
+//! Readonly data records for LIR string and byte-list literal backing.
 
 const std = @import("std");
 const base = @import("base");
@@ -10,13 +10,13 @@ const StaticDataRelocation = @import("StaticDataExport.zig").StaticDataRelocatio
 
 const Allocator = std.mem.Allocator;
 
-/// Codegen lookup entry for a non-SSO LIR string literal.
+/// Codegen lookup entry for a LIR literal backing.
 pub const Entry = struct {
     id: base.StringLiteral.Idx,
     symbol_name: []const u8,
 };
 
-/// Readonly data exports and lookup entries for non-SSO string literals.
+/// Readonly data exports and lookup entries for literal backing.
 pub const Table = struct {
     allocator: Allocator,
     exports: []StaticDataExport,
@@ -48,10 +48,9 @@ pub const Table = struct {
     }
 };
 
-/// Build readonly data exports for all non-SSO strings in a LIR store.
+/// Build readonly data exports for all string-store backings in a LIR store.
 pub fn build(allocator: Allocator, store: *const lir.LirStore, target: RocTarget) Allocator.Error!Table {
     const word_size: u32 = @intCast(target.ptrBitWidth() / 8);
-    const roc_str_size = word_size * 3;
 
     var exports = std.ArrayList(StaticDataExport).empty;
     var entries = std.ArrayList(Entry).empty;
@@ -71,8 +70,6 @@ pub fn build(allocator: Allocator, store: *const lir.LirStore, target: RocTarget
 
     var strings = store.strings.iterator();
     while (strings.next()) |entry| {
-        if (entry.bytes.len < roc_str_size) continue;
-
         const symbol_name = try std.fmt.allocPrint(allocator, "roc__static_str_{d}", .{@intFromEnum(entry.idx)});
         var symbol_owned = true;
         errdefer if (symbol_owned) allocator.free(symbol_name);
@@ -139,7 +136,7 @@ fn writeSignedWord(word_size: u32, bytes: []u8, offset: u32, value: isize) void 
     }
 }
 
-test "build emits only non-SSO strings" {
+test "build emits all literal backing with static refcount headers" {
     const allocator = std.testing.allocator;
 
     var store = lir.LirStore.init(allocator);
@@ -151,14 +148,20 @@ test "build emits only non-SSO strings" {
     var table = try build(allocator, &store, .x64linux);
     defer table.deinit();
 
-    try std.testing.expectEqual(@as(usize, 1), table.exports.len);
-    try std.testing.expectEqual(@as(usize, 1), table.entries.len);
-    try std.testing.expect(table.find(small) == null);
+    try std.testing.expectEqual(@as(usize, 2), table.exports.len);
+    try std.testing.expectEqual(@as(usize, 2), table.entries.len);
+    try std.testing.expect(table.find(small) != null);
     try std.testing.expect(table.find(large) != null);
 
-    const static_export = table.exports[0];
-    try std.testing.expectEqual(@as(u32, 8), static_export.symbol_offset);
-    try std.testing.expectEqual(@as(usize, 8 + store.getString(large).len), static_export.bytes.len);
-    try std.testing.expectEqual(@as(i64, 0), std.mem.readInt(i64, static_export.bytes[0..8], .little));
-    try std.testing.expectEqualSlices(u8, store.getString(large), static_export.bytes[8..]);
+    for (table.entries) |entry| {
+        const text = store.getString(entry.id);
+        const static_export = for (table.exports) |candidate| {
+            if (std.mem.eql(u8, candidate.symbol_name, entry.symbol_name)) break candidate;
+        } else return error.MissingStaticDataExport;
+
+        try std.testing.expectEqual(@as(u32, 8), static_export.symbol_offset);
+        try std.testing.expectEqual(@as(usize, 8 + text.len), static_export.bytes.len);
+        try std.testing.expectEqual(@as(i64, 0), std.mem.readInt(i64, static_export.bytes[0..8], .little));
+        try std.testing.expectEqualSlices(u8, text, static_export.bytes[8..]);
+    }
 }

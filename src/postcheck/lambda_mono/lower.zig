@@ -548,6 +548,7 @@ const Lowerer = struct {
             .frac_f64_lit => |value| .{ .frac_f64_lit = value },
             .dec_lit => |value| .{ .dec_lit = value },
             .str_lit => |value| .{ .str_lit = value },
+            .bytes_lit => |value| .{ .bytes_lit = value },
             .uninitialized => .uninitialized,
             .uninitialized_payload => |payload| .{ .uninitialized_payload = .{
                 .condition = try self.localFor(payload.condition, try self.lowerType(self.solved.local_tys[@intFromEnum(payload.condition)])),

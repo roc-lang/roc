@@ -1612,10 +1612,10 @@ pub fn computeUniqueness(
             .assign_literal => |assign| {
                 marks.trackDef(&has_def, &multi_def, assign.target);
                 switch (assign.value) {
-                    // A big string literal is a view of static backing whose
+                    // Static string and byte-list literals view backing whose
                     // count is the static sentinel, never 1, so it is not a
                     // unique birth and must never take an in-place path.
-                    .str_literal => marks.destroy(&foreign_def, assign.target),
+                    .str_literal, .bytes_literal => marks.destroy(&foreign_def, assign.target),
                     else => marks.noteBirth(&born, assign.target),
                 }
             },

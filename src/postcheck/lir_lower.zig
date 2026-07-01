@@ -903,6 +903,14 @@ const Lowerer = struct {
                     .next = next,
                 } });
             },
+            .bytes_lit => |literal| blk: {
+                const bytes_lit = self.program.stringLiteral(literal);
+                break :blk try self.result.store.addCFStmt(.{ .assign_literal = .{
+                    .target = target,
+                    .value = .{ .bytes_literal = try self.result.store.insertStringView(bytes_lit.backing, bytes_lit.offset, bytes_lit.len) },
+                    .next = next,
+                } });
+            },
             .uninitialized, .uninitialized_payload => next,
             .list => |items| try self.lowerListInto(target, items, next),
             .tuple => |items| try self.lowerTupleInto(target, items, next),
