@@ -13143,7 +13143,7 @@ test "isCompilerOwnedBuiltinSourcePath detects builtin by filename and content m
     const tmp_root = try std.fs.path.join(allocator, &.{ ".zig-cache", "tmp", tmp.sub_path[0..] });
     defer allocator.free(tmp_root);
 
-    const markers = "module []\n\nStr :: [ProvidedByCompiler].{\n}\n";
+    const markers = "Str :: [ProvidedByCompiler].{\n}\n";
 
     const expectClassified = struct {
         fn check(gpa: Allocator, t_io: std.Io, root: []const u8, dir: std.Io.Dir, name: []const u8, data: []const u8, expected: bool) CliMainError!void {
@@ -13158,7 +13158,7 @@ test "isCompilerOwnedBuiltinSourcePath detects builtin by filename and content m
     try expectClassified(allocator, io, tmp_root, tmp.dir, "Builtin.roc", markers, true);
     // Correct filename but missing the markers (a user file that happens to be
     // named Builtin.roc) must not be classified as compiler-owned.
-    try expectClassified(allocator, io, tmp_root, tmp.dir, "Builtin.roc", "module []\n\nfoo = 1\n", false);
+    try expectClassified(allocator, io, tmp_root, tmp.dir, "Builtin.roc", "foo = 1\n", false);
     // The markers in a file that isn't named Builtin.roc must not match.
     try expectClassified(allocator, io, tmp_root, tmp.dir, "NotBuiltin.roc", markers, false);
 

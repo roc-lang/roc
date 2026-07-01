@@ -323,18 +323,17 @@ pub const tests = [_]TestCase{
         .imports = &.{.{
             .name = "Acct",
             .source =
-            \\module [Account, sample]
+            \\Acct := { id : U8, balance : U32 }.{
+            \\    sample : Acct
+            \\    sample = { id : 7, balance : 99 }
+            \\}
             \\
-            \\Account := { id : U8, balance : U32 }
-            \\
-            \\sample : Account
-            \\sample = { id : 7, balance : 99 }
             ,
         }},
         .source =
-        \\import Acct exposing [Account]
+        \\import Acct exposing [Acct]
         \\
-        \\describe : Account -> U32
+        \\describe : Acct -> U32
         \\describe = |{ id, balance }| id.to_u32() * 1000 + balance
         \\
         \\main = describe(Acct.sample)

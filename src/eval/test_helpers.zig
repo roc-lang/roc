@@ -641,6 +641,16 @@ fn parseAndCheckProgramForProblemsImpl(
         };
     }
 
+    var explicit_problem_root_names_storage: [1][]const u8 = undefined;
+    var explicit_problem_root_names: []const []const u8 = &.{};
+    switch (source_kind) {
+        .expr => {
+            explicit_problem_root_names_storage[0] = evalRootName(source_kind, false);
+            explicit_problem_root_names = explicit_problem_root_names_storage[0..];
+        },
+        .module => {},
+    }
+
     const main_checked = try parseCheckModule(
         allocator,
         "Test",
@@ -649,7 +659,7 @@ fn parseAndCheckProgramForProblemsImpl(
         false,
         false,
         .checked_artifact,
-        &.{},
+        explicit_problem_root_names,
         builtin_env,
         builtin_indices,
         main_imports,
@@ -928,6 +938,28 @@ pub fn publishProgramForComptimeProblems(
     source: []const u8,
     imports: []const ModuleSource,
 ) TestHelperError!ComptimePublishOutcome {
+    return publishProgramForComptimeProblemsImpl(allocator, source_kind, source, imports, null);
+}
+
+/// Same as `publishProgramForComptimeProblems` but reuses a Builtin artifact
+/// the caller has already published.
+pub fn publishProgramForComptimeProblemsWithBuiltin(
+    allocator: Allocator,
+    source_kind: SourceKind,
+    source: []const u8,
+    imports: []const ModuleSource,
+    pre_published_builtin: PrePublishedBuiltin,
+) TestHelperError!ComptimePublishOutcome {
+    return publishProgramForComptimeProblemsImpl(allocator, source_kind, source, imports, pre_published_builtin);
+}
+
+fn publishProgramForComptimeProblemsImpl(
+    allocator: Allocator,
+    source_kind: SourceKind,
+    source: []const u8,
+    imports: []const ModuleSource,
+    pre_published_builtin: ?PrePublishedBuiltin,
+) TestHelperError!ComptimePublishOutcome {
     const resources = parseAndCanonicalizeProgramWithRootModeReporting(
         allocator,
         source_kind,
@@ -935,7 +967,7 @@ pub fn publishProgramForComptimeProblems(
         imports,
         false,
         .published_roots_only,
-        null,
+        pre_published_builtin,
         .report_comptime_problems,
     ) catch |err| switch (err) {
         error.CompileTimeProblem => return .comptime_problems,
@@ -1316,6 +1348,15 @@ pub fn parseCheckModule(
         builtin_ctx,
     );
     checker.fixupTypeWriter();
+    for (explicit_root_names) |root_name| {
+        const root_def_idx = czer.explicitRootDefByName(root_name) orelse {
+            if (@import("builtin").mode == .Debug) {
+                std.debug.panic("eval helper invariant violated: explicit executable root `{s}` was not found", .{root_name});
+            }
+            unreachable;
+        };
+        try checker.addExecutableRootDef(root_def_idx);
+    }
     errdefer checker.deinit();
     var check_timer = try StageTimer.start();
     try checker.checkFile();

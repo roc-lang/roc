@@ -5,8 +5,6 @@ type=file
 ~~~
 # SOURCE
 ~~~roc
-module [shorthand]
-
 FooBar := {}.{
     myfunc : List(a) -> U64
     myfunc = |list| list.len()
@@ -15,26 +13,11 @@ FooBar := {}.{
 shorthand = FooBar.myfunc
 ~~~
 # EXPECTED
-MODULE HEADER DEPRECATED - generalize_alias_exposed.md:1:1:1:19
+NIL
 # PROBLEMS
-
-┌──────────────────────────┐
-│ MODULE HEADER DEPRECATED ├─ The `module` header is deprecated. ─────────────┐
-└┬─────────────────────────┘                                                  │
- │                                                                            │
- │  module [shorthand]                                                        │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                        │
- └─────────────────────────────────────────── generalize_alias_exposed.md:1:1 ┘
-
-    Type modules (headerless files with a top-level type matching the filename)
-    are now the preferred way to define modules.
-
-    Remove the `module` header and ensure your file defines a type that matches
-    the filename.
-
+NIL
 # TOKENS
 ~~~zig
-KwModule,OpenSquare,LowerIdent,CloseSquare,
 UpperIdent,OpColonEqual,OpenCurly,CloseCurly,Dot,OpenCurly,
 LowerIdent,OpColon,UpperIdent,NoSpaceOpenRound,LowerIdent,CloseRound,OpArrow,UpperIdent,
 LowerIdent,OpAssign,OpBar,LowerIdent,OpBar,LowerIdent,NoSpaceDotLowerIdent,NoSpaceOpenRound,CloseRound,
@@ -45,10 +28,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(module
-		(exposes
-			(exposed-lower-ident
-				(text "shorthand"))))
+	(type-module)
 	(statements
 		(s-type-decl
 			(header (name "FooBar")
@@ -76,8 +56,6 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-module [shorthand]
-
 FooBar := {}.{
 	myfunc : List(a) -> U64
 	myfunc = |list| list.len()
@@ -93,7 +71,7 @@ shorthand = FooBar.myfunc
 		(e-lambda
 			(args
 				(p-assign (ident "list")))
-			(e-dispatch-call (method "len") (constraint-fn-var 40)
+			(e-dispatch-call (method "len") (constraint-fn-var 39)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "list"))))
