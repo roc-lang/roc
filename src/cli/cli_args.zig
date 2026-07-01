@@ -211,6 +211,7 @@ pub const DocsArgs = struct {
     no_cache: bool = false, // disable cache
     verbose: bool = false, // enable verbose output
     serve: bool = false, // start an HTTP server after generating docs
+    with_lang_ref: bool = false, // include the language reference articles from docs/langref
     resolve_limits: ResolveLimitArgs = .{}, // package download size limits
 };
 
@@ -970,6 +971,7 @@ fn parseDocs(args: []const []const u8) CliArgs {
     var no_cache: bool = false;
     var verbose: bool = false;
     var serve: bool = false;
+    var with_lang_ref: bool = false;
     var resolve_limits: ResolveLimitArgs = .{};
 
     for (args) |arg| {
@@ -986,6 +988,7 @@ fn parseDocs(args: []const []const u8) CliArgs {
             \\      --main=<main>    The .roc file of the main app/package module to resolve dependencies from
             \\      --output=<dir>   Output directory for generated documentation [default: generated-docs]
             \\      --serve          Start an HTTP server to view the documentation
+            \\      --with-lang-ref  Include the language reference articles from docs/langref
             \\      --time           Print timing information for each compilation phase. Will not print anything if everything is cached.
             \\      --no-cache       Disable caching
             \\      --verbose        Enable verbose output including cache statistics
@@ -1011,6 +1014,8 @@ fn parseDocs(args: []const []const u8) CliArgs {
             }
         } else if (mem.eql(u8, arg, "--serve")) {
             serve = true;
+        } else if (mem.eql(u8, arg, "--with-lang-ref")) {
+            with_lang_ref = true;
         } else if (mem.eql(u8, arg, "--time")) {
             time = true;
         } else if (mem.eql(u8, arg, "--no-cache")) {
@@ -1025,7 +1030,7 @@ fn parseDocs(args: []const []const u8) CliArgs {
         }
     }
 
-    return CliArgs{ .docs = DocsArgs{ .path = path orelse "main.roc", .main = main, .output = output orelse "generated-docs", .time = time, .no_cache = no_cache, .verbose = verbose, .serve = serve, .resolve_limits = resolve_limits } };
+    return CliArgs{ .docs = DocsArgs{ .path = path orelse "main.roc", .main = main, .output = output orelse "generated-docs", .time = time, .no_cache = no_cache, .verbose = verbose, .serve = serve, .with_lang_ref = with_lang_ref, .resolve_limits = resolve_limits } };
 }
 
 fn parseExperimentalLsp(args: []const []const u8) CliArgs {
@@ -1872,6 +1877,16 @@ test "roc docs" {
         const result = try parse(gpa, testing.io, &[_][]const u8{ "docs", "--verbose" });
         defer result.deinit(gpa);
         try testing.expectEqual(true, result.docs.verbose);
+    }
+    {
+        const result = try parse(gpa, testing.io, &[_][]const u8{ "docs", "--with-lang-ref" });
+        defer result.deinit(gpa);
+        try testing.expectEqual(true, result.docs.with_lang_ref);
+    }
+    {
+        const result = try parse(gpa, testing.io, &[_][]const u8{ "docs", "foo.roc" });
+        defer result.deinit(gpa);
+        try testing.expectEqual(false, result.docs.with_lang_ref);
     }
 }
 

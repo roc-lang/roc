@@ -12714,7 +12714,7 @@ fn rocDocs(ctx: *CliCtx, args: cli_args.DocsArgs) CliMainError!void {
     }
 
     // Generate documentation for all packages and modules
-    try generateDocs(ctx, &result_with_env.build_env, args.path, args.output);
+    try generateDocs(ctx, &result_with_env.build_env, args.path, args.output, args.with_lang_ref);
 
     stdout.print("\nGenerated docs for {s}\n", .{args.path}) catch {};
 
@@ -12736,6 +12736,7 @@ fn generateDocs(
     build_env: *compile.BuildEnv,
     module_path: []const u8,
     base_output_dir: []const u8,
+    with_lang_ref: bool,
 ) CliMainError!void {
     const DocModel = docs.DocModel;
     const extract = docs.extract;
@@ -12853,6 +12854,10 @@ fn generateDocs(
     };
     defer package_docs.deinit(ctx.gpa);
 
+    // Promote the builtin types (Str, Num, …) to top-level modules so the
+    // internal `Builtin` container never surfaces in the generated docs.
+    try package_docs.reshapeBuiltin(ctx.gpa);
+
     // Remove existing output directory to ensure a clean build
     try std.Io.Dir.cwd().deleteTree(ctx.io.std_io, base_output_dir);
 
@@ -12861,6 +12866,18 @@ fn generateDocs(
         error.PathAlreadyExists => {},
         else => return err,
     };
+
+    // Load the language reference articles when requested. They are read from
+    // `docs/langref` (relative to the current working directory).
+    const langref_dir_path = "docs/langref";
+    var langref: ?docs.render_markdown.LangRef = if (with_lang_ref)
+        docs.render_markdown.load(ctx.gpa, ctx.io.std_io, langref_dir_path) catch |err| {
+            std.debug.print("Error: failed to load language reference from '{s}': {}\n", .{ langref_dir_path, err });
+            return error.DocsFailed;
+        }
+    else
+        null;
+    defer if (langref) |*lr| lr.deinit();
 
     // Generate HTML documentation site
     // TODO: support --format md and --format json output formats
@@ -12873,7 +12890,7 @@ fn generateDocs(
         }
         broken_links.deinit(ctx.gpa);
     }
-    render_html.renderPackageDocs(ctx.gpa, ctx.io.std_io, &package_docs, base_output_dir, &broken_links) catch |err| {
+    render_html.renderPackageDocs(ctx.gpa, ctx.io.std_io, &package_docs, base_output_dir, &broken_links, if (langref) |*lr| lr else null) catch |err| {
         return err;
     };
 
