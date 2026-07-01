@@ -33,15 +33,19 @@ Also committed: `requireBoxyTagVariantByDiscriminant` prints the descriptor's va
 
 ## Current state of all_syntax_test (boxy interpreter)
 
-Completes 10/10 runs with exit 0. All remaining stdout diffs vs the expected baseline are Str.inspect FORMATTING fidelity (values are correct):
+Stable (15/15 runs, exit 0; the flaky segfault is FIXED — see 1432a4a89f). stdout matches the expected baseline byte-for-byte EXCEPT one line:
 
-1. Records inspect as tuples — `{ age: 31, name: "Alice" }` prints `(31, "Alice")`. Descriptors/layouts carry no record field names.
-2. Dec scalars inspect as raw i128 mantissas — `15.0` prints `15000000000000000000`. `appendScalarInspect` in interpreter.zig has frac handling in its 4- and 8-byte branches but not the 16-byte branch; check whether layout `.dec` is a 16-byte frac scalar and format via RocDec.
-3. Opaque nominal values inspect through — `<opaque>` prints `("my_secret_key",)`. Descriptors carry no opaqueness marker.
-4. Zero-sized tag payloads are dropped — `Err(NoFirstError(ListWasEmpty))` prints `Err`. `appendTagUnionInspect` returns early when `payload_size == 0`; it should recurse through the variant's payload descriptors (ZST tags still have names).
-5. The unicode-escape line is NOT a real diff — boxy prints the correct NBSP; an earlier scratchpad baseline had lost the byte in copy-paste.
+- `Err(NoFirstError(ListWasEmpty))` prints as `Err(ListWasEmpty)` — the intermediate singleton zero-sized tag level is collapsed in the DESCRIPTOR chain: the Err variant's payload descriptor points directly at the inner `[ListWasEmpty]` union instead of `[NoFirstError(...)]`. The inspect walker is fine (it prints whatever the chain has). Investigate where the Err variant's payload desc-rep is chosen: `staticPayloadDescRefsForTagVariant` → `tagPayloadStorageDescRepForLayout` → `tagPayloadStorageDescRep`, or whether the PLAN's tag variant payload children already flattened the singleton union. The singleton-ZST-union descriptor builder (the "zero-sized boxy tag descriptor had multiple variants" path) builds name+payload_descs correctly when given the right rep, so the level loss is upstream of it.
 
-Note `BoxyTypeDesc.structural_inspect: ?LirProcSpecId` exists but is never populated — the intended design may be generated per-type inspect procs, which would also serve the machine backends. Either enrich descriptors (field names, opaque flag) for the interpreter walker, or implement descriptor-referenced inspect procs; decide once, because backends need the same answer.
+stderr is exactly `[dbg] 42.0` (instrumentation cleanup landed in 2010f53561).
+
+## Fixed and committed (third stretch, 2026-07-01)
+
+- 2010f53561 — instrumentation cleanup (−2503 lines across interpreter.zig/lower.zig via subagent + arc.zig by hand); stderr byte-clean; failure-path diagnostics kept.
+- 1432a4a89f — THE FLAKY SEGFAULT: `materializeBoxyListPayloadToLayoutWithTargetDesc` strode the source buffer by the element DESCRIPTOR's payload layout; a payload-direct element descriptor (describing boxed contents, 16B) walked an 8B-stride box buffer and increfed garbage read past the allocation. Stride now comes from the storage layout only. 15/15 stable after.
+- edfcfa7dfe — inspect: Dec formatted via RocDec.format_to_buf (16-byte frac branch was missing); zero-sized tag payloads print their names via the variant payload descriptor (new appendZstTagInspect helper; the `.zst` inspect case also consults descriptor tag variants).
+- c283d96f99 — inspect: record field names. New `boxy_field_names` pool (program.zig + lir_image.zig + interpreter BoxyTables + runtime desc copy) populated shape-driven (children with record_field roles — record-shaped descs exist on record, dynamic, AND nominal reps; kind-gating missed most of them). `appendStructInspect` prints `{ name: value }` when the descriptor supplies exactly one name per field.
+- 4c4dee0f39 — inspect: `<opaque>`. Inspect authority = checked `nominal.is_opaque` (NOT the plan's opaque_nominal kind, which means opaque_without_backing). Recorded as `TypeRepresentation.inspect_opaque` when the plan visits the nominal, carried on BoxyTypeDesc, checked first in the walker.
 
 ## Fixed and committed (second stretch, 2026-07-01)
 
