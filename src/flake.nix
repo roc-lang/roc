@@ -37,12 +37,32 @@
         pkgs = import nixpkgs { inherit system; };
         isLinux = pkgs.stdenv.isLinux;
 
-        # kcov build dependencies for Linux (coverage uses custom kcov fork built from source)
+        # kcov (built from source for coverage on every platform) links system
+        # libs via pkg-config, but asks for "z"/"curl"/"dwarf" while nixpkgs
+        # ships "zlib"/"libcurl"/"libdwarf". Provide alias .pc files so those
+        # resolve; they must be packages since the nix pkg-config wrapper only
+        # reads .pc dirs from buildInputs. On macOS the bare "-l" fallback only
+        # searches the SDK (which has neither libz nor libcurl), so every lib
+        # must resolve through pkg-config here.
+        pcConfigAlias = name: pkg: pcName: pkgs.runCommand "pkgconfig-alias-${name}" { } ''
+          mkdir -p "$out/lib/pkgconfig"
+          cp "$(find ${pkg} -name '${pcName}.pc' | head -n1)" "$out/lib/pkgconfig/${name}.pc"
+        '';
         kcovBuildDeps = with pkgs; [
-          elfutils
           pkg-config
           curl
           zlib
+          (pcConfigAlias "z" zlib.dev "zlib")
+          (pcConfigAlias "curl" curl.dev "libcurl")
+        ];
+        # elfutils (libdw/libelf for DWARF parsing) is used by kcov on Linux.
+        kcovLinuxOnlyDeps = with pkgs; [
+          elfutils
+        ];
+        # macOS kcov uses libdwarf (linked as "dwarf") instead of elfutils.
+        kcovDarwinOnlyDeps = with pkgs; [
+          libdwarf
+          (pcConfigAlias "dwarf" libdwarf.dev "libdwarf")
         ];
         zig = pkgs.zig_0_16;
         dependencies = [
@@ -53,7 +73,9 @@
           pkgs.jq # see ci/benchmarks_zig.sh
           (pkgs.writeShellScriptBin "zon2nix" "nix run github:Cloudef/zig2nix -- zon2nix")
         ]
-        ++ pkgs.lib.optionals isLinux kcovBuildDeps;
+        ++ kcovBuildDeps
+        ++ pkgs.lib.optionals isLinux kcovLinuxOnlyDeps
+        ++ pkgs.lib.optionals (!isLinux) kcovDarwinOnlyDeps;
 
         shellFunctions = ''
           buildcmd() {
