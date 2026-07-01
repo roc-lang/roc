@@ -482,8 +482,6 @@ fn countDebugEffectStmts(lowered: *const lir.CheckedPipeline.LoweredProgram) Deb
 test "optimized inline expect lowering omits expects and keeps dbg" {
     const allocator = std.testing.allocator;
     const source =
-        \\module [main]
-        \\
         \\main : I64
         \\main = {
         \\    dbg 1
@@ -514,8 +512,6 @@ test "nominal record lays out fields in declared order" {
     // layout, so { z: U16, y: U16, x: U32 } is kept verbatim. Without the marker
     // it would sort structurally and hoist the U32 to offset 0.
     const source =
-        \\module [main]
-        \\
         \\Account := { z : U16, y : U16, x : U32, _ : {} }
         \\
         \\main : Account -> Account
@@ -543,15 +539,11 @@ test "nominal record lays out fields in declared order" {
 test "imported nominal record lays out fields in declared order" {
     const allocator = std.testing.allocator;
     const acct_module =
-        \\module [Account]
-        \\
         \\Account := { z : U16, y : U16, x : U32, _ : {} }
     ;
     // An imported nominal record must lay out identically to a local one, or
     // values would be read with the wrong offsets across module boundaries.
     const source =
-        \\module [main]
-        \\
         \\import Acct exposing [Account]
         \\
         \\main : Account -> Account
@@ -579,8 +571,6 @@ test "nominal record reserves unnamed padding fields without inflating alignment
     // unnamed bytes hold the explicit padding so `b` lands at offset 4 without
     // the compiler inserting alignment padding of its own.
     const source =
-        \\module [main]
-        \\
         \\Padded := { a : U8, _ : U8, _ : U8, _ : U8, b : U32 }
         \\
         \\main : Padded -> Padded
@@ -613,8 +603,6 @@ test "generic nominal record instantiates unnamed padding to the argument's size
     // size, exactly like a named field of the same type: `Foo(U64)` is 16 bytes
     // (x:U64 @0 plus 8 bytes of padding), just as `{ x : a, y : a }(U64)` would be.
     const source =
-        \\module [main]
-        \\
         \\Foo(a) := { x : a, _ : a }
         \\
         \\main : Foo(U64) -> Foo(U64)
@@ -643,8 +631,6 @@ test "nominal record with a parenthesized backing still honors declared order an
     // the unnamed field must still be accepted and the layout must match the
     // unparenthesized form (a@0, b@4, size 8, with three padding spacers).
     const source =
-        \\module [main]
-        \\
         \\Padded := ({ a : U8, _ : U8, _ : U8, _ : U8, b : U32 })
         \\
         \\main : Padded -> Padded
@@ -1758,8 +1744,6 @@ test "differently ordered source record rows produce normalized monotype rows" {
 
 test "direct call wrapper is inlined when inline mode is enabled" {
     try expectRootDirectCallCount(
-        \\module [main]
-        \\
         \\callee : U64 -> U64
         \\callee = |x| x + 1
         \\
@@ -1773,8 +1757,6 @@ test "direct call wrapper is inlined when inline mode is enabled" {
 
 test "direct call wrapper is not inlined when inline mode is none" {
     try expectRootTargetHasCalls(
-        \\module [main]
-        \\
         \\callee : U64 -> U64
         \\callee = |x| x + 1
         \\
@@ -1788,8 +1770,6 @@ test "direct call wrapper is not inlined when inline mode is none" {
 
 test "zero statement block wrapper is inlined" {
     try expectRootDirectCallCount(
-        \\module [main]
-        \\
         \\callee : U64 -> U64
         \\callee = |x| x + 1
         \\
@@ -1806,8 +1786,6 @@ test "zero statement block wrapper is inlined" {
 test "low level wrapper is inlined when inline mode is enabled" {
     const allocator = std.testing.allocator;
     var lowered_source = try lowerModule(allocator,
-        \\module [main]
-        \\
         \\main : Str -> U64
         \\main = |str| Str.count_utf8_bytes(str)
     , .wrappers);
@@ -1820,8 +1798,6 @@ test "low level wrapper is inlined when inline mode is enabled" {
 
 test "block wrapper with statements is not inlined" {
     try expectInlinePlanDecision(
-        \\module [main]
-        \\
         \\callee : U64 -> U64
         \\callee = |x| x + 1
         \\
@@ -1838,8 +1814,6 @@ test "block wrapper with statements is not inlined" {
 
 test "call value wrapper is not inlined" {
     try expectInlinePlanDecision(
-        \\module [main]
-        \\
         \\callee : U64 -> U64
         \\callee = |x| x + 1
         \\
@@ -1854,8 +1828,6 @@ test "call value wrapper is not inlined" {
 test "self-recursive direct wrapper is not inlined" {
     const allocator = std.testing.allocator;
     var lowered_source = try lowerModule(allocator,
-        \\module [main]
-        \\
         \\wrapper : U64 -> U64
         \\wrapper = |x| wrapper(x)
         \\
@@ -1879,8 +1851,6 @@ test "self-recursive direct wrapper is not inlined" {
 
 test "mutually recursive direct wrappers are not inlined" {
     try expectRootTargetHasCalls(
-        \\module [main]
-        \\
         \\a : U64 -> U64
         \\a = |x| b(x)
         \\
@@ -1895,8 +1865,6 @@ test "mutually recursive direct wrappers are not inlined" {
 test "capturing direct wrapper is not inlined" {
     const allocator = std.testing.allocator;
     var lowered_source = try lowerModule(allocator,
-        \\module [main]
-        \\
         \\callee : U64 -> U64
         \\callee = |x| x + 1
         \\
@@ -1934,8 +1902,6 @@ fn expectRootTargetTailTransform(
 
 test "trmc: recursive list builder is TRMC-transformed through the pipeline" {
     try expectRootTargetTailTransform(
-        \\module [main]
-        \\
         \\LinkedList := [Nil, Cons(I64, LinkedList)]
         \\
         \\repeat : I64, I64 -> LinkedList
@@ -1947,8 +1913,6 @@ test "trmc: recursive list builder is TRMC-transformed through the pipeline" {
 
 test "trmc: accumulator recursion is TCE-transformed through the pipeline" {
     try expectRootTargetTailTransform(
-        \\module [main]
-        \\
         \\sum_to : I64, I64 -> I64
         \\sum_to = |n, acc| if n == 0.I64 acc else sum_to(n - 1, acc + n)
         \\
@@ -1958,8 +1922,6 @@ test "trmc: accumulator recursion is TCE-transformed through the pipeline" {
 
 test "trmc: result used before the constructor is not transformed" {
     try expectRootTargetTailTransform(
-        \\module [main]
-        \\
         \\LinkedList := [Nil, Cons(I64, LinkedList)]
         \\
         \\length_acc : LinkedList, I64 -> I64
@@ -1980,8 +1942,6 @@ test "trmc: result used before the constructor is not transformed" {
 
 test "plant iter pipeline specializes collect worker after inlining" {
     try expectIterCollectWorkerSpecialized(
-        \\module [main]
-        \\
         \\Plant : { seed : I64 }
         \\
         \\random_plant : I64 -> Plant
@@ -2008,8 +1968,6 @@ test "known-length List.iter collect specializes without unbound locals" {
     // ARC use-after-realloc fix, since main's rewrite emits an owned variant.)
     const allocator = std.testing.allocator;
     var optimized = try lowerModule(allocator,
-        \\module [main]
-        \\
         \\main : List(I64)
         \\main =
         \\    Iter.collect(
@@ -2021,8 +1979,6 @@ test "known-length List.iter collect specializes without unbound locals" {
 
 test "direct iter collect worker specializes constructor recursive call" {
     try expectIterCollectWorkerSpecialized(
-        \\module [main]
-        \\
         \\Plant : { seed : I64 }
         \\
         \\random_plant : I64 -> Plant
@@ -2039,8 +1995,6 @@ test "direct iter collect worker specializes constructor recursive call" {
 test "spec constr does not duplicate opaque let-bound direct calls" {
     const allocator = std.testing.allocator;
     const source =
-        \\module [main]
-        \\
         \\State : { n : I64 }
         \\
         \\tick : I64 -> I64
@@ -2066,8 +2020,6 @@ test "spec constr does not duplicate opaque let-bound direct calls" {
 test "spec constr does not duplicate opaque known-match payloads" {
     const allocator = std.testing.allocator;
     const source =
-        \\module [main]
-        \\
         \\State : { n : I64 }
         \\Step : [One(I64)]
         \\
@@ -2093,8 +2045,6 @@ test "spec constr does not duplicate opaque known-match payloads" {
 
 test "spec constr preserves direct call argument effect order" {
     try expectOptimizedDbgEvents(
-        \\module [main]
-        \\
         \\State : { n : I64 }
         \\
         \\tap : I64 -> I64
@@ -2120,8 +2070,6 @@ test "spec constr preserves direct call argument effect order" {
 
 test "spec constr preserves left-to-right order for multiple unsafe call args" {
     try expectOptimizedDbgEvents(
-        \\module [main]
-        \\
         \\State : { n : I64 }
         \\
         \\tap_one : I64 -> I64
@@ -2153,8 +2101,6 @@ test "spec constr preserves left-to-right order for multiple unsafe call args" {
 
 test "spec constr preserves substituted capture order before direct call args" {
     try expectOptimizedDbgEvents(
-        \\module [main]
-        \\
         \\State : { n : I64 }
         \\
         \\tap_capture : I64 -> I64
@@ -2185,8 +2131,6 @@ test "spec constr preserves substituted capture order before direct call args" {
 
 test "spec constr preserves callable argument effect order" {
     try expectOptimizedDbgEvents(
-        \\module [main]
-        \\
         \\State : { n : I64 }
         \\
         \\tap : I64 -> I64
@@ -2215,8 +2159,6 @@ test "spec constr preserves callable argument effect order" {
 
 test "spec constr preserves known-match single-use payload effect order" {
     try expectOptimizedDbgEvents(
-        \\module [main]
-        \\
         \\State : { n : I64 }
         \\Step : [One(I64)]
         \\
@@ -2242,8 +2184,6 @@ test "spec constr preserves known-match single-use payload effect order" {
 
 test "spec constr preserves nested known-match payload effect order" {
     try expectOptimizedDbgEvents(
-        \\module [main]
-        \\
         \\State : { n : I64 }
         \\Step : [One({ item : I64 })]
         \\
@@ -2274,8 +2214,6 @@ test "spec constr preserves nested known-match payload effect order" {
 test "spec constr writes dynamically discovered workers once" {
     const allocator = std.testing.allocator;
     const source =
-        \\module [main]
-        \\
         \\Step : [Start(I64), Loop(I64)]
         \\
         \\go : Step -> I64
@@ -2304,8 +2242,6 @@ test "spec constr writes dynamically discovered workers once" {
 test "spec constr specializes recursive record state" {
     const allocator = std.testing.allocator;
     const source =
-        \\module [main]
-        \\
         \\State : { n : I64, acc : I64 }
         \\
         \\sum_record : State -> I64
@@ -2337,8 +2273,6 @@ test "spec constr specializes recursive record state" {
 test "spec constr specializes record state carried by while loop" {
     const allocator = std.testing.allocator;
     const source =
-        \\module [main]
-        \\
         \\Start : { n : I64 }
         \\State : { n : I64, acc : I64 }
         \\
@@ -2373,8 +2307,6 @@ test "spec constr specializes record state carried by while loop" {
 test "spec constr specializes recursive tuple state" {
     const allocator = std.testing.allocator;
     const source =
-        \\module [main]
-        \\
         \\sum_tuple : (I64, I64) -> I64
         \\sum_tuple = |state|
         \\    match state {
@@ -2407,8 +2339,6 @@ test "spec constr specializes recursive tuple state" {
 test "spec constr leaves uninspected constructor arguments generic" {
     const allocator = std.testing.allocator;
     const source =
-        \\module [main]
-        \\
         \\unused_state : { n : I64 }, I64 -> I64
         \\unused_state = |state, n|
         \\    if n == 0 {
@@ -2438,8 +2368,6 @@ test "spec constr leaves uninspected constructor arguments generic" {
 test "spec constr specializes tagged recursive state" {
     const allocator = std.testing.allocator;
     const source =
-        \\module [main]
-        \\
         \\Step : [Done, More(I64)]
         \\
         \\count_down : Step, I64 -> I64
@@ -2475,8 +2403,6 @@ test "spec constr specializes tagged recursive state" {
 test "spec constr uses fully known entry shape for multiple tuple states" {
     const allocator = std.testing.allocator;
     const source =
-        \\module [main]
-        \\
         \\roman : I64, (I64, I64), (I64, I64) -> I64
         \\roman = |n, p, q|
         \\    if n == 0 {
@@ -2509,8 +2435,6 @@ test "LIR statements and procs carry resolved source locations" {
     const allocator = std.testing.allocator;
 
     const source =
-        \\module [main]
-        \\
         \\add2 : U64 -> U64
         \\add2 = |n| n + 2
         \\
@@ -2613,8 +2537,6 @@ test "referenced but uncalled function does not materialize a proc" {
     const allocator = std.testing.allocator;
 
     const source =
-        \\module [main]
-        \\
         \\unused : U64 -> U64
         \\unused = |n| n + 1
         \\
@@ -2641,8 +2563,6 @@ test "LIR statements carry source locations under optimizing inline mode" {
     const allocator = std.testing.allocator;
 
     const source =
-        \\module [main]
-        \\
         \\add2 : U64 -> U64
         \\add2 = |n| n + 2
         \\
@@ -2669,8 +2589,6 @@ test "adjacent string interpolation patterns lower to grouped LIR match set" {
     const allocator = std.testing.allocator;
 
     const source =
-        \\module [main]
-        \\
         \\classify : Str -> Str
         \\classify = |s| match s {
         \\    "a${x}z" => x
@@ -2693,8 +2611,6 @@ test "LIR locals carry source-level names" {
     const allocator = std.testing.allocator;
 
     const source =
-        \\module [main]
-        \\
         \\compute : U64 -> U64
         \\compute = |n| {
         \\    first_part = n * 2
@@ -2734,7 +2650,7 @@ test "shared callees are lifted once and never gain spurious captures" {
 
     var source = std.ArrayList(u8).empty;
     defer source.deinit(allocator);
-    try source.appendSlice(allocator, "module [main]\n\nf0 : U64 -> U64\nf0 = |n| n + 1\n\n");
+    try source.appendSlice(allocator, "f0 : U64 -> U64\nf0 = |n| n + 1\n\n");
     var level: usize = 1;
     while (level <= depth) : (level += 1) {
         const chunk = try std.fmt.allocPrint(

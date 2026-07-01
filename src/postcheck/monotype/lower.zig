@@ -342,6 +342,35 @@ const SpecLookupKind = enum {
     solved,
 };
 
+const FinalBodyOutputCounts = struct {
+    exprs: usize = 0,
+    pats: usize = 0,
+    locals: usize = 0,
+    typed_locals: usize = 0,
+    layout_requests: usize = 0,
+    runtime_schema_requests: usize = 0,
+
+    fn fromProgram(program: *const Ast.Program) FinalBodyOutputCounts {
+        return .{
+            .exprs = program.exprs.items.len,
+            .pats = program.pats.items.len,
+            .locals = program.locals.items.len,
+            .typed_locals = program.typed_locals.items.len,
+            .layout_requests = program.layout_requests.items.len,
+            .runtime_schema_requests = program.runtime_schema_requests.items.len,
+        };
+    }
+
+    fn addDelta(self: *FinalBodyOutputCounts, before: FinalBodyOutputCounts, after: FinalBodyOutputCounts) void {
+        self.exprs += after.exprs - before.exprs;
+        self.pats += after.pats - before.pats;
+        self.locals += after.locals - before.locals;
+        self.typed_locals += after.typed_locals - before.typed_locals;
+        self.layout_requests += after.layout_requests - before.layout_requests;
+        self.runtime_schema_requests += after.runtime_schema_requests - before.runtime_schema_requests;
+    }
+};
+
 const TemplateSpecLookup = struct {
     family: TemplateFamily,
     kind: SpecLookupKind,
@@ -418,6 +447,7 @@ const MergeBinder = struct {
 const LoweredLambdaArgs = struct {
     args: DraftSpan(DraftTypedLocal),
     body: DraftExprId,
+    ret: DraftTypeCell,
 };
 
 const LoweredCall = struct {
@@ -543,6 +573,7 @@ const Builder = struct {
     /// requests made anywhere inside that specialization defer to its end,
     /// when its types are final and specialization keys are stable.
     active_graph: ?*InstGraph = null,
+    final_body_output_allowance: FinalBodyOutputCounts = .{},
 
     fn init(allocator: Allocator, modules: Common.CheckedModules, program: *Ast.Program, options: Options) Builder {
         return .{
@@ -1216,7 +1247,7 @@ const Builder = struct {
         source_fn_key: names.TypeDigest,
         fn_ty: Type.TypeId,
     ) Allocator.Error!Ast.DefId {
-        return try self.lowerTemplateWithMonoFor(template_ref, source_ty_view, source_fn_ty, source_fn_key, fn_ty, null, null);
+        return try self.lowerTemplateWithMonoFor(template_ref, source_ty_view, source_fn_ty, source_fn_key, fn_ty, null, null, null, null);
     }
 
     /// Specializations of one template family are deduplicated by structural
@@ -1234,6 +1265,8 @@ const Builder = struct {
         fn_ty: Type.TypeId,
         requester: ?*InstGraph,
         reserved_fn_id: ?Ast.FnId,
+        source_region_override: ?base.Region,
+        current_entry_root: ?checked.ComptimeRootId,
     ) Allocator.Error!Ast.DefId {
         const family = TemplateFamily.from(template_ref, source_fn_key);
         self.count("template_requests");
@@ -1375,6 +1408,8 @@ const Builder = struct {
         var body_draft = BodyDraftStore.init(self.allocator);
         defer body_draft.deinit();
         var body_ctx = try BodyContext.init(self.allocator, self, view, template_ref, graph, &body_draft);
+        body_ctx.source_region_override = source_region_override;
+        body_ctx.current_entry_root = current_entry_root;
         const root_fn_key = Ast.fnTemplateDigest(fn_template, &self.program.types, &self.program.names);
         body_ctx.owner_context_fn_key = root_fn_key;
         body_ctx.current_fn_key = root_fn_key;
@@ -1402,15 +1437,17 @@ const Builder = struct {
         const body_fn_ty = if (body_uses_generated_evidence) lower_fn_ty else live_fn_ty;
         const lowered = try body_ctx.lowerTemplateBody(template_ref, template, body_fn_ty);
         const draft_end = draft.end(self);
+        try self.drainSpecRequests(graph);
         if (requester) |requester_graph| {
+            try graph.drainDirty();
             const requester_fn_ty = if (body_uses_generated_evidence) body_fn_ty else live_fn_ty;
+            const solved_requester_fn_ty = try graph.sealType(requester_fn_ty);
             try requester_graph.unify(
                 try requester_graph.importMono(fn_ty),
-                try requester_graph.importMono(requester_fn_ty),
+                try requester_graph.importMono(solved_requester_fn_ty),
             );
             try requester_graph.drainDirty();
         }
-        try self.drainSpecRequests(graph);
         const sealed = try self.sealActiveBodyDraft(
             graph,
             &body_draft,
@@ -1452,6 +1489,10 @@ const Builder = struct {
     ) Allocator.Error!ReservedTemplate {
         const family = TemplateFamily.from(template_ref, source_fn_key);
         self.count("template_requests");
+        const request_has_generated_evidence = try self.monoTypeHasGeneratedOpaqueEvidence(fn_ty);
+        if (!request_has_generated_evidence) {
+            try requester.addMonoView(try requester.importMono(fn_ty), fn_ty);
+        }
         const fn_ty_digest = self.specializationTypeDigest(fn_ty);
         if (try self.findLoweredTemplate(family, fn_ty, fn_ty_digest)) |match| {
             self.count("template_hits");
@@ -1910,9 +1951,10 @@ const Builder = struct {
     }
 
     fn typeHasBuiltinOwner(self: *Builder, ty: Type.TypeId, owner: static_dispatch.BuiltinOwner) bool {
-        return switch (self.program.types.get(ty)) {
-            .named => |named| named.builtin_owner == owner,
-            else => false,
+        return switch (methodOwnerFromType(&self.program.types, ty) orelse return false) {
+            .builtin => |actual| actual == owner,
+            .source_decl => false,
+            .nominal => false,
         };
     }
 
@@ -2096,12 +2138,12 @@ const Builder = struct {
             try ctx.constrainTypeToMono(checked_arg, mono_arg);
         }
         if (ctx.nominalInstantiationSource(nominal)) |source| {
-            if (source.declaration.formalArgs(ctx.view.types).len != mono_args.len) {
-                Common.invariant("checked nominal declaration arity differed from nominal type use");
+            const arg_nodes = try graph.arena().alloc(NodeId, mono_args.len);
+            for (mono_args, 0..) |mono_arg, index| {
+                arg_nodes[index] = try graph.importMono(mono_arg);
             }
-            for (source.declaration.formalArgs(ctx.view.types), mono_args) |formal, mono_arg| {
-                try ctx.constrainTypeToMono(ctx.checkedTypeInCurrentView(source.view, formal), mono_arg);
-            }
+            const backing = try graph.sealNode(try ctx.instNominalDeclarationBackingNode(source, arg_nodes));
+            return try self.structuralBackingForNominal(view, nominal, mono_args, backing);
         }
         const backing = try graph.sealNode(try ctx.instNode(ctx.nominalBackingRoot(nominal)));
         return try self.structuralBackingForNominal(view, nominal, mono_args, backing);
@@ -2349,7 +2391,16 @@ const Builder = struct {
                 const decl = sv.types.nominalDeclaration(capability.nominal) orelse break :blk null;
                 break :blk .{ .view = sv, .declaration = decl, .padding_field_tys = capability.paddingFieldTys(sv.interface_capabilities) };
             },
-            .builtin, .opaque_without_backing => null,
+            .builtin => blk: {
+                const source_view = self.moduleForDigest(self.moduleDigestForOrigin(view, nominal.origin_module));
+                const source_decl = nominal.source_decl orelse break :blk null;
+                for (source_view.types.nominal_declarations) |decl| {
+                    if (decl.nominal.source_decl != source_decl) continue;
+                    break :blk .{ .view = source_view, .declaration = decl, .padding_field_tys = decl.paddingFieldTypes(source_view.types) };
+                }
+                break :blk null;
+            },
+            .opaque_without_backing => null,
         };
     }
 
@@ -2554,6 +2605,8 @@ const Builder = struct {
                     .source_fn_ty = request_template.source_fn_ty,
                     .source_fn_key = request_template.source_fn_key,
                     .fn_ty = request_template.mono_fn_ty,
+                    .source_region_override = null,
+                    .current_entry_root = null,
                 });
             }
             return reserved.target;
@@ -2624,6 +2677,8 @@ const Builder = struct {
                 .source_fn_ty = request_template.source_fn_ty,
                 .source_fn_key = request_template.source_fn_key,
                 .fn_ty = request_template.mono_fn_ty,
+                .source_region_override = source_ctx.source_region_override,
+                .current_entry_root = source_ctx.current_entry_root,
             });
         }
         return reserved.target;
@@ -2761,16 +2816,25 @@ const Builder = struct {
         try self.lowered_nested_by_fn.put(fn_id, entry_index);
         try self.appendNestedLookup(family, .request, fn_ty_digest, entry_index);
 
-        try request.ctx.constrainTypeToMono(fn_template.source_fn_ty, fn_template.mono_fn_ty);
+        const public_constraint_fn_ty = try request.ctx.publicOpaqueFunctionUnificationType(fn_template.mono_fn_ty);
+        try request.ctx.constrainTypeToMono(fn_template.source_fn_ty, public_constraint_fn_ty);
 
         const root_node = try request.ctx.instNode(fn_template.source_fn_ty);
-        if (!self.unsolved_monos.contains(fn_template.mono_fn_ty)) {
-            try request.ctx.graph.addMonoView(root_node, fn_template.mono_fn_ty);
+        const body_uses_generated_evidence =
+            !self.unsolved_monos.contains(fn_template.mono_fn_ty) and request.ctx.functionHasGeneratedOpaqueEvidence(fn_template.mono_fn_ty);
+        if (!body_uses_generated_evidence) {
+            if (request.ctx.graph.monoViewNode(fn_template.mono_fn_ty)) |request_node| {
+                try request.ctx.graph.unify(root_node, request_node);
+                try request.ctx.graph.drainDirty();
+            } else if (!self.unsolved_monos.contains(fn_template.mono_fn_ty)) {
+                try request.ctx.graph.addMonoView(root_node, fn_template.mono_fn_ty);
+            }
         }
         const live_fn_ty = try request.ctx.activeTypeFromNode(root_node);
-        const lowered = try request.ctx.lowerNestedFunction(request.expr_id, live_fn_ty);
+        const body_fn_ty = if (body_uses_generated_evidence) fn_template.mono_fn_ty else live_fn_ty;
+        const lowered = try request.ctx.lowerNestedFunction(request.expr_id, body_fn_ty);
         var def_template = fn_template;
-        def_template.mono_fn_ty = live_fn_ty;
+        def_template.mono_fn_ty = body_fn_ty;
         self.program.fns.items[@intFromEnum(fn_id)].source = def_template;
         _ = try request.ctx.draft.addNestedDef(.{
             .symbol = self.symbols.fresh(),
@@ -2860,14 +2924,14 @@ const Builder = struct {
         return null;
     }
 
-    fn sealDeferredSpecRequests(self: *Builder, graph: *InstGraph) Allocator.Error!void {
-        if (graph.deferred_templates.items.len == 0) return;
+    fn sealDeferredSpecRequestsFrom(self: *Builder, graph: *InstGraph, start_len: usize) Allocator.Error!void {
+        if (graph.deferred_templates.items.len == start_len) return;
 
         try graph.drainDirty();
         var sealer = GraphTypeFinals.init(graph);
         defer sealer.deinit();
 
-        for (graph.deferred_templates.items) |*request| {
+        for (graph.deferred_templates.items[start_len..]) |*request| {
             const sealed_fn_ty = try sealer.sealType(request.fn_ty);
             if (sealed_fn_ty == request.fn_ty) continue;
             request.fn_ty = sealed_fn_ty;
@@ -2922,8 +2986,20 @@ const Builder = struct {
     /// while its body lowered. Request function types are sealed before any
     /// callee body lowers, so every queued specialization key is stable.
     fn drainSpecRequests(self: *Builder, graph: *InstGraph) Allocator.Error!void {
-        try self.sealDeferredSpecRequests(graph);
-        while (graph.deferred_templates.pop()) |request| {
+        try self.drainSpecRequestsFrom(graph, 0);
+    }
+
+    /// Process only requests appended after `start_len`. A chained dispatch can
+    /// need the receiver operand's target-body return evidence before the
+    /// enclosing dispatch can identify its owner. Those operand-local requests
+    /// keep their graph-owned request type so the callee body's solved return
+    /// flows back to the receiver expression; full end-of-body draining seals
+    /// every remaining request before lowering it.
+    fn drainSpecRequestsFrom(self: *Builder, graph: *InstGraph, start_len: usize) Allocator.Error!void {
+        if (start_len == 0) try self.sealDeferredSpecRequestsFrom(graph, start_len);
+        while (graph.deferred_templates.items.len > start_len) {
+            const request = graph.deferred_templates.pop() orelse
+                Common.invariant("deferred template queue length changed while draining");
             _ = try self.lowerTemplateWithMonoFor(
                 request.template_ref,
                 self.moduleForId(request.module),
@@ -2932,6 +3008,8 @@ const Builder = struct {
                 request.fn_ty,
                 graph,
                 request.fn_id,
+                request.source_region_override,
+                request.current_entry_root,
             );
         }
     }
@@ -2959,7 +3037,9 @@ const Builder = struct {
         graph.assertNoDeferredRequestsBeforeBodySeal();
         const sealed_root = if (root_node) |node| try sealer.sealNode(node) else null;
         if (sealed_root) |ty| try graph.assertTypeHasNoGraphViews(ty);
+        const output_before = FinalBodyOutputCounts.fromProgram(self.program);
         try body_draft.sealCoreIntoProgram(self.program, graph, &sealer);
+        self.final_body_output_allowance.addDelta(output_before, FinalBodyOutputCounts.fromProgram(self.program));
         const sealed_extra = if (extra_ty) |ty| blk: {
             const sealed = try sealer.sealType(ty);
             try graph.assertTypeHasNoGraphViews(sealed);
@@ -6082,61 +6162,45 @@ const FinalIdOffsets = struct {
 };
 
 const FinalBodyOutputGuard = struct {
-    exprs_start: usize,
-    pats_start: usize,
-    locals_start: usize,
-    typed_locals_start: usize,
-    layout_requests_start: usize,
-    runtime_schema_requests_start: usize,
+    start: FinalBodyOutputCounts,
+    allowance_start: FinalBodyOutputCounts,
 
     const End = struct {
-        exprs: usize,
-        pats: usize,
-        locals: usize,
-        typed_locals: usize,
-        layout_requests: usize,
-        runtime_schema_requests: usize,
+        counts: FinalBodyOutputCounts,
+        allowance: FinalBodyOutputCounts,
     };
 
     fn begin(builder: *Builder) FinalBodyOutputGuard {
         return .{
-            .exprs_start = builder.program.exprs.items.len,
-            .pats_start = builder.program.pats.items.len,
-            .locals_start = builder.program.locals.items.len,
-            .typed_locals_start = builder.program.typed_locals.items.len,
-            .layout_requests_start = builder.program.layout_requests.items.len,
-            .runtime_schema_requests_start = builder.program.runtime_schema_requests.items.len,
+            .start = FinalBodyOutputCounts.fromProgram(builder.program),
+            .allowance_start = builder.final_body_output_allowance,
         };
     }
 
     fn end(_: FinalBodyOutputGuard, builder: *Builder) End {
         return .{
-            .exprs = builder.program.exprs.items.len,
-            .pats = builder.program.pats.items.len,
-            .locals = builder.program.locals.items.len,
-            .typed_locals = builder.program.typed_locals.items.len,
-            .layout_requests = builder.program.layout_requests.items.len,
-            .runtime_schema_requests = builder.program.runtime_schema_requests.items.len,
+            .counts = FinalBodyOutputCounts.fromProgram(builder.program),
+            .allowance = builder.final_body_output_allowance,
         };
     }
 
     fn assertNoFinalBodyOutput(self: FinalBodyOutputGuard, end_: End) void {
-        if (self.exprs_start != end_.exprs) {
+        if (end_.counts.exprs - self.start.exprs != end_.allowance.exprs - self.allowance_start.exprs) {
             Common.invariant("active Monotype lowering wrote final expressions instead of BodyDraftStore expressions");
         }
-        if (self.pats_start != end_.pats) {
+        if (end_.counts.pats - self.start.pats != end_.allowance.pats - self.allowance_start.pats) {
             Common.invariant("active Monotype lowering wrote final patterns instead of BodyDraftStore patterns");
         }
-        if (self.locals_start != end_.locals) {
+        if (end_.counts.locals - self.start.locals != end_.allowance.locals - self.allowance_start.locals) {
             Common.invariant("active Monotype lowering wrote final locals instead of BodyDraftStore locals");
         }
-        if (self.typed_locals_start != end_.typed_locals) {
+        if (end_.counts.typed_locals - self.start.typed_locals != end_.allowance.typed_locals - self.allowance_start.typed_locals) {
             Common.invariant("active Monotype lowering wrote final typed locals instead of BodyDraftStore typed locals");
         }
-        if (self.layout_requests_start != end_.layout_requests) {
+        if (end_.counts.layout_requests - self.start.layout_requests != end_.allowance.layout_requests - self.allowance_start.layout_requests) {
             Common.invariant("active Monotype lowering wrote final layout requests instead of BodyDraftStore layout requests");
         }
-        if (self.runtime_schema_requests_start != end_.runtime_schema_requests) {
+        if (end_.counts.runtime_schema_requests - self.start.runtime_schema_requests != end_.allowance.runtime_schema_requests - self.allowance_start.runtime_schema_requests) {
             Common.invariant("active Monotype lowering wrote final runtime schema requests instead of BodyDraftStore runtime schema requests");
         }
     }
@@ -6199,6 +6263,10 @@ const BodyContext = struct {
     /// The template body can be lowered from a lookup site, but diagnostics
     /// must point at the original const root.
     source_region_override: ?base.Region = null,
+    /// The specific compile-time entry root currently being lowered. Hoisted
+    /// constants only count as "own" roots for this exact entry, not for every
+    /// specialization of the same procedure template.
+    current_entry_root: ?checked.ComptimeRootId = null,
 
     const PatternLiteralGuard = struct {
         local: DraftLocalId,
@@ -6945,6 +7013,8 @@ const BodyContext = struct {
         child.owner_context_fn_key = self.owner_context_fn_key;
         child.current_fn_key = current_fn_key;
         child.comptime_exhaustiveness_depth = self.comptime_exhaustiveness_depth;
+        child.source_region_override = self.source_region_override;
+        child.current_entry_root = self.current_entry_root;
 
         var binder_iter = self.binders.iterator();
         while (binder_iter.next()) |entry| {
@@ -7564,6 +7634,11 @@ const BodyContext = struct {
         return try self.graph.importMono(ty);
     }
 
+    fn activeTypeFromType(self: *BodyContext, ty: Type.TypeId) Allocator.Error!Type.TypeId {
+        try self.graph.drainDirty();
+        return try self.activeTypeFromNode(try self.activeNodeFromType(ty));
+    }
+
     fn lowerTypeCell(self: *BodyContext, checked_ty: checked.CheckedTypeId) Allocator.Error!DraftTypeCell {
         return DraftTypeCell.fromGraphNode(try self.lowerTypeNode(checked_ty));
     }
@@ -7656,6 +7731,7 @@ const BodyContext = struct {
             index -= 1;
             if (self.decl_scopes.items[index].get(address)) |existing| return existing;
         }
+        if (self.decl_scopes.items.len != 0) return null;
         return self.node_map.get(address);
     }
 
@@ -7702,7 +7778,7 @@ const BodyContext = struct {
             } }),
             .record_unbound => |fields| try self.graph.newNode(.{ .record = .{
                 .fields = try self.instFields(fields),
-                .ext = try self.graph.newNode(.empty_record),
+                .ext = try self.graph.newNode(.{ .unresolved = InstVariable.row(.empty_record) }),
             } }),
             .record => |record| try self.graph.newNode(.{ .record = .{
                 .fields = try self.instFields(record.fields),
@@ -7831,12 +7907,12 @@ const BodyContext = struct {
         return entries;
     }
 
-    /// Instantiate a nominal instance's backing. A local declaration's
-    /// formals and backing share one set of checked roots across every
-    /// instance of the nominal, so the backing instantiates inside a fresh
-    /// scope seeded with this instance's argument nodes: two instances of the
-    /// same nominal at different arguments stay independent, and the
-    /// recursive uses inside the backing resolve through the scope chain.
+    /// Instantiate a nominal instance's backing. A declaration-backed nominal's
+    /// formals and backing share one set of checked roots across every instance
+    /// of the nominal, so the backing instantiates inside a fresh scope seeded
+    /// with this instance's argument nodes: two instances of the same nominal at
+    /// different arguments stay independent, and the recursive uses inside the
+    /// backing resolve through the scope chain.
     fn instNominalBackingNode(
         self: *BodyContext,
         nominal: checked.CheckedNominalType,
@@ -7844,17 +7920,41 @@ const BodyContext = struct {
     ) Allocator.Error!NodeId {
         const source = self.nominalInstantiationSource(nominal) orelse
             return try self.instNode(self.nominalBackingRoot(nominal));
-        if (source.declaration.formalArgs(self.view.types).len != args.len) {
+        return try self.instNominalDeclarationBackingNode(source, args);
+    }
+
+    fn instNominalDeclarationBackingNode(
+        self: *BodyContext,
+        source: NominalInstantiationSource,
+        args: []NodeId,
+    ) Allocator.Error!NodeId {
+        if (moduleBytesEqual(source.view.key.bytes, self.view.key.bytes)) {
+            return try self.instNominalDeclarationBackingNodeInCurrentView(source.declaration, args);
+        }
+        var source_ctx = try BodyContext.init(self.allocator, self.builder, source.view, self.owner_template, self.graph, self.draft);
+        defer source_ctx.deinit();
+        source_ctx.owner_context_fn_key = self.owner_context_fn_key;
+        source_ctx.current_fn_key = self.current_fn_key;
+        return try source_ctx.instNominalDeclarationBackingNodeInCurrentView(source.declaration, args);
+    }
+
+    fn instNominalDeclarationBackingNodeInCurrentView(
+        self: *BodyContext,
+        declaration: checked.CheckedNominalDeclaration,
+        args: []NodeId,
+    ) Allocator.Error!NodeId {
+        const formal_args = declaration.formalArgs(self.view.types);
+        if (formal_args.len != args.len) {
             Common.invariant("checked nominal declaration arity differed from nominal type use");
         }
         var scope = std.AutoHashMap(CheckedTypeAddress, NodeId).init(self.allocator);
         defer scope.deinit();
-        for (source.declaration.formalArgs(self.view.types), args) |formal, arg| {
-            try scope.put(self.typeAddress(self.checkedTypeInCurrentView(source.view, formal)), arg);
+        for (formal_args, args) |formal, arg| {
+            try scope.put(self.typeAddress(formal), arg);
         }
         try self.decl_scopes.append(self.allocator, &scope);
         defer _ = self.decl_scopes.pop();
-        return try self.instNode(self.nominalBackingRoot(nominal));
+        return try self.instNode(declaration.backing);
     }
 
     const NominalInstantiationSource = struct {
@@ -7871,13 +7971,37 @@ const BodyContext = struct {
                 .view = self.view,
                 .declaration = self.view.types.nominalDeclarationById(id),
             },
-            .local_box_payload_capability,
-            .imported_declaration,
-            .imported_box_payload_capability,
-            => null,
-            .builtin,
-            .opaque_without_backing,
-            => null,
+            .local_box_payload_capability => blk: {
+                const lookup = self.builder.nominalDeclarationFor(self.view, nominal) orelse
+                    Common.invariant("local box-payload nominal had no declaration source");
+                break :blk .{
+                    .view = lookup.view,
+                    .declaration = lookup.declaration,
+                };
+            },
+            .imported_declaration => |imported| blk: {
+                const source_view = self.builder.moduleForId(checked.importedNominalDeclarationModuleId(imported));
+                break :blk .{
+                    .view = source_view,
+                    .declaration = source_view.types.nominalDeclarationById(imported.declaration),
+                };
+            },
+            .imported_box_payload_capability => blk: {
+                const lookup = self.builder.nominalDeclarationFor(self.view, nominal) orelse
+                    Common.invariant("imported box-payload nominal had no declaration source");
+                break :blk .{
+                    .view = lookup.view,
+                    .declaration = lookup.declaration,
+                };
+            },
+            .builtin => blk: {
+                const lookup = self.builder.nominalDeclarationFor(self.view, nominal) orelse break :blk null;
+                break :blk .{
+                    .view = lookup.view,
+                    .declaration = lookup.declaration,
+                };
+            },
+            .opaque_without_backing => null,
         };
     }
 
@@ -7948,11 +8072,14 @@ const BodyContext = struct {
             .entry_wrapper => |wrapper_id| {
                 const wrapper = self.view.entry_wrappers.get(wrapper_id);
                 const root = self.view.compile_time_roots.root(wrapper.root);
+                const saved_entry_root = self.current_entry_root;
+                defer self.current_entry_root = saved_entry_root;
+                self.current_entry_root = wrapper.root;
                 const saved_source_region_override = self.source_region_override;
                 defer self.source_region_override = saved_source_region_override;
                 self.source_region_override = switch (root.kind) {
-                    .hoisted_constant => self.view.bodies.expr(root.expr).source_region,
                     .constant,
+                    .hoisted_constant,
                     .callable_binding,
                     .expect,
                     .numeral_conversion,
@@ -8014,7 +8141,7 @@ const BodyContext = struct {
         return .{
             .args = lowered.args,
             .body = lowered.body,
-            .ret = try self.draftTypeCell(fn_data.ret),
+            .ret = lowered.ret,
         };
     }
 
@@ -8087,12 +8214,19 @@ const BodyContext = struct {
         while (remaining > 0) {
             remaining -= 1;
             const arg_let = arg_lets.items[remaining];
-            body = try self.addExpr(.{ .ty = ret_ty, .data = .{ .let_ = .{
+            const body_ty = try self.exprType(body);
+            body = try self.addExpr(.{ .ty = body_ty, .data = .{ .let_ = .{
                 .bind = arg_let.pat,
                 .value = arg_let.value,
                 .rest = body,
             } } });
         }
+
+        const body_ty = try self.exprType(body);
+        try self.graph.unify(try self.graph.importMono(ret_ty), try self.graph.importMono(body_ty));
+        try self.graph.drainDirty();
+        const solved_ret_ty = try self.activeTypeFromType(ret_ty);
+        self.draft.exprs.items[@intFromEnum(body)].ty = try self.draftTypeCell(solved_ret_ty);
 
         for (args) |*arg| {
             arg.ty = try self.localType(arg.local);
@@ -8101,6 +8235,7 @@ const BodyContext = struct {
         return .{
             .args = try self.addTypedLocalSpan(args),
             .body = body,
+            .ret = try self.draftTypeCell(solved_ret_ty),
         };
     }
 
@@ -8274,6 +8409,10 @@ const BodyContext = struct {
     }
 
     fn loweringOwnHoistedConstRoot(self: *BodyContext, entry: checked.HoistedConstEntry) bool {
+        if (self.current_entry_root) |root| {
+            return entry.root == root;
+        }
+
         const wrapper = self.view.entry_wrappers.lookupByRoot(entry.root) orelse
             Common.invariant("hoisted const root had no checked entry wrapper");
         return names.procedureTemplateRefEql(wrapper.template, self.owner_template);
@@ -8286,9 +8425,18 @@ const BodyContext = struct {
     ) Allocator.Error!DraftExprId {
         try self.constrainTypeToMono(entry.checked_type, ty);
         const template = self.view.const_templates.get(entry.const_ref);
+        const source_region = self.hoistedConstSourceRegion(entry);
         return switch (template.state) {
-            .stored_const => |stored| try self.restoreConstNodeAtType(self.view, self.view, stored.node, ty),
-            .eval_template => |eval| try self.lowerConstEvalTemplateUse(self.view, eval, ty, self.hoistedConstSourceRegion(entry)),
+            .stored_const => |stored| blk: {
+                const saved_loc = self.builder.program.current_loc;
+                defer self.builder.program.current_loc = saved_loc;
+                const saved_region = self.builder.program.current_region;
+                defer self.builder.program.current_region = saved_region;
+                self.builder.program.current_loc = try self.sourceLocFor(source_region);
+                self.builder.program.current_region = source_region;
+                break :blk try self.restoreConstNodeAtType(self.view, self.view, stored.node, ty);
+            },
+            .eval_template => |eval| try self.lowerConstEvalTemplateUse(self.view, eval, ty, source_region, entry.root),
             .reserved => Common.invariant("reserved hoisted const template reached Monotype"),
         };
     }
@@ -8586,7 +8734,9 @@ const BodyContext = struct {
             },
             .fields_rename_fields => blk: {
                 if (args.len != 2 or arg_tys.len != 2) Common.invariant("FieldNames.rename_fields reached Monotype with an unexpected arity");
-                if (self.generatedFieldNamesBackingValueFieldNames(arg_tys[0]) != null) break :blk arg_tys[0];
+                if (self.generatedFieldNamesBackingValueFieldNames(arg_tys[0]) != null) {
+                    break :blk try self.sealedGeneratedOpaqueEvidenceType(arg_tys[0]);
+                }
                 if (expected_ret_ty) |expected| break :blk expected;
                 break :blk try self.lowerTypeView(checked_ret_ty);
             },
@@ -9441,8 +9591,8 @@ const BodyContext = struct {
             break :blk try self.addLocal(self.builder.symbols.fresh(), arg_tys[1]);
         } else null;
 
-        var iter_expr = if (self.generatedFieldNamesBackingFieldNames(arg_tys[0], field_handle_ty, fields.len)) |backing_fields|
-            try self.lowerFieldNamesValueIter(
+        var iter_expr = if (self.generatedFieldNamesBackingFieldNames(arg_tys[0], field_handle_ty, fields.len)) |backing_fields| blk: {
+            break :blk try self.lowerFieldNamesValueIter(
                 backing_fields,
                 arg_tys[0],
                 fields_local,
@@ -9456,9 +9606,9 @@ const BodyContext = struct {
                 arg_tys,
                 checked_source_ty,
                 checked_expr_id,
-            )
-        else if (mode == .all)
-            try self.lowerFieldNamesStaticIterFromIndex(
+            );
+        } else if (mode == .all) blk: {
+            break :blk try self.lowerFieldNamesStaticIterFromIndex(
                 fields,
                 0,
                 field_handle_ty,
@@ -9469,9 +9619,9 @@ const BodyContext = struct {
                 step_shape.ret,
                 checked_source_ty,
                 checked_expr_id,
-            )
-        else
-            try self.lowerFieldNamesForSizeIter(
+            );
+        } else blk: {
+            break :blk try self.lowerFieldNamesForSizeIter(
                 fields,
                 field_handle_ty,
                 ret_ty,
@@ -9484,6 +9634,7 @@ const BodyContext = struct {
                 checked_source_ty,
                 checked_expr_id,
             );
+        };
         if (mode == .for_size) {
             const size_value = try self.lowerParseIntrinsicArgAtType(args[1], arg_tys[1]);
             iter_expr = try self.wrapLet(size_local.?, arg_tys[1], size_value, iter_expr, ret_ty);
@@ -9587,6 +9738,11 @@ const BodyContext = struct {
 
     fn isGeneratedSpecializationEvidenceType(self: *BodyContext, ty: Type.TypeId) bool {
         return self.isGeneratedFieldNamesEvidenceType(ty) or self.isGeneratedParseTagUnionSpecEvidenceType(ty);
+    }
+
+    fn sealedGeneratedOpaqueEvidenceType(self: *BodyContext, ty: Type.TypeId) Allocator.Error!Type.TypeId {
+        if (!self.isGeneratedOpaqueEvidenceType(ty)) return ty;
+        return try self.graph.sealType(ty);
     }
 
     fn functionHasGeneratedOpaqueEvidence(self: *BodyContext, fn_ty: Type.TypeId) bool {
@@ -12485,6 +12641,8 @@ const BodyContext = struct {
             defer call_ctx.deinit();
             call_ctx.owner_context_fn_key = self.owner_context_fn_key;
             call_ctx.current_fn_key = self.current_fn_key;
+            call_ctx.source_region_override = self.source_region_override;
+            call_ctx.current_entry_root = self.current_entry_root;
 
             const source_fn_ty = self.directCallInstantiationSourceFnType(target, call.source_fn_ty_payload);
             const mono_fn_ty = try call_ctx.instantiateCallTypeFromCallerAtType(source_fn_ty, self, checked_ret_ty, call.args, expected_ret_ty);
@@ -12506,11 +12664,13 @@ const BodyContext = struct {
             };
         }
 
-        const fn_ty = (try self.indirectCalleeMonoType(call.func)) orelse fn_ty: {
+        const fn_ty = (try self.indirectCalleeMonoType(call.func, call.args, expected_ret_ty)) orelse fn_ty: {
             var call_ctx = try BodyContext.init(self.allocator, self.builder, self.view, self.owner_template, self.graph, self.draft);
             defer call_ctx.deinit();
             call_ctx.owner_context_fn_key = self.owner_context_fn_key;
             call_ctx.current_fn_key = self.current_fn_key;
+            call_ctx.source_region_override = self.source_region_override;
+            call_ctx.current_entry_root = self.current_entry_root;
 
             break :fn_ty try call_ctx.instantiateCallTypeFromCallerAtType(call.source_fn_ty_payload, self, checked_ret_ty, call.args, expected_ret_ty);
         };
@@ -12530,19 +12690,40 @@ const BodyContext = struct {
         };
     }
 
-    fn indirectCalleeMonoType(self: *BodyContext, checked_func: checked.CheckedExprId) Allocator.Error!?Type.TypeId {
+    fn indirectCalleeMonoType(
+        self: *BodyContext,
+        checked_func: checked.CheckedExprId,
+        checked_args: []const checked.CheckedExprId,
+        expected_ret_ty: ?Type.TypeId,
+    ) Allocator.Error!?Type.TypeId {
         const expr = self.view.bodies.expr(checked_func);
         return switch (expr.data) {
             .lookup_local,
             .lookup_external,
             .lookup_required,
-            => try self.localCalleeMonoType(checked_func),
-            .field_access => try self.lowerExprType(checked_func),
+            => try self.localCalleeMonoType(checked_func, checked_args, expected_ret_ty),
+            .field_access => |field| blk: {
+                switch (self.view.bodies.expr(field.receiver).data) {
+                    .lookup_required => {},
+                    else => break :blk null,
+                }
+                const field_ty = try self.lowerExprType(checked_func);
+                if (expected_ret_ty) |expected| {
+                    const fn_data = self.builder.functionShape(field_ty, "checked field callee type was not a function");
+                    if (!self.sameType(expected, fn_data.ret)) break :blk null;
+                }
+                break :blk field_ty;
+            },
             else => null,
         };
     }
 
-    fn localCalleeMonoType(self: *BodyContext, checked_func: checked.CheckedExprId) Allocator.Error!?Type.TypeId {
+    fn localCalleeMonoType(
+        self: *BodyContext,
+        checked_func: checked.CheckedExprId,
+        checked_args: []const checked.CheckedExprId,
+        expected_ret_ty: ?Type.TypeId,
+    ) Allocator.Error!?Type.TypeId {
         const expr = self.view.bodies.expr(checked_func);
         const maybe_ref = switch (expr.data) {
             .lookup_local => |lookup| lookup.resolved,
@@ -12552,7 +12733,19 @@ const BodyContext = struct {
         };
         const ref_id = maybe_ref orelse Common.invariant("checked callee lookup reached Monotype without resolved value ref");
         const local_id = self.currentLocalForResolvedValue(ref_id) orelse return null;
-        return try self.localType(local_id);
+        const fn_ty = try self.localType(local_id);
+        const fn_data = self.builder.functionShape(fn_ty, "checked local callee type was not a function");
+        const arg_tys = self.builder.program.types.span(fn_data.args);
+        if (arg_tys.len != checked_args.len) Common.invariant("checked local callee arity differed from call arity");
+        if (expected_ret_ty) |expected| {
+            if (!self.sameType(expected, fn_data.ret)) return null;
+        }
+        for (checked_args) |checked_arg| {
+            if (try self.callArgumentMonoType(checked_arg, null)) |evidence_ty| {
+                if (self.isGeneratedOpaqueEvidenceType(evidence_ty)) return null;
+            }
+        }
+        return fn_ty;
     }
 
     fn directCallInstantiationSourceFnType(
@@ -12652,10 +12845,11 @@ const BodyContext = struct {
                 else
                     try self.graph.sealNode(try self.instNode(formal_ty));
             }
-            return try self.builder.program.types.add(.{ .func = .{
+            const generated_fn_ty = try self.builder.program.types.add(.{ .func = .{
                 .args = try self.builder.program.types.addSpan(args),
                 .ret = try self.graph.sealNode(try self.instNode(function.ret)),
             } });
+            return generated_fn_ty;
         }
         return try self.activeTypeFromNode(fn_node);
     }
@@ -12966,7 +13160,7 @@ const BodyContext = struct {
         expected_ret_ty: ?Type.TypeId,
     ) Allocator.Error!?Type.TypeId {
         if (call.direct_target == null) {
-            if (try self.indirectCalleeMonoType(call.func)) |fn_ty| {
+            if (try self.indirectCalleeMonoType(call.func, call.args, expected_ret_ty)) |fn_ty| {
                 const ret_ty = self.functionReturnType(fn_ty);
                 if (expected_ret_ty) |expected| {
                     if (!self.sameType(expected, ret_ty)) {
@@ -12983,6 +13177,8 @@ const BodyContext = struct {
             defer call_ctx.deinit();
             call_ctx.owner_context_fn_key = self.owner_context_fn_key;
             call_ctx.current_fn_key = self.current_fn_key;
+            call_ctx.source_region_override = self.source_region_override;
+            call_ctx.current_entry_root = self.current_entry_root;
 
             const mono_fn_ty = try call_ctx.instantiateCallTypeFromCallerAtType(call.source_fn_ty_payload, self, checked_ret_ty, call.args, expected_ret_ty);
             return call_ctx.functionReturnType(mono_fn_ty);
@@ -12992,6 +13188,8 @@ const BodyContext = struct {
         defer call_ctx.deinit();
         call_ctx.owner_context_fn_key = self.owner_context_fn_key;
         call_ctx.current_fn_key = self.current_fn_key;
+        call_ctx.source_region_override = self.source_region_override;
+        call_ctx.current_entry_root = self.current_entry_root;
 
         const source_fn_ty = self.directCallInstantiationSourceFnType(call.direct_target.?, call.source_fn_ty_payload);
         const mono_fn_ty = try call_ctx.instantiateCallTypeFromCallerAtType(source_fn_ty, self, checked_ret_ty, call.args, expected_ret_ty);
@@ -13332,7 +13530,7 @@ const BodyContext = struct {
         return switch (template.state) {
             .stored_const => |stored| try self.restoreConstNodeAtType(store_view, self.view, stored.node, ty),
             .reserved => Common.invariant("reserved checked const template reached Monotype"),
-            .eval_template => |eval| try self.lowerConstEvalTemplateUse(store_view, eval, ty, null),
+            .eval_template => |eval| try self.lowerConstEvalTemplateUse(store_view, eval, ty, null, null),
         };
     }
 
@@ -13342,6 +13540,7 @@ const BodyContext = struct {
         eval: checked.ConstEvalTemplate,
         ty: Type.TypeId,
         source_region_override: ?base.Region,
+        current_entry_root: ?checked.ComptimeRootId,
     ) Allocator.Error!DraftExprId {
         const body = store_view.checked_const_bodies.get(eval.body);
         const entry_template = store_view.templates.get(eval.entry_template.template);
@@ -13362,6 +13561,7 @@ const BodyContext = struct {
         var body_ctx = try BodyContext.init(self.allocator, self.builder, store_view, eval.entry_template, self.graph, self.draft);
         defer body_ctx.deinit();
         body_ctx.source_region_override = source_region_override;
+        body_ctx.current_entry_root = current_entry_root;
         const root_fn_key = Ast.fnTemplateDigest(wrapper_template, &self.builder.program.types, &self.builder.program.names);
         body_ctx.owner_context_fn_key = root_fn_key;
         body_ctx.current_fn_key = root_fn_key;
@@ -14661,14 +14861,16 @@ const BodyContext = struct {
         defer call_ctx.deinit();
         call_ctx.owner_context_fn_key = self.owner_context_fn_key;
         call_ctx.current_fn_key = self.current_fn_key;
+        call_ctx.source_region_override = self.source_region_override;
+        call_ctx.current_entry_root = self.current_entry_root;
 
-        const callable_mono_ty = try call_ctx.instantiateDispatchPlanCallTypeFromCaller(plan.callable_ty, self, checked_ret_ty, plan_args, expected_ret_ty);
-        const plan_fn_data = self.builder.functionShape(callable_mono_ty, "checked dispatch plan had a non-function type");
+        var callable_mono_ty = try call_ctx.instantiateDispatchPlanCallTypeFromCaller(plan.callable_ty, self, checked_ret_ty, plan_args, expected_ret_ty);
+        var plan_fn_data = self.builder.functionShape(callable_mono_ty, "checked dispatch plan had a non-function type");
         const plan_arg_tys = try self.allocator.dupe(Type.TypeId, self.builder.program.types.span(plan_fn_data.args));
         defer self.allocator.free(plan_arg_tys);
-        const plan_ret_ty = plan_fn_data.ret;
+        var plan_ret_ty = plan_fn_data.ret;
 
-        const dispatcher_ty = try self.dispatcherMonoType(plan, plan_arg_tys);
+        var dispatcher_ty = try self.dispatcherMonoType(plan, plan_arg_tys);
         // A dispatcher slot fed only by another method dispatch stays
         // unresolved until that operand's target resolves. Lowering the
         // dispatcher operand first supplies the receiver's solved type; the
@@ -14678,10 +14880,47 @@ const BodyContext = struct {
         if (owner_is_null) {
             switch (plan.dispatcher) {
                 .arg => |index| {
+                    const deferred_top = self.graph.deferred_templates.items.len;
+                    const lowered = try self.lowerDispatchOperandAtType(plan_args[index], plan_arg_tys[index]);
+                    try self.builder.drainSpecRequestsFrom(self.graph, deferred_top);
+                    switch (plan_args[index]) {
+                        .checked_expr => |expr| _ = try self.callArgumentMonoType(expr, null),
+                        .generated_interpolation_iter,
+                        .generated_numeral,
+                        .generated_quote,
+                        => {},
+                    }
+                    var lowered_ty = try self.exprType(lowered);
+                    if (methodOwnerFromType(&self.builder.program.types, lowered_ty) == null and
+                        methodOwnerFromType(&self.builder.program.types, plan_ret_ty) != null and
+                        plan.result_mode == .value)
+                    {
+                        switch (plan_args[index]) {
+                            .checked_expr => |expr| {
+                                try self.constrainTypeToMono(self.view.bodies.expr(expr).ty, plan_ret_ty);
+                                lowered_ty = try self.activeTypeFromType(plan_ret_ty);
+                                self.draft.exprs.items[@intFromEnum(lowered)].ty = try self.draftTypeCell(lowered_ty);
+                            },
+                            .generated_interpolation_iter,
+                            .generated_numeral,
+                            .generated_quote,
+                            => {},
+                        }
+                    }
                     pre_lowered = .{
                         .index = index,
-                        .expr = try self.lowerDispatchOperandAtType(plan_args[index], plan_arg_tys[index]),
+                        .expr = lowered,
                     };
+                    callable_mono_ty = try call_ctx.activeTypeFromNode(try call_ctx.instNode(plan.callable_ty));
+                    plan_fn_data = self.builder.functionShape(callable_mono_ty, "checked dispatch plan had a non-function type");
+                    const refreshed_args = self.builder.program.types.span(plan_fn_data.args);
+                    if (refreshed_args.len != plan_arg_tys.len) {
+                        Common.invariant("checked dispatch plan arity changed after dispatcher pre-lowering");
+                    }
+                    @memcpy(plan_arg_tys, refreshed_args);
+                    plan_arg_tys[index] = lowered_ty;
+                    plan_ret_ty = plan_fn_data.ret;
+                    dispatcher_ty = lowered_ty;
                 },
                 .type_only => {},
             }
@@ -14721,19 +14960,23 @@ const BodyContext = struct {
         const resolved = lookup.?;
         const target_mono_ty = try self.methodTargetMonoTypeFromPlan(resolved, &call_ctx, plan.callable_ty, expected_ret_ty);
         try call_ctx.constrainTypeToMono(plan.callable_ty, target_mono_ty);
-        if (!self.sameType(callable_mono_ty, target_mono_ty)) {
+        const refreshed_target_mono_ty = try self.activeTypeFromType(target_mono_ty);
+        if (!self.sameType(callable_mono_ty, refreshed_target_mono_ty)) {
             Common.invariant("checked dispatch target callable type differed from dispatch plan callable type");
         }
-        const fn_data = self.builder.functionShape(target_mono_ty, "checked dispatch target had a non-function type");
+        const fn_data = self.builder.functionShape(refreshed_target_mono_ty, "checked dispatch target had a non-function type");
         try self.constrainTypeToMono(checked_ret_ty, fn_data.ret);
+        const call_data = try self.lowerResolvedDispatch(plan, resolved, refreshed_target_mono_ty, self, pre_lowered);
+        const ret_ty = try self.activeTypeFromType(fn_data.ret);
         if (expected_ret_ty) |expected| {
-            if (!self.sameType(expected, fn_data.ret)) Common.invariant("checked dispatch expression lowered at a type different from its call operand type");
+            const expected_ty = try self.activeTypeFromType(expected);
+            if (!self.sameType(expected_ty, ret_ty)) Common.invariant("checked dispatch expression lowered at a type different from its call operand type");
         }
         const call_expr = try self.addExpr(.{
-            .ty = fn_data.ret,
-            .data = try self.lowerResolvedDispatch(plan, resolved, target_mono_ty, self, pre_lowered),
+            .ty = ret_ty,
+            .data = call_data,
         });
-        return try self.applyDispatchResultMode(plan.result_mode, call_expr, fn_data.ret);
+        return try self.applyDispatchResultMode(plan.result_mode, call_expr, ret_ty);
     }
 
     fn applyDispatchResultMode(
@@ -14785,6 +15028,8 @@ const BodyContext = struct {
         defer call_ctx.deinit();
         call_ctx.owner_context_fn_key = self.owner_context_fn_key;
         call_ctx.current_fn_key = self.current_fn_key;
+        call_ctx.source_region_override = self.source_region_override;
+        call_ctx.current_entry_root = self.current_entry_root;
 
         const callable_mono_ty = try call_ctx.instantiateNumeralPlanCallType(plan.callable_ty, self, checked_ret_ty, target_ty, plan_args);
         const plan_fn_data = self.builder.functionShape(callable_mono_ty, "checked from_numeral plan had a non-function type");
@@ -15070,6 +15315,8 @@ const BodyContext = struct {
         defer call_ctx.deinit();
         call_ctx.owner_context_fn_key = self.owner_context_fn_key;
         call_ctx.current_fn_key = self.current_fn_key;
+        call_ctx.source_region_override = self.source_region_override;
+        call_ctx.current_entry_root = self.current_entry_root;
 
         const plan_args = plan.argsSlice(self.view.static_dispatch_plans);
         const callable_mono_ty = try call_ctx.instantiateDispatchPlanCallTypeFromCaller(plan.callable_ty, self, checked_ret_ty, plan_args, expected_ret_ty);
@@ -15842,6 +16089,7 @@ const BodyContext = struct {
             .builtin_owner = template.builtin_owner,
             .args = try self.builder.program.types.addSpan(args),
             .backing = .{ .ty = backing_ty, .use = template.backing.?.use },
+            .declared_order = template.declared_order,
         } });
     }
 
@@ -18704,6 +18952,8 @@ const BodyContext = struct {
         defer call_ctx.deinit();
         call_ctx.owner_context_fn_key = self.owner_context_fn_key;
         call_ctx.current_fn_key = self.current_fn_key;
+        call_ctx.source_region_override = self.source_region_override;
+        call_ctx.current_entry_root = self.current_entry_root;
 
         const callable_mono_ty = try call_ctx.instantiateIteratorPlanCallTypeFromCaller(plan.callable_ty, self, plan_args, loop_iterator, expected_ret_ty);
         const plan_fn_data = self.builder.functionShape(callable_mono_ty, "checked iterator dispatch plan had a non-function type");

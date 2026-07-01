@@ -281,15 +281,15 @@ test "imported checked bodies restore their module's hoisted constants" {
     try tmp_dir.dir.writeFile(std.testing.io, .{
         .sub_path = "Helper.roc",
         .data =
-        \\module [helper, base]
+        \\Helper := [].{
+        \\    base = 41.I64
         \\
-        \\base = 41.I64
-        \\
-        \\helper : I64 -> I64
-        \\helper = |arg| {
-        \\    x = 41.I64
-        \\    y = x + 1.I64
-        \\    y + arg
+        \\    helper : I64 -> I64
+        \\    helper = |arg| {
+        \\        x = 41.I64
+        \\        y = x + 1.I64
+        \\        y + arg
+        \\    }
         \\}
         ,
     });

@@ -141,10 +141,23 @@ pub fn process(
             var index = AtomicUsize.init(0);
             const fixed_stack_thread_count: usize = 16;
             var threads: [fixed_stack_thread_count]Thread = undefined;
+            var stack_threads_started: usize = 0;
             var extra_threads: std.array_list.Managed(Thread) = undefined;
+            const has_extra_threads = thread_count > fixed_stack_thread_count;
 
-            if (thread_count > fixed_stack_thread_count) {
+            if (has_extra_threads) {
                 extra_threads = std.array_list.Managed(Thread).init(allocator);
+            }
+            errdefer {
+                for (threads[0..stack_threads_started]) |thread| {
+                    thread.join();
+                }
+                if (has_extra_threads) {
+                    for (extra_threads.items) |thread| {
+                        thread.join();
+                    }
+                    extra_threads.deinit();
+                }
             }
 
             for (0..thread_count) |i| {
@@ -158,15 +171,20 @@ pub fn process(
                 };
                 if (i < threads.len) {
                     threads[i] = try Thread.spawn(.{}, workerThread, .{ T, ctx });
+                    stack_threads_started += 1;
                 } else {
-                    try extra_threads.append(try Thread.spawn(.{}, workerThread, .{ T, ctx }));
+                    const thread = try Thread.spawn(.{}, workerThread, .{ T, ctx });
+                    extra_threads.append(thread) catch |err| {
+                        thread.join();
+                        return err;
+                    };
                 }
             }
 
-            for (threads[0..@min(thread_count, fixed_stack_thread_count)]) |thread| {
+            for (threads[0..stack_threads_started]) |thread| {
                 thread.join();
             }
-            if (thread_count > fixed_stack_thread_count) {
+            if (has_extra_threads) {
                 for (extra_threads.items) |thread| {
                     thread.join();
                 }

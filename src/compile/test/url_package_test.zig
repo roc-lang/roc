@@ -26,7 +26,7 @@ test "URL dependency resolves from a warm cache with no network, and its modules
     });
     try tmp_dir.dir.writeFile(io, .{
         .sub_path = "cache/" ++ fake_hash ++ "/Util.roc",
-        .data = "module [add_one]\n\nadd_one : I64 -> I64\nadd_one = |n| n + 1\n",
+        .data = "add_one : I64 -> I64\nadd_one = |n| n + 1\n",
     });
 
     // A local package depending on the URL.

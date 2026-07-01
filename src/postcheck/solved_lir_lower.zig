@@ -237,7 +237,9 @@ const FnEntry = struct {
     spec: FnSpec,
     symbol: Common.Symbol,
     source: ?Mono.FnTemplate,
+    args: Type.Span,
     ret: Type.TypeId,
+    capture_arg_ty: ?Type.TypeId,
     proc: ?LIR.LirProcSpecId,
 };
 
@@ -674,13 +676,29 @@ const Lowerer = struct {
             .func => |func| func,
             else => Common.invariant("direct Lambda Mono function table contains a non-function type"),
         };
+        const solved_args = self.solved.types.span(func.args);
+        const lifted_args = self.solved.lifted.typedLocalSpan(source_fn.args);
+        if (solved_args.len != lifted_args.len) Common.invariant("direct Lambda Mono function arity changed after Lambda Solved");
+
+        const arg_tys = try self.allocator.alloc(Type.TypeId, solved_args.len);
+        defer self.allocator.free(arg_tys);
+        for (solved_args, 0..) |arg_ty, i| {
+            arg_tys[i] = try self.lowerType(arg_ty);
+        }
+
         const ret_ty = try self.lowerType(func.ret);
+        const capture_arg_ty = switch (spec.abi) {
+            .finite => spec.capture_ty,
+            .erased => try self.erasedCapturePtrType(),
+        };
 
         self.fn_entries.items[@intFromEnum(fn_id)] = .{
             .spec = spec,
             .symbol = symbol,
             .source = source_fn.source,
+            .args = try self.types.addSpan(arg_tys),
             .ret = ret_ty,
+            .capture_arg_ty = capture_arg_ty,
             .proc = null,
         };
         return fn_id;
@@ -708,31 +726,19 @@ const Lowerer = struct {
         var entry = self.fn_entries.items[index];
         const spec = entry.spec;
         const source_fn = self.solved.lifted.fns.items[@intFromEnum(spec.source)];
-        const func = switch (self.solved.types.rootContent(spec.solved_fn_ty)) {
-            .func => |func| func,
-            else => Common.invariant("direct Lambda Mono function table contains a non-function type"),
-        };
-        const solved_args = self.solved.types.span(func.args);
+        const arg_tys = self.types.span(entry.args);
         const lifted_args = self.solved.lifted.typedLocalSpan(source_fn.args);
-        if (solved_args.len != lifted_args.len) Common.invariant("direct Lambda Mono function arity changed after Lambda Solved");
+        if (arg_tys.len != lifted_args.len) Common.invariant("direct Lambda Mono function arity changed after Lambda Solved");
 
-        const arg_count = lifted_args.len + switch (spec.abi) {
-            .finite => if (spec.capture_ty == null) @as(usize, 0) else 1,
-            .erased => 1,
-        };
+        const arg_count = lifted_args.len + if (entry.capture_arg_ty == null) @as(usize, 0) else 1;
         const arg_locals = try self.allocator.alloc(LIR.LocalId, arg_count);
         defer self.allocator.free(arg_locals);
 
-        for (solved_args, 0..) |arg_ty, i| {
-            arg_locals[i] = try self.addLocalForLayout(try self.layoutOfType(try self.lowerType(arg_ty)));
+        for (arg_tys, 0..) |arg_ty, i| {
+            arg_locals[i] = try self.addLocalForLayout(try self.layoutOfType(arg_ty));
         }
-        switch (spec.abi) {
-            .finite => if (spec.capture_ty) |capture_ty| {
-                arg_locals[lifted_args.len] = try self.addLocalForLayout(try self.layoutOfType(capture_ty));
-            },
-            .erased => {
-                arg_locals[lifted_args.len] = try self.addLocalForLayout(try self.layoutOfType(try self.erasedCapturePtrType()));
-            },
+        if (entry.capture_arg_ty) |capture_arg_ty| {
+            arg_locals[lifted_args.len] = try self.addLocalForLayout(try self.layoutOfType(capture_arg_ty));
         }
 
         const saved_loc = self.result.store.current_loc;
@@ -1836,14 +1842,22 @@ const Lowerer = struct {
     }
 
     fn verifyFnEntriesMatch(self: *Lowerer, materialized: *const LambdaMono.Program) Common.LowerError!void {
-        if (self.fn_entries.items.len > materialized.fns.items.len) {
+        var reachable_count: usize = 0;
+        for (self.fn_reachable.items) |reachable| {
+            if (reachable) reachable_count += 1;
+        }
+        if (reachable_count > materialized.fns.items.len) {
             Common.invariant("debug Lambda Mono verifier saw too many direct function specs");
         }
         const used = try self.allocator.alloc(bool, materialized.fns.items.len);
         defer self.allocator.free(used);
         @memset(used, false);
 
-        for (self.fn_entries.items) |entry| {
+        for (self.fn_entries.items, 0..) |entry, entry_index| {
+            // Direct LIR keeps type-level entries so callable layouts and
+            // ConstStore metadata can refer to source templates without forcing
+            // every queued Lambda Mono function into a LIR proc.
+            if (!self.fn_reachable.items[entry_index]) continue;
             for (materialized.fns.items, 0..) |fn_, index| {
                 if (used[index]) continue;
                 if (try self.fnEntryMatchesMaterialized(entry, fn_, materialized)) {
@@ -1869,32 +1883,14 @@ const Lowerer = struct {
         if (!try type_equivalence.equivalent(entry.ret, fn_.ret)) return false;
 
         const args = materialized.typedLocalSpan(fn_.args);
-        const spec = entry.spec;
-        const source_fn = self.solved.lifted.fns.items[@intFromEnum(spec.source)];
-        const lifted_args = self.solved.lifted.typedLocalSpan(source_fn.args);
-        const func = switch (self.solved.types.rootContent(spec.solved_fn_ty)) {
-            .func => |func| func,
-            else => Common.invariant("debug Lambda Mono verifier saw non-function fn spec type"),
-        };
-        const solved_args = self.solved.types.span(func.args);
-        if (solved_args.len != lifted_args.len) Common.invariant("debug Lambda Mono verifier saw changed source arity");
-        const expected_arg_count = lifted_args.len + switch (spec.abi) {
-            .finite => if (spec.capture_ty == null) @as(usize, 0) else 1,
-            .erased => 1,
-        };
+        const arg_tys = self.types.span(entry.args);
+        const expected_arg_count = arg_tys.len + if (entry.capture_arg_ty == null) @as(usize, 0) else 1;
         if (args.len != expected_arg_count) return false;
-        for (solved_args, 0..) |solved_arg, arg_index| {
-            const expected = try self.lowerType(solved_arg);
-            if (!try type_equivalence.equivalent(expected, args[arg_index].ty)) return false;
+        for (arg_tys, 0..) |arg_ty, arg_index| {
+            if (!try type_equivalence.equivalent(arg_ty, args[arg_index].ty)) return false;
         }
-        switch (spec.abi) {
-            .finite => if (spec.capture_ty) |capture_ty| {
-                if (!try type_equivalence.equivalent(capture_ty, args[lifted_args.len].ty)) return false;
-            },
-            .erased => {
-                const erased_ptr = self.erased_capture_ptr_ty orelse Common.invariant("debug Lambda Mono verifier expected an erased capture pointer type");
-                if (!try type_equivalence.equivalent(erased_ptr, args[lifted_args.len].ty)) return false;
-            },
+        if (entry.capture_arg_ty) |capture_arg_ty| {
+            if (!try type_equivalence.equivalent(capture_arg_ty, args[arg_tys.len].ty)) return false;
         }
         return true;
     }
@@ -1954,8 +1950,14 @@ const Lowerer = struct {
         defer self.result.store.current_loc = saved_loc;
         const saved_region = self.result.store.current_region;
         defer self.result.store.current_region = saved_region;
-        self.result.store.current_loc = self.solved.lifted.exprLoc(expr_id);
-        self.result.store.current_region = self.solved.lifted.exprRegion(expr_id);
+        const expr_loc = self.solved.lifted.exprLoc(expr_id);
+        if (expr_loc.hasLocation()) {
+            self.result.store.current_loc = expr_loc;
+        }
+        const expr_region = self.solved.lifted.exprRegion(expr_id);
+        if (!expr_region.isEmpty()) {
+            self.result.store.current_region = expr_region;
+        }
         return switch (expr_data.data) {
             .local => |local| try self.lowerLocalInto(target, local, expr_ty, next),
             .unit => try self.assignZst(target, next),
@@ -4315,8 +4317,14 @@ const Lowerer = struct {
         defer self.result.store.current_loc = saved_loc;
         const saved_region = self.result.store.current_region;
         defer self.result.store.current_region = saved_region;
-        self.result.store.current_loc = self.solved.lifted.stmtLoc(stmt_id);
-        self.result.store.current_region = self.solved.lifted.stmtRegion(stmt_id);
+        const stmt_loc = self.solved.lifted.stmtLoc(stmt_id);
+        if (stmt_loc.hasLocation()) {
+            self.result.store.current_loc = stmt_loc;
+        }
+        const stmt_region = self.solved.lifted.stmtRegion(stmt_id);
+        if (!stmt_region.isEmpty()) {
+            self.result.store.current_region = stmt_region;
+        }
         return switch (self.solved.lifted.stmts.items[@intFromEnum(stmt_id)]) {
             .uninitialized => |pat_id| try self.initUninitializedPattern(pat_id, next),
             .let_ => |let_| blk: {
@@ -5922,6 +5930,12 @@ const Lowerer = struct {
         next: LIR.CFStmtId,
     ) Common.LowerError!LIR.CFStmtId {
         if (try self.maybeAssignDirectLayoutBoundary(target, source, next)) |stmt| return stmt;
+
+        const target_runtime_ty = self.runtimeBackingType(target_ty);
+        const source_runtime_ty = self.runtimeBackingType(source_ty);
+        if (target_runtime_ty != target_ty or source_runtime_ty != source_ty) {
+            return try self.assignTypedBoundary(target, target_runtime_ty, source, source_runtime_ty, next);
+        }
 
         const target_content = self.types.get(target_ty);
         const source_content = self.types.get(source_ty);

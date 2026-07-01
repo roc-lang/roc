@@ -327,7 +327,7 @@ fn failureData(allocator: std.mem.Allocator, message: ?[]const u8, status: TestR
 const TestData = struct {
     pub fn happyPathRocCode(allocator: std.mem.Allocator) Allocator.Error![]u8 {
         return allocator.dupe(u8,
-            \\module [foo]
+            \\main! = |_| {}
             \\
             \\foo = "bar"
         );
@@ -335,14 +335,12 @@ const TestData = struct {
 
     pub fn syntaxErrorRocCode(allocator: std.mem.Allocator) Allocator.Error![]u8 {
         return allocator.dupe(u8,
-            \\module [main]
             \\main = [1, 2, 3
         );
     }
 
     pub fn typeErrorRocCode(allocator: std.mem.Allocator) Allocator.Error![]u8 {
         return allocator.dupe(u8,
-            \\module [main]
             \\main = "hello" + 123
         );
     }

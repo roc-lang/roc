@@ -2213,7 +2213,7 @@ pub const Coordinator = struct {
         });
     }
 
-    pub fn validatePlatformAppRelationsForCheck(self: *Coordinator) (Allocator.Error || error{CompileTimeProblem})!void {
+    pub fn validatePlatformAppRelationsForCheck(self: *Coordinator) compile_package.PublishError!void {
         if (self.hasUserErrors()) {
             if (builtin.mode == .Debug) {
                 std.debug.panic("compile.coordinator.validatePlatformAppRelationsForCheck called after user-facing errors", .{});
@@ -4753,6 +4753,7 @@ pub const Coordinator = struct {
             platform_requirement_artifact,
             task.platform_requirement_context,
             task.explicit_roots,
+            compile_package.compileTimeFinalizationOptions(self.max_threads, &self.roc_ctx),
         );
         defer typecheck_output.deinit();
 
@@ -5361,7 +5362,7 @@ test "Coordinator readModuleSource hashes raw CRLF source bytes" {
     const tmp_root = try tmp.dir.realPathFileAlloc(testing.io, ".", allocator);
     defer allocator.free(tmp_root);
 
-    const source = "module [main]\r\n\r\nmain = 1\r\n";
+    const source = "main = 1\r\n";
     try tmp.dir.writeFile(testing.io, .{ .sub_path = "main.roc", .data = source });
 
     const main_path = try std.fs.path.join(allocator, &.{ tmp_root, "main.roc" });
@@ -5383,7 +5384,7 @@ test "Coordinator readModuleSource hashes raw CRLF source bytes" {
     const read = try coord.readModuleSourceWithState(main_path, allocator);
     defer allocator.free(read.source);
 
-    try testing.expectEqualStrings("module [main]\n\nmain = 1\n", read.source);
+    try testing.expectEqualStrings("main = 1\n", read.source);
     const expected_hash = watch_inputs.hashBytes(source);
     switch (read.file_state orelse return error.ExpectedWatchInputState) {
         .hash => |hash| try testing.expectEqualSlices(u8, &expected_hash, &hash),
