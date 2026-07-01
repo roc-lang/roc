@@ -282,6 +282,11 @@ const RenderCtx = struct {
     gpa: Allocator,
     articles: []const Article,
     slugger: *Slugger,
+    /// Relative path from the current page to the `langref/` directory, used to
+    /// build links to other articles. Empty for the README landing page (served
+    /// at `/langref/`, so siblings are bare slugs); "../" for an article page
+    /// (served at `/langref/<slug>/`, so siblings live one level up).
+    langref_base: []const u8 = "",
     /// Set once the first level-1 heading is skipped (it is rendered as the
     /// page title by `renderArticleBody`).
     h1_consumed: bool = false,
@@ -322,6 +327,7 @@ pub fn renderArticleBody(
     gpa: Allocator,
     articles: []const Article,
     article: *const Article,
+    langref_base: []const u8,
 ) RenderError!void {
     var slugger = Slugger.init(gpa);
     defer slugger.deinit();
@@ -331,6 +337,7 @@ pub fn renderArticleBody(
         .gpa = gpa,
         .articles = articles,
         .slugger = &slugger,
+        .langref_base = langref_base,
     };
 
     // Page title (rendered from the first `# ` heading; the heading itself is
@@ -839,12 +846,16 @@ fn writeLinkHref(rctx: *RenderCtx, url: []const u8) RenderError!void {
     // Resolve aliases (e.g. `conditionals` -> the `if-else` article).
     path = resolveSlugAlias(path);
 
-    // Every langref page resolves relative links against `/langref/`, so a
-    // reference to another article is just its extensionless slug, and the
-    // README (the `/langref/` landing page) is "./".
+    // Links to other articles are resolved relative to the current page via
+    // `langref_base` (the path back to the `langref/` directory): empty on the
+    // README landing page (served at `/langref/`), "../" on an article page
+    // (served at `/langref/<slug>/`). A reference to another article is that
+    // base plus its extensionless slug; the README is the `langref/` directory
+    // itself ("./" when we are already in it, otherwise `langref_base`).
     if (std.ascii.eqlIgnoreCase(path, "README")) {
-        try w.writeAll("./");
+        try writeEscaped(w, if (rctx.langref_base.len == 0) "./" else rctx.langref_base);
     } else {
+        try writeEscaped(w, rctx.langref_base);
         try writeEscaped(w, path);
     }
     try writeEscaped(w, anchor);
@@ -1165,7 +1176,7 @@ fn expectInline(gpa: Allocator, text: []const u8, expected: []const u8) (RenderE
 fn expectBody(gpa: Allocator, article: *const Article, needle: []const u8) (RenderError || error{NeedleNotFound})!void {
     var aw = std.Io.Writer.Allocating.init(gpa);
     defer aw.deinit();
-    try renderArticleBody(&aw.writer, gpa, &[_]Article{}, article);
+    try renderArticleBody(&aw.writer, gpa, &[_]Article{}, article, "");
     if (std.mem.find(u8, aw.written(), needle) == null) {
         std.debug.print("expected body to contain:\n{s}\n--- actual ---\n{s}\n", .{ needle, aw.written() });
         return error.NeedleNotFound;
@@ -1260,6 +1271,39 @@ test "renderArticleBody produces titled, anchored output" {
     try expectBody(gpa, &article, "<section class=\"langref-article\">");
 }
 
+test "renderArticleBody resolves cross-article links against langref_base" {
+    const gpa = testing.allocator;
+    const md =
+        "# T\n\nSee [values](expressions.md#value) and the [home](README.md).\n";
+    const article = Article{
+        .slug = "statements",
+        .title = "T",
+        .source_path = "",
+        .markdown = md,
+        .is_index = false,
+    };
+
+    // README landing page (served at `/langref/`): siblings are bare slugs and
+    // the README self-link is the current directory.
+    {
+        var aw = std.Io.Writer.Allocating.init(gpa);
+        defer aw.deinit();
+        try renderArticleBody(&aw.writer, gpa, &[_]Article{}, &article, "");
+        try testing.expect(std.mem.find(u8, aw.written(), "href=\"expressions#value\"") != null);
+        try testing.expect(std.mem.find(u8, aw.written(), "href=\"./\"") != null);
+    }
+
+    // Article page (served at `/langref/<slug>/`): siblings and the README both
+    // live one level up, so links are prefixed with "../".
+    {
+        var aw = std.Io.Writer.Allocating.init(gpa);
+        defer aw.deinit();
+        try renderArticleBody(&aw.writer, gpa, &[_]Article{}, &article, "../");
+        try testing.expect(std.mem.find(u8, aw.written(), "href=\"../expressions#value\"") != null);
+        try testing.expect(std.mem.find(u8, aw.written(), "href=\"../\"") != null);
+    }
+}
+
 test "renderArticleBody honors explicit heading ids and hides the attribute" {
     const gpa = testing.allocator;
     const md =
@@ -1276,7 +1320,7 @@ test "renderArticleBody honors explicit heading ids and hides the attribute" {
     // ...and the `{#values}` attribute is not rendered as visible text.
     var aw = std.Io.Writer.Allocating.init(gpa);
     defer aw.deinit();
-    try renderArticleBody(&aw.writer, gpa, &[_]Article{}, &article);
+    try renderArticleBody(&aw.writer, gpa, &[_]Article{}, &article, "");
     try testing.expect(std.mem.find(u8, aw.written(), "{#values}") == null);
 }
 

@@ -539,8 +539,9 @@ pub fn renderPackageDocs(
 /// Writes each langref article as a page under `langref/`: the README becomes
 /// `langref/index.html` (the section landing page, served at `/langref/`) and
 /// every other article becomes `langref/<slug>/index.html`, so its URL is the
-/// extensionless `/langref/<slug>`. Every page resolves relative links against
-/// `/langref/`, so they all share the same `../` asset base.
+/// extensionless `/langref/<slug>`. The README sits one level below the site
+/// root and each article two levels below, so their relative asset/link bases
+/// differ (see `writeLangRefArticlePage`).
 fn writeLangRefPages(
     ctx: *const RenderContext,
     gpa: Allocator,
@@ -594,16 +595,19 @@ fn writeLangRefArticlePage(
     defer if (plain_title) |t| gpa.free(t);
     const title = std.fmt.bufPrint(&title_buf, "{s} Docs", .{plain_title orelse article.slug}) catch (plain_title orelse article.slug);
 
-    // Every langref page is served from within `/langref/` (the README at
-    // `/langref/`, each article at `/langref/<slug>`), so relative links resolve
-    // against `/langref/` and the site root is one level up at "../".
-    const base = "../";
+    // The README landing page is served at `/langref/` (one level below the
+    // site root), while every other article is served at `/langref/<slug>/`
+    // (two levels below). `base` reaches the site root — for assets, module
+    // links and search entries — and `langref_base` reaches the `langref/`
+    // directory, for links to sibling articles.
+    const base = if (article.is_index) "../" else "../../";
+    const langref_base = if (article.is_index) "" else "../";
     try writeHtmlHead(w, title, base);
     try writeBodyOpen(w);
     try renderSidebar(w, ctx, gpa, base);
 
     try writeMainOpen(w, ctx, gpa, base);
-    try render_markdown.renderArticleBody(w, gpa, langref.articles, article);
+    try render_markdown.renderArticleBody(w, gpa, langref.articles, article, langref_base);
     try writeFooter(w);
     try w.writeAll("    </main>\n");
     try writeBodyClose(w);
