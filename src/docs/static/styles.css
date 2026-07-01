@@ -476,7 +476,7 @@ footer p {
 }
 
 .sidebar-sub-entries {
-    font-size: var(--font-sm);
+    font-size: var(--font-base);
     display: none;
     list-style: none;
     padding: 0;
@@ -763,6 +763,16 @@ code a:visited .type {
 code a:visited,
 a:visited code {
   color: var(--code-link-color);
+}
+
+/* Language-reference sidebar links are prose, so inline `code` in a langref
+   article title (e.g. the "`if` / `else`" heading) should read as part of the
+   link text rather than as a code link — inherit the link's own color instead
+   of the violet `--code-link-color`. Placed after the rules above so it wins
+   the specificity tie with `a:visited code` on source order. */
+.langref-articles a code,
+.langref-articles a:visited code {
+  color: inherit;
 }
 
 pre {
