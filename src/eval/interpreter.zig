@@ -4260,7 +4260,14 @@ pub const Interpreter = struct {
     ) Error!void {
         const layout_val = self.layout_store.getLayout(layout_idx);
         switch (layout_val.tag) {
-            .zst => try out.appendSlice(self.evalAllocator(), "{}"),
+            .zst => {
+                if (desc) |zst_desc| {
+                    if (zst_desc.tag_variants.len > 0) {
+                        return try self.appendZstTagInspect(frame, out, zst_desc);
+                    }
+                }
+                try out.appendSlice(self.evalAllocator(), "{}");
+            },
             .scalar => switch (layout_val.getScalar().tag) {
                 .str => try self.appendQuotedInspectBytes(out, self.readRocStr(value)),
                 .int, .frac, .opaque_ptr => try self.appendScalarInspect(out, value, layout_idx),
@@ -4333,10 +4340,18 @@ pub const Interpreter = struct {
                 else
                     try std.fmt.allocPrint(self.evalAllocator(), "{d}", .{value.read(i64)});
             },
-            16 => if (isUnsigned(layout_idx))
-                try std.fmt.allocPrint(self.evalAllocator(), "{d}", .{value.read(u128)})
-            else
-                try std.fmt.allocPrint(self.evalAllocator(), "{d}", .{value.read(i128)}),
+            16 => blk: {
+                const layout_val = self.layout_store.getLayout(layout_idx);
+                if (layout_val.tag == .scalar and layout_val.getScalar().tag == .frac) {
+                    var dec_buf: [builtins.dec.RocDec.max_str_length]u8 = undefined;
+                    const dec = builtins.dec.RocDec{ .num = value.read(i128) };
+                    break :blk try self.evalAllocator().dupe(u8, dec.format_to_buf(&dec_buf));
+                }
+                break :blk if (isUnsigned(layout_idx))
+                    try std.fmt.allocPrint(self.evalAllocator(), "{d}", .{value.read(u128)})
+                else
+                    try std.fmt.allocPrint(self.evalAllocator(), "{d}", .{value.read(i128)});
+            },
             else => try std.fmt.allocPrint(self.evalAllocator(), "0", .{}),
         };
         defer self.evalAllocator().free(text);
@@ -4449,6 +4464,24 @@ pub const Interpreter = struct {
         };
     }
 
+    fn appendZstTagInspect(
+        self: *LirInterpreter,
+        frame: *const Frame,
+        out: *std.ArrayList(u8),
+        desc: *const LirProgram.BoxyTypeDesc,
+    ) Error!void {
+        const variant = self.requireBoxyTagVariantByDiscriminant(desc, 0);
+        try out.appendSlice(self.evalAllocator(), self.store.getString(variant.name));
+        if (self.findBoxyPayloadDesc(variant, 0)) |payload_desc_ref| {
+            const payload_desc = try self.resolveBoxyDescRef(frame, payload_desc_ref);
+            if (payload_desc.tag_variants.len > 0) {
+                try out.append(self.evalAllocator(), '(');
+                try self.appendZstTagInspect(frame, out, payload_desc);
+                try out.append(self.evalAllocator(), ')');
+            }
+        }
+    }
+
     fn appendTagUnionInspect(
         self: *LirInterpreter,
         frame: *const Frame,
@@ -4472,7 +4505,19 @@ pub const Interpreter = struct {
         try out.appendSlice(self.evalAllocator(), self.store.getString(variant.name));
 
         const payload_size = self.helper.sizeOf(variant.payload_layout);
-        if (payload_size == 0) return;
+        if (payload_size == 0) {
+            // Zero payload bytes can still carry semantic structure: nested
+            // zero-sized tags keep their names in the payload descriptor.
+            if (self.findBoxyPayloadDesc(variant, 0)) |payload_desc_ref| {
+                const payload_desc = try self.resolveBoxyDescRef(frame, payload_desc_ref);
+                if (payload_desc.tag_variants.len > 0) {
+                    try out.append(self.evalAllocator(), '(');
+                    try self.appendZstTagInspect(frame, out, payload_desc);
+                    try out.append(self.evalAllocator(), ')');
+                }
+            }
+            return;
+        }
 
         try out.append(self.evalAllocator(), '(');
         const payload_layout_val = self.layout_store.getLayout(variant.payload_layout);
