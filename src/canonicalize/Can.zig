@@ -776,7 +776,10 @@ fn getOrCreateAutoImportedTypeImport(
     }
 
     const import_ident = if (info.is_package_qualified)
-        source_module_ident
+        if (self.scopeLookupModule(source_module_ident)) |module_info|
+            module_info.module_name
+        else
+            source_module_ident
     else
         try self.env.insertIdent(base.Ident.for_text(info.env.module_name));
 
