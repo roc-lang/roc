@@ -949,6 +949,28 @@ pub fn publishProgramForComptimeProblems(
     source: []const u8,
     imports: []const ModuleSource,
 ) TestHelperError!ComptimePublishOutcome {
+    return publishProgramForComptimeProblemsImpl(allocator, source_kind, source, imports, null);
+}
+
+/// Same as `publishProgramForComptimeProblems` but reuses a Builtin artifact
+/// the caller has already published.
+pub fn publishProgramForComptimeProblemsWithBuiltin(
+    allocator: Allocator,
+    source_kind: SourceKind,
+    source: []const u8,
+    imports: []const ModuleSource,
+    pre_published_builtin: PrePublishedBuiltin,
+) TestHelperError!ComptimePublishOutcome {
+    return publishProgramForComptimeProblemsImpl(allocator, source_kind, source, imports, pre_published_builtin);
+}
+
+fn publishProgramForComptimeProblemsImpl(
+    allocator: Allocator,
+    source_kind: SourceKind,
+    source: []const u8,
+    imports: []const ModuleSource,
+    pre_published_builtin: ?PrePublishedBuiltin,
+) TestHelperError!ComptimePublishOutcome {
     const resources = parseAndCanonicalizeProgramWithRootModeReporting(
         allocator,
         source_kind,
@@ -956,7 +978,7 @@ pub fn publishProgramForComptimeProblems(
         imports,
         false,
         .published_roots_only,
-        null,
+        pre_published_builtin,
         .report_comptime_problems,
         null,
     ) catch |err| switch (err) {
