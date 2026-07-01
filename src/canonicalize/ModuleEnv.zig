@@ -1012,6 +1012,7 @@ fn getDiagnosticRegion(diagnostic: CIR.Diagnostic) Region {
         .type_alias_redeclared => |data| data.redeclared_region,
         .nominal_type_redeclared => |data| data.redeclared_region,
         .duplicate_record_field => |data| data.duplicate_region,
+        .duplicate_tag => |data| data.duplicate_region,
         inline else => |data| data.region,
     };
 }
@@ -1672,6 +1673,21 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addReflowingText("Record fields must have unique names. Consider renaming one of these fields or removing the duplicate.");
 
             break :blk report;
+        },
+        .duplicate_tag => |data| blk: {
+            const tag_name = self.getIdent(data.tag_name);
+            const duplicate_region_info = self.calcRegionInfo(data.duplicate_region);
+            const original_region_info = self.calcRegionInfo(data.original_region);
+
+            break :blk try CIR.Diagnostic.buildDuplicateTagReport(
+                allocator,
+                tag_name,
+                duplicate_region_info,
+                original_region_info,
+                filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
         },
         .redundant_exposed => |data| blk: {
             const ident_name = self.getIdent(data.ident);

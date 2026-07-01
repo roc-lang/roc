@@ -797,6 +797,13 @@ pub const Store = struct {
                 if (named_mode == .full) {
                     self.writeCachedNamedBackingDigest(name_store, hasher, named.backing, ctx, stats);
                     self.writeCachedDeclaredOrderDigest(name_store, hasher, named.declared_order, ctx, stats);
+                } else if (named.builtin_owner) |owner| {
+                    if (generatedEvidenceOwnerUsesBacking(owner)) {
+                        writeBytes(hasher, "specialization-builtin-backing");
+                        self.writeCachedNamedBackingDigest(name_store, hasher, named.backing, ctx, stats);
+                    } else {
+                        writeBytes(hasher, "specialization-named-identity");
+                    }
                 } else {
                     writeBytes(hasher, "specialization-named-identity");
                 }
@@ -945,6 +952,13 @@ pub const Store = struct {
                 if (named_mode == .full) {
                     self.writeNamedBackingDigest(name_store, hasher, named.backing, visiting);
                     self.writeDeclaredOrderDigest(name_store, hasher, named.declared_order, visiting);
+                } else if (named.builtin_owner) |owner| {
+                    if (generatedEvidenceOwnerUsesBacking(owner)) {
+                        writeBytes(hasher, "specialization-builtin-backing");
+                        self.writeNamedBackingDigest(name_store, hasher, named.backing, visiting);
+                    } else {
+                        writeBytes(hasher, "specialization-named-identity");
+                    }
                 } else {
                     writeBytes(hasher, "specialization-named-identity");
                 }
@@ -2029,6 +2043,7 @@ fn writeBytes(hasher: *std.crypto.hash.sha2.Sha256, bytes: []const u8) void {
 fn generatedEvidenceOwnerUsesBacking(owner: static_dispatch.BuiltinOwner) bool {
     return switch (owner) {
         .fields,
+        .field,
         .parse_tag_union_spec,
         => true,
         else => false,
@@ -2711,6 +2726,41 @@ test "monotype named type digest includes backing" {
     const i64_spec_digest = store.specializationDigest(&name_store, named_i64);
     const str_spec_digest = store.specializationDigest(&name_store, named_str);
     try std.testing.expect(std.mem.eql(u8, i64_spec_digest.bytes[0..], str_spec_digest.bytes[0..]));
+}
+
+test "monotype specialization digest includes builtin evidence backing" {
+    var name_store = names.NameStore.init(std.testing.allocator);
+    defer name_store.deinit();
+
+    var store = Store.init(std.testing.allocator);
+    defer store.deinit();
+
+    const module_name = try name_store.internModuleName("Builtin.Str.FieldName");
+    const type_name = try name_store.internTypeName("FieldNames");
+    const checked_ty: checked.CheckedTypeId = @enumFromInt(1);
+    const i64_ty = try store.add(.{ .primitive = .i64 });
+    const str_ty = try store.add(.{ .primitive = .str });
+
+    const fields_i64 = try store.add(.{ .named = .{
+        .named_type = .{ .module = .{}, .ty = checked_ty },
+        .def = .{ .module_name = module_name, .type_name = type_name },
+        .kind = .@"opaque",
+        .builtin_owner = .fields,
+        .args = Span.empty(),
+        .backing = .{ .ty = i64_ty, .use = .runtime_layout_only },
+    } });
+    const fields_str = try store.add(.{ .named = .{
+        .named_type = .{ .module = .{}, .ty = checked_ty },
+        .def = .{ .module_name = module_name, .type_name = type_name },
+        .kind = .@"opaque",
+        .builtin_owner = .fields,
+        .args = Span.empty(),
+        .backing = .{ .ty = str_ty, .use = .runtime_layout_only },
+    } });
+
+    const i64_spec_digest = store.specializationDigest(&name_store, fields_i64);
+    const str_spec_digest = store.specializationDigest(&name_store, fields_str);
+    try std.testing.expect(!std.mem.eql(u8, i64_spec_digest.bytes[0..], str_spec_digest.bytes[0..]));
 }
 
 test "monotype named type digest includes nested named backing" {
