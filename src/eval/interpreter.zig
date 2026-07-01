@@ -2895,13 +2895,30 @@ pub const Interpreter = struct {
                         source_desc,
                         assign.payload_mode,
                     );
+                    var target_local_desc: *const LirProgram.BoxyTypeDesc = payload_desc;
                     const result = switch (target_layout_tag) {
                         .box, .box_of_zst => blk: {
-                            if (source_desc == payload_desc) {
+                            // The descriptor attached to a box value may describe the box
+                            // itself (payload_layout == the box layout, payload described by
+                            // nested descriptors) or describe the payload directly. Boxing
+                            // stores the payload, so resolve to the payload descriptor the
+                            // same way box readers do. When the target-side descriptor has
+                            // no payload information (a fully erased box descriptor), the
+                            // source descriptor still describes the exact payload being
+                            // stored, so it becomes both the allocation descriptor and the
+                            // target local's descriptor.
+                            const alloc_desc = try self.boxyBoxAllocationPayloadDesc(frame, target_layout, payload_desc) orelse alloc: {
+                                if (source_desc != payload_desc) {
+                                    target_local_desc = source_desc;
+                                    break :alloc source_desc;
+                                }
+                                break :blk try self.allocBoxOfZstValue(target_layout);
+                            };
+                            if (source_desc == alloc_desc) {
                                 break :blk try self.allocBoxyDynamicPayload(
                                     payload_value,
                                     assign.payload_layout,
-                                    payload_desc,
+                                    alloc_desc,
                                     target_layout,
                                 );
                             }
@@ -2910,13 +2927,13 @@ pub const Interpreter = struct {
                                 payload_value,
                                 assign.payload_layout,
                                 source_desc,
-                                payload_desc,
-                                payload_desc.payload_layout,
+                                alloc_desc,
+                                alloc_desc.payload_layout,
                             );
                             break :blk try self.allocBoxyDynamicPayload(
                                 materialized_payload,
-                                payload_desc.payload_layout,
-                                payload_desc,
+                                alloc_desc.payload_layout,
+                                alloc_desc,
                                 target_layout,
                             );
                         },
@@ -2929,7 +2946,7 @@ pub const Interpreter = struct {
                         ),
                     };
                     self.setLocalChecked(frame, current, assign.target, result);
-                    frame.setLocalDesc(assign.target, payload_desc);
+                    frame.setLocalDesc(assign.target, target_local_desc);
                     current = assign.next;
                 },
                 .assign_boxy_reuse_box => |assign| {
@@ -7128,36 +7145,11 @@ pub const Interpreter = struct {
                 const elem_ptr = rl.bytes.? + @as(usize, @intCast(idx)) * info.width;
                 const val = try self.alloc(ll.ret_layout);
                 @memcpy(val.ptr[0..info.width], elem_ptr[0..info.width]);
-                if (builtin.mode == .Debug and @intFromEnum(arg_layout) == 51 and @intFromEnum(ll.ret_layout) == 21) {
-                    const boxed_ptr = if (self.readBoxedDataPointer(val)) |ptr| @intFromPtr(ptr) else 0;
-                    const boxed_dec = if (self.readBoxedDataPointer(val)) |ptr| (Value{ .ptr = ptr }).read(i128) else @as(i128, -1);
-                    trace_rc.log(
-                        "debug_proc20_list_get idx={d} arg_layout={d} ret_layout={d} elem_ptr=0x{x} boxed_ptr=0x{x} boxed_dec={d}",
-                        .{ idx, @intFromEnum(arg_layout), @intFromEnum(ll.ret_layout), @intFromPtr(elem_ptr), boxed_ptr, boxed_dec },
-                    );
-                }
                 break :blk val;
             },
             .list_append_unsafe => blk: {
                 const info = self.listElemInfo(arg_layout);
                 const list_val = self.valueToRocListForLayout(args[0], arg_layout);
-                if (builtin.mode == .Debug and (@intFromEnum(arg_layout) == 51 or @intFromEnum(ll.ret_layout) == 51)) {
-                    debugPrint(
-                        "debug_list_append_51 arg_layout={d} ret_layout={d} arg0_layout={d} arg1_layout={d} width={d} align={d} list_len={d} list_bytes={any} elem_layout={d} elem_tag={s}\n",
-                        .{
-                            @intFromEnum(arg_layout),
-                            @intFromEnum(ll.ret_layout),
-                            @intFromEnum(try self.lowLevelArgLayout(ll, 0)),
-                            @intFromEnum(try self.lowLevelArgLayout(ll, 1)),
-                            info.width,
-                            info.alignment,
-                            list_val.len(),
-                            list_val.bytes,
-                            @intFromEnum(self.listElemLayout(arg_layout)),
-                            @tagName(self.layout_store.getLayout(self.listElemLayout(arg_layout)).tag),
-                        },
-                    );
-                }
                 if (info.width == 0) {
                     break :blk self.rocListToValue(canonicalZstList(list_val.len() + 1), ll.ret_layout);
                 }
@@ -7294,24 +7286,6 @@ pub const Interpreter = struct {
                 const elem_ptr = rl.bytes.? + @as(usize, @intCast(idx)) * info.width;
                 const val = try self.alloc(ll.ret_layout);
                 @memcpy(val.ptr[0..info.width], elem_ptr[0..info.width]);
-                if (builtin.mode == .Debug and ll.ret_layout == .str) {
-                    const extracted = valueToRocStr(val);
-                    debugPrint(
-                        "debug_list_map_extract proc={d} stmt={d} idx={d} arg_layout={d} ret_layout={d} width={d} len={d} bytes={any} cap=0x{x} small={}\n",
-                        .{
-                            if (self.active_proc_id) |proc| @intFromEnum(proc) else std.math.maxInt(u32),
-                            if (self.active_stmt_id) |stmt| @intFromEnum(stmt) else std.math.maxInt(u32),
-                            idx,
-                            @intFromEnum(arg_layout),
-                            @intFromEnum(ll.ret_layout),
-                            info.width,
-                            extracted.len(),
-                            extracted.bytes,
-                            extracted.capacity_or_alloc_ptr,
-                            extracted.isSmallStr(),
-                        },
-                    );
-                }
                 break :blk val;
             },
             .list_map_write_unsafe => blk: {
@@ -7320,25 +7294,6 @@ pub const Interpreter = struct {
                 const info = self.listElemInfo(arg_layout);
                 if (info.width == 0) break :blk self.rocListToValue(rl, ll.ret_layout);
                 const elem_ptr = rl.bytes.? + @as(usize, @intCast(idx)) * info.width;
-                if (builtin.mode == .Debug and (try self.lowLevelArgLayout(ll, 2)) == .str) {
-                    const replacement = valueToRocStr(args[2]);
-                    debugPrint(
-                        "debug_list_map_write proc={d} stmt={d} idx={d} arg_layout={d} ret_layout={d} elem_arg_layout={d} width={d} len={d} bytes={any} cap=0x{x} small={}\n",
-                        .{
-                            if (self.active_proc_id) |proc| @intFromEnum(proc) else std.math.maxInt(u32),
-                            if (self.active_stmt_id) |stmt| @intFromEnum(stmt) else std.math.maxInt(u32),
-                            idx,
-                            @intFromEnum(arg_layout),
-                            @intFromEnum(ll.ret_layout),
-                            @intFromEnum(try self.lowLevelArgLayout(ll, 2)),
-                            info.width,
-                            replacement.len(),
-                            replacement.bytes,
-                            replacement.capacity_or_alloc_ptr,
-                            replacement.isSmallStr(),
-                        },
-                    );
-                }
                 @memcpy(elem_ptr[0..info.width], args[2].ptr[0..info.width]);
                 break :blk self.rocListToValue(rl, ll.ret_layout);
             },
