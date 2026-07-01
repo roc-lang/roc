@@ -978,22 +978,6 @@ const Inserter = struct {
                 },
                 .assign_call => |assign| {
                     const callee_sig = self.solution.sigOf(assign.proc);
-                    if (@intFromEnum(assign.proc) == 24 or @intFromEnum(assign.proc) == 94) {
-                        std.debug.print(
-                            "ARC call proc={d} stmt={d} target={d} callee={d} sig_borrowed=0x{x} ret_mode={s} ret_lenders=0x{x} target_borrowed={} target_rc={}\n",
-                            .{
-                                @intFromEnum(self.current_proc),
-                                @intFromEnum(path.cursor),
-                                @intFromEnum(assign.target),
-                                @intFromEnum(assign.proc),
-                                callee_sig.borrowed_params,
-                                @tagName(callee_sig.ret_mode),
-                                callee_sig.ret_lenders,
-                                self.isBindingBorrowed(assign.target),
-                                self.localContainsRefcounted(assign.target),
-                            },
-                        );
-                    }
                     // Unique demands clone variants, so they exist only when
                     // specialization is on, and never for pinned callees,
                     // whose vectors are ABI contracts.
@@ -1586,13 +1570,13 @@ const Inserter = struct {
             }
         }
         switch (stmt) {
-	            .assign_ref => |assign| {
-	                if (frame.retain_assign_ref_target) {
-	                    next = try self.retainLocalIfRc(assign.target, next);
-	                }
-	                cloned = try self.store.addCFStmt(.{ .assign_ref = .{
-	                    .target = assign.target,
-	                    .op = assign.op,
+            .assign_ref => |assign| {
+                if (frame.retain_assign_ref_target) {
+                    next = try self.retainLocalIfRc(assign.target, next);
+                }
+                cloned = try self.store.addCFStmt(.{ .assign_ref = .{
+                    .target = assign.target,
+                    .op = assign.op,
                     .next = next,
                 } });
             },
@@ -1667,15 +1651,15 @@ const Inserter = struct {
                 if (assign.payload_mode == .move and !frame.transfer_single) {
                     next = try self.retainLocalIfRc(assign.payload, next);
                 }
-	                cloned = try self.store.addCFStmt(.{ .assign_boxy_box = .{
-	                    .target = assign.target,
-	                    .payload = assign.payload,
-	                    .payload_layout = assign.payload_layout,
-	                    .source_desc = assign.source_desc,
-	                    .payload_desc = assign.payload_desc,
-	                    .payload_mode = assign.payload_mode,
-	                    .next = next,
-	                } });
+                cloned = try self.store.addCFStmt(.{ .assign_boxy_box = .{
+                    .target = assign.target,
+                    .payload = assign.payload,
+                    .payload_layout = assign.payload_layout,
+                    .source_desc = assign.source_desc,
+                    .payload_desc = assign.payload_desc,
+                    .payload_mode = assign.payload_mode,
+                    .next = next,
+                } });
             },
             .assign_boxy_reuse_box => |assign| {
                 if (!frame.transfer_single) {

@@ -1138,47 +1138,9 @@ const ProcedureBuilder = struct {
         );
 
         const start: u32 = @intCast(self.result.boxy_method_hidden_desc_sources.items.len);
-        if (zig_builtin.mode == .Debug and @intFromEnum(worker_id) == 77) {
-            const children = self.plan.childSlice(self.plan.representations.items[@intFromEnum(worker_function.rep)].children);
-            std.debug.print(
-                "debug_method77_worker_function rep={d} args_start={d} arg_count={d} ret={d} children={d}\n",
-                .{ @intFromEnum(worker_function.rep), worker_function.args_start, worker_function.arg_count, @intFromEnum(worker_function.ret), children.len },
-            );
-            for (children, 0..) |child, child_index| {
-                const child_rep = self.plan.representations.items[@intFromEnum(child.rep)];
-                std.debug.print(
-                    "debug_method77_worker_child index={d} role={s} rep={d} kind={s} source_ty={d}\n",
-                    .{
-                        child_index,
-                        @tagName(child.role),
-                        @intFromEnum(child.rep),
-                        @tagName(child_rep.kind),
-                        @intFromEnum(child_rep.source_type.ty),
-                    },
-                );
-            }
-        }
         for (params, 0..) |param, slot_index| {
             const static_source = descriptor_sources.get(param.desc);
             const adapter_source = call_sources.get(param.desc);
-            if (zig_builtin.mode == .Debug and @intFromEnum(worker_id) == 77) {
-                const worker_rep = self.plan.representations.items[@intFromEnum(param.rep)];
-                std.debug.print(
-                    "debug_method77_hidden_source param={d} desc={d} rep={d} kind={s} source_ty={d} static_source={d} call_source={d}\n",
-                    .{
-                        slot_index,
-                        @intFromEnum(param.desc),
-                        @intFromEnum(param.rep),
-                        @tagName(worker_rep.kind),
-                        @intFromEnum(worker_rep.source_type.ty),
-                        if (static_source) |source| @intFromEnum(source) else std.math.maxInt(u32),
-                        if (adapter_source) |source| switch (source) {
-                            .slot => |source_slot| source_slot,
-                            .call => |source_call| source_call,
-                        } else std.math.maxInt(u32),
-                    },
-                );
-            }
             if (static_source != null) {
                 try self.result.boxy_method_hidden_desc_sources.append(self.allocator, .{ .slot = @intCast(slot_index) });
             } else {
@@ -1737,21 +1699,6 @@ const ProcedureBuilder = struct {
                 if (!self.layoutNeedsNestedBoxyDesc(field_layout)) continue;
                 const desc_rep = self.tagPayloadStorageDescRepForLayout(field.rep, field_layout, false) orelse continue;
                 const field_source = try self.matchingDeclaredFieldInstantiationSource(source_rep_id, field);
-                if (zig_builtin.mode == .Debug and (@intFromEnum(worker_payload_layout) == 349 or @intFromEnum(worker_payload_layout) == 313)) {
-                    std.debug.print(
-                        "debug_static_nested_declared payload={d} worker_rep={d} source_rep={d} field_index={d} field_layout={d} field_rep={d} desc_rep={d} field_source={d}\n",
-                        .{
-                            @intFromEnum(worker_payload_layout),
-                            @intFromEnum(worker_rep_id),
-                            if (source_rep_id) |source| @intFromEnum(source) else std.math.maxInt(u32),
-                            field.index,
-                            @intFromEnum(field_layout),
-                            @intFromEnum(field.rep),
-                            @intFromEnum(desc_rep),
-                            if (field_source) |source| @intFromEnum(source) else std.math.maxInt(u32),
-                        },
-                    );
-                }
                 try refs.append(
                     self.allocator,
                     try self.staticDescRefForWorkerRepWithSourceMap(desc_rep, field_source, descriptor_sources, context),
@@ -1776,21 +1723,6 @@ const ProcedureBuilder = struct {
                 if (!force_desc and !self.layoutNeedsNestedBoxyDesc(field_layout)) continue;
                 const desc_rep = self.tagPayloadStorageDescRepForLayout(child.rep, field_layout, force_desc) orelse continue;
                 const child_source = try self.matchingInstantiationSource(source_children, child);
-                if (zig_builtin.mode == .Debug and (@intFromEnum(worker_payload_layout) == 349 or @intFromEnum(worker_payload_layout) == 313)) {
-                    std.debug.print(
-                        "debug_static_nested_child payload={d} worker_rep={d} source_rep={d} role={s} field_layout={d} child_rep={d} desc_rep={d} child_source={d}\n",
-                        .{
-                            @intFromEnum(worker_payload_layout),
-                            @intFromEnum(worker_rep_id),
-                            if (source_rep_id) |source| @intFromEnum(source) else std.math.maxInt(u32),
-                            @tagName(child.role),
-                            @intFromEnum(field_layout),
-                            @intFromEnum(child.rep),
-                            @intFromEnum(desc_rep),
-                            if (child_source) |source| @intFromEnum(source) else std.math.maxInt(u32),
-                        },
-                    );
-                }
                 try refs.append(
                     self.allocator,
                     try self.staticDescRefForWorkerRepWithSourceMap(desc_rep, child_source, descriptor_sources, context),
@@ -1887,18 +1819,6 @@ const ProcedureBuilder = struct {
 
         for (variants, 0..) |variant, index| {
             const payloads = self.plan.childSlice(variant.payloads);
-            if (zig_builtin.mode == .Debug and @intFromEnum(payload_layout) == 74) {
-                std.debug.print(
-                    "debug_static_worker_tag_variant74 worker_rep={d} source_rep={d} variant_index={d} payload_layout={d} payload_descs_len={d}\n",
-                    .{
-                        @intFromEnum(worker_tag_rep_id),
-                        if (source_tag_rep_id) |source| @intFromEnum(source) else std.math.maxInt(u32),
-                        index,
-                        @intFromEnum(tag_info.variants.get(index).payload_layout),
-                        payloads.len,
-                    },
-                );
-            }
             const source_payloads = if (source_tag_rep != null) blk: {
                 const source_variant = self.findMatchingTagVariant(
                     source_variants,
@@ -2217,108 +2137,6 @@ const ProcedureBuilder = struct {
         const tag_ext_desc = try self.staticTagExtDescForRep(rep_id);
 
         const rep = self.plan.representations.items[rep_index];
-        if (zig_builtin.mode == .Debug and (@intFromEnum(rep_id) == 82 or @intFromEnum(rep_id) == 83)) {
-            const tag_rep_id = self.tagVariantRepForDesc(rep_id);
-            const tag_rep = self.plan.representations.items[@intFromEnum(tag_rep_id)];
-            std.debug.print(
-                "debug_rep82_desc rep={d} desc_id={d} kind={s} source_ty={d} payload_layout={d} worker_layout={d} children={d}+{d} variants={d}+{d} tag_rep={d}:{s}:{d}+{d} desc={any}\n",
-                .{
-                    @intFromEnum(rep_id),
-                    @intFromEnum(desc_id),
-                    @tagName(rep.kind),
-                    @intFromEnum(rep.source_type.ty),
-                    @intFromEnum(payload_layout),
-                    @intFromEnum(rep_layout.worker.layoutIdx()),
-                    rep.children.start,
-                    rep.children.len,
-                    rep.tag_variants.start,
-                    rep.tag_variants.len,
-                    @intFromEnum(tag_rep_id),
-                    @tagName(tag_rep.kind),
-                    tag_rep.tag_variants.start,
-                    tag_rep.tag_variants.len,
-                    rep.descriptor,
-                },
-            );
-            for (self.plan.childSlice(rep.children), 0..) |child, index| {
-                const child_rep = self.plan.representations.items[@intFromEnum(child.rep)];
-                std.debug.print(
-                    "debug_rep82_child rep={d} index={d} role={s} child_rep={d}:{s} child_ty={d} child_desc={any} child_variants={d}+{d}\n",
-                    .{
-                        @intFromEnum(rep_id),
-                        index,
-                        @tagName(child.role),
-                        @intFromEnum(child.rep),
-                        @tagName(child_rep.kind),
-                        @intFromEnum(child_rep.source_type.ty),
-                        child_rep.descriptor,
-                        child_rep.tag_variants.start,
-                        child_rep.tag_variants.len,
-                    },
-                );
-            }
-            for (self.plan.tagVariantSlice(tag_rep.tag_variants), 0..) |variant, index| {
-                std.debug.print(
-                    "debug_rep82_variant rep={d} index={d} name={d} module={any} text={s}\n",
-                    .{
-                        @intFromEnum(rep_id),
-                        index,
-                        @intFromEnum(variant.name),
-                        variant.name_module,
-                        self.tagVariantNameText(variant),
-                    },
-                );
-            }
-        }
-        if (zig_builtin.mode == .Debug and (@intFromEnum(desc_id) == 176 or @intFromEnum(desc_id) == 218)) {
-            std.debug.print(
-                "debug_static_desc_focus desc={d} rep={d} kind={s} source_ty={d} payload_layout={d} worker_layout={d} children={d}+{d} variants={d}+{d} desc={any}\n",
-                .{
-                    @intFromEnum(desc_id),
-                    @intFromEnum(rep_id),
-                    @tagName(rep.kind),
-                    @intFromEnum(rep.source_type.ty),
-                    @intFromEnum(payload_layout),
-                    @intFromEnum(rep_layout.worker.layoutIdx()),
-                    rep.children.start,
-                    rep.children.len,
-                    rep.tag_variants.start,
-                    rep.tag_variants.len,
-                    rep.descriptor,
-                },
-            );
-            for (self.plan.childSlice(rep.children), 0..) |child, child_index| {
-                const child_rep = self.plan.representations.items[@intFromEnum(child.rep)];
-                std.debug.print(
-                    "debug_static_desc_focus_child desc={d} index={d} role={s} child_rep={d} child_kind={s} child_ty={d} child_variants={d}+{d} child_children={d}+{d} child_desc={any}\n",
-                    .{
-                        @intFromEnum(desc_id),
-                        child_index,
-                        @tagName(child.role),
-                        @intFromEnum(child.rep),
-                        @tagName(child_rep.kind),
-                        @intFromEnum(child_rep.source_type.ty),
-                        child_rep.tag_variants.start,
-                        child_rep.tag_variants.len,
-                        child_rep.children.start,
-                        child_rep.children.len,
-                        child_rep.descriptor,
-                    },
-                );
-            }
-            for (self.plan.tagVariantSlice(rep.tag_variants), 0..) |variant, variant_index| {
-                std.debug.print(
-                    "debug_static_desc_focus_variant desc={d} index={d} text={s} payloads={d}+{d}\n",
-                    .{
-                        @intFromEnum(desc_id),
-                        variant_index,
-                        self.tagVariantNameText(variant),
-                        variant.payloads.start,
-                        variant.payloads.len,
-                    },
-                );
-            }
-        }
         self.result.boxy_type_descs.items[@intFromEnum(desc_id)] = .{
             .payload_layout = payload_layout,
             .contains_refcounted = self.result.layouts.layoutContainsRefcounted(layout_value) or rep.contains_dynamic,
@@ -2342,19 +2160,6 @@ const ProcedureBuilder = struct {
                 const field_layout = self.recordPayloadFieldLayout(payload_layout, field.index);
                 if (!self.layoutNeedsNestedBoxyDesc(field_layout)) continue;
                 const desc_rep = self.tagPayloadStorageDescRepForLayout(field.rep, field_layout, false) orelse continue;
-                if (zig_builtin.mode == .Debug and @intFromEnum(payload_layout) == 349) {
-                    std.debug.print(
-                        "debug_static_plain_declared payload={d} rep={d} field_index={d} field_layout={d} field_rep={d} desc_rep={d}\n",
-                        .{
-                            @intFromEnum(payload_layout),
-                            @intFromEnum(rep_id),
-                            field.index,
-                            @intFromEnum(field_layout),
-                            @intFromEnum(field.rep),
-                            @intFromEnum(desc_rep),
-                        },
-                    );
-                }
                 try refs.append(self.allocator, try self.staticDescRefForRep(desc_rep));
             }
         } else {
@@ -2376,19 +2181,6 @@ const ProcedureBuilder = struct {
                 };
                 if (!force_desc and !self.layoutNeedsNestedBoxyDesc(field_layout)) continue;
                 const desc_rep = self.tagPayloadStorageDescRepForLayout(child.rep, field_layout, force_desc) orelse continue;
-                if (zig_builtin.mode == .Debug and @intFromEnum(payload_layout) == 349) {
-                    std.debug.print(
-                        "debug_static_plain_child payload={d} rep={d} role={s} field_layout={d} child_rep={d} desc_rep={d}\n",
-                        .{
-                            @intFromEnum(payload_layout),
-                            @intFromEnum(rep_id),
-                            @tagName(child.role),
-                            @intFromEnum(field_layout),
-                            @intFromEnum(child.rep),
-                            @intFromEnum(desc_rep),
-                        },
-                    );
-                }
                 try refs.append(self.allocator, try self.staticDescRefForRep(desc_rep));
             }
         }
@@ -2456,18 +2248,6 @@ const ProcedureBuilder = struct {
         for (variants, 0..) |variant, index| {
             const variant_payload_layout = tag_info.variants.get(index).payload_layout;
             const payload_descs = try self.staticPayloadDescRefsForTagVariant(variant, variant_payload_layout);
-            if (zig_builtin.mode == .Debug and @intFromEnum(payload_layout) == 74) {
-                std.debug.print(
-                    "debug_static_tag_variant74 rep={d} variant_index={d} payload_layout={d} payload_descs={d}+{d}\n",
-                    .{
-                        @intFromEnum(tag_rep_id),
-                        index,
-                        @intFromEnum(variant_payload_layout),
-                        payload_descs.start,
-                        payload_descs.len,
-                    },
-                );
-            }
             try entries.append(self.allocator, .{
                 .name = try self.result.store.insertString(self.tagVariantNameText(variant)),
                 .discriminant = @intCast(index),
@@ -3177,7 +2957,6 @@ const ProcedureBuilder = struct {
         });
         self.worker_procs[index] = proc_id;
         try self.setProcDebugName(proc_id, resolved);
-        self.debugEmittedProc("worker", proc_id, worker_id, resolved, ret_layout);
 
         const ret_stmt = try self.result.store.addCFStmt(.{ .ret = .{ .value = ret_local } });
         var body_stmt = try self.lowerWorkerBodyInto(resolved, &proc, body_source, ret_local, ret_stmt);
@@ -3224,7 +3003,6 @@ const ProcedureBuilder = struct {
         });
         self.erased_worker_procs[index] = proc_id;
         try self.setProcDebugName(proc_id, resolved);
-        self.debugEmittedProc("erased_worker", proc_id, worker_id, resolved, ret_layout);
 
         const ret_stmt = try self.result.store.addCFStmt(.{ .ret = .{ .value = ret_local } });
         var body_stmt = try self.lowerWorkerBodyInto(resolved, &proc, body_source, ret_local, ret_stmt);
@@ -3236,48 +3014,6 @@ const ProcedureBuilder = struct {
         proc_spec.body = body_stmt;
         proc_spec.stack_probe = self.stackProbeForProc(args_span, frame_span, ret_layout);
         return proc_id;
-    }
-
-    fn debugEmittedProc(
-        self: *ProcedureBuilder,
-        kind: []const u8,
-        proc_id: LIR.LirProcSpecId,
-        worker_id: Plan.WorkerPlanId,
-        resolved: ResolvedWorker,
-        ret_layout: layout.Idx,
-    ) void {
-        if (zig_builtin.mode != .Debug) return;
-        const proc_raw = @intFromEnum(proc_id);
-        if (proc_raw != 16 and proc_raw != 17 and proc_raw != 18 and proc_raw != 19 and proc_raw != 20 and proc_raw != 22) return;
-        const body_root: u32 = switch (resolved.body) {
-            .checked_expr => |body| @intFromEnum(body.root_expr),
-            .intrinsic, .hosted => std.math.maxInt(u32),
-        };
-        const worker_plan = self.plan.workers.items[@intFromEnum(worker_id)];
-        const worker_ret = functionReturnRepForRepInPlan(self.plan, worker_plan.rep);
-        const proc_base = resolved.module.canonical_names.procBase(resolved.template.proc_base);
-        std.debug.print(
-            "debug_emit_proc kind={s} proc={d} worker={d} worker_rep={d} worker_ret={d} source={s} body={s} root_expr={d} checked_fn_root={d} ret_layout={d} module={s} export={s} proc_kind={s} ordinal={d} source_def={d} nested_owner_template={d} nested_site={d}\n",
-            .{
-                kind,
-                proc_raw,
-                @intFromEnum(worker_id),
-                @intFromEnum(worker_plan.rep),
-                if (worker_ret) |ret| @intFromEnum(ret) else std.math.maxInt(u32),
-                @tagName(self.plan.workers.items[@intFromEnum(worker_id)].source),
-                @tagName(resolved.body),
-                body_root,
-                @intFromEnum(resolved.template.checked_fn_root),
-                @intFromEnum(ret_layout),
-                resolved.module.canonical_names.moduleNameText(proc_base.module_name),
-                if (proc_base.export_name) |export_name| resolved.module.canonical_names.exportNameText(export_name) else "<none>",
-                @tagName(proc_base.kind),
-                proc_base.ordinal,
-                proc_base.source_def_idx orelse std.math.maxInt(u32),
-                if (proc_base.nested_proc_site) |site| @intFromEnum(site.owner_template.template) else std.math.maxInt(u32),
-                if (proc_base.nested_proc_site) |site| @intFromEnum(site.site) else std.math.maxInt(u32),
-            },
-        );
     }
 
     fn emitHostedExternalProc(
@@ -3870,21 +3606,6 @@ const ProcBodyBuilder = struct {
                 boxyLowerInvariant("boxy hidden descriptor arg layout was not opaque_ptr");
             }
             const local = try self.addArgLocal(layout_idx);
-            if (zig_builtin.mode == .Debug) {
-                const canonical_rep = self.canonicalDescriptorRep(param.rep);
-                const canonical_desc = self.parent.plan.representations.items[@intFromEnum(canonical_rep)].descriptor;
-                std.debug.print(
-                    "debug_hidden_bind worker={d} local={d} param_desc={d} param_rep={d} canonical_rep={d} canonical_desc={d}\n",
-                    .{
-                        @intFromEnum(self.worker_layout.worker),
-                        @intFromEnum(local),
-                        @intFromEnum(param.desc),
-                        @intFromEnum(param.rep),
-                        @intFromEnum(canonical_rep),
-                        if (canonical_desc) |desc| @intFromEnum(desc) else std.math.maxInt(u32),
-                    },
-                );
-            }
             self.bindDescriptorRequirementLocal(param.desc, local, true);
             self.bindCanonicalDescriptorLocalForRep(param.rep, local, true);
         }
@@ -3932,21 +3653,6 @@ const ProcBodyBuilder = struct {
 
         for (captures) |capture| {
             const local = try self.addFrameLocal(self.erasedCaptureSlotLayout(capture));
-            if (zig_builtin.mode == .Debug and @intFromEnum(local) == 305) {
-                std.debug.print(
-                    "debug_capture_alloc worker={d} index={d} kind={s} local={d} rep={d} desc={d} dicts={d}+{d}\n",
-                    .{
-                        @intFromEnum(self.worker_layout.worker),
-                        self.erased_capture_locals.items.len,
-                        @tagName(capture.kind),
-                        @intFromEnum(local),
-                        @intFromEnum(capture.rep),
-                        if (capture.desc) |desc| @intFromEnum(desc) else std.math.maxInt(u32),
-                        capture.dictionaries.start,
-                        capture.dictionaries.len,
-                    },
-                );
-            }
             try self.erased_capture_locals.append(self.parent.allocator, local);
             switch (capture.kind) {
                 .captured_value => {
@@ -4126,64 +3832,6 @@ const ProcBodyBuilder = struct {
             .zero_argument_tag => |tag| try self.lowerTagInto(target, expr.ty, tag.name, &.{}, next),
             .if_ => |if_| try self.lowerIfInto(target, expr.ty, if_.branches, if_.final_else, next),
             .match_ => |match_| blk: {
-                if (zig_builtin.mode == .Debug and match_.is_try_suffix) {
-                    std.debug.print(
-                        "debug_try_suffix proc_worker={d} expr={d} target={d} ty={d} cond={d} cond_tag={s} cond_ty={d} branches={d}\n",
-                        .{
-                            @intFromEnum(self.worker_layout.worker),
-                            @intFromEnum(expr_id),
-                            @intFromEnum(target),
-                            @intFromEnum(expr.ty),
-                            @intFromEnum(match_.cond),
-                            @tagName(self.module.checked_bodies.expr(match_.cond).data),
-                            @intFromEnum(self.module.checked_bodies.expr(match_.cond).ty),
-                            match_.branches.len,
-                        },
-                    );
-                    switch (self.module.checked_bodies.expr(match_.cond).data) {
-                        .dispatch_call, .type_dispatch_call => |maybe_plan| {
-                            const dispatch = self.staticDispatchPlan(maybe_plan);
-                            std.debug.print(
-                                "debug_try_suffix_dispatch method={s} dispatcher={s} result_mode={s} operands={d}\n",
-                                .{
-                                    self.module.canonical_names.methodNameText(dispatch.method),
-                                    @tagName(dispatch.dispatcher),
-                                    @tagName(dispatch.result_mode),
-                                    dispatch.args.len,
-                                },
-                            );
-                            for (dispatch.argsSlice(self.module.static_dispatch_plans), 0..) |operand, operand_index| {
-                                switch (operand) {
-                                    .checked_expr => |operand_expr| {
-                                        const operand_node = self.module.checked_bodies.expr(operand_expr);
-                                        std.debug.print(
-                                            "debug_try_suffix_operand {d} expr={d} tag={s} ty={d}\n",
-                                            .{ operand_index, @intFromEnum(operand_expr), @tagName(operand_node.data), @intFromEnum(operand_node.ty) },
-                                        );
-                                    },
-                                    else => std.debug.print("debug_try_suffix_operand {d} tag={s}\n", .{ operand_index, @tagName(operand) }),
-                                }
-                            }
-                        },
-                        else => {},
-                    }
-                    for (match_.branches, 0..) |branch, branch_index| {
-                        const value = self.module.checked_bodies.expr(branch.value);
-                        const pattern = self.module.checked_bodies.pattern(branch.patternsSlice(self.module.checked_bodies)[0].pattern);
-                        std.debug.print(
-                            "debug_try_suffix_branch {d} value={d} value_tag={s} value_ty={d} pattern_tag={s} pattern_ty={d} patterns={d}\n",
-                            .{
-                                branch_index,
-                                @intFromEnum(branch.value),
-                                @tagName(value.data),
-                                @intFromEnum(value.ty),
-                                @tagName(pattern.data),
-                                @intFromEnum(pattern.ty),
-                                branch.patternsSlice(self.module.checked_bodies).len,
-                            },
-                        );
-                    }
-                }
                 break :blk try self.lowerMatchInto(target, expr.ty, match_.cond, match_.branches, next);
             },
             .unary_minus => |child| try self.lowerUnaryLowLevelInto(target, expr.ty, .num_negate, child, next),
@@ -4899,7 +4547,6 @@ const ProcBodyBuilder = struct {
             boxyLowerInvariant("non-descriptor erased capture reached descriptor materialization");
         }
         const materialization = try self.descriptorMaterializationForKnownRep(source_rep);
-        self.debugDescriptorWrite("erased_capture_descriptor", target, materialization.desc);
         return try self.parent.result.store.addCFStmt(.{ .assign_boxy_desc_ref = .{
             .target = target,
             .desc = materialization.desc,
@@ -5091,22 +4738,6 @@ const ProcBodyBuilder = struct {
             call_target,
             try self.erasedCallResultDescriptorRef(callee_ret_rep),
         );
-        if (zig_builtin.mode == .Debug and (@intFromEnum(self.worker_layout.worker) == 46 or @intFromEnum(self.worker_layout.worker) == 77)) {
-            std.debug.print(
-                "debug_erased_call_result worker={d} target={d} target_rep={d} callee_ret_rep={d} call_target={d} target_layout={d} callee_layout={d} desc={any} materialize_local={d}\n",
-                .{
-                    @intFromEnum(self.worker_layout.worker),
-                    @intFromEnum(target),
-                    @intFromEnum(target_rep),
-                    @intFromEnum(callee_ret_rep),
-                    @intFromEnum(call_target),
-                    @intFromEnum(target_layout),
-                    @intFromEnum(callee_ret_layout),
-                    result_desc_info.desc,
-                    if (result_desc_info.materialize) |materialize| @intFromEnum(materialize.local) else std.math.maxInt(u32),
-                },
-            );
-        }
         const result_desc = result_desc_info.desc;
         if (result_desc) |desc| {
             self.parent.result.store.replaceLocalBoxyDesc(call_target, desc);
@@ -5122,7 +4753,6 @@ const ProcBodyBuilder = struct {
         if (result_desc_info.materialize) |materialize| {
             const desc = materialize.materialize orelse
                 boxyLowerInvariant("boxy erased call result descriptor materialization had no descriptor");
-            self.debugDescriptorWrite("erased_call_result", materialize.local, desc);
             continuation = try self.parent.result.store.addCFStmt(.{ .assign_boxy_desc_ref = .{
                 .target = materialize.local,
                 .desc = desc,
@@ -5299,33 +4929,6 @@ const ProcBodyBuilder = struct {
 
         const args = try self.checkedArgsForDispatchCall(dispatch);
         defer self.parent.allocator.free(args);
-        if (zig_builtin.mode == .Debug and @intFromEnum(self.worker_layout.worker) == 49) {
-            std.debug.print(
-                "debug_worker49_dict_dispatch method={s} dispatcher_rep={d} dispatcher_ty={d} args={d}\n",
-                .{
-                    self.module.canonical_names.methodNameText(dispatch.method),
-                    @intFromEnum(dispatcher_rep),
-                    @intFromEnum(dispatch.dispatcher_ty),
-                    args.len,
-                },
-            );
-            for (args, 0..) |arg, index| {
-                const arg_expr = self.module.checked_bodies.expr(arg);
-                std.debug.print(
-                    "debug_worker49_dict_arg index={d} expr={d} ty={d} tag={s} num_kind={s}\n",
-                    .{
-                        index,
-                        @intFromEnum(arg),
-                        @intFromEnum(arg_expr.ty),
-                        @tagName(arg_expr.data),
-                        switch (arg_expr.data) {
-                            .num => |num| @tagName(num.kind),
-                            else => "",
-                        },
-                    },
-                );
-            }
-        }
         const lowered = try self.lowerExprsToTemps(args);
         defer self.parent.allocator.free(lowered);
 
@@ -5338,56 +4941,6 @@ const ProcBodyBuilder = struct {
         const method_function_rep = self.dictionaryMethodFunctionRepForCall(dispatcher_rep, match.requirement, dispatch.callable_ty);
         const method_function = self.functionChildrenForRep(method_function_rep) orelse
             boxyLowerInvariant("dictionary dispatch method representation was not a function");
-        if (zig_builtin.mode == .Debug and @intFromEnum(self.worker_layout.worker) == 49) {
-            const children = self.parent.plan.childSlice(self.parent.plan.representations.items[@intFromEnum(method_function.rep)].children);
-            const method_args = children[method_function.args_start..][0..method_function.arg_count];
-            std.debug.print(
-                "debug_worker49_method_function rep={d} args_start={d} arg_count={d} ret={d}\n",
-                .{
-                    @intFromEnum(method_function.rep),
-                    method_function.args_start,
-                    method_function.arg_count,
-                    @intFromEnum(method_function.ret),
-                },
-            );
-            for (method_args, 0..) |method_arg, index| {
-                const rep = self.parent.plan.representations.items[@intFromEnum(method_arg.rep)];
-                std.debug.print(
-                    "debug_worker49_method_arg index={d} rep={d} kind={s} desc={any} dicts={d}+{d} source_ty={d}\n",
-                    .{
-                        index,
-                        @intFromEnum(method_arg.rep),
-                        @tagName(rep.kind),
-                        rep.descriptor,
-                        rep.dictionaries.start,
-                        rep.dictionaries.len,
-                        @intFromEnum(rep.source_type.ty),
-                    },
-                );
-                for (self.parent.plan.dictionarySlice(rep.dictionaries), 0..) |requirement, req_index| {
-                    std.debug.print(
-                        "debug_worker49_method_arg_dict arg_index={d} req_index={d} method={s} fn_ty={d} num_literal={}\n",
-                        .{
-                            index,
-                            req_index,
-                            procedureModuleById(self.parent.modules, requirement.source_type.module).canonical_names.methodNameText(requirement.fn_name),
-                            @intFromEnum(requirement.fn_ty.ty),
-                            requirement.num_literal != null,
-                        },
-                    );
-                }
-            }
-            const ret_rep = self.parent.plan.representations.items[@intFromEnum(method_function.ret)];
-            std.debug.print(
-                "debug_worker49_method_ret rep={d} kind={s} desc={any} source_ty={d}\n",
-                .{
-                    @intFromEnum(method_function.ret),
-                    @tagName(ret_rep.kind),
-                    ret_rep.descriptor,
-                    @intFromEnum(ret_rep.source_type.ty),
-                },
-            );
-        }
         const hidden_desc_args = try self.dictionaryCallHiddenDescriptorArgs(method_function_rep, arg_types, ret_type);
         defer self.parent.allocator.free(hidden_desc_args);
         var pre_arg_descriptor_initializers = std.ArrayList(DescriptorArgLocal).empty;
@@ -5586,36 +5139,13 @@ const ProcBodyBuilder = struct {
 
         const adapted_args = try self.parent.allocator.alloc(LIR.LocalId, source_args.len);
         defer self.parent.allocator.free(adapted_args);
-        for (source_args, adapted_args, arg_types, worker_args, worker_arg_children, 0..) |source, *adapted, arg_type, arg_layout, worker_arg, arg_index| {
+        for (source_args, adapted_args, arg_types, worker_args, worker_arg_children) |source, *adapted, arg_type, arg_layout, worker_arg| {
             const source_layout = self.workerRuntimeLayoutForTypeRef(arg_type);
             const source_rep = self.repForTypeRef(arg_type);
-            if (zig_builtin.mode == .Debug and @intFromEnum(worker_id) == 46) {
-                std.debug.print(
-                    "debug_worker46_arg index={d} source={d} source_rep={d} source_canon={d} source_type_layout={d} source_local_layout={d} source_desc={any} worker_rep={d} worker_canon={d} worker_layout={d}\n",
-                    .{
-                        arg_index,
-                        @intFromEnum(source),
-                        @intFromEnum(source_rep),
-                        @intFromEnum(self.canonicalDescriptorRep(source_rep)),
-                        @intFromEnum(source_layout.layoutIdx()),
-                        @intFromEnum(self.parent.result.store.getLocal(source).layout_idx),
-                        self.parent.result.store.getLocal(source).boxy_desc,
-                        @intFromEnum(worker_arg.rep),
-                        @intFromEnum(self.canonicalDescriptorRep(worker_arg.rep)),
-                        @intFromEnum(arg_layout.layoutIdx()),
-                    },
-                );
-            }
             adapted.* = if (source_layout.layoutIdx() == arg_layout.layoutIdx() and self.canonicalDescriptorRep(source_rep) == self.canonicalDescriptorRep(worker_arg.rep))
                 source
             else
                 try self.addFrameBoundaryTargetLocalForRep(worker_arg.rep);
-            if (zig_builtin.mode == .Debug and @intFromEnum(worker_id) == 46) {
-                std.debug.print(
-                    "debug_worker46_arg_adapted index={d} source={d} adapted={d}\n",
-                    .{ arg_index, @intFromEnum(source), @intFromEnum(adapted.*) },
-                );
-            }
         }
 
         const hidden_desc_args = self.parent.plan.directCallHiddenDescriptorArgSlice(hidden_desc_args_span);
@@ -5668,7 +5198,6 @@ const ProcBodyBuilder = struct {
         if (result_desc_info.materialize) |materialize| {
             const desc = materialize.materialize orelse
                 boxyLowerInvariant("boxy direct call result descriptor materialization had no descriptor");
-            self.debugDescriptorWrite("direct_call_result", materialize.local, desc);
             continuation = try self.parent.result.store.addCFStmt(.{ .assign_boxy_desc_ref = .{
                 .target = materialize.local,
                 .desc = desc,
@@ -5767,37 +5296,6 @@ const ProcBodyBuilder = struct {
         try self.reserveMatchBranchRepresentativeBindings(branches);
 
         const cond_expr = self.module.checked_bodies.expr(cond);
-        if (zig_builtin.mode == .Debug and @intFromEnum(self.worker_layout.worker) == 4 and branches.len == 1) {
-            std.debug.print(
-                "debug_single_branch_match worker=4 target={d} match_ty={d} cond={d} cond_tag={s} cond_ty={d} branches={d}\n",
-                .{
-                    @intFromEnum(target),
-                    @intFromEnum(match_ty),
-                    @intFromEnum(cond),
-                    @tagName(cond_expr.data),
-                    @intFromEnum(cond_expr.ty),
-                    branches.len,
-                },
-            );
-            const branch = branches[0];
-            const branch_value = self.module.checked_bodies.expr(branch.value);
-            for (branch.patternsSlice(self.module.checked_bodies), 0..) |branch_pattern, pattern_index| {
-                const pattern = self.module.checked_bodies.pattern(branch_pattern.pattern);
-                std.debug.print(
-                    "debug_single_branch_pattern index={d} pattern={d} tag={s} ty={d} value={d} value_tag={s} value_ty={d} degenerate={}\n",
-                    .{
-                        pattern_index,
-                        @intFromEnum(branch_pattern.pattern),
-                        @tagName(pattern.data),
-                        @intFromEnum(pattern.ty),
-                        @intFromEnum(branch.value),
-                        @tagName(branch_value.data),
-                        @intFromEnum(branch_value.ty),
-                        branch_pattern.degenerate,
-                    },
-                );
-            }
-        }
         const cond_local = try self.addFrameLocalForType(cond_expr.ty);
         const outer_descriptors = try self.snapshotDescriptorBindings();
         defer outer_descriptors.deinit(self.parent.allocator);
@@ -5818,7 +5316,6 @@ const ProcBodyBuilder = struct {
         if (cond_desc) |desc| {
             if (!cond_desc_was_bound) {
                 const cond_static_desc = try self.parent.staticDescRefForRep(cond_rep);
-                self.debugDescriptorWrite("match_cond", desc.local, cond_static_desc);
                 remainder = try self.parent.result.store.addCFStmt(.{ .assign_boxy_desc_ref = .{
                     .target = desc.local,
                     .desc = cond_static_desc,
@@ -5996,18 +5493,6 @@ const ProcBodyBuilder = struct {
     ) Allocator.Error!LIR.CFStmtId {
         const expr = self.module.checked_bodies.expr(expr_id);
         const source_rep = self.repForType(expr.ty);
-        if (zig_builtin.mode == .Debug and @intFromEnum(self.worker_layout.worker) == 80) {
-            std.debug.print(
-                "debug_worker80_lower_expr target_rep={d} source_rep={d} expr={d} expr_ty={d} direct={}\n",
-                .{
-                    @intFromEnum(target_rep),
-                    @intFromEnum(source_rep),
-                    @intFromEnum(expr_id),
-                    @intFromEnum(expr.ty),
-                    self.representationBoundaryIsDirect(target_rep, source_rep),
-                },
-            );
-        }
         if (self.representationBoundaryIsDirect(target_rep, source_rep)) {
             return try self.lowerExprInto(target, expr_id, next);
         }
@@ -6555,30 +6040,6 @@ const ProcBodyBuilder = struct {
     ) Allocator.Error!LIR.CFStmtId {
         const access = self.recordFieldAccessInfo(receiver_rep, field_view, field_name);
         const receiver_layout = self.workerRuntimeLayoutForRep(receiver_rep);
-        if (zig_builtin.mode == .Debug) {
-            const local_layout = self.parent.result.store.getLocal(receiver_local).layout_idx;
-            const local_layout_value = self.parent.result.layouts.getLayout(local_layout);
-            if (receiver_layout == .concrete and (local_layout_value.tag == .box or local_layout_value.tag == .box_of_zst)) {
-                const rep_info = self.parent.plan.representations.items[@intFromEnum(receiver_rep)];
-                const access_info = self.parent.plan.representations.items[@intFromEnum(access.record_rep)];
-                std.debug.print(
-                    "debug_record_field_boxed_concrete worker={d} receiver={d} local_layout={d} local_tag={s} receiver_rep={d} receiver_kind={s} access_rep={d} access_kind={s} field={d} target={d} target_rep={d}\n",
-                    .{
-                        @intFromEnum(self.worker_layout.worker),
-                        @intFromEnum(receiver_local),
-                        @intFromEnum(local_layout),
-                        @tagName(local_layout_value.tag),
-                        @intFromEnum(receiver_rep),
-                        @tagName(rep_info.kind),
-                        @intFromEnum(access.record_rep),
-                        @tagName(access_info.kind),
-                        access.field_idx,
-                        @intFromEnum(target),
-                        @intFromEnum(target_rep),
-                    },
-                );
-            }
-        }
         const nested_desc_index = self.recordFieldNestedDescriptorIndex(access.record_rep, access.field_idx);
         const receiver_desc = if (receiver_layout == .dynamic_box or nested_desc_index != null)
             try self.descriptorRefForLocalOrKnownRep(receiver_local, access.record_rep)
@@ -6631,15 +6092,15 @@ const ProcBodyBuilder = struct {
             .concrete => before_read,
             .dynamic_box => blk: {
                 const unbox = try self.parent.result.store.addCFStmt(.{ .assign_boxy_unbox = .{
-                .target = read_source,
-                .source = receiver_local,
-                .source_desc = receiver_desc orelse
-                    boxyLowerInvariant("dynamic record field unbox had no source descriptor"),
-                .target_desc = unboxed_receiver_desc_info.desc,
-                .target_layout = self.parent.result.store.getLocal(read_source).layout_idx,
-                .source_mode = .borrow,
-                .next = before_read,
-            } });
+                    .target = read_source,
+                    .source = receiver_local,
+                    .source_desc = receiver_desc orelse
+                        boxyLowerInvariant("dynamic record field unbox had no source descriptor"),
+                    .target_desc = unboxed_receiver_desc_info.desc,
+                    .target_layout = self.parent.result.store.getLocal(read_source).layout_idx,
+                    .source_mode = .borrow,
+                    .next = before_read,
+                } });
                 break :blk try self.prependOptionalDescriptorMaterialization(unboxed_receiver_desc_info.materialize, unbox);
             },
         };
@@ -6812,24 +6273,7 @@ const ProcBodyBuilder = struct {
                         field_count,
                     );
                     if (self.recordExprFieldIndex(expr_fields, rep_field_view, label)) |source_index| {
-                        const expr = self.module.checked_bodies.expr(expr_fields[source_index].value);
-                        const source_rep = self.repForType(expr.ty);
                         const local = try self.addFrameLocal(field_layout);
-                        if (zig_builtin.mode == .Debug and @intFromEnum(self.parent.result.store.getLocal(target).layout_idx) == 349) {
-                            std.debug.print(
-                                "debug_record_payload349_field worker={d} layout_index={d} label={s} child_rep={d} source_index={d} source_expr={d} source_rep={d} local={d}\n",
-                                .{
-                                    @intFromEnum(self.worker_layout.worker),
-                                    layout_index,
-                                    rep_field_view.canonical_names.recordFieldLabelText(label),
-                                    @intFromEnum(child.rep),
-                                    source_index,
-                                    @intFromEnum(expr_fields[source_index].value),
-                                    @intFromEnum(source_rep),
-                                    @intFromEnum(local),
-                                },
-                            );
-                        }
                         field_locals[layout_index] = local;
                         descriptor_fields[layout_index] = .{ .local = local, .rep = child.rep };
                         if (source_field_locals[source_index] != null) {
@@ -6972,27 +6416,6 @@ const ProcBodyBuilder = struct {
             const ext_expr = self.module.checked_bodies.expr(ext);
             const ext_rep = self.repForType(ext_expr.ty);
             const ext_local = try self.addFrameLocalForRep(ext_rep);
-            if (zig_builtin.mode == .Debug) {
-                const ext_layout = self.parent.result.store.getLocal(ext_local).layout_idx;
-                const ext_layout_value = self.parent.result.layouts.getLayout(ext_layout);
-                const ext_rep_info = self.parent.plan.representations.items[@intFromEnum(ext_rep)];
-                std.debug.print(
-                    "debug_record_expr_ext worker={d} target={d} record_ty={d} target_rep={d} ext_expr={d} ext_ty={d} ext_rep={d} ext_kind={s} ext_local={d} ext_layout={d} ext_tag={s}\n",
-                    .{
-                        @intFromEnum(self.worker_layout.worker),
-                        @intFromEnum(target),
-                        @intFromEnum(record_ty),
-                        @intFromEnum(self.repForType(record_ty)),
-                        @intFromEnum(ext),
-                        @intFromEnum(ext_expr.ty),
-                        @intFromEnum(ext_rep),
-                        @tagName(ext_rep_info.kind),
-                        @intFromEnum(ext_local),
-                        @intFromEnum(ext_layout),
-                        @tagName(ext_layout_value.tag),
-                    },
-                );
-            }
             const continuation = try self.lowerRecordRepInto(target, self.repForType(record_ty), record.fields, .{
                 .local = ext_local,
                 .rep = ext_rep,
@@ -7582,7 +7005,6 @@ const ProcBodyBuilder = struct {
                     if (backing_desc) |reserved| {
                         if (reserved.fresh) {
                             const backing_static_desc = try self.parent.staticDescRefForRep(backing_rep);
-                            self.debugDescriptorWrite("nominal_pattern_backing", reserved.local, backing_static_desc);
                             matched = try self.parent.result.store.addCFStmt(.{ .assign_boxy_desc_ref = .{
                                 .target = reserved.local,
                                 .desc = backing_static_desc,
@@ -7806,7 +7228,6 @@ const ProcBodyBuilder = struct {
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
         const materialization = try self.descriptorMaterializationForKnownRep(payload_rep);
-        self.debugDescriptorWrite("tag_payload_descriptor", target, materialization.desc);
         return try self.parent.result.store.addCFStmt(.{ .assign_boxy_desc_ref = .{
             .target = target,
             .desc = materialization.desc,
@@ -9412,69 +8833,6 @@ const ProcBodyBuilder = struct {
             boxyLowerInvariant("boxy dictionary call hidden descriptor mapping did not cover every method descriptor param");
         }
 
-        const debug_worker77_rep = if (self.parent.plan.workers.items.len > 77)
-            self.parent.plan.workers.items[77].rep
-        else
-            null;
-        if (zig_builtin.mode == .Debug and ((debug_worker77_rep != null and method_function_rep_id == debug_worker77_rep.?) or params.items.len == 7)) {
-            const children = self.parent.plan.childSlice(self.parent.plan.representations.items[@intFromEnum(method_function.rep)].children);
-            std.debug.print(
-                "debug_method77_call_hidden method_rep={d} function_ret={d} ret_ty={d} args_start={d} arg_count={d} children={d} params={d} pending={d}\n",
-                .{
-                    @intFromEnum(method_function_rep_id),
-                    @intFromEnum(method_function.ret),
-                    @intFromEnum(ret_type.ty),
-                    method_function.args_start,
-                    method_function.arg_count,
-                    children.len,
-                    params.items.len,
-                    pending.items.len,
-                },
-            );
-            for (children, 0..) |child, child_index| {
-                const child_rep = self.parent.plan.representations.items[@intFromEnum(child.rep)];
-                std.debug.print(
-                    "debug_method77_call_child index={d} role={s} rep={d} kind={s} source_ty={d}\n",
-                    .{
-                        child_index,
-                        @tagName(child.role),
-                        @intFromEnum(child.rep),
-                        @tagName(child_rep.kind),
-                        @intFromEnum(child_rep.source_type.ty),
-                    },
-                );
-            }
-            for (params.items, 0..) |param, index| {
-                const rep = self.parent.plan.representations.items[@intFromEnum(param.rep)];
-                std.debug.print(
-                    "debug_method77_call_param index={d} desc={d} rep={d} kind={s} source_ty={d}\n",
-                    .{
-                        index,
-                        @intFromEnum(param.desc),
-                        @intFromEnum(param.rep),
-                        @tagName(rep.kind),
-                        @intFromEnum(rep.source_type.ty),
-                    },
-                );
-            }
-            for (pending.items, 0..) |arg, index| {
-                const worker_rep = self.parent.plan.representations.items[@intFromEnum(arg.worker_rep)];
-                const call_rep = self.parent.plan.representations.items[@intFromEnum(arg.rep)];
-                std.debug.print(
-                    "debug_method77_call_arg index={d} worker_desc={d} worker_rep={d} worker_kind={s} call_rep={d} call_kind={s} source_ty={d}\n",
-                    .{
-                        index,
-                        @intFromEnum(arg.worker_desc),
-                        @intFromEnum(arg.worker_rep),
-                        @tagName(worker_rep.kind),
-                        @intFromEnum(arg.rep),
-                        @tagName(call_rep.kind),
-                        @intFromEnum(arg.source_type.ty),
-                    },
-                );
-            }
-        }
-
         return try pending.toOwnedSlice(self.parent.allocator);
     }
 
@@ -9831,47 +9189,6 @@ const ProcBodyBuilder = struct {
             local.* = .{ .local = try self.addFrameLocal(.opaque_ptr) };
         }
 
-        if (zig_builtin.mode == .Debug) {
-            for (hidden_args, lowered, 0..) |arg, local, index| {
-                if (@intFromEnum(arg.worker_desc) != 12 and @intFromEnum(arg.worker_desc) != 13) continue;
-                const worker_rep = self.parent.plan.representations.items[@intFromEnum(arg.worker_rep)];
-                const call_rep = self.parent.plan.representations.items[@intFromEnum(arg.rep)];
-                std.debug.print(
-                    "debug_hidden_desc12_lower worker={d} index={d} worker_desc={d} worker_rep={d}:{s} call_rep={d}:{s} source_ty={d} local={d} materialize={any} captures={d}+{d} uses_call_shape={}\n",
-                    .{
-                        @intFromEnum(self.worker_layout.worker),
-                        index,
-                        @intFromEnum(arg.worker_desc),
-                        @intFromEnum(arg.worker_rep),
-                        @tagName(worker_rep.kind),
-                        @intFromEnum(arg.rep),
-                        @tagName(call_rep.kind),
-                        @intFromEnum(arg.source_type.ty),
-                        @intFromEnum(local.local),
-                        local.materialize,
-                        local.captures.start,
-                        local.captures.len,
-                        self.directCallHiddenDescriptorUsesCallShape(arg),
-                    },
-                );
-                for (arg_types, source_args, 0..) |arg_type, source, source_index| {
-                    const source_rep = self.repForTypeRef(arg_type);
-                    std.debug.print(
-                        "debug_hidden_desc12_source index={d} source={d} ty={d} rep={d}:{s} canonical={d} desc={any}\n",
-                        .{
-                            source_index,
-                            @intFromEnum(source),
-                            @intFromEnum(arg_type.ty),
-                            @intFromEnum(source_rep),
-                            @tagName(self.parent.plan.representations.items[@intFromEnum(source_rep)].kind),
-                            @intFromEnum(self.canonicalDescriptorRep(source_rep)),
-                            self.parent.result.store.getLocal(source).boxy_desc,
-                        },
-                    );
-                }
-            }
-        }
-
         const snapshot = try self.snapshotDescriptorBindings();
         defer snapshot.deinit(self.parent.allocator);
         defer self.restoreDescriptorBindings(snapshot);
@@ -9952,12 +9269,6 @@ const ProcBodyBuilder = struct {
             }
 
             const local = try self.addFrameLocal(.opaque_ptr);
-            if (zig_builtin.mode == .Debug and @intFromEnum(local) == 2228) {
-                std.debug.print(
-                    "debug_source_desc_local_2228 worker={d} source={d} existing={any}\n",
-                    .{ @intFromEnum(self.worker_layout.worker), @intFromEnum(source), existing },
-                );
-            }
             self.parent.result.store.replaceLocalBoxyDescMetadataOnly(source, .{ .local = local });
             try pre_arg_descriptor_initializers.append(self.parent.allocator, .{
                 .local = local,
@@ -9967,12 +9278,6 @@ const ProcBodyBuilder = struct {
         }
 
         const local = try self.addFrameLocal(.opaque_ptr);
-        if (zig_builtin.mode == .Debug and @intFromEnum(local) == 2228) {
-            std.debug.print(
-                "debug_source_desc_local_2228 worker={d} source={d} existing=null\n",
-                .{ @intFromEnum(self.worker_layout.worker), @intFromEnum(source) },
-            );
-        }
         self.parent.result.store.replaceLocalBoxyDescMetadataOnly(source, .{ .local = local });
         return .{ .local = local, .from_source_value = true };
     }
@@ -10283,20 +9588,6 @@ const ProcBodyBuilder = struct {
         errdefer self.parent.allocator.free(lowered);
 
         for (hidden_args, lowered) |arg, *local| {
-            const debug_rep = self.parent.plan.representations.items[@intFromEnum(arg.rep)];
-            std.debug.print(
-                "debug_hidden_dict_arg rep={d} kind={s} dicts={d}+{d} worker_dicts={d}+{d} source_ty={d} bound={}\n",
-                .{
-                    @intFromEnum(arg.rep),
-                    @tagName(debug_rep.kind),
-                    debug_rep.dictionaries.start,
-                    debug_rep.dictionaries.len,
-                    arg.worker_dictionaries.start,
-                    arg.worker_dictionaries.len,
-                    @intFromEnum(debug_rep.source_type.ty),
-                    self.dictionaryBindingIsBoundForSpan(debug_rep.dictionaries),
-                },
-            );
             const dict_ref = try self.dictionaryRefForKnownRep(arg.rep, arg.worker_dictionaries);
             local.* = switch (dict_ref) {
                 .local => |dict_local| blk: {
@@ -10591,7 +9882,6 @@ const ProcBodyBuilder = struct {
             if (self.descriptorBindingIsBound(desc)) return next;
         }
         const materialization = try self.descriptorMaterializationForSourceRep(source_rep);
-        self.debugDescriptorWrite("descriptor_rebind_from_rep", target_desc_local, materialization.desc);
         return try self.parent.result.store.addCFStmt(.{ .assign_boxy_desc_ref = .{
             .target = target_desc_local,
             .desc = materialization.desc,
@@ -10637,19 +9927,6 @@ const ProcBodyBuilder = struct {
 
         const desc_id: LIR.BoxyTypeDescId = @enumFromInt(@as(u32, @intCast(self.parent.result.boxy_type_descs.items.len)));
         context.ids[rep_index] = desc_id;
-        if (zig_builtin.mode == .Debug and (@intFromEnum(rep_id) == 376 or @intFromEnum(rep_id) == 377 or @intFromEnum(rep_id) == 373)) {
-            const rep = self.parent.plan.representations.items[rep_index];
-            std.debug.print(
-                "debug_template_desc_alloc rep={d} desc_id={d} kind={s} desc={any} source_ty={d}\n",
-                .{
-                    @intFromEnum(rep_id),
-                    @intFromEnum(desc_id),
-                    @tagName(rep.kind),
-                    rep.descriptor,
-                    @intFromEnum(rep.source_type.ty),
-                },
-            );
-        }
         try self.parent.result.boxy_type_descs.append(self.parent.allocator, .{
             .payload_layout = .zst,
             .contains_refcounted = false,
@@ -10694,19 +9971,6 @@ const ProcBodyBuilder = struct {
                 const field_layout = self.parent.recordPayloadFieldLayout(payload_layout, field.index);
                 if (!self.parent.layoutNeedsNestedBoxyDesc(field_layout)) continue;
                 const desc_rep = self.parent.tagPayloadStorageDescRepForLayout(field.rep, field_layout, false) orelse continue;
-                if (zig_builtin.mode == .Debug and @intFromEnum(payload_layout) == 349) {
-                    std.debug.print(
-                        "debug_template_nested_declared payload={d} rep={d} field_index={d} field_layout={d} field_rep={d} desc_rep={d}\n",
-                        .{
-                            @intFromEnum(payload_layout),
-                            @intFromEnum(rep_id),
-                            field.index,
-                            @intFromEnum(field_layout),
-                            @intFromEnum(field.rep),
-                            @intFromEnum(desc_rep),
-                        },
-                    );
-                }
                 try refs.append(self.parent.allocator, try self.descriptorTemplateRefForRep(desc_rep, current_desc, captures, context));
             }
         } else {
@@ -10728,39 +9992,7 @@ const ProcBodyBuilder = struct {
                 };
                 if (!force_desc and !self.parent.layoutNeedsNestedBoxyDesc(field_layout)) continue;
                 const desc_rep = self.parent.tagPayloadStorageDescRepForLayout(child.rep, field_layout, force_desc) orelse continue;
-                if (zig_builtin.mode == .Debug and @intFromEnum(payload_layout) == 349) {
-                    const child_info = self.parent.plan.representations.items[@intFromEnum(child.rep)];
-                    const desc_info = self.parent.plan.representations.items[@intFromEnum(desc_rep)];
-                    std.debug.print(
-                        "debug_template_nested_child payload={d} rep={d} role={s} field_layout={d} child_rep={d} child_kind={s} child_desc={any} child_ty={d} desc_rep={d} desc_kind={s} desc_ty={d}\n",
-                        .{
-                            @intFromEnum(payload_layout),
-                            @intFromEnum(rep_id),
-                            @tagName(child.role),
-                            @intFromEnum(field_layout),
-                            @intFromEnum(child.rep),
-                            @tagName(child_info.kind),
-                            child_info.descriptor,
-                            @intFromEnum(child_info.source_type.ty),
-                            @intFromEnum(desc_rep),
-                            @tagName(desc_info.kind),
-                            @intFromEnum(desc_info.source_type.ty),
-                        },
-                    );
-                }
                 const desc_ref = try self.descriptorTemplateRefForRep(desc_rep, current_desc, captures, context);
-                if (zig_builtin.mode == .Debug and @intFromEnum(payload_layout) == 349) {
-                    std.debug.print(
-                        "debug_template_nested_child_ref payload={d} rep={d} child_rep={d} desc_rep={d} desc_ref={any}\n",
-                        .{
-                            @intFromEnum(payload_layout),
-                            @intFromEnum(rep_id),
-                            @intFromEnum(child.rep),
-                            @intFromEnum(desc_rep),
-                            desc_ref,
-                        },
-                    );
-                }
                 try refs.append(self.parent.allocator, desc_ref);
             }
         }
@@ -10816,16 +10048,6 @@ const ProcBodyBuilder = struct {
 
         for (variants, 0..) |variant, index| {
             const variant_payload_layout = tag_info.variants.get(index).payload_layout;
-            if (zig_builtin.mode == .Debug and @intFromEnum(payload_layout) == 74) {
-                std.debug.print(
-                    "debug_template_tag_variant74 rep={d} variant_index={d} payload_layout={d}\n",
-                    .{
-                        @intFromEnum(tag_rep_id),
-                        index,
-                        @intFromEnum(variant_payload_layout),
-                    },
-                );
-            }
             try entries.append(self.parent.allocator, .{
                 .name = try self.parent.result.store.insertString(self.tagVariantNameText(variant)),
                 .discriminant = @intCast(index),
@@ -11019,7 +10241,6 @@ const ProcBodyBuilder = struct {
             const hidden = hidden_args[order.items[index]];
             const desc = hidden.materialize orelse
                 boxyLowerInvariant("boxy hidden descriptor materialization order included a descriptor with no materialization");
-            self.debugDescriptorWrite("hidden_descriptor_arg", hidden.local, desc);
             continuation = try self.parent.result.store.addCFStmt(.{ .assign_boxy_desc_ref = .{
                 .target = hidden.local,
                 .desc = desc,
@@ -11038,7 +10259,6 @@ const ProcBodyBuilder = struct {
         const hidden = maybe_hidden orelse return next;
         const desc = hidden.materialize orelse
             boxyLowerInvariant("optional descriptor materialization had no descriptor");
-        self.debugDescriptorWrite("optional_descriptor", hidden.local, desc);
         return try self.parent.result.store.addCFStmt(.{ .assign_boxy_desc_ref = .{
             .target = hidden.local,
             .desc = desc,
@@ -11688,22 +10908,6 @@ const ProcBodyBuilder = struct {
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
         const source_desc = try self.descriptorRefForSourceLocalRep(source, rep_id);
-        if (zig_builtin.mode == .Debug) {
-            const canonical_rep = self.canonicalDescriptorRep(rep_id);
-            const rep = self.parent.plan.representations.items[@intFromEnum(canonical_rep)];
-            std.debug.print(
-                "debug_lower_inspect worker={d} target={d} source={d} rep={d} canonical_rep={d} desc_req={d} source_desc={any}\n",
-                .{
-                    @intFromEnum(self.worker_layout.worker),
-                    @intFromEnum(target),
-                    @intFromEnum(source),
-                    @intFromEnum(rep_id),
-                    @intFromEnum(canonical_rep),
-                    if (rep.descriptor) |desc| @intFromEnum(desc) else std.math.maxInt(u32),
-                    source_desc,
-                },
-            );
-        }
         return try self.parent.result.store.addCFStmt(.{ .assign_boxy_inspect = .{
             .target = target,
             .source = source,
@@ -13018,32 +12222,6 @@ const ProcBodyBuilder = struct {
             .local, .runtime => boxyLowerInvariant("boxy dynamic literal target used a runtime descriptor without a concrete literal payload layout"),
         };
         if (payload_layout == target_layout) {
-            if (zig_builtin.mode == .Debug) {
-                const desc_id = switch (payload_desc) {
-                    .static => |static| @intFromEnum(static),
-                    .local => std.math.maxInt(u32) - 1,
-                    .runtime => |runtime| runtime,
-                };
-                const desc = switch (payload_desc) {
-                    .static => |static| self.parent.result.boxy_type_descs.items[@intFromEnum(static)],
-                    else => LirProgram.BoxyTypeDesc{
-                        .payload_layout = payload_layout,
-                        .contains_refcounted = false,
-                    },
-                };
-                std.debug.print(
-                    "debug_dynamic_literal_unresolved worker={d} target={d} target_layout={d} desc_ref={s}:{d} desc_payload={d} desc_ty={d}\n",
-                    .{
-                        @intFromEnum(self.worker_layout.worker),
-                        @intFromEnum(target),
-                        @intFromEnum(target_layout),
-                        @tagName(payload_desc),
-                        desc_id,
-                        @intFromEnum(desc.payload_layout),
-                        if (desc.debug_checked_type) |ty| @intFromEnum(ty) else std.math.maxInt(u32),
-                    },
-                );
-            }
             boxyLowerInvariant("boxy dynamic literal target descriptor resolved to dynamic storage");
         }
         return .{
@@ -13410,24 +12588,6 @@ const ProcBodyBuilder = struct {
         const adapter = try self.emitCallableAdapterProc(source_function, target_function);
         const descriptor_captures = try self.collectCallableAdapterDescriptorCaptures(source_function, target_function);
         defer self.parent.allocator.free(descriptor_captures);
-        if (zig_builtin.mode == .Debug) {
-            std.debug.print(
-                "debug_callable_adapter_boundary source_fn={d} target_fn={d} source_ret={d} target_ret={d} captures={d}\n",
-                .{
-                    @intFromEnum(source_function.rep),
-                    @intFromEnum(target_function.rep),
-                    @intFromEnum(source_function.ret),
-                    @intFromEnum(target_function.ret),
-                    descriptor_captures.len,
-                },
-            );
-            for (descriptor_captures, 0..) |capture, index| {
-                std.debug.print(
-                    "debug_callable_adapter_boundary_capture index={d} desc={d} rep={d} ty={d}\n",
-                    .{ index, @intFromEnum(capture.desc), @intFromEnum(capture.rep), @intFromEnum(capture.source_type.ty) },
-                );
-            }
-        }
 
         const capture_local = try self.addFrameLocal(adapter.capture_layout);
         const capture_fields = try self.parent.allocator.alloc(LIR.LocalId, 1 + descriptor_captures.len);
@@ -13538,24 +12698,6 @@ const ProcBodyBuilder = struct {
 
         const descriptor_captures = try self.collectCallableAdapterDescriptorCaptures(source_function, target_function);
         defer self.parent.allocator.free(descriptor_captures);
-        if (zig_builtin.mode == .Debug) {
-            std.debug.print(
-                "debug_callable_adapter_proc source_fn={d} target_fn={d} source_ret={d} target_ret={d} captures={d}\n",
-                .{
-                    @intFromEnum(source_function.rep),
-                    @intFromEnum(target_function.rep),
-                    @intFromEnum(source_function.ret),
-                    @intFromEnum(target_function.ret),
-                    descriptor_captures.len,
-                },
-            );
-            for (descriptor_captures, 0..) |capture, index| {
-                std.debug.print(
-                    "debug_callable_adapter_proc_capture index={d} desc={d} rep={d} ty={d}\n",
-                    .{ index, @intFromEnum(capture.desc), @intFromEnum(capture.rep), @intFromEnum(capture.source_type.ty) },
-                );
-            }
-        }
 
         const source_closure_layout = self.workerRuntimeLayoutForRep(source_function.rep).layoutIdx();
         const capture_layout = try self.callableAdapterCaptureLayout(source_closure_layout, descriptor_captures.len);
@@ -13822,73 +12964,6 @@ const ProcBodyBuilder = struct {
         const source_layout = self.parent.result.store.getLocal(source).layout_idx;
         const canonical_target_rep = self.canonicalDescriptorRep(target_rep);
         const canonical_source_rep = self.canonicalDescriptorRep(source_rep);
-        if (zig_builtin.mode == .Debug) {
-            const source_layout_value = self.parent.result.layouts.getLayout(source_layout);
-            const source_worker_layout = self.workerRuntimeLayoutForRep(canonical_source_rep).layoutIdx();
-            const source_worker_layout_value = self.parent.result.layouts.getLayout(source_worker_layout);
-            if ((source_layout_value.tag == .box or source_layout_value.tag == .box_of_zst) and
-                source_worker_layout_value.tag != .box and source_worker_layout_value.tag != .box_of_zst)
-            {
-                const source_info = self.parent.plan.representations.items[@intFromEnum(source_rep)];
-                const canonical_source_info = self.parent.plan.representations.items[@intFromEnum(canonical_source_rep)];
-                const target_info = self.parent.plan.representations.items[@intFromEnum(target_rep)];
-                const canonical_target_info = self.parent.plan.representations.items[@intFromEnum(canonical_target_rep)];
-                std.debug.print(
-                    "debug_boundary_boxed_source_as_concrete worker={d} target={d} target_layout={d} target_rep={d} target_kind={s} target_canon={d} target_canon_kind={s} source={d} source_layout={d} source_tag={s} source_rep={d} source_kind={s} source_canon={d} source_canon_kind={s} source_worker_layout={d} source_worker_tag={s}\n",
-                    .{
-                        @intFromEnum(self.worker_layout.worker),
-                        @intFromEnum(target),
-                        @intFromEnum(target_layout),
-                        @intFromEnum(target_rep),
-                        @tagName(target_info.kind),
-                        @intFromEnum(canonical_target_rep),
-                        @tagName(canonical_target_info.kind),
-                        @intFromEnum(source),
-                        @intFromEnum(source_layout),
-                        @tagName(source_layout_value.tag),
-                        @intFromEnum(source_rep),
-                        @tagName(source_info.kind),
-                        @intFromEnum(canonical_source_rep),
-                        @tagName(canonical_source_info.kind),
-                        @intFromEnum(source_worker_layout),
-                        @tagName(source_worker_layout_value.tag),
-                    },
-                );
-            }
-        }
-        if (zig_builtin.mode == .Debug and @intFromEnum(source) == 1686) {
-            const target_info = self.parent.plan.representations.items[@intFromEnum(target_rep)];
-            const source_info = self.parent.plan.representations.items[@intFromEnum(source_rep)];
-            const canonical_target_info = self.parent.plan.representations.items[@intFromEnum(canonical_target_rep)];
-            const canonical_source_info = self.parent.plan.representations.items[@intFromEnum(canonical_source_rep)];
-            const target_record_rep = self.recordRepForBoundary(canonical_target_rep);
-            const source_record_rep = self.recordRepForBoundary(canonical_source_rep);
-            const target_record_kind = if (target_record_rep) |rep| @tagName(self.parent.plan.representations.items[@intFromEnum(rep)].kind) else "none";
-            const source_record_kind = if (source_record_rep) |rep| @tagName(self.parent.plan.representations.items[@intFromEnum(rep)].kind) else "none";
-            std.debug.print(
-                "debug_boundary_from1686 builder_worker={d} target={d} target_rep={d} target_kind={s} target_canon={d} target_canon_kind={s} target_record={d} target_record_kind={s} source_rep={d} source_kind={s} source_canon={d} source_canon_kind={s} source_record={d} source_record_kind={s} target_layout={d} source_layout={d} target_desc={any} source_desc={any}\n",
-                .{
-                    @intFromEnum(self.worker_layout.worker),
-                    @intFromEnum(target),
-                    @intFromEnum(target_rep),
-                    @tagName(target_info.kind),
-                    @intFromEnum(canonical_target_rep),
-                    @tagName(canonical_target_info.kind),
-                    if (target_record_rep) |rep| @intFromEnum(rep) else std.math.maxInt(u32),
-                    target_record_kind,
-                    @intFromEnum(source_rep),
-                    @tagName(source_info.kind),
-                    @intFromEnum(canonical_source_rep),
-                    @tagName(canonical_source_info.kind),
-                    if (source_record_rep) |rep| @intFromEnum(rep) else std.math.maxInt(u32),
-                    source_record_kind,
-                    @intFromEnum(target_layout),
-                    @intFromEnum(source_layout),
-                    self.parent.result.store.getLocal(target).boxy_desc,
-                    self.parent.result.store.getLocal(source).boxy_desc,
-                },
-            );
-        }
         if (target_layout == source_layout and canonical_target_rep == canonical_source_rep) {
             return if (target == source) next else try self.assignLocal(target, source, next);
         }
@@ -14004,7 +13079,6 @@ const ProcBodyBuilder = struct {
         if (!self.descriptorBindingIsBoundForRep(target_rep)) {
             if (try self.reserveDescriptorLocalForRep(target_rep)) |target_desc| {
                 self.parent.result.store.replaceLocalBoxyDesc(target, .{ .local = target_desc });
-                self.debugDescriptorWrite("dynamic_box_boundary", target_desc, source_desc);
                 const rebind = try self.parent.result.store.addCFStmt(.{ .assign_boxy_desc_ref = .{
                     .target = target_desc,
                     .desc = source_desc,
@@ -14179,34 +13253,6 @@ const ProcBodyBuilder = struct {
             } });
         }
 
-        if (zig_builtin.mode == .Debug) {
-            const source_layout = self.parent.result.store.getLocal(source).layout_idx;
-            const source_layout_value = self.parent.result.layouts.getLayout(source_layout);
-            if (source_layout_value.tag == .box or source_layout_value.tag == .box_of_zst) {
-                const source_info = self.parent.plan.representations.items[@intFromEnum(source_rep)];
-                const target_info = self.parent.plan.representations.items[@intFromEnum(target_rep)];
-                const source_record_info = self.parent.plan.representations.items[@intFromEnum(source_record_rep)];
-                const target_record_info = self.parent.plan.representations.items[@intFromEnum(target_record_rep)];
-                std.debug.print(
-                    "debug_concrete_record_boundary_boxed_source worker={d} target={d} target_rep={d} target_kind={s} target_record={d} target_record_kind={s} source={d} source_layout={d} source_tag={s} source_rep={d} source_kind={s} source_record={d} source_record_kind={s}\n",
-                    .{
-                        @intFromEnum(self.worker_layout.worker),
-                        @intFromEnum(target),
-                        @intFromEnum(target_rep),
-                        @tagName(target_info.kind),
-                        @intFromEnum(target_record_rep),
-                        @tagName(target_record_info.kind),
-                        @intFromEnum(source),
-                        @intFromEnum(source_layout),
-                        @tagName(source_layout_value.tag),
-                        @intFromEnum(source_rep),
-                        @tagName(source_info.kind),
-                        @intFromEnum(source_record_rep),
-                        @tagName(source_record_info.kind),
-                    },
-                );
-            }
-        }
         const target_field_count = self.recordFieldCount(self.parent.plan.childSlice(target_record.children));
         if (target_field_count == 0) return null;
 
@@ -14705,15 +13751,9 @@ const ProcBodyBuilder = struct {
         for (variants) |variant| {
             const source_payloads = self.parent.plan.childSlice(variant.payloads);
             const target_payloads = (try self.dynamicTagPayloadsForRepTagNameOrNull(target_rep, source_tag_rep, variant.name)) orelse {
-                if (zig_builtin.mode == .Debug) {
-                    std.debug.print("debug_reuse_desc no_target_payloads tag={d}\n", .{@intFromEnum(variant.name)});
-                }
                 return false;
             };
             if (source_payloads.len != target_payloads.len) {
-                if (zig_builtin.mode == .Debug) {
-                    std.debug.print("debug_reuse_desc payload_len tag={d} source={d} target={d}\n", .{ @intFromEnum(variant.name), source_payloads.len, target_payloads.len });
-                }
                 return false;
             }
             for (source_payloads, target_payloads) |source_payload, target_payload| {
@@ -15314,7 +14354,6 @@ const ProcBodyBuilder = struct {
             target_desc = .{ .local = target_desc_local };
             self.parent.result.store.replaceLocalBoxyDesc(target, target_desc);
         }
-        self.debugDescriptorWrite("set_local_descriptor", target_desc_local, source_desc);
         return try self.parent.result.store.addCFStmt(.{ .assign_boxy_desc_ref = .{
             .target = target_desc_local,
             .desc = source_desc,
@@ -15390,23 +14429,6 @@ const ProcBodyBuilder = struct {
     fn markLocalDescriptorForType(self: *ProcBodyBuilder, local: LIR.LocalId, ty: checked.CheckedTypeId) Allocator.Error!void {
         const rep_id = self.repForType(ty);
         const desc_ref = try self.descriptorRefForRepIfNeeded(rep_id);
-        if (zig_builtin.mode == .Debug and @intFromEnum(self.worker_layout.worker) == 30) {
-            const exact_rep = self.parent.plan.representations.items[@intFromEnum(rep_id)];
-            const canonical_rep = self.canonicalDescriptorRep(rep_id);
-            const canonical = self.parent.plan.representations.items[@intFromEnum(canonical_rep)];
-            std.debug.print(
-                "debug_worker30_mark local={d} ty={d} rep={d} exact_desc={d} canonical_rep={d} canonical_desc={d} chosen={any}\n",
-                .{
-                    @intFromEnum(local),
-                    @intFromEnum(ty),
-                    @intFromEnum(rep_id),
-                    if (exact_rep.descriptor) |desc| @intFromEnum(desc) else std.math.maxInt(u32),
-                    @intFromEnum(canonical_rep),
-                    if (canonical.descriptor) |desc| @intFromEnum(desc) else std.math.maxInt(u32),
-                    desc_ref,
-                },
-            );
-        }
         if (desc_ref) |desc| {
             self.parent.result.store.setLocalBoxyDesc(local, desc);
         }
@@ -15589,18 +14611,6 @@ const ProcBodyBuilder = struct {
         }
         if (self.descriptor_slots[desc_index]) |existing| return .{ .local = existing, .fresh = false };
         const local = try self.addFrameLocal(.opaque_ptr);
-        if (zig_builtin.mode == .Debug and @intFromEnum(local) == 1800) {
-            std.debug.print(
-                "debug_reserve_desc_1800 worker={d} rep={d} desc={d}\n",
-                .{ @intFromEnum(self.worker_layout.worker), @intFromEnum(rep_id), @intFromEnum(desc) },
-            );
-        }
-        if (zig_builtin.mode == .Debug and @intFromEnum(local) == 2228) {
-            std.debug.print(
-                "debug_reserve_desc_2228 worker={d} rep={d} desc={d}\n",
-                .{ @intFromEnum(self.worker_layout.worker), @intFromEnum(rep_id), @intFromEnum(desc) },
-            );
-        }
         self.descriptor_slots[desc_index] = local;
         return .{ .local = local, .fresh = true };
     }
@@ -15660,7 +14670,6 @@ const ProcBodyBuilder = struct {
             if (self.workerHasHiddenDescriptor(desc)) return next;
         }
         const static_desc = try self.parent.staticDescRefForRep(rep_id);
-        self.debugDescriptorWrite("static_descriptor", reservation.local, static_desc);
         return try self.parent.result.store.addCFStmt(.{ .assign_boxy_desc_ref = .{
             .target = reservation.local,
             .desc = static_desc,
@@ -15680,7 +14689,6 @@ const ProcBodyBuilder = struct {
         const local = self.descriptorLocalForRequirementOrNull(desc) orelse return next;
         if (self.localIsHiddenDescriptorCapture(local)) return next;
         const static_desc = try self.parent.staticDescRefForRep(rep_id);
-        self.debugDescriptorWrite("active_static_descriptor", local, static_desc);
         return try self.parent.result.store.addCFStmt(.{ .assign_boxy_desc_ref = .{
             .target = local,
             .desc = static_desc,
@@ -15700,7 +14708,6 @@ const ProcBodyBuilder = struct {
         if (self.localIsHiddenDescriptorCapture(local)) return next;
         if (self.descriptorBindingIsBound(desc)) return next;
         const materialization = try self.descriptorMaterializationForKnownRep(rep_id);
-        self.debugDescriptorWrite("constructed_descriptor_rebind", local, materialization.desc);
         return try self.parent.result.store.addCFStmt(.{ .assign_boxy_desc_ref = .{
             .target = local,
             .desc = materialization.desc,
@@ -15721,39 +14728,11 @@ const ProcBodyBuilder = struct {
             index -= 1;
             const local = self.descriptor_slots[index] orelse continue;
             const desc: Plan.DescriptorRequirementId = @enumFromInt(@as(u32, @intCast(index)));
-            if (zig_builtin.mode == .Debug and @intFromEnum(local) == 305) {
-                std.debug.print(
-                    "debug_slot_emit worker={d} index={d} desc={d} local={d} bound={} hidden={} local_hidden={}\n",
-                    .{
-                        @intFromEnum(self.worker_layout.worker),
-                        index,
-                        @intFromEnum(desc),
-                        @intFromEnum(local),
-                        self.descriptorBindingIsBound(desc),
-                        self.workerHasHiddenDescriptor(desc),
-                        self.localIsHiddenDescriptorCapture(local),
-                    },
-                );
-            }
-            if (zig_builtin.mode == .Debug and @intFromEnum(local) == 1800) {
-                std.debug.print(
-                    "debug_slot_emit_1800 worker={d} index={d} desc={d} bound={} hidden={} local_hidden={}\n",
-                    .{
-                        @intFromEnum(self.worker_layout.worker),
-                        index,
-                        @intFromEnum(desc),
-                        self.descriptorBindingIsBound(desc),
-                        self.workerHasHiddenDescriptor(desc),
-                        self.localIsHiddenDescriptorCapture(local),
-                    },
-                );
-            }
             if (self.descriptorBindingIsBound(desc)) continue;
             if (self.localIsHiddenDescriptorCapture(local)) continue;
             if (self.workerHasHiddenDescriptor(desc)) continue;
             const requirement = self.parent.plan.descriptors.items[index];
             const static_desc = try self.parent.staticDescRefForRep(requirement.rep);
-            self.debugDescriptorWrite("slot_static_descriptor", local, static_desc);
             continuation = try self.parent.result.store.addCFStmt(.{ .assign_boxy_desc_ref = .{
                 .target = local,
                 .desc = static_desc,
@@ -15801,15 +14780,6 @@ const ProcBodyBuilder = struct {
 
     fn localIsReadOnlyDescriptorInput(self: *const ProcBodyBuilder, local: LIR.LocalId) bool {
         return self.localIsHiddenDescriptorArg(local) or self.localIsHiddenDescriptorCapture(local);
-    }
-
-    fn debugDescriptorWrite(self: *const ProcBodyBuilder, label: []const u8, target: LIR.LocalId, desc: LIR.BoxyDescRef) void {
-        if (zig_builtin.mode == .Debug and (@intFromEnum(target) == 305 or @intFromEnum(target) == 45 or @intFromEnum(target) == 65 or @intFromEnum(target) == 2228)) {
-            std.debug.print(
-                "debug_desc_write label={s} worker={d} target={d} desc={any}\n",
-                .{ label, if (self.synthetic_adapter) std.math.maxInt(u32) else @intFromEnum(self.worker_layout.worker), @intFromEnum(target), desc },
-            );
-        }
     }
 
     fn reservePatternBindings(self: *ProcBodyBuilder, pattern_id: checked.CheckedPatternId) Allocator.Error!void {
