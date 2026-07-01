@@ -1877,6 +1877,10 @@ const Builder = struct {
                         .parse_tag_union_spec,
                         .fields,
                         .field,
+                        .crypto_sha256_digest,
+                        .crypto_sha256_hasher,
+                        .crypto_blake3_digest,
+                        .crypto_blake3_hasher,
                         => {},
                     },
                     else => {},
@@ -3135,126 +3139,6 @@ const Builder = struct {
         };
     }
 
-    fn restoreConstType(
-        self: *Builder,
-        store_view: ModuleView,
-        ty: check.ConstStore.ConstTypeId,
-    ) Allocator.Error!Type.TypeId {
-        var map = std.AutoHashMap(check.ConstStore.ConstTypeId, Type.TypeId).init(self.allocator);
-        defer map.deinit();
-        return try self.restoreConstTypeInner(store_view, ty, &map);
-    }
-
-    fn restoreConstTypeInner(
-        self: *Builder,
-        store_view: ModuleView,
-        ty: check.ConstStore.ConstTypeId,
-        map: *std.AutoHashMap(check.ConstStore.ConstTypeId, Type.TypeId),
-    ) Allocator.Error!Type.TypeId {
-        if (map.get(ty)) |existing| return existing;
-
-        const out = try self.program.types.add(.zst);
-        try map.put(ty, out);
-
-        const content = try self.restoreConstTypeContent(store_view, ty, map);
-        self.program.types.types.items[@intFromEnum(out)] = content;
-        return out;
-    }
-
-    fn restoreConstTypeContent(
-        self: *Builder,
-        store_view: ModuleView,
-        ty: check.ConstStore.ConstTypeId,
-        map: *std.AutoHashMap(check.ConstStore.ConstTypeId, Type.TypeId),
-    ) Allocator.Error!Type.Content {
-        const store = &store_view.const_store.type_store;
-        return switch (store.get(ty)) {
-            .primitive => |primitive| .{ .primitive = monoPrimitiveFromConst(primitive) },
-            .zst => .zst,
-            .erased => |erased| .{ .erased = erased },
-            .list => |elem| .{ .list = try self.restoreConstTypeInner(store_view, elem, map) },
-            .box => |elem| .{ .box = try self.restoreConstTypeInner(store_view, elem, map) },
-            .tuple => |items| blk: {
-                const source = store.typeSpan(items);
-                const out = try self.allocator.alloc(Type.TypeId, source.len);
-                defer self.allocator.free(out);
-                for (source, 0..) |item, i| out[i] = try self.restoreConstTypeInner(store_view, item, map);
-                break :blk .{ .tuple = try self.program.types.addSpan(out) };
-            },
-            .func => |function| blk: {
-                const args = store.typeSpan(function.args);
-                const out = try self.allocator.alloc(Type.TypeId, args.len);
-                defer self.allocator.free(out);
-                for (args, 0..) |arg, i| out[i] = try self.restoreConstTypeInner(store_view, arg, map);
-                break :blk .{ .func = .{
-                    .args = try self.program.types.addSpan(out),
-                    .ret = try self.restoreConstTypeInner(store_view, function.ret, map),
-                } };
-            },
-            .record => |fields| blk: {
-                const source = store.fieldSpan(fields);
-                const out = try self.allocator.alloc(Type.Field, source.len);
-                defer self.allocator.free(out);
-                for (source, 0..) |field, i| {
-                    out[i] = .{
-                        .name = try self.recordFieldName(store_view, field.name),
-                        .ty = try self.restoreConstTypeInner(store_view, field.ty, map),
-                    };
-                }
-                break :blk .{ .record = try self.program.types.addFields(out) };
-            },
-            .tag_union => |tags| blk: {
-                const source = store.tagSpan(tags);
-                const out = try self.allocator.alloc(Type.Tag, source.len);
-                defer self.allocator.free(out);
-                for (source, 0..) |tag, i| {
-                    const payloads = store.typeSpan(tag.payloads);
-                    const out_payloads = try self.allocator.alloc(Type.TypeId, payloads.len);
-                    defer self.allocator.free(out_payloads);
-                    for (payloads, 0..) |payload, j| out_payloads[j] = try self.restoreConstTypeInner(store_view, payload, map);
-                    out[i] = .{
-                        .name = try self.tagName(store_view, tag.name),
-                        .checked_name = try self.tagName(store_view, tag.checked_name),
-                        .payloads = try self.program.types.addSpan(out_payloads),
-                    };
-                }
-                break :blk .{ .tag_union = try self.program.types.addTags(out) };
-            },
-            .named => |named| blk: {
-                const args = store.typeSpan(named.args);
-                const out_args = try self.allocator.alloc(Type.TypeId, args.len);
-                defer self.allocator.free(out_args);
-                for (args, 0..) |arg, i| out_args[i] = try self.restoreConstTypeInner(store_view, arg, map);
-
-                const declared = store.declaredFieldSpan(named.declared_order);
-                const out_declared = try self.allocator.alloc(Type.DeclaredField, declared.len);
-                defer self.allocator.free(out_declared);
-                for (declared, 0..) |entry, i| {
-                    out_declared[i] = switch (entry) {
-                        .named => |name| .{ .named = try self.recordFieldName(store_view, name) },
-                        .padding => |padding| .{ .padding = try self.restoreConstTypeInner(store_view, padding, map) },
-                    };
-                }
-
-                break :blk .{ .named = .{
-                    .named_type = .{
-                        .module = named.named_type.module,
-                        .ty = named.named_type.ty,
-                    },
-                    .def = try self.typeDef(store_view, named.def.module_name, named.def.type_name, named.def.source_decl),
-                    .kind = monoNamedKindFromConst(named.kind),
-                    .builtin_owner = named.builtin_owner,
-                    .args = try self.program.types.addSpan(out_args),
-                    .backing = if (named.backing) |backing| .{
-                        .ty = try self.restoreConstTypeInner(store_view, backing.ty, map),
-                        .use = monoBackingUseFromConst(backing.use),
-                    } else null,
-                    .declared_order = try self.program.types.addDeclaredFields(out_declared),
-                } };
-            },
-        };
-    }
-
     const RestoredConstSourceCapture = struct {
         binder: checked.PatternBinderId,
         previous: ?DraftLocalId,
@@ -3288,7 +3172,7 @@ const Builder = struct {
                 .binder => |binder| binder,
                 .generated => continue,
             };
-            const lowered_ty = try self.restoreConstType(store_view, capture.ty);
+            const lowered_ty = try fn_ctx.lowerTypeView(checkedBinderType(fn_view, binder));
             const local = try fn_ctx.addLocalWithBinder(self.symbols.fresh(), lowered_ty, binder);
             try fn_ctx.bindLocalName(local, binder);
             const previous = fn_ctx.binders.get(binder);
@@ -3860,7 +3744,7 @@ const Builder = struct {
 
         for (fn_value.captures, 0..) |capture, index| {
             const binder = constCaptureBinder(capture.id);
-            const lowered_ty = try self.restoreConstType(store_view, capture.ty);
+            const lowered_ty = try fn_ctx.lowerTypeView(checkedBinderType(fn_view, binder));
             const capture_cell = try fn_ctx.draftTypeCell(lowered_ty);
             const local = try fn_ctx.addLocalWithBinderCell(self.symbols.fresh(), capture_cell, binder);
             try fn_ctx.bindLocalName(local, binder);
@@ -6419,6 +6303,19 @@ const BodyContext = struct {
         }
     }
 
+    fn currentBinderLocalAtType(
+        self: *BodyContext,
+        binder: checked.PatternBinderId,
+        ty: Type.TypeId,
+    ) Allocator.Error!?DraftLocalId {
+        if (self.typed_binders.get(self.typedBinder(binder, ty))) |local| return local;
+
+        const local = self.binders.get(binder) orelse return null;
+        const local_ty = try self.localType(local);
+        if (!self.sameType(local_ty, ty)) return null;
+        return local;
+    }
+
     fn init(
         allocator: Allocator,
         builder: *Builder,
@@ -7840,6 +7737,10 @@ const BodyContext = struct {
                 .parse_tag_union_spec,
                 .fields,
                 .field,
+                .crypto_sha256_digest,
+                .crypto_sha256_hasher,
+                .crypto_blake3_digest,
+                .crypto_blake3_hasher,
                 => {},
             },
             else => {},
@@ -13827,7 +13728,7 @@ const BodyContext = struct {
 
         for (fn_value.captures, 0..) |capture, index| {
             const binder = constCaptureBinder(capture.id);
-            const lowered_ty = try self.builder.restoreConstType(store_view, capture.ty);
+            const lowered_ty = try fn_ctx.lowerTypeView(checkedBinderType(fn_view, binder));
             const capture_cell = try fn_ctx.draftTypeCell(lowered_ty);
             const local = try fn_ctx.addLocalWithBinderCell(self.builder.symbols.fresh(), capture_cell, binder);
             try fn_ctx.bindLocalName(local, binder);
@@ -14783,8 +14684,8 @@ const BodyContext = struct {
 
         for (captures) |capture| {
             const binder = checkedCaptureBinder(self.view, capture.pattern);
-            const local = self.binders.get(binder) orelse continue;
-            const ty = try self.localType(local);
+            const ty = try self.lowerTypeView(checkedBinderType(self.view, binder));
+            const local = (try self.currentBinderLocalAtType(binder, ty)) orelse continue;
             const value = try self.addExpr(.{
                 .ty = ty,
                 .data = .{ .local = local },
@@ -21016,6 +20917,10 @@ fn builtinOwner(builtin: ?checked.CheckedBuiltinNominal) ?static_dispatch.Builti
         .parse_tag_union_spec => .parse_tag_union_spec,
         .fields => .fields,
         .field => .field,
+        .crypto_sha256_digest => .crypto_sha256_digest,
+        .crypto_sha256_hasher => .crypto_sha256_hasher,
+        .crypto_blake3_digest => .crypto_blake3_digest,
+        .crypto_blake3_hasher => .crypto_blake3_hasher,
     };
 }
 
@@ -21239,26 +21144,6 @@ const NestedFnFamily = struct {
         };
     }
 };
-
-fn monoPrimitiveFromConst(primitive: check.ConstStore.Primitive) Type.Primitive {
-    return std.meta.stringToEnum(Type.Primitive, @tagName(primitive)) orelse
-        Common.invariant("ConstStore primitive had no Monotype primitive equivalent");
-}
-
-fn monoNamedKindFromConst(kind: check.ConstStore.TypeNamedKind) Type.NamedKind {
-    return switch (kind) {
-        .nominal => .nominal,
-        .@"opaque" => .@"opaque",
-        .alias => .alias,
-    };
-}
-
-fn monoBackingUseFromConst(use: check.ConstStore.TypeBackingUse) Type.BackingUse {
-    return switch (use) {
-        .inspectable => .inspectable,
-        .runtime_layout_only => .runtime_layout_only,
-    };
-}
 
 test "monotype lower declarations are referenced" {
     std.testing.refAllDecls(@This());

@@ -91,6 +91,10 @@ pub const BuiltinOwner = enum(u8) {
     f64,
     dec,
     parse_tag_union_spec,
+    crypto_sha256_digest,
+    crypto_sha256_hasher,
+    crypto_blake3_digest,
+    crypto_blake3_hasher,
 };
 
 /// Public `MethodKey` declaration.
@@ -354,6 +358,10 @@ fn builtinOwnerForRegistryEntry(
     if (type_ident.eql(common.builtin_str_field_names)) return .fields;
     if (type_ident.eql(common.builtin_str_field_name)) return .field;
     if (type_ident.eql(common.builtin_parse_tag_union_spec)) return .parse_tag_union_spec;
+    if (type_ident.eql(common.builtin_crypto_sha256_digest)) return .crypto_sha256_digest;
+    if (type_ident.eql(common.builtin_crypto_sha256_hasher)) return .crypto_sha256_hasher;
+    if (type_ident.eql(common.builtin_crypto_blake3_digest)) return .crypto_blake3_digest;
+    if (type_ident.eql(common.builtin_crypto_blake3_hasher)) return .crypto_blake3_hasher;
     return null;
 }
 
@@ -1244,6 +1252,10 @@ fn builtinOwnerForCheckedBuiltin(builtin: anytype) BuiltinOwner {
         .fields => .fields,
         .field => .field,
         .parse_tag_union_spec => .parse_tag_union_spec,
+        .crypto_sha256_digest => .crypto_sha256_digest,
+        .crypto_sha256_hasher => .crypto_sha256_hasher,
+        .crypto_blake3_digest => .crypto_blake3_digest,
+        .crypto_blake3_hasher => .crypto_blake3_hasher,
     };
 }
 
