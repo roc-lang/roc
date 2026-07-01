@@ -2598,6 +2598,7 @@ pub const MonoLlvmCodeGen = struct {
             .num_floor => try self.emitNumericFloatUnaryIntrinsic(target, arg_locals[0], .floor),
             .num_ceiling => try self.emitNumericFloatUnaryIntrinsic(target, arg_locals[0], .ceil),
             .list_len => try self.storeIntToLayout(self.slot(target).ptr, try self.loadUsize(try self.offsetPtr(self.slot(arg_locals[0]).ptr, self.rocListLenOffset())), self.localLayout(target)),
+            .list_capacity => try self.emitListCapacity(target, arg_locals[0]),
             .list_get_unsafe => try self.emitListGetUnsafe(target, arg_locals),
             .list_with_capacity => try self.emitListWithCapacity(target, arg_locals),
             .list_append_unsafe => try self.emitListAppendUnsafe(target, arg_locals),
@@ -5853,6 +5854,22 @@ pub const MonoLlvmCodeGen = struct {
             builder.intValue(.i1, @intFromBool(abi.contains_refcounted)) catch return error.OutOfMemory,
             self.rocOps(),
         });
+    }
+
+    fn emitListCapacity(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId) Error!void {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const wip = self.wip orelse return error.CompilationFailed;
+        const usize_ty = self.ptrSizedIntType();
+        const one = builder.intValue(usize_ty, 1) catch return error.OutOfMemory;
+        const zero = builder.intValue(usize_ty, 0) catch return error.OutOfMemory;
+        const list_ptr = self.slot(arg).ptr;
+        const len = try self.loadUsize(try self.offsetPtr(list_ptr, self.rocListLenOffset()));
+        const cap_or_alloc = try self.loadUsize(try self.offsetPtr(list_ptr, self.rocListCapacityOffset()));
+        const decoded_capacity = wip.bin(.lshr, cap_or_alloc, one, "") catch return error.OutOfMemory;
+        const slice_tag = wip.bin(.@"and", cap_or_alloc, one, "") catch return error.OutOfMemory;
+        const is_slice = wip.icmp(.ne, slice_tag, zero, "") catch return error.OutOfMemory;
+        const capacity = wip.select(.normal, is_slice, len, decoded_capacity, "") catch return error.OutOfMemory;
+        try self.storeIntToLayout(self.slot(target).ptr, capacity, self.localLayout(target));
     }
 
     fn emitListAppendUnsafe(self: *MonoLlvmCodeGen, target: LocalId, args: []const LocalId) Error!void {

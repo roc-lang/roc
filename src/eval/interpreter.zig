@@ -318,6 +318,8 @@ pub const Interpreter = struct {
     active_stmt_loc: base.SourceLoc = base.SourceLoc.none,
     /// Checked source region of the LIR statement currently being interpreted.
     active_stmt_region: base.Region = base.Region.zero(),
+    active_proc_id: ?LirProcSpecId = null,
+    active_stmt_id: ?CFStmtId = null,
     /// Source location captured when the current evaluation first failed.
     failed_stmt_loc: base.SourceLoc = base.SourceLoc.none,
     /// Checked source region captured when the current evaluation first failed.
@@ -1713,6 +1715,78 @@ pub const Interpreter = struct {
         return spaces[0..@min(indent * 2, spaces.len)];
     }
 
+    fn debugPrintValueSummary(self: *LirInterpreter, value: Value, layout_idx: layout_mod.Idx, depth: u8) void {
+        if (depth > 2) {
+            debugPrint("...", .{});
+            return;
+        }
+        const layout_val = self.layout_store.getLayout(layout_idx);
+        debugPrint("{d}:{s}", .{ @intFromEnum(layout_idx), @tagName(layout_val.tag) });
+        switch (layout_val.tag) {
+            .scalar => {
+                const size = self.helper.sizeOf(layout_idx);
+                const raw = switch (size) {
+                    0 => @as(u64, 0),
+                    1 => @as(u64, value.read(u8)),
+                    2 => @as(u64, value.read(u16)),
+                    4 => @as(u64, value.read(u32)),
+                    8 => value.read(u64),
+                    else => @as(u64, 0),
+                };
+                debugPrint("(raw={d})", .{raw});
+            },
+            .tag_union => {
+                const disc = self.helper.readTagDiscriminant(value, layout_idx);
+                debugPrint("(disc={d}", .{disc});
+                const payload_layout = self.requireBoxyTagPayloadLayout(layout_idx, disc);
+                debugPrint(",payload=", .{});
+                if (self.helper.sizeOf(payload_layout) == 0) {
+                    debugPrint("{d}:zst", .{@intFromEnum(payload_layout)});
+                } else {
+                    self.debugPrintValueSummary(value, payload_layout, depth + 1);
+                }
+                debugPrint(")", .{});
+            },
+            .struct_ => {
+                const struct_idx = layout_val.getStruct().idx;
+                const data = self.layout_store.getStructData(struct_idx);
+                debugPrint("(", .{});
+                var field_index: u32 = 0;
+                while (field_index < data.fields.count) : (field_index += 1) {
+                    if (field_index != 0) debugPrint(",", .{});
+                    const field_layout = self.layout_store.getStructFieldLayoutByOriginalIndex(struct_idx, field_index);
+                    const field_offset = self.layout_store.getStructFieldOffsetByOriginalIndex(struct_idx, field_index);
+                    debugPrint("f{d}=", .{field_index});
+                    if (self.helper.sizeOf(field_layout) == 0) {
+                        debugPrint("{d}:zst", .{@intFromEnum(field_layout)});
+                    } else {
+                        self.debugPrintValueSummary(value.offset(field_offset), field_layout, depth + 1);
+                    }
+                }
+                debugPrint(")", .{});
+            },
+            .list, .list_of_zst => {
+                const list = self.valueToRocListForLayout(value, layout_idx);
+                debugPrint("(len={d},bytes={any})", .{ list.len(), list.bytes });
+            },
+            .box, .box_of_zst => {
+                debugPrint("(ptr={any})", .{self.readBoxedDataPointer(value)});
+            },
+            .erased_callable => {
+                const ptr = self.readBoxedDataPointer(value);
+                debugPrint("(ptr={any}", .{ptr});
+                if (ptr) |data_ptr| {
+                    debugPrint(",proc={d}", .{@intFromEnum(erasedCallableInterpreterProcId(data_ptr))});
+                }
+                debugPrint(")", .{});
+            },
+            .zst => {},
+            .ptr, .closure => {
+                debugPrint("(ptr=0x{x})", .{@intFromPtr(value.ptr)});
+            },
+        }
+    }
+
     fn evalProcSpec(
         self: *LirInterpreter,
         proc_id: LirProcSpecId,
@@ -1789,6 +1863,22 @@ pub const Interpreter = struct {
                 "LIR/interpreter invariant violated: proc {d} expected {d} arg layouts but got {d}",
                 .{ proc_spec.name.raw(), params.len, arg_layouts.len },
             );
+        }
+
+        if (builtin.mode == .Debug and (@intFromEnum(proc_id) == 14 or @intFromEnum(proc_id) == 15 or @intFromEnum(proc_id) == 16)) {
+            debugPrint("debug_enter_proc proc={d} name={d} stack=", .{ @intFromEnum(proc_id), proc_spec.name.raw() });
+            for (self.call_stack.items) |stack_proc| debugPrint("{d} ", .{@intFromEnum(stack_proc)});
+            debugPrint("args=", .{});
+            for (params, args, arg_layouts, 0..) |param, arg, arg_layout, i| {
+                debugPrint("#{d} param={d}:{d} arg=", .{
+                    i,
+                    @intFromEnum(param),
+                    @intFromEnum(self.store.getLocal(param).layout_idx),
+                });
+                self.debugPrintValueSummary(arg, arg_layout, 0);
+                debugPrint(" ", .{});
+            }
+            debugPrint("\n", .{});
         }
 
         if (builtin.mode == .Debug and @intFromEnum(proc_id) == 106) {
@@ -1882,6 +1972,10 @@ pub const Interpreter = struct {
             );
         }
         const body = self.requireProcBody(proc_id, proc_spec);
+        if (builtin.mode == .Debug and @intFromEnum(proc_id) == 15 and params.len == 5) {
+            debugPrint("debug_proc15_body\n", .{});
+            self.debugPrintStmtChain(body, 140);
+        }
         if (trace.enabled) self.debugPrintStmtChain(body, 32);
         const outcome = try self.execStmtChain(&frame, body);
         return switch (outcome) {
@@ -1982,9 +2076,61 @@ pub const Interpreter = struct {
             const stmt = self.store.getCFStmt(current);
             self.active_stmt_loc = self.store.stmtLoc(current);
             self.active_stmt_region = self.store.stmtRegion(current);
+            self.active_proc_id = frame.proc_id;
+            self.active_stmt_id = current;
             switch (stmt) {
                 .assign_ref => |assign| {
                     const target_layout = self.store.getLocal(assign.target).layout_idx;
+                    if (builtin.mode == .Debug) {
+                        switch (assign.op) {
+	                            .field => |field| {
+	                                const source_layout = self.store.getLocal(field.source).layout_idx;
+	                                const source_layout_val = self.layout_store.getLayout(source_layout);
+	                                if (source_layout_val.tag != .struct_ and source_layout_val.tag != .box) {
+                                    debugPrint(
+                                        "debug_bad_field_assign proc={d} stmt={d} target={d} target_layout={d} source={d} source_layout={d} source_tag={s} field={d}\n",
+                                        .{
+                                            @intFromEnum(frame.proc_id),
+                                            @intFromEnum(current),
+                                            @intFromEnum(assign.target),
+                                            @intFromEnum(target_layout),
+                                            @intFromEnum(field.source),
+                                            @intFromEnum(source_layout),
+                                            @tagName(source_layout_val.tag),
+                                            field.field_idx,
+                                        },
+                                    );
+                                    self.debugDumpProc(frame.proc_id);
+	                                    self.debugPrintStmtChain(current, 16);
+	                                }
+	                            },
+	                            .nominal => |nominal| {
+	                                const source_layout = self.store.getLocal(nominal.backing_ref).layout_idx;
+	                                const source_layout_val = self.layout_store.getLayout(source_layout);
+	                                const target_layout_val = self.layout_store.getLayout(target_layout);
+	                                const source_is_box = source_layout_val.tag == .box or source_layout_val.tag == .box_of_zst;
+	                                const target_is_box = target_layout_val.tag == .box or target_layout_val.tag == .box_of_zst;
+	                                if (source_is_box != target_is_box) {
+	                                    debugPrint(
+	                                        "debug_bad_nominal_assign proc={d} stmt={d} target={d} target_layout={d} target_tag={s} source={d} source_layout={d} source_tag={s}\n",
+	                                        .{
+	                                            @intFromEnum(frame.proc_id),
+	                                            @intFromEnum(current),
+	                                            @intFromEnum(assign.target),
+	                                            @intFromEnum(target_layout),
+	                                            @tagName(target_layout_val.tag),
+	                                            @intFromEnum(nominal.backing_ref),
+	                                            @intFromEnum(source_layout),
+	                                            @tagName(source_layout_val.tag),
+	                                        },
+	                                    );
+	                                    self.debugDumpProc(frame.proc_id);
+	                                    self.debugPrintStmtChain(current, 16);
+	                                }
+	                            },
+	                            else => {},
+	                        }
+	                    }
                     const value = try self.evalAssignRef(frame, assign.op, target_layout);
                     self.setLocalChecked(frame, current, assign.target, value);
                     switch (assign.op) {
@@ -1996,6 +2142,27 @@ pub const Interpreter = struct {
                             frame.setLocalDesc(assign.target, source_desc);
                         },
                         else => {},
+                    }
+                    if (builtin.mode == .Debug and @intFromEnum(frame.proc_id) == 95 and
+                        (@intFromEnum(assign.target) == 1717 or @intFromEnum(assign.target) == 1718 or @intFromEnum(assign.target) == 1721 or @intFromEnum(assign.target) == 1722))
+                    {
+                        trace_rc.log(
+                            "debug_proc95_assign_ref stmt={d} target={d} layout={d} desc_payload={d}",
+                            .{
+                                @intFromEnum(current),
+                                @intFromEnum(assign.target),
+                                @intFromEnum(target_layout),
+                                if (frame.localDesc(assign.target)) |desc| @intFromEnum(desc.payload_layout) else 0,
+                            },
+                        );
+                        const target_layout_val = self.layout_store.getLayout(target_layout);
+                        if ((target_layout_val.tag == .box or target_layout_val.tag == .box_of_zst) and self.readBoxedDataPointer(value) != null) {
+                            const payload_ptr = self.readBoxedDataPointer(value).?;
+                            trace_rc.log(
+                                "debug_proc95_assign_ref_box target={d} ptr=0x{x} dec={d}",
+                                .{ @intFromEnum(assign.target), @intFromPtr(payload_ptr), (Value{ .ptr = payload_ptr }).read(i128) },
+                            );
+                        }
                     }
                     current = assign.next;
                 },
@@ -2126,18 +2293,39 @@ pub const Interpreter = struct {
                             },
                         );
                     }
+                    const materialized_result = try self.materializeCallResultToLayout(
+                        frame,
+                        result.value,
+                        self.store.getProcSpec(assign.proc).ret_layout,
+                        result.desc,
+                        assign.result_desc,
+                        self.store.getLocal(assign.target).layout_idx,
+                    );
+                    if (builtin.mode == .Debug and @intFromEnum(frame.proc_id) == 20 and @intFromEnum(current) == 5349) {
+                        const target_layout = self.store.getLocal(assign.target).layout_idx;
+                        trace_rc.log(
+                            "debug_proc20_call25_result target={d} target_layout={d} result_layout={d} result_desc_payload={d}",
+                            .{
+                                @intFromEnum(assign.target),
+                                @intFromEnum(target_layout),
+                                @intFromEnum(self.store.getProcSpec(assign.proc).ret_layout),
+                                if (result.desc) |desc| @intFromEnum(desc.payload_layout) else 0,
+                            },
+                        );
+                        const target_layout_val = self.layout_store.getLayout(target_layout);
+                        if ((target_layout_val.tag == .box or target_layout_val.tag == .box_of_zst) and self.readBoxedDataPointer(materialized_result) != null) {
+                            const payload_ptr = self.readBoxedDataPointer(materialized_result).?;
+                            trace_rc.log(
+                                "debug_proc20_call25_box ptr=0x{x} dec={d}",
+                                .{ @intFromPtr(payload_ptr), (Value{ .ptr = payload_ptr }).read(i128) },
+                            );
+                        }
+                    }
                     self.setLocalChecked(
                         frame,
                         current,
                         assign.target,
-                        try self.materializeCallResultToLayout(
-                            frame,
-                            result.value,
-                            self.store.getProcSpec(assign.proc).ret_layout,
-                            result.desc,
-                            assign.result_desc,
-                            self.store.getLocal(assign.target).layout_idx,
-                        ),
+                        materialized_result,
                     );
                     frame.setLocalDesc(assign.target, (try self.resolveOptionalBoxyDescRef(frame, assign.result_desc)) orelse result.desc);
                     current = assign.next;
@@ -2179,6 +2367,25 @@ pub const Interpreter = struct {
                         );
                         self.debugDumpProc(frame.proc_id);
                         self.debugDumpProc(erasedCallableInterpreterProcId(self.readBoxedDataPointer(try self.getLocalChecked(frame, assign.closure)).?));
+                    }
+                    if (builtin.mode == .Debug and @intFromEnum(frame.proc_id) == 20 and @intFromEnum(current) == 5336) {
+                        trace_rc.log(
+                            "debug_proc20_erased_result target={d} result_layout={d} result_desc_payload={d}",
+                            .{
+                                @intFromEnum(assign.target),
+                                @intFromEnum(result.layout),
+                                if (result.desc) |desc| @intFromEnum(desc.payload_layout) else 0,
+                            },
+                        );
+                        const target_layout = self.store.getLocal(assign.target).layout_idx;
+                        const target_layout_val = self.layout_store.getLayout(target_layout);
+                        if ((target_layout_val.tag == .box or target_layout_val.tag == .box_of_zst) and self.readBoxedDataPointer(result.value) != null) {
+                            const payload_ptr = self.readBoxedDataPointer(result.value).?;
+                            trace_rc.log(
+                                "debug_proc20_erased_box ptr=0x{x}",
+                                .{@intFromPtr(payload_ptr)},
+                            );
+                        }
                     }
                     self.setLocalChecked(
                         frame,
@@ -2536,6 +2743,23 @@ pub const Interpreter = struct {
                 },
                 .assign_boxy_desc_ref => |assign| {
                     if (builtin.mode == .Debug and
+                        (@intFromEnum(frame.proc_id) == 17 or @intFromEnum(frame.proc_id) == 94))
+                    {
+                        debugPrint(
+                            "debug_assign_desc_ref proc={d} stmt={d} target={d} nested={any} captures={d}+{d} desc_raw=",
+                            .{
+                                @intFromEnum(frame.proc_id),
+                                @intFromEnum(current),
+                                @intFromEnum(assign.target),
+                                assign.nested_index,
+                                assign.captures.start,
+                                assign.captures.len,
+                            },
+                        );
+                        debugPrintBoxyDescRefBytes(&assign.desc);
+                        debugPrint("\n", .{});
+                    }
+                    if (builtin.mode == .Debug and
                         ((@intFromEnum(frame.proc_id) == 20 and @intFromEnum(assign.target) == 358) or
                             (@intFromEnum(frame.proc_id) == 19 and @intFromEnum(assign.target) == 314) or
                             (@intFromEnum(frame.proc_id) == 4 and @intFromEnum(assign.target) == 2039)))
@@ -2662,43 +2886,7 @@ pub const Interpreter = struct {
                         try self.resolveBoxyDescRef(frame, desc_ref)
                     else
                         payload_desc;
-                    if (builtin.mode == .Debug and @intFromEnum(assign.payload_layout) == 16 and @intFromEnum(payload_desc.payload_layout) == 21) {
-                        debugPrint(
-                            "debug_box_zst_to_box proc={d} stmt={d} target={d} target_layout={d} payload={d} payload_layout={d} source_desc_payload={d} payload_desc_payload={d} alloc_contains={} layout_contains={} nested={d}+{d} next={d}\n",
-                            .{
-                                @intFromEnum(frame.proc_id),
-                                @intFromEnum(current),
-                                @intFromEnum(assign.target),
-                                @intFromEnum(self.store.getLocal(assign.target).layout_idx),
-                                @intFromEnum(assign.payload),
-                                @intFromEnum(assign.payload_layout),
-                                @intFromEnum(source_desc.payload_layout),
-                                @intFromEnum(payload_desc.payload_layout),
-                                self.boxyDynamicPayloadAllocationContainsRc(payload_desc, self.store.getLocal(assign.target).layout_idx),
-                                self.layoutContainsRc(payload_desc.payload_layout),
-                                payload_desc.nested_descs.start,
-                                payload_desc.nested_descs.len,
-                                @intFromEnum(assign.next),
-                            },
-                        );
-                        self.debugDumpProc(frame.proc_id);
-                    }
-                    if (builtin.mode == .Debug and ((@intFromEnum(frame.proc_id) == 18 and @intFromEnum(current) == 3752) or self.layout_store.getLayout(self.store.getLocal(assign.target).layout_idx).tag == .erased_callable)) {
-                        debugPrint(
-                            "assign_boxy_box_erased_target proc={d} stmt={d} target={d} target_layout={d} payload={d} payload_layout={d} desc_payload={d}\n",
-                            .{
-                                @intFromEnum(frame.proc_id),
-                                @intFromEnum(current),
-                                @intFromEnum(assign.target),
-                                @intFromEnum(self.store.getLocal(assign.target).layout_idx),
-                                @intFromEnum(assign.payload),
-                                @intFromEnum(assign.payload_layout),
-                                @intFromEnum(payload_desc.payload_layout),
-                            },
-                        );
-                        self.debugDumpProc(frame.proc_id);
-                    }
-                    const target_layout = self.store.getLocal(assign.target).layout_idx;
+	                    const target_layout = self.store.getLocal(assign.target).layout_idx;
                     const target_layout_tag = self.layout_store.getLayout(target_layout).tag;
                     try self.increfBoxyTransferSourceIfCopied(
                         frame,
@@ -2820,6 +3008,29 @@ pub const Interpreter = struct {
                     } else try self.materializeLocalValue(Value.zst, assign.target_layout);
                     if (assign.source_mode == .move) {
                         self.freeMovedBoxyDynamicPayload(source_value, source_layout, source_desc);
+                    }
+                    if (builtin.mode == .Debug and @intFromEnum(frame.proc_id) == 95 and @intFromEnum(current) == 6531) {
+                        trace_rc.log(
+                            "debug_proc95_unbox_6531 source_ptr=0x{x} payload_layout={d} target_layout={d} payload_desc={d} target_desc={d}",
+                            .{
+                                if (data_ptr) |ptr| @intFromPtr(ptr) else 0,
+                                @intFromEnum(payload_layout),
+                                @intFromEnum(assign.target_layout),
+                                if (payload_desc) |desc| @intFromEnum(desc.payload_layout) else 0,
+                                if (target_desc) |desc| @intFromEnum(desc.payload_layout) else 0,
+                            },
+                        );
+                        const target_struct = self.layout_store.getLayout(assign.target_layout).getStruct().idx;
+                        const field0_offset = self.layout_store.getStructFieldOffsetByOriginalIndex(target_struct, 0);
+                        const field0 = result.offset(field0_offset);
+                        if (self.readBoxedDataPointer(field0)) |payload_ptr| {
+                            trace_rc.log(
+                                "debug_proc95_unbox_6531_field0 ptr=0x{x} dec={d}",
+                                .{ @intFromPtr(payload_ptr), (Value{ .ptr = payload_ptr }).read(i128) },
+                            );
+                        } else {
+                            trace_rc.log("debug_proc95_unbox_6531_field0 ptr=null", .{});
+                        }
                     }
                     self.setLocalChecked(frame, current, assign.target, result);
                     frame.setLocalDesc(assign.target, target_desc orelse payload_desc);
@@ -3031,6 +3242,53 @@ pub const Interpreter = struct {
                     const arg_locals = self.store.getLocalSpan(assign.args);
                     const arg_values = try self.collectLocalValues(frame, arg_locals);
                     const arg_layouts = try self.localLayouts(arg_locals);
+                    if (builtin.mode == .Debug and
+                        (assign.op == .list_with_capacity or assign.op == .list_append_unsafe) and
+                        @intFromEnum(self.store.getLocal(assign.target).layout_idx) == 51)
+                    {
+                        debugPrint(
+                            "debug_ll_51 proc={d} stmt={d} op={s} target={d} target_layout={d} args=",
+                            .{
+                                @intFromEnum(frame.proc_id),
+                                @intFromEnum(current),
+                                @tagName(assign.op),
+                                @intFromEnum(assign.target),
+                                @intFromEnum(self.store.getLocal(assign.target).layout_idx),
+                            },
+                        );
+                        for (arg_locals, arg_values, arg_layouts) |arg_local, arg_value, arg_layout| {
+                            const arg_layout_val = self.layout_store.getLayout(arg_layout);
+                            debugPrint("{d}:layout={d}:{s}", .{
+                                @intFromEnum(arg_local),
+                                @intFromEnum(arg_layout),
+                                @tagName(arg_layout_val.tag),
+                            });
+                            switch (arg_layout_val.tag) {
+                                .list, .list_of_zst => {
+                                    const list = self.valueToRocListForLayout(arg_value, arg_layout);
+                                    debugPrint(":len={d}:bytes={any}", .{ list.len(), list.bytes });
+                                },
+                                .scalar => {
+                                    const size = self.helper.sizeOf(arg_layout);
+                                    const raw = switch (size) {
+                                        0 => @as(u64, 0),
+                                        1 => @as(u64, arg_value.read(u8)),
+                                        2 => @as(u64, arg_value.read(u16)),
+                                        4 => @as(u64, arg_value.read(u32)),
+                                        8 => arg_value.read(u64),
+                                        else => @as(u64, 0),
+                                    };
+                                    debugPrint(":raw={d}", .{raw});
+                                },
+                                .box, .box_of_zst => {
+                                    debugPrint(":box={any}", .{self.readBoxedDataPointer(arg_value)});
+                                },
+                                else => {},
+                            }
+                            debugPrint(" ", .{});
+                        }
+                        debugPrint("\n", .{});
+                    }
                     self.setLocalChecked(frame, current, assign.target, try self.evalLowLevel(.{
                         .op = assign.op,
                         .args = arg_values,
@@ -3289,6 +3547,37 @@ pub const Interpreter = struct {
                         self.store.getLocal(switch_stmt.cond).layout_idx,
                     );
                     const branches = self.store.getCFSwitchBranches(switch_stmt.branches);
+                    if (builtin.mode == .Debug and
+                        (@intFromEnum(frame.proc_id) == 14 or @intFromEnum(frame.proc_id) == 15 or @intFromEnum(frame.proc_id) == 16))
+                    {
+                        debugPrint(
+                            "debug_switch proc={d} stmt={d} cond={d}:{d} value={d} branches=",
+                            .{
+                                @intFromEnum(frame.proc_id),
+                                @intFromEnum(current),
+                                @intFromEnum(switch_stmt.cond),
+                                @intFromEnum(self.store.getLocal(switch_stmt.cond).layout_idx),
+                                cond_value,
+                            },
+                        );
+                        for (branches) |branch| {
+                            debugPrint("{d}->{d} ", .{ branch.value, @intFromEnum(branch.body) });
+                        }
+                        debugPrint("default={d}\n", .{@intFromEnum(switch_stmt.default_branch)});
+                        if (@intFromEnum(frame.proc_id) == 14 and
+                            (@intFromEnum(current) == 4833 or @intFromEnum(current) == 4760 or @intFromEnum(current) == 4649))
+                        {
+                            for (branches) |branch| {
+                                debugPrint("debug_switch_branch_chain proc=14 switch={d} value={d}\n", .{
+                                    @intFromEnum(current),
+                                    branch.value,
+                                });
+                                self.debugPrintStmtChain(branch.body, 40);
+                            }
+                            debugPrint("debug_switch_default_chain proc=14 switch={d}\n", .{@intFromEnum(current)});
+                            self.debugPrintStmtChain(switch_stmt.default_branch, 40);
+                        }
+                    }
                     if (trace.enabled) {
                         trace.log(
                             "switch: cond_local={d} layout={any} value={d} branches={d} default={d}",
@@ -4555,6 +4844,12 @@ pub const Interpreter = struct {
                 self.store.getLocal(elem_local).layout_idx,
                 elem_layout,
             );
+            if (builtin.mode == .Debug and @intFromEnum(frame.proc_id) == 4 and @intFromEnum(list_layout) == 114) {
+                trace_rc.log(
+                    "debug_proc4_list_literal index={d} local={d} elem_layout={d} dec={d}",
+                    .{ i, @intFromEnum(elem_local), @intFromEnum(elem_layout), elem_value.read(i128) },
+                );
+            }
             if (builtin.mode == .Debug and elem_layout_val.tag == .box and self.readBoxedDataPointer(elem_value) == null) {
                 self.invariantFailed(
                     "LIR/interpreter invariant violated: list literal source local {d} in proc {d} had null boxed element for list elem layout {d}",
@@ -6467,7 +6762,28 @@ pub const Interpreter = struct {
                 val.write(u8, if (result) 1 else 0);
                 break :blk val;
             },
-            .str_trim => self.callBuiltinStr1(builtins.str.strTrim, valueToRocStr(args[0]), updateModeForArg0(ll.unique_args), ll.ret_layout),
+            .str_trim => blk: {
+                const input = valueToRocStr(args[0]);
+                const result = builtins.str.strTrim(input, updateModeForArg0(ll.unique_args), &self.roc_ops);
+                if (builtin.mode == .Debug) {
+                    debugPrint(
+                        "debug_str_trim proc={d} stmt={d} in_len={d} in_bytes={any} in_cap=0x{x} in_small={} out_len={d} out_bytes={any} out_cap=0x{x} out_small={}\n",
+                        .{
+                            if (self.active_proc_id) |proc| @intFromEnum(proc) else std.math.maxInt(u32),
+                            if (self.active_stmt_id) |stmt| @intFromEnum(stmt) else std.math.maxInt(u32),
+                            input.len(),
+                            input.bytes,
+                            input.capacity_or_alloc_ptr,
+                            input.isSmallStr(),
+                            result.len(),
+                            result.bytes,
+                            result.capacity_or_alloc_ptr,
+                            result.isSmallStr(),
+                        },
+                    );
+                }
+                break :blk self.rocStrToValue(result, ll.ret_layout);
+            },
             .str_trim_start => self.callBuiltinStr1(builtins.str.strTrimStart, valueToRocStr(args[0]), updateModeForArg0(ll.unique_args), ll.ret_layout),
             .str_trim_end => self.callBuiltinStr1(builtins.str.strTrimEnd, valueToRocStr(args[0]), updateModeForArg0(ll.unique_args), ll.ret_layout),
             .str_with_ascii_lowercased => self.callBuiltinStr1(builtins.str.strWithAsciiLowercased, valueToRocStr(args[0]), updateModeForArg0(ll.unique_args), ll.ret_layout),
@@ -6650,6 +6966,32 @@ pub const Interpreter = struct {
                 defer crash_boundary.deinit();
                 const sj = crash_boundary.set();
                 if (sj != 0) return error.Crash;
+                if (builtin.mode == .Debug) {
+                    const list = self.valueToRocListForLayout(args[0], arg_layout);
+                    debugPrint(
+                        "debug_str_join_with proc={d} stmt={d} list_layout={d} elem_layout={d} len={d} bytes={any} cap=0x{x}\n",
+                        .{
+                            if (self.active_proc_id) |proc| @intFromEnum(proc) else std.math.maxInt(u32),
+                            if (self.active_stmt_id) |stmt| @intFromEnum(stmt) else std.math.maxInt(u32),
+                            @intFromEnum(arg_layout),
+                            @intFromEnum(self.listElemLayout(arg_layout)),
+                            list.len(),
+                            list.bytes,
+                            list.capacity_or_alloc_ptr,
+                        },
+                    );
+                    if (list.bytes) |bytes| {
+                        const elems: [*]RocStr = @ptrCast(@alignCast(bytes));
+                        var i: usize = 0;
+                        while (i < list.len()) : (i += 1) {
+                            const elem = elems[i];
+                            debugPrint(
+                                "debug_str_join_with_elem index={d} len={d} bytes={any} cap=0x{x} small={}\n",
+                                .{ i, elem.len(), elem.bytes, elem.capacity_or_alloc_ptr, elem.isSmallStr() },
+                            );
+                        }
+                    }
+                }
                 const result = builtins.str.strJoinWithC(self.valueToRocListForLayout(args[0], arg_layout), valueToRocStr(args[1]), &self.roc_ops);
                 break :blk self.rocStrToValue(result, ll.ret_layout);
             },
@@ -6772,6 +7114,12 @@ pub const Interpreter = struct {
                 val.write(u64, @intCast(rl.len()));
                 break :blk val;
             },
+            .list_capacity => blk: {
+                const rl = self.valueToRocListForLayout(args[0], arg_layout);
+                const val = try self.alloc(ll.ret_layout);
+                val.write(u64, @intCast(rl.getCapacity()));
+                break :blk val;
+            },
             .list_get_unsafe => blk: {
                 const rl = self.valueToRocListForLayout(args[0], arg_layout);
                 const idx = args[1].read(u64);
@@ -6780,11 +7128,36 @@ pub const Interpreter = struct {
                 const elem_ptr = rl.bytes.? + @as(usize, @intCast(idx)) * info.width;
                 const val = try self.alloc(ll.ret_layout);
                 @memcpy(val.ptr[0..info.width], elem_ptr[0..info.width]);
+                if (builtin.mode == .Debug and @intFromEnum(arg_layout) == 51 and @intFromEnum(ll.ret_layout) == 21) {
+                    const boxed_ptr = if (self.readBoxedDataPointer(val)) |ptr| @intFromPtr(ptr) else 0;
+                    const boxed_dec = if (self.readBoxedDataPointer(val)) |ptr| (Value{ .ptr = ptr }).read(i128) else @as(i128, -1);
+                    trace_rc.log(
+                        "debug_proc20_list_get idx={d} arg_layout={d} ret_layout={d} elem_ptr=0x{x} boxed_ptr=0x{x} boxed_dec={d}",
+                        .{ idx, @intFromEnum(arg_layout), @intFromEnum(ll.ret_layout), @intFromPtr(elem_ptr), boxed_ptr, boxed_dec },
+                    );
+                }
                 break :blk val;
             },
             .list_append_unsafe => blk: {
                 const info = self.listElemInfo(arg_layout);
                 const list_val = self.valueToRocListForLayout(args[0], arg_layout);
+                if (builtin.mode == .Debug and (@intFromEnum(arg_layout) == 51 or @intFromEnum(ll.ret_layout) == 51)) {
+                    debugPrint(
+                        "debug_list_append_51 arg_layout={d} ret_layout={d} arg0_layout={d} arg1_layout={d} width={d} align={d} list_len={d} list_bytes={any} elem_layout={d} elem_tag={s}\n",
+                        .{
+                            @intFromEnum(arg_layout),
+                            @intFromEnum(ll.ret_layout),
+                            @intFromEnum(try self.lowLevelArgLayout(ll, 0)),
+                            @intFromEnum(try self.lowLevelArgLayout(ll, 1)),
+                            info.width,
+                            info.alignment,
+                            list_val.len(),
+                            list_val.bytes,
+                            @intFromEnum(self.listElemLayout(arg_layout)),
+                            @tagName(self.layout_store.getLayout(self.listElemLayout(arg_layout)).tag),
+                        },
+                    );
+                }
                 if (info.width == 0) {
                     break :blk self.rocListToValue(canonicalZstList(list_val.len() + 1), ll.ret_layout);
                 }
@@ -6921,6 +7294,24 @@ pub const Interpreter = struct {
                 const elem_ptr = rl.bytes.? + @as(usize, @intCast(idx)) * info.width;
                 const val = try self.alloc(ll.ret_layout);
                 @memcpy(val.ptr[0..info.width], elem_ptr[0..info.width]);
+                if (builtin.mode == .Debug and ll.ret_layout == .str) {
+                    const extracted = valueToRocStr(val);
+                    debugPrint(
+                        "debug_list_map_extract proc={d} stmt={d} idx={d} arg_layout={d} ret_layout={d} width={d} len={d} bytes={any} cap=0x{x} small={}\n",
+                        .{
+                            if (self.active_proc_id) |proc| @intFromEnum(proc) else std.math.maxInt(u32),
+                            if (self.active_stmt_id) |stmt| @intFromEnum(stmt) else std.math.maxInt(u32),
+                            idx,
+                            @intFromEnum(arg_layout),
+                            @intFromEnum(ll.ret_layout),
+                            info.width,
+                            extracted.len(),
+                            extracted.bytes,
+                            extracted.capacity_or_alloc_ptr,
+                            extracted.isSmallStr(),
+                        },
+                    );
+                }
                 break :blk val;
             },
             .list_map_write_unsafe => blk: {
@@ -6929,6 +7320,25 @@ pub const Interpreter = struct {
                 const info = self.listElemInfo(arg_layout);
                 if (info.width == 0) break :blk self.rocListToValue(rl, ll.ret_layout);
                 const elem_ptr = rl.bytes.? + @as(usize, @intCast(idx)) * info.width;
+                if (builtin.mode == .Debug and (try self.lowLevelArgLayout(ll, 2)) == .str) {
+                    const replacement = valueToRocStr(args[2]);
+                    debugPrint(
+                        "debug_list_map_write proc={d} stmt={d} idx={d} arg_layout={d} ret_layout={d} elem_arg_layout={d} width={d} len={d} bytes={any} cap=0x{x} small={}\n",
+                        .{
+                            if (self.active_proc_id) |proc| @intFromEnum(proc) else std.math.maxInt(u32),
+                            if (self.active_stmt_id) |stmt| @intFromEnum(stmt) else std.math.maxInt(u32),
+                            idx,
+                            @intFromEnum(arg_layout),
+                            @intFromEnum(ll.ret_layout),
+                            @intFromEnum(try self.lowLevelArgLayout(ll, 2)),
+                            info.width,
+                            replacement.len(),
+                            replacement.bytes,
+                            replacement.capacity_or_alloc_ptr,
+                            replacement.isSmallStr(),
+                        },
+                    );
+                }
                 @memcpy(elem_ptr[0..info.width], args[2].ptr[0..info.width]);
                 break :blk self.rocListToValue(rl, ll.ret_layout);
             },
@@ -7133,6 +7543,19 @@ pub const Interpreter = struct {
             .list_with_capacity => blk: {
                 const elem_layout = self.listElemLayout(ll.ret_layout);
                 const sa = self.helper.sizeAlignOf(elem_layout);
+                if (builtin.mode == .Debug and @intFromEnum(ll.ret_layout) == 51) {
+                    debugPrint(
+                        "debug_list_with_capacity_51 ret_layout={d} elem_layout={d} elem_tag={s} size={d} align={d} capacity={d}\n",
+                        .{
+                            @intFromEnum(ll.ret_layout),
+                            @intFromEnum(elem_layout),
+                            @tagName(self.layout_store.getLayout(elem_layout).tag),
+                            sa.size,
+                            @intFromEnum(sa.alignment),
+                            args[0].read(u64),
+                        },
+                    );
+                }
                 if (sa.size == 0) {
                     break :blk self.rocListToValue(canonicalZstList(0), ll.ret_layout);
                 }
@@ -9808,6 +10231,13 @@ pub const Interpreter = struct {
         return null;
     }
 
+    fn debugPrintBoxyDescRefBytes(desc_ref: *const LIR.BoxyDescRef) void {
+        const bytes = @as(*const [@sizeOf(LIR.BoxyDescRef)]u8, @ptrCast(desc_ref));
+        for (bytes.*) |byte| {
+            debugPrint("{x:0>2}", .{byte});
+        }
+    }
+
     fn copyBoxyDescRefToRuntime(
         self: *LirInterpreter,
         frame: *const Frame,
@@ -9815,15 +10245,42 @@ pub const Interpreter = struct {
         copied: *std.AutoHashMap(usize, u32),
         allow_global_reuse: bool,
     ) Error!LIR.BoxyDescRef {
+        if (builtin.mode == .Debug and
+            (@intFromEnum(frame.proc_id) == 17 or @intFromEnum(frame.proc_id) == 94))
+        {
+            debugPrint(
+                "debug_copy_desc_ref_enter proc={d} allow_reuse={} raw=",
+                .{ @intFromEnum(frame.proc_id), allow_global_reuse },
+            );
+            debugPrintBoxyDescRefBytes(&desc_ref);
+            debugPrint("\n", .{});
+        }
         if (desc_ref == .runtime) return desc_ref;
 
         const source = try self.resolveBoxyDescRef(frame, desc_ref);
-        if (allow_global_reuse) {
-            if (self.runtimeBoxyDescIdForPtr(source)) |runtime_id| {
-                return .{ .runtime = runtime_id };
-            }
+        if (self.runtimeBoxyDescIdForPtr(source)) |runtime_id| {
+            return .{ .runtime = runtime_id };
         }
-
+        if (builtin.mode == .Debug and
+            (@intFromEnum(frame.proc_id) == 17 or @intFromEnum(frame.proc_id) == 94))
+        {
+            debugPrint(
+                "debug_copy_desc_ref_source proc={d} payload={d} nested={d}+{d} variants={d}+{d} tag_ext={} copy={d}+{d} drop={d}+{d}\n",
+                .{
+                    @intFromEnum(frame.proc_id),
+                    @intFromEnum(source.payload_layout),
+                    source.nested_descs.start,
+                    source.nested_descs.len,
+                    source.tag_variants.start,
+                    source.tag_variants.len,
+                    source.tag_ext_desc != null,
+                    source.copy_plan.start,
+                    source.copy_plan.len,
+                    source.drop_plan.start,
+                    source.drop_plan.len,
+                },
+            );
+        }
         const source_key = @intFromPtr(source);
         if (copied.get(source_key)) |runtime_id| {
             return .{ .runtime = runtime_id };
@@ -9861,12 +10318,24 @@ pub const Interpreter = struct {
         copied: *std.AutoHashMap(usize, u32),
         allow_global_reuse: bool,
     ) Error!LIR.BoxySpan {
+        if (runtimeBoxySpanStart(span) != null) return span;
+
         const source_refs = self.requireBoxyDescRefs(span);
         if (source_refs.len == 0) return .{};
 
         const start = self.runtime_boxy_desc_refs.items.len;
         try self.runtime_boxy_desc_refs.appendNTimes(self.allocator, .{ .static = @enumFromInt(0) }, source_refs.len);
         for (source_refs, 0..) |source_ref, index| {
+            if (builtin.mode == .Debug and
+                (@intFromEnum(frame.proc_id) == 17 or @intFromEnum(frame.proc_id) == 94))
+            {
+                debugPrint(
+                    "debug_copy_desc_ref_span proc={d} span={d}+{d} index={d} raw=",
+                    .{ @intFromEnum(frame.proc_id), span.start, span.len, index },
+                );
+                debugPrintBoxyDescRefBytes(&source_ref);
+                debugPrint("\n", .{});
+            }
             self.runtime_boxy_desc_refs.items[start + index] =
                 try self.copyBoxyDescRefToRuntime(frame, source_ref, copied, allow_global_reuse);
         }
@@ -9880,6 +10349,8 @@ pub const Interpreter = struct {
         copied: *std.AutoHashMap(usize, u32),
         allow_global_reuse: bool,
     ) Error!LIR.BoxySpan {
+        if (runtimeBoxySpanStart(span) != null) return span;
+
         const source_variants = self.requireBoxyTagVariants(span);
         if (source_variants.len == 0) return .{};
 
@@ -9907,6 +10378,8 @@ pub const Interpreter = struct {
         copied: *std.AutoHashMap(usize, u32),
         allow_global_reuse: bool,
     ) Error!LIR.BoxySpan {
+        if (runtimeBoxySpanStart(span) != null) return span;
+
         const source_descs = self.requireBoxyTagPayloadDescs(span);
         if (source_descs.len == 0) return .{};
 
@@ -9916,6 +10389,16 @@ pub const Interpreter = struct {
             .desc = .{ .static = @enumFromInt(0) },
         }, source_descs.len);
         for (source_descs, 0..) |payload_desc, index| {
+            if (builtin.mode == .Debug and
+                (@intFromEnum(frame.proc_id) == 17 or @intFromEnum(frame.proc_id) == 94))
+            {
+                debugPrint(
+                    "debug_copy_tag_payload_desc proc={d} span={d}+{d} index={d} payload_index={d} desc_raw=",
+                    .{ @intFromEnum(frame.proc_id), span.start, span.len, index, payload_desc.payload_index },
+                );
+                debugPrintBoxyDescRefBytes(&payload_desc.desc);
+                debugPrint("\n", .{});
+            }
             self.runtime_boxy_tag_payload_descs.items[start + index] = .{
                 .payload_index = payload_desc.payload_index,
                 .desc = try self.copyBoxyDescRefToRuntime(frame, payload_desc.desc, copied, allow_global_reuse),
@@ -9954,6 +10437,8 @@ pub const Interpreter = struct {
         copied: *std.AutoHashMap(usize, u32),
         allow_global_reuse: bool,
     ) Error!LIR.BoxySpan {
+        if (runtimeBoxySpanStart(span) != null) return span;
+
         const source_steps = self.requireBoxyPayloadSteps(span);
         if (source_steps.len == 0) return .{};
 
@@ -10058,6 +10543,13 @@ pub const Interpreter = struct {
         discriminant: u16,
     ) layout_mod.Idx {
         const union_layout_val = self.layout_store.getLayout(union_layout);
+        if (union_layout_val.tag == .zst) {
+            if (discriminant == 0) return .zst;
+            self.invariantFailed(
+                "LIR/interpreter invariant violated: zero-sized boxy tag descriptor payload layout {d} received nonzero discriminant {d}",
+                .{ @intFromEnum(union_layout), discriminant },
+            );
+        }
         if (union_layout_val.tag != .tag_union) {
             self.invariantFailed(
                 "LIR/interpreter invariant violated: boxy tag descriptor payload layout {d} was not a tag union",
@@ -10085,6 +10577,28 @@ pub const Interpreter = struct {
         payload_desc: ?*const LirProgram.BoxyTypeDesc,
         target_layout: layout_mod.Idx,
     ) Error!Value {
+        if (builtin.mode == .Debug and @intFromEnum(frame.proc_id) == 4 and
+            std.mem.eql(u8, self.store.getString(tag_name), "True"))
+        {
+            debugPrint(
+                "debug_construct_tag_entry proc={d} tag={s} target_layout={d} desc_payload={d} debug_ty={any} variants=",
+                .{
+                    @intFromEnum(frame.proc_id),
+                    self.store.getString(tag_name),
+                    @intFromEnum(target_layout),
+                    @intFromEnum(desc.payload_layout),
+                    desc.debug_checked_type,
+                },
+            );
+            for (self.requireBoxyTagVariants(desc.tag_variants)) |variant| {
+                debugPrint("{s}:{d}:{d} ", .{
+                    self.store.getString(variant.name),
+                    variant.discriminant,
+                    @intFromEnum(variant.payload_layout),
+                });
+            }
+            debugPrint("tag_ext={any}\n", .{desc.tag_ext_desc});
+        }
         if (self.findLocalBoxyTagVariant(desc, tag_name)) |variant| {
             const allocated = try self.allocTagValue(desc.payload_layout);
             if (self.helper.sizeOf(allocated.base_layout) > 0) {
@@ -10238,6 +10752,30 @@ pub const Interpreter = struct {
     ) Error!bool {
         const tag_base = self.resolveBoxyTagBaseValue(source_value, source_layout, source_desc);
         const disc = self.helper.readTagDiscriminant(tag_base.value, tag_base.layout);
+        const wanted_name = self.store.getString(tag_name);
+
+        if (builtin.mode == .Debug and (std.mem.eql(u8, wanted_name, "Known") or std.mem.eql(u8, wanted_name, "Unknown"))) {
+            debugPrint(
+                "debug_known_unknown_match proc={d} stmt={d} wanted={s} source_layout={d} base_layout={d} desc_payload={d} disc={d} variants=",
+                .{
+                    @intFromEnum(frame.proc_id),
+                    if (self.active_stmt_id) |stmt| @intFromEnum(stmt) else std.math.maxInt(u32),
+                    wanted_name,
+                    @intFromEnum(source_layout),
+                    @intFromEnum(tag_base.layout),
+                    @intFromEnum(source_desc.payload_layout),
+                    disc,
+                },
+            );
+            for (self.requireBoxyTagVariants(source_desc.tag_variants)) |variant| {
+                debugPrint("{s}:{d}:{d} ", .{
+                    self.store.getString(variant.name),
+                    variant.discriminant,
+                    @intFromEnum(variant.payload_layout),
+                });
+            }
+            debugPrint("tag_ext={any}\n", .{source_desc.tag_ext_desc});
+        }
 
         if (self.findLocalBoxyTagVariant(source_desc, tag_name)) |variant| {
             return disc == variant.discriminant;
@@ -10995,6 +11533,14 @@ pub const Interpreter = struct {
                 desc_for_element_materialization,
                 target_elem_layout,
             );
+            if (builtin.mode == .Debug and @intFromEnum(actual_layout) == 114 and @intFromEnum(expected_layout) == 51 and source_elem_layout == .dec) {
+                const boxed_ptr = if (self.readBoxedDataPointer(materialized)) |ptr| @intFromPtr(ptr) else 0;
+                const boxed_dec = if (self.readBoxedDataPointer(materialized)) |ptr| (Value{ .ptr = ptr }).read(i128) else @as(i128, -1);
+                trace_rc.log(
+                    "debug_boxy_list_materialize_elem index={d} source_dec={d} boxed_ptr=0x{x} boxed_dec={d}",
+                    .{ index, source_elem.read(i128), boxed_ptr, boxed_dec },
+                );
+            }
             @memcpy(target_bytes[index * target_elem_size ..][0..target_elem_size], materialized.readBytes(target_elem_size));
         }
 
@@ -11039,8 +11585,79 @@ pub const Interpreter = struct {
             );
         }
 
-        const actual_is_tag = actual_layout_val.tag == .tag_union or actual_layout_val.tag == .box or actual_layout_val.tag == .box_of_zst;
-        const expected_is_tag = expected_layout_val.tag == .tag_union or expected_layout_val.tag == .box or expected_layout_val.tag == .box_of_zst;
+        const expected_is_box = expected_layout_val.tag == .box or expected_layout_val.tag == .box_of_zst;
+        if (expected_is_box) {
+            const source_payload_desc = if (actual_layout_val.tag == .box or actual_layout_val.tag == .box_of_zst)
+                try self.boxyBoxAllocationPayloadDesc(frame, actual_layout, source_desc)
+            else
+                source_desc;
+            const target_payload_desc = try self.boxyBoxAllocationPayloadDesc(frame, expected_layout, target_desc);
+            if (actual_layout == expected_layout and source_payload_desc == null and target_payload_desc == null) {
+                return try self.materializeLocalValue(value, expected_layout);
+            }
+            if (actual_layout == expected_layout and
+                source_payload_desc != null and
+                target_payload_desc != null and
+                source_payload_desc.?.payload_layout == target_payload_desc.?.payload_layout)
+            {
+                return try self.materializeLocalValue(value, expected_layout);
+            }
+
+            const target_allocation_desc = target_payload_desc orelse {
+                switch (expected_layout_val.tag) {
+                    .box_of_zst => return try self.allocBoxOfZstValue(expected_layout),
+                    .box => {
+                        const target_payload_layout = expected_layout_val.getIdx();
+                        const materialized_payload = try self.materializeBoxyPayloadToLayout(
+                            frame,
+                            value,
+                            actual_layout,
+                            source_desc,
+                            target_payload_layout,
+                        );
+                        return try self.evalBoxBox(materialized_payload, expected_layout);
+                    },
+                    else => unreachable,
+                }
+            };
+            const source_payload = try self.boxyPayloadValueForTargetDesc(
+                frame,
+                value,
+                actual_layout,
+                source_desc,
+                target_allocation_desc,
+            );
+            const materialized_payload = try self.materializeBoxyPayloadToLayoutWithTargetDesc(
+                frame,
+                source_payload.value,
+                source_payload.layout,
+                source_payload.desc orelse source_desc,
+                target_allocation_desc,
+                target_allocation_desc.payload_layout,
+            );
+            return try self.allocBoxyDynamicPayload(materialized_payload, target_allocation_desc.payload_layout, target_allocation_desc, expected_layout);
+        }
+
+        if (actual_layout_val.tag == .box or actual_layout_val.tag == .box_of_zst) {
+            const source_payload = try self.boxyPayloadValueForTargetDesc(
+                frame,
+                value,
+                actual_layout,
+                source_desc,
+                target_desc,
+            );
+            return try self.materializeBoxyPayloadToLayoutWithTargetDesc(
+                frame,
+                source_payload.value,
+                source_payload.layout,
+                source_payload.desc orelse source_desc,
+                target_desc,
+                expected_layout,
+            );
+        }
+
+        const actual_is_tag = actual_layout_val.tag == .tag_union;
+        const expected_is_tag = expected_layout_val.tag == .tag_union;
         if (actual_is_tag and expected_is_tag and target_desc.tag_variants.len != 0) {
             if (builtin.mode == .Debug and @intFromEnum(source_desc.payload_layout) == 119) {
                 debugPrint(
@@ -11092,48 +11709,6 @@ pub const Interpreter = struct {
                 value,
                 actual_layout,
                 source_desc,
-                target_desc,
-                expected_layout,
-            );
-        }
-
-        const expected_is_box = expected_layout_val.tag == .box or expected_layout_val.tag == .box_of_zst;
-        if (expected_is_box) {
-            const source_payload_desc = if (actual_layout_val.tag == .box or actual_layout_val.tag == .box_of_zst)
-                try self.boxyBoxAllocationPayloadDesc(frame, actual_layout, source_desc)
-            else
-                source_desc;
-            const target_payload_desc = try self.boxyBoxAllocationPayloadDesc(frame, expected_layout, target_desc);
-            if (actual_layout == expected_layout and source_payload_desc == null and target_payload_desc == null) {
-                return try self.materializeLocalValue(value, expected_layout);
-            }
-            if (actual_layout == expected_layout and
-                (source_payload_desc == null or
-                    target_payload_desc == null or
-                    source_payload_desc.?.payload_layout == target_payload_desc.?.payload_layout))
-            {
-                return try self.materializeLocalValue(value, expected_layout);
-            }
-
-            const source_payload = try self.boxyPayloadValueForDesc(frame, value, actual_layout, source_desc);
-            const materialized_payload = try self.materializeBoxyPayloadToLayoutWithTargetDesc(
-                frame,
-                source_payload.value,
-                source_payload.layout,
-                source_payload.desc orelse source_desc,
-                target_desc,
-                target_desc.payload_layout,
-            );
-            return try self.allocBoxyDynamicPayload(materialized_payload, target_desc.payload_layout, target_desc, expected_layout);
-        }
-
-        if (actual_layout_val.tag == .box or actual_layout_val.tag == .box_of_zst) {
-            const source_payload = try self.boxyPayloadValueForDesc(frame, value, actual_layout, source_desc);
-            return try self.materializeBoxyPayloadToLayoutWithTargetDesc(
-                frame,
-                source_payload.value,
-                source_payload.layout,
-                source_payload.desc orelse source_desc,
                 target_desc,
                 expected_layout,
             );
@@ -11345,6 +11920,60 @@ pub const Interpreter = struct {
         return .{ .value = value, .layout = layout_idx, .desc = desc };
     }
 
+    fn boxyPayloadValueForTargetDesc(
+        self: *LirInterpreter,
+        frame: *const Frame,
+        value: Value,
+        layout_idx: layout_mod.Idx,
+        source_desc: *const LirProgram.BoxyTypeDesc,
+        target_payload_desc: ?*const LirProgram.BoxyTypeDesc,
+    ) Error!BoxyPayloadValue {
+        const layout_val = self.layout_store.getLayout(layout_idx);
+        if (layout_val.tag != .box and layout_val.tag != .box_of_zst) {
+            return .{ .value = value, .layout = layout_idx, .desc = source_desc };
+        }
+
+        if (try self.boxyBoxAllocationPayloadDesc(frame, layout_idx, source_desc)) |source_payload_desc| {
+            const data_ptr = self.readBoxedDataPointer(value);
+            if (data_ptr == null) {
+                if (self.helper.sizeOf(source_payload_desc.payload_layout) == 0) {
+                    return .{ .value = Value.zst, .layout = source_payload_desc.payload_layout, .desc = source_payload_desc };
+                }
+                return self.invariantFailedError(
+                    "LIR/interpreter invariant violated: boxy source box layout {d} had null data for payload layout {d}",
+                    .{ @intFromEnum(layout_idx), @intFromEnum(source_payload_desc.payload_layout) },
+                );
+            }
+            return .{ .value = .{ .ptr = data_ptr.? }, .layout = source_payload_desc.payload_layout, .desc = source_payload_desc };
+        }
+
+        if (target_payload_desc) |payload_desc| {
+            const data_ptr = self.readBoxedDataPointer(value);
+            if (data_ptr == null) {
+                if (self.helper.sizeOf(payload_desc.payload_layout) == 0) {
+                    return .{ .value = Value.zst, .layout = payload_desc.payload_layout, .desc = payload_desc };
+                }
+                return self.invariantFailedError(
+                    "LIR/interpreter invariant violated: target-guided boxy source box layout {d} had null data for payload layout {d}",
+                    .{ @intFromEnum(layout_idx), @intFromEnum(payload_desc.payload_layout) },
+                );
+            }
+            return .{ .value = .{ .ptr = data_ptr.? }, .layout = payload_desc.payload_layout, .desc = payload_desc };
+        }
+
+        if (layout_val.tag == .box_of_zst) {
+            if (self.readBoxedDataPointer(value) != null) {
+                return self.invariantFailedError(
+                    "LIR/interpreter invariant violated: erased box layout {d} had a dynamic payload but no source or target payload descriptor",
+                    .{@intFromEnum(layout_idx)},
+                );
+            }
+            return .{ .value = Value.zst, .layout = .zst, .desc = null };
+        }
+
+        return try self.boxyPayloadValueForDesc(frame, value, layout_idx, source_desc);
+    }
+
     fn writeBoxyPayloadToDestination(
         self: *LirInterpreter,
         frame: *const Frame,
@@ -11522,6 +12151,7 @@ pub const Interpreter = struct {
                     @intFromEnum(expected_layout) == 119 or
                     @intFromEnum(source_desc.payload_layout) == 119 or
                     @intFromEnum(target_desc.payload_layout) == 119 or
+                    (@intFromEnum(actual_layout) == 352 and @intFromEnum(expected_layout) == 313) or
                     (@intFromEnum(actual_layout) == 349 and @intFromEnum(expected_layout) == 313) or
                     @intFromEnum(actual_field_layout) == 229 or
                     @intFromEnum(expected_field_layout) == 119))
@@ -11848,6 +12478,26 @@ pub const Interpreter = struct {
             try self.resolveBoxyDescRef(frame, desc_ref)
         else
             null;
+        if (builtin.mode == .Debug and @intFromEnum(actual_layout) == 21 and @intFromEnum(expected_layout) == 21) {
+            debugPrint(
+                "debug_variant_box_payload proc={d} source_variant={s} target_variant={s} source_desc_payload={d} source_nested={d}+{d} source_variants={d}+{d} target_desc_payload={d} target_nested={d}+{d} target_variants={d}+{d}\n",
+                .{
+                    @intFromEnum(frame.proc_id),
+                    self.store.getString(source_variant.name),
+                    self.store.getString(target_variant.name),
+                    if (source_payload_desc) |desc| @intFromEnum(desc.payload_layout) else 0,
+                    if (source_payload_desc) |desc| desc.nested_descs.start else 0,
+                    if (source_payload_desc) |desc| desc.nested_descs.len else 0,
+                    if (source_payload_desc) |desc| desc.tag_variants.start else 0,
+                    if (source_payload_desc) |desc| desc.tag_variants.len else 0,
+                    if (target_payload_desc) |desc| @intFromEnum(desc.payload_layout) else 0,
+                    if (target_payload_desc) |desc| desc.nested_descs.start else 0,
+                    if (target_payload_desc) |desc| desc.nested_descs.len else 0,
+                    if (target_payload_desc) |desc| desc.tag_variants.start else 0,
+                    if (target_payload_desc) |desc| desc.tag_variants.len else 0,
+                },
+            );
+        }
         if (builtin.mode == .Debug and
             (@intFromEnum(source_variant.payload_layout) == 8 or
                 expected_layout_val.tag == .struct_ or
@@ -12016,6 +12666,23 @@ pub const Interpreter = struct {
         const actual_is_box = actual_layout_val.tag == .box or actual_layout_val.tag == .box_of_zst;
         const expected_is_box = expected_layout_val.tag == .box or expected_layout_val.tag == .box_of_zst;
         if (actual_is_box or expected_is_box) {
+            if (builtin.mode == .Debug and actual_is_box != expected_is_box and
+                !(actual_layout_val.tag == .zst and expected_layout_val.tag == .box_of_zst))
+            {
+                debugPrint(
+                    "debug_bad_ref_box_coerce proc={d} stmt={d} actual_layout={d} actual_tag={s} expected_layout={d} expected_tag={s}\n",
+                    .{
+                        if (self.active_proc_id) |proc| @intFromEnum(proc) else std.math.maxInt(u32),
+                        if (self.active_stmt_id) |stmt| @intFromEnum(stmt) else std.math.maxInt(u32),
+                        @intFromEnum(actual_layout),
+                        @tagName(actual_layout_val.tag),
+                        @intFromEnum(expected_layout),
+                        @tagName(expected_layout_val.tag),
+                    },
+                );
+                if (self.active_proc_id) |proc| self.debugDumpProc(proc);
+                if (self.active_stmt_id) |stmt| self.debugPrintStmtChain(stmt, 16);
+            }
             return try self.coerceExplicitNominalValueToLayout(value, actual_layout, expected_layout);
         }
 

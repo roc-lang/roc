@@ -9739,6 +9739,40 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                 self.currentCode().append(self.allocator, Op.i64_extend_i32_u) catch return error.OutOfMemory;
             }
         },
+        .list_capacity => {
+            // RocList stores normal-list capacity shifted left by one.
+            // Seamless slices tag the low bit and report length as capacity.
+            try self.emitProcLocal(args[0]);
+            const list_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+            try self.emitLocalSet(list_local);
+
+            const len_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+            try self.emitLocalGet(list_local);
+            try self.emitLoadOp(.i32, 4);
+            try self.emitLocalSet(len_local);
+
+            const cap_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+            try self.emitLocalGet(list_local);
+            try self.emitLoadOp(.i32, 8);
+            try self.emitLocalSet(cap_local);
+
+            try self.emitLocalGet(cap_local);
+            try self.emitI32Const(1);
+            self.currentCode().append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
+            self.currentCode().append(self.allocator, Op.@"if") catch return error.OutOfMemory;
+            self.currentCode().append(self.allocator, @intFromEnum(ValType.i32)) catch return error.OutOfMemory;
+            try self.emitLocalGet(len_local);
+            self.currentCode().append(self.allocator, Op.@"else") catch return error.OutOfMemory;
+            try self.emitLocalGet(cap_local);
+            try self.emitI32Const(1);
+            self.currentCode().append(self.allocator, Op.i32_shr_u) catch return error.OutOfMemory;
+            self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
+
+            const ret_vt = try self.resolveValType(ll.ret_layout);
+            if (ret_vt == .i64) {
+                self.currentCode().append(self.allocator, Op.i64_extend_i32_u) catch return error.OutOfMemory;
+            }
+        },
         .list_get_unsafe => {
             // args[0] = list, args[1] = index
             // Returns bare element without bounds checking.

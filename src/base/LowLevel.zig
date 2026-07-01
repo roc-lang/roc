@@ -54,6 +54,7 @@ pub const LowLevel = enum {
 
     // List operations
     list_len,
+    list_capacity,
     list_get_unsafe,
     list_append_unsafe,
     list_concat,
@@ -754,6 +755,7 @@ pub const LowLevel = enum {
             .str_ends_with,
             .str_count_utf8_bytes,
             .list_len,
+            .list_capacity,
             .bool_not,
             .dict_pseudo_seed,
             .hasher_finish,

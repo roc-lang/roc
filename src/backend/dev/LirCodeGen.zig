@@ -1594,6 +1594,45 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try self.emitLoad(.w64, result_reg, frame_ptr, base_offset + 8);
                     return .{ .general_reg = result_reg };
                 },
+                .list_capacity => {
+                    // RocList stores normal-list capacity shifted left by one.
+                    // Seamless slices tag the low bit and report length as capacity.
+                    std.debug.assert(args.len >= 1);
+                    const list_loc = try self.emitValueLocal(args[0]);
+
+                    const base_offset: i32 = switch (list_loc) {
+                        .stack => |s| s.offset,
+                        .list_stack => |ls_info| ls_info.struct_offset,
+                        .immediate_i64 => |val| {
+                            if (val == 0) return .{ .immediate_i64 = 0 };
+                            unreachable;
+                        },
+                        else => unreachable,
+                    };
+
+                    const len_reg = try self.allocTempGeneral();
+                    defer self.codegen.freeGeneral(len_reg);
+                    const cap_reg = try self.allocTempGeneral();
+                    defer self.codegen.freeGeneral(cap_reg);
+                    const tag_reg = try self.allocTempGeneral();
+                    defer self.codegen.freeGeneral(tag_reg);
+                    const result_reg = try self.allocTempGeneral();
+
+                    try self.emitLoad(.w64, len_reg, frame_ptr, base_offset + 8);
+                    try self.emitLoad(.w64, cap_reg, frame_ptr, base_offset + 16);
+                    try self.emitLsrImm(.w64, result_reg, cap_reg, 1);
+
+                    try self.codegen.emitLoadImm(tag_reg, 1);
+                    try self.emitAndRegs(.w64, tag_reg, tag_reg, cap_reg);
+                    try self.emitCmpImm(tag_reg, 0);
+                    if (comptime target.toCpuArch() == .aarch64) {
+                        try self.codegen.emit.csel(.w64, result_reg, len_reg, result_reg, .ne);
+                    } else {
+                        try self.codegen.emit.cmovcc(.not_equal, .w64, result_reg, len_reg);
+                    }
+
+                    return .{ .general_reg = result_reg };
+                },
                 .list_with_capacity => {
                     // listWithCapacity(capacity, alignment, elem_width, elements_refcounted,
                     //                  inc_context, inc, roc_ops) -> RocList

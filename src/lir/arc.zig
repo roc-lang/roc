@@ -217,15 +217,6 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
         try arc_certify.certifyStoreOrPanic(store.allocator, store, layouts, boxy_rc_descs, .{ .sigs = all_sigs }, options.roots);
     }
 
-    if (builtin.mode == .Debug and store.proc_specs.items.len > 97) {
-        var buffer: std.Io.Writer.Allocating = .init(store.allocator);
-        defer buffer.deinit();
-        debug_print.writeProc(store.allocator, store, layouts, @enumFromInt(94), &buffer.writer) catch {};
-        std.debug.print("\n{s}\n", .{buffer.written()});
-        buffer.clearRetainingCapacity();
-        debug_print.writeProc(store.allocator, store, layouts, @enumFromInt(97), &buffer.writer) catch {};
-        std.debug.print("\n{s}\n", .{buffer.written()});
-    }
 }
 
 fn computeBoxyRcDescs(store: *const LirStore) ResourceError![]?LIR.BoxyDescRef {
@@ -1595,13 +1586,13 @@ const Inserter = struct {
             }
         }
         switch (stmt) {
-            .assign_ref => |assign| {
-                if (frame.retain_assign_ref_target) {
-                    next = try self.retainLocalIfRc(assign.target, next);
-                }
-                cloned = try self.store.addCFStmt(.{ .assign_ref = .{
-                    .target = assign.target,
-                    .op = assign.op,
+	            .assign_ref => |assign| {
+	                if (frame.retain_assign_ref_target) {
+	                    next = try self.retainLocalIfRc(assign.target, next);
+	                }
+	                cloned = try self.store.addCFStmt(.{ .assign_ref = .{
+	                    .target = assign.target,
+	                    .op = assign.op,
                     .next = next,
                 } });
             },
@@ -1676,14 +1667,15 @@ const Inserter = struct {
                 if (assign.payload_mode == .move and !frame.transfer_single) {
                     next = try self.retainLocalIfRc(assign.payload, next);
                 }
-                cloned = try self.store.addCFStmt(.{ .assign_boxy_box = .{
-                    .target = assign.target,
-                    .payload = assign.payload,
-                    .payload_layout = assign.payload_layout,
-                    .payload_desc = assign.payload_desc,
-                    .payload_mode = assign.payload_mode,
-                    .next = next,
-                } });
+	                cloned = try self.store.addCFStmt(.{ .assign_boxy_box = .{
+	                    .target = assign.target,
+	                    .payload = assign.payload,
+	                    .payload_layout = assign.payload_layout,
+	                    .source_desc = assign.source_desc,
+	                    .payload_desc = assign.payload_desc,
+	                    .payload_mode = assign.payload_mode,
+	                    .next = next,
+	                } });
             },
             .assign_boxy_reuse_box => |assign| {
                 if (!frame.transfer_single) {
