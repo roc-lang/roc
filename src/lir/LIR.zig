@@ -944,7 +944,7 @@ test "RcHelper distinguishes concrete layout helpers from boxy descriptor helper
     switch (boxy) {
         .boxy => |desc| switch (desc) {
             .static => |id| try std.testing.expectEqual(@as(u32, 7), @intFromEnum(id)),
-            .local => return error.TestExpectedEqual,
+            .local, .runtime => return error.TestExpectedEqual,
         },
         .concrete => return error.TestExpectedEqual,
     }

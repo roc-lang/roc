@@ -2517,7 +2517,11 @@ const ProcedureBuilder = struct {
         defer descs.deinit(self.allocator);
         for (payloads, 0..) |child, index| {
             const field_layout = self.tagVariantPayloadFieldLayout(variant_payload_layout, index, payloads.len);
-            const desc_rep = self.tagPayloadStorageDescRepForLayout(child.rep, field_layout, false) orelse continue;
+            // Force payload descriptors even for concrete payloads: a static
+            // descriptor can describe a value that flows into a worker whose
+            // own view of the payload is erased, and such a worker reads tag
+            // payloads through the descriptor it was handed.
+            const desc_rep = self.tagPayloadStorageDescRepForLayout(child.rep, field_layout, true) orelse continue;
             try descs.append(self.allocator, .{
                 .payload_index = @intCast(index),
                 .desc = try self.staticDescRefForRep(desc_rep),
@@ -9917,7 +9921,18 @@ const ProcBodyBuilder = struct {
             return null;
         }
         if (self.parent.plan.representations.items[@intFromEnum(canonical_source_rep)].descriptor == null) {
-            return null;
+            // The call-side rep has no descriptor requirement of its own, so
+            // its shape is known at this call site. Materialize a descriptor
+            // that describes the actual argument value; the worker's declared
+            // descriptor cannot account for call-site row instantiation (for
+            // example extra tags living in an open union's extension).
+            const materialization = try self.descriptorMaterializationForSourceRep(canonical_source_rep);
+            return .{
+                .local = try self.addFrameLocal(.opaque_ptr),
+                .materialize = materialization.desc,
+                .captures = materialization.captures,
+                .from_source_value = true,
+            };
         }
 
         const source = source_args[index];
