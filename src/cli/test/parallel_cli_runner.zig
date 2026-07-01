@@ -31,7 +31,6 @@ const child_command_timeout_reserve_ms: u64 = 1_000;
 const timeout_result_grace_ms: u64 = 5_000;
 const default_timeout_ms: u64 = 120_000;
 const glue_timeout_ms: u64 = 240_000;
-const rust_glue_duplicate_tag_timeout_ms: u64 = 90_000;
 
 const CliRunnerError = util.RocRunError ||
     util.ChildTimeoutError ||
@@ -1937,7 +1936,7 @@ fn runCustomCase(
         .glue_zig_box_payload_alignment => customGlueZigBoxPayloadAlignment(io, allocator, &env, &timer, timeout_ms),
         .glue_rust => customGlueRust(io, allocator, &env, &timer, timeout_ms),
         .glue_zig_duplicate_tag_unions => customGlueZigDuplicateTagUnions(io, allocator, &env, &timer, timeout_ms),
-        .glue_rust_duplicate_tag_unions => customGlueRustDuplicateTagUnions(io, allocator, &env, &timer),
+        .glue_rust_duplicate_tag_unions => customGlueRustDuplicateTagUnions(io, allocator, &env, &timer, timeout_ms),
         .glue_rust_box_payload_alignment => customGlueRustBoxPayloadAlignment(io, allocator, &env, &timer, timeout_ms),
         .glue_zig_bang_record_fields => customGlueZigBangRecordFieldNames(io, allocator, &env, &timer, timeout_ms),
         .glue_package_nominal_api_alias => customGluePackageNominalApiAlias(io, allocator, &env, &timer, timeout_ms),
@@ -4882,10 +4881,10 @@ fn customGlueZigCompiles(io: std.Io, allocator: Allocator, env: *const CaseEnv, 
     return null;
 }
 
-fn customGlueRustDuplicateTagUnions(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer) ?TestResult {
+fn customGlueRustDuplicateTagUnions(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
     const output_dir = createWorkSubdir(io, allocator, env, "rust-duplicate-tag-glue-out") catch |err|
         return customInfraFailure(allocator, timer, "failed to create glue output dir: {}", .{err});
-    if (runRocAndCheck(io, allocator, env, timer, rust_glue_duplicate_tag_timeout_ms, .{
+    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
         .args = &.{ "glue", "src/glue/src/RustGlue.roc", output_dir, "test/glue/rust-duplicate-tag-platform/main.roc" },
         .not_contains = &.{ .{ .stream = .stderr, .text = "PANIC" }, .{ .stream = .stderr, .text = "unreachable" } },
     })) |failure| return failure;
