@@ -9879,25 +9879,24 @@ const CheckKindState = union(enum) {
         scratch_top: u32,
         cursor: usize,
     },
-    /// State for `e_str`. Carries the two cross-segment accumulators that the
-    /// recursive arm keeps as loop locals (`did_err`, `has_interpolation`) plus
-    /// `cursor`, the index of the current segment in `str.span` (advanced in
-    /// `str_after_segment`). `did_err` drives the final 3-way unify in `.exit`;
-    /// `has_interpolation` selects the `Str`-vs-`from_quote` post-loop path.
+    /// State for `e_str`. Carries the two cross-segment accumulators
+    /// (`did_err`, `has_interpolation`) plus `cursor`, the index of the current
+    /// segment in `str.span` (advanced in `str_after_segment`). `did_err` drives
+    /// the final 3-way unify in `.exit`; `has_interpolation` selects the
+    /// `Str`-vs-`from_quote` post-loop path.
     str: struct {
         did_err: bool,
         has_interpolation: bool,
         cursor: usize,
     },
-    /// State for `e_list`. Mirrors the recursive arm's per-element interleave.
-    /// The reference element is always `elems[0]` (its var is the list's
-    /// `elem_var`, recomputed in the resume step), so it is not stored. `cursor`
-    /// indexes the current element (advanced in `list_after_elem`).
+    /// State for `e_list`. The reference element is always `elems[0]` (its var is
+    /// the list's `elem_var`, recomputed in the resume step), so it is not stored.
+    /// `cursor` indexes the current element (advanced in `list_after_elem`).
     /// `error_recovery`, once a unify fails, makes every later element skip its
-    /// unify (the recursive arm's post-failure "check the rest without comparing,
-    /// then break"). `last_elem` is the most recent successfully-unified element,
-    /// supplying each `.list_entry` diagnostic context's `last_elem_idx` (matches
-    /// the recursive arm's `last_elem_expr_idx`, which only advances on success).
+    /// unify (the remaining elements are still checked, just not compared to
+    /// `elem_var`). `last_elem` is the most recent successfully-unified element,
+    /// supplying each `.list_entry` diagnostic context's `last_elem_idx`; it
+    /// advances only on a successful unify.
     list: struct {
         cursor: usize,
         error_recovery: bool,
@@ -9916,16 +9915,14 @@ const CheckFrame = struct {
     /// When true, the driver re-asserts `self.checking_call_arg` immediately
     /// before this frame's `.enter` prologue runs (the prologue consumes the
     /// flag). Used by `e_call` to mark the function and every argument child as
-    /// call-args, reproducing the recursive arm's per-child
-    /// `self.checking_call_arg = true` even though the children run as separately
-    /// scheduled frames. Default false (no effect on other kinds; never CLEARS
-    /// the flag, so the root frame's externally-set value is preserved).
+    /// call-args even though the children run as separately scheduled frames.
+    /// Default false (no effect on other kinds; never CLEARS the flag, so the
+    /// root frame's externally-set value is preserved).
     call_arg: bool = false,
     /// When true, the driver re-asserts `self.checking_immediate_callee` immediately
     /// before this frame's `.enter` prologue runs (the prologue consumes the flag).
     /// Used by `e_call` to mark the immediately-invoked function child, and by
-    /// `e_closure` to forward its own immediate-callee status to the inner lambda,
-    /// reproducing the recursive arm's `self.checking_immediate_callee = true`.
+    /// `e_closure` to forward its own immediate-callee status to the inner lambda.
     /// Default false (the consumed default; never CLEARS the flag).
     immediate_callee: bool = false,
     kind_state: CheckKindState = .none,
@@ -9934,15 +9931,15 @@ const CheckFrame = struct {
 };
 
 /// Construct a fresh `.enter` frame for `expr_idx`. Used for the root push and
-/// for scheduling each child of a migrated kind.
+/// for scheduling each child of a kind that schedules its children.
 fn makeEnterFrame(expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected) CheckFrame {
     return .{ .expr_idx = expr_idx, .env = env, .expected = expected, .step = .enter, .does_fx = false };
 }
 
 /// Values produced by `checkEnterPrologue` that the expression switch body and
-/// `checkExitEpilogue` need. This struct exists solely to let the prologue and
-/// epilogue live in their own functions while keeping the giant switch body
-/// byte-for-byte unchanged (it reads locals unpacked from this struct).
+/// `checkExitEpilogue` need. Bundling them in one struct lets the prologue and
+/// epilogue live in their own functions, with the switch body reading its
+/// per-expression locals unpacked from here.
 const ExprPrologue = struct {
     expr_idx: CIR.Expr.Idx,
     expr: CIR.Expr,
@@ -10223,14 +10220,10 @@ fn checkExitEpilogue(self: *Self, p: *ExprPrologue, env: *Env, does_fx: bool) st
     return does_fx;
 }
 
-/// Shared checking body for the literal/leaf expression kinds whose logic is
-/// identical in both drivers — the recursive arm's `switch (expr)` and the
-/// iterative driver's `.exit` switch. Previously each body was copied verbatim
-/// into both; extracting it here gives ONE definition, so a fix to (say)
-/// `e_num`'s `from_numeral` constraint can no longer silently drift between the
-/// two copies. These kinds are pure w.r.t. the work stack: no child `checkExpr`
-/// is scheduled/re-entered and they perform no effects (`does_fx` stays false),
-/// so callers thread no effect result. `expr` is the already-fetched node
+/// Checking body for the literal/leaf expression kinds, run from the `.exit`
+/// switch. These kinds are pure w.r.t. the work stack: no child `checkExpr` is
+/// scheduled/re-entered and they perform no effects (`does_fx` stays false), so
+/// callers thread no effect result. `expr` is the already-fetched node
 /// (== `getExpr(expr_idx)`); the switch is exhaustive over the leaf kinds it
 /// covers and `unreachable` for any other kind (callers only dispatch leaves).
 fn checkLeafExpr(
@@ -10549,11 +10542,10 @@ fn checkExprIter(self: *Self, root_idx: CIR.Expr.Idx, root_env: *Env, root_expec
                     // element's `elem_var` unify immediately after that element's
                     // child frame pops — so a list-element-mismatch diagnostic is
                     // appended in element order, interleaved with the elements'
-                    // own diagnostics, matching the recursive arm. `.exit` only
-                    // builds the final list type. Delegated to a helper (NOT
-                    // inlined) so its scheduling local does not bloat
-                    // `checkExprIter`'s native stack frame on the deep
-                    // statement-nesting spine (mirrors `enterStrExpr`).
+                    // own diagnostics. `.exit` only builds the final list type.
+                    // Delegated to a helper (NOT inlined) so its scheduling local
+                    // does not bloat `checkExprIter`'s native stack frame on the
+                    // deep statement-nesting spine (mirrors `enterStrExpr`).
                     .e_list => {
                         try self.enterListExpr(top);
                     },
@@ -10610,8 +10602,7 @@ fn checkExprIter(self: *Self, root_idx: CIR.Expr.Idx, root_env: *Env, root_expec
                     },
                     .e_dbg => |dbg| {
                         // `dbg` is an observable effect; mark BEFORE checking the
-                        // child (matching the recursive arm's order). Its own
-                        // `does_fx` is forced to false in `.exit`.
+                        // child. Its own `does_fx` is forced to false in `.exit`.
                         self.markCurrentHoistObservableEffect();
                         frame.step = .exit;
                         const child_env = frame.env;
@@ -10638,7 +10629,7 @@ fn checkExprIter(self: *Self, root_idx: CIR.Expr.Idx, root_env: *Env, root_expec
                         // AND immediate-callee status so the inner lambda inherits
                         // both (an argument lambda is not generalized; an
                         // immediately-invoked one keeps its delayed-dependency
-                        // status). Restored in `.exit` (mirrors the recursive `defer`).
+                        // status). Restored in `.exit`.
                         const saved = self.checking_call_arg;
                         const saved_immediate = self.checking_immediate_callee;
                         self.checking_call_arg = frame.prologue.is_call_arg;
@@ -10670,8 +10661,7 @@ fn checkExprIter(self: *Self, root_idx: CIR.Expr.Idx, root_env: *Env, root_expec
                     },
                     // INTERLEAVING: `e_call` schedules its function child (marked
                     // `call_arg` so the func re-asserts `checking_call_arg` at its
-                    // own prologue, matching the recursive arm's
-                    // `self.checking_call_arg = true` before `checkExpr(call.func)`).
+                    // own prologue — the function child is checked as a call-arg).
                     // The `call_after_func` resume step instantiates a generalized
                     // func var and schedules the arg children; `.exit` runs the
                     // post-args body. The non-apply/record_builder/range `else`
@@ -10683,9 +10673,8 @@ fn checkExprIter(self: *Self, root_idx: CIR.Expr.Idx, root_env: *Env, root_expec
                     },
                     // INTERLEAVING: `e_interpolation` schedules its `first`
                     // child (marked `call_arg` so it re-asserts
-                    // `self.checking_call_arg` at its own prologue, matching the
-                    // recursive arm's `self.checking_call_arg = true` before
-                    // `checkExpr(interpolation.first)`). The `interp_after_first`
+                    // `self.checking_call_arg` at its own prologue — the `first`
+                    // child is checked as a call-arg). The `interp_after_first`
                     // resume step creates `str_var`/`item_var`, runs the
                     // first-child unify, and schedules the `parts` children; the
                     // per-pair resume steps run the between-segment unifies; and
@@ -10758,10 +10747,10 @@ fn checkExprIter(self: *Self, root_idx: CIR.Expr.Idx, root_env: *Env, root_expec
                         try self.enterStrExpr(top);
                     },
                     // Helper-delegating / per-child-state kinds: like the leaf
-                    // kinds below, advance to `.exit` and run the recursive body
-                    // verbatim there. Their child `checkExpr` calls re-enter the
-                    // driver (each its own frame_base), so no native recursion
-                    // through the block/final-expr spine is added.
+                    // kinds below, advance to `.exit` and run their checking body
+                    // there. Their child `checkExpr` calls re-enter the driver
+                    // (each its own frame_base), so no native recursion through
+                    // the block/final-expr spine is added.
                     .e_binop,
                     .e_unary_minus,
                     .e_unary_not,
@@ -10770,17 +10759,17 @@ fn checkExprIter(self: *Self, root_idx: CIR.Expr.Idx, root_env: *Env, root_expec
                     // Helper-delegating: `checkMatchExpr` runs as a unit in
                     // `.exit`, re-entering `checkExpr` for the cond/guards/bodies.
                     .e_match,
-                    // Call-family kinds: run the recursive body verbatim in
-                    // `.exit` (re-entering `checkExpr` per child), because each
-                    // arg sets `checking_call_arg` immediately before its check.
+                    // Call-family kinds: run their checking body in `.exit`
+                    // (re-entering `checkExpr` per child), because each arg sets
+                    // `checking_call_arg` immediately before its check.
                     .e_dispatch_call,
                     .e_method_call,
                     .e_run_low_level,
                     .e_type_dispatch_call,
                     .e_type_method_call,
                     // Leaf kinds: no children to schedule. Just advance to
-                    // `.exit`, where the recursive arm's body runs verbatim and
-                    // the shared epilogue+finish tail completes the frame. The
+                    // `.exit`, where the leaf body runs and the shared
+                    // epilogue+finish tail completes the frame. The
                     // self.* checking flags set by `checkEnterPrologue` stay
                     // intact until `.exit` because no other frame runs between
                     // this `.enter` and the immediately-following `.exit` (no
@@ -10902,9 +10891,8 @@ fn checkExprIter(self: *Self, root_idx: CIR.Expr.Idx, root_env: *Env, root_expec
                 // rather than re-`getExpr`'ing the same node on the hot path.
                 switch (f.prologue.expr) {
                     .e_tuple_access => |ta| {
-                        // POST-CHILD body, copied verbatim from the recursive
-                        // arm. The child's does_fx was already OR'd into
-                        // f.does_fx when the child frame popped.
+                        // POST-CHILD body. The child's does_fx was already OR'd
+                        // into f.does_fx when the child frame popped.
                         const tuple_var = ModuleEnv.varFrom(ta.tuple);
                         const resolved = self.types.resolveVar(tuple_var);
 
@@ -11005,8 +10993,8 @@ fn checkExprIter(self: *Self, root_idx: CIR.Expr.Idx, root_env: *Env, root_expec
                     // valid. (`e_list`'s per-element `elem_var` unifies already
                     // ran INTERLEAVED in `list_after_elem` — in element order, so
                     // a mismatch diagnostic is appended between the relevant
-                    // element checks, matching the recursive arm. `.exit` only
-                    // builds the final list type from the inferred `elem_var`.)
+                    // element checks. `.exit` only builds the final list type
+                    // from the inferred `elem_var`.)
                     .e_list => |list| {
                         const env = f.env;
                         const expr_var = f.prologue.expr_var;
@@ -11052,10 +11040,9 @@ fn checkExprIter(self: *Self, root_idx: CIR.Expr.Idx, root_env: *Env, root_expec
                         try self.unifyWith(expr_var, tag_union_content, env);
                     },
                     // ---- Leaf / literal kinds ----
-                    // Checking body shared with the recursive arm via
-                    // `checkLeafExpr` (one definition, no cross-driver drift).
-                    // `does_fx` stays the frame's seeded value (false for these
-                    // kinds) and is applied by the shared tail below.
+                    // Checking body run via `checkLeafExpr`. `does_fx` stays the
+                    // frame's seeded value (false for these kinds) and is applied
+                    // by the shared tail below.
                     .e_str_segment,
                     .e_bytes_literal,
                     .e_num,
@@ -11166,7 +11153,7 @@ fn checkExprIter(self: *Self, root_idx: CIR.Expr.Idx, root_env: *Env, root_expec
                                                 // Inside a delayed-dependency context (a non-immediately-
                                                 // invoked lambda body), a reference to a still-in-flight
                                                 // non-function def is a benign forward reference: just link
-                                                // the types, no diagnostic/poisoning (mirrors the recursive arm).
+                                                // the types, no diagnostic/poisoning.
                                                 _ = try self.unify(expr_var, ModuleEnv.varFrom(referenced_def.expr), env);
                                             }
                                             break :blk;
@@ -11537,7 +11524,7 @@ fn checkExprIter(self: *Self, root_idx: CIR.Expr.Idx, root_env: *Env, root_expec
 
                         _ = try self.unify(expr_var, lambda_var, env);
 
-                        // Restore the forwarded flags (mirrors the recursive defer).
+                        // Restore the forwarded flags.
                         self.checking_call_arg = f.kind_state.closure.saved_checking_call_arg;
                         self.checking_immediate_callee = f.kind_state.closure.saved_checking_immediate_callee;
                     },
@@ -11559,9 +11546,9 @@ fn checkExprIter(self: *Self, root_idx: CIR.Expr.Idx, root_env: *Env, root_expec
                         _ = try self.unify(hasher_var, expr_var, env);
                     },
                     // ---- Helper-delegating / per-child-state kinds ----
-                    // Run the recursive arm body VERBATIM. Their child `checkExpr`
-                    // calls re-enter the driver and may realloc `check_frame_stack`,
-                    // so read all needed values into locals first and write
+                    // Run their checking body. Their child `checkExpr` calls
+                    // re-enter the driver and may realloc `check_frame_stack`, so
+                    // read all needed values into locals first and write
                     // `does_fx` back via `items[top]` (never reuse `f` afterward).
                     .e_binop => |binop| {
                         const expr_idx_l = f.expr_idx;
@@ -11649,13 +11636,13 @@ fn checkExprIter(self: *Self, root_idx: CIR.Expr.Idx, root_env: *Env, root_expec
                         self.check_frame_stack.items[top].does_fx = fx_lhs or fx_rhs;
                     },
                     // ---- Call-family kinds ----
-                    // Delegate to the shared helper (also called by the recursive
-                    // arm), which re-enters `checkExpr` per child. That re-entry
-                    // may realloc `check_frame_stack`, so read all values off `f`
-                    // first and write `does_fx` back via `items[top]` (never reuse
-                    // `f` afterward). The helper — not this frame — carries the
-                    // arg `stackFallback` buffer, keeping `checkExprIter`'s frame
-                    // small for the deep statement-nesting recursion spine.
+                    // Delegate to the helper, which re-enters `checkExpr` per
+                    // child. That re-entry may realloc `check_frame_stack`, so
+                    // read all values off `f` first and write `does_fx` back via
+                    // `items[top]` (never reuse `f` afterward). The helper — not
+                    // this frame — carries the arg `stackFallback` buffer, keeping
+                    // `checkExprIter`'s frame small for the deep statement-nesting
+                    // recursion spine.
                     .e_method_call => |method_call| {
                         const expr_idx_l = f.expr_idx;
                         const env = f.env;
@@ -11692,16 +11679,15 @@ fn checkExprIter(self: *Self, root_idx: CIR.Expr.Idx, root_env: *Env, root_expec
                         const fx = try self.checkRunLowLevelExpr(env, child_expected, run_ll);
                         self.check_frame_stack.items[top].does_fx = fx;
                     },
-                    // Helper-delegating: `checkMatchExpr` is the single source of
-                    // truth (also called by the recursive arm). It re-enters
-                    // `checkExpr` for the cond/guards/bodies — that re-entry may
-                    // realloc `check_frame_stack`, so read all values off `f`
-                    // first and write `does_fx` back via `items[top]` (never reuse
-                    // `f` afterward). It takes the ORIGINAL `expected` (for
+                    // Helper-delegating: `checkMatchExpr` re-enters `checkExpr`
+                    // for the cond/guards/bodies — that re-entry may realloc
+                    // `check_frame_stack`, so read all values off `f` first and
+                    // write `does_fx` back via `items[top]` (never reuse `f`
+                    // afterward). It takes the ORIGINAL `expected` (for
                     // `expected.branch_result`/`forStatement()`), not
                     // `child_expected`. No children are scheduled, so `f.does_fx`
-                    // is still its initial `false`; assigning the helper's result
-                    // matches the recursive arm's `fx or does_fx` (does_fx=false).
+                    // is still its initial `false`; the helper's result is
+                    // assigned directly.
                     .e_match => |match| {
                         const expr_idx_l = f.expr_idx;
                         const env = f.env;
@@ -11802,9 +11788,8 @@ fn checkExprIter(self: *Self, root_idx: CIR.Expr.Idx, root_env: *Env, root_expec
                     // `does_fx` to pick `mkFuncEffectful`/`mkFuncUnbound`, then
                     // RESETS `f.does_fx` to false — a lambda value performs no
                     // effects itself, so it must contribute `false` to its
-                    // parent and to `hoist_frame.finish` (the recursive arm never
-                    // assigns its outer `does_fx`). No `checkExpr` re-entry / no
-                    // `check_frame_stack` append, so `f` stays valid.
+                    // parent and to `hoist_frame.finish`. No `checkExpr` re-entry
+                    // / no `check_frame_stack` append, so `f` stays valid.
                     .e_lambda => {
                         try self.exitLambdaExpr(top);
                     },
@@ -11822,8 +11807,8 @@ fn checkExprIter(self: *Self, root_idx: CIR.Expr.Idx, root_env: *Env, root_expec
                     .e_record => {
                         try self.exitRecordExpr(top);
                     },
-                    // NOTE: no `else` prong — every `CIR.Expr` kind is now migrated,
-                    // so this post-body switch is exhaustive. A future new kind
+                    // NOTE: no `else` prong — this post-body switch handles every
+                    // `CIR.Expr` kind, so it is exhaustive. A future new kind
                     // fails to compile here until its `.exit` body is added.
                 }
                 const does_fx = try self.checkExitEpilogue(
@@ -13270,171 +13255,12 @@ fn tagsCanUseSamePayloads(self: *Self, expected_tag: types_mod.Tag, actual_tag: 
 
 // if-else //
 
-/// Check the types for an if-else expr
-fn checkIfElseExpr(
-    self: *Self,
-    if_expr_idx: CIR.Expr.Idx,
-    expr_region: Region,
-    env: *Env,
-    if_: @FieldType(CIR.Expr, @tagName(.e_if)),
-    expected: Expected,
-) std.mem.Allocator.Error!bool {
-    const trace = tracy.trace(@src());
-    defer trace.end();
-    const expected_branch_ret = expected.branch_result;
-    const child_expected = expected.forStatement();
-
-    // Fresh accumulator for the meet of all compatible branch bodies. Branches
-    // fold into this instead of into the shared `expected_ret`, which is unified
-    // with the whole expr (and hence the accumulator) exactly once, at the end.
-    const branch_acc: ?Var = if (expected_branch_ret != null) try self.fresh(env, expr_region) else null;
-
-    const branches = self.cir.store.sliceIfBranches(if_.branches);
-
-    // Should never be 0
-    std.debug.assert(branches.len > 0);
-
-    // Get the first branch
-    const first_branch_idx = branches[0];
-    const first_branch = self.cir.store.getIfBranch(first_branch_idx);
-
-    // Check the condition of the 1st branch
-    var does_fx = try self.checkExpr(first_branch.cond, env, child_expected);
-    const first_cond_var: Var = ModuleEnv.varFrom(first_branch.cond);
-    const bool_var = try self.freshBool(env, expr_region);
-    const first_cond_result = try self.unifyInContext(bool_var, first_cond_var, env, .if_condition);
-    if (if_.warn_unused_branches and first_cond_result.isOk()) {
-        try self.warnIfComptimeConditionalExpr(first_branch.cond, .if_condition, expected);
-    }
-
-    // Then we check the 1st branch's body
-    does_fx = try self.checkExprWithHoistSelectionSuppressed(first_branch.body, env, expected.forBranchBody()) or does_fx;
-
-    if (expected_branch_ret) |expected_ret| {
-        const branch_ctx = problem.Context{ .if_branch = .{
-            .branch_index = 0,
-            .num_branches = @intCast(branches.len + 1),
-            .is_else = false,
-            .parent_if_expr = if_expr_idx,
-            .last_if_branch = first_branch_idx,
-        } };
-        try self.checkBranchBodyAgainstExpected(first_branch.body, expected_ret, branch_acc.?, branch_ctx, env);
-    }
-
-    // The 1st branch's body is the type all other branches must match (when no expected type)
-    const branch_var = @as(Var, ModuleEnv.varFrom(first_branch.body));
-
-    // Total number of branches (including final else)
-    const num_branches: u32 = @intCast(branches.len + 1);
-
-    var last_if_branch = first_branch_idx;
-    for (branches[1..], 1..) |branch_idx, cur_index| {
-        const branch = self.cir.store.getIfBranch(branch_idx);
-
-        // Check the branches condition
-        does_fx = try self.checkExpr(branch.cond, env, child_expected) or does_fx;
-        const cond_var: Var = ModuleEnv.varFrom(branch.cond);
-        const branch_bool_var = try self.freshBool(env, expr_region);
-        const cond_result = try self.unifyInContext(branch_bool_var, cond_var, env, .if_condition);
-        if (if_.warn_unused_branches and cond_result.isOk()) {
-            try self.warnIfComptimeConditionalExpr(branch.cond, .if_condition, expected);
-        }
-
-        // Check the branch body
-        does_fx = try self.checkExprWithHoistSelectionSuppressed(branch.body, env, expected.forBranchBody()) or does_fx;
-
-        // Check against expected return type BEFORE pairwise unification
-        if (expected_branch_ret) |expected_ret| {
-            const branch_ctx = problem.Context{ .if_branch = .{
-                .branch_index = @intCast(cur_index),
-                .num_branches = num_branches,
-                .is_else = false,
-                .parent_if_expr = if_expr_idx,
-                .last_if_branch = last_if_branch,
-            } };
-            try self.checkBranchBodyAgainstExpected(branch.body, expected_ret, branch_acc.?, branch_ctx, env);
-        } else {
-            const body_var: Var = ModuleEnv.varFrom(branch.body);
-            const body_result = try self.unifyInContext(branch_var, body_var, env, .{ .if_branch = .{
-                .branch_index = @intCast(cur_index),
-                .num_branches = num_branches,
-                .is_else = false,
-                .parent_if_expr = if_expr_idx,
-                .last_if_branch = last_if_branch,
-            } });
-
-            if (!body_result.isOk()) {
-                // Check remaining branches to catch their individual errors
-                for (branches[cur_index + 1 ..]) |remaining_branch_idx| {
-                    const remaining_branch = self.cir.store.getIfBranch(remaining_branch_idx);
-
-                    does_fx = try self.checkExpr(remaining_branch.cond, env, child_expected) or does_fx;
-                    const remaining_cond_var: Var = ModuleEnv.varFrom(remaining_branch.cond);
-
-                    const fresh_bool = try self.freshBool(env, expr_region);
-                    const remaining_cond_result = try self.unifyInContext(fresh_bool, remaining_cond_var, env, .if_condition);
-                    if (if_.warn_unused_branches and remaining_cond_result.isOk()) {
-                        try self.warnIfComptimeConditionalExpr(remaining_branch.cond, .if_condition, expected);
-                    }
-
-                    does_fx = try self.checkExprWithHoistSelectionSuppressed(remaining_branch.body, env, expected.forBranchBody()) or does_fx;
-                    try self.unifyWith(ModuleEnv.varFrom(remaining_branch.body), .err, env);
-                }
-
-                // Break to avoid cascading errors
-                break;
-            }
-        }
-
-        last_if_branch = branch_idx;
-    }
-
-    // Check the final else
-    does_fx = try self.checkExprWithHoistSelectionSuppressed(if_.final_else, env, expected.forBranchBody()) or does_fx;
-
-    // Check final else against expected return type before pairwise unification
-    if (expected_branch_ret) |expected_ret| {
-        const branch_ctx = problem.Context{ .if_branch = .{
-            .branch_index = num_branches - 1,
-            .num_branches = num_branches,
-            .is_else = true,
-            .parent_if_expr = if_expr_idx,
-            .last_if_branch = last_if_branch,
-        } };
-        try self.checkBranchBodyAgainstExpected(if_.final_else, expected_ret, branch_acc.?, branch_ctx, env);
-        const if_expr_var: Var = ModuleEnv.varFrom(if_expr_idx);
-        // Tie the whole expr to the accumulated branch meet, then to the shared
-        // expected return type. This is the ONLY place `expected_ret` is merged
-        // for the if-expr, and it runs in the load-bearing `(expr, expected)`
-        // operand order so `expected_ret` survives as the union-find root (see
-        // `store.union_`): flipping it ties recursive type parameters off to
-        // duplicate rigids of the same name, which then fail to unify.
-        _ = try self.unify(if_expr_var, branch_acc.?, env);
-        _ = try self.unify(if_expr_var, expected_ret, env);
-    } else {
-        const final_else_var: Var = ModuleEnv.varFrom(if_.final_else);
-        _ = try self.unifyInContext(branch_var, final_else_var, env, .{ .if_branch = .{
-            .branch_index = num_branches - 1,
-            .num_branches = num_branches,
-            .is_else = true,
-            .parent_if_expr = if_expr_idx,
-            .last_if_branch = last_if_branch,
-        } });
-
-        // Set the entire expr's type to be the type of the branch
-        const if_expr_var: Var = ModuleEnv.varFrom(if_expr_idx);
-        _ = try self.unify(if_expr_var, branch_var, env);
-    }
-
-    return does_fx;
-}
-
-/// `e_if` `.enter` dispatch for the iterative driver (extracted from
+/// `e_if` `.enter` dispatch for the iterative driver (separate from
 /// `checkExprIter` so its scheduling local does not bloat that function's native
 /// stack frame on the deep statement-nesting spine — mirrors `enterForExpr`).
 ///
-/// Inlines the front of `checkIfElseExpr`: computes the cross-branch accumulator
-/// state (`expected_branch_ret`/`branch_acc`), parks it in `kind_state.if_else`,
+/// Computes the cross-branch accumulator state
+/// (`expected_branch_ret`/`branch_acc`), parks it in `kind_state.if_else`,
 /// advances the frame to `if_after_cond`, and schedules the FIRST branch's
 /// condition (checked with `child_expected`, NOT under hoist-selection
 /// suppression — only bodies/the-else are suppressed). `top` indexes the if
@@ -13449,7 +13275,7 @@ fn enterIfExpr(self: *Self, top: usize) Allocator.Error!void {
     const expected_branch_ret = expected.branch_result;
 
     // Fresh accumulator for the meet of all compatible branch bodies (only when
-    // there is an expected return type). Mirrors `checkIfElseExpr`.
+    // there is an expected return type).
     const branch_acc: ?Var = if (expected_branch_ret != null) try self.fresh(env, expr_region) else null;
 
     const branches = self.cir.store.sliceIfBranches(if_.branches);
@@ -13458,8 +13284,8 @@ fn enterIfExpr(self: *Self, top: usize) Allocator.Error!void {
     const first_branch = self.cir.store.getIfBranch(first_branch_idx);
 
     // Park cross-branch state; cursor starts at branch 0. `last_if_branch` is
-    // seeded to the first branch idx (matching `checkIfElseExpr`'s pre-loop init,
-    // where the first branch's diagnostic context uses `first_branch_idx`).
+    // seeded to the first branch idx (the first branch's diagnostic context uses
+    // `first_branch_idx`).
     self.check_frame_stack.items[top].kind_state = .{ .if_else = .{
         .expected_branch_ret = expected_branch_ret,
         .branch_acc = branch_acc,
@@ -13474,13 +13300,13 @@ fn enterIfExpr(self: *Self, top: usize) Allocator.Error!void {
     try self.check_frame_stack.append(self.gpa, makeEnterFrame(first_branch.cond, env, child_expected));
 }
 
-/// `e_if` `if_after_cond` resume step (extracted from `checkExprIter` to keep its
+/// `e_if` `if_after_cond` resume step (separate from `checkExprIter` to keep its
 /// scheduling local off that function's native stack frame — mirrors
 /// `forAfterIterable`).
 ///
 /// The condition of the branch at `kind_state.if_else.cursor` has been checked.
-/// Inlines the between-cond-and-body half of `checkIfElseExpr`'s per-branch
-/// work: unify the condition with a fresh `Bool` (`.if_condition`), emit the
+/// Runs the between-cond-and-body half of the per-branch work: unify the
+/// condition with a fresh `Bool` (`.if_condition`), emit the
 /// `warn_unused_branches` comptime warning, raise hoist-selection suppression
 /// for the body subtree (mirroring `checkExprWithHoistSelectionSuppressed`;
 /// lowered in `if_after_body`), advance to `if_after_body`, and schedule the
@@ -13514,13 +13340,13 @@ fn ifAfterCond(self: *Self, top: usize) Allocator.Error!void {
     try self.check_frame_stack.append(self.gpa, makeEnterFrame(branch.body, env, body_expected));
 }
 
-/// `e_if` `if_after_body` resume step (extracted from `checkExprIter` to keep its
+/// `e_if` `if_after_body` resume step (separate from `checkExprIter` to keep its
 /// scheduling local off that function's native stack frame — mirrors
 /// `forAfterIterable`).
 ///
 /// The body of the branch at `kind_state.if_else.cursor` has been checked (under
-/// hoist-selection suppression). Inlines the post-body half of
-/// `checkIfElseExpr`'s branch loop: lower suppression, then either poison the
+/// hoist-selection suppression). Runs the post-body half of the per-branch
+/// loop: lower suppression, then either poison the
 /// body to `.err` (error-recovery mode), fold it against the expected return
 /// type (accumulator path), or pairwise-unify it with the first branch's body
 /// var (entering error-recovery on mismatch). Then advance the cursor and
@@ -13546,8 +13372,8 @@ fn ifAfterBody(self: *Self, top: usize) Allocator.Error!void {
     self.hoist_selection_suppressed_depth -= 1;
 
     const body_var: Var = ModuleEnv.varFrom(branch.body);
-    // The first branch's body is the reference type all other branches must
-    // match in the no-expected pairwise path (`branch_var` in `checkIfElseExpr`).
+    // The first branch's body (`branch_var`) is the reference type all other
+    // branches must match in the no-expected pairwise path.
     const branch_var: Var = ModuleEnv.varFrom(self.cir.store.getIfBranch(branches[0]).body);
 
     var error_recovery = st.error_recovery;
@@ -13555,8 +13381,8 @@ fn ifAfterBody(self: *Self, top: usize) Allocator.Error!void {
 
     if (error_recovery) {
         // A prior branch's pairwise unify failed; poison this branch's body to
-        // `.err` (mirrors the recursive error-recovery sub-loop). Do NOT update
-        // `last_if_branch` (the recursive loop `break`s before that update).
+        // `.err`. Do NOT update `last_if_branch` — once error recovery begins,
+        // subsequent branches keep the last good branch index.
         try self.unifyWith(body_var, .err, env);
     } else if (st.expected_branch_ret) |expected_ret| {
         const branch_ctx = problem.Context{ .if_branch = .{
@@ -13583,8 +13409,8 @@ fn ifAfterBody(self: *Self, top: usize) Allocator.Error!void {
         } });
         if (!body_result.isOk()) {
             // Enter error-recovery: subsequent branch bodies are poisoned to
-            // `.err` when they reach this step. Do NOT update `last_if_branch`
-            // (matches the recursive `break` before the update).
+            // `.err` when they reach this step. Do NOT update `last_if_branch` —
+            // it stays at the last good branch once error recovery begins.
             error_recovery = true;
         } else {
             last_if_branch = branches[cursor];
@@ -13614,19 +13440,19 @@ fn ifAfterBody(self: *Self, top: usize) Allocator.Error!void {
     }
 }
 
-/// `e_if` `.exit` post-body (extracted from `checkExprIter` to keep its
+/// `e_if` `.exit` post-body (separate from `checkExprIter` to keep its
 /// constraint locals off that function's native stack frame — mirrors
 /// `checkInterpolationPostLoop`).
 ///
 /// The final-else body has been checked (under hoist-selection suppression
-/// raised by `if_after_body`). Inlines the tail of `checkIfElseExpr`: lower
+/// raised by `if_after_body`). Runs the tail of the if/else check: lower
 /// suppression, fold the final-else against the expected return type
 /// (accumulator path) or pairwise-unify it with the first branch's body var,
 /// then run the two closing unifies that tie the whole if-expr to the
 /// accumulated/branch type. Uses `ModuleEnv.varFrom(if_expr_idx)` (NOT
-/// `prologue.expr_var`) exactly as the recursive `checkIfElseExpr` does — the
-/// shared epilogue separately reconciles any annotation against this var. No
-/// frame-stack append below, so `items[top]` stays valid throughout.
+/// `prologue.expr_var`) — the shared epilogue separately reconciles any
+/// annotation against this var. No frame-stack append below, so `items[top]`
+/// stays valid throughout.
 fn exitIfExpr(self: *Self, top: usize) Allocator.Error!void {
     const if_expr_idx = self.check_frame_stack.items[top].expr_idx;
     const if_ = self.cir.store.getExpr(if_expr_idx).e_if;
@@ -13653,7 +13479,7 @@ fn exitIfExpr(self: *Self, top: usize) Allocator.Error!void {
         try self.checkBranchBodyAgainstExpected(if_.final_else, expected_ret, st.branch_acc.?, branch_ctx, env);
         // Tie the whole expr to the accumulated branch meet, then to the shared
         // expected return type, in the load-bearing `(expr, expected)` operand
-        // order (see the note in `checkIfElseExpr`).
+        // order.
         _ = try self.unify(if_expr_var, st.branch_acc.?, env);
         _ = try self.unify(if_expr_var, expected_ret, env);
     } else {
@@ -14322,7 +14148,7 @@ fn checkBinopExpr(
 }
 
 /// Body of the `e_method_call` arm, run by the iterative driver's `.exit`.
-/// Extracted so the caller does not carry this arm's `stackFallback` arg buffer
+/// Kept in its own function so the caller does not carry this arm's `stackFallback` arg buffer
 /// in its own frame (keeps the per-level native stack frame of the
 /// block/statement recursion spine small).
 fn checkMethodCallExpr(
@@ -14377,14 +14203,14 @@ fn checkMethodCallExpr(
     return does_fx;
 }
 
-/// `e_call` `.enter` scheduling for the iterative driver (extracted from
+/// `e_call` `.enter` scheduling for the iterative driver (separate from
 /// `checkExprIter` so its `CheckFrame`-sized local stays off that function's
 /// native stack frame). For apply/record_builder/range, schedules the function
 /// child (marked `call_arg`) and advances the call frame to `call_after_func`;
 /// otherwise advances straight to `.exit` (the no-children compiler-bug path).
 /// `top` indexes the call frame. The `append` may realloc, so the call frame is
 /// re-indexed via `items[top]` (never held as a pointer across the append).
-/// `e_interpolation` `.enter` dispatch (extracted from `checkExprIter` to keep
+/// `e_interpolation` `.enter` dispatch (separate from `checkExprIter` to keep
 /// its `CheckFrame`-sized scheduling local off that function's native stack
 /// frame, which is on the deep statement-nesting recursion spine). Advances the
 /// frame to `interp_after_first` and schedules the `first` child, marked
@@ -14400,7 +14226,7 @@ fn enterInterpolationExpr(self: *Self, top: usize) Allocator.Error!void {
     self.check_frame_stack.items[fr_idx].call_arg = true;
 }
 
-/// `e_interpolation` `interp_after_first` resume step (extracted from
+/// `e_interpolation` `interp_after_first` resume step (separate from
 /// `checkExprIter` to keep its `CheckFrame`-sized scheduling local off that
 /// function's native stack frame, which is on the deep statement-nesting
 /// recursion spine). The `first` child has been checked; mirror the recursive
@@ -14451,8 +14277,8 @@ fn interpAfterFirst(self: *Self, top: usize) Allocator.Error!void {
 /// `e_interpolation` `interp_after_part_value` resume step. A `parts[cursor]`
 /// interpolated-value child has been checked; fold its error into `did_err`,
 /// then schedule the paired following-segment child (`parts[cursor+1]`), marked
-/// `call_arg` (mirrors the recursive arm's per-child
-/// `self.checking_call_arg = true`). `top` is re-indexed across the `append`.
+/// `call_arg` so it is checked as a call-arg. `top` is re-indexed across the
+/// `append`.
 fn interpAfterPartValue(self: *Self, top: usize) Allocator.Error!void {
     const cursor = self.check_frame_stack.items[top].kind_state.interpolation.part_cursor;
     const interpolation = self.cir.store.getExpr(self.check_frame_stack.items[top].expr_idx).e_interpolation;
@@ -14472,10 +14298,9 @@ fn interpAfterPartValue(self: *Self, top: usize) Allocator.Error!void {
 
 /// `e_interpolation` `interp_after_part_segment` resume step. A
 /// `parts[cursor+1]` following-segment child has been checked; unify `str_var`
-/// with it (the recursive arm's `unify(str_var, following_segment_var)`), fold
-/// its error into `did_err`, advance the cursor by 2, then schedule the next
-/// value child or advance to `.exit` once all pairs are consumed. `top` is
-/// re-indexed across the `append`.
+/// with it, fold its error into `did_err`, advance the cursor by 2, then schedule
+/// the next value child or advance to `.exit` once all pairs are consumed. `top`
+/// is re-indexed across the `append`.
 fn interpAfterPartSegment(self: *Self, top: usize) Allocator.Error!void {
     const cursor = self.check_frame_stack.items[top].kind_state.interpolation.part_cursor;
     const str_var = self.check_frame_stack.items[top].kind_state.interpolation.str_var;
@@ -14503,8 +14328,7 @@ fn interpAfterPartSegment(self: *Self, top: usize) Allocator.Error!void {
 
 /// Post-children body of the `e_interpolation` arm, run by the iterative
 /// driver's `.exit` step once `first` and every `parts` child have been checked
-/// (their `does_fx` already accumulated into the frame). Copied verbatim from
-/// the recursive arm's post-loop body. Reads the parked
+/// (their `does_fx` already accumulated into the frame). Reads the parked
 /// `first_var`/`str_var`/`item_var`/`did_err` out of `kind_state.interpolation`
 /// and builds the iterator-protocol constraint. Lives in its own function —
 /// rather than inlined into `checkExprIter` — so its many constraint-building
@@ -14566,7 +14390,7 @@ fn checkInterpolationPostLoop(self: *Self, top: usize) Allocator.Error!void {
     }
 }
 
-/// `e_str` `.enter` dispatch (extracted from `checkExprIter` to keep its
+/// `e_str` `.enter` dispatch (separate from `checkExprIter` to keep its
 /// `CheckFrame`-sized scheduling local off that function's native stack frame,
 /// which is on the deep statement-nesting recursion spine — mirrors
 /// `enterInterpolationExpr`). Parks the cross-segment accumulators
@@ -14574,8 +14398,8 @@ fn checkInterpolationPostLoop(self: *Self, top: usize) Allocator.Error!void {
 /// `cursor` in `kind_state.str`, then schedules the first segment child against
 /// `child_expected`. With no segments (e.g. an empty literal), advances straight
 /// to `.exit`, where the `from_quote` path runs. Segments are NOT marked
-/// `call_arg` — the recursive `e_str` arm checks each segment without setting
-/// `self.checking_call_arg`. `top` is re-indexed across the `append` (realloc).
+/// `call_arg` — each segment is checked without setting `self.checking_call_arg`.
+/// `top` is re-indexed across the `append` (realloc).
 fn enterStrExpr(self: *Self, top: usize) Allocator.Error!void {
     const str = self.cir.store.getExpr(self.check_frame_stack.items[top].expr_idx).e_str;
     const segments = self.cir.store.sliceExpr(str.span);
@@ -14597,19 +14421,18 @@ fn enterStrExpr(self: *Self, top: usize) Allocator.Error!void {
     }
 }
 
-/// `e_str` `str_after_segment` resume step (extracted from `checkExprIter` to
-/// keep its scheduling local off that function's native stack frame — mirrors
-/// the `e_interpolation` resume helpers). The segment at `kind_state.str.cursor`
-/// has been checked; mirror the recursive arm's per-segment body VERBATIM: for
-/// an interpolated (non-`e_str_segment`) segment, set `has_interpolation`,
-/// unify a fresh `Str` with the segment var, and on failure poison the segment
-/// to `.err` + set `did_err`. Then, when `!did_err`, fold the segment's
-/// resolved-`.err` state into `did_err` (this check runs for EVERY segment in
-/// the recursive arm, not just interpolated ones). Advance the cursor and
-/// schedule the next segment child, or advance to `.exit` once all segments are
-/// consumed. None of the unify/resolve calls append to `check_frame_stack`, so
-/// `items[top]` stays valid until the final `append`, across which `top` is
-/// re-indexed.
+/// `e_str` `str_after_segment` resume step (in its own function to keep its
+/// scheduling local off `checkExprIter`'s native stack frame — mirrors the
+/// `e_interpolation` resume helpers). The segment at `kind_state.str.cursor`
+/// has been checked; run the per-segment body: for an interpolated
+/// (non-`e_str_segment`) segment, set `has_interpolation`, unify a fresh `Str`
+/// with the segment var, and on failure poison the segment to `.err` + set
+/// `did_err`. Then, when `!did_err`, fold the segment's resolved-`.err` state
+/// into `did_err` (this check runs for EVERY segment, not just interpolated
+/// ones). Advance the cursor and schedule the next segment child, or advance to
+/// `.exit` once all segments are consumed. None of the unify/resolve calls append
+/// to `check_frame_stack`, so `items[top]` stays valid until the final `append`,
+/// across which `top` is re-indexed.
 fn strAfterSegment(self: *Self, top: usize) Allocator.Error!void {
     const env = self.check_frame_stack.items[top].env;
     const cursor = self.check_frame_stack.items[top].kind_state.str.cursor;
@@ -14658,14 +14481,14 @@ fn strAfterSegment(self: *Self, top: usize) Allocator.Error!void {
     }
 }
 
-/// `e_list` `.enter` dispatch (extracted from `checkExprIter` to keep its
+/// `e_list` `.enter` dispatch (separate from `checkExprIter` to keep its
 /// scheduling local off that function's native stack frame, which is on the deep
 /// statement-nesting recursion spine — mirrors `enterStrExpr`). Parks the
 /// per-element state (`cursor`, `error_recovery`, `last_elem`) and schedules the
 /// first element child against `child_expected`, advancing to `.list_after_elem`.
 /// With no elements, advances straight to `.exit`, where the empty-list type is
-/// built. Elements are NOT marked `call_arg` (the recursive `e_list` arm checks
-/// each element without setting `self.checking_call_arg`). `top` is re-indexed
+/// built. Elements are NOT marked `call_arg` (each element is checked without
+/// setting `self.checking_call_arg`). `top` is re-indexed
 /// across the `append` (realloc).
 fn enterListExpr(self: *Self, top: usize) Allocator.Error!void {
     const list = self.cir.store.getExpr(self.check_frame_stack.items[top].expr_idx).e_list;
@@ -14688,18 +14511,18 @@ fn enterListExpr(self: *Self, top: usize) Allocator.Error!void {
     try self.check_frame_stack.append(self.gpa, makeEnterFrame(elems[0], child_env, child_expected));
 }
 
-/// `e_list` `list_after_elem` resume step (extracted from `checkExprIter` to keep
-/// its unify/scheduling locals off that function's native stack frame — mirrors
-/// `strAfterSegment`). The element at `kind_state.list.cursor` has been checked;
-/// mirror the recursive arm's per-element body. The reference element is
-/// `elems[0]` (its var is `elem_var`), so the first element (cursor 0) runs no
-/// unify. For cursor >= 1, unless already in error recovery, unify the element's
-/// var against `elem_var` with a `.list_entry` context — running it HERE, right
-/// after the element's child frame popped, so a mismatch diagnostic is appended
-/// in element order (between this element's check and the next). On a failed
-/// unify, enter error recovery so every later element skips its unify (the
-/// recursive arm's "check the rest without comparing, then break"); on success,
-/// advance `last_elem`. Advance the cursor and schedule the next element child,
+/// `e_list` `list_after_elem` resume step (in its own function to keep its
+/// unify/scheduling locals off `checkExprIter`'s native stack frame — mirrors
+/// `strAfterSegment`). The element at `kind_state.list.cursor` has been checked.
+/// The reference element is `elems[0]` (its var is `elem_var`), so the first
+/// element (cursor 0) runs no unify. For cursor >= 1, unless already in error
+/// recovery, unify the element's var against `elem_var` with a `.list_entry`
+/// context — running it HERE, right after the element's child frame popped, so a
+/// mismatch diagnostic is appended in element order (between this element's check
+/// and the next). On a failed unify, enter error recovery so every later element
+/// skips its unify (the remaining elements are still checked, just not compared
+/// to `elem_var`); on success, advance `last_elem`. Advance the cursor and
+/// schedule the next element child,
 /// or advance to `.exit` once all elements are consumed. The `unifyInContext`
 /// does not append to `check_frame_stack`, so `items[top]` stays valid until the
 /// final `append`, across which `top` is re-indexed.
@@ -14709,8 +14532,8 @@ fn listAfterElem(self: *Self, top: usize) Allocator.Error!void {
     const elems = self.cir.store.exprSlice(list.elems);
     const cursor = self.check_frame_stack.items[top].kind_state.list.cursor;
 
-    // cursor 0 is the reference element — no unify (the recursive arm checks
-    // `elems[0]` then starts unifying from `elems[1]`).
+    // cursor 0 is the reference element — no unify; unifying starts from
+    // `elems[1]`.
     if (cursor >= 1 and !self.check_frame_stack.items[top].kind_state.list.error_recovery) {
         const elem_var = ModuleEnv.varFrom(elems[0]);
         const cur_elem_var = ModuleEnv.varFrom(elems[cursor]);
@@ -14746,9 +14569,9 @@ fn listAfterElem(self: *Self, top: usize) Allocator.Error!void {
 
 /// Post-loop body of the `e_str` arm, run by the iterative driver's `.exit` step
 /// once every segment child has been checked (their `does_fx` already
-/// accumulated into the frame). Copied verbatim from the recursive arm's final
-/// 3-way unify. Reads the parked `did_err`/`has_interpolation` out of
-/// `kind_state.str`. Lives in its own function — rather than inlined into
+/// accumulated into the frame). Runs the final 3-way unify. Reads the parked
+/// `did_err`/`has_interpolation` out of `kind_state.str`. Lives in its own
+/// function — rather than inlined into
 /// `checkExprIter` — so its constraint-building locals do NOT bloat
 /// `checkExprIter`'s native stack frame on the deep statement-nesting spine
 /// (mirrors `checkInterpolationPostLoop`). It is a leaf w.r.t. the work stack:
@@ -14791,10 +14614,9 @@ fn enterCallExpr(self: *Self, top: usize) Allocator.Error!void {
             try self.check_frame_stack.append(self.gpa, makeEnterFrame(call.func, child_env, child_expected));
             self.check_frame_stack.items[fr_idx].call_arg = true;
             // The function is the immediately-invoked callee — mark it so its
-            // prologue re-asserts `checking_immediate_callee` (matching the
-            // recursive arm's `self.checking_immediate_callee = true` before
-            // checking `call.func`). Argument children are NOT immediate callees,
-            // so they keep the consumed default (false).
+            // prologue re-asserts `checking_immediate_callee`. Argument children
+            // are NOT immediate callees, so they keep the consumed default
+            // (false).
             self.check_frame_stack.items[fr_idx].immediate_callee = true;
         },
         else => {
@@ -14803,9 +14625,9 @@ fn enterCallExpr(self: *Self, top: usize) Allocator.Error!void {
     }
 }
 
-/// `e_call` `call_after_func` resume step for the iterative driver (extracted
-/// from `checkExprIter` to keep its `CheckFrame`-sized arg-scheduling local off
-/// that function's native stack frame). The function child has been checked;
+/// `e_call` `call_after_func` resume step for the iterative driver (in its own
+/// function to keep its `CheckFrame`-sized arg-scheduling local off
+/// `checkExprIter`'s native stack frame). The function child has been checked;
 /// this resolves/instantiates the func var, parks it (and the func-side error
 /// flag) in `kind_state.call`, advances the call frame to `.exit`, and schedules
 /// every argument child (marked `call_arg`). `top` indexes the call frame; it is
@@ -14846,8 +14668,7 @@ fn checkCallAfterFunc(self: *Self, top: usize) Allocator.Error!void {
 
     // Schedule every argument child (pushed in REVERSE so the first arg runs
     // first), each marked `call_arg` so it re-asserts `checking_call_arg` at its
-    // own prologue (matching the recursive arm's per-arg
-    // `self.checking_call_arg = true`).
+    // own prologue.
     const call_arg_expr_idxs = self.cir.store.sliceExpr(call.args);
     var i = call_arg_expr_idxs.len;
     while (i > 0) {
@@ -14883,10 +14704,9 @@ fn checkCallExprPostArgs(
     func_var: Var,
     func_did_err: bool,
 ) Allocator.Error!bool {
-    // Whether the called function is effectful; mirrors the recursive arm's
-    // `does_fx = true`. Returned so the caller can OR it into the frame's
-    // accumulator. Preserved across the early-error returns below (the recursive
-    // arm's `break :blk` exits, which fire AFTER this is set).
+    // Whether the called function is effectful. Returned so the caller can OR it
+    // into the frame's accumulator. Preserved across the early-error returns
+    // below (which fire AFTER this is set).
     var does_fx_eff = false;
 
     const call_arg_expr_idxs = self.cir.store.sliceExpr(call.args);
@@ -15523,11 +15343,11 @@ fn publishUnaryDispatchExpr(
     );
 }
 
-/// `e_for` `.enter` step for the iterative driver (extracted from
+/// `e_for` `.enter` step for the iterative driver (separate from
 /// `checkExprIter` so its scheduling local does not bloat that function's native
 /// stack frame on the deep statement-nesting spine — mirrors `enterCallExpr`).
 ///
-/// Inlines the front of `checkIteratorForLoop`: marks the hoist observable
+/// Runs the front of the for-loop check: marks the hoist observable
 /// effect, checks the loop pattern inline (patterns are not on the work stack;
 /// `checkPattern` does not append to `check_frame_stack`, so `items[top]` stays
 /// valid across it), parks the pattern's `item_var` in `kind_state.for_loop`,
@@ -15539,9 +15359,8 @@ fn enterForExpr(self: *Self, top: usize) Allocator.Error!void {
     const env = self.check_frame_stack.items[top].env;
     const child_expected = self.check_frame_stack.items[top].prologue.child_expected;
 
-    // `for` is an observable effect; mark BEFORE checking the children, matching
-    // the recursive arm's ordering (`markCurrentHoistObservableEffect` runs
-    // before `checkIteratorForLoop`).
+    // `for` is an observable effect; mark BEFORE checking the children (the
+    // observable effect is recorded before the iterable and body are checked).
     self.markCurrentHoistObservableEffect();
 
     // Check the loop pattern inline (mirrors `checkIteratorForLoop`'s leading
@@ -15556,11 +15375,11 @@ fn enterForExpr(self: *Self, top: usize) Allocator.Error!void {
     try self.check_frame_stack.append(self.gpa, makeEnterFrame(for_expr.expr, env, child_expected));
 }
 
-/// `e_for` `for_after_iterable` resume step for the iterative driver (extracted
+/// `e_for` `for_after_iterable` resume step for the iterative driver (separate
 /// from `checkExprIter` so its constraint-building locals do not bloat that
 /// function's native stack frame — mirrors `checkCallAfterFunc`).
 ///
-/// Inlines the BETWEEN-CHILD body of `checkIteratorForLoop`: now that the
+/// Runs the BETWEEN-CHILD body of the for-loop check: now that the
 /// iterable child has been checked, build the `iter`/`next` synthetic receiver
 /// dispatch constraints (which depend on the pattern's `item_var` and the
 /// iterable's var) and record the for-loop dispatch plan, then schedule the
@@ -15608,12 +15427,12 @@ fn forAfterIterable(self: *Self, top: usize) Allocator.Error!void {
     try self.check_frame_stack.append(self.gpa, makeEnterFrame(for_expr.body, env, child_expected));
 }
 
-/// `e_lambda` `.enter` step for the iterative driver (extracted from
+/// `e_lambda` `.enter` step for the iterative driver (separate from
 /// `checkExprIter` so its arg-scheduling/constraint locals do not bloat that
 /// function's native stack frame on the deep statement-nesting spine — mirrors
 /// `enterForExpr`).
 ///
-/// Inlines the front of the recursive `.e_lambda` arm, in the SAME order:
+/// Runs the front of the lambda check, in order:
 ///   1. record the param span for the end-of-check pinnable collection;
 ///   2. unwrap the (optional) expected `Func` from the annotation, following
 ///      aliases through `fn_pure`/`fn_unbound`/`fn_effectful`;
@@ -15623,8 +15442,8 @@ fn forAfterIterable(self: *Self, top: usize) Allocator.Error!void {
 ///   4. when annotated and arities match, run the rigid-var pairwise unify loop
 ///      (poisoning `expr_var` to `.err` on a problem) then the per-arg
 ///      annotation unify;
-///   5. save and ZERO `empirical_exhaustiveness_depth` (the recursive arm's
-///      `defer`-restored guard — restored in `exitLambdaExpr`).
+///   5. save and ZERO `empirical_exhaustiveness_depth` (restored in
+///      `exitLambdaExpr`).
 /// Then it parks the saved depth + the annotation return var in
 /// `kind_state.lambda`, advances to `.exit`, and schedules the single `body`
 /// child with the annotation's return type as `branch_result` (when annotated)
@@ -15739,14 +15558,13 @@ fn enterLambdaExpr(self: *Self, top: usize) Allocator.Error!void {
     }
 
     // (5) Save & zero the empirical-exhaustiveness guard for the body subtree
-    // (restored in `exitLambdaExpr`, mirroring the recursive arm's `defer`).
+    // (restored in `exitLambdaExpr`).
     const saved_empirical_exhaustiveness_depth = self.empirical_exhaustiveness_depth;
     self.empirical_exhaustiveness_depth = 0;
 
     // (6) If this lambda is not an immediate callee, its body is a delayed
     // dependency: bump `delayed_dependency_depth` for the body subtree (lowered in
-    // `exitLambdaExpr`), mirroring the recursive arm's `defer`. This affects the
-    // body's hoisting decisions.
+    // `exitLambdaExpr`). This affects the body's hoisting decisions.
     const body_is_delayed_dependency = !self.check_frame_stack.items[top].prologue.is_immediate_callee;
     if (body_is_delayed_dependency) self.delayed_dependency_depth += 1;
 
@@ -15765,21 +15583,20 @@ fn enterLambdaExpr(self: *Self, top: usize) Allocator.Error!void {
     try self.check_frame_stack.append(self.gpa, makeEnterFrame(lambda.body, env, body_expected));
 }
 
-/// `e_lambda` `.exit` post-body step for the iterative driver (extracted from
-/// `checkExprIter` so its constraint locals + arg-buffer do not bloat that
-/// function's native stack frame on the deep statement-nesting spine).
+/// `e_lambda` `.exit` post-body step for the iterative driver (in its own
+/// function so its constraint locals + arg-buffer do not bloat `checkExprIter`'s
+/// native stack frame on the deep statement-nesting spine).
 ///
 /// The single `body` child has been checked (its `does_fx` OR'd into the lambda
-/// frame on pop). Inlines the tail of the recursive `.e_lambda` arm, in the SAME
-/// order: close absent constructed payload vars; run the annotation return-type
-/// unify (only when annotated); restore `empirical_exhaustiveness_depth`; process
-/// pending return constraints; check for infinite types; then build the function
-/// type — `mkFuncEffectful` when the body does fx, else `mkFuncUnbound` — by
-/// re-deriving `arg_vars` from the param span (cheap pure index transforms,
-/// avoiding a heap buffer parked across the body child). Finally it RESETS the
-/// frame's `does_fx` to false: defining a lambda performs no effects itself (the
-/// body's effectfulness is captured in the function type), and the recursive arm
-/// never assigns its outer `does_fx`, so the lambda frame must contribute `false`
+/// frame on pop). Runs the post-body tail, in order: close absent constructed
+/// payload vars; run the annotation return-type unify (only when annotated);
+/// restore `empirical_exhaustiveness_depth`; process pending return constraints;
+/// check for infinite types; then build the function type — `mkFuncEffectful`
+/// when the body does fx, else `mkFuncUnbound` — by re-deriving `arg_vars` from
+/// the param span (cheap pure index transforms, avoiding a heap buffer parked
+/// across the body child). Finally it RESETS the frame's `does_fx` to false:
+/// defining a lambda performs no effects itself (the body's effectfulness is
+/// captured in the function type), so the lambda frame must contribute `false`
 /// to both `hoist_frame.finish` (in the epilogue) and its parent. No `checkExpr`
 /// re-entry / no `check_frame_stack` append below, so `items[top]` stays valid.
 fn exitLambdaExpr(self: *Self, top: usize) Allocator.Error!void {
@@ -15800,7 +15617,7 @@ fn exitLambdaExpr(self: *Self, top: usize) Allocator.Error!void {
         _ = try self.unifyInContext(anno_ret, body_var, env, .type_annotation);
     }
 
-    // Restore the empirical-exhaustiveness guard (recursive arm's `defer`).
+    // Restore the empirical-exhaustiveness guard saved in `enterLambdaExpr`.
     self.empirical_exhaustiveness_depth = st.saved_empirical_exhaustiveness_depth;
 
     // Process pending return constraints (early returns / `?`) before generalizing
@@ -15824,19 +15641,19 @@ fn exitLambdaExpr(self: *Self, top: usize) Allocator.Error!void {
         try self.unifyWith(expr_var, try self.types.mkFuncUnbound(arg_vars, body_var), env);
     }
 
-    // Lower the delayed-dependency depth bumped in `enterLambdaExpr` (mirrors the
-    // recursive arm's `defer`). The body subtree — which reads this for hoisting —
-    // has already completed, so the position here only needs to balance the bump.
+    // Lower the delayed-dependency depth bumped in `enterLambdaExpr`. The body
+    // subtree — which reads this for hoisting — has already completed, so the
+    // position here only needs to balance the bump.
     if (st.body_is_delayed_dependency) self.delayed_dependency_depth -= 1;
 
     // A lambda value performs no effects itself: contribute `false` upward.
     self.check_frame_stack.items[top].does_fx = false;
 }
 
-/// `e_record` `.enter` (extracted from `checkExprIter` to keep its scheduling
-/// local off that function's native stack frame — mirrors `enterIfExpr`).
+/// `e_record` `.enter` (in its own function to keep its scheduling local off
+/// `checkExprIter`'s native stack frame — mirrors `enterIfExpr`).
 ///
-/// Inlines the front of the recursive `e_record` arm: parks the
+/// Runs the front of the record check: parks the
 /// `scratch_record_fields` accumulator base (PLAIN path) and schedules the first
 /// child. UPDATE path (`e.ext != null`): schedule the record-being-updated child
 /// and advance to `record_after_updated`. PLAIN path: schedule the first field
@@ -15849,8 +15666,8 @@ fn enterRecordExpr(self: *Self, top: usize) Allocator.Error!void {
     const child_expected = self.check_frame_stack.items[top].prologue.child_expected;
 
     // Capture the scratch accumulator base up front (used by the PLAIN path,
-    // spanning all field children, mirroring the recursive arm's
-    // `defer clearFrom(record_fields_top)`).
+    // spanning all field children; the accumulator is cleared back to this base
+    // once the record is materialized).
     const scratch_top = self.scratch_record_fields.top();
 
     if (e.ext) |record_being_updated_expr| {
@@ -15880,7 +15697,7 @@ fn enterRecordExpr(self: *Self, top: usize) Allocator.Error!void {
     const fields = self.cir.store.sliceRecordFields(e.fields);
     if (fields.len == 0) {
         // Fieldless record: nothing to schedule; `.exit` materializes an empty
-        // field range (matching the recursive arm's zero-iteration loop).
+        // field range.
         self.check_frame_stack.items[top].step = .exit;
         return;
     }
@@ -15889,7 +15706,7 @@ fn enterRecordExpr(self: *Self, top: usize) Allocator.Error!void {
     try self.check_frame_stack.append(self.gpa, makeEnterFrame(field.value, env, child_expected));
 }
 
-/// `e_record` `record_after_updated` resume step (UPDATE path only; extracted
+/// `e_record` `record_after_updated` resume step (UPDATE path only; separate
 /// from `checkExprIter` to keep its scheduling local off that function's native
 /// stack frame — mirrors `ifAfterCond`).
 ///
@@ -15922,14 +15739,13 @@ fn recordAfterUpdated(self: *Self, top: usize) Allocator.Error!void {
     try self.check_frame_stack.append(self.gpa, makeEnterFrame(field.value, env, child_expected));
 }
 
-/// `e_record` `record_after_field` resume step (extracted from `checkExprIter`
+/// `e_record` `record_after_field` resume step (separate from `checkExprIter`
 /// to keep its scheduling/constraint local off that function's native stack
 /// frame — mirrors `ifAfterBody`).
 ///
 /// The field value at `kind_state.record.cursor` has been checked. UPDATE path:
 /// build a single-field unbound record (`{name, varFrom(value)}`) and
-/// `.record_update`-unify it with the record being updated (per-field context
-/// region idxs derived exactly as in the recursive arm). PLAIN path: append
+/// `.record_update`-unify it with the record being updated. PLAIN path: append
 /// `{name, varFrom(value)}` to the `scratch_record_fields` accumulator. Then
 /// advance the cursor and schedule the next field value child, or fall through
 /// to `.exit` once all fields are consumed. The unify/append calls do not append
@@ -15981,18 +15797,17 @@ fn recordAfterField(self: *Self, top: usize) Allocator.Error!void {
     }
 }
 
-/// `e_record` `.exit` post-field body (extracted from `checkExprIter` to keep its
+/// `e_record` `.exit` post-field body (separate from `checkExprIter` to keep its
 /// sort/constraint locals off that function's native stack frame — mirrors
 /// `exitIfExpr`).
 ///
 /// All field children have been checked. UPDATE path: tie the whole update
 /// expression to the record being updated (`unify(updated_var, expr_var)`).
 /// PLAIN path: copy the accumulated scratch fields into the types store (sorted
-/// by field-name text, matching the recursive arm's `std.mem.sort`), build the
-/// unbound `.record` content with a fresh `empty_record` ext, and unify it with
-/// `expr_var`; the `defer clearFrom(scratch_top)` releases the accumulator
-/// (mirroring the recursive arm's `defer`). No frame-stack append below, so
-/// `items[top]` stays valid throughout.
+/// by field-name text via `std.mem.sort`), build the unbound `.record` content
+/// with a fresh `empty_record` ext, and unify it with `expr_var`; the
+/// `defer clearFrom(scratch_top)` releases the accumulator. No frame-stack append
+/// below, so `items[top]` stays valid throughout.
 fn exitRecordExpr(self: *Self, top: usize) Allocator.Error!void {
     const env = self.check_frame_stack.items[top].env;
     const expr_var = self.check_frame_stack.items[top].prologue.expr_var;
@@ -21067,8 +20882,9 @@ fn reportBranchMismatchAndPoison(
 /// Check one if/match branch body against the shared expected return type, and
 /// fold a compatible body into the per-expression accumulator `acc`.
 ///
-/// `acc` is a fresh var owned by the enclosing `checkIfElseExpr` /
-/// `checkMatchExpr`; it accumulates the meet of every compatible branch body and
+/// `acc` is a fresh var owned by the enclosing if-expr check (the `e_if` resume
+/// steps) or `checkMatchExpr`; it accumulates the meet of every compatible branch
+/// body and
 /// is unified with the shared `expected_ret` exactly once, at the end of the
 /// expression. Branches therefore never merge into `expected_ret` directly: the
 /// shared annotated return var is no longer the per-branch union-find hub, so
