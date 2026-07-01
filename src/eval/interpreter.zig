@@ -10447,6 +10447,13 @@ pub const Interpreter = struct {
         discriminant: u16,
     ) *const LirProgram.BoxyTagVariant {
         if (self.findBoxyTagVariantByDiscriminant(desc, discriminant)) |variant| return variant;
+        if (builtin.mode == .Debug) {
+            debugPrint("boxy descriptor variants for payload_layout={d}:", .{@intFromEnum(desc.payload_layout)});
+            for (self.requireBoxyTagVariants(desc.tag_variants)) |*variant| {
+                debugPrint(" {s}:{d}", .{ self.store.getString(variant.name), variant.discriminant });
+            }
+            debugPrint(" tag_ext_desc={any}\n", .{desc.tag_ext_desc});
+        }
         self.invariantFailed(
             "LIR/interpreter invariant violated: boxy descriptor had no tag variant with discriminant {d} payload_layout={d}",
             .{
@@ -12244,6 +12251,24 @@ pub const Interpreter = struct {
                     target_desc.tag_variants.len,
                 },
             );
+        }
+        if (self.boxyTagExtDiscriminant(source_desc)) |ext_discriminant| {
+            if (source_discriminant == ext_discriminant) {
+                // The source value sits in the row-extension slot, whose payload
+                // is the extension union itself. Flatten it into the expected
+                // target union by materializing the extension payload with the
+                // extension descriptor as the new source.
+                const ext_desc = try self.resolveBoxyTagExtDesc(frame, source_desc);
+                const actual_payload_layout = self.requireBoxyTagPayloadLayout(actual_base.layout, ext_discriminant);
+                return try self.materializeBoxyPayloadToLayoutWithTargetDesc(
+                    frame,
+                    actual_base.value,
+                    actual_payload_layout,
+                    ext_desc,
+                    target_desc,
+                    expected_layout,
+                );
+            }
         }
         const source_variant = self.requireBoxyTagVariantByDiscriminant(source_desc, source_discriminant);
         const target_variant = self.findLocalBoxyTagVariant(target_desc, source_variant.name) orelse {
