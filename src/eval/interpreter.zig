@@ -524,6 +524,7 @@ pub const Interpreter = struct {
         dict_refs: []const LirProgram.BoxyDictRef = &.{},
         tag_variants: []const LirProgram.BoxyTagVariant = &.{},
         tag_payload_descs: []const LirProgram.BoxyTagPayloadDesc = &.{},
+        field_names: []const base.StringLiteral.Idx = &.{},
         adapt_steps: []const LirProgram.BoxyAdaptStep = &.{},
         payload_steps: []const LirProgram.BoxyPayloadStep = &.{},
         method_slots: []const LirProgram.BoxyMethodSlot = &.{},
@@ -539,6 +540,7 @@ pub const Interpreter = struct {
                 .dict_refs = result.boxy_dict_refs.items,
                 .tag_variants = result.boxy_tag_variants.items,
                 .tag_payload_descs = result.boxy_tag_payload_descs.items,
+                .field_names = result.boxy_field_names.items,
                 .adapt_steps = result.boxy_adapt_steps.items,
                 .payload_steps = result.boxy_payload_steps.items,
                 .method_slots = result.boxy_method_slots.items,
@@ -556,6 +558,7 @@ pub const Interpreter = struct {
                 .dict_refs = view.boxy_dict_refs,
                 .tag_variants = view.boxy_tag_variants,
                 .tag_payload_descs = view.boxy_tag_payload_descs,
+                .field_names = view.boxy_field_names,
                 .adapt_steps = view.boxy_adapt_steps,
                 .payload_steps = view.boxy_payload_steps,
                 .method_slots = view.boxy_method_slots,
@@ -4423,16 +4426,25 @@ pub const Interpreter = struct {
         const struct_idx = struct_layout_val.getStruct().idx;
         const struct_data = self.layout_store.getStructData(struct_idx);
         const desc_refs = if (desc) |struct_desc| self.requireBoxyDescRefs(struct_desc.nested_descs) else &.{};
+        const field_names = if (desc) |struct_desc| self.requireBoxyFieldNames(struct_desc.field_names) else &.{};
         var next_desc: usize = 0;
 
-        try out.append(self.evalAllocator(), '(');
+        // Records carry their field names in the descriptor; tuples have no
+        // names and print positionally.
+        const named = field_names.len == struct_data.fields.count;
+        try out.append(self.evalAllocator(), if (named) '{' else '(');
+        if (named) try out.append(self.evalAllocator(), ' ');
         var original_index: u32 = 0;
         var written: usize = 0;
         while (original_index < struct_data.fields.count) : (original_index += 1) {
             const field_layout = self.layout_store.getStructFieldLayoutByOriginalIndex(struct_idx, original_index);
-            if (self.helper.sizeOf(field_layout) == 0) continue;
+            if (self.helper.sizeOf(field_layout) == 0 and !named) continue;
             if (written != 0) try out.appendSlice(self.evalAllocator(), ", ");
 
+            if (named) {
+                try out.appendSlice(self.evalAllocator(), self.store.getString(field_names[original_index]));
+                try out.appendSlice(self.evalAllocator(), ": ");
+            }
             const field_offset = self.layout_store.getStructFieldOffsetByOriginalIndex(struct_idx, original_index);
             const field_desc = if (self.layoutNeedsBoxyStructuralDesc(field_layout) and next_desc < desc_refs.len) blk: {
                 const resolved = try self.resolveBoxyDescRef(frame, desc_refs[next_desc]);
@@ -4442,8 +4454,12 @@ pub const Interpreter = struct {
             try self.appendLayoutInspect(frame, out, value.offset(field_offset), field_layout, field_desc);
             written += 1;
         }
-        if (written == 1) try out.append(self.evalAllocator(), ',');
-        try out.append(self.evalAllocator(), ')');
+        if (named) {
+            try out.appendSlice(self.evalAllocator(), " }");
+        } else {
+            if (written == 1) try out.append(self.evalAllocator(), ',');
+            try out.append(self.evalAllocator(), ')');
+        }
     }
 
     fn layoutNeedsBoxyStructuralDesc(self: *const LirInterpreter, layout_idx: layout_mod.Idx) bool {
@@ -9000,6 +9016,18 @@ pub const Interpreter = struct {
         return .{ .start = runtimeBoxySpanTag | @as(u32, @intCast(start)), .len = @intCast(len) };
     }
 
+    fn requireBoxyFieldNames(self: *const LirInterpreter, span: LIR.BoxySpan) []const base.StringLiteral.Idx {
+        const start: usize = span.start;
+        const end = start + span.len;
+        if (end > self.boxy_tables.field_names.len) {
+            self.invariantFailed(
+                "LIR/interpreter invariant violated: boxy field name span [{d}, {d}) exceeded field name table length {d}",
+                .{ start, end, self.boxy_tables.field_names.len },
+            );
+        }
+        return self.boxy_tables.field_names[start..end];
+    }
+
     fn requireBoxyTagVariants(self: *const LirInterpreter, span: LIR.BoxySpan) []const LirProgram.BoxyTagVariant {
         if (runtimeBoxySpanStart(span)) |start| {
             const end = start + span.len;
@@ -9284,6 +9312,9 @@ pub const Interpreter = struct {
         target.structural_eq = source.structural_eq;
         target.structural_hash = source.structural_hash;
         target.structural_inspect = source.structural_inspect;
+        // Field names are immutable static-pool data; runtime copies keep the
+        // static span.
+        target.field_names = source.field_names;
 
         return .{ .runtime = runtime_id };
     }

@@ -1657,6 +1657,7 @@ const ProcedureBuilder = struct {
             .nested_descs = nested_descs,
             .tag_variants = tag_variants,
             .tag_ext_desc = tag_ext_desc,
+            .field_names = try self.staticFieldNamesForRep(canonical_worker),
             .debug_checked_type = worker_rep.source_type.ty,
         };
         return desc_id;
@@ -2143,6 +2144,7 @@ const ProcedureBuilder = struct {
             .nested_descs = nested_descs,
             .tag_variants = tag_variants,
             .tag_ext_desc = tag_ext_desc,
+            .field_names = try self.staticFieldNamesForRep(rep_id),
             .debug_checked_type = rep.source_type.ty,
         };
         return desc_id;
@@ -2747,6 +2749,32 @@ const ProcedureBuilder = struct {
     fn tagVariantNameText(self: *const ProcedureBuilder, variant: Plan.TagVariant) []const u8 {
         const module = procedureModuleById(self.modules, variant.name_module);
         return module.canonical_names.tagLabelText(variant.name);
+    }
+
+    /// Record field names for a record-shaped representation, in payload field
+    /// order. Returns an empty span for non-record shapes (tuples and other
+    /// payloads print positionally).
+    fn staticFieldNamesForRep(self: *ProcedureBuilder, rep_id: Plan.TypeRepId) Allocator.Error!LIR.BoxySpan {
+        const rep = self.plan.representations.items[@intFromEnum(rep_id)];
+        const view = procedureModuleById(self.modules, rep.source_type.module);
+
+        var field_name_ids = std.ArrayList(base.StringLiteral.Idx).empty;
+        defer field_name_ids.deinit(self.allocator);
+        for (self.plan.childSlice(rep.children)) |child| {
+            switch (child.role) {
+                .record_field => |label| try field_name_ids.append(
+                    self.allocator,
+                    try self.result.store.insertString(view.canonical_names.recordFieldLabelText(label)),
+                ),
+                .record_ext => {},
+                else => return .{},
+            }
+        }
+        if (field_name_ids.items.len == 0) return .{};
+
+        const start: u32 = @intCast(self.result.boxy_field_names.items.len);
+        try self.result.boxy_field_names.appendSlice(self.allocator, field_name_ids.items);
+        return .{ .start = start, .len = @intCast(field_name_ids.items.len) };
     }
 
     fn initHostedCatalog(self: *ProcedureBuilder) Allocator.Error!void {
@@ -9948,6 +9976,7 @@ const ProcBodyBuilder = struct {
             .nested_descs = nested_descs,
             .tag_variants = tag_variants,
             .tag_ext_desc = tag_ext_desc,
+            .field_names = try self.parent.staticFieldNamesForRep(rep_id),
             .debug_checked_type = rep.source_type.ty,
         };
         return desc_id;

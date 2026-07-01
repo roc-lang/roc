@@ -140,6 +140,9 @@ pub const BoxyTypeDesc = struct {
     nested_descs: BoxySpan = .{},
     tag_variants: BoxySpan = .{},
     tag_ext_desc: ?BoxyDescRef = null,
+    /// Record field names in payload field order, one per field. Empty for
+    /// non-record payloads (including tuples, which print positionally).
+    field_names: BoxySpan = .{},
     copy_plan: BoxySpan = .{},
     drop_plan: BoxySpan = .{},
     structural_eq: ?LIR.LirProcSpecId = null,
@@ -232,6 +235,7 @@ pub const Result = struct {
     boxy_dict_refs: std.ArrayList(BoxyDictRef),
     boxy_tag_variants: std.ArrayList(BoxyTagVariant),
     boxy_tag_payload_descs: std.ArrayList(BoxyTagPayloadDesc),
+    boxy_field_names: std.ArrayList(base.StringLiteral.Idx),
     boxy_adapt_steps: std.ArrayList(BoxyAdaptStep),
     boxy_payload_steps: std.ArrayList(BoxyPayloadStep),
     boxy_method_slots: std.ArrayList(BoxyMethodSlot),
@@ -257,6 +261,7 @@ pub const Result = struct {
             .boxy_dict_refs = .empty,
             .boxy_tag_variants = .empty,
             .boxy_tag_payload_descs = .empty,
+            .boxy_field_names = .empty,
             .boxy_adapt_steps = .empty,
             .boxy_payload_steps = .empty,
             .boxy_method_slots = .empty,
@@ -284,6 +289,7 @@ pub const Result = struct {
         self.boxy_method_slots.deinit(allocator);
         self.boxy_payload_steps.deinit(allocator);
         self.boxy_adapt_steps.deinit(allocator);
+        self.boxy_field_names.deinit(allocator);
         self.boxy_tag_payload_descs.deinit(allocator);
         self.boxy_tag_variants.deinit(allocator);
         self.boxy_dict_refs.deinit(allocator);
