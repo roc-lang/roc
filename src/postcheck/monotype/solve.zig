@@ -10,6 +10,7 @@
 
 const std = @import("std");
 const check = @import("check");
+const base = @import("base");
 
 const Common = @import("../common.zig");
 const Ast = @import("ast.zig");
@@ -19,7 +20,7 @@ const Allocator = std.mem.Allocator;
 const checked = check.CheckedModule;
 const names = check.CheckedNames;
 const static_dispatch = check.StaticDispatchRegistry;
-const Ident = @import("base").Ident;
+const Ident = base.Ident;
 
 /// A procedure template body request deferred to the end of the requesting
 /// specialization, when that specialization's types are final. Requesting at
@@ -32,6 +33,8 @@ pub const DeferredTemplate = struct {
     source_fn_ty: checked.CheckedTypeId,
     source_fn_key: names.TypeDigest,
     fn_ty: Type.TypeId,
+    source_region_override: ?base.Region,
+    current_entry_root: ?checked.ComptimeRootId,
 };
 
 /// Identity of a node in a specialization's instantiation graph.

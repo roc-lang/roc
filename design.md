@@ -4096,25 +4096,81 @@ checked CIR
   -> Lambda Mono decisions
   -> LIR
   -> ARC insertion
-  -> LIR interpreter
+  -> native dev backend on native compiler hosts
   -> store eval result in ConstStore
 ```
 
-The compile-time evaluator is an LIR interpreter. It does not interpret
-Monotype IR, Lambda Solved IR, logical Lambda Mono expressions, or any
-source-level IR.
+On native compiler hosts, every `compile_time_*` root uses the dev backend for
+compile-time evaluation: ordinary constants, selected hoisted constants,
+expects, callable eval roots, numeral conversions, and quote conversions. The
+compile-time evaluator does not interpret Monotype IR, Lambda Solved IR,
+logical Lambda Mono expressions, or any source-level IR.
+
+The only interpreter path is for compiler hosts that cannot run generated native
+code, currently wasm32 and freestanding compiler builds. This decision is made
+from the compiler's own build target. The Roc program target selected by
+`roc --target` does not affect the compile-time evaluation strategy. A native
+compiler host without host dev-backend code generation support is unsupported for
+compile-time evaluation; it must not silently use the interpreter.
+
+Diagnostic behavior must be identical between the dev-backend evaluator and the
+host-restricted LIR interpreter. A mismatch in crashes, expect failures,
+empirical exhaustiveness diagnostics, branch coverage, literal conversion
+diagnostics, or stored constants is a compiler bug in one of the evaluators or
+in the data they consume.
 
 Compile-time ARC insertion runs the same borrow-inference solver as runtime
 ARC insertion in its single-variant form: one proc per solved `RcSig`, no
 mode specialization. Compile-time evaluation pays for solving once per
 evaluated root and never for variant cloning.
 
-The LIR interpreter produces a runtime value. Checking then stores that eval
+The evaluator produces a runtime value. Checking then stores that eval
 result as checked-stage data in the checked module's `ConstStore`. `ConstStore`
 stores checked Roc values only. It does not contain Monotype nodes, Lambda
 Solved data, Lambda Mono decision data, runtime addresses, allocation identity,
 layout ids, runtime discriminants, field offsets, LIR locals, LIR procedure
 ids, backend symbols, backend bytes, or host handles.
+
+Compile-time finalization evaluates dependency-ready roots in batches. Each
+batch is lowered to LIR once, ARC is inserted once, the dev backend emits native
+code for the reachable proc specs, and a generated wrapper is emitted for each
+root. Roots in the same batch are independent pure computations and may run on a
+work queue. The finalizer still commits stored values, diagnostics, coverage
+updates, and root completion in sorted request order.
+
+Each root job owns its compile-time host state: `RocOps`, a root-local arena for
+Roc allocations, allocation tracking needed by RocOps, branch-hit records,
+expect/dbg/crash event lists, failure region state, a call-region stack, a crash
+boundary, and its result buffer. Roc runtime allocations are arena allocations
+and are bulk-freed after the result has been copied into `ConstStore`. Host
+events and failure state stay root-local until deterministic replay.
+
+A crash or empirical exhaustiveness failure in one root records that root's
+result and must not change the result of any other root in the same batch. Root
+jobs do not write diagnostics, stderr output, checked problems, or `ConstStore`
+entries directly. They write root-local event lists and branch-hit data; after
+all jobs in the batch finish, checking finalization replays those lists in the
+sorted root order.
+
+Slow-root progress reporting observes the same root job state without changing
+evaluation. By default, a root that has been running for more than three seconds
+may be reported periodically on both TTY and non-TTY stderr. The message names
+the one-line source snippet for the root, truncated with `…` if needed, plus the
+module, line, column, and elapsed seconds. If the root belongs to a binding, the
+snippet should include enough of that binding line to identify the binding.
+
+Progress reporting must not add a fixed latency penalty to fast compile-time
+evaluation. A reporting worker may be started when stderr/std_io reporting is
+configured, but every wait in that worker must be interruptible by the
+finalizer. The worker waits for the earliest running root's slow-report
+deadline, normally `root_start + 3s`, or for a stop signal, whichever comes
+first. When a root starts, the worker is signaled so it can recompute the next
+deadline without polling. When finalization finishes, it signals the worker and
+joins it immediately; it must never wait for a plain sleep interval to expire.
+Roots that finish before the slow threshold therefore pay only monitor setup and
+signaling overhead, not the reporting period. Roots that exceed the threshold
+are reported, then the worker waits interruptibly until the next per-root report
+deadline or finalization stop.
 
 `ConstStore` uses node ids so stored constants can preserve sharing without
 duplicating large values. Multiple fields may reference the same `ConstNodeId`.
