@@ -33,59 +33,39 @@ Also committed: `requireBoxyTagVariantByDiscriminant` prints the descriptor's va
 
 ## Current state of all_syntax_test (boxy interpreter)
 
-Runs to completion (no crash; one segfault was observed once early in the session and has not reproduced since the two fixes — watch for it). Output is wrong in these clustered ways vs the expected baseline in `parallel_cli_runner.zig`:
+Completes 10/10 runs with exit 0. All remaining stdout diffs vs the expected baseline are Str.inspect FORMATTING fidelity (values are correct):
 
-1. **Open-union argument descriptor mismatch (semantic, match correctness)** — see next section. Manifests as `color_to_str(Blue)` printing "red".
-2. **Str.inspect through boxy descriptors loses metadata**: records print as tuples (field names missing), opaque nominal types print through (`<opaque>` → `("my_secret_key",)`), tag payloads dropped (`Err(NoFirstError(ListWasEmpty))` → `Err`).
-3. **Dec scalars mishandled**: printed as raw i128 mantissas (`42.0` → `42000000000000000000`), or scaled wrongly (`stringify(12345)` → `"0.000000000000012345"`), and at least one wrong VALUE (`while_loop(5)` prints `0` instead of `10.0`) — the descriptor/scalar-kind for Dec is being lost somewhere between literal lowering and numeric ops/inspect.
-4. **stderr is polluted** by large amounts of pre-existing debug instrumentation (the expected stderr is exactly `[dbg] 42.0`), so the exact-match test cannot pass until instrumentation cleanup happens.
-5. Possible byte-level diff on the unicode-escape line (uninvestigated).
+1. Records inspect as tuples — `{ age: 31, name: "Alice" }` prints `(31, "Alice")`. Descriptors/layouts carry no record field names.
+2. Dec scalars inspect as raw i128 mantissas — `15.0` prints `15000000000000000000`. `appendScalarInspect` in interpreter.zig has frac handling in its 4- and 8-byte branches but not the 16-byte branch; check whether layout `.dec` is a 16-byte frac scalar and format via RocDec.
+3. Opaque nominal values inspect through — `<opaque>` prints `("my_secret_key",)`. Descriptors carry no opaqueness marker.
+4. Zero-sized tag payloads are dropped — `Err(NoFirstError(ListWasEmpty))` prints `Err`. `appendTagUnionInspect` returns early when `payload_size == 0`; it should recurse through the variant's payload descriptors (ZST tags still have names).
+5. The unicode-escape line is NOT a real diff — boxy prints the correct NBSP; an earlier scratchpad baseline had lost the byte in copy-paste.
 
-## Diagnosed, not yet fixed: open-union hidden descriptor correspondence
+Note `BoxyTypeDesc.structural_inspect: ?LirProcSpecId` exists but is never populated — the intended design may be generated per-type inspect procs, which would also serve the machine backends. Either enrich descriptors (field names, opaque flag) for the interpreter walker, or implement descriptor-referenced inspect procs; decide once, because backends need the same answer.
 
-Minimal repro (delete after fixing; the bisect files were `test/echo/_bisect_tmp*.roc`, since removed):
+## Fixed and committed (second stretch, 2026-07-01)
 
-```roc
-question_postfix : List(Str) -> Try(I64, _)
-question_postfix = |strings| {
-    first_str = strings.first()?
-    first_num = I64.from_str(first_str)?
-    Ok(first_num)
-}
+### f96c3df966 — Pass value-accurate descriptors for known call-site reps
 
-color_to_str : [Red, Green, ..] -> Str
-color_to_str = |color| match color {
-    Red => "red"
-    Green => "green"
-    _ => "other color"
-}
+Fixes the open-union argument bug (`color_to_str(Blue)` printing "red") AND the previously-intermittent segfaults. Two coordinated changes:
 
-main! = |_args| {
-    _ = question_postfix(["1", "not a number", "100"])
-    echo!(color_to_str(Blue))   # prints "red"; must print "other color"
-    Ok({})
-}
-```
+1. `sourceValueDescriptorLocalForHiddenArg` bailed out when the call-side rep had no descriptor requirement of its own, so hidden descriptor args fell back to the worker's declared-shape binding — which cannot describe call-site row instantiation (extra tags in an open union's extension) and was flat-out unable to represent `Blue`. Now it materializes a descriptor from the known call-side rep (`descriptorMaterializationForSourceRep`). The rep-equality gate stays: relaxing IT breaks other cases (tried; boxy_map_trim went silent).
+2. `staticPayloadDescRefsForTagVariant` skipped per-variant payload descriptors when the payload rep "needed none" from the producer's view (concrete payloads like Str). But descriptors describe values flowing into workers whose payload view is erased, and those workers read tag payloads through the descriptor they were handed — tripping "boxy tag payload 0 for tag Dog had no descriptor to bind", and (before that check existed on a given path) reading payload bytes at wrong offsets, which is the best explanation for the intermittent segfaults that disappeared with this fix. Payload descriptors are now forced (`tagPayloadStorageDescRepForLayout(..., true)`).
 
-Without the `question_postfix` call the program prints the right answer — but for the WRONG reason (verified: the worker reads a garbage discriminant (170) through a mismatched descriptor and happens to fall into the `_` branch). Both variants violate the same contract.
+Regression test: `test/echo/boxy_open_union_arg.roc` (the two-function repro; also exercises Red/Green staying correct).
 
-Mechanism (all verified by instrumentation):
+Earlier hypotheses about the plan-side tandem walk misattributing params (previous report revision) were WRONG — the null-arg-index hidden args belonged to `question_postfix`'s return union, which is legitimately return-position. The plan mapping was fine; only the lowering fallback was wrong.
 
-- At the call site, `Blue` is constructed as a static `assign_tag` (discriminant 0) in the CALL-side union rep (`[Blue:0, Green:1, Red:2]`, its descriptor was static desc 9 in the repro) and boxed with that payload descriptor. This part is fine: the box payload is stored under a descriptor that truthfully describes it.
-- The hidden descriptor ARG passed to the worker, however, is the WORKER's declared-shape descriptor (static desc 7 = `[Green:0]` + `tag_ext` = `[Red:0]` — note the odd row ordering), which cannot describe `Blue` at all. The worker's `boxy_tag_match` reads the value's discriminant bytes through this wrong descriptor/layout (stored layout 76 read as layout 57) and takes the wrong branch.
-- Why the wrong descriptor gets passed, two layers:
-  1. In the plan, `materializeWorkerCallHiddenDescriptorArgs` maps worker hidden-descriptor params to call args by a tandem tree walk over the worker's FN-TYPE rep children vs call-side reps, with an order assertion (`params[next] == worker_desc`). But the worker's hidden params were collected on the worker's PARAM-PATTERN reps (33/34 in the repro), which in the poisoned program are DIFFERENT rep ids from the fn-type's arg child rep (30) for the same type. The arg pass therefore consumes nothing, and the ret pass sweeps the params up with `source_arg_index=null` and the WRONG call-side rep (the ret's). In the clean program the two rep instances happen to coincide (28), so the mapping "works". Same-type-different-rep = fragile identity; adding unrelated definitions (question_postfix) perturbs rep allocation and flips the outcome.
-  2. In the lowerer, `lowerDirectCallHiddenDescriptorArgs`'s source-value path (`sourceValueDescriptorLocalForHiddenArg`) requires the call-side rep to have its own descriptor requirement — call-site value reps generally don't have one, so even with a correct `source_arg_index` the code falls back to the worker's bound requirement descriptor (the declared-shape one). The hidden descriptor must instead be derived from the CALL-side value: either the arg local's own descriptor or a materialization from the call-side rep (`descriptorMaterializationForSourceRep(arg.rep)` — arg.rep IS the call-side rep when the plan mapping is correct).
+### f1996cbcdc — Encode Dec-defaulted numeric literals with the scaled Dec bit pattern
 
-Late-session correction (verified with a branch probe in `lowerDirectCallHiddenDescriptorArgs`): the earlier attribution of the null-index hidden args to the color call was wrong — those belong to `question_postfix`'s RETURN-union descriptors, which are legitimately return-position (null arg index is correct there). The color call's hidden arg (requirement 11 in the repro) maps with `source_arg_index=0` and the right call-side rep in the plan, but at the lowering it falls through every branch to **fresh_unbound** — a brand-new opaque local with no initializer recorded by that code path. At runtime that local nonetheless contains the worker's declared-shape descriptor (static table desc 7), so some other machinery initializes it — most likely the worker-level descriptor requirement slot binding (`descriptor_locals` + the prologue `slot_static_descriptor` writes) aliasing the same local id. Next probe: find what writes the fresh_unbound local (dump the statement that assigns it, or print `descriptor_locals` slot assignments), then make this path produce a value-accurate descriptor — the call-side rep is known here (`sourceValueDescriptorLocalForHiddenArg` reached rep equality but bailed because the call-side rep has no descriptor REQUIREMENT of its own; a `descriptorMaterializationForSourceRep(arg.rep)` materialization at that point may be the entire fix).
+`lowerExprInto`'s `.num` fallback for concrete targets emitted raw integer bits regardless of the target's committed layout, so Dec-typed literals (the default for untyped numerals) were unscaled while other Dec producers were scaled. `while_loop(5)` compared a scaled counter against an unscaled limit, exited after one iteration, and printed 0. The fallback now routes through the same layout-directed encoding as the dynamic-target path (`assignBuiltinNumLiteralPayload`). All Dec VALUES in all_syntax are now correct; only inspect formatting remains. Regression test: `test/echo/boxy_dec_literals.roc`.
 
-Recommended fix shape (matches the systemic-analysis prescription "record facts at derivation time, don't re-derive by matching"):
+### Test-infrastructure notes from this stretch
 
-- When the plan collects a worker's hidden descriptor params (worker side), record for each param where it came from (arg index and/or rep path), instead of relying on the call-site tandem walk + order assertion to rediscover it. Then `materializeWorkerCallHiddenDescriptorArgs` maps each param directly to the call arg's rep, and `source_arg_index` is correct by construction.
-- At the call site, pass a descriptor that describes the VALUE: prefer the source arg local's descriptor / call-side rep materialization over the worker's declared-shape binding. (Note: naively relaxing the canonical-rep gate in `sourceValueDescriptorLocalForHiddenArg` breaks other cases — tried and reverted; test/echo/boxy_map_trim.roc went silent. Whatever change is made must keep the whole echo corpus green.)
-- The worker-side declared descriptor (static 7 style) is still needed for constructing values inside the worker; only the VALUE-describing role must come from the caller.
-
-Also worth fixing/verifying nearby: static desc 7's shape `[Green local, ext=[Red]]` for declared `[Red, Green, ..]` — the row ordering that puts a declared tag in the extension is at minimum surprising and worth understanding while in there.
+- `boxy lowerer emits direct calls to planned imported workers` (postcheck unit test) is ORDER-DEPENDENT: passes alone, fails inside the full boxy-filtered `run-test-zig` binary — including on commits before any of today's changes. Some shared state leaks between tests in that binary. Worth fixing; it derailed a bisect today (looked like my regression, wasn't).
+- The `lir_core` unit-test compile was broken by the WIP's `.runtime` variant on `BoxyDescRef` (non-exhaustive switch in a test); fixed in f96c3df966.
+- `builtin_compiler` failed once during a test-pipeline build and passed on retry — builtin compilation runs the interpreter for compile-time eval, so pre-fix descriptor bugs could surface there; watch whether it recurs after the descriptor fixes.
+- Unit test filtering works as `zig build run-test-zig -- --test-filter <text>` (args go after `--`).
 
 ## Backend scope discovery
 
@@ -94,8 +74,8 @@ All three machine-code backends currently REJECT boxy LIR statements (`assign_bo
 ## Other open items
 
 - Interpreter debug value-shape checker for lists recurses with `layout_val.getIdx()` instead of the resolved element layout (`listElemLayout`); would have caught the map/trim corruption earlier. Small fix, not yet done.
-- Remove the large pre-existing debug instrumentation (hard-coded proc/stmt/layout IDs across `interpreter.zig`, `lower.zig`) and clean accidental whitespace churn in `src/lir/arc.zig` around `assign_ref`/`assign_boxy_box`. Required before stderr-exact tests can pass.
-- Focused regression tests still to add: record destructuring from dynamic boxed records, list-boundary capacity preservation (reserve → boundary → append_unsafe), dynamic tag materialization with ZST payloads, open-union argument passing (the repro above), Dec through erased calls, inspect of records/opaques/tag payloads.
+- Instrumentation cleanup: arc.zig is done (trace removed, tab-indent churn fixed); a subagent pass over interpreter.zig and lower.zig was in flight at the time of writing — verify stderr of hello.roc is empty and all_syntax stderr is exactly `[dbg] 42.0` before trusting stderr-exact tests.
+- Focused regression tests still to add: record destructuring from dynamic boxed records, list-boundary capacity preservation (reserve → boundary → append_unsafe), dynamic tag materialization with ZST payloads, inspect of records/opaques/tag payloads once implemented.
 - Boxy pass-through list boundaries rebuild lists per iteration in loops (observed O(n²) rebuilds in the map fallback loop). Correctness first, but this wants a same-rep fast path once descriptors are trustworthy.
 - CI benchmarks for boxy (task #9), `roc_smoke_test.sh` run (task #10) once the suite is green.
 
