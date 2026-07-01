@@ -10245,10 +10245,11 @@ pub const Interpreter = struct {
         else
             null;
         const target_elem_desc = try self.firstNestedBoxyDesc(frame, target_desc);
-        const source_elem_layout = if (source_elem_desc) |elem_desc|
-            elem_desc.payload_layout
-        else
-            self.listElemLayout(actual_layout);
+        // The list's storage layout is the only truth about element stride and
+        // shape. The element descriptor may legitimately describe the payload
+        // INSIDE a boxed element (payload-direct convention), so it must not
+        // decide how the buffer is walked.
+        const source_elem_layout = self.listElemLayout(actual_layout);
         const target_elem_layout = self.listElemLayout(expected_layout);
         const source_elem_size = self.helper.sizeOf(source_elem_layout);
         const target_elem_size = self.helper.sizeOf(target_elem_layout);
