@@ -4090,7 +4090,15 @@ const ProcBodyBuilder = struct {
             .num => |num| if (try self.assignBuiltinNumLiteralForDynamicTarget(target, num.value, num.kind, expr.ty, next)) |literal|
                 literal
             else
-                try self.assignIntLiteral(target, num.value.toI128(), next),
+                // A concrete target's committed layout decides the runtime
+                // encoding: Dec-typed numerals need the scaled Dec bit pattern,
+                // not the raw integer bits.
+                try self.assignBuiltinNumLiteralPayload(
+                    target,
+                    self.parent.result.store.getLocal(target).layout_idx,
+                    num.value,
+                    next,
+                ),
             .typed_int => |int| try self.assignIntLiteral(target, int.value.toI128(), next),
             .frac_f32 => |frac| try self.assignF32Literal(target, frac.value, next),
             .frac_f64 => |frac| try self.assignF64Literal(target, frac.value, next),

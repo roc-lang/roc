@@ -701,6 +701,7 @@ const echo_cases = [_]CliCase{
     .{ .id = 0, .suite = .echo, .name = "echo platform: statically dispatched, propagated, open error union does not crash (regression test #9588)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--no-cache" }, .roc_file = "test/echo/issue_9588.roc", .exit = .success, .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "invariant violated" } } } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: boxy List.map result boxing preserves transform payloads (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{"--opt=interpreter"}, .roc_file = "test/echo/boxy_map_trim.roc", .stdout_exact = "Alice, Bob, Charlie\n" } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: boxy open-union argument descriptor describes the value (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{"--opt=interpreter"}, .roc_file = "test/echo/boxy_open_union_arg.roc", .stdout_exact = "other color\nred\ngreen\n" } } },
+    .{ .id = 0, .suite = .echo, .name = "echo platform: boxy Dec-defaulted numeric literals use the scaled encoding (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{"--opt=interpreter"}, .roc_file = "test/echo/boxy_dec_literals.roc", .stdout_exact = "10.0\n" } } },
 };
 
 // Glue suite cases
