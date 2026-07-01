@@ -134,6 +134,7 @@ const AssociatedDeclBodyWork = struct {
     pattern_idx: Pattern.Idx,
     pattern_region: Region,
     annotation: ?Annotation.Idx,
+    type_anno_idx: ?TypeAnno.Idx,
     type_var_scope: ?TypeVarScopeIdx,
 };
 
@@ -892,9 +893,103 @@ fn registerAssociatedMethodIdent(
     method_ident: Ident.Idx,
     qualified_ident: Ident.Idx,
     binding: ModuleEnv.MethodBinding,
+    type_anno_idx: ?TypeAnno.Idx,
 ) std.mem.Allocator.Error!void {
-    try self.env.registerMethodIdentForOwner(owner_stmt_idx, method_ident, qualified_ident);
-    try self.env.registerMethodDefForOwner(owner_stmt_idx, method_ident, binding);
+    const associated_owner = ModuleEnv.MethodOwner.init(self.env.qualified_module_ident, owner_stmt_idx);
+    try self.env.registerMethodIdentForMethodOwner(associated_owner, method_ident, qualified_ident);
+    try self.env.registerMethodDefForMethodOwner(associated_owner, method_ident, binding);
+
+    if (!self.associatedOwnerAllowsReceiverMethods(owner_stmt_idx)) return;
+    const receiver_owner = try self.receiverMethodOwnerFromFunctionAnno(type_anno_idx) orelse return;
+    if (receiver_owner.eql(associated_owner)) return;
+
+    try self.env.registerMethodIdentForMethodOwner(receiver_owner, method_ident, qualified_ident);
+    try self.env.registerMethodDefForMethodOwner(receiver_owner, method_ident, binding);
+}
+
+fn associatedOwnerAllowsReceiverMethods(self: *const Self, owner_stmt_idx: Statement.Idx) bool {
+    if (self.env.module_role == .builtin) return false;
+
+    const owner_stmt = self.env.store.getStatement(owner_stmt_idx);
+    const nominal = switch (owner_stmt) {
+        .s_nominal_decl => |nominal| nominal,
+        else => return false,
+    };
+    const owner_anno = self.unwrapTypeAnnoParens(nominal.anno);
+    const tag_union = switch (self.env.store.getTypeAnno(owner_anno)) {
+        .tag_union => |tag_union| tag_union,
+        else => return false,
+    };
+    return tag_union.ext == null and self.env.store.sliceTypeAnnos(tag_union.tags).len == 0;
+}
+
+fn receiverMethodOwnerFromFunctionAnno(
+    self: *Self,
+    maybe_type_anno_idx: ?TypeAnno.Idx,
+) std.mem.Allocator.Error!?ModuleEnv.MethodOwner {
+    const type_anno_idx = maybe_type_anno_idx orelse return null;
+    const root_idx = self.unwrapTypeAnnoParens(type_anno_idx);
+    const func = switch (self.env.store.getTypeAnno(root_idx)) {
+        .@"fn" => |func| func,
+        else => return null,
+    };
+    const args = self.env.store.sliceTypeAnnos(func.args);
+    if (args.len == 0) return null;
+    return try self.receiverMethodOwnerFromTypeAnno(args[0]);
+}
+
+fn receiverMethodOwnerFromTypeAnno(
+    self: *Self,
+    type_anno_idx: TypeAnno.Idx,
+) std.mem.Allocator.Error!?ModuleEnv.MethodOwner {
+    const root_idx = self.unwrapTypeAnnoParens(type_anno_idx);
+    return switch (self.env.store.getTypeAnno(root_idx)) {
+        .lookup => |lookup| try self.receiverMethodOwnerFromTypeBase(lookup.base),
+        .apply => |apply| try self.receiverMethodOwnerFromTypeBase(apply.base),
+        else => null,
+    };
+}
+
+fn unwrapTypeAnnoParens(self: *const Self, type_anno_idx: TypeAnno.Idx) TypeAnno.Idx {
+    var current = type_anno_idx;
+    while (true) {
+        switch (self.env.store.getTypeAnno(current)) {
+            .parens => |parens| current = parens.anno,
+            else => return current,
+        }
+    }
+}
+
+fn receiverMethodOwnerFromTypeBase(
+    self: *Self,
+    type_base: TypeAnno.LocalOrExternal,
+) std.mem.Allocator.Error!?ModuleEnv.MethodOwner {
+    return switch (type_base) {
+        .local => |local| ModuleEnv.MethodOwner.init(self.env.qualified_module_ident, local.decl_idx),
+        .external => |external| try self.receiverMethodOwnerFromExternalType(external),
+        .builtin => null,
+        .pending => null,
+    };
+}
+
+fn receiverMethodOwnerFromExternalType(
+    self: *Self,
+    external: @TypeOf(@as(TypeAnno.LocalOrExternal, undefined).external),
+) std.mem.Allocator.Error!?ModuleEnv.MethodOwner {
+    const import_idx: usize = @intFromEnum(external.module_idx);
+    if (import_idx < self.env.imports.imports.items.items.len) {
+        const import_name = self.env.common.strings.get(self.env.imports.imports.items.items[import_idx]);
+        if (std.mem.eql(u8, import_name, "Builtin") or CIR.Import.isCompilerBuiltinImportName(import_name)) return null;
+    }
+
+    const import_ident = self.env.imports.getIdentIdx(external.module_idx) orelse return null;
+    const owner_module_ident = if (self.lookupAvailableModuleEnv(import_ident)) |info| blk: {
+        if (info.env.module_role == .builtin) return null;
+        const owner_module_text = info.env.getIdent(info.env.qualified_module_ident);
+        break :blk try self.env.insertIdent(Ident.for_text(owner_module_text));
+    } else import_ident;
+
+    return ModuleEnv.MethodOwner.init(owner_module_ident, @enumFromInt(external.target_node_idx));
 }
 
 fn hasAvailableModuleEnv(self: *const Self, ident: Ident.Idx) bool {
@@ -2978,6 +3073,7 @@ fn prepareAssociatedDeclBody(
         .pattern_idx = pattern_idx,
         .pattern_region = pattern_region,
         .annotation = annotation_idx,
+        .type_anno_idx = type_anno_idx,
         .type_var_scope = type_var_scope,
     };
 }
@@ -3004,7 +3100,7 @@ fn finishAssociatedDeclBody(
     if (state.owner_is_module_visible) {
         try self.env.setExposedValueNodeIndexById(work.qualified_ident, def_idx_u32);
     }
-    try self.registerAssociatedMethodIdent(state.work.owner_stmt_idx, work.decl_ident, work.qualified_ident, method_binding);
+    try self.registerAssociatedMethodIdent(state.work.owner_stmt_idx, work.decl_ident, work.qualified_ident, method_binding, work.type_anno_idx);
 
     const def_cir = self.env.store.getDef(associated_def.def_idx);
     const pattern_idx = def_cir.pattern;
@@ -3490,7 +3586,7 @@ fn canonicalizeAssociatedItems(
                         owner_is_module_visible,
                         block_context,
                     );
-                    try self.registerAssociatedMethodIdent(owner_stmt_idx, name_ident, qualified_idx, method_binding);
+                    try self.registerAssociatedMethodIdent(owner_stmt_idx, name_ident, qualified_idx, method_binding, type_anno_idx);
 
                     const def_cir_anno = self.env.store.getDef(def_idx);
                     const anno_pattern_idx = def_cir_anno.pattern;
