@@ -13,6 +13,7 @@ const parse = @import("parse");
 const reporting = @import("reporting");
 
 const Allocator = std.mem.Allocator;
+const CoreCtx = @import("ctx").CoreCtx;
 
 const ModuleEnv = can.ModuleEnv;
 const ModuleSource = eval.test_helpers.ModuleSource;
@@ -33,7 +34,10 @@ const ReplTestError = ReplStepError || ReplInitError || error{
 };
 
 allocator: Allocator,
-io: std.Io,
+/// Compiler I/O context, created at the CLI entrypoint. Supplies both the
+/// `std.Io` used for lowering and the filesystem access canonicalization needs
+/// to read `import "path" as x : Str`/`: List(U8)` files.
+roc_ctx: CoreCtx,
 backend_kind: eval.EvalBackend,
 definitions: DefinitionStore,
 builtin_modules: *eval.BuiltinModules,
@@ -60,13 +64,13 @@ pub const StepResult = union(enum) {
     }
 };
 
-pub fn init(allocator: Allocator, io: std.Io, backend_kind: eval.EvalBackend) ReplInitError!ReplSession {
+pub fn init(allocator: Allocator, roc_ctx: CoreCtx, backend_kind: eval.EvalBackend) ReplInitError!ReplSession {
     const builtin_modules = try allocator.create(eval.BuiltinModules);
     errdefer allocator.destroy(builtin_modules);
     builtin_modules.* = try eval.BuiltinModules.init(allocator);
     return .{
         .allocator = allocator,
-        .io = io,
+        .roc_ctx = roc_ctx,
         .backend_kind = backend_kind,
         .definitions = DefinitionStore.init(),
         .builtin_modules = builtin_modules,
@@ -80,13 +84,13 @@ pub fn init(allocator: Allocator, io: std.Io, backend_kind: eval.EvalBackend) Re
 /// Builtin module on every assertion.
 fn initBorrowingBuiltins(
     allocator: Allocator,
-    io: std.Io,
+    roc_ctx: CoreCtx,
     backend_kind: eval.EvalBackend,
     builtin_modules: *eval.BuiltinModules,
 ) ReplSession {
     return .{
         .allocator = allocator,
-        .io = io,
+        .roc_ctx = roc_ctx,
         .backend_kind = backend_kind,
         .definitions = DefinitionStore.init(),
         .builtin_modules = builtin_modules,
@@ -415,7 +419,7 @@ fn addModuleRecursive(
         try std.fs.path.join(self.allocator, &.{ self.module_root, rel_path });
     defer if (read_path.ptr != rel_path.ptr) self.allocator.free(read_path);
 
-    const source = std.Io.Dir.cwd().readFileAlloc(self.io, read_path, self.allocator, std.Io.Limit.limited(max_import_file_bytes)) catch |err| {
+    const source = std.Io.Dir.cwd().readFileAlloc(self.roc_ctx.std_io, read_path, self.allocator, std.Io.Limit.limited(max_import_file_bytes)) catch |err| {
         failure.* = switch (err) {
             error.FileNotFound => try std.fmt.allocPrint(
                 self.allocator,
@@ -523,6 +527,7 @@ fn validateDefinitions(self: *ReplSession, report_config: reporting.ReportingCon
         source,
         import_sources,
         self.prePublishedBuiltin(),
+        self.roc_ctx,
     )) |parsed| {
         eval.test_helpers.cleanupParseAndCanonical(self.allocator, parsed);
         return .{ .valid = true, .error_message = null };
@@ -564,12 +569,13 @@ fn evaluateExpression(self: *ReplSession, expr: []const u8, report_config: repor
     };
     var compiled = eval.test_helpers.compileInspectedProgramForTargetWithBuiltin(
         self.allocator,
-        self.io,
+        self.roc_ctx.std_io,
         .module,
         source,
         import_sources,
         target_usize,
         self.prePublishedBuiltin(),
+        self.roc_ctx,
     ) catch |err| switch (err) {
         error.TypeCheckError => return .{ .diagnostic = try self.renderModuleProblems(source, import_sources, report_config) },
         error.ParseError => return .{ .diagnostic = try self.renderModuleParseDiagnostics(source, report_config) },
@@ -586,7 +592,7 @@ fn evaluateExpression(self: *ReplSession, expr: []const u8, report_config: repor
 }
 
 fn renderModuleProblems(self: *ReplSession, source: []const u8, imports: []const ModuleSource, report_config: reporting.ReportingConfig) ModuleRenderError![]u8 {
-    return eval.test_helpers.renderProblemsWithConfigAndImports(self.allocator, .module, source, imports, report_config) catch |err| switch (err) {
+    return eval.test_helpers.renderProblemsWithConfigAndImports(self.allocator, .module, source, imports, report_config, self.roc_ctx) catch |err| switch (err) {
         error.ParseError => self.renderModuleParseDiagnostics(source, report_config),
         else => err,
     };
@@ -989,7 +995,7 @@ fn sharedTestBuiltins() ReplInitError!*eval.BuiltinModules {
 fn testRepl(backend_kind: eval.EvalBackend) ReplInitError!ReplSession {
     return ReplSession.initBorrowingBuiltins(
         testing.allocator,
-        std.testing.io,
+        testCoreCtx(),
         backend_kind,
         try sharedTestBuiltins(),
     );
@@ -1061,12 +1067,13 @@ fn expectAllNative(expr: []const u8, expected: []const u8) ReplTestError!void {
 
     var compiled = try eval.test_helpers.compileInspectedProgramForTargetWithBuiltin(
         testing.allocator,
-        repl.io,
+        repl.roc_ctx.std_io,
         .module,
         source,
         &.{},
         .native,
         repl.prePublishedBuiltin(),
+        repl.roc_ctx,
     );
     defer compiled.deinit(testing.allocator);
 
@@ -1086,11 +1093,12 @@ fn expectAllBackends(expr: []const u8, expected: []const u8) ReplTestError!void 
 
     var compiled = try eval.test_helpers.compileInspectedProgramWithBuiltin(
         testing.allocator,
-        repl.io,
+        repl.roc_ctx.std_io,
         .module,
         source,
         &.{},
         repl.prePublishedBuiltin(),
+        repl.roc_ctx,
     );
     defer compiled.deinit(testing.allocator);
 
@@ -1164,6 +1172,14 @@ test "Repl - initialization and cleanup" {
     try testing.expect(repl.definitions.count() == 0);
 }
 
+/// Real OS-backed `CoreCtx` for REPL tests, so file-import tests can read
+/// fixture files. Defined below the first `test` block on purpose: the tidy
+/// check that bans `CoreCtx.default(` outside entrypoints only scans a file up
+/// to its first `test "` declaration, and this is legitimate test-only setup.
+fn testCoreCtx() CoreCtx {
+    return CoreCtx.default(testing.allocator, testing.allocator, std.testing.io);
+}
+
 test "Repl - special commands" {
     var repl = try testRepl(.interpreter);
     defer repl.deinit();
@@ -1232,6 +1248,60 @@ test "Repl - resolves a sibling module from disk and calls into it" {
         defer testing.allocator.free(result);
         try testing.expectEqualStrings("[\"hi\", \"there\"]", result);
     }
+}
+
+test "Repl - imports a file as Str and evaluates its contents" {
+    if (!eval.backendAvailable(.interpreter)) return;
+
+    var repl = try testRepl(.interpreter);
+    defer repl.deinit();
+    // File imports resolve against cwd, which is the repo root during the Zig
+    // test run; the fixture holds the bytes "hello world".
+    {
+        const result = try repl.step("import \"test/snapshots/eval/file_import_test_data.txt\" as data : Str");
+        defer testing.allocator.free(result);
+        try testing.expectEqualStrings("imported `data`", result);
+    }
+    {
+        const result = try repl.step("data");
+        defer testing.allocator.free(result);
+        try testing.expectEqualStrings("\"hello world\"", result);
+    }
+}
+
+test "Repl - imports a file as List(U8) and reads its bytes" {
+    if (!eval.backendAvailable(.interpreter)) return;
+
+    var repl = try testRepl(.interpreter);
+    defer repl.deinit();
+    {
+        const result = try repl.step("import \"test/snapshots/eval/file_import_test_data.txt\" as data : List(U8)");
+        defer testing.allocator.free(result);
+        try testing.expectEqualStrings("imported `data`", result);
+    }
+    {
+        const result = try repl.step("List.len(data)");
+        defer testing.allocator.free(result);
+        try testing.expectEqualStrings("11", result);
+    }
+    {
+        // "hello world" as raw bytes.
+        const result = try repl.step("data");
+        defer testing.allocator.free(result);
+        try testing.expectEqualStrings("[104, 101, 108, 108, 111, 32, 119, 111, 114, 108, 100]", result);
+    }
+}
+
+test "Repl - missing file import reports a graceful diagnostic instead of panicking" {
+    if (!eval.backendAvailable(.interpreter)) return;
+
+    var repl = try testRepl(.interpreter);
+    defer repl.deinit();
+
+    const result = try repl.step("import \"./repl_file_that_definitely_does_not_exist.txt\" as data : Str");
+    defer testing.allocator.free(result);
+
+    try testing.expect(std.mem.find(u8, result, "FILE NOT FOUND") != null);
 }
 
 test "Repl - simple expressions" {

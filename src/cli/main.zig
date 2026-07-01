@@ -11285,7 +11285,7 @@ fn rocRepl(ctx: *CliCtx, repl_args: cli_args.ReplArgs) CliMainError!void {
     // it before printing the greeting so the greeting and the first prompt appear
     // together and the REPL is immediately interactive — otherwise the greeting
     // shows with no prompt until this finishes.
-    var session = try ReplSession.init(ctx.gpa, ctx.io.std_io, backend_kind);
+    var session = try ReplSession.init(ctx.gpa, ctx.coreCtx(), backend_kind);
     defer session.deinit();
 
     if (mode == .interactive) {
