@@ -98,7 +98,7 @@ jobs:
         run: zig build run-check-cli-global-stdio
 
       - name: zig snapshot tests
-        run: zig build run-check-snapshots -- --debug
+        run: zig build run-check-snapshots -Dforbid-arc-certifier-skips -- --debug
 
       - name: Run Playground Tests
         run: zig build run-test-playground -Doptimize=ReleaseSmall -- --verbose
@@ -226,7 +226,7 @@ jobs:
         if: runner.os != 'Windows'
         uses: ./.github/actions/flaky-retry
         with:
-          command: zig build run-test-eval -- --llvm
+          command: zig build run-test-eval -Dforbid-arc-certifier-skips -- --llvm
           error_string_contains: "HttpConnectionClosing|build.zig.zon|TemporaryNameServerFailure|error: cannot download|EndOfStream|WriteFailed|503|Timeout|bad HTTP response code"
           retry_count: 3
 
@@ -242,24 +242,24 @@ jobs:
         if: runner.os == 'Windows'
         uses: ./.github/actions/flaky-retry
         with:
-          command: zig build run-test-eval -- --llvm --timeout 120000
+          command: zig build run-test-eval -Dforbid-arc-certifier-skips -- --llvm --timeout 120000
           error_string_contains: "HttpConnectionClosing|build.zig.zon|TemporaryNameServerFailure|error: cannot download|EndOfStream|WriteFailed|503|Timeout|bad HTTP response code"
           retry_count: 3
 
       - name: Run CLI platform tests (LLVM size/speed backends)
         if: runner.os != 'Windows'
-        run: zig build run-test-cli -- --include-llvm --filter "[size]" --filter "[speed]"
+        run: zig build run-test-cli -Dforbid-arc-certifier-skips -- --include-llvm --filter "[size]" --filter "[speed]"
 
       - name: Run CLI platform tests (LLVM size/speed backends, Windows)
         if: runner.os == 'Windows'
         run: |
-          zig build run-test-cli -- --include-llvm --filter "[size]" --filter "[speed]"
+          zig build run-test-cli -Dforbid-arc-certifier-skips -- --include-llvm --filter "[size]" --filter "[speed]"
 
       - name: Shared-library build-and-run test (roc build --opt=size)
-        run: zig build run-test-dylib
+        run: zig build run-test-dylib -Dforbid-arc-certifier-skips
 
       - name: Static-archive build-and-run test
-        run: zig build run-test-archive
+        run: zig build run-test-archive -Dforbid-arc-certifier-skips
 
   zig-tests:
     needs: check-once
@@ -329,7 +329,7 @@ jobs:
 
       - name: Run Test Platforms (Unix)
         if: runner.os != 'Windows'
-        run: zig build run-test-cli ${{ matrix.target_flag }}
+        run: zig build run-test-cli -Dforbid-arc-certifier-skips ${{ matrix.target_flag }}
 
       - name: Setup MSVC (Windows)
         if: runner.os == 'Windows'
@@ -340,7 +340,7 @@ jobs:
       - name: Run Test Platforms (Windows)
         if: runner.os == 'Windows'
         run: |
-          zig build run-test-cli
+          zig build run-test-cli -Dforbid-arc-certifier-skips
 
       - name: roc executable minimal check (Unix)
         if: runner.os != 'Windows'
@@ -353,11 +353,11 @@ jobs:
           zig-out\bin\roc.exe check ./CONTRIBUTING/profiling/bench_repeated_check.roc
 
       - name: zig snapshot tests
-        run: zig build run-check-snapshots ${{ matrix.target_flag }} -- --debug
+        run: zig build run-check-snapshots -Dforbid-arc-certifier-skips ${{ matrix.target_flag }} -- --debug
 
       # 1) in debug mode
       - name: build and execute tests, build repro executables
-        run: zig build run-test-zig -Dfuzz -Dsystem-afl=false ${{ matrix.target_flag }}
+        run: zig build run-test-zig -Dforbid-arc-certifier-skips -Dfuzz -Dsystem-afl=false ${{ matrix.target_flag }}
 
       # 2) in release mode
       - name: Build and execute tests, build repro executables. All in release mode.

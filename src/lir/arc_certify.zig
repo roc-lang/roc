@@ -26,6 +26,8 @@
 //! entry point panics in debug builds; release builds never run the certifier.
 
 const std = @import("std");
+const builtin = @import("builtin");
+const build_options = @import("build_options");
 const core = @import("lir_core");
 const layout_mod = @import("layout");
 const arc_sig = @import("arc_sig.zig");
@@ -34,6 +36,10 @@ const arc_solve = @import("arc_solve.zig");
 const LIR = core.LIR;
 const LirStore = core.LirStore;
 const Allocator = std.mem.Allocator;
+
+pub const production_join_state_capacity: usize = 4096;
+const skipped_proc_record_limit = 16;
+const forbid_skips = builtin.mode == .Debug and build_options.forbid_arc_certifier_skips;
 
 /// Errors produced while certifying: allocation failure or a violation of
 /// the ownership rules (a compiler bug in ARC insertion).
@@ -62,6 +68,10 @@ pub const Diagnostic = struct {
     /// exceeded the certifier's budget (incompleteness, not a finding). Exposed for
     /// tests/debugging; a nonzero value means certification was not exhaustive.
     skipped_proc_count: usize = 0,
+    /// First skipped procedures, for warning/panic context. The count above is
+    /// authoritative; this fixed-size list is only a bounded diagnostic sample.
+    skipped_procs: [skipped_proc_record_limit]LIR.LirProcSpecId = undefined,
+    skipped_proc_len: usize = 0,
 
     pub const ChainLink = struct {
         value: u32,
@@ -82,6 +92,18 @@ pub const Diagnostic = struct {
             return;
         }).len;
     }
+
+    fn recordSkippedProc(self: *Diagnostic, proc_id: LIR.LirProcSpecId) void {
+        if (self.skipped_proc_len < self.skipped_procs.len) {
+            self.skipped_procs[self.skipped_proc_len] = proc_id;
+            self.skipped_proc_len += 1;
+        }
+        self.skipped_proc_count += 1;
+    }
+};
+
+const CertifyOptions = struct {
+    join_state_capacity: usize = production_join_state_capacity,
 };
 
 /// Certifies every proc body in the store. Returns `error.Certification`
@@ -93,6 +115,18 @@ pub fn certifyStore(
     sigs: arc_sig.SigTable,
     roots: []const LIR.LirProcSpecId,
     diag: *Diagnostic,
+) CertifyError!void {
+    return certifyStoreWithOptions(allocator, store, layouts, sigs, roots, diag, .{});
+}
+
+fn certifyStoreWithOptions(
+    allocator: Allocator,
+    store: *const LirStore,
+    layouts: *const layout_mod.Store,
+    sigs: arc_sig.SigTable,
+    roots: []const LIR.LirProcSpecId,
+    diag: *Diagnostic,
+    options: CertifyOptions,
 ) CertifyError!void {
     var rc_local = try allocator.alloc(bool, store.locals.items.len);
     defer allocator.free(rc_local);
@@ -115,6 +149,7 @@ pub fn certifyStore(
         .join_bodies = std.AutoHashMap(LIR.JoinPointId, LIR.CFStmtId).init(allocator),
         .reads_before_rebind_cache = std.AutoHashMap(LIR.CFStmtId, std.bit_set.DynamicBitSetUnmanaged).init(allocator),
         .diag = diag,
+        .join_state_capacity = options.join_state_capacity,
     };
     defer certifier.deinit();
 
@@ -127,7 +162,7 @@ pub fn certifyStore(
             // its work stack is cleaned up on unwind, so skipping is safe. Real findings surface as
             // `error.Certification` and still propagate.
             error.CertifierCapacityExceeded => {
-                diag.skipped_proc_count += 1;
+                diag.recordSkippedProc(@enumFromInt(@as(u32, @intCast(index))));
                 continue;
             },
             else => |e| return e,
@@ -309,6 +344,15 @@ pub fn certifyStoreOrPanic(
             std.debug.panic("ARC borrow certifier: {s}{s}", .{ diag.message(), context.text() });
         },
     };
+    if (diag.skipped_proc_count != 0) {
+        var context = FailureContext{};
+        writeSkippedProcReport(&context, store, &diag);
+        // When the debug stats compiler from #9787/#9789 lands, route this count there too.
+        std.log.warn("{s}", .{context.text()});
+        if (comptime forbid_skips) {
+            std.debug.panic("{s}", .{context.text()});
+        }
+    }
 }
 
 /// Bounded, allocation-free text buffer for panic context. Output past the
@@ -327,6 +371,26 @@ const FailureContext = struct {
         self.len += written.len;
     }
 };
+
+fn writeSkippedProcReport(
+    context: *FailureContext,
+    store: *const LirStore,
+    diag: *const Diagnostic,
+) void {
+    context.append(
+        "ARC certifier skipped {d} procedure(s) whose join-state enumeration exceeded capacity; their RC schedules are UNVERIFIED.",
+        .{diag.skipped_proc_count},
+    );
+    for (diag.skipped_procs[0..diag.skipped_proc_len]) |proc_id| {
+        context.append("\n  proc={d}", .{@intFromEnum(proc_id)});
+        if (store.procDebugName(proc_id)) |name| {
+            context.append(" name={s}", .{name});
+        }
+    }
+    if (diag.skipped_proc_count > diag.skipped_proc_len) {
+        context.append("\n  ... and {d} more", .{diag.skipped_proc_count - diag.skipped_proc_len});
+    }
+}
 
 /// Writes every statement of the failing proc that mentions the implicated
 /// local, plus all join/jump structure, into the panic context buffer.
@@ -804,6 +868,7 @@ const Certifier = struct {
     /// Scratch bitset over store locals, reused by join-relevance extension.
     relevant_scratch: std.bit_set.DynamicBitSetUnmanaged = .{},
     diag: *Diagnostic,
+    join_state_capacity: usize = production_join_state_capacity,
     /// Proc and statement being certified; written by `certifyProc` and
     /// `runSegment` before any read.
     current_proc: LIR.LirProcSpecId = undefined,
@@ -2248,7 +2313,7 @@ const Certifier = struct {
                         // that carry different balances (e.g. `if c then x = dup(y) else x = y`)
                         // would be unsound. Until then the bound is generous enough to fully
                         // certify realistic procedures and only skips genuinely pathological ones.
-                        if (record.scheduled.count() > 4096) {
+                        if (record.scheduled.count() > self.join_state_capacity) {
                             return error.CertifierCapacityExceeded;
                         }
                         const copy = try self.allocator.dupe(LocalSummary, jump_summary);
@@ -2598,7 +2663,15 @@ const CertifyTest = struct {
     fn certifyWith(self: *CertifyTest, sigs: arc_sig.SigTable) CertifyError!void {
         return certifyStore(self.allocator, &self.store, &self.layouts, sigs, &.{}, &self.diag);
     }
+
+    fn certifyWithOptions(self: *CertifyTest, options: CertifyOptions) CertifyError!void {
+        return certifyStoreWithOptions(self.allocator, &self.store, &self.layouts, arc_sig.SigTable.all_owned, &.{}, &self.diag, options);
+    }
 };
+
+test "certifier production join-state capacity remains 4096" {
+    try testing.expectEqual(@as(usize, 4096), production_join_state_capacity);
+}
 
 test "certify accepts owned binding released once" {
     var f = try CertifyTest.init(testing.allocator);
@@ -2611,6 +2684,67 @@ test "certify accepts owned binding released once" {
     const body = try f.assignStr(value, result_assign);
     _ = try f.addProc(&.{}, body, .i64);
     try f.certify();
+    try testing.expectEqual(@as(usize, 0), f.diag.skipped_proc_count);
+}
+
+test "certify records skipped proc when join-state capacity is exceeded" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+    const result = try f.local(.i64);
+
+    const join_id = f.freshJoinPointId();
+    const ret = try f.ret(result);
+    const result_assign = try f.assignI64(result, ret);
+    const jump = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } });
+    const join_stmt = try f.store.addCFStmt(.{ .join = .{
+        .id = join_id,
+        .params = LIR.LocalSpan.empty(),
+        .body = result_assign,
+        .remainder = jump,
+    } });
+    const proc = try f.addProc(&.{}, join_stmt, .i64);
+    try f.store.setProcDebugName(proc, "capacitySkip");
+
+    try f.certifyWithOptions(.{ .join_state_capacity = 0 });
+
+    try testing.expectEqual(@as(usize, 1), f.diag.skipped_proc_count);
+    try testing.expectEqual(@as(usize, 1), f.diag.skipped_proc_len);
+    try testing.expectEqual(proc, f.diag.skipped_procs[0]);
+
+    var report = FailureContext{};
+    writeSkippedProcReport(&report, &f.store, &f.diag);
+    try testing.expect(std.mem.find(u8, report.text(), "ARC certifier skipped 1 procedure(s)") != null);
+    try testing.expect(std.mem.find(u8, report.text(), "UNVERIFIED") != null);
+    try testing.expect(std.mem.find(u8, report.text(), "capacitySkip") != null);
+}
+
+test "skipped proc report caps listed names and preserves total count" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+
+    var diag = Diagnostic{};
+    for (0..skipped_proc_record_limit + 1) |index| {
+        const proc = try f.store.addProcSpec(.{
+            .name = f.store.freshSyntheticSymbol(),
+            .args = LIR.LocalSpan.empty(),
+            .ret_layout = .i64,
+        });
+        var name_buf: [32]u8 = undefined;
+        const name = try std.fmt.bufPrint(&name_buf, "proc-{d}", .{index});
+        try f.store.setProcDebugName(proc, name);
+        diag.recordSkippedProc(proc);
+    }
+
+    var report = FailureContext{};
+    writeSkippedProcReport(&report, &f.store, &diag);
+
+    try testing.expectEqual(@as(usize, skipped_proc_record_limit + 1), diag.skipped_proc_count);
+    try testing.expectEqual(@as(usize, skipped_proc_record_limit), diag.skipped_proc_len);
+    try testing.expect(std.mem.find(u8, report.text(), "ARC certifier skipped 17 procedure(s)") != null);
+    try testing.expect(std.mem.find(u8, report.text(), "proc-0") != null);
+    try testing.expect(std.mem.find(u8, report.text(), "proc-15") != null);
+    try testing.expect(std.mem.find(u8, report.text(), "proc-16") == null);
+    try testing.expect(std.mem.find(u8, report.text(), "... and 1 more") != null);
 }
 
 test "certify flags a leaked binding" {
