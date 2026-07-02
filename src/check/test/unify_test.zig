@@ -424,7 +424,7 @@ test "unify - alias with concrete" {
     try std.testing.expect(resolved_alias.var_ != resolved_backing.var_);
 
     const occurs_result = try occurs.occurs(&env.module_env.types, &env.occurs_scratch, a);
-    try std.testing.expectEqual(.not_recursive, occurs_result);
+    try std.testing.expectEqual(.valid, occurs_result);
 }
 
 test "unify - alias with concrete other way" {
@@ -456,7 +456,7 @@ test "unify - alias with concrete other way" {
     try std.testing.expect(resolved_alias.var_ != resolved_backing.var_);
 
     const occurs_result = try occurs.occurs(&env.module_env.types, &env.occurs_scratch, b);
-    try std.testing.expectEqual(.not_recursive, occurs_result);
+    try std.testing.expectEqual(.valid, occurs_result);
 }
 
 test "unify - alias with own backing structure" {
@@ -483,7 +483,7 @@ test "unify - alias with own backing structure" {
     try std.testing.expect(resolved_alias.var_ != resolved_backing.var_);
 
     const occurs_result = try occurs.occurs(&env.module_env.types, &env.occurs_scratch, alias_var);
-    try std.testing.expectEqual(.not_recursive, occurs_result);
+    try std.testing.expectEqual(.valid, occurs_result);
 }
 
 test "unify - own backing structure with alias" {
@@ -510,7 +510,7 @@ test "unify - own backing structure with alias" {
     try std.testing.expect(resolved_alias.var_ != resolved_backing.var_);
 
     const occurs_result = try occurs.occurs(&env.module_env.types, &env.occurs_scratch, alias_var);
-    try std.testing.expectEqual(.not_recursive, occurs_result);
+    try std.testing.expectEqual(.valid, occurs_result);
 }
 
 test "unify - alias (flex backing) with rigid" {
