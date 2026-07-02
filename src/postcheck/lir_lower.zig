@@ -3966,6 +3966,10 @@ const Lowerer = struct {
             .parse_tag_union_spec,
             .fields,
             .field,
+            .crypto_sha256_digest,
+            .crypto_sha256_hasher,
+            .crypto_blake3_digest,
+            .crypto_blake3_hasher,
             => null,
         };
     }

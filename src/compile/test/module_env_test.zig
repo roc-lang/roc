@@ -108,13 +108,14 @@ test "ModuleEnv.Serialized roundtrip" {
     // Plus 2 fully qualified builtin type names: Builtin.List, Builtin.Box
     // Plus 2 fully qualified Box intrinsic method names: Builtin.Box.box, Builtin.Box.unbox
     // Plus 1 fully qualified Bool type name: Builtin.Bool
+    // Plus 4 fully qualified Crypto builtin type names: SHA256/BLAKE3 Digest and Hasher
     // Count reflects the merged builtin set: origin/main's identifiers
     // (Str.find_first, parser_for, encode_to, structural parser field metadata)
     // plus this branch's `to_hash` method name used for structural hash
     // derivation. Ranges desugar to the generic Iter.exclusive_range /
     // inclusive_range constructors, so no per-type range method identifiers are
     // interned.
-    try testing.expectEqual(@as(u32, 98), original.common.idents.interner.entry_count);
+    try testing.expectEqual(@as(u32, 102), original.common.idents.interner.entry_count);
     try testing.expectEqualStrings("hello", original.getIdent(hello_idx));
     try testing.expectEqualStrings("world", original.getIdent(world_idx));
 
@@ -125,7 +126,7 @@ test "ModuleEnv.Serialized roundtrip" {
     // First verify that the CommonEnv data was preserved after deserialization
     // Should have same identifiers as original, including the builtin structural method identifiers.
     // (Note: "Try" is now shared with well-known identifiers, reducing total by 1)
-    try testing.expectEqual(@as(u32, 98), env.common.idents.interner.entry_count);
+    try testing.expectEqual(@as(u32, 102), env.common.idents.interner.entry_count);
 
     try testing.expectEqual(@as(usize, 1), env.common.exposed_items.count());
     try testing.expectEqual(@as(?u32, 42), env.common.exposed_items.getValueNodeIndexById(gpa, @as(u32, @bitCast(hello_idx))));

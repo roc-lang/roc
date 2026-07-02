@@ -2635,6 +2635,15 @@ pub const MonoLlvmCodeGen = struct {
             .hasher_write_bytes,
             .hasher_write_str,
             => try self.emitHasherLowLevel(target, op, arg_locals),
+            .crypto_sha256_hash_bytes,
+            .crypto_sha256_hasher_empty,
+            .crypto_sha256_hasher_write,
+            .crypto_sha256_hasher_finish,
+            .crypto_blake3_hash_bytes,
+            .crypto_blake3_hasher_empty,
+            .crypto_blake3_hasher_write,
+            .crypto_blake3_hasher_finish,
+            => try self.emitCryptoLowLevel(target, op, arg_locals),
             .u8_from_str => try self.emitIntFromStr(target, arg_locals[0], 1, false),
             .i8_from_str => try self.emitIntFromStr(target, arg_locals[0], 1, true),
             .u16_from_str => try self.emitIntFromStr(target, arg_locals[0], 2, false),
@@ -2774,6 +2783,53 @@ pub const MonoLlvmCodeGen = struct {
         };
 
         try self.storeHasherState(target, result);
+    }
+
+    fn emitCryptoLowLevel(self: *MonoLlvmCodeGen, target: LocalId, op: lir.LowLevel, args: []const LocalId) Error!void {
+        const Arity = enum { zero, one, two };
+        const CryptoInfo = struct {
+            name: []const u8,
+            arity: Arity,
+        };
+        const info: CryptoInfo = switch (op) {
+            .crypto_sha256_hash_bytes => .{ .name = "roc_builtins_crypto_sha256_hash_bytes", .arity = Arity.one },
+            .crypto_sha256_hasher_empty => .{ .name = "roc_builtins_crypto_sha256_hasher_empty", .arity = Arity.zero },
+            .crypto_sha256_hasher_write => .{ .name = "roc_builtins_crypto_sha256_hasher_write", .arity = Arity.two },
+            .crypto_sha256_hasher_finish => .{ .name = "roc_builtins_crypto_sha256_hasher_finish", .arity = Arity.one },
+            .crypto_blake3_hash_bytes => .{ .name = "roc_builtins_crypto_blake3_hash_bytes", .arity = Arity.one },
+            .crypto_blake3_hasher_empty => .{ .name = "roc_builtins_crypto_blake3_hasher_empty", .arity = Arity.zero },
+            .crypto_blake3_hasher_write => .{ .name = "roc_builtins_crypto_blake3_hasher_write", .arity = Arity.two },
+            .crypto_blake3_hasher_finish => .{ .name = "roc_builtins_crypto_blake3_hasher_finish", .arity = Arity.one },
+            else => return error.UnsupportedLowLevel,
+        };
+
+        var call_args = CallArgs.init();
+        defer call_args.deinit(self.allocator);
+
+        switch (info.arity) {
+            .zero => {
+                if (args.len != 0) return error.CompilationFailed;
+            },
+            .one => {
+                if (args.len != 1) return error.CompilationFailed;
+                call_args = try self.rocListArgs1(args[0]);
+            },
+            .two => {
+                if (args.len != 2) return error.CompilationFailed;
+                call_args = try self.rocListArgs1(args[0]);
+                const rhs = try self.rocListArgs1(args[1]);
+                defer {
+                    var owned = rhs;
+                    owned.deinit(self.allocator);
+                }
+                try call_args.types.appendSlice(self.allocator, rhs.types.items);
+                try call_args.values.appendSlice(self.allocator, rhs.values.items);
+            },
+        }
+
+        try call_args.prepend(self.allocator, try self.ptrType(), self.slot(target).ptr);
+        try call_args.append(self.allocator, try self.ptrType(), self.rocOps());
+        try self.callBuiltinVoid(info.name, call_args.types.items, call_args.values.items);
     }
 
     fn hasherDomain(op: lir.LowLevel) u8 {

@@ -14,6 +14,7 @@ const utils = @import("utils.zig");
 const erased_callable = @import("erased_callable.zig");
 const dec = @import("dec.zig");
 const hash = @import("hash.zig");
+const crypto = @import("crypto.zig");
 const i128h = @import("compiler_rt_128.zig");
 const float_tan = @import("float_math/tan.zig");
 const numeric_conversions = @import("numeric_conversions.zig");
@@ -91,6 +92,46 @@ pub fn roc_builtins_hasher_finish(seed: u64) callconv(.c) u64 {
 /// C ABI wrapper for the compiler-owned Dict hash seed.
 pub fn roc_builtins_dict_pseudo_seed() callconv(.c) u64 {
     return utils.dictPseudoSeed();
+}
+
+/// C ABI wrapper for one-shot SHA-256 hashing.
+pub fn roc_builtins_crypto_sha256_hash_bytes(out: *RocList, bytes: ?[*]const u8, len: usize, _: usize, roc_ops: *RocOps) callconv(.c) void {
+    out.* = crypto.sha256HashBytes(bytes, len, roc_ops);
+}
+
+/// C ABI wrapper for creating an empty serialized SHA-256 state.
+pub fn roc_builtins_crypto_sha256_hasher_empty(out: *RocList, roc_ops: *RocOps) callconv(.c) void {
+    out.* = crypto.sha256HasherEmpty(roc_ops);
+}
+
+/// C ABI wrapper for updating serialized SHA-256 state.
+pub fn roc_builtins_crypto_sha256_hasher_write(out: *RocList, state_bytes: ?[*]const u8, state_len: usize, _: usize, input_bytes: ?[*]const u8, input_len: usize, _: usize, roc_ops: *RocOps) callconv(.c) void {
+    out.* = crypto.sha256HasherWrite(state_bytes, state_len, input_bytes, input_len, roc_ops);
+}
+
+/// C ABI wrapper for finishing serialized SHA-256 state.
+pub fn roc_builtins_crypto_sha256_hasher_finish(out: *RocList, state_bytes: ?[*]const u8, state_len: usize, _: usize, roc_ops: *RocOps) callconv(.c) void {
+    out.* = crypto.sha256HasherFinish(state_bytes, state_len, roc_ops);
+}
+
+/// C ABI wrapper for one-shot BLAKE3 hashing.
+pub fn roc_builtins_crypto_blake3_hash_bytes(out: *RocList, bytes: ?[*]const u8, len: usize, _: usize, roc_ops: *RocOps) callconv(.c) void {
+    out.* = crypto.blake3HashBytes(bytes, len, roc_ops);
+}
+
+/// C ABI wrapper for creating an empty serialized BLAKE3 state.
+pub fn roc_builtins_crypto_blake3_hasher_empty(out: *RocList, roc_ops: *RocOps) callconv(.c) void {
+    out.* = crypto.blake3HasherEmpty(roc_ops);
+}
+
+/// C ABI wrapper for updating serialized BLAKE3 state.
+pub fn roc_builtins_crypto_blake3_hasher_write(out: *RocList, state_bytes: ?[*]const u8, state_len: usize, _: usize, input_bytes: ?[*]const u8, input_len: usize, _: usize, roc_ops: *RocOps) callconv(.c) void {
+    out.* = crypto.blake3HasherWrite(state_bytes, state_len, input_bytes, input_len, roc_ops);
+}
+
+/// C ABI wrapper for finishing serialized BLAKE3 state.
+pub fn roc_builtins_crypto_blake3_hasher_finish(out: *RocList, state_bytes: ?[*]const u8, state_len: usize, _: usize, roc_ops: *RocOps) callconv(.c) void {
+    out.* = crypto.blake3HasherFinish(state_bytes, state_len, roc_ops);
 }
 
 // Import builtin functions we wrap (using actual function names from str.zig and list.zig)

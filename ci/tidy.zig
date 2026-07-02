@@ -298,7 +298,7 @@ const Errors = struct {
     pub fn addDisallowedBuiltinType(errors: *Errors, file: SourceFile, offset: usize, name: []const u8) void {
         errors.emit(
             "{s}:{d}: error: '{s}' is exposed as a top-level Builtin type. The only types allowed " ++
-                "directly under Builtin are: Str, Hasher, Iter, Stream, List, Bool, Box, Try, Dict, Set, Num. " ++
+                "directly under Builtin are: Str, Hasher, Iter, Stream, List, Bool, Box, Try, Dict, Set, Num, Crypto. " ++
                 "Make '{s}' private by moving it below the exposed Builtin block (to the module's top level), " ++
                 "unless a user-facing method needs it and would break without it — in which case nest it under a " ++
                 "logical Builtin type instead (e.g. DictBucket under Dict, ParseTagUnionSpec under Str).\n",
@@ -367,7 +367,7 @@ fn tidyFile(
 /// type must either be private (declared below the exposed block, at the module's
 /// top level) or nested under one of these.
 const allowed_builtin_types = [_][]const u8{
-    "Str", "Hasher", "Iter", "Stream", "List", "Bool", "Box", "Try", "Dict", "Set", "Num",
+    "Str", "Hasher", "Iter", "Stream", "List", "Bool", "Box", "Try", "Dict", "Set", "Num", "Crypto",
 };
 
 fn isAllowedBuiltinType(name: []const u8) bool {

@@ -1877,6 +1877,11 @@ const Formatter = struct {
                 const args_region = AST.TokenizedRegion{ .start = mapper_region.end, .end = region.end };
                 try fmt.formatCollection(args_region, .round, AST.Expr.Idx, fmt.ast.store.exprSlice(na.args), Formatter.formatExpr);
             },
+            .nominal_record => |nr| {
+                try fmt.formatExprDiscard(nr.mapper);
+                try fmt.push('.');
+                try fmt.formatExprDiscard(nr.backing);
+            },
             .malformed => {
                 // Output nothing for malformed node
             },
@@ -3200,6 +3205,9 @@ const Formatter = struct {
                     },
                     .record_builder => |rb| {
                         return fmt.nodesWillBeMultiline(AST.RecordField.Idx, fmt.ast.store.recordFieldSlice(rb.fields));
+                    },
+                    .nominal_record => |nr| {
+                        return fmt.nodeWillBeMultiline(AST.Expr.Idx, nr.backing);
                     },
                     .suffix_single_question => |s| {
                         return fmt.nodeWillBeMultiline(AST.Expr.Idx, s.expr);
