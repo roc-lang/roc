@@ -114,8 +114,30 @@ pub const TypeCheckTask = struct {
     imported_artifacts: []const CheckedArtifact.PublishImportArtifact,
     /// Published checked artifacts currently available for exact-key lookup during checking finalization
     available_artifacts: []const CheckedArtifact.ImportedModuleView,
+    /// Platform requirement surface for app-root checking, carrying both the
+    /// checker's input and the cache-identity component so the two can never
+    /// be set independently.
+    platform_requirements: ?PlatformRequirementSurface = null,
     /// Additional checked roots requested by package-level metadata.
     explicit_roots: []const CheckedArtifact.ExplicitRootRequestInput,
+};
+
+/// The platform root's requirement surface, borrowed from its completed
+/// type check: the checked platform ModuleEnv (stable once the module is
+/// Done), the cache-identity context derived from its published artifact,
+/// and the platform path for diagnostics. Plain borrowed data — nothing here
+/// is owned, so copies are free and there is nothing to deinit.
+pub const PlatformRequirementSurface = struct {
+    env: *const ModuleEnv,
+    context: CheckedArtifact.PlatformRequirementContextKey,
+    path: []const u8,
+
+    pub fn checkerInput(self: *const PlatformRequirementSurface) check.Check.PlatformRequirementInput {
+        return .{
+            .env = self.env,
+            .path = self.path,
+        };
+    }
 };
 
 /// Task sent to workers - contains ALL inputs needed for the operation

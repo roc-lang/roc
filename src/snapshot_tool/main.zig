@@ -295,6 +295,7 @@ fn generateAllReports(
             empty_modules,
             &solver.import_mapping,
             &solver.regions,
+            null,
         );
         defer report_builder.deinit();
 

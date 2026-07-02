@@ -1446,6 +1446,7 @@ fn compileSource(source: []const u8, module_name: []const u8) PlaygroundCompileE
             imported_envs,
             &solver.import_mapping,
             &solver.regions,
+            null,
         ) catch |err| {
             // On allocation failure, return result with current reports
             logDebug("compileSource: ReportBuilder.init failed: {}\n", .{err});

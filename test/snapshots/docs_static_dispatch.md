@@ -76,7 +76,7 @@ main_for_host = main
     (entry
       (name "main")
       (kind value)
-      (type (error))
+      (type (type-ref (name "Str")))
     )
   )
   (module
