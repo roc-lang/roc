@@ -57,6 +57,65 @@ Glue generators must consume compiler-emitted metadata such as `AbiLayout`,
 ownership behavior from display strings, semantic type names, source field
 order, or incidental data structure shape.
 
+## Pointer-Width Contract
+
+The glue script input is targetless. It carries no concrete Roc build target,
+OS, or architecture, and `roc glue` has no `--target` flag: running it on any
+machine produces the same generated source for a given platform and glue
+script. The only ABI axis a glue script may branch on is host pointer width,
+modeled as `AbiWidth := [Pointer32, Pointer64]`.
+
+What the compiler guarantees to glue scripts:
+
+- Every layout fact arrives for both widths (`size32`/`size64`,
+  `offset32`/`offset64`, `alignment32`/`alignment64`,
+  `discriminant_offset32`/`discriminant_offset64`, ...), read from the layout
+  store with explicit dual-width queries. Use the width-parameterized
+  accessors (`AbiLayout.size(layout, width)`,
+  `AbiFieldLayout.offset(field, width)`, ...).
+- Everything else is width-independent: field order, field names, tag names,
+  discriminant values, and refcount plans.
+- `AbiRecordLayout.fields` and `AbiTagLayout.payload_fields` are emitted in
+  committed layout order, which is identical at both widths with
+  non-decreasing offsets at both widths (asserted in `src/glue/glue.zig`).
+  Emitters must iterate fields in the given order and must not re-sort them.
+- Padding fields (`is_padding`) have nonzero size at both widths; zero-sized
+  padding markers such as `_ : {}` are dropped before emission.
+
+What generators must do with that data:
+
+- Render pointer-sized Roc values (`Str`, `List`, `Box`, erased callables)
+  with the host language's pointer-sized types (`size_t`/`uintptr_t`, `usize`,
+  raw pointers), not hardcoded 4- or 8-byte shapes.
+- Emit one source file per language containing both width shapes, resolved by
+  the host compiler: `#if UINTPTR_MAX == UINT64_MAX` in C,
+  `if (@sizeOf(usize) == 4)` in Zig, `#[cfg(target_pointer_width = "32")]` in
+  Rust. A future language without a compile-time width idiom may instead emit
+  one file per width; the dual-width schema supports both.
+- Emit size/alignment/offset assertions from the emitted facts for both
+  widths, so the host compiler proves the generated shapes match the
+  committed ABI.
+- Never compute sizes, offsets, or padding from reflected type shape; the
+  compiler owns the ABI facts.
+
+Concrete build targets still exist, but only in the test harness and `roc
+build`: the runtime matrix compiles the same generated source for native and
+wasm32 hosts and runs it in both.
+
+## Regenerating the C Header Snapshot
+
+`glue command with CGlue generates expected C header` byte-compares CGlue
+output for `test/fx/platform/main.roc` against
+`test/glue/fx_platform_cglue_expected.h`. After an intentional CGlue change,
+regenerate the snapshot with:
+
+```sh
+roc glue src/glue/src/CGlue.roc /tmp/cglue-out test/fx/platform/main.roc
+cp /tmp/cglue-out/roc_platform_abi.h test/glue/fx_platform_cglue_expected.h
+```
+
+Treat an unexpected diff as an emitter bug, not a regen trigger.
+
 ## ABI Risk Register and Roc Glue Runtime Controls
 
 Every risk in this section must be covered by at least one Roc glue test

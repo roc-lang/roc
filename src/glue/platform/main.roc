@@ -1,40 +1,41 @@
 platform ""
-    requires {
-        make_glue : List(Types) -> Try(List(File), Str)
-    }
-    exposes [
-        EntryPoint,
-        AbiFieldLayout,
-        AbiLayout,
-        AbiLayoutDetails,
-        AbiRecordLayout,
-        AbiTagLayout,
-        AbiTagUnionLayout,
-        ArgShape,
-        File,
-        FunctionInfo,
-        FunctionRepr,
-        GlueInput,
-        HostRcPlan,
-        HostedFunctionInfo,
-        ModuleTypeInfo,
-        ProvidesEntry,
-        RocName,
-        RecordField,
-        RecordFieldInfo,
-        RecordRepr,
-        TagUnionRepr,
-        TagVariant,
-        TypeId,
-        TypeInfo,
-        TypeTable,
-        TypeNamePlan,
-        TypeRepr,
-        Types,
-    ]
-    packages {}
-    provides { "roc_make_glue": make_glue_for_host }
-    targets: {}
+	requires {
+		make_glue : List(Types) -> Try(List(File), Str)
+	}
+	exposes [
+		EntryPoint,
+		AbiFieldLayout,
+		AbiLayout,
+		AbiLayoutDetails,
+		AbiRecordLayout,
+		AbiTagLayout,
+		AbiTagUnionLayout,
+		AbiWidth,
+		ArgShape,
+		File,
+		FunctionInfo,
+		FunctionRepr,
+		GlueInput,
+		HostRcPlan,
+		HostedFunctionInfo,
+		ModuleTypeInfo,
+		ProvidesEntry,
+		RocName,
+		RecordField,
+		RecordFieldInfo,
+		RecordRepr,
+		TagUnionRepr,
+		TagVariant,
+		TypeId,
+		TypeInfo,
+		TypeTable,
+		TypeNamePlan,
+		TypeRepr,
+		Types,
+	]
+	packages {}
+	provides { "roc_make_glue": make_glue_for_host }
+	targets: {}
 
 import Types exposing [Types]
 import File exposing [File]
@@ -45,6 +46,7 @@ import AbiLayoutDetails exposing [AbiLayoutDetails]
 import AbiRecordLayout exposing [AbiRecordLayout]
 import AbiTagLayout exposing [AbiTagLayout]
 import AbiTagUnionLayout exposing [AbiTagUnionLayout]
+import AbiWidth exposing [AbiWidth]
 import ArgShape exposing [ArgShape]
 import EntryPoint exposing [EntryPoint]
 import ModuleTypeInfo exposing [ModuleTypeInfo]

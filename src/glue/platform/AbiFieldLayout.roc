@@ -1,4 +1,12 @@
+import AbiWidth exposing [AbiWidth]
+
 ## Exact committed layout for one ABI-visible record field.
+##
+## Field lists (`AbiRecordLayout.fields`, `AbiTagLayout.payload_fields`) are
+## emitted in committed layout order, which is identical at both pointer
+## widths with non-decreasing offsets at both widths (asserted by
+## src/glue/glue.zig). Emitters must iterate fields in the given order and
+## must not re-sort them. Padding fields have nonzero size at both widths.
 ##
 ## Source of truth: src/layout/store.zig `StructField`/`StructData`, reached
 ## through src/lir/program.zig `RequestedLayout` for this glue type id.
@@ -14,27 +22,24 @@ AbiFieldLayout := {
 	size64 : U64,
 	type_id : U64,
 }.{
-	target_offset : AbiFieldLayout, Bool -> U64
-	target_offset = |field, is_wasm32| if is_wasm32 { field.offset32 } else { field.offset64 }
+	offset : AbiFieldLayout, AbiWidth -> U64
+	offset = |field, width|
+		match width {
+			Pointer32 => field.offset32
+			Pointer64 => field.offset64
+		}
 
-	compare_u64 : U64, U64 -> [LT, EQ, GT]
-	compare_u64 = |left, right| if left < right { LT } else if left > right { GT } else { EQ }
+	size : AbiFieldLayout, AbiWidth -> U64
+	size = |field, width|
+		match width {
+			Pointer32 => field.size32
+			Pointer64 => field.size64
+		}
 
-	## Sort fields into committed target layout order.
-	##
-	## Source of truth: src/layout/store.zig `getStructFieldOffsetByOriginalIndexAt`
-	## exposes the offset selected for the concrete target width. Glue emitters
-	## must use these offsets directly; source/declaration order is not an ABI fact.
-	sort_by_target_offset : List(AbiFieldLayout), Bool -> List(AbiFieldLayout)
-	sort_by_target_offset = |fields, is_wasm32|
-		List.sort_with(
-			fields,
-			|left, right| {
-				offset_order = compare_u64(target_offset(left, is_wasm32), target_offset(right, is_wasm32))
-				match offset_order {
-					EQ => compare_u64(left.original_index, right.original_index)
-					_ => offset_order
-				}
-			},
-		)
+	alignment : AbiFieldLayout, AbiWidth -> U64
+	alignment = |field, width|
+		match width {
+			Pointer32 => field.alignment32
+			Pointer64 => field.alignment64
+		}
 }

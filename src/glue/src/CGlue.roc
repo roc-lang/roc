@@ -5,6 +5,7 @@ import pf.Types exposing [Types]
 import pf.File exposing [File]
 import pf.TypeRepr exposing [TypeRepr]
 import pf.AbiFieldLayout exposing [AbiFieldLayout]
+import pf.AbiWidth exposing [AbiWidth]
 import pf.ArgShape exposing [ArgShape]
 import pf.GlueInput exposing [GlueInput]
 import pf.HostedFunctionInfo exposing [HostedFunctionInfo]
@@ -87,29 +88,27 @@ resolve_tag_union_type_c = |type_table, duplicate_record_names, duplicate_tag_na
 			} else {
 				"void*"
 			}
-	}
+		}
 }
 
-c_record_field_decl : TypeTable, List(Str), List(Str), AbiFieldLayout, Bool -> Str
-c_record_field_decl = |type_table, duplicate_record_names, duplicate_tag_names, field, is_wasm32| {
+c_record_field_decl : TypeTable, List(Str), List(Str), AbiFieldLayout, AbiWidth -> Str
+c_record_field_decl = |type_table, duplicate_record_names, duplicate_tag_names, field, width| {
 	field_name = name_to_c_field_ident(field.name)
 	if field.is_padding {
-		size = if is_wasm32 { field.size32 } else { field.size64 }
-		if size == 0 {
-			""
-		} else {
-			"    uint8_t ${field_name}[${U64.to_str(size)}];\n"
-		}
+		# Padding fields are nonzero at both widths (asserted by the compiler).
+		"    uint8_t ${field_name}[${U64.to_str(AbiFieldLayout.size(field, width))}];\n"
 	} else {
 		c_type = type_id_to_c(type_table, duplicate_record_names, duplicate_tag_names, field.type_id)
 		"    ${c_type} ${field_name};\n"
 	}
 }
 
-c_record_fields_decl = |type_table, duplicate_record_names, duplicate_tag_names, fields, is_wasm32| {
+## Fields arrive in committed layout order (valid at both pointer widths);
+## only per-width padding byte counts differ between the two renderings.
+c_record_fields_decl = |type_table, duplicate_record_names, duplicate_tag_names, fields, width| {
 	var $field_strs = ""
-	for field in AbiFieldLayout.sort_by_target_offset(fields, is_wasm32) {
-		$field_strs = Str.concat($field_strs, c_record_field_decl(type_table, duplicate_record_names, duplicate_tag_names, field, is_wasm32))
+	for field in fields {
+		$field_strs = Str.concat($field_strs, c_record_field_decl(type_table, duplicate_record_names, duplicate_tag_names, field, width))
 	}
 	$field_strs
 }
@@ -207,7 +206,7 @@ expect name_to_c_func_name("Foo.barBaz!") == "foo_bar_baz"
 
 name_to_c_field_ident : Str -> Str
 name_to_c_field_ident = |name| {
-	sanitized =
+	sanitized = 
 		RocName.from_str(name).to_bang_snake_identifier()
 
 	match sanitized {
@@ -348,32 +347,42 @@ generate_opaque_type_decls = |type_table, duplicate_records, duplicate_tags| {
 	$decls
 }
 
-generate_opaque_type_decl = |type_name, native_size, native_alignment, wasm32_size, wasm32_alignment| {
-	native_byte_count = if native_size == 0 {
+generate_opaque_type_decl = |type_name, size64, alignment64, size32, alignment32| {
+	byte_count64 = if size64 == 0 {
 		1
 	} else {
-		native_size
+		size64
 	}
 
-	native_type_alignment = if native_alignment == 0 {
+	type_alignment64 = if alignment64 == 0 {
 		1
 	} else {
-		native_alignment
+		alignment64
 	}
 
-	wasm32_byte_count = if wasm32_size == 0 {
+	byte_count32 = if size32 == 0 {
 		1
 	} else {
-		wasm32_size
+		size32
 	}
 
-	wasm32_type_alignment = if wasm32_alignment == 0 {
+	type_alignment32 = if alignment32 == 0 {
 		1
 	} else {
-		wasm32_alignment
+		alignment32
 	}
 
-	"#if UINTPTR_MAX == UINT64_MAX\ntypedef struct {\n    ROC_ALIGNAS(${U64.to_str(native_type_alignment)}) uint8_t bytes[${U64.to_str(native_byte_count)}];\n} ${type_name};\n${static_asserts(type_name, native_size, native_alignment)}#else\ntypedef struct {\n    ROC_ALIGNAS(${U64.to_str(wasm32_type_alignment)}) uint8_t bytes[${U64.to_str(wasm32_byte_count)}];\n} ${type_name};\n${static_asserts(type_name, wasm32_size, wasm32_alignment)}#endif\n\n"
+	decl = 
+		\\#if UINTPTR_MAX == UINT64_MAX
+		\\typedef struct {
+		\\    ROC_ALIGNAS(${U64.to_str(type_alignment64)}) uint8_t bytes[${U64.to_str(byte_count64)}];
+		\\} ${type_name};
+		\\${static_asserts(type_name, size64, alignment64)}#else
+		\\typedef struct {
+		\\    ROC_ALIGNAS(${U64.to_str(type_alignment32)}) uint8_t bytes[${U64.to_str(byte_count32)}];
+		\\} ${type_name};
+		\\${static_asserts(type_name, size32, alignment32)}#endif
+	"${decl}\n\n"
 }
 
 static_asserts = |type_name, size, alignment| {
@@ -401,19 +410,29 @@ generate_args_struct = |func, type_table, duplicate_records, duplicate_tags| {
 	match arg_shape.hosted_args(func) {
 		NoMeaningfulArgs => ""
 		SingleRecordArg(record) => {
-			native_fields = c_record_fields_decl(type_table, duplicate_records, duplicate_tags, record.fields, Bool.False)
-			wasm32_fields = c_record_fields_decl(type_table, duplicate_records, duplicate_tags, record.fields, Bool.True)
+			fields64 = c_record_fields_decl(type_table, duplicate_records, duplicate_tags, record.fields, Pointer64)
+			fields32 = c_record_fields_decl(type_table, duplicate_records, duplicate_tags, record.fields, Pointer32)
 
-			doc = doc_comment([
-				"Arguments for ${func.name}",
-				"Roc signature: ${func.type_str}",
-				"Refcounted fields are owned by the hosted function.",
-			])
+			doc = doc_comment(
+				[
+					"Arguments for ${func.name}",
+					"Roc signature: ${func.type_str}",
+					"Refcounted fields are owned by the hosted function.",
+				],
+			)
 
 			args_name = "${struct_name}Args"
-			native_assertions = static_asserts(args_name, record.layout.size64, record.layout.alignment64)
-			wasm32_assertions = static_asserts(args_name, record.layout.size32, record.layout.alignment32)
-			"${doc}#if UINTPTR_MAX == UINT64_MAX\ntypedef struct {\n${native_fields}} ${args_name};\n${native_assertions}#else\ntypedef struct {\n${wasm32_fields}} ${args_name};\n${wasm32_assertions}#endif\n\n"
+			assertions64 = static_asserts(args_name, record.layout.size64, record.layout.alignment64)
+			assertions32 = static_asserts(args_name, record.layout.size32, record.layout.alignment32)
+			decl = 
+				\\${doc}#if UINTPTR_MAX == UINT64_MAX
+				\\typedef struct {
+				\\${fields64}} ${args_name};
+				\\${assertions64}#else
+				\\typedef struct {
+				\\${fields32}} ${args_name};
+				\\${assertions32}#endif
+			"${decl}\n\n"
 		}
 		PositionalArgs(arg_type_ids) => {
 			var $positional_fields = ""
@@ -424,11 +443,13 @@ generate_args_struct = |func, type_table, duplicate_records, duplicate_tags| {
 				$idx = $idx + 1
 			}
 
-			doc = doc_comment([
-				"Arguments for ${func.name}",
-				"Roc signature: ${func.type_str}",
-				"Refcounted fields are owned by the hosted function.",
-			])
+			doc = doc_comment(
+				[
+					"Arguments for ${func.name}",
+					"Roc signature: ${func.type_str}",
+					"Refcounted fields are owned by the hosted function.",
+				],
+			)
 
 			"${doc}typedef struct {\n${$positional_fields}} ${struct_name}Args;\n\n"
 		}
@@ -570,35 +591,37 @@ doc_comment = |lines| {
 
 header_guard_top : Str
 header_guard_top = {
-	header_doc = doc_comment([
-		"Roc Platform ABI Header",
-		"",
-		"This file defines C declarations for a Roc platform's direct symbol ABI.",
-		"It is automatically generated by the Roc glue generator.",
-		"",
-		"Hosted argument ownership:",
-		"Roc transfers ownership of refcounted arguments to the hosted function.",
-		"The hosted function must decref owned refcounted arguments when done,",
-		"or retain/transfer ownership explicitly when storing or returning them.",
-	])
+	header_doc = doc_comment(
+		[
+			"Roc Platform ABI Header",
+			"",
+			"This file defines C declarations for a Roc platform's direct symbol ABI.",
+			"It is automatically generated by the Roc glue generator.",
+			"",
+			"Hosted argument ownership:",
+			"Roc transfers ownership of refcounted arguments to the hosted function.",
+			"The hosted function must decref owned refcounted arguments when done,",
+			"or retain/transfer ownership explicitly when storing or returning them.",
+		],
+	)
 
 	"${header_doc}\n#ifndef ROC_PLATFORM_ABI_H\n#define ROC_PLATFORM_ABI_H\n\n"
 }
 
 includes_section : Str
-includes_section =
+includes_section = 
 	"#include <stdbool.h>\n#include <stddef.h>\n#include <stdint.h>\n\n#if defined(__cplusplus)\n#define ROC_ALIGNAS(n) alignas(n)\n#define ROC_ALIGNOF(T) alignof(T)\n#define ROC_STATIC_ASSERT(cond, message) static_assert(cond, message)\n#else\n#define ROC_ALIGNAS(n) _Alignas(n)\n#define ROC_ALIGNOF(T) _Alignof(T)\n#define ROC_STATIC_ASSERT(cond, message) _Static_assert(cond, message)\n#endif\n\n"
 
 extern_c_start : Str
-extern_c_start =
+extern_c_start = 
 	"#ifdef __cplusplus\nextern \"C\" {\n#endif\n\n"
 
 extern_c_end : Str
-extern_c_end =
+extern_c_end = 
 	"\n#ifdef __cplusplus\n}\n#endif\n\n"
 
 header_guard_bottom : Str
-header_guard_bottom =
+header_guard_bottom = 
 	"#endif /* ROC_PLATFORM_ABI_H */\n"
 
 core_types_section : Str
@@ -611,7 +634,7 @@ core_types_section = {
 
 	roc_box_def = "typedef void* RocBox;\n\n"
 
-	erased_callable_def =
+	erased_callable_def = 
 		"struct RocOps;\n\n"
 			.concat("typedef void (*RocErasedCallableFn)(struct RocOps* ops, uint8_t* ret, const uint8_t* args, uint8_t* capture);\n")
 			.concat("typedef void (*RocErasedCallableOnDrop)(uint8_t* capture, struct RocOps* ops);\n")
@@ -642,15 +665,17 @@ function_count_section = |count| {
 }
 
 args_structs_header : Str
-args_structs_header =
+args_structs_header = 
 	section("Argument Structures", "")
 
 hosted_functions_registry : Str -> Str
 hosted_functions_registry = |fields| {
-	registry_doc = doc_comment([
-		"Registry of all hosted function implementations.",
-		"Store each implementation cast to HostedFn.",
-	])
+	registry_doc = doc_comment(
+		[
+			"Registry of all hosted function implementations.",
+			"Store each implementation cast to HostedFn.",
+		],
+	)
 	registry_typedef = "typedef struct {\n${fields}\n} HostedFunctions;\n"
 
 	section("HostedFunctions Registry", "${registry_doc}${registry_typedef}")
