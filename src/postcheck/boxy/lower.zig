@@ -2958,10 +2958,13 @@ const ProcedureBuilder = struct {
             if (root.worker != root_layout.worker) boxyLowerInvariant("boxy root layout table disagreed with root worker plan");
             const worker_layout = self.layout_plan.workerLayoutFor(root.worker);
             const worker_proc = try self.emitWorker(root.worker);
-            const root_proc = switch (root.wrapper_kind) {
-                .private_worker_only => worker_proc,
-                .host_shaped_wrapper => try self.emitHostWrapper(root_layout, worker_layout, worker_proc),
-            };
+            const worker_plan = self.plan.workers.items[@intFromEnum(root.worker)];
+            const worker_hidden = self.plan.hiddenDescriptorParamSlice(worker_plan.hidden_descs).len != 0 or
+                self.plan.hiddenDictionaryParamSlice(worker_plan.hidden_dicts).len != 0;
+            const root_proc = if (worker_hidden or root.wrapper_kind == .host_shaped_wrapper)
+                try self.emitHostWrapper(root_layout, worker_layout, worker_proc, worker_plan)
+            else
+                worker_proc;
             if (self.options.proc_debug_names and root.wrapper_kind == .host_shaped_wrapper) {
                 try self.result.store.copyProcDebugInfo(root_proc, worker_proc);
             }
@@ -3324,9 +3327,12 @@ const ProcedureBuilder = struct {
         root_layout: Layouts.RootLayouts,
         worker_layout: Layouts.WorkerLayouts,
         worker_proc: LIR.LirProcSpecId,
+        worker_plan: Plan.WorkerPlan,
     ) Allocator.Error!LIR.LirProcSpecId {
         const host_args = self.layout_plan.rootLayoutSlice(root_layout.host_args);
         const worker_args = self.layout_plan.workerLayoutSlice(worker_layout.args);
+        const hidden_desc_params = self.plan.hiddenDescriptorParamSlice(worker_plan.hidden_descs);
+        const hidden_dict_params = self.plan.hiddenDictionaryParamSlice(worker_plan.hidden_dicts);
         if (host_args.len != worker_args.len) {
             boxyLowerInvariant("boxy host wrapper needed argument adaptation before adapters were emitted");
         }
@@ -3347,25 +3353,61 @@ const ProcedureBuilder = struct {
             boxyLowerInvariant("boxy host wrapper needed return layout adaptation before adapters were emitted");
         }
 
+        // The worker's hidden descriptor and dictionary parameters are
+        // materialized statically: a root's platform-facing types are fixed,
+        // so the requirements resolve to static table entries.
+        const call_arg_count = host_args.len + hidden_desc_params.len + hidden_dict_params.len;
+        const call_locals = try self.allocator.alloc(LIR.LocalId, call_arg_count);
+        defer self.allocator.free(call_locals);
+        @memcpy(call_locals[0..host_args.len], arg_locals);
+        for (hidden_desc_params, 0..) |param, index| {
+            call_locals[host_args.len + index] = try self.addLocal(.opaque_ptr);
+            _ = param;
+        }
+        for (hidden_dict_params, 0..) |param, index| {
+            call_locals[host_args.len + hidden_desc_params.len + index] = try self.addLocal(.opaque_ptr);
+            _ = param;
+        }
+
         const ret_local = try self.addLocal(host_ret.layoutIdx());
         const ret_stmt = try self.result.store.addCFStmt(.{ .ret = .{ .value = ret_local } });
-        const call_stmt = try self.result.store.addCFStmt(.{ .assign_call = .{
+        var continuation = try self.result.store.addCFStmt(.{ .assign_call = .{
             .target = ret_local,
             .proc = worker_proc,
-            .args = try self.result.store.addLocalSpan(arg_locals),
+            .args = try self.result.store.addLocalSpan(call_locals),
             .next = ret_stmt,
         } });
+        var dict_index = hidden_dict_params.len;
+        while (dict_index > 0) {
+            dict_index -= 1;
+            const param = hidden_dict_params[dict_index];
+            continuation = try self.result.store.addCFStmt(.{ .assign_boxy_dict_ref = .{
+                .target = call_locals[host_args.len + hidden_desc_params.len + dict_index],
+                .dict = try self.staticDictRefForRep(param.rep, param.dictionaries),
+                .next = continuation,
+            } });
+        }
+        var desc_index = hidden_desc_params.len;
+        while (desc_index > 0) {
+            desc_index -= 1;
+            const param = hidden_desc_params[desc_index];
+            continuation = try self.result.store.addCFStmt(.{ .assign_boxy_desc_ref = .{
+                .target = call_locals[host_args.len + desc_index],
+                .desc = try self.staticDescRefForRep(param.rep),
+                .next = continuation,
+            } });
+        }
         const args_span = try self.result.store.addLocalSpan(arg_locals);
-        const frame_locals = try self.allocator.alloc(LIR.LocalId, arg_locals.len + 1);
+        const frame_locals = try self.allocator.alloc(LIR.LocalId, call_arg_count + 1);
         defer self.allocator.free(frame_locals);
-        @memcpy(frame_locals[0..arg_locals.len], arg_locals);
-        frame_locals[arg_locals.len] = ret_local;
+        @memcpy(frame_locals[0..call_arg_count], call_locals);
+        frame_locals[call_arg_count] = ret_local;
         const frame_span = try self.result.store.addLocalSpan(frame_locals);
         return try self.result.store.addProcSpec(.{
             .name = lirSymbol(self.symbols.fresh()),
             .args = args_span,
             .frame_locals = frame_span,
-            .body = call_stmt,
+            .body = continuation,
             .ret_layout = host_ret.layoutIdx(),
             .stack_probe = self.stackProbeForProc(args_span, frame_span, host_ret.layoutIdx()),
         });
