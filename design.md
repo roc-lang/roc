@@ -74,6 +74,19 @@ layout used to represent that value. The stage that commits a runtime encoding
 outputs the explicit mapping from checked ids to runtime encodings, and all
 later stages consume that mapping.
 
+Identity provenance follows meaning provenance. An identity may be derived
+from module content — the module name, the source bytes, and the identities
+of imports — only for definitions whose entire meaning is determined by that
+content. A binding whose meaning is partly supplied from outside the compiled
+program is identified by its role at that outside boundary instead. Hosted
+functions receive their implementations from the host, and `provides`
+entrypoints are called by the host, both keyed by the symbol strings in the
+platform header; their identities are those symbol strings and declaration
+slots, never a content hash of a declaring module. Two hosted declarations
+are two distinct identities even when their declaring modules are
+byte-identical, and no deduplication, specialization, or merging step may
+collapse two externally-bound identities into one.
+
 Backends do not reason about reference counting. They lower and execute the
 explicit LIR `incref`, `decref`, and `free` statements emitted before backend
 code generation. Each explicit RC statement carries the concrete RC helper
@@ -728,6 +741,11 @@ CheckedModuleId =
   + checking_context_identity
   + direct_import_checked_module_ids
 ```
+
+`module_identity` includes the module's name. Canonicalization output is not
+a function of source bytes alone — a type module's main type takes its name
+from the module's file name — so no key or identity derived from module
+content may be computed from source bytes without the module name.
 
 The cache id does not include target ABI, pointer width, layout ids, field offsets,
 alignment decisions, backend choice, object format, code-generation options, or
@@ -4463,6 +4481,16 @@ provides { "roc_main": main_for_host! }
 hosted { "roc_stdout_line": Stdout.line!, "roc_stderr_line": Stderr.line! }
 ```
 
+The symbol string is the identity of an externally-bound function. A hosted
+call resolves to the entry at its declaration slot in the `hosted` section;
+resolution never matches hosted declarations by signature, by
+declaring-module content, or by any content-derived module identity. Two
+byte-identical modules whose effectful declarations are wired to different
+symbols stay distinct because the platform header that assigns those symbols
+is the data that separates them. `provides` follows the same rule: the
+exported symbol set is part of the platform relation, and two exports remain
+two exports even when they name the same Roc function.
+
 Compiled Roc code references each hosted symbol (and the fixed runtime set:
 roc_alloc, roc_dealloc, roc_realloc, roc_dbg, roc_expect_failed, roc_crashed)
 as a weak extern and calls it directly with the natural C ABI for its types.
@@ -4795,5 +4823,8 @@ Minimum boundary checks:
 - ARC insertion receives LIR containing no RC statements.
 - ARC output passes the debug borrow certifier.
 - Backends receive only ARC-complete LIR.
+- No deduplication, specialization, or callable-merging step maps two
+  `hosted` declarations or two `provides` exports to one identity, even when
+  their declaring modules are byte-identical.
 
 If a boundary check fails, the compiler stops as a compiler bug.
