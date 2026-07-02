@@ -197,7 +197,7 @@ fn looksLikeTypeDecl(self: *Parser) bool {
     };
 }
 
-fn looksLikeAppliedTagDestructure(self: *Parser) bool {
+fn looksLikeTagOrNominalDestructure(self: *Parser) bool {
     std.debug.assert(self.peek() == .UpperIdent);
 
     var lookahead: u32 = 1;
@@ -205,11 +205,18 @@ fn looksLikeAppliedTagDestructure(self: *Parser) bool {
         lookahead += 1;
     }
 
-    if (self.peekN(lookahead) != .NoSpaceOpenRound) {
+    // After the (optional) qualifier chain, accept either the applied-tag form
+    // `Tag(args) =` (qualifiers then `(`) or the nominal-value destructure
+    // `Type.(pattern) =` (qualifiers then `.(`). Both then share the same scan
+    // to the matching `)` followed by `=`.
+    if (self.peekN(lookahead) == .NoSpaceOpenRound) {
+        lookahead += 1;
+    } else if (self.peekN(lookahead) == .Dot and self.peekN(lookahead + 1) == .NoSpaceOpenRound) {
+        lookahead += 2;
+    } else {
         return false;
     }
 
-    lookahead += 1;
     var depth: u32 = 1;
     var closing_tok = Token.Tag.EndOfFile;
     while (depth > 0) {
@@ -5216,7 +5223,7 @@ fn runExprStatementKernel(
                 }
                 if (tok == .UpperIdent) {
                     const start = self.pos;
-                    if (self.looksLikeAppliedTagDestructure()) {
+                    if (self.looksLikeTagOrNominalDestructure()) {
                         try open_syntax.pushPattern(open_allocator, .statement_destructure_pattern, Token.Idx, start);
                         pattern_root_state = .{
                             .outer_start = self.pos,
