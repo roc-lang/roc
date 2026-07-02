@@ -94,33 +94,42 @@ One function, one owner. Add to `src/compile` (or `src/base` if the CLI must
 call it without depending on compile):
 
 ```zig
-pub const PackageIdentity = struct {
-    /// Stable identity string used in qualified module idents and
-    /// therefore in module identity hashes and cache keys.
-    identity: []const u8,
-    /// Short display name for diagnostics ("app", "pf", "json").
-    shorthand: []const u8,
+pub const PackageProvenance = union(enum) {
+    url: []const u8,
+    local_path: []const u8,
+    synthetic_app,
+    synthetic_platform,
 };
 
-pub fn packageIdentityFor(role: PackageRole, resolved: ?ResolvedPackage)
-    PackageIdentity;
+pub fn packageIdentityFor(allocator, filesystem, provenance: PackageProvenance)
+    PackageIdentityError![]u8;
+
+pub fn buildPackageKeys(allocator, filesystem, resolved, options: PackageKeyOptions)
+    PackageIdentityError!PackageKeys;
 ```
 
-where `PackageRole` distinguishes: root app, root non-app module, platform of
-the root app, URL dependency (uses the resolver's content-derived
-`package.identity`), path dependency, and synthesized/default platform.
-Rules:
+`buildPackageKeys` maps a whole resolved graph at once (indexed by resolver
+package index); `PackageKeyOptions` carries the synthetic flags that only the
+code synthesizing a default-app root or platform sets. Rules:
 
-1. Root app is always `identity = "app"`; the root platform is always
-   `identity = "pf"`. These are the defined synthetic identities.
+1. Identity derives from the package's own provenance, never from its role
+   in the current invocation: URL packages use the resolved URL verbatim;
+   local packages — including real roots and real platforms — use their
+   canonical (realpath) root path, falling back to the lexically normalized
+   path when the file has no on-disk resolution (missing files must surface
+   as parse-time diagnostics, and editor overlays serve files that exist
+   only in memory).
 2. URL packages use the version-resolver identity (content-derived), never
    the shorthand alias under which a workspace imported them.
-3. No rule may consult an absolute path, a temp directory, or any per-run
-   state. The default/synthesized platform gets a fixed synthetic identity,
-   not one derived from its staging location.
+3. Only compiler-synthesized roots take the synthetic identities `"app"` and
+   `"pf"`: their staged temp-dir paths are per-run state and must not reach
+   cache keys or nominal identity. Real packages never take a synthetic
+   identity, even when checked directly as the root.
 4. The function is total: every entry point (BuildEnv, coordinator discovery,
    the run path, glue, LSP, playground, future ones) calls it; none computes
-   a name locally.
+   a name locally. Display strings are separate data: user-facing output
+   (docs, diagnostics) goes through a display-name lookup, never through
+   identity keys.
 
 Migration order:
 
@@ -152,10 +161,14 @@ it leaves exactly one call site to rewrite when content-based identity lands.
 - `grep -rn '"pf"' src` and `grep -rn '"app"' src` (as package names) match
   only that function and tests.
 - A default app compiled twice in a row gets a checked-module cache hit on
-  the second run.
+  the second run — including via `roc check`, whose staged default-app root
+  must take the synthetic identity just like the run path's.
 - The same module compiled via `roc check` and via `roc run` produces the
   same `computeStableModuleIdentityHash` output.
-- No cache-key input contains an absolute path or temp-dir component.
+- No cache-key input contains a temp-dir or other per-run component.
+  Local-package identities are canonical absolute paths by design (that is
+  what makes symlinked and differently-spelled workspace paths converge);
+  such caches are machine-local, which the checked-module cache already is.
 
 ## How to evaluate the result
 

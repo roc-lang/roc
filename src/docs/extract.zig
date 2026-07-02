@@ -219,6 +219,11 @@ pub fn extractModuleDocs(
     const pkg_name = try gpa.dupe(u8, package_name);
     errdefer gpa.free(pkg_name);
 
+    // Display-qualified path for local type refs ("app.Geometry"): docs must
+    // never render identity keys (URLs, canonical paths) as module paths.
+    const local_module_path = try std.fmt.allocPrint(gpa, "{s}.{s}", .{ package_name, module_env.module_name });
+    defer gpa.free(local_module_path);
+
     // Collect entries from exported defs
     var entries_list = std.ArrayList(DocModel.DocEntry).empty;
     defer {
@@ -242,7 +247,7 @@ pub fn extractModuleDocs(
     };
 
     for (defs_slice) |def_idx| {
-        if (try extractDefEntry(gpa, module_env, def_idx, source)) |entry| {
+        if (try extractDefEntry(gpa, module_env, local_module_path, def_idx, source)) |entry| {
             // Skip internal Builtin functions
             if (std.mem.eql(u8, package_name, "Builtin") and isInternalBuiltin(entry.name)) {
                 var mutable_entry = entry;
@@ -271,7 +276,7 @@ pub fn extractModuleDocs(
                 const doc_extract = try extractDocComment(gpa, source, region.start.offset);
                 errdefer if (doc_extract) |d| gpa.free(d.text);
 
-                const type_sig = try extractDeclTypeSig(gpa, module_env, decl.anno);
+                const type_sig = try extractDeclTypeSig(gpa, module_env, local_module_path, decl.anno);
                 errdefer if (type_sig) |s| {
                     s.deinit(gpa);
                     gpa.destroy(s);
@@ -303,7 +308,7 @@ pub fn extractModuleDocs(
                 const doc_extract = try extractDocComment(gpa, source, region.start.offset);
                 errdefer if (doc_extract) |d| gpa.free(d.text);
 
-                const type_sig = try extractDeclTypeSig(gpa, module_env, decl.anno);
+                const type_sig = try extractDeclTypeSig(gpa, module_env, local_module_path, decl.anno);
                 errdefer if (type_sig) |s| {
                     s.deinit(gpa);
                     gpa.destroy(s);
@@ -645,6 +650,7 @@ fn reparentDottedChildInto(
 fn extractDefEntry(
     gpa: Allocator,
     module_env: *const ModuleEnv,
+    local_module_path: []const u8,
     def_idx: CIR.Def.Idx,
     source: []const u8,
 ) Allocator.Error!?DocModel.DocEntry {
@@ -669,7 +675,7 @@ fn extractDefEntry(
             const type_sig: ?*const DocType = blk: {
                 if (def.annotation) |anno_idx| {
                     const annotation = module_env.store.getAnnotation(anno_idx);
-                    break :blk try extractAnnotationAsDocType(gpa, module_env, annotation);
+                    break :blk try extractAnnotationAsDocType(gpa, module_env, local_module_path, annotation);
                 }
 
                 const def_var = ModuleEnv.varFrom(def_idx);
@@ -712,7 +718,7 @@ fn extractDefEntry(
                     const doc_extract = try extractDocComment(gpa, source, region.start.offset);
                     errdefer if (doc_extract) |d| gpa.free(d.text);
 
-                    const type_sig = try extractDeclTypeSig(gpa, module_env, decl.anno);
+                    const type_sig = try extractDeclTypeSig(gpa, module_env, local_module_path, decl.anno);
                     errdefer if (type_sig) |s| {
                         s.deinit(gpa);
                         gpa.destroy(s);
@@ -821,20 +827,22 @@ fn extractRecordChildren(
 fn extractDeclTypeSig(
     gpa: Allocator,
     module_env: *const ModuleEnv,
+    local_module_path: []const u8,
     anno_idx: CIR.TypeAnno.Idx,
 ) Allocator.Error!?*const DocType {
     // Extract the backing type from the CIR annotation. The inferred type for a
     // nominal resolves to the nominal itself, so we use the annotation instead.
     // DocEntry.writeToSExpr generates the declaration prefix from kind + name.
-    return try extractTypeAnnoAsDocType(gpa, module_env, anno_idx);
+    return try extractTypeAnnoAsDocType(gpa, module_env, local_module_path, anno_idx);
 }
 
 fn extractAnnotationAsDocType(
     gpa: Allocator,
     module_env: *const ModuleEnv,
+    local_module_path: []const u8,
     annotation: CIR.Annotation,
 ) Allocator.Error!?*const DocType {
-    const base_type = try extractTypeAnnoAsDocType(gpa, module_env, annotation.anno) orelse return null;
+    const base_type = try extractTypeAnnoAsDocType(gpa, module_env, local_module_path, annotation.anno) orelse return null;
     var base_type_moved = false;
     errdefer if (!base_type_moved) {
         base_type.deinit(gpa);
@@ -857,7 +865,7 @@ fn extractAnnotationAsDocType(
         const where_clause = module_env.store.getWhereClause(where_idx);
         switch (where_clause) {
             .w_method => |method| {
-                const constraint = try extractWhereMethodConstraint(gpa, module_env, method);
+                const constraint = try extractWhereMethodConstraint(gpa, module_env, local_module_path, method);
                 errdefer {
                     constraint.signature.deinit(gpa);
                     gpa.destroy(constraint.signature);
@@ -898,6 +906,7 @@ fn extractAnnotationAsDocType(
 fn extractWhereMethodConstraint(
     gpa: Allocator,
     module_env: *const ModuleEnv,
+    local_module_path: []const u8,
     method: @TypeOf(@as(CIR.WhereClause, undefined).w_method),
 ) Allocator.Error!DocType.Constraint {
     const type_var = try extractWhereTypeVarName(gpa, module_env, method.var_);
@@ -906,7 +915,7 @@ fn extractWhereMethodConstraint(
     const method_name = try gpa.dupe(u8, module_env.getIdentText(method.method_name));
     errdefer gpa.free(method_name);
 
-    const signature = try extractWhereMethodSignature(gpa, module_env, method);
+    const signature = try extractWhereMethodSignature(gpa, module_env, local_module_path, method);
     errdefer {
         signature.deinit(gpa);
         gpa.destroy(signature);
@@ -922,6 +931,7 @@ fn extractWhereMethodConstraint(
 fn extractWhereMethodSignature(
     gpa: Allocator,
     module_env: *const ModuleEnv,
+    local_module_path: []const u8,
     method: @TypeOf(@as(CIR.WhereClause, undefined).w_method),
 ) Allocator.Error!*const DocType {
     const args_slice = module_env.store.sliceTypeAnnos(method.args);
@@ -937,12 +947,12 @@ fn extractWhereMethodSignature(
     };
 
     for (args_slice) |arg_idx| {
-        args[args_len] = try extractTypeAnnoAsDocType(gpa, module_env, arg_idx) orelse
+        args[args_len] = try extractTypeAnnoAsDocType(gpa, module_env, local_module_path, arg_idx) orelse
             try allocDocType(gpa, .@"error");
         args_len += 1;
     }
 
-    const ret = try extractTypeAnnoAsDocType(gpa, module_env, method.ret) orelse
+    const ret = try extractTypeAnnoAsDocType(gpa, module_env, local_module_path, method.ret) orelse
         try allocDocType(gpa, .@"error");
     var ret_moved = false;
     errdefer if (!ret_moved) {
@@ -978,12 +988,16 @@ fn extractWhereTypeVarName(
 /// Resolve the module path from a CIR TypeAnno's LocalOrExternal base.
 fn resolveModulePathFromBase(
     module_env: *const ModuleEnv,
+    local_module_path: []const u8,
     local_or_ext: TypeAnno.LocalOrExternal,
 ) []const u8 {
     return switch (local_or_ext) {
         .builtin => "", // Don't expose "Builtin" module as it's an implementation detail
+        // Local refs render the display-qualified path ("app.Geometry"), not
+        // the identity-qualified ident (which may embed a URL or canonical
+        // filesystem path); identity strings are cache keys, not presentation.
         .local => if (!module_env.qualified_module_ident.isNone())
-            module_env.getIdentText(module_env.qualified_module_ident)
+            local_module_path
         else
             module_env.module_name,
         .external => |ext| blk: {
@@ -1015,6 +1029,7 @@ fn isAnonymousOpenExt(module_env: *const ModuleEnv, ext_idx: CIR.TypeAnno.Idx) b
 fn extractTypeAnnoAsDocType(
     gpa: Allocator,
     module_env: *const ModuleEnv,
+    local_module_path: []const u8,
     type_anno_idx: CIR.TypeAnno.Idx,
 ) Allocator.Error!?*const DocType {
     const BuildFrame = union(enum) {
@@ -1105,7 +1120,7 @@ fn extractTypeAnnoAsDocType(
                     .apply => |a| {
                         const args_slice = module_env.store.sliceTypeAnnos(a.args);
                         const name = module_env.getIdentText(a.name);
-                        const module_path = resolveModulePathFromBase(module_env, a.base);
+                        const module_path = resolveModulePathFromBase(module_env, local_module_path, a.base);
                         if (args_slice.len == 0) {
                             try Builder.pushResult(&results, gpa, try allocDocType(gpa, .{ .type_ref = .{
                                 .module_path = try gpa.dupe(u8, module_path),
@@ -1133,7 +1148,7 @@ fn extractTypeAnnoAsDocType(
                     },
                     .lookup => |t| {
                         const name = module_env.getIdentText(t.name);
-                        const module_path = resolveModulePathFromBase(module_env, t.base);
+                        const module_path = resolveModulePathFromBase(module_env, local_module_path, t.base);
                         try Builder.pushResult(&results, gpa, try allocDocType(gpa, .{ .type_ref = .{
                             .module_path = try gpa.dupe(u8, module_path),
                             .type_name = try gpa.dupe(u8, name),

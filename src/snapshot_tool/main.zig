@@ -3464,6 +3464,8 @@ fn processDocsSnapshot(
     };
     defer build_env.deinit();
     build_env.setFinalizeExecutableArtifacts(false);
+    build_env.setSyntheticRootPackageIdentity();
+    build_env.setSyntheticRootPlatformPackageIdentity();
 
     build_env.build(app_path) catch |err| {
         std.log.err("BuildEnv.build failed for {s}: {}", .{ app_path, err });
@@ -3490,9 +3492,9 @@ fn processDocsSnapshot(
     }
 
     for (modules) |mod| {
-        // Docs show the alias the root uses for a package, not its internal
-        // identity name (full URL or absolute path).
-        const display_pkg_name = build_env.rootAliasForPackage(mod.package_name) orelse mod.package_name;
+        // Docs show display names (root alias, or "app"/"module" for the
+        // root itself), never internal identity keys (URLs, absolute paths).
+        const display_pkg_name = build_env.displayNameForPackage(mod.package_name);
         var mod_docs = docs_mod.extract.extractModuleDocs(allocator, mod.semantic.env, display_pkg_name, mod.path) catch |err| {
             std.log.err("Failed to extract docs from module {s}: {}", .{ mod.name, err });
             continue;
@@ -3907,6 +3909,8 @@ fn processDevObjectSnapshot(
         return false;
     };
     defer build_env.deinit();
+    build_env.setSyntheticRootPackageIdentity();
+    build_env.setSyntheticRootPlatformPackageIdentity();
 
     build_env.build(app_path) catch |err| {
         std.log.err("BuildEnv.build failed for {s}: {}", .{ app_path, err });

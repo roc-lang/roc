@@ -511,6 +511,197 @@ Builtin :: [].{
 		write_str : Hasher, Str -> Hasher
 	}
 
+	## Cryptographic digest functions for byte data.
+	##
+	## Use `Crypto.SHA256.hash(bytes)` or `Crypto.BLAKE3.hash(bytes)` when the
+	## whole input is already in memory. The result is an algorithm-specific
+	## typed digest, so SHA-256 digests compare only with SHA-256 digests and
+	## BLAKE3 digests compare only with BLAKE3 digests.
+	##
+	## Digest bytes and hex are both available: `to_bytes` returns the raw
+	## 32-byte digest, while `to_hex` returns 64 lowercase hexadecimal
+	## characters. `from_bytes` and `from_hex` validate that external digest data
+	## has the exact expected length before producing a typed digest.
+	##
+	## For input that arrives in pieces, use `hash_chunks(chunks)` with an
+	## `Iter(List(U8))`, or use `Hasher.empty`, `Hasher.write`, and
+	## `Hasher.finish` manually. `finish` observes the current hasher state; it
+	## does not consume the prior value.
+	##
+	## These are digest APIs. They are not password hashing, KDF, HMAC, keyed
+	## BLAKE3, or digital signature APIs.
+	Crypto :: {}.{
+		DigestBytesErr := [WrongLength({ expected : U64, actual : U64 })].{}
+		DigestHexErr := [
+			WrongLength({ expected : U64, actual : U64 }),
+			InvalidHex({ index : U64, byte : U8 }),
+		].{}
+
+		## SHA-256 hashing.
+		##
+		## Use `hash` for one input list, `hash_chunks` for an iterator of byte
+		## chunks, and `Hasher` when you want to thread the state yourself.
+		SHA256 :: {}.{
+
+			## A typed SHA-256 digest.
+			Digest :: { bytes : List(U8) }.{
+
+				## Return this SHA-256 digest as its 32 raw bytes.
+				to_bytes : Digest -> List(U8)
+				to_bytes = |digest| digest.bytes
+
+				## Return this SHA-256 digest as 64 lowercase hexadecimal characters.
+				to_hex : Digest -> Str
+				to_hex = |digest| crypto_digest_to_hex(digest.bytes)
+
+				## Build a SHA-256 digest from exactly 32 raw bytes.
+				from_bytes : List(U8) -> Try(Digest, Crypto.DigestBytesErr)
+				from_bytes = |bytes|
+					match crypto_digest_from_bytes(bytes) {
+						Ok(valid_bytes) => Ok(Digest.{ bytes: valid_bytes })
+						Err(err) => Err(err)
+					}
+
+				## Build a SHA-256 digest from exactly 64 ASCII hex characters.
+				## Uppercase and lowercase hex are accepted; `0x` prefixes are not.
+				from_hex : Str -> Try(Digest, Crypto.DigestHexErr)
+				from_hex = |hex|
+					match crypto_digest_from_hex(hex) {
+						Ok(bytes) => Ok(Digest.{ bytes })
+						Err(err) => Err(err)
+					}
+
+				## Returns `True` if both SHA-256 digests contain the same bytes.
+				is_eq : Digest, Digest -> Bool
+				is_eq = |left, right| List.is_eq(left.bytes, right.bytes)
+
+				## Feed the digest bytes into a regular non-cryptographic [Hasher].
+				to_hash : Digest, Builtin.Hasher -> Builtin.Hasher
+				to_hash = |digest, hasher| Builtin.Hasher.write_bytes(hasher, digest.bytes)
+
+				## Return a typed, human-readable SHA-256 digest.
+				to_inspect : Digest -> Str
+				to_inspect = |digest| Str.concat("SHA256.Digest(\"", Str.concat(Digest.to_hex(digest), "\")"))
+			}
+
+			## Incremental SHA-256 state.
+			Hasher :: { state : List(U8) }.{
+
+				## Start a fresh SHA-256 hasher.
+				empty : () -> Hasher
+				empty = || Hasher.{ state: crypto_sha256_hasher_empty() }
+
+				## Add bytes to this SHA-256 hasher and return the updated hasher.
+				write : Hasher, List(U8) -> Hasher
+				write = |hasher, bytes| Hasher.{ state: crypto_sha256_hasher_write(hasher.state, bytes) }
+
+				## Finish a SHA-256 hasher snapshot and return its digest.
+				## The hasher value is immutable, so callers can also continue writing to the prior state.
+				finish : Hasher -> Digest
+				finish = |hasher| Digest.{ bytes: crypto_sha256_hasher_finish(hasher.state) }
+			}
+
+			## Hash all bytes in one SHA-256 operation.
+			##
+			## ```roc
+			## digest = Crypto.SHA256.hash("abc".to_utf8())
+			## hex = digest.to_hex()
+			## ```
+			hash : List(U8) -> Digest
+			hash = |bytes| Digest.{ bytes: crypto_sha256_hash_bytes(bytes) }
+
+			## Hash byte chunks in order with SHA-256.
+			##
+			## ```roc
+			## digest = Crypto.SHA256.hash_chunks(["a".to_utf8(), "bc".to_utf8()].iter())
+			## ```
+			hash_chunks : Iter(List(U8)) -> Digest
+			hash_chunks = |chunks| Hasher.finish(Iter.fold(chunks, Hasher.empty(), Hasher.write))
+		}
+
+		## BLAKE3 hashing in the default unkeyed digest mode.
+		##
+		## Use `hash` for one input list, `hash_chunks` for an iterator of byte
+		## chunks, and `Hasher` when you want to thread the state yourself.
+		BLAKE3 :: {}.{
+
+			## A typed BLAKE3 digest.
+			Digest :: { bytes : List(U8) }.{
+
+				## Return this BLAKE3 digest as its 32 raw bytes.
+				to_bytes : Digest -> List(U8)
+				to_bytes = |digest| digest.bytes
+
+				## Return this BLAKE3 digest as 64 lowercase hexadecimal characters.
+				to_hex : Digest -> Str
+				to_hex = |digest| crypto_digest_to_hex(digest.bytes)
+
+				## Build a BLAKE3 digest from exactly 32 raw bytes.
+				from_bytes : List(U8) -> Try(Digest, Crypto.DigestBytesErr)
+				from_bytes = |bytes|
+					match crypto_digest_from_bytes(bytes) {
+						Ok(valid_bytes) => Ok(Digest.{ bytes: valid_bytes })
+						Err(err) => Err(err)
+					}
+
+				## Build a BLAKE3 digest from exactly 64 ASCII hex characters.
+				## Uppercase and lowercase hex are accepted; `0x` prefixes are not.
+				from_hex : Str -> Try(Digest, Crypto.DigestHexErr)
+				from_hex = |hex|
+					match crypto_digest_from_hex(hex) {
+						Ok(bytes) => Ok(Digest.{ bytes })
+						Err(err) => Err(err)
+					}
+
+				## Returns `True` if both BLAKE3 digests contain the same bytes.
+				is_eq : Digest, Digest -> Bool
+				is_eq = |left, right| List.is_eq(left.bytes, right.bytes)
+
+				## Feed the digest bytes into a regular non-cryptographic [Hasher].
+				to_hash : Digest, Builtin.Hasher -> Builtin.Hasher
+				to_hash = |digest, hasher| Builtin.Hasher.write_bytes(hasher, digest.bytes)
+
+				## Return a typed, human-readable BLAKE3 digest.
+				to_inspect : Digest -> Str
+				to_inspect = |digest| Str.concat("BLAKE3.Digest(\"", Str.concat(Digest.to_hex(digest), "\")"))
+			}
+
+			## Incremental BLAKE3 state.
+			Hasher :: { state : List(U8) }.{
+
+				## Start a fresh BLAKE3 hasher.
+				empty : () -> Hasher
+				empty = || Hasher.{ state: crypto_blake3_hasher_empty() }
+
+				## Add bytes to this BLAKE3 hasher and return the updated hasher.
+				write : Hasher, List(U8) -> Hasher
+				write = |hasher, bytes| Hasher.{ state: crypto_blake3_hasher_write(hasher.state, bytes) }
+
+				## Finish a BLAKE3 hasher snapshot and return its digest.
+				## The hasher value is immutable, so callers can also continue writing to the prior state.
+				finish : Hasher -> Digest
+				finish = |hasher| Digest.{ bytes: crypto_blake3_hasher_finish(hasher.state) }
+			}
+
+			## Hash all bytes in one BLAKE3 operation.
+			##
+			## ```roc
+			## digest = Crypto.BLAKE3.hash("abc".to_utf8())
+			## hex = digest.to_hex()
+			## ```
+			hash : List(U8) -> Digest
+			hash = |bytes| Digest.{ bytes: crypto_blake3_hash_bytes(bytes) }
+
+			## Hash byte chunks in order with BLAKE3.
+			##
+			## ```roc
+			## digest = Crypto.BLAKE3.hash_chunks(["a".to_utf8(), "bc".to_utf8()].iter())
+			## ```
+			hash_chunks : Iter(List(U8)) -> Digest
+			hash_chunks = |chunks| Hasher.finish(Iter.fold(chunks, Hasher.empty(), Hasher.write))
+		}
+	}
+
 	Iter(item) :: {
 		# The sequence being iterated, or e.g. a range, is captured in the step thunk.
 		len_if_known : [Known(U64), Unknown],
@@ -12897,6 +13088,22 @@ hasher_finish : Hasher -> U64
 
 dict_pseudo_seed : () -> U64
 
+crypto_sha256_hash_bytes : List(U8) -> List(U8)
+
+crypto_sha256_hasher_empty : () -> List(U8)
+
+crypto_sha256_hasher_write : List(U8), List(U8) -> List(U8)
+
+crypto_sha256_hasher_finish : List(U8) -> List(U8)
+
+crypto_blake3_hash_bytes : List(U8) -> List(U8)
+
+crypto_blake3_hasher_empty : () -> List(U8)
+
+crypto_blake3_hasher_write : List(U8), List(U8) -> List(U8)
+
+crypto_blake3_hasher_finish : List(U8) -> List(U8)
+
 dict_seed : () -> U64
 dict_seed = || dict_pseudo_seed()
 
@@ -13445,6 +13652,87 @@ u8_drop_first = |list, count| {
 	}
 
 	$out
+}
+
+crypto_digest_byte_len : U64
+crypto_digest_byte_len = 32
+
+crypto_digest_hex_len : U64
+crypto_digest_hex_len = 64
+
+crypto_digest_from_bytes : List(U8) -> Try(List(U8), Crypto.DigestBytesErr)
+crypto_digest_from_bytes = |bytes| {
+	actual = u8_list_len(bytes)
+	if actual == crypto_digest_byte_len {
+		Ok(bytes)
+	} else {
+		Err(WrongLength({ expected: crypto_digest_byte_len, actual }))
+	}
+}
+
+crypto_hex_digit : U8 -> U8
+crypto_hex_digit = |nibble|
+	if nibble < 10 {
+		nibble + 48
+	} else {
+		nibble + 87
+	}
+
+crypto_digest_to_hex_bytes : List(U8) -> List(U8)
+crypto_digest_to_hex_bytes = |bytes| {
+	var $out = u8_list_with_capacity(crypto_digest_hex_len)
+	var $index = 0
+
+	while $index < crypto_digest_byte_len {
+		byte = u8_list_get_unsafe(bytes, $index)
+		$out = u8_append($out, crypto_hex_digit(U8.shift_right_zf_by(byte, 4)))
+		$out = u8_append($out, crypto_hex_digit(U8.bitwise_and(byte, 15)))
+		$index = $index + 1
+	}
+
+	$out
+}
+
+crypto_digest_to_hex : List(U8) -> Str
+crypto_digest_to_hex = |bytes|
+	match bytes_to_str(crypto_digest_to_hex_bytes(bytes)) {
+		Ok(hex) => hex
+		Err(_) => {
+			crash "Crypto hex encoder invariant violated"
+		}
+	}
+
+crypto_hex_nibble : U8, U64 -> Try(U8, Crypto.DigestHexErr)
+crypto_hex_nibble = |byte, index|
+	if byte >= 48 and byte <= 57 {
+		Ok(byte - 48)
+	} else if byte >= 65 and byte <= 70 {
+		Ok(byte - 55)
+	} else if byte >= 97 and byte <= 102 {
+		Ok(byte - 87)
+	} else {
+		Err(InvalidHex({ index, byte }))
+	}
+
+crypto_digest_from_hex : Str -> Try(List(U8), Crypto.DigestHexErr)
+crypto_digest_from_hex = |hex| {
+	bytes = Str.to_utf8(hex)
+	actual = u8_list_len(bytes)
+	if actual != crypto_digest_hex_len {
+		return Err(WrongLength({ expected: crypto_digest_hex_len, actual }))
+	}
+
+	var $out = u8_list_with_capacity(crypto_digest_byte_len)
+	var $index = 0
+
+	while $index < crypto_digest_hex_len {
+		high = crypto_hex_nibble(u8_list_get_unsafe(bytes, $index), $index)?
+		low = crypto_hex_nibble(u8_list_get_unsafe(bytes, $index + 1), $index + 1)?
+		$out = u8_append($out, U8.bitwise_or(U8.shift_left_by(high, 4), low))
+		$index = $index + 2
+	}
+
+	Ok($out)
 }
 
 u8_list_len : List(U8) -> U64

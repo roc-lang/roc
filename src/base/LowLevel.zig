@@ -103,6 +103,16 @@ pub const LowLevel = enum(u16) {
     hasher_write_bytes,
     hasher_write_str,
 
+    // Crypto operations
+    crypto_sha256_hash_bytes,
+    crypto_sha256_hasher_empty,
+    crypto_sha256_hasher_write,
+    crypto_sha256_hasher_finish,
+    crypto_blake3_hash_bytes,
+    crypto_blake3_hasher_empty,
+    crypto_blake3_hasher_write,
+    crypto_blake3_hasher_finish,
+
     // Numeric comparison operations
     num_is_eq,
     num_is_gt,
@@ -732,6 +742,14 @@ pub const LowLevel = enum(u16) {
             .f64_to_str,
             .num_to_str,
             .list_with_capacity,
+            .crypto_sha256_hash_bytes,
+            .crypto_sha256_hasher_empty,
+            .crypto_sha256_hasher_write,
+            .crypto_sha256_hasher_finish,
+            .crypto_blake3_hash_bytes,
+            .crypto_blake3_hasher_empty,
+            .crypto_blake3_hasher_write,
+            .crypto_blake3_hasher_finish,
             => RcEffect.allocates(),
 
             .str_join_with => RcEffect.allocatesConsumingArgs(argMask(&.{0})),

@@ -183,6 +183,7 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
         return error.BuildEnvInit;
     };
     defer build_env.deinit();
+    build_env.setSyntheticRootPackageIdentity();
 
     build_env.build(synthetic_app_path) catch {
         _ = try build_env.renderDiagnostics(stderr);
@@ -1290,6 +1291,11 @@ const TypeTable = struct {
                 .fields,
                 .field,
                 => return .unit,
+                .crypto_sha256_digest,
+                .crypto_sha256_hasher,
+                .crypto_blake3_digest,
+                .crypto_blake3_hasher,
+                => {},
                 .str => return .str_,
                 .bool => return .bool_,
                 .dec => return .dec,

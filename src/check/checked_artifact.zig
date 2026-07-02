@@ -1390,7 +1390,12 @@ fn checkedTypeIsConcreteCompileTimeRootInner(
                     .fields,
                     .field,
                     => break :blk true,
-                    .bool_tag_union => {},
+                    .bool_tag_union,
+                    .crypto_sha256_digest,
+                    .crypto_sha256_hasher,
+                    .crypto_blake3_digest,
+                    .crypto_blake3_hasher,
+                    => {},
                 },
                 .opaque_without_backing => break :blk true,
                 else => {},
@@ -2252,6 +2257,10 @@ pub const CheckedBuiltinNominal = enum {
     parse_tag_union_spec,
     fields,
     field,
+    crypto_sha256_digest,
+    crypto_sha256_hasher,
+    crypto_blake3_digest,
+    crypto_blake3_hasher,
 };
 
 /// Public `CheckedPrimitive` declaration.
@@ -2282,6 +2291,10 @@ pub const CheckedBuiltinRuntimeEncoding = union(enum) {
     parse_tag_union_spec,
     fields,
     field,
+    crypto_sha256_digest,
+    crypto_sha256_hasher,
+    crypto_blake3_digest,
+    crypto_blake3_hasher,
 };
 
 /// Public `builtinRuntimeEncoding` function.
@@ -2307,6 +2320,10 @@ pub fn builtinRuntimeEncoding(builtin_nominal: CheckedBuiltinNominal) CheckedBui
         .parse_tag_union_spec => .parse_tag_union_spec,
         .fields => .fields,
         .field => .field,
+        .crypto_sha256_digest => .crypto_sha256_digest,
+        .crypto_sha256_hasher => .crypto_sha256_hasher,
+        .crypto_blake3_digest => .crypto_blake3_digest,
+        .crypto_blake3_hasher => .crypto_blake3_hasher,
     };
 }
 
@@ -6251,6 +6268,10 @@ fn checkedBuiltinNominalForIdent(module_env: *const ModuleEnv, ident: base.Ident
     if (ident.eql(common.builtin_parse_tag_union_spec)) return .parse_tag_union_spec;
     if (ident.eql(common.builtin_str_field_names)) return .fields;
     if (ident.eql(common.builtin_str_field_name)) return .field;
+    if (ident.eql(common.builtin_crypto_sha256_digest)) return .crypto_sha256_digest;
+    if (ident.eql(common.builtin_crypto_sha256_hasher)) return .crypto_sha256_hasher;
+    if (ident.eql(common.builtin_crypto_blake3_digest)) return .crypto_blake3_digest;
+    if (ident.eql(common.builtin_crypto_blake3_hasher)) return .crypto_blake3_hasher;
     return null;
 }
 
@@ -10837,6 +10858,10 @@ pub fn builtinNominalAcceptsNumeralLiteral(builtin_nominal: CheckedBuiltinNomina
         .parse_tag_union_spec,
         .fields,
         .field,
+        .crypto_sha256_digest,
+        .crypto_sha256_hasher,
+        .crypto_blake3_digest,
+        .crypto_blake3_hasher,
         => false,
     };
 }
@@ -20431,6 +20456,10 @@ fn checkedTypeHasNoReachableCallableSlotsInner(
                     .parse_tag_union_spec,
                     .fields,
                     .field,
+                    .crypto_sha256_digest,
+                    .crypto_sha256_hasher,
+                    .crypto_blake3_digest,
+                    .crypto_blake3_hasher,
                     => break :blk true,
                     .list,
                     .box,

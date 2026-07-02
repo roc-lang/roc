@@ -59,6 +59,13 @@ pub const BuiltinIndices = struct {
     f32_type: Statement.Idx,
     f64_type: Statement.Idx,
     numeral_type: Statement.Idx,
+    crypto_type: Statement.Idx,
+    crypto_digest_bytes_err_type: Statement.Idx,
+    crypto_digest_hex_err_type: Statement.Idx,
+    crypto_sha256_digest_type: Statement.Idx,
+    crypto_sha256_hasher_type: Statement.Idx,
+    crypto_blake3_digest_type: Statement.Idx,
+    crypto_blake3_hasher_type: Statement.Idx,
 
     // Ident indices - simple unqualified names (e.g., "Bool", "U8")
     bool_ident: Ident.Idx,
@@ -89,6 +96,13 @@ pub const BuiltinIndices = struct {
     f32_ident: Ident.Idx,
     f64_ident: Ident.Idx,
     numeral_ident: Ident.Idx,
+    crypto_ident: Ident.Idx,
+    crypto_digest_bytes_err_ident: Ident.Idx,
+    crypto_digest_hex_err_ident: Ident.Idx,
+    crypto_sha256_digest_ident: Ident.Idx,
+    crypto_sha256_hasher_ident: Ident.Idx,
+    crypto_blake3_digest_ident: Ident.Idx,
+    crypto_blake3_hasher_ident: Ident.Idx,
     // Tag idents for Try type
     ok_ident: Ident.Idx,
     err_ident: Ident.Idx,
@@ -156,12 +170,22 @@ pub const builtin_type_specs = [_]BuiltinTypeSpec{
     .{ .display_name = "F32", .qualified_name = "Builtin.Num.F32", .type_field = "f32_type", .ident_field = "f32_ident", .lookup = .{ .nested = .{ .parent = "Num", .name = "F32" } }, .num_kind = .f32 },
     .{ .display_name = "F64", .qualified_name = "Builtin.Num.F64", .type_field = "f64_type", .ident_field = "f64_ident", .lookup = .{ .nested = .{ .parent = "Num", .name = "F64" } }, .num_kind = .f64 },
     .{ .display_name = "Numeral", .qualified_name = "Builtin.Num.Numeral", .type_field = "numeral_type", .ident_field = "numeral_ident", .lookup = .{ .nested = .{ .parent = "Num", .name = "Numeral" } } },
+    .{ .display_name = "Crypto", .qualified_name = "Builtin.Crypto", .type_field = "crypto_type", .ident_field = "crypto_ident", .lookup = .{ .top_level = "Crypto" } },
+    .{ .display_name = "DigestBytesErr", .qualified_name = "Builtin.Crypto.DigestBytesErr", .type_field = "crypto_digest_bytes_err_type", .ident_field = "crypto_digest_bytes_err_ident", .lookup = .{ .qualified = "Builtin.Crypto.DigestBytesErr" }, .auto_import = false },
+    .{ .display_name = "DigestHexErr", .qualified_name = "Builtin.Crypto.DigestHexErr", .type_field = "crypto_digest_hex_err_type", .ident_field = "crypto_digest_hex_err_ident", .lookup = .{ .qualified = "Builtin.Crypto.DigestHexErr" }, .auto_import = false },
+    .{ .display_name = "Digest", .qualified_name = "Builtin.Crypto.SHA256.Digest", .type_field = "crypto_sha256_digest_type", .ident_field = "crypto_sha256_digest_ident", .lookup = .{ .qualified = "Builtin.Crypto.SHA256.Digest" }, .auto_import = false },
+    .{ .display_name = "Hasher", .qualified_name = "Builtin.Crypto.SHA256.Hasher", .type_field = "crypto_sha256_hasher_type", .ident_field = "crypto_sha256_hasher_ident", .lookup = .{ .qualified = "Builtin.Crypto.SHA256.Hasher" }, .auto_import = false },
+    .{ .display_name = "Digest", .qualified_name = "Builtin.Crypto.BLAKE3.Digest", .type_field = "crypto_blake3_digest_type", .ident_field = "crypto_blake3_digest_ident", .lookup = .{ .qualified = "Builtin.Crypto.BLAKE3.Digest" }, .auto_import = false },
+    .{ .display_name = "Hasher", .qualified_name = "Builtin.Crypto.BLAKE3.Hasher", .type_field = "crypto_blake3_hasher_type", .ident_field = "crypto_blake3_hasher_ident", .lookup = .{ .qualified = "Builtin.Crypto.BLAKE3.Hasher" }, .auto_import = false },
 };
 
 /// Nominal declarations that only group nested builtin types rather than representing builtin types.
 pub const builtin_type_container_names = [_][]const u8{
     "Builtin",
     "Builtin.Num",
+    "Builtin.Crypto",
+    "Builtin.Crypto.SHA256",
+    "Builtin.Crypto.BLAKE3",
 };
 
 const hash_offset: u64 = 0xcbf29ce484222325;

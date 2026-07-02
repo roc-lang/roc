@@ -156,6 +156,14 @@ pub fn runWasmStrWithStats(
         env_imports.addHostFunction("roc_hasher_write_f64_bits", &[_]bytebox.ValType{ .I64, .I64 }, &[_]bytebox.ValType{.I64}, hostHasherWriteF64Bits, null) catch return error.WasmExecFailed;
         env_imports.addHostFunction("roc_hasher_write_bytes", &[_]bytebox.ValType{ .I64, .I32, .I32, .I32 }, &[_]bytebox.ValType{.I64}, hostHasherWriteBytes, null) catch return error.WasmExecFailed;
         env_imports.addHostFunction("roc_hasher_write_str", &[_]bytebox.ValType{ .I64, .I32, .I32, .I32 }, &[_]bytebox.ValType{.I64}, hostHasherWriteStr, null) catch return error.WasmExecFailed;
+        env_imports.addHostFunction("roc_crypto_sha256_hash_bytes", &[_]bytebox.ValType{ .I32, .I32, .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostCryptoSha256HashBytes, null) catch return error.WasmExecFailed;
+        env_imports.addHostFunction("roc_crypto_sha256_hasher_empty", &[_]bytebox.ValType{ .I32, .I32 }, &[_]bytebox.ValType{}, hostCryptoSha256HasherEmpty, null) catch return error.WasmExecFailed;
+        env_imports.addHostFunction("roc_crypto_sha256_hasher_write", &[_]bytebox.ValType{ .I32, .I32, .I32, .I32, .I32, .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostCryptoSha256HasherWrite, null) catch return error.WasmExecFailed;
+        env_imports.addHostFunction("roc_crypto_sha256_hasher_finish", &[_]bytebox.ValType{ .I32, .I32, .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostCryptoSha256HasherFinish, null) catch return error.WasmExecFailed;
+        env_imports.addHostFunction("roc_crypto_blake3_hash_bytes", &[_]bytebox.ValType{ .I32, .I32, .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostCryptoBlake3HashBytes, null) catch return error.WasmExecFailed;
+        env_imports.addHostFunction("roc_crypto_blake3_hasher_empty", &[_]bytebox.ValType{ .I32, .I32 }, &[_]bytebox.ValType{}, hostCryptoBlake3HasherEmpty, null) catch return error.WasmExecFailed;
+        env_imports.addHostFunction("roc_crypto_blake3_hasher_write", &[_]bytebox.ValType{ .I32, .I32, .I32, .I32, .I32, .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostCryptoBlake3HasherWrite, null) catch return error.WasmExecFailed;
+        env_imports.addHostFunction("roc_crypto_blake3_hasher_finish", &[_]bytebox.ValType{ .I32, .I32, .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostCryptoBlake3HasherFinish, null) catch return error.WasmExecFailed;
 
         // Compiler-rt intrinsics needed by merged builtins
         env_imports.addHostFunction("__multi3", &[_]bytebox.ValType{ .I32, .I64, .I64, .I64, .I64 }, &[_]bytebox.ValType{}, hostMulti3, null) catch return error.WasmExecFailed;
@@ -479,6 +487,137 @@ fn hostHasherWriteStr(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [
     const bytes = if (len == 0) buffer[0..0] else buffer[ptr..][0..len];
     const str_domain = @intFromEnum(builtins.hash.HasherDomain.str);
     results[0] = .{ .I64 = @bitCast(builtins.hash.hasher_write_bytes(seed, str_domain, bytes.ptr, bytes.len)) };
+}
+
+const CryptoAlgorithm = enum { sha256, blake3 };
+
+fn wasmByteSlice(buffer: []u8, ptr: usize, len: usize) []const u8 {
+    return if (len == 0) buffer[0..0] else buffer[ptr..][0..len];
+}
+
+fn nativeRocListBytes(roc_list: builtins.list.RocList) []const u8 {
+    if (roc_list.bytes) |ptr| return ptr[0..roc_list.length];
+    std.debug.assert(roc_list.length == 0);
+    return &.{};
+}
+
+fn writeWasmList(buffer: []u8, result_ptr: usize, bytes: []const u8) void {
+    if (bytes.len == 0) {
+        writeIntLittle(u32, buffer, result_ptr, 0);
+        writeIntLittle(u32, buffer, result_ptr + 4, 0);
+        writeIntLittle(u32, buffer, result_ptr + 8, 0);
+        return;
+    }
+
+    const data_ptr = allocWasmData(buffer, 1, bytes.len);
+    @memcpy(buffer[data_ptr..][0..bytes.len], bytes);
+    writeIntLittle(u32, buffer, result_ptr, data_ptr);
+    writeIntLittle(u32, buffer, result_ptr + 4, @intCast(bytes.len));
+    writeIntLittle(u32, buffer, result_ptr + 8, encodeWasmListCapacity(bytes.len));
+}
+
+fn writeNativeRocListToWasm(buffer: []u8, result_ptr: usize, roc_list: builtins.list.RocList) void {
+    writeWasmList(buffer, result_ptr, nativeRocListBytes(roc_list));
+}
+
+fn hostCryptoHashBytes(module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, comptime algorithm: CryptoAlgorithm) void {
+    const buffer = module.store.getMemory(0).buffer();
+    const result_ptr: usize = @intCast(params[0].I32);
+    const input_ptr: usize = @intCast(params[1].I32);
+    const input_len: usize = @intCast(params[2].I32);
+    const input = wasmByteSlice(buffer, input_ptr, input_len);
+
+    var env = builtins.utils.TestEnv.init(std.heap.page_allocator);
+    defer env.deinit();
+    const ops = env.getOps();
+    const result = switch (algorithm) {
+        .sha256 => builtins.crypto.sha256HashBytes(input.ptr, input.len, ops),
+        .blake3 => builtins.crypto.blake3HashBytes(input.ptr, input.len, ops),
+    };
+    writeNativeRocListToWasm(buffer, result_ptr, result);
+}
+
+fn hostCryptoHasherEmpty(module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, comptime algorithm: CryptoAlgorithm) void {
+    const buffer = module.store.getMemory(0).buffer();
+    const result_ptr: usize = @intCast(params[0].I32);
+
+    var env = builtins.utils.TestEnv.init(std.heap.page_allocator);
+    defer env.deinit();
+    const ops = env.getOps();
+    const result = switch (algorithm) {
+        .sha256 => builtins.crypto.sha256HasherEmpty(ops),
+        .blake3 => builtins.crypto.blake3HasherEmpty(ops),
+    };
+    writeNativeRocListToWasm(buffer, result_ptr, result);
+}
+
+fn hostCryptoHasherWrite(module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, comptime algorithm: CryptoAlgorithm) void {
+    const buffer = module.store.getMemory(0).buffer();
+    const result_ptr: usize = @intCast(params[0].I32);
+    const state_ptr: usize = @intCast(params[1].I32);
+    const state_len: usize = @intCast(params[2].I32);
+    const input_ptr: usize = @intCast(params[4].I32);
+    const input_len: usize = @intCast(params[5].I32);
+    const state = wasmByteSlice(buffer, state_ptr, state_len);
+    const input = wasmByteSlice(buffer, input_ptr, input_len);
+
+    var env = builtins.utils.TestEnv.init(std.heap.page_allocator);
+    defer env.deinit();
+    const ops = env.getOps();
+    const result = switch (algorithm) {
+        .sha256 => builtins.crypto.sha256HasherWrite(state.ptr, state.len, input.ptr, input.len, ops),
+        .blake3 => builtins.crypto.blake3HasherWrite(state.ptr, state.len, input.ptr, input.len, ops),
+    };
+    writeNativeRocListToWasm(buffer, result_ptr, result);
+}
+
+fn hostCryptoHasherFinish(module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, comptime algorithm: CryptoAlgorithm) void {
+    const buffer = module.store.getMemory(0).buffer();
+    const result_ptr: usize = @intCast(params[0].I32);
+    const state_ptr: usize = @intCast(params[1].I32);
+    const state_len: usize = @intCast(params[2].I32);
+    const state = wasmByteSlice(buffer, state_ptr, state_len);
+
+    var env = builtins.utils.TestEnv.init(std.heap.page_allocator);
+    defer env.deinit();
+    const ops = env.getOps();
+    const result = switch (algorithm) {
+        .sha256 => builtins.crypto.sha256HasherFinish(state.ptr, state.len, ops),
+        .blake3 => builtins.crypto.blake3HasherFinish(state.ptr, state.len, ops),
+    };
+    writeNativeRocListToWasm(buffer, result_ptr, result);
+}
+
+fn hostCryptoSha256HashBytes(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
+    hostCryptoHashBytes(module, params, .sha256);
+}
+
+fn hostCryptoSha256HasherEmpty(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
+    hostCryptoHasherEmpty(module, params, .sha256);
+}
+
+fn hostCryptoSha256HasherWrite(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
+    hostCryptoHasherWrite(module, params, .sha256);
+}
+
+fn hostCryptoSha256HasherFinish(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
+    hostCryptoHasherFinish(module, params, .sha256);
+}
+
+fn hostCryptoBlake3HashBytes(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
+    hostCryptoHashBytes(module, params, .blake3);
+}
+
+fn hostCryptoBlake3HasherEmpty(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
+    hostCryptoHasherEmpty(module, params, .blake3);
+}
+
+fn hostCryptoBlake3HasherWrite(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
+    hostCryptoHasherWrite(module, params, .blake3);
+}
+
+fn hostCryptoBlake3HasherFinish(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
+    hostCryptoHasherFinish(module, params, .blake3);
 }
 
 fn readI128FromMem(buffer: []u8, ptr: usize) i128 {
