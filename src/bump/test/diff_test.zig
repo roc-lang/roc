@@ -11,7 +11,7 @@ const TypeId = PackageApi.TypeId;
 
 const gpa = std.testing.allocator;
 
-fn diffMagnitude(old: *PackageApi, new: *PackageApi) !Magnitude {
+fn diffMagnitude(old: *PackageApi, new: *PackageApi) std.mem.Allocator.Error!Magnitude {
     try old.normalize();
     try new.normalize();
     var result = try diff_mod.diff(gpa, old, new);
@@ -19,12 +19,12 @@ fn diffMagnitude(old: *PackageApi, new: *PackageApi) !Magnitude {
     return result.magnitude;
 }
 
-fn builtinStr(api: *PackageApi) !TypeId {
+fn builtinStr(api: *PackageApi) std.mem.Allocator.Error!TypeId {
     return api.addType(.{ .named = .{ .origin = .builtin, .path = "Str", .args = &.{} } });
 }
 
 /// A module "M" with a single value item "M.f" of type `Str -> Str`.
-fn strToStrApi() !PackageApi {
+fn strToStrApi() std.mem.Allocator.Error!PackageApi {
     var api = PackageApi.init(gpa);
     errdefer api.deinit();
     const str = try builtinStr(&api);
@@ -145,7 +145,7 @@ test "changing function purity is major" {
 
 /// A module "M" with a value "M.f" whose type is a variable, optionally
 /// carrying an `eq` constraint.
-fn constrainedVarApi(with_constraint: bool) !PackageApi {
+fn constrainedVarApi(with_constraint: bool) std.mem.Allocator.Error!PackageApi {
     var api = PackageApi.init(gpa);
     errdefer api.deinit();
     const bool_ty = try api.addType(.{ .named = .{ .origin = .builtin, .path = "Bool", .args = &.{} } });
@@ -179,7 +179,7 @@ test "removing a static dispatch constraint is major" {
     try std.testing.expectEqual(Magnitude.major, try diffMagnitude(&old, &new));
 }
 
-fn aliasApi(target_path: []const u8) !PackageApi {
+fn aliasApi(target_path: []const u8) std.mem.Allocator.Error!PackageApi {
     var api = PackageApi.init(gpa);
     errdefer api.deinit();
     const target = try api.addType(.{ .named = .{ .origin = .builtin, .path = target_path, .args = &.{} } });
@@ -197,7 +197,7 @@ test "changing an alias target is major" {
     try std.testing.expectEqual(Magnitude.major, try diffMagnitude(&old, &new));
 }
 
-fn recordNominalApi(field_names: []const []const u8) !PackageApi {
+fn recordNominalApi(field_names: []const []const u8) std.mem.Allocator.Error!PackageApi {
     var api = PackageApi.init(gpa);
     errdefer api.deinit();
     const str = try builtinStr(&api);
@@ -220,7 +220,7 @@ test "adding a field to a transparent record backing is major" {
     try std.testing.expectEqual(Magnitude.major, try diffMagnitude(&old, &new));
 }
 
-fn unionNominalApi(tag_names: []const []const u8) !PackageApi {
+fn unionNominalApi(tag_names: []const []const u8) std.mem.Allocator.Error!PackageApi {
     var api = PackageApi.init(gpa);
     errdefer api.deinit();
     const tags = try api.allocator().alloc(PackageApi.Tag, tag_names.len);
@@ -242,7 +242,7 @@ test "adding a tag to a transparent union backing is major" {
     try std.testing.expectEqual(Magnitude.major, try diffMagnitude(&old, &new));
 }
 
-fn opaqueNominalApi() !PackageApi {
+fn opaqueNominalApi() std.mem.Allocator.Error!PackageApi {
     var api = PackageApi.init(gpa);
     errdefer api.deinit();
     const module = try api.addModule("M");
@@ -292,7 +292,7 @@ test "changing nominal arity is major" {
     try std.testing.expectEqual(Magnitude.major, try diffMagnitude(&old, &new));
 }
 
-fn externalRefApi(major: u32) !PackageApi {
+fn externalRefApi(major: u32) std.mem.Allocator.Error!PackageApi {
     var api = PackageApi.init(gpa);
     errdefer api.deinit();
     const ref = try api.addType(.{ .named = .{

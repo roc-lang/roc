@@ -14,6 +14,7 @@ const base = @import("base");
 
 const PackageApi = @import("PackageApi.zig");
 
+/// Semver bump severity, ordered so magnitudes combine with max.
 pub const Magnitude = enum(u8) {
     patch = 0,
     minor = 1,
@@ -41,6 +42,7 @@ pub fn nextVersion(old: base.url.Version, magnitude: Magnitude) base.url.Version
     };
 }
 
+/// What kind of API difference a `Change` describes.
 pub const ChangeKind = enum {
     module_added,
     module_removed,
@@ -49,6 +51,7 @@ pub const ChangeKind = enum {
     item_changed,
 };
 
+/// One structured API difference, with rendered signatures for display.
 pub const Change = struct {
     magnitude: Magnitude,
     kind: ChangeKind,
@@ -61,6 +64,8 @@ pub const Change = struct {
     new_rendered: ?[]const u8,
 };
 
+/// The outcome of diffing two `PackageApi`s: the overall magnitude and the
+/// change list (arena-owned; free with `deinit`).
 pub const DiffResult = struct {
     arena: std.heap.ArenaAllocator,
     magnitude: Magnitude,

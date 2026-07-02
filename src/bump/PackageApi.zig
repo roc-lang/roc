@@ -23,6 +23,7 @@ types: std.ArrayListUnmanaged(ApiType),
 /// Index into `types`.
 pub const TypeId = enum(u32) { _ };
 
+/// One exposed module's public items.
 pub const ModuleApi = struct {
     /// The exposed module name from the package header, e.g. "Parser".
     name: []const u8,
@@ -58,6 +59,7 @@ pub const Item = struct {
     };
 };
 
+/// A canonical structural type, stored in the `types` pool.
 pub const ApiType = union(enum) {
     variable: Variable,
     function: Function,
@@ -83,17 +85,20 @@ pub const Variable = struct {
     constraints: []Constraint = &.{},
 };
 
+/// A static-dispatch (`where`) constraint on a type variable.
 pub const Constraint = struct {
     method: []const u8,
     fn_ty: TypeId,
 };
 
+/// A function type; `unbound` purity collapses to pure at extraction time.
 pub const Function = struct {
     effectful: bool,
     args: []TypeId,
     ret: TypeId,
 };
 
+/// A structural record type.
 pub const Record = struct {
     /// Sorted by field name during normalization.
     fields: []Field,
@@ -101,11 +106,13 @@ pub const Record = struct {
     ext: ?TypeId,
 };
 
+/// One record field.
 pub const Field = struct {
     name: []const u8,
     ty: TypeId,
 };
 
+/// A structural tag union type.
 pub const TagUnion = struct {
     /// Sorted by tag name during normalization.
     tags: []Tag,
@@ -113,6 +120,7 @@ pub const TagUnion = struct {
     ext: ?TypeId,
 };
 
+/// One tag of a tag union, with its payload types.
 pub const Tag = struct {
     name: []const u8,
     args: []TypeId,
@@ -129,6 +137,7 @@ pub const Named = struct {
     args: []TypeId,
 };
 
+/// Which package a named type reference belongs to.
 pub const TypeOrigin = union(enum) {
     /// Declared in the package being diffed.
     self,
@@ -157,16 +166,19 @@ pub fn deinit(self: *PackageApi) void {
     self.arena.deinit();
 }
 
+/// The arena allocator that owns all names, slices, and types in this API.
 pub fn allocator(self: *PackageApi) std.mem.Allocator {
     return self.arena.allocator();
 }
 
+/// Append a type to the pool and return its id.
 pub fn addType(self: *PackageApi, ty: ApiType) std.mem.Allocator.Error!TypeId {
     const id: TypeId = @enumFromInt(self.types.items.len);
     try self.types.append(self.arena.allocator(), ty);
     return id;
 }
 
+/// The pooled type for an id (mutable; normalization patches variables).
 pub fn getType(self: *const PackageApi, id: TypeId) *ApiType {
     return &self.types.items[@intFromEnum(id)];
 }
@@ -177,6 +189,7 @@ pub fn addModule(self: *PackageApi, name: []const u8) std.mem.Allocator.Error!us
     return self.modules.items.len - 1;
 }
 
+/// Append an item to the module at `module_index` (from `addModule`).
 pub fn addItem(self: *PackageApi, module_index: usize, item: Item) std.mem.Allocator.Error!void {
     try self.modules.items[module_index].items.append(self.arena.allocator(), item);
 }
@@ -498,7 +511,7 @@ pub fn renderItemSignature(self: *const PackageApi, gpa: std.mem.Allocator, item
         for (variable.constraints) |constraint| {
             try where_out.writer.writeAll(if (first) " where " else ", ");
             first = false;
-            try self.renderVariableName(variable, &where_out.writer);
+            try renderVariableName(variable, &where_out.writer);
             try where_out.writer.print(".{s} : ", .{constraint.method});
             var inner_visited = std.AutoHashMapUnmanaged(TypeId, void).empty;
             defer inner_visited.deinit(gpa);
@@ -513,8 +526,7 @@ fn variableIndexLessThan(self: *const PackageApi, a: TypeId, b: TypeId) bool {
     return self.getType(a).variable.index < self.getType(b).variable.index;
 }
 
-fn renderVariableName(self: *const PackageApi, variable: Variable, writer: *std.Io.Writer) WriteError!void {
-    _ = self;
+fn renderVariableName(variable: Variable, writer: *std.Io.Writer) WriteError!void {
     if (variable.display_name) |name| {
         try writer.writeAll(name);
     } else if (variable.index < 26) {
@@ -529,7 +541,7 @@ fn renderType(self: *const PackageApi, id: TypeId, writer: *std.Io.Writer, state
     switch (ty.*) {
         .variable => |variable| {
             _ = try state.visited.getOrPut(state.gpa, id);
-            try self.renderVariableName(variable, writer);
+            try renderVariableName(variable, writer);
         },
         .function => |function| {
             for (function.args, 0..) |arg, i| {

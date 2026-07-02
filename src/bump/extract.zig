@@ -17,7 +17,6 @@ const check = @import("check");
 
 const PackageApi = @import("PackageApi.zig");
 
-const CIR = can.CIR;
 const ModuleEnv = can.ModuleEnv;
 const CheckedArtifact = check.CheckedArtifact;
 const canonical_type_keys = check.CanonicalTypeKeys;
@@ -69,6 +68,7 @@ pub const OriginMap = struct {
     }
 };
 
+/// Extraction fails hard: `ExtractFailed` always comes with a `Failure`.
 pub const ExtractError = error{ OutOfMemory, ExtractFailed };
 
 /// Structured description of why extraction failed. The strings are owned
