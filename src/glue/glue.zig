@@ -1290,6 +1290,8 @@ const TypeTable = struct {
                 .fields,
                 .field,
                 => return .unit,
+                .dict,
+                .set,
                 .crypto_sha256_digest,
                 .crypto_sha256_hasher,
                 .crypto_blake3_digest,

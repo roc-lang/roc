@@ -3963,6 +3963,8 @@ const Lowerer = struct {
             .dec => .dec,
             .list,
             .box,
+            .dict,
+            .set,
             .parse_tag_union_spec,
             .fields,
             .field,

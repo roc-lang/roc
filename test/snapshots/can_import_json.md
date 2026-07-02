@@ -10,8 +10,24 @@ import json.Json
 main = Json.utf8
 ~~~
 # EXPECTED
+DUPLICATE DEFINITION - can_import_json.md:1:1:1:17
 UNDEFINED VARIABLE - can_import_json.md:3:8:3:17
 # PROBLEMS
+
+┌──────────────────────┐
+│ DUPLICATE DEFINITION ├─ The name `Json` is being redeclared here. ──────────┐
+└┬─────────────────────┘                                                      │
+ │                                                                            │
+ │  import json.Json                                                          │
+ │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                          │
+ └──────────────────────────────────────────────────── can_import_json.md:1:1 ┘
+
+    In this scope, `Json` was already defined here:
+      ┌───────────────────────────────────────────────────────────────────────┐
+    1 │  import json.Json                                                     │
+      │  ‾                                                                    │
+      └─────────────────────────────────────────────── can_import_json.md:1:1 ┘
+
 
 ┌────────────────────┐
 │ UNDEFINED VARIABLE ├─ Nothing is named `utf8` in this scope. ───────────────┐

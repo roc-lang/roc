@@ -59,6 +59,7 @@ combineTrys = |jsonTry, httpStatus|
     }
 ~~~
 # EXPECTED
+DUPLICATE DEFINITION - can_import_exposing_types.md:1:1:1:49
 UNDECLARED TYPE - can_import_exposing_types.md:6:24:6:29
 UNDECLARED TYPE - can_import_exposing_types.md:6:31:6:36
 UNDEFINED VARIABLE - can_import_exposing_types.md:7:21:7:31
@@ -89,6 +90,21 @@ UNDECLARED TYPE - can_import_exposing_types.md:47:48:47:56
 UNDECLARED TYPE - can_import_exposing_types.md:47:58:47:63
 UNDEFINED VARIABLE - can_import_exposing_types.md:50:33:50:44
 # PROBLEMS
+
+┌──────────────────────┐
+│ DUPLICATE DEFINITION ├─ The name `Json` is being redeclared here. ──────────┐
+└┬─────────────────────┘                                                      │
+ │                                                                            │
+ │  import json.Json exposing [Value, Error, Config]                          │
+ │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                          │
+ └────────────────────────────────────────── can_import_exposing_types.md:1:1 ┘
+
+    In this scope, `Json` was already defined here:
+      ┌───────────────────────────────────────────────────────────────────────┐
+    1 │  import json.Json exposing [Value, Error, Config]                     │
+      │  ‾                                                                    │
+      └───────────────────────────────────── can_import_exposing_types.md:1:1 ┘
+
 
 ┌─────────────────┐
 │ UNDECLARED TYPE ├─ The type `Value` is not declared in this scope. ─────────┐

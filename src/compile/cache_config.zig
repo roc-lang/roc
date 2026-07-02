@@ -33,7 +33,9 @@ pub const Constants = struct {
     /// 8: ModuleEnv stores source-relative file-import dependency metadata.
     /// 9: ModuleEnv records runtime-prepared static builtin serialization state.
     /// 10: ModuleEnv common identifiers include Crypto digest and hasher builtin names.
-    pub const CACHE_VERSION = 10;
+    /// 11: Builtin indices and common identifiers changed for Encoding.Json and Encoding.HttpHeader.
+    /// 12: Builtin.Encoding.Json structural encode/parse support changed common identifiers.
+    pub const CACHE_VERSION = 12;
 };
 
 /// Configuration for the Roc cache system.

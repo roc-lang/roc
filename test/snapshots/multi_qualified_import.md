@@ -134,13 +134,14 @@ UNDEFINED VARIABLE - multi_qualified_import.md:12:8:12:12
 
 
 ┌────────────────┐
-│ DOES NOT EXIST ├─ `Json.Core.Utf8.defaultEncoder` does not exist. ──────────┐
+│ DOES NOT EXIST ├─ `Json.defaultEncoder` does not exist. ────────────────────┐
 └┬───────────────┘                                                            │
  │                                                                            │
  │  json_encoder = Json.Core.Utf8.defaultEncoder                              │
  │                 ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                              │
  └──────────────────────────────────────────── multi_qualified_import.md:4:16 ┘
 
+    `Json` is in scope, but it has no associated `defaultEncoder`.
 
 
 ┌─────────────────────┐
@@ -254,7 +255,7 @@ data = json
 (can-ir
 	(d-let
 		(p-assign (ident "json_encoder"))
-		(e-runtime-error (tag "qualified_ident_does_not_exist"))
+		(e-runtime-error (tag "nested_value_not_found"))
 		(annotation
 			(ty-malformed)))
 	(d-let

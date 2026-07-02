@@ -40,6 +40,7 @@ main = {
 }
 ~~~
 # EXPECTED
+DUPLICATE DEFINITION - can_import_comprehensive.md:1:1:1:17
 DUPLICATE DEFINITION - can_import_comprehensive.md:3:1:3:27
 UNDEFINED VARIABLE - can_import_comprehensive.md:6:14:6:22
 UNDEFINED VARIABLE - can_import_comprehensive.md:7:14:7:23
@@ -50,6 +51,21 @@ UNDEFINED VARIABLE - can_import_comprehensive.md:17:15:17:18
 UNDEFINED VARIABLE - can_import_comprehensive.md:18:15:18:19
 UNDEFINED VARIABLE - can_import_comprehensive.md:21:16:21:26
 # PROBLEMS
+
+┌──────────────────────┐
+│ DUPLICATE DEFINITION ├─ The name `Json` is being redeclared here. ──────────┐
+└┬─────────────────────┘                                                      │
+ │                                                                            │
+ │  import json.Json                                                          │
+ │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                          │
+ └─────────────────────────────────────────── can_import_comprehensive.md:1:1 ┘
+
+    In this scope, `Json` was already defined here:
+      ┌───────────────────────────────────────────────────────────────────────┐
+    1 │  import json.Json                                                     │
+      │  ‾                                                                    │
+      └────────────────────────────────────── can_import_comprehensive.md:1:1 ┘
+
 
 ┌──────────────────────┐
 │ DUPLICATE DEFINITION ├─ The name `Str` is being redeclared here. ───────────┐

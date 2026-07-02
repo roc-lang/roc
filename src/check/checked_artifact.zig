@@ -1386,6 +1386,8 @@ fn checkedTypeIsConcreteCompileTimeRootInner(
                     .primitive,
                     .list,
                     .box,
+                    .dict,
+                    .set,
                     .parse_tag_union_spec,
                     .fields,
                     .field,
@@ -2254,6 +2256,8 @@ pub const CheckedBuiltinNominal = enum {
     dec,
     list,
     box,
+    dict,
+    set,
     parse_tag_union_spec,
     fields,
     field,
@@ -2288,6 +2292,8 @@ pub const CheckedBuiltinRuntimeEncoding = union(enum) {
     bool_tag_union,
     list,
     box,
+    dict,
+    set,
     parse_tag_union_spec,
     fields,
     field,
@@ -2317,6 +2323,8 @@ pub fn builtinRuntimeEncoding(builtin_nominal: CheckedBuiltinNominal) CheckedBui
         .dec => .{ .primitive = .dec },
         .list => .list,
         .box => .box,
+        .dict => .dict,
+        .set => .set,
         .parse_tag_union_spec => .parse_tag_union_spec,
         .fields => .fields,
         .field => .field,
@@ -6265,9 +6273,11 @@ fn checkedBuiltinNominalForIdent(module_env: *const ModuleEnv, ident: base.Ident
     if (ident.eql(common.dec) or ident.eql(common.dec_type)) return .dec;
     if (ident.eql(common.list) or ident.eql(common.builtin_list)) return .list;
     if (ident.eql(common.box) or ident.eql(common.builtin_box)) return .box;
-    if (ident.eql(common.builtin_parse_tag_union_spec)) return .parse_tag_union_spec;
-    if (ident.eql(common.builtin_str_field_names)) return .fields;
-    if (ident.eql(common.builtin_str_field_name)) return .field;
+    if (ident.eql(common.dict) or ident.eql(common.builtin_dict)) return .dict;
+    if (ident.eql(common.set) or ident.eql(common.builtin_set)) return .set;
+    if (ident.eql(common.builtin_encoding_parse_tag_union_spec)) return .parse_tag_union_spec;
+    if (ident.eql(common.builtin_encoding_field_names)) return .fields;
+    if (ident.eql(common.builtin_encoding_field_name)) return .field;
     if (ident.eql(common.builtin_crypto_sha256_digest)) return .crypto_sha256_digest;
     if (ident.eql(common.builtin_crypto_sha256_hasher)) return .crypto_sha256_hasher;
     if (ident.eql(common.builtin_crypto_blake3_digest)) return .crypto_blake3_digest;
@@ -10855,6 +10865,8 @@ pub fn builtinNominalAcceptsNumeralLiteral(builtin_nominal: CheckedBuiltinNomina
         .str,
         .list,
         .box,
+        .dict,
+        .set,
         .parse_tag_union_spec,
         .fields,
         .field,
@@ -14948,6 +14960,7 @@ fn specializeResolvedStaticDispatchPlanCallables(
     allocator: Allocator,
     names: *canonical.CanonicalNameStore,
     store: *CheckedTypeStore,
+    module_idx: u32,
     artifact_key: CheckedModuleArtifactKey,
     available_artifacts: []const ImportedModuleView,
     plans: *static_dispatch.StaticDispatchPlanTable,
@@ -14961,6 +14974,7 @@ fn specializeResolvedStaticDispatchPlanCallables(
             allocator,
             names,
             store,
+            module_idx,
             artifact_key,
             available_artifacts,
             target,
@@ -14979,12 +14993,24 @@ fn projectResolvedDispatchTargetCallable(
     allocator: Allocator,
     names: *canonical.CanonicalNameStore,
     store: *CheckedTypeStore,
+    module_idx: u32,
     artifact_key: CheckedModuleArtifactKey,
     available_artifacts: []const ImportedModuleView,
     target: static_dispatch.MethodTarget,
 ) Allocator.Error!CheckedTypeId {
     const target_key = switch (target.kind) {
         .local_proc => return target.callable_ty,
+        .generated_structural_parser,
+        .generated_structural_encoder,
+        => {
+            if (target.module_idx == module_idx) return target.callable_ty;
+            const imported = importedModuleViewByModuleIndex(available_artifacts, target.module_idx) orelse {
+                checkedArtifactInvariant("resolved generated structural dispatch target artifact was not available during checked publication", .{});
+            };
+            var projector = CheckedTypeStoreImportProjector.init(allocator, store, names, imported);
+            defer projector.deinit();
+            return try projector.project(target.callable_ty);
+        },
         .procedure => |procedure| checkedArtifactKeyFromArtifactRef(procedure.template.artifact),
     };
     if (checkedArtifactKeyEql(target_key, artifact_key)) return target.callable_ty;
@@ -15953,6 +15979,16 @@ fn importedModuleViewByKey(
 ) ?ImportedModuleView {
     for (artifacts) |artifact| {
         if (std.meta.eql(artifact.key.bytes, key.bytes)) return artifact;
+    }
+    return null;
+}
+
+fn importedModuleViewByModuleIndex(
+    artifacts: []const ImportedModuleView,
+    module_idx: u32,
+) ?ImportedModuleView {
+    for (artifacts) |artifact| {
+        if (artifact.module_identity.module_idx == module_idx) return artifact;
     }
     return null;
 }
@@ -20466,6 +20502,15 @@ fn checkedTypeHasNoReachableCallableSlotsInner(
                     => {
                         if (nominal.args.len != 1) checkedArtifactInvariant("builtin container nominal had non-unary args", .{});
                         break :blk try checkedTypeHasNoReachableCallableSlotsInner(checked_types, nominal.args[0], active);
+                    },
+                    .set => {
+                        if (nominal.args.len != 1) checkedArtifactInvariant("builtin Set nominal had non-unary args", .{});
+                        break :blk try checkedTypeHasNoReachableCallableSlotsInner(checked_types, nominal.args[0], active);
+                    },
+                    .dict => {
+                        if (nominal.args.len != 2) checkedArtifactInvariant("builtin Dict nominal had non-binary args", .{});
+                        if (!try checkedTypeHasNoReachableCallableSlotsInner(checked_types, nominal.args[0], active)) break :blk false;
+                        break :blk try checkedTypeHasNoReachableCallableSlotsInner(checked_types, nominal.args[1], active);
                     },
                 }
             }
@@ -27321,6 +27366,7 @@ pub fn publishFromTypedModule(
         allocator,
         &canonical_names,
         checked_types,
+        module_idx,
         artifact_key,
         inputs.available_artifacts,
         &static_dispatch_plans,
@@ -29048,8 +29094,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, bump `serialized_layout_version` and replace the golden bytes below with
     // the ones this assertion prints.
     const golden: [32]u8 = .{
-        0x33, 0xA8, 0x21, 0x31, 0xEE, 0x36, 0x52, 0x92, 0x6F, 0x71, 0x2B, 0x42, 0x59, 0xE3, 0xB5, 0x57,
-        0xF1, 0x2D, 0xDB, 0xD1, 0x82, 0x87, 0xB9, 0x3E, 0xB7, 0x97, 0xF9, 0xAE, 0x11, 0xAE, 0xFE, 0xB2,
+        0x32, 0xA5, 0x67, 0x52, 0xA5, 0xFF, 0x07, 0x98, 0xC3, 0x20, 0xD9, 0x35, 0xEC, 0x50, 0x59, 0x20,
+        0x82, 0xCD, 0x81, 0xCC, 0x00, 0x46, 0xD9, 0x6E, 0xD8, 0xE4, 0xB7, 0x0B, 0x4E, 0x80, 0xAE, 0x41,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

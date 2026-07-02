@@ -3207,6 +3207,10 @@ const Formatter = struct {
                         return fmt.nodesWillBeMultiline(AST.RecordField.Idx, fmt.ast.store.recordFieldSlice(rb.fields));
                     },
                     .nominal_record => |nr| {
+                        if (fmt.nodeWillBeMultiline(AST.Expr.Idx, nr.mapper)) {
+                            return true;
+                        }
+
                         return fmt.nodeWillBeMultiline(AST.Expr.Idx, nr.backing);
                     },
                     .suffix_single_question => |s| {
