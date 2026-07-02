@@ -480,6 +480,36 @@ pub fn assertDefTypeOptions(self: *TestEnv, target_def_name: []const u8, expecte
     return error.TestUnexpectedResult;
 }
 
+/// Render the type of every top-level def, in def order, joined by '\n'.
+/// Caller owns the returned slice. Reuses the same type-writing path as
+/// `assertDefType`.
+pub fn renderAllDefTypes(self: *TestEnv) Allocator.Error![]u8 {
+    var buf = std.array_list.Managed(u8).init(self.gpa);
+    errdefer buf.deinit();
+
+    const idents = self.module_env.getIdentStoreConst();
+    const defs_slice = self.module_env.store.sliceDefs(self.module_env.all_defs);
+    for (defs_slice) |def_idx| {
+        const def = self.module_env.store.getDef(def_idx);
+        const ptrn = self.module_env.store.getPattern(def.pattern);
+
+        const def_name = switch (ptrn) {
+            .assign => |assign| idents.getText(assign.ident),
+            else => "<non-assign>",
+        };
+
+        self.type_writer.write(ModuleEnv.varFrom(def_idx), .wrap) catch return error.OutOfMemory;
+        const rendered = self.type_writer.get();
+
+        try buf.appendSlice(def_name);
+        try buf.appendSlice(" : ");
+        try buf.appendSlice(rendered);
+        try buf.append('\n');
+    }
+
+    return buf.toOwnedSlice();
+}
+
 /// Get the inferred type of the last declaration and compare it to the provided
 /// expected type string.
 ///
