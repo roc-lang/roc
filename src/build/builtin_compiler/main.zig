@@ -407,7 +407,6 @@ fn compileModule(
             &checker.import_mapping,
             &checker.regions,
             null,
-            "",
         );
         defer report_builder.deinit();
 

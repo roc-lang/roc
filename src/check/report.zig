@@ -105,6 +105,14 @@ fn pluralize(count: anytype, singular: []const u8, plural: []const u8) []const u
 
 // reporting //
 
+/// Platform source used to render the platform-side region of
+/// platform-requirement diagnostics: the platform's checked env and its
+/// user-facing filename, always supplied together.
+pub const PlatformRequirementSource = struct {
+    env: *const ModuleEnv,
+    filename: []const u8,
+};
+
 /// Build reports for problems
 pub const ReportBuilder = struct {
     const Self = @This();
@@ -118,8 +126,7 @@ pub const ReportBuilder = struct {
     source: []const u8,
     filename: []const u8,
     other_modules: []const *const ModuleEnv,
-    platform_requirement_env: ?*const ModuleEnv,
-    platform_requirement_filename: []const u8,
+    platform_requirement_source: ?PlatformRequirementSource,
     import_mapping: *const @import("types").import_mapping.ImportMapping,
     /// The checker's full region list, which includes regions for type variables
     /// created during type checking that don't have corresponding CIR nodes.
@@ -144,8 +151,7 @@ pub const ReportBuilder = struct {
         other_modules: []const *const ModuleEnv,
         import_mapping: *const @import("types").import_mapping.ImportMapping,
         checker_regions: *const Region.List,
-        platform_requirement_env: ?*const ModuleEnv,
-        platform_requirement_filename: []const u8,
+        platform_requirement_source: ?PlatformRequirementSource,
     ) Allocator.Error!Self {
         return .{
             .gpa = gpa,
@@ -159,8 +165,7 @@ pub const ReportBuilder = struct {
             .source = module_env.common.source,
             .filename = filename,
             .other_modules = other_modules,
-            .platform_requirement_env = platform_requirement_env,
-            .platform_requirement_filename = platform_requirement_filename,
+            .platform_requirement_source = platform_requirement_source,
             .diff_fields = try SnapshotRecordFieldSafeList.initCapacity(gpa, 8),
             .diff_tags = try SnapshotTagSafeList.initCapacity(gpa, 8),
             .typo_suggestions = try diff.TypoSuggestion.ArrayList.initCapacity(gpa, 16),
@@ -215,14 +220,14 @@ pub const ReportBuilder = struct {
     }
 
     fn addPlatformRequirementSourceHighlight(self: *Self, report: *Report, region: Region) Allocator.Error!void {
-        const platform_env = self.platform_requirement_env orelse return;
-        const region_info = platform_env.calcRegionInfo(region);
+        const source = self.platform_requirement_source orelse return;
+        const region_info = source.env.calcRegionInfo(region);
         try report.document.addSourceRegion(
             region_info,
             .error_highlight,
-            self.platform_requirement_filename,
-            platform_env.common.source,
-            platform_env.getLineStarts(),
+            source.filename,
+            source.env.common.source,
+            source.env.getLineStarts(),
         );
     }
 
@@ -809,15 +814,22 @@ pub const ReportBuilder = struct {
                     .record_access => |ctx| self.buildRecordAccess(mismatch.types, ctx),
                     .record_update => |ctx| self.buildRecordUpdate(mismatch.types, ctx),
                     .recursive_def => |ctx| self.buildRecursiveDef(mismatch.types, ctx),
-                    .platform_requirement => return try self.makeMismatchReport(
-                        ProblemRegion{ .simple = regionIdxFrom(mismatch.types.actual_var) },
-                        &.{D.bytes("This expression is used in an unexpected way.")},
-                        &.{D.bytes("It has the type:")},
-                        mismatch.types.actual_snapshot,
-                        &.{D.bytes("But the platform says it should be:")},
-                        mismatch.types.expected_snapshot,
-                        &.{},
-                    ),
+                    .platform_requirement => |ctx| {
+                        var report = try self.makeMismatchReport(
+                            ProblemRegion{ .simple = regionIdxFrom(mismatch.types.actual_var) },
+                            &.{ D.bytes("The platform requires "), D.ident(ctx.required_ident), D.bytes(" to have a specific type.") },
+                            &.{D.bytes("Here it has the type:")},
+                            mismatch.types.actual_snapshot,
+                            &.{D.bytes("But the platform requires:")},
+                            mismatch.types.expected_snapshot,
+                            &.{},
+                        );
+                        try report.document.addLineBreak();
+                        try report.document.addText("The requirement is declared here:");
+                        try report.document.addLineBreak();
+                        try self.addPlatformRequirementSourceHighlight(&report, ctx.platform_region);
+                        return report;
+                    },
                     .type_annotation => return try self.makeMismatchReport(
                         ProblemRegion{ .simple = regionIdxFrom(mismatch.types.actual_var) },
                         &.{D.bytes("This expression is used in an unexpected way.")},

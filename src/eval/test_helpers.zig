@@ -1685,7 +1685,6 @@ fn renderCheckedModuleProblemsWithConfig(
             &main.checker.import_mapping,
             &main.checker.regions,
             null,
-            "",
         );
         defer report_builder.deinit();
 

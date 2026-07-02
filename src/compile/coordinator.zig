@@ -346,10 +346,9 @@ pub const ModuleState = struct {
     /// Owned semantic module payload. Earlier phases populate only `module_env`;
     /// type checking later fills in the checked artifact.
     semantic: ?OwnedSemanticModuleData = null,
-    /// Checked platform requirement header surface for platform roots.
+    /// Requirement surface exposed once a platform root's check completes
+    /// with a published artifact; borrows the platform's checked env.
     platform_requirement_surface: ?PlatformRequirementSurface = null,
-    /// True once the platform requirement surface worker has been queued.
-    platform_requirement_surface_queued: bool = false,
     /// Cached AST from parsing (owned, null after canonicalization)
     cached_ast: ?*AST,
     /// Current compilation phase
@@ -442,12 +441,6 @@ pub const ModuleState = struct {
         }
     }
 
-    fn markUserErrorsNotLowerable(self: *ModuleState) void {
-        if (self.semantic) |*semantic| {
-            semantic.user_errors_allow_lowering = false;
-        }
-    }
-
     fn canonicalSourceDir(self: *const ModuleState) []const u8 {
         return self.source_dir_override orelse (std.fs.path.dirname(self.path) orelse "");
     }
@@ -524,9 +517,6 @@ pub const ModuleState = struct {
                 env_alloc.destroy(env);
                 if (source.len > 0) env_alloc.free(@constCast(source));
             }
-        }
-        if (self.platform_requirement_surface) |*surface| {
-            surface.deinit();
         }
         for (self.explicit_root_ident_names) |name| gpa.free(name);
         gpa.free(self.explicit_root_ident_names);
@@ -854,6 +844,11 @@ pub const Coordinator = struct {
     enable_hosted_transform: bool,
     /// Whether to retain exact source byte states for watch-mode refreshes.
     track_watch_inputs: bool,
+    /// Name of the registered platform package, set via markPlatformPackage.
+    /// App-root type checks wait for this package's root module to finish
+    /// checking, so platform existence comes from explicit registration data
+    /// rather than probing names or canonicalization progress.
+    platform_root_package_name: ?[]const u8 = null,
 
     /// Package name -> note for packages compiled against a dependency
     /// version they did not declare. Rendered alongside errors from those
@@ -934,6 +929,7 @@ pub const Coordinator = struct {
             .retired_checked_artifacts = std.ArrayList(RetiredCheckedArtifact).empty,
             .enable_hosted_transform = false,
             .track_watch_inputs = false,
+            .platform_root_package_name = null,
             .version_notes = std.StringHashMap([]const u8).init(gpa),
             .total_parse_ns = 0,
             .total_canonicalize_ns = 0,
@@ -1019,6 +1015,13 @@ pub const Coordinator = struct {
 
     pub fn setWatchInputTracking(self: *Coordinator, enabled: bool) void {
         self.track_watch_inputs = enabled;
+    }
+
+    /// Record which registered package is the app's platform. App-root type
+    /// checks wait for this package's root module to finish checking, so the
+    /// requirement surface always comes from a completed platform check.
+    pub fn markPlatformPackage(self: *Coordinator, package_name: []const u8) void {
+        self.platform_root_package_name = package_name;
     }
 
     /// Set the I/O / core context implementation. Callers must supply a fully
@@ -1200,6 +1203,7 @@ pub const Coordinator = struct {
         url: ?package_source.UrlSourceView,
     ) Allocator.Error!void {
         const pf_pkg = try self.ensurePackageWithUrl("pf", platform_dir, url);
+        self.markPlatformPackage(pf_pkg.name);
 
         if (qualifier) |qual| {
             try app_pkg.shorthands.put(
@@ -1517,60 +1521,6 @@ pub const Coordinator = struct {
         }
 
         return try views.toOwnedSlice(allocator);
-    }
-
-    fn appendTypecheckAvailablePublicApiClosure(
-        self: *Coordinator,
-        views: *std.ArrayList(check.CheckedArtifact.ImportedModuleView),
-        allocator: Allocator,
-        root_view: check.CheckedArtifact.ImportedModuleView,
-    ) Allocator.Error!void {
-        var pending = std.ArrayList(check.CheckedArtifact.ImportedModuleView).empty;
-        defer pending.deinit(allocator);
-
-        var seen = std.AutoHashMap(check.CheckedArtifact.CheckedModuleArtifactKey, void).init(allocator);
-        defer seen.deinit();
-
-        for (views.items) |view| {
-            try seen.put(view.key, {});
-        }
-        try pending.append(allocator, root_view);
-
-        while (pending.pop()) |view| {
-            const entry = try seen.getOrPut(view.key);
-            if (entry.found_existing) continue;
-            entry.value_ptr.* = {};
-
-            try views.append(allocator, view);
-
-            for (view.direct_import_artifact_keys) |dependency_key| {
-                const artifact = self.checkedArtifactByKey(dependency_key) orelse {
-                    if (builtin.mode == .Debug) {
-                        std.debug.panic("compile.coordinator missing direct dependency checked artifact", .{});
-                    }
-                    unreachable;
-                };
-                try pending.append(allocator, check.CheckedArtifact.importedView(artifact));
-            }
-            for (view.public_api_dependencies.artifacts) |dependency_key| {
-                const artifact = self.checkedArtifactByKey(dependency_key) orelse {
-                    if (builtin.mode == .Debug) {
-                        std.debug.panic("compile.coordinator missing public API dependency checked artifact", .{});
-                    }
-                    unreachable;
-                };
-                try pending.append(allocator, check.CheckedArtifact.importedView(artifact));
-            }
-            for (view.public_api_dependencies.type_owner_artifacts) |dependency_key| {
-                const artifact = self.checkedArtifactByKey(dependency_key) orelse {
-                    if (builtin.mode == .Debug) {
-                        std.debug.panic("compile.coordinator missing type-owner dependency checked artifact", .{});
-                    }
-                    unreachable;
-                };
-                try pending.append(allocator, check.CheckedArtifact.importedView(artifact));
-            }
-        }
     }
 
     fn rootRelationContainsArtifact(
@@ -2148,8 +2098,19 @@ pub const Coordinator = struct {
 
         const relation = switch (relation_result) {
             .relation => |relation| relation,
-            .type_mismatch => coordinatorInvariant("platform/app relation type mismatch reached executable finalization after checking", .{}),
-            .missing_value => coordinatorInvariant("platform/app relation missing required app value reached executable finalization after checking", .{}),
+            .type_mismatch, .missing_value => {
+                // With user errors permitted (the `roc run` lowering path from
+                // the error-recovery contract), an app that failed checking can
+                // publish an artifact whose required values never materialized
+                // as exports; the user already has the diagnostics, so skip the
+                // relation instead of asserting. Without user errors, checking
+                // proved the requirements, so these outcomes are compiler bugs.
+                if (allow_user_errors and self.hasUserErrors()) return;
+                switch (relation_result) {
+                    .type_mismatch => coordinatorInvariant("platform/app relation type mismatch reached executable finalization after checking", .{}),
+                    else => coordinatorInvariant("platform/app relation missing required app value reached executable finalization after checking", .{}),
+                }
+            },
         };
         const relation_artifacts = [_]check.CheckedArtifact.ImportedModuleView{
             check.CheckedArtifact.importedView(app_artifact),
@@ -2161,6 +2122,10 @@ pub const Coordinator = struct {
     }
 
     pub fn validatePlatformAppRelationsForCheck(self: *Coordinator) compile_package.PublishError!void {
+        // Checking owns all user-facing requirement diagnostics; this pass only
+        // asserts that the published artifacts agree with what checking proved,
+        // so it has no reason to spend time in release builds.
+        if (comptime builtin.mode != .Debug) return;
         if (self.hasUserErrors()) {
             if (builtin.mode == .Debug) {
                 std.debug.panic("compile.coordinator.validatePlatformAppRelationsForCheck called after user-facing errors", .{});
@@ -2862,7 +2827,6 @@ pub const Coordinator = struct {
         return switch (task) {
             .parse => |t| self.executeParse(t, allocators),
             .canonicalize => |t| self.executeCanonicalize(t, allocators),
-            .platform_requirements_check => |t| self.executePlatformRequirementsCheck(t, allocators),
             .type_check => |t| self.executeTypeCheck(t, allocators),
         };
     }
@@ -2880,11 +2844,6 @@ pub const Coordinator = struct {
             .user_errors_allow_lowering = user_errors_allow_lowering,
         };
         return semantic;
-    }
-
-    fn appendNonLowerableReport(self: *Coordinator, app_mod: *ModuleState, report: Report) Allocator.Error!void {
-        app_mod.markUserErrorsNotLowerable();
-        try app_mod.reports.append(self.gpa, report);
     }
 
     fn appendReportOwned(allocator: Allocator, reports: *std.ArrayList(Report), report: Report) Allocator.Error!void {
@@ -2958,119 +2917,6 @@ pub const Coordinator = struct {
     ) Allocator.Error!void {
         const serialized = try writer.appendAlloc(arena_alloc, T.Serialized);
         try serialized.serialize(value, arena_alloc, writer);
-    }
-
-    fn cloneModuleEnvStorageForChecking(
-        self: *Coordinator,
-        env: *const ModuleEnv,
-        module_name: []const u8,
-    ) Allocator.Error!check.CheckedArtifact.ModuleEnvStorage {
-        const module_alloc = self.getModuleAllocator();
-
-        const source = try module_alloc.dupe(u8, env.common.source);
-        errdefer module_alloc.free(source);
-
-        var common = try env.common.clone(module_alloc);
-        errdefer common.deinit(module_alloc);
-        common.source = source;
-
-        var types = try env.types.clone(module_alloc);
-        errdefer types.deinit();
-
-        var external_decls = try env.external_decls.clone(module_alloc);
-        errdefer external_decls.deinit(module_alloc);
-
-        var requires_types = try env.requires_types.clone(module_alloc);
-        errdefer requires_types.deinit(module_alloc);
-
-        var for_clause_aliases = try env.for_clause_aliases.clone(module_alloc);
-        errdefer for_clause_aliases.deinit(module_alloc);
-
-        var provides_entries = try env.provides_entries.clone(module_alloc);
-        errdefer provides_entries.deinit(module_alloc);
-
-        var hosted_entries = try env.hosted_entries.clone(module_alloc);
-        errdefer hosted_entries.deinit(module_alloc);
-
-        var imports = try env.imports.clone(module_alloc);
-        errdefer imports.deinit(module_alloc);
-
-        var file_dependencies = try env.file_dependencies.clone(module_alloc);
-        errdefer file_dependencies.deinit(module_alloc);
-
-        var store = try env.store.clone(module_alloc);
-        errdefer store.deinit();
-
-        var import_mapping = try env.import_mapping.cloneWithAllocator(module_alloc);
-        errdefer import_mapping.deinit();
-
-        var method_idents = try env.method_idents.clone(module_alloc);
-        errdefer method_idents.deinit(module_alloc);
-
-        var method_defs = try env.method_defs.clone(module_alloc);
-        errdefer method_defs.deinit(module_alloc);
-
-        var for_loop_dispatch_plans = try env.for_loop_dispatch_plans.clone(module_alloc);
-        errdefer for_loop_dispatch_plans.deinit(module_alloc);
-
-        var numeral_digit_bytes = try env.numeral_digit_bytes.clone(module_alloc);
-        errdefer numeral_digit_bytes.deinit(module_alloc);
-
-        var numeral_literals = try env.numeral_literals.clone(module_alloc);
-        errdefer numeral_literals.deinit(module_alloc);
-
-        var numeral_dispatch_plans = try env.numeral_dispatch_plans.clone(module_alloc);
-        errdefer numeral_dispatch_plans.deinit(module_alloc);
-
-        var quote_dispatch_plans = try env.quote_dispatch_plans.clone(module_alloc);
-        errdefer quote_dispatch_plans.deinit(module_alloc);
-
-        var numeric_suffix_targets = try env.numeric_suffix_targets.clone(module_alloc);
-        errdefer numeric_suffix_targets.deinit(module_alloc);
-
-        const cloned_env = try module_alloc.create(ModuleEnv);
-        errdefer module_alloc.destroy(cloned_env);
-
-        cloned_env.* = .{
-            .gpa = module_alloc,
-            .common = common,
-            .types = types,
-            .module_kind = env.module_kind,
-            .module_role = env.module_role,
-            .all_defs = env.all_defs,
-            .global_value_defs = env.global_value_defs,
-            .all_statements = env.all_statements,
-            .type_decls = env.type_decls,
-            .forward_type_decls = env.forward_type_decls,
-            .exports = env.exports,
-            .requires_types = requires_types,
-            .for_clause_aliases = for_clause_aliases,
-            .provides_entries = provides_entries,
-            .hosted_entries = hosted_entries,
-            .builtin_statements = env.builtin_statements,
-            .external_decls = external_decls,
-            .imports = imports,
-            .file_dependencies = file_dependencies,
-            .module_name = module_name,
-            .display_module_name_idx = env.display_module_name_idx,
-            .qualified_module_ident = env.qualified_module_ident,
-            .diagnostics = env.diagnostics,
-            .store = store,
-            .evaluation_order = null,
-            .runtime_prepared = env.runtime_prepared,
-            .idents = env.idents,
-            .import_mapping = import_mapping,
-            .method_idents = method_idents,
-            .method_defs = method_defs,
-            .for_loop_dispatch_plans = for_loop_dispatch_plans,
-            .numeral_digit_bytes = numeral_digit_bytes,
-            .numeral_literals = numeral_literals,
-            .numeral_dispatch_plans = numeral_dispatch_plans,
-            .quote_dispatch_plans = quote_dispatch_plans,
-            .numeric_suffix_targets = numeric_suffix_targets,
-        };
-
-        return .{ .checked_source = cloned_env };
     }
 
     fn checkedModuleCacheKey(
@@ -3392,6 +3238,8 @@ pub const Coordinator = struct {
         mod.phase = .Done;
         mod.visit_color = .black;
 
+        self.installPlatformRequirementSurface(mod);
+
         self.cache_hits += 1;
 
         if (pkg.remaining_modules > 0) pkg.remaining_modules -= 1;
@@ -3403,6 +3251,27 @@ pub const Coordinator = struct {
 
         const module_id = pkg.getModuleId(mod.name) orelse return;
         try self.wakeCrossPackageDependents(pkg.name, module_id);
+        try self.wakeAppsWaitingOnPlatformRequirements();
+    }
+
+    /// When a platform root finishes checking with a published artifact and a
+    /// requires clause, expose its requirement surface for app-root checks.
+    /// The surface borrows the platform's checked env — stable once the module
+    /// is Done — and derives its cache-identity context from the published
+    /// artifact, so the checker input and the cache key can never disagree.
+    /// A platform whose check failed publishes no artifact and installs no
+    /// surface; its own diagnostics gate the build instead.
+    fn installPlatformRequirementSurface(self: *Coordinator, mod: *ModuleState) void {
+        _ = self;
+        const env = mod.moduleEnv() orelse return;
+        if (moduleKindTag(env.module_kind) != .platform) return;
+        if (env.requires_types.items.items.len == 0) return;
+        const artifact = mod.checkedArtifact() orelse return;
+        mod.platform_requirement_surface = .{
+            .env = env,
+            .context = artifact.platformRequirementContextKey(),
+            .path = mod.path,
+        };
     }
 
     /// Write a BUG diagnostic to stderr via the injected Io. No-op in release builds.
@@ -3425,7 +3294,6 @@ pub const Coordinator = struct {
         switch (res) {
             .parsed => |*r| try self.handleParsed(r),
             .canonicalized => |*r| try self.handleCanonicalized(r),
-            .platform_requirements_checked => |*r| try self.handlePlatformRequirementsChecked(r),
             .type_checked => |*r| try self.handleTypeChecked(r),
             .parse_failed => |*r| try self.handleParseFailed(r),
             .compile_failed => |*r| try self.handleCompileFailed(r),
@@ -3609,103 +3477,18 @@ pub const Coordinator = struct {
         self.total_canonicalize_diag_ns += result.canonicalize_diagnostics_ns;
         mod.compile_time_ns += result.canonicalize_ns + result.canonicalize_diagnostics_ns;
 
-        try self.queuePlatformRequirementsCheckIfNeeded(pkg, mod);
-        if (self.platformRootCandidate()) |platform_root| {
-            try self.queuePlatformRequirementsCheckIfNeeded(platform_root.pkg, platform_root.mod);
-        }
-        try self.wakeAppsWaitingOnPlatformRequirements();
         if (self.appShouldWaitForPlatformRequirements(mod)) {
             mod.phase = .WaitingOnPlatformRequirements;
             mod.visit_color = .black;
             return;
         }
 
-        const platform_surface = self.platformRequirementSurfaceForApp(mod);
-        const platform_requirement_input: ?check.Check.PlatformRequirementInput = if (platform_surface) |surface| surface.checkerInput() else null;
-        const platform_requirement_context: ?check.CheckedArtifact.PlatformRequirementContextKey = if (platform_surface) |surface| surface.context else null;
-
-        const task_payload_alloc = self.getWorkerAllocator();
-        const imported_envs = try self.buildTypecheckImportedEnvs(pkg, mod, task_payload_alloc);
-        errdefer task_payload_alloc.free(imported_envs);
-        const imported_artifacts = try self.buildTypecheckImportedArtifacts(pkg, mod, task_payload_alloc);
-        errdefer task_payload_alloc.free(imported_artifacts);
-        const available_artifacts = try self.collectTypecheckAvailableArtifactViews(task_payload_alloc, imported_artifacts);
-        errdefer task_payload_alloc.free(available_artifacts);
-        const explicit_roots = try buildExplicitRootRequests(mod, task_payload_alloc);
-        errdefer task_payload_alloc.free(explicit_roots);
-
-        if (mod.reports.items.len == 0 and
-            self.tryLoadCachedCheckedModule(pkg, mod, imported_envs, imported_artifacts, platform_requirement_context, explicit_roots))
-        {
-            task_payload_alloc.free(imported_envs);
-            task_payload_alloc.free(imported_artifacts);
-            task_payload_alloc.free(available_artifacts);
-            task_payload_alloc.free(explicit_roots);
-            try self.finishCachedModule(pkg, mod);
-            return;
-        }
-
-        mod.phase = .TypeCheck;
-        mod.visit_color = .black;
-        try self.enqueueTask(.{
-            .type_check = .{
-                .package_name = pkg.name,
-                .module_id = result.module_id,
-                .module_name = mod.name,
-                .path = mod.path,
-                .module_env = mod.moduleEnv().?,
-                .imported_envs = imported_envs,
-                .imported_artifacts = imported_artifacts,
-                .available_artifacts = available_artifacts,
-                .platform_requirements = platform_requirement_input,
-                .platform_requirement_context = platform_requirement_context,
-                .explicit_roots = explicit_roots,
-            },
-        });
-    }
-
-    fn queuePlatformRequirementsCheckIfNeeded(
-        self: *Coordinator,
-        pkg: *PackageState,
-        mod: *ModuleState,
-    ) Allocator.Error!void {
-        const env = mod.moduleEnv() orelse return;
-        if (moduleKindTag(env.module_kind) != .platform) return;
-        if (env.requires_types.items.items.len == 0) return;
-        if (mod.platform_requirement_surface != null or mod.platform_requirement_surface_queued) return;
-
-        var env_storage = try self.cloneModuleEnvStorageForChecking(env, mod.name);
-        var env_storage_owned = true;
-        errdefer if (env_storage_owned) env_storage.deinit();
-
-        const cloned_env = env_storage.env();
-        const task_payload_alloc = self.getWorkerAllocator();
-        const imported_envs = try self.buildTypecheckImportedEnvsForEnv(pkg, mod, cloned_env, task_payload_alloc);
-        errdefer task_payload_alloc.free(imported_envs);
-
-        const module_id = moduleIdForPtr(pkg, mod) orelse {
-            if (builtin.mode == .Debug) {
-                std.debug.panic("compile.coordinator.queuePlatformRequirementsCheckIfNeeded could not find module id for {s}", .{mod.name});
-            }
-            unreachable;
-        };
-        mod.platform_requirement_surface_queued = true;
-        try self.enqueueTask(.{
-            .platform_requirements_check = .{
-                .package_name = pkg.name,
-                .module_id = module_id,
-                .module_name = mod.name,
-                .path = mod.path,
-                .env_storage = env_storage,
-                .imported_envs = imported_envs,
-            },
-        });
-        env_storage_owned = false;
+        try self.scheduleTypeCheckForCanonicalizedModule(pkg, result.module_id, mod);
     }
 
     fn platformRootCandidate(self: *Coordinator) ?RootModuleRef {
-        if (self.findRootModule(.platform)) |root| return root;
-        const pkg = self.packages.get("pf") orelse return null;
+        const package_name = self.platform_root_package_name orelse return null;
+        const pkg = self.packages.get(package_name) orelse return null;
         const root_id = pkg.root_module_id orelse return null;
         const mod = pkg.getModule(root_id) orelse return null;
         return .{ .pkg = pkg, .mod = mod };
@@ -3722,6 +3505,11 @@ pub const Coordinator = struct {
         return null;
     }
 
+    /// App roots wait for the registered platform's root module to finish
+    /// checking, so the requirement surface (or the platform's own failure
+    /// diagnostics) always exists before the app is checked. Registration is
+    /// the authority for whether a platform exists; canonicalization progress
+    /// and package names are never consulted.
     fn appShouldWaitForPlatformRequirements(self: *Coordinator, mod: *ModuleState) bool {
         const env = mod.moduleEnv() orelse return false;
         switch (moduleKindTag(env.module_kind)) {
@@ -3729,13 +3517,6 @@ pub const Coordinator = struct {
             else => return false,
         }
         const platform_root = self.platformRootCandidate() orelse return false;
-        if (platform_root.mod.platform_requirement_surface != null) return false;
-        if (platform_root.mod.moduleEnv()) |platform_env| {
-            if (moduleKindTag(platform_env.module_kind) == .platform) {
-                return platform_env.requires_types.items.items.len > 0 and
-                    platform_root.mod.platform_requirement_surface_queued;
-            }
-        }
         return platform_root.mod.phase != .Done;
     }
 
@@ -3757,8 +3538,7 @@ pub const Coordinator = struct {
         module_id: ModuleId,
         mod: *ModuleState,
     ) Allocator.Error!void {
-        const platform_surface = self.platformRequirementSurfaceForApp(mod);
-        const platform_requirement_input: ?check.Check.PlatformRequirementInput = if (platform_surface) |surface| surface.checkerInput() else null;
+        const platform_surface: ?messages.PlatformRequirementSurface = if (self.platformRequirementSurfaceForApp(mod)) |surface| surface.* else null;
         const platform_requirement_context: ?check.CheckedArtifact.PlatformRequirementContextKey = if (platform_surface) |surface| surface.context else null;
 
         const task_payload_alloc = self.getWorkerAllocator();
@@ -3766,8 +3546,23 @@ pub const Coordinator = struct {
         errdefer task_payload_alloc.free(imported_envs);
         const imported_artifacts = try self.buildTypecheckImportedArtifacts(pkg, mod, task_payload_alloc);
         errdefer task_payload_alloc.free(imported_artifacts);
-        const available_artifacts = try self.collectTypecheckAvailableArtifactViews(task_payload_alloc, imported_artifacts);
+        var available_artifacts = try self.collectTypecheckAvailableArtifactViews(task_payload_alloc, imported_artifacts);
         errdefer task_payload_alloc.free(available_artifacts);
+        if (platform_surface != null) {
+            // Requirement unification copies platform-owned types into the
+            // app's store, so the app's published API can depend on the
+            // platform root's artifact; make it available to publication's
+            // public-API dependency scan.
+            if (self.platformRootCandidate()) |platform_root| {
+                if (platform_root.mod.checkedArtifact()) |platform_artifact| {
+                    const with_platform = try task_payload_alloc.alloc(check.CheckedArtifact.ImportedModuleView, available_artifacts.len + 1);
+                    @memcpy(with_platform[0..available_artifacts.len], available_artifacts);
+                    with_platform[available_artifacts.len] = check.CheckedArtifact.importedView(platform_artifact);
+                    task_payload_alloc.free(available_artifacts);
+                    available_artifacts = with_platform;
+                }
+            }
+        }
         const explicit_roots = try buildExplicitRootRequests(mod, task_payload_alloc);
         errdefer task_payload_alloc.free(explicit_roots);
 
@@ -3794,8 +3589,7 @@ pub const Coordinator = struct {
                 .imported_envs = imported_envs,
                 .imported_artifacts = imported_artifacts,
                 .available_artifacts = available_artifacts,
-                .platform_requirements = platform_requirement_input,
-                .platform_requirement_context = platform_requirement_context,
+                .platform_requirements = platform_surface,
                 .explicit_roots = explicit_roots,
             },
         });
@@ -3841,44 +3635,6 @@ pub const Coordinator = struct {
             .as => |as_pattern| as_pattern.ident,
             else => null,
         };
-    }
-
-    fn handlePlatformRequirementsChecked(self: *Coordinator, result: *PlatformRequirementsCheckedResult) Allocator.Error!void {
-        if (comptime trace_build) {
-            std.debug.print("[COORD] PLATFORM_REQUIREMENTS_CHECKED: pkg={s} module={s} result_reports={}\n", .{ result.package_name, result.module_name, result.reports.items.len });
-        }
-        const pkg = self.packages.get(result.package_name) orelse {
-            self.bugReport("BUG: package '{s}' not found for platform requirements result (module={s}, id={})\n", .{
-                result.package_name, result.module_name, result.module_id,
-            });
-            unreachable;
-        };
-        const mod = pkg.getModule(result.module_id) orelse {
-            self.bugReport("BUG: module id={} not found in package '{s}' for platform requirements result (module={s})\n", .{
-                result.module_id, result.package_name, result.module_name,
-            });
-            unreachable;
-        };
-
-        for (result.reports.items) |rep| {
-            try mod.reports.append(self.gpa, rep);
-        }
-        result.reports.clearRetainingCapacity();
-        mod.platform_requirement_surface_queued = false;
-
-        if (result.surface) |surface| {
-            if (mod.platform_requirement_surface) |*old_surface| {
-                old_surface.deinit();
-            }
-            mod.platform_requirement_surface = surface;
-            result.surface = null;
-        }
-
-        self.total_typecheck_ns += result.check_ns;
-        self.total_typecheck_diag_ns += result.diagnostics_ns;
-        mod.compile_time_ns += result.check_ns + result.diagnostics_ns;
-
-        try self.wakeAppsWaitingOnPlatformRequirements();
     }
 
     /// Handle a successful type-check result
@@ -3965,6 +3721,8 @@ pub const Coordinator = struct {
         // Mark as done
         mod.phase = .Done;
         mod.visit_color = .black;
+
+        self.installPlatformRequirementSurface(mod);
 
         // Update compile stats
         self.cache_misses += 1;
@@ -4740,97 +4498,6 @@ pub const Coordinator = struct {
         };
     }
 
-    fn executePlatformRequirementsCheck(self: *Coordinator, task: PlatformRequirementsCheckTask, allocators: WorkerTaskAllocators) WorkerResult {
-        return self.executePlatformRequirementsCheckFallible(task, allocators) catch |err| switch (err) {
-            error.OutOfMemory => WorkerResult{ .worker_oom = .{
-                .package_name = task.package_name,
-                .module_id = task.module_id,
-                .module_name = task.module_name,
-            } },
-            else => |e| WorkerResult{ .compile_failed = .{
-                .package_name = task.package_name,
-                .module_id = task.module_id,
-                .module_name = task.module_name,
-                .path = task.path,
-                .reports = self.workerFailureReports(allocators.result, "Platform Requirements Checking Failed", task.path, e),
-                .partial_env = null,
-            } },
-        };
-    }
-
-    fn executePlatformRequirementsCheckFallible(
-        self: *Coordinator,
-        task: PlatformRequirementsCheckTask,
-        task_allocs: WorkerTaskAllocators,
-    ) TypeCheckWorkerError!WorkerResult {
-        var env_storage = task.env_storage;
-        var env_storage_owned = true;
-        defer if (env_storage_owned) env_storage.deinit();
-        defer task_allocs.result.free(task.imported_envs);
-
-        var check_timer = startStageTimer(self.roc_ctx.std_io);
-
-        const env = env_storage.env();
-        const result_alloc = task_allocs.result;
-        var check_output = try compile_package.PackageEnv.checkPlatformRequirementsOnly(
-            result_alloc,
-            env,
-            self.builtin_modules.builtin_module.env,
-            task.imported_envs,
-        );
-        defer check_output.deinit();
-
-        const check_ns = readStageTimer(self.roc_ctx.std_io, &check_timer);
-
-        var diagnostics_timer = startStageTimer(self.roc_ctx.std_io);
-        var reports = try std.ArrayList(Report).initCapacity(result_alloc, 8);
-        errdefer deinitReports(&reports, result_alloc);
-
-        var rb = try check.ReportBuilder.init(
-            result_alloc,
-            env,
-            env,
-            &check_output.checker.snapshots,
-            &check_output.checker.problems,
-            task.path,
-            task.imported_envs,
-            &check_output.checker.import_mapping,
-            &check_output.checker.regions,
-            null,
-            "",
-        );
-        defer rb.deinit();
-
-        for (check_output.checker.problems.problems.items) |prob| {
-            const rep = try rb.build(prob);
-            try appendReportOwned(result_alloc, &reports, rep);
-        }
-
-        const diagnostics_ns = readStageTimer(self.roc_ctx.std_io, &diagnostics_timer);
-
-        const surface: ?PlatformRequirementSurface = if (reports.items.len == 0) surface: {
-            const context = try check.CheckedArtifact.platformRequirementContextKeyFromEnv(result_alloc, env);
-            env_storage_owned = false;
-            break :surface .{
-                .env_storage = env_storage,
-                .context = context,
-                .path = task.path,
-            };
-        } else null;
-
-        return .{ .platform_requirements_checked = .{
-            .package_name = task.package_name,
-            .module_id = task.module_id,
-            .module_name = task.module_name,
-            .path = task.path,
-            .surface = surface,
-            .reports = reports,
-            .check_ns = check_ns,
-            .diagnostics_ns = diagnostics_ns,
-        } };
-    }
-
-    /// Execute a type-check task (pure function)
     fn executeTypeCheck(self: *Coordinator, task: TypeCheckTask, allocators: WorkerTaskAllocators) WorkerResult {
         return self.executeTypeCheckFallible(task, allocators) catch |err| switch (err) {
             error.OutOfMemory => WorkerResult{ .worker_oom = .{
@@ -4871,8 +4538,8 @@ pub const Coordinator = struct {
             task.imported_envs,
             task.imported_artifacts,
             task.available_artifacts,
-            task.platform_requirements,
-            task.platform_requirement_context,
+            if (task.platform_requirements) |surface| surface.checkerInput() else null,
+            if (task.platform_requirements) |surface| surface.context else null,
             task.explicit_roots,
             compile_package.compileTimeFinalizationOptions(self.max_threads, &self.roc_ctx),
         );
@@ -4895,8 +4562,7 @@ pub const Coordinator = struct {
             task.imported_envs,
             &typecheck_output.checker.import_mapping,
             &typecheck_output.checker.regions,
-            if (task.platform_requirements) |requirements| requirements.env else null,
-            if (task.platform_requirements) |requirements| requirements.path else "",
+            if (task.platform_requirements) |requirements| .{ .env = requirements.env, .filename = requirements.path } else null,
         );
         defer rb.deinit();
 
@@ -5886,6 +5552,37 @@ test "Coordinator enqueueParseTask flow" {
     try std.testing.expectEqualStrings("app", task.parse.package_name);
     try std.testing.expectEqual(@as(ModuleId, 0), task.parse.module_id);
     try std.testing.expectEqualStrings("Main", task.parse.module_name);
+}
+
+test "platform root candidate comes from registration, not name probing" {
+    const allocator = std.testing.allocator;
+
+    var coord = try Coordinator.init(
+        allocator,
+        .single_threaded,
+        1,
+        roc_target.RocTarget.detectNative(),
+        undefined,
+        "test",
+        null, // cache_manager
+        CoreCtx.os(std.testing.allocator, std.testing.allocator, std.testing.io),
+    );
+    defer coord.deinit();
+
+    // No platform registered: no candidate, so apps never wait.
+    try std.testing.expect(coord.platformRootCandidate() == null);
+
+    const pf_pkg = try coord.ensurePackage("/abs/path/to/platform/main.roc", "/abs/path/to/platform");
+    const pf_root_id = try pf_pkg.ensureModule(allocator, "main", "/abs/path/to/platform/main.roc");
+    pf_pkg.root_module_id = pf_root_id;
+
+    // Registered but unmarked: still no candidate (registration is the authority).
+    try std.testing.expect(coord.platformRootCandidate() == null);
+
+    coord.markPlatformPackage(pf_pkg.name);
+    const candidate = coord.platformRootCandidate() orelse return error.TestExpectedCandidate;
+    try std.testing.expect(candidate.mod == pf_pkg.getModule(pf_root_id).?);
+    try std.testing.expect(candidate.mod.phase != .Done);
 }
 
 test "Coordinator single-threaded loop with mock result" {

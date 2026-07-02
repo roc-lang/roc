@@ -5565,6 +5565,7 @@ fn lowerLirWithCoordinator(
             // provides/hosted declarations are available to the build.
             if (i == compile.package_resolution.Resolved.root_index and dep.is_platform) {
                 const pf_pkg = coord.packages.get(target_name) orelse return error.CliError;
+                coord.markPlatformPackage(pf_pkg.name);
                 if (pf_pkg.root_module_id == null) {
                     const pf_module_id = try pf_pkg.ensureModule(ctx.gpa, "main", target.root_file);
                     pf_pkg.root_module_id = pf_module_id;

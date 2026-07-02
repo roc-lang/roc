@@ -88,6 +88,10 @@ pub const Instantiator = struct {
         /// In this mode, rigids present in the provided map are substituted,
         /// and any other rigids are instantiated as fresh rigid variables.
         substitute_rigids_fresh: *std.AutoHashMapUnmanaged(Ident.Idx, Var),
+
+        /// In this mode, rigids present in the provided map are substituted,
+        /// and any other rigids are instantiated as fresh flex variables.
+        substitute_rigids_fresh_flex: *std.AutoHashMapUnmanaged(Ident.Idx, Var),
     };
 
     const Self = @This();
@@ -167,6 +171,13 @@ pub const Instantiator = struct {
                                 return existing_var;
                             }
                             break :blk .rigid;
+                        },
+                        .substitute_rigids_fresh_flex => |rigid_subs| {
+                            if (rigid_subs.get(rigid.name)) |existing_var| {
+                                try self.var_map.put(resolved_var, existing_var);
+                                return existing_var;
+                            }
+                            break :blk .flex;
                         },
                     }
                 };

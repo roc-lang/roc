@@ -1875,45 +1875,6 @@ pub const PackageEnv = struct {
         };
     }
 
-    pub fn checkPlatformRequirementsOnly(
-        check_alloc: Allocator,
-        env: *ModuleEnv,
-        builtin_module_env: *const ModuleEnv,
-        imported_envs: []const *ModuleEnv,
-    ) TypeCheckModuleError!PlatformRequirementsCheckOutput {
-        const builtin_indices = compiled_builtins.builtinIndices(can.CIR);
-
-        const module_builtin_ctx: Check.BuiltinContext = .{
-            .module_name = env.qualified_module_ident,
-            .bool_stmt = builtin_indices.bool_type,
-            .try_stmt = builtin_indices.try_type,
-            .str_stmt = builtin_indices.str_type,
-            .builtin_module = builtin_module_env,
-            .builtin_indices = builtin_indices,
-        };
-
-        var module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(check_alloc);
-        errdefer module_envs_map.deinit();
-
-        var checker = try Check.initWithOwnerModules(
-            check_alloc,
-            &env.types,
-            env,
-            imported_envs,
-            imported_envs,
-            &module_envs_map,
-            &env.store.regions,
-            module_builtin_ctx,
-        );
-        checker.fixupTypeWriter();
-        errdefer checker.deinit();
-
-        try checker.checkPlatformRequirementsOnly();
-        module_envs_map.deinit();
-
-        return .{ .checker = checker };
-    }
-
     pub fn publishCheckedArtifactFromCheckedModule(
         gpa: Allocator,
         env: *ModuleEnv,
@@ -2076,7 +2037,6 @@ pub const PackageEnv = struct {
             &typecheck_output.checker.import_mapping,
             &typecheck_output.checker.regions,
             null,
-            "",
         );
         defer rb.deinit();
         for (typecheck_output.checker.problems.problems.items) |prob| {

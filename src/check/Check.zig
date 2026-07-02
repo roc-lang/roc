@@ -57,6 +57,9 @@ const InterpolationConstraintMetadata = struct {
     checked_parts: bool = false,
 };
 
+/// Transient checker input carrying the platform root's requirement surface:
+/// the platform's checked env (read-only; instantiated into the app's store,
+/// never referenced by checker output) and its path for diagnostics.
 pub const PlatformRequirementInput = struct {
     env: *const ModuleEnv,
     path: []const u8,
@@ -65,6 +68,8 @@ pub const PlatformRequirementInput = struct {
 const PlatformRequiredDef = struct {
     expected_var: Var,
     required_ident: Ident.Idx,
+    /// Where the platform's requires clause declares this requirement.
+    platform_region: Region,
 };
 
 gpa: std.mem.Allocator,
@@ -248,6 +253,9 @@ empirical_exhaustiveness_depth: u32 = 0,
 /// constraints resolve. This ordering requirement is why these can't be
 /// stored in the `constraints` list (which runs after both steps).
 deferred_def_unifications: std.ArrayListUnmanaged(DeferredDefUnification),
+/// Platform-required unifications deferred past cycle generalization, for the
+/// same rank reasons as `deferred_def_unifications`.
+deferred_platform_required_unifications: std.ArrayListUnmanaged(DeferredPlatformRequiredUnification),
 /// Envs from cycle participants whose vars need to be merged at the cycle root.
 /// Stored here instead of merging eagerly so that ranks remain correct
 /// (no `popRankRetainingVars` needed).
@@ -967,6 +975,13 @@ const DeferredDefUnification = struct {
     expr_var: Var,
 };
 
+const DeferredPlatformRequiredUnification = struct {
+    expected_var: Var,
+    expr_var: Var,
+    required_ident: Ident.Idx,
+    platform_region: Region,
+};
+
 const ValueLookupEntry = struct {
     expr_idx: CIR.Expr.Idx,
     pattern_idx: CIR.Pattern.Idx,
@@ -1177,6 +1192,7 @@ fn initAssumePrepared(
         // Initialize with null import_mapping - caller should call fixupTypeWriter() after storing Check
         .type_writer = try types_mod.TypeWriter.initFromParts(gpa, types, cir.getIdentStore(), null),
         .deferred_def_unifications = .empty,
+        .deferred_platform_required_unifications = .empty,
         .deferred_cycle_envs = .empty,
         .value_lookup_tracking = .empty,
         .erroneous_value_exprs = .empty,
@@ -1343,6 +1359,7 @@ pub fn deinit(self: *Self) void {
     self.local_recursive_refs.deinit(self.gpa);
     self.type_writer.deinit();
     self.deferred_def_unifications.deinit(self.gpa);
+    self.deferred_platform_required_unifications.deinit(self.gpa);
     self.instantiation_dispatchers.deinit(self.gpa);
     self.open_literal_vars.deinit(self.gpa);
     self.open_numeral_literals.deinit(self.gpa);
@@ -3198,7 +3215,11 @@ fn instantiateVarWithSubs(
 }
 
 /// Instantiate a variable, substituting rigids in the provided map and
-/// instantiating any other rigids normally.
+/// instantiating any other rigids as fresh flex vars. Used for platform
+/// requirement schemes: for-clause rigids take the app's chosen types, and
+/// every other rigid the requires grammar permits (`_`-prefixed vars, open
+/// union `..` extensions) is app-flexible by design — the same semantics
+/// whether or not a for-clause is present.
 fn instantiateVarWithPartialSubs(
     self: *Self,
     var_to_instantiate: Var,
@@ -3215,7 +3236,7 @@ fn instantiateVarWithPartialSubs(
         .var_map = &self.var_map,
 
         .current_rank = env.rank(),
-        .rigid_behavior = .{ .substitute_rigids_fresh = subs },
+        .rigid_behavior = .{ .substitute_rigids_fresh_flex = subs },
     };
     return self.instantiateVarHelp(var_to_instantiate, &instantiate_ctx, env, region_behavior);
 }
@@ -4572,73 +4593,6 @@ fn copyBuiltinTypes(self: *Self) Allocator.Error!void {
 /// Public `checkFile` function.
 pub fn checkFile(self: *Self) std.mem.Allocator.Error!void {
     return self.checkFileInternal(false);
-}
-
-pub fn checkPlatformRequirementsOnly(self: *Self) std.mem.Allocator.Error!void {
-    const trace = tracy.trace(@src());
-    defer trace.end();
-
-    try self.prepareMethodFieldAccessExprs();
-    try ensureTypeStoreIsFilled(self);
-
-    var env = try self.env_pool.acquire();
-    defer self.env_pool.release(env);
-
-    std.debug.assert(env.rank() == .generalized);
-
-    if (self.builtin_ctx.builtin_module != null and self.isCheckingBuiltinModuleDirectly()) {
-        self.builtin_ctx.module_name = self.cir.idents.builtin_module;
-        self.cir.qualified_module_ident = self.cir.idents.builtin_module;
-    }
-
-    try self.copyBuiltinTypes();
-
-    for (0..self.cir.builtin_statements.span.len) |stmt_offset| {
-        const builtin_stmt_idx = self.cir.store.statementAt(self.cir.builtin_statements, stmt_offset);
-        try self.generateStmtTypeDeclType(builtin_stmt_idx, &env);
-    }
-
-    for (0..self.cir.type_decls.span.len) |stmt_offset| {
-        const stmt_idx = self.cir.store.statementAt(self.cir.type_decls, stmt_offset);
-        const stmt = self.cir.store.getStatement(stmt_idx);
-        const stmt_var = ModuleEnv.varFrom(stmt_idx);
-
-        switch (stmt) {
-            .s_alias_decl => |alias| {
-                try self.setVarRank(stmt_var, &env);
-                try self.predeclareAliasDecl(stmt_var, alias, &env);
-            },
-            .s_nominal_decl => |nominal| {
-                try self.setVarRank(stmt_var, &env);
-                try self.predeclareNominalDecl(stmt_var, nominal, &env);
-            },
-            else => {},
-        }
-    }
-
-    for (0..self.cir.all_statements.span.len) |stmt_offset| {
-        const stmt_idx = self.cir.store.statementAt(self.cir.all_statements, stmt_offset);
-        const stmt = self.cir.store.getStatement(stmt_idx);
-        const stmt_var = ModuleEnv.varFrom(stmt_idx);
-
-        switch (stmt) {
-            .s_alias_decl => |alias| try self.generateAliasDecl(stmt_idx, stmt_var, alias, &env),
-            .s_nominal_decl => |nominal| try self.generateNominalDecl(stmt_idx, stmt_var, nominal, &env),
-            .s_runtime_error => {
-                try self.setVarRank(stmt_var, &env);
-                try self.unifyWith(stmt_var, .err, &env);
-            },
-            .s_type_anno => |type_anno| {
-                try self.setVarRank(stmt_var, &env);
-                try self.generateStandaloneTypeAnno(stmt_var, type_anno, &env);
-            },
-            else => {},
-        }
-    }
-
-    try env.var_pool.pushRank();
-    std.debug.assert(env.rank() == .outermost);
-    try self.processRequiresTypes(&env);
 }
 
 fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator.Error!void {
@@ -7467,6 +7421,7 @@ fn processAppPlatformRequirements(self: *Self, env: *Env) std.mem.Allocator.Erro
         try self.platform_required_defs.put(self.gpa, def_idx, .{
             .expected_var = expected_var,
             .required_ident = required_ident,
+            .platform_region = required_type.region,
         });
     }
 }
@@ -7502,16 +7457,12 @@ fn instantiatePlatformRequiredType(
     }
 
     const copied = try self.copyVar(ModuleEnv.varFrom(required_type.type_anno), input.env, required_type.region);
-    if (self.rigid_var_substitutions.count() == 0) {
-        return try self.instantiateVar(copied, env, .{ .explicit = required_type.region });
-    }
-    const instantiated = try self.instantiateVarWithPartialSubs(
+    return try self.instantiateVarWithPartialSubs(
         copied,
         &self.rigid_var_substitutions,
         env,
         .{ .explicit = required_type.region },
     );
-    return instantiated;
 }
 
 fn copyPlatformIdent(self: *Self, platform_env: *const ModuleEnv, ident: Ident.Idx) std.mem.Allocator.Error!Ident.Idx {
@@ -7519,19 +7470,8 @@ fn copyPlatformIdent(self: *Self, platform_env: *const ModuleEnv, ident: Ident.I
 }
 
 fn appTypeDeclByIdent(self: *Self, ident: Ident.Idx) ?CIR.Statement.Idx {
-    const wanted = self.cir.getIdent(ident);
-    for (0..self.cir.all_statements.span.len) |stmt_offset| {
-        const stmt_idx = self.cir.store.statementAt(self.cir.all_statements, stmt_offset);
-        const stmt = self.cir.store.getStatement(stmt_idx);
-        const header_idx = switch (stmt) {
-            .s_alias_decl => |alias| alias.header,
-            .s_nominal_decl => |nominal| nominal.header,
-            else => continue,
-        };
-        const header = self.cir.store.getTypeHeader(header_idx);
-        if (Ident.textEql(self.cir.getIdent(header.relative_name), wanted)) return stmt_idx;
-    }
-    return null;
+    if (self.findLocalTypeDeclByNameInSpan(self.cir.type_decls, ident)) |stmt_idx| return stmt_idx;
+    return self.findLocalTypeDeclByNameInSpan(self.cir.forward_type_decls, ident);
 }
 
 fn exposedAppDefByIdent(self: *Self, ident: Ident.Idx) ?CIR.Def.Idx {
@@ -7900,7 +7840,7 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx, env: *Env) std.mem.Allocator.Erro
         } else if (platform_required) |required| {
             break :blk Expected.none().withExpectedType(.{
                 .var_ = required.expected_var,
-                .context = .{ .platform_requirement = .{ .required_ident = required.required_ident } },
+                .context = .{ .platform_requirement = .{ .required_ident = required.required_ident, .platform_region = required.platform_region } },
             });
         } else {
             break :blk Expected.none();
@@ -7925,12 +7865,25 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx, env: *Env) std.mem.Allocator.Erro
     const def_does_fx = try self.checkExpr(def.expr, env, expectation);
     if (def.annotation != null) {
         if (platform_required) |required| {
-            _ = try self.unifyInContext(
-                required.expected_var,
-                ModuleEnv.varFrom(def.expr),
-                env,
-                .{ .platform_requirement = .{ .required_ident = required.required_ident } },
-            );
+            if (self.defer_generalize) {
+                // Same rank contract as the deferred def unifications below:
+                // the requirement var lives at the outermost rank, so unifying
+                // now would lower this cycle participant's expr var out of the
+                // rank the cycle root generalizes at.
+                try self.deferred_platform_required_unifications.append(self.gpa, .{
+                    .expected_var = required.expected_var,
+                    .expr_var = ModuleEnv.varFrom(def.expr),
+                    .required_ident = required.required_ident,
+                    .platform_region = required.platform_region,
+                });
+            } else {
+                _ = try self.unifyInContext(
+                    required.expected_var,
+                    ModuleEnv.varFrom(def.expr),
+                    env,
+                    .{ .platform_requirement = .{ .required_ident = required.required_ident, .platform_region = required.platform_region } },
+                );
+            }
         }
     }
     if (def_does_fx) {
@@ -11937,6 +11890,16 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 _ = try self.unify(u.def_var, u.ptrn_var, env);
             }
             self.deferred_def_unifications.clearRetainingCapacity();
+
+            for (self.deferred_platform_required_unifications.items) |u| {
+                _ = try self.unifyInContext(
+                    u.expected_var,
+                    u.expr_var,
+                    env,
+                    .{ .platform_requirement = .{ .required_ident = u.required_ident, .platform_region = u.platform_region } },
+                );
+            }
+            self.deferred_platform_required_unifications.clearRetainingCapacity();
 
             // Resolve eql constraints accumulated during cycle body checks
             // (from .processing handlers). This must happen now — before

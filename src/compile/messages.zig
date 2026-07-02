@@ -114,48 +114,30 @@ pub const TypeCheckTask = struct {
     imported_artifacts: []const CheckedArtifact.PublishImportArtifact,
     /// Published checked artifacts currently available for exact-key lookup during checking finalization
     available_artifacts: []const CheckedArtifact.ImportedModuleView,
-    /// Platform requirement surface for app-root checking.
-    platform_requirements: ?check.Check.PlatformRequirementInput = null,
-    /// Cache identity component for the platform requirement surface.
-    platform_requirement_context: ?CheckedArtifact.PlatformRequirementContextKey = null,
+    /// Platform requirement surface for app-root checking, carrying both the
+    /// checker's input and the cache-identity component so the two can never
+    /// be set independently.
+    platform_requirements: ?PlatformRequirementSurface = null,
     /// Additional checked roots requested by package-level metadata.
     explicit_roots: []const CheckedArtifact.ExplicitRootRequestInput,
 };
 
+/// The platform root's requirement surface, borrowed from its completed
+/// type check: the checked platform ModuleEnv (stable once the module is
+/// Done), the cache-identity context derived from its published artifact,
+/// and the platform path for diagnostics. Plain borrowed data — nothing here
+/// is owned, so copies are free and there is nothing to deinit.
 pub const PlatformRequirementSurface = struct {
-    env_storage: CheckedArtifact.ModuleEnvStorage,
+    env: *const ModuleEnv,
     context: CheckedArtifact.PlatformRequirementContextKey,
     path: []const u8,
 
-    pub fn env(self: *const PlatformRequirementSurface) *const ModuleEnv {
-        return self.env_storage.envConst();
-    }
-
     pub fn checkerInput(self: *const PlatformRequirementSurface) check.Check.PlatformRequirementInput {
         return .{
-            .env = self.env(),
+            .env = self.env,
             .path = self.path,
         };
     }
-
-    pub fn deinit(self: *PlatformRequirementSurface) void {
-        self.env_storage.deinit();
-    }
-};
-
-pub const PlatformRequirementsCheckTask = struct {
-    /// Package this module belongs to
-    package_name: []const u8,
-    /// Module identifier within the package
-    module_id: ModuleId,
-    /// Human-readable module name
-    module_name: []const u8,
-    /// Filesystem path (for diagnostics)
-    path: []const u8,
-    /// Cloned platform ModuleEnv storage (ownership transferred)
-    env_storage: CheckedArtifact.ModuleEnvStorage,
-    /// Imported module environments for requirement type annotations
-    imported_envs: []const *ModuleEnv,
 };
 
 /// Task sent to workers - contains ALL inputs needed for the operation
@@ -164,8 +146,6 @@ pub const WorkerTask = union(enum) {
     parse: ParseTask,
     /// Canonicalize a parsed module into CIR
     canonicalize: CanonicalizeTask,
-    /// Type-check a platform's requires header surface
-    platform_requirements_check: PlatformRequirementsCheckTask,
     /// Type-check a canonicalized module
     type_check: TypeCheckTask,
 
@@ -173,7 +153,6 @@ pub const WorkerTask = union(enum) {
         return switch (self) {
             .parse => |t| t.package_name,
             .canonicalize => |t| t.package_name,
-            .platform_requirements_check => |t| t.package_name,
             .type_check => |t| t.package_name,
         };
     }
@@ -182,7 +161,6 @@ pub const WorkerTask = union(enum) {
         return switch (self) {
             .parse => |t| t.module_id,
             .canonicalize => |t| t.module_id,
-            .platform_requirements_check => |t| t.module_id,
             .type_check => |t| t.module_id,
         };
     }
@@ -191,7 +169,6 @@ pub const WorkerTask = union(enum) {
         return switch (self) {
             .parse => |t| t.module_name,
             .canonicalize => |t| t.module_name,
-            .platform_requirements_check => |t| t.module_name,
             .type_check => |t| t.module_name,
         };
     }
@@ -278,25 +255,6 @@ pub const TypeCheckedResult = struct {
     check_diagnostics_ns: u64,
 };
 
-pub const PlatformRequirementsCheckedResult = struct {
-    /// Package this module belongs to
-    package_name: []const u8,
-    /// Module identifier
-    module_id: ModuleId,
-    /// Module name
-    module_name: []const u8,
-    /// Path to the module file
-    path: []const u8,
-    /// Checked platform requirement surface. Ownership is returned to coordinator.
-    surface: ?PlatformRequirementSurface,
-    /// Any reports generated while checking the requirement surface
-    reports: std.ArrayList(Report),
-    /// Timing: nanoseconds spent checking requirements
-    check_ns: u64,
-    /// Timing: nanoseconds spent on diagnostics
-    diagnostics_ns: u64,
-};
-
 /// Result when parsing fails (but we still return partial info)
 pub const ParseFailure = struct {
     /// Package this module belongs to
@@ -368,8 +326,6 @@ pub const WorkerResult = union(enum) {
     parsed: ParsedResult,
     /// Module was successfully canonicalized
     canonicalized: CanonicalizedResult,
-    /// Platform requirement surface was successfully checked
-    platform_requirements_checked: PlatformRequirementsCheckedResult,
     /// Module was successfully type-checked
     type_checked: TypeCheckedResult,
     /// Parsing failed
@@ -385,7 +341,6 @@ pub const WorkerResult = union(enum) {
         return switch (self) {
             .parsed => |r| r.package_name,
             .canonicalized => |r| r.package_name,
-            .platform_requirements_checked => |r| r.package_name,
             .type_checked => |r| r.package_name,
             .parse_failed => |r| r.package_name,
             .compile_failed => |r| r.package_name,
@@ -398,7 +353,6 @@ pub const WorkerResult = union(enum) {
         return switch (self) {
             .parsed => |r| r.module_id,
             .canonicalized => |r| r.module_id,
-            .platform_requirements_checked => |r| r.module_id,
             .type_checked => |r| r.module_id,
             .parse_failed => |r| r.module_id,
             .compile_failed => |r| r.module_id,
@@ -411,7 +365,6 @@ pub const WorkerResult = union(enum) {
         return switch (self) {
             .parsed => |r| r.module_name,
             .canonicalized => |r| r.module_name,
-            .platform_requirements_checked => |r| r.module_name,
             .type_checked => |r| r.module_name,
             .parse_failed => |r| r.module_name,
             .compile_failed => |r| r.module_name,
@@ -446,11 +399,6 @@ pub const WorkerResult = union(enum) {
                     gpa.free(imp.import_name);
                 }
                 r.discovered_external_imports.deinit(gpa);
-                for (r.reports.items) |*rep| rep.deinit();
-                r.reports.deinit(gpa);
-            },
-            .platform_requirements_checked => |*r| {
-                if (r.surface) |*surface| surface.deinit();
                 for (r.reports.items) |*rep| rep.deinit();
                 r.reports.deinit(gpa);
             },

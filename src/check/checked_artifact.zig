@@ -13871,35 +13871,6 @@ pub const PlatformRequiredDeclarationTable = struct {
         return .{ .declarations = declarations };
     }
 
-    pub fn fromModuleEnv(
-        allocator: Allocator,
-        module_env: *const ModuleEnv,
-        names: *canonical.CanonicalNameStore,
-    ) Allocator.Error!PlatformRequiredDeclarationTable {
-        const required_types = module_env.requires_types.items.items;
-        const declarations = try allocator.alloc(PlatformRequiredDeclaration, required_types.len);
-        errdefer allocator.free(declarations);
-
-        for (required_types, 0..) |required_type, i| {
-            declarations[i] = .{
-                .id = @enumFromInt(@as(u32, @intCast(i))),
-                .module_idx = 0,
-                .requires_idx = @intCast(i),
-                .platform_name = try names.internExportIdent(module_env.getIdentStoreConst(), required_type.ident),
-                .declared_source_ty = try canonical_type_keys.schemeFromVar(
-                    allocator,
-                    &module_env.types,
-                    module_env.getIdentStoreConst(),
-                    ModuleEnv.varFrom(required_type.type_anno),
-                ),
-                .type_anno = required_type.type_anno,
-                .for_clause_aliases_hash = hashRequiredTypeForClauseAliases(module_env, required_type),
-            };
-        }
-
-        return .{ .declarations = declarations };
-    }
-
     pub fn lookupByRequiredIndex(
         self: *const PlatformRequiredDeclarationTable,
         requires_idx: u32,
@@ -14593,34 +14564,6 @@ pub fn platformRequirementContextKey(artifact: *const CheckedModuleArtifact) Pla
     return PlatformRequirementContextKey.compute(
         artifact.module_identity,
         artifact.platform_required_declarations.identityHash(&artifact.canonical_names),
-    );
-}
-
-pub fn platformRequirementContextKeyFromEnv(
-    allocator: Allocator,
-    platform_env: *const ModuleEnv,
-) Allocator.Error!PlatformRequirementContextKey {
-    var names = canonical.CanonicalNameStore.init(allocator);
-    defer names.deinit();
-
-    const module_name = try names.internModuleName(platform_env.module_name);
-    const display_module_name = try names.internModuleIdent(platform_env.getIdentStoreConst(), platform_env.display_module_name_idx);
-    const qualified_module_name = try names.internModuleIdent(platform_env.getIdentStoreConst(), platform_env.qualified_module_ident);
-    const platform_identity = ModuleIdentity{
-        .stable_hash = computeStableModuleIdentityHash(platform_env),
-        .module_idx = 0,
-        .module_name = module_name,
-        .display_module_name = display_module_name,
-        .qualified_module_name = qualified_module_name,
-        .kind = platform_env.module_kind,
-    };
-
-    var declarations = try PlatformRequiredDeclarationTable.fromModuleEnv(allocator, platform_env, &names);
-    defer declarations.deinit(allocator);
-
-    return PlatformRequirementContextKey.compute(
-        platform_identity,
-        declarations.identityHash(&names),
     );
 }
 
