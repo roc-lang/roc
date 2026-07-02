@@ -9679,16 +9679,13 @@ const ProcBodyBuilder = struct {
         source: LIR.LocalId,
         rep_id: Plan.TypeRepId,
     ) Allocator.Error!LIR.BoxyDescRef {
-        const canonical_rep = self.canonicalDescriptorRep(rep_id);
-        const rep = self.parent.plan.representations.items[@intFromEnum(canonical_rep)];
-        const desc = rep.descriptor orelse {
-            boxyLowerInvariant("boxy source descriptor requested for a representation without a descriptor");
-        };
+        // A descriptor attached to the source local describes the actual
+        // value and takes precedence over anything rep-derived — including
+        // for representations that carry no descriptor requirement of their
+        // own (fully known at this site).
         if (self.parent.result.store.getLocal(source).boxy_desc) |source_desc| return source_desc;
-        const source_desc = if (self.descriptorBindingIsBound(desc))
-            try self.descriptorRefForKnownRep(canonical_rep)
-        else
-            try self.descriptorRefForKnownRep(canonical_rep);
+        const canonical_rep = self.canonicalDescriptorRep(rep_id);
+        const source_desc = try self.descriptorRefForKnownRep(canonical_rep);
         self.parent.result.store.replaceLocalBoxyDesc(source, source_desc);
         return source_desc;
     }
@@ -13062,7 +13059,12 @@ const ProcBodyBuilder = struct {
                     else
                         null;
                     const payload_desc = target_desc orelse source_desc;
-                    self.parent.result.store.setLocalBoxyDesc(target, payload_desc);
+                    // The same target local can receive boundary conversions
+                    // from several lowering paths (match branches, repeated
+                    // return adaptations); the static descriptor metadata is a
+                    // last-write hint while the executing statements set the
+                    // frame descriptor on every path.
+                    self.parent.result.store.replaceLocalBoxyDesc(target, payload_desc);
                     const box = try self.parent.result.store.addCFStmt(.{ .assign_boxy_box = .{
                         .target = target,
                         .payload = source,
@@ -13270,18 +13272,21 @@ const ProcBodyBuilder = struct {
             .dynamic => if (!self.repHasRecordFieldChildrenForBoundary(target_record)) return null,
             else => return null,
         }
-        if (source_record.kind == .dynamic or target_record.kind == .dynamic) {
+        const boxed_source_layout = self.workerRuntimeLayoutForRep(source_record_rep).layoutIdx();
+        const boxed_source_layout_value = self.parent.result.layouts.getLayout(boxed_source_layout);
+        const source_backing_is_box = switch (boxed_source_layout_value.tag) {
+            .box, .box_of_zst => true,
+            else => false,
+        };
+        // A plan-dynamic record whose backing is concrete at this site (fully
+        // known instantiation) converts field-by-field like a concrete record;
+        // only genuinely boxed backings take the box round-trip.
+        if ((source_record.kind == .dynamic or target_record.kind == .dynamic) and source_backing_is_box) {
             const source_desc = try self.descriptorRefForSourceLocalRep(source, source_rep);
             try self.bindConstructedTargetDescriptor(target, target_rep);
             const target_desc = try self.constructedTargetDescForRep(target_rep);
             const target_layout = self.parent.result.store.getLocal(target).layout_idx;
             const source_layout = self.parent.result.store.getLocal(source).layout_idx;
-            const boxed_source_layout = self.workerRuntimeLayoutForRep(source_record_rep).layoutIdx();
-            const boxed_source_layout_value = self.parent.result.layouts.getLayout(boxed_source_layout);
-            switch (boxed_source_layout_value.tag) {
-                .box, .box_of_zst => {},
-                else => boxyLowerInvariant("dynamic concrete record boundary source backing was not a dynamic box layout"),
-            }
             const boxed_source = try self.addFrameLocal(boxed_source_layout);
             self.parent.result.store.setLocalBoxyDesc(boxed_source, source_desc);
             var continuation = try self.parent.result.store.addCFStmt(.{ .assign_boxy_unbox = .{
