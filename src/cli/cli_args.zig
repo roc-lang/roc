@@ -226,6 +226,7 @@ pub const ExperimentalLspArgs = struct {
 pub const ReplArgs = struct {
     opt: OptLevel = .dev,
     no_color: bool = false,
+    rpc: bool = false,
 };
 
 /// Arguments for `roc glue`
@@ -792,6 +793,7 @@ fn parseTest(args: []const []const u8) CliArgs {
 fn parseRepl(args: []const []const u8) CliArgs {
     var opt: OptLevel = .dev;
     var no_color: bool = false;
+    var rpc: bool = false;
 
     for (args) |arg| {
         if (isHelpFlag(arg)) {
@@ -803,11 +805,14 @@ fn parseRepl(args: []const []const u8) CliArgs {
             \\Options:
             \\      --opt=<opt>  Execution mode: dev (default, fast compilation), interpreter, size (LLVM) or speed (LLVM)
             \\      --no-color   Do not use ANSI color codes in REPL diagnostics
+            \\      --rpc        Start in JSON-RPC server mode
             \\  -h, --help       Print help
             \\
             };
         } else if (mem.eql(u8, arg, "--no-color")) {
             no_color = true;
+        } else if (mem.eql(u8, arg, "--rpc")) {
+            rpc = true;
         } else if (mem.startsWith(u8, arg, "--opt")) {
             if (getFlagValue(arg)) |value| {
                 if (OptLevel.from_str(value)) |level| {
@@ -822,7 +827,7 @@ fn parseRepl(args: []const []const u8) CliArgs {
             return CliArgs{ .problem = ArgProblem{ .unexpected_argument = .{ .cmd = "repl", .arg = arg } } };
         }
     }
-    return CliArgs{ .repl = .{ .opt = opt, .no_color = no_color } };
+    return CliArgs{ .repl = .{ .opt = opt, .no_color = no_color, .rpc = rpc } };
 }
 
 fn parseGlue(args: []const []const u8) CliArgs {
