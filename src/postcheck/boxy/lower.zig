@@ -1905,18 +1905,23 @@ const ProcedureBuilder = struct {
             break :blk self.plan.childSlice(source_variant.payloads);
         } else &[_]Plan.RepChild{};
 
+        // Build the payload descriptors BEFORE reserving this variant's slot:
+        // they can recursively append nested descriptors' variants to the same
+        // pool, which would land inside a span captured too early.
+        const payload_descs = try self.staticTagPayloadDescsForWorkerRepWithSourceMap(
+            payloads,
+            source_payloads,
+            .zst,
+            descriptor_sources,
+            context,
+        );
+        const name = try self.result.store.insertString(self.tagVariantNameText(variant));
         const start: u32 = @intCast(self.result.boxy_tag_variants.items.len);
         try self.result.boxy_tag_variants.append(self.allocator, .{
-            .name = try self.result.store.insertString(self.tagVariantNameText(variant)),
+            .name = name,
             .discriminant = 0,
             .payload_layout = .zst,
-            .payload_descs = try self.staticTagPayloadDescsForWorkerRepWithSourceMap(
-                payloads,
-                source_payloads,
-                .zst,
-                descriptor_sources,
-                context,
-            ),
+            .payload_descs = payload_descs,
         });
         return .{ .start = start, .len = 1 };
     }
@@ -1933,12 +1938,17 @@ const ProcedureBuilder = struct {
         }
 
         const variant = variants[0];
+        // Build the payload descriptors BEFORE reserving this variant's slot:
+        // they can recursively append nested descriptors' variants to the same
+        // pool, which would land inside a span captured too early.
+        const payload_descs = try self.staticPayloadDescRefsForTagVariant(variant, .zst);
+        const name = try self.result.store.insertString(self.tagVariantNameText(variant));
         const start: u32 = @intCast(self.result.boxy_tag_variants.items.len);
         try self.result.boxy_tag_variants.append(self.allocator, .{
-            .name = try self.result.store.insertString(self.tagVariantNameText(variant)),
+            .name = name,
             .discriminant = 0,
             .payload_layout = .zst,
-            .payload_descs = try self.staticPayloadDescRefsForTagVariant(variant, .zst),
+            .payload_descs = payload_descs,
         });
         return .{ .start = start, .len = 1 };
     }
@@ -10118,18 +10128,23 @@ const ProcBodyBuilder = struct {
         }
 
         const variant = variants[0];
+        // Build the payload descriptors BEFORE reserving this variant's slot:
+        // they can recursively append nested descriptors' variants to the same
+        // pool, which would land inside a span captured too early.
+        const payload_descs = try self.templatePayloadDescRefsForTagVariant(
+            variant,
+            .zst,
+            current_desc,
+            captures,
+            context,
+        );
+        const name = try self.parent.result.store.insertString(self.tagVariantNameText(variant));
         const start: u32 = @intCast(self.parent.result.boxy_tag_variants.items.len);
         try self.parent.result.boxy_tag_variants.append(self.parent.allocator, .{
-            .name = try self.parent.result.store.insertString(self.tagVariantNameText(variant)),
+            .name = name,
             .discriminant = 0,
             .payload_layout = .zst,
-            .payload_descs = try self.templatePayloadDescRefsForTagVariant(
-                variant,
-                .zst,
-                current_desc,
-                captures,
-                context,
-            ),
+            .payload_descs = payload_descs,
         });
         return .{ .start = start, .len = 1 };
     }
