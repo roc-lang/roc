@@ -2067,8 +2067,12 @@ const ProcedureBuilder = struct {
     ) ?Plan.WorkerPlanId {
         const source_rep = self.plan.representations.items[@intFromEnum(rep_id)];
         const source_module = procedureModuleById(self.modules, source_rep.source_type.module);
-        const owner = methodOwnerForProcedureType(source_module, source_rep.source_type.ty) orelse
+        const owner = methodOwnerForProcedureType(source_module, source_rep.source_type.ty) orelse {
+            if (@import("builtin").mode == .Debug) {
+                std.debug.print("debug_dict_no_owner rep={d} kind={s} ty={d} fn={d}\n", .{ @intFromEnum(rep_id), @tagName(source_rep.kind), @intFromEnum(source_rep.source_type.ty), @intFromEnum(requirement.fn_name) });
+            }
             boxyLowerInvariant("static boxy dictionary source type had no method owner");
+        };
         const target_lookup = self.lookupMethodTarget(
             source_module,
             owner,
@@ -3172,15 +3176,15 @@ const ProcedureBuilder = struct {
         if (function.args.len != worker_args.len) {
             boxyLowerInvariant("hosted procedure worker arity disagreed with worker root layout");
         }
+        // Worker layouts can legitimately differ from the hosted signature's
+        // checked-type layouts when the hosted procedure is used through an
+        // erased callable; lowerHostedWorkerBodyInto adapts arguments and the
+        // result across that boundary.
         for (function.args, worker_args) |arg_ty, arg_layout| {
-            if (proc.workerRuntimeLayoutForType(arg_ty).layoutIdx() != arg_layout.layoutIdx()) {
-                boxyLowerInvariant("hosted procedure argument layout disagreed with checked type");
-            }
             const local = try proc.addArgLocal(arg_layout.layoutIdx());
-            try proc.markLocalDescriptorForType(local, arg_ty);
-        }
-        if (proc.workerRuntimeLayoutForType(function.ret).layoutIdx() != proc.workerReturnLayout()) {
-            boxyLowerInvariant("hosted procedure return layout disagreed with checked type");
+            if (proc.workerRuntimeLayoutForType(arg_ty).layoutIdx() == arg_layout.layoutIdx()) {
+                try proc.markLocalDescriptorForType(local, arg_ty);
+            }
         }
         return .hosted;
     }
@@ -3889,7 +3893,26 @@ const ProcBodyBuilder = struct {
             .call => |call| try self.lowerDirectCallInto(target, expr_id, call, next),
             .dispatch_call => |maybe_plan| try self.lowerDispatchCallInto(target, expr_id, maybe_plan, next),
             .type_dispatch_call => |maybe_plan| try self.lowerDispatchCallInto(target, expr_id, maybe_plan, next),
-            .for_ => |for_| try self.lowerIteratorForInto(target, for_, next),
+            .for_ => |for_| blk: {
+                if (self.isZstLocal(target)) {
+                    break :blk try self.lowerIteratorForInto(target, for_, next);
+                }
+                // A for expression always evaluates to the unit record. When
+                // the surrounding type is erased, the target is a dynamic box,
+                // so run the loop into a unit temporary and box the unit.
+                const unit_local = try self.addFrameLocal(.zst);
+                const payload_desc = try self.appendLiteralPayloadDesc(.zst, expr.ty);
+                self.parent.result.store.replaceLocalBoxyDesc(target, payload_desc);
+                const box = try self.parent.result.store.addCFStmt(.{ .assign_boxy_box = .{
+                    .target = target,
+                    .payload = unit_local,
+                    .payload_layout = .zst,
+                    .payload_desc = payload_desc,
+                    .payload_mode = .move,
+                    .next = next,
+                } });
+                break :blk try self.lowerIteratorForInto(unit_local, for_, box);
+            },
             .run_low_level => |run_low_level| try self.lowerLowLevelInto(target, expr.ty, run_low_level.op, run_low_level.args, next),
             .block => |block| blk: {
                 try self.reserveBlockBindings(block.statements);
@@ -9638,13 +9661,11 @@ const ProcBodyBuilder = struct {
                     if (self.parent.result.store.getLocal(dict_local).layout_idx != .opaque_ptr) {
                         boxyLowerInvariant("boxy hidden dictionary local was not opaque_ptr");
                     }
-                    if (self.dictionaryBindingIsBoundForSpan(arg.worker_dictionaries)) {
-                        break :blk .{ .local = dict_local };
-                    }
-                    break :blk .{
-                        .local = dict_local,
-                        .materialize = try self.parent.staticDictRefForRep(arg.rep, arg.worker_dictionaries),
-                    };
+                    // dictionaryRefForKnownRep yields a local only when the
+                    // representation's own dictionary binding is live; that
+                    // dictionary value satisfies the callee's requirements
+                    // regardless of the callee-side requirement ids.
+                    break :blk .{ .local = dict_local };
                 },
                 .static => blk: {
                     const materialized = (try self.reserveDictionarySlotForSpan(arg.worker_dictionaries)) orelse try self.addFrameLocal(.opaque_ptr);
@@ -10255,6 +10276,19 @@ const ProcBodyBuilder = struct {
                 if (self.dictionaryLocalForRequirementOrNull(first)) |local| return .{ .local = local };
                 boxyLowerInvariant("boxy runtime-bound dictionary requirement had no local");
             }
+        }
+        if (rep.kind == .dynamic) {
+            // A dynamic representation has no owner to build a static
+            // dictionary from; the requirement must be satisfied by the
+            // enclosing worker's own dictionary binding (a recursive or
+            // sibling generic call passing its dictionaries along).
+            if (worker_dictionaries.len != 0) {
+                const callee_first: Plan.DictionaryRequirementId = @enumFromInt(worker_dictionaries.start);
+                if (self.dictionaryBindingIsBound(callee_first)) {
+                    if (self.dictionaryLocalForRequirementOrNull(callee_first)) |local| return .{ .local = local };
+                }
+            }
+            boxyLowerInvariant("boxy dynamic representation dictionary requirement was not bound in the enclosing worker");
         }
         return try self.parent.staticDictRefForRep(canonical_rep, worker_dictionaries);
     }
