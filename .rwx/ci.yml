@@ -160,9 +160,9 @@ tasks:
     filter: *pos-build
     tool-cache: ci-build-ci-x64  # persist .zig-cache + ~/.cache/zig → warm runs skip the build-runner compile & recompile only changed modules
     timeout: 45m
-    agent:  # CO 8c/16g — Debug anchor; off critical path, feeds gates+leaves so keep it reasonably fast (4c gated the run)
+    agent:  # GP 8c/32g — Debug anchor; 8c parallelism OOM'd at 16g on newer main (same as build-ci-arm64) → 32g floor for build tasks. Off crit path but feeds gates+leaves, keep 8c (4c gated the run).
       cpus: 8
-      memory: 16gb
+      memory: 32gb
     run: |
       set -euo pipefail
       # -Droc-test-runner so the module + standalone test binaries are compiled ONCE here with
