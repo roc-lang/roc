@@ -10,18 +10,27 @@ const package_resolution = @import("package_resolution.zig");
 
 const Allocator = std.mem.Allocator;
 
+/// Identity for compiler-synthesized default-app roots whose temp path is ephemeral.
 pub const synthetic_app_identity = "app";
+/// Identity for compiler-synthesized default platforms whose temp path is ephemeral.
 pub const synthetic_platform_identity = "pf";
 
+/// Errors that can occur while deriving an owned package identity string.
 pub const PackageIdentityError = Allocator.Error || CoreCtx.CanonicalizeError;
 
+/// Provenance that determines package identity.
 pub const PackageProvenance = union(enum) {
+    /// A resolved package URL.
     url: []const u8,
+    /// A local package root path, canonicalized before use.
     local_path: []const u8,
+    /// Compiler-synthesized default-app root.
     synthetic_app,
+    /// Compiler-synthesized default platform.
     synthetic_platform,
 };
 
+/// Return an owned package identity string derived from package provenance.
 pub fn packageIdentityFor(
     allocator: Allocator,
     filesystem: CoreCtx,
@@ -35,11 +44,15 @@ pub fn packageIdentityFor(
     };
 }
 
+/// Options for mapping a resolved package graph to package identity keys.
 pub const PackageKeyOptions = struct {
+    /// Use the synthetic app identity for the resolved root package.
     synthetic_root: bool = false,
+    /// Use the synthetic platform identity for root platform dependencies.
     synthetic_platform: bool = false,
 };
 
+/// Owned package identity strings indexed like package_resolution.Resolved.packages.
 pub const PackageKeys = struct {
     allocator: Allocator,
     identities: []const []const u8,
@@ -57,6 +70,7 @@ pub const PackageKeys = struct {
     }
 };
 
+/// Build all package identity keys for a resolved graph once, indexed by package index.
 pub fn buildPackageKeys(
     allocator: Allocator,
     filesystem: CoreCtx,
@@ -104,11 +118,13 @@ pub fn buildPackageKeys(
     };
 }
 
+/// A version-bump note keyed by the package identity used for compilation.
 pub const VersionBumpNote = struct {
     package_identity: []const u8,
     message: []const u8,
 };
 
+/// Collect version-bump notes using helper-built package identity keys.
 pub fn versionBumpNotesForPackageKeys(
     resolved: *const package_resolution.Resolved,
     keys: PackageKeys,

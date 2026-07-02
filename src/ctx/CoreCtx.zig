@@ -383,7 +383,9 @@ pub const max_file_size = std.math.maxInt(u32);
 /// Wraps an `Io` and intercepts `readFile` for a single path,
 /// returning `content` instead of reading from disk.
 ///
-/// All other vtable functions (writeFile, fileExists, stat, …) delegate to `base`.
+/// Canonicalization of the overridden path returns `path` directly, allowing
+/// virtual files to participate in path-derived package identity. All other
+/// vtable functions (writeFile, fileExists, stat, …) delegate to `base`.
 /// This is safe when `base` is `Io.os()` or `Io.default()` because those vtable
 /// functions ignore their `ctx` argument — so passing a `ReadFileOverride` pointer
 /// as `ctx` causes no harm.
@@ -407,6 +409,7 @@ pub const ReadFileOverride = struct {
     pub fn io(self: *@This()) Self {
         var v = self.base.vtable;
         v.readFile = &readFileOverrideFn;
+        v.canonicalize = &canonicalizeOverrideFn;
         return .{ .ctx = @ptrCast(self), .vtable = v, .std_io = self.base.std_io, .gpa = self.base.gpa, .arena = self.base.arena };
     }
 };
@@ -416,6 +419,13 @@ fn readFileOverrideFn(ctx: ?*anyopaque, std_io: std.Io, path: []const u8, alloca
     if (std.mem.eql(u8, path, self.path))
         return allocator.dupe(u8, self.content) catch return error.OutOfMemory;
     return self.base.vtable.readFile(self.base.ctx, std_io, path, allocator);
+}
+
+fn canonicalizeOverrideFn(ctx: ?*anyopaque, std_io: std.Io, path: []const u8, allocator: Allocator) CanonicalizeError![]const u8 {
+    const self: *ReadFileOverride = @ptrCast(@alignCast(ctx.?));
+    if (std.mem.eql(u8, path, self.path))
+        return allocator.dupe(u8, self.path) catch return error.OutOfMemory;
+    return self.base.vtable.canonicalize(self.base.ctx, std_io, path, allocator);
 }
 
 const is_freestanding = builtin.os.tag == .freestanding;
