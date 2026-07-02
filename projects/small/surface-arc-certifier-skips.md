@@ -75,9 +75,10 @@ Verified against the pre-fix tree:
 - Existing stats/verbose infrastructure: `BuildStats` in
   `src/compile/compile_build.zig` (`getBuildStats`), rendered by
   `printBuildSuccess` in `src/cli/main.zig` when `args.verbose` is set.
-  Issues roc-lang/roc#9787 and roc-lang/roc#9789 discuss a debug stats
-  compiler; verify what exists when implementing and wire into it rather
-  than inventing a parallel channel.
+  The struct and its rendering exist today, but no channel carries
+  LIR-stage certification diagnostics into them; building that channel is
+  part of the debug stats compiler discussed in roc-lang/roc#9787 and
+  roc-lang/roc#9789, which is why this stopgap only logs and gates.
 
 ## Solution design
 
@@ -101,16 +102,22 @@ the hole, at which point this surfacing (and the counter) is deleted.
    procedures silently accumulate: the `-Dforbid-arc-certifier-skips`
    build option is checked after `certifyStore` returns. When it is set and
    `skipped_proc_count > 0`, `certifyStoreOrPanic` panics with the same
-   listing as item 1. Enable it for the debug test jobs in CI so the repo's
-   own test corpus (unit tests, snapshot tests, eval tests — all of which
-   run `arc.insert` in debug builds) certifies with zero skips.
+   listing as item 1. The option defaults to on whenever the `CI`
+   environment variable is non-empty, so every debug job — the ci_zig.yml
+   steps, the nix legs driven by `ci/zig_nix_ci.sh`, and future workflow
+   additions — enforces zero skips without per-step flags, and mixed
+   flagged/unflagged steps cannot split the build cache into two
+   `build_options` variants. MiniCI passes the flag explicitly so the
+   local CI mirror matches GitHub. A plain local `zig build` stays
+   warn-only.
 
 The count should also flow into the debug stats compiler once the #9787/#9789
 stats work exists, but this stopgap intentionally does not add new stats
 infrastructure.
 
 What gets deleted later: both pieces, together with `skipped_proc_count`,
-the sampled skipped-proc ids, the build option, the CI flag, and
+the sampled skipped-proc ids, the build option with its CI-environment
+default, the MiniCI flag, and
 `error.CertifierCapacityExceeded`, when the big project's dataflow fixpoint
 removes the skip path entirely.
 

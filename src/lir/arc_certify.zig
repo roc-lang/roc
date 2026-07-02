@@ -37,6 +37,8 @@ const LIR = core.LIR;
 const LirStore = core.LirStore;
 const Allocator = std.mem.Allocator;
 
+/// Join-state budget for full-store certification. The production bound is
+/// written here in exactly one place; tests override it via `CertifyOptions`.
 pub const production_join_state_capacity: usize = 4096;
 const skipped_proc_record_limit = 16;
 const forbid_skips = builtin.mode == .Debug and build_options.forbid_arc_certifier_skips;
@@ -68,10 +70,10 @@ pub const Diagnostic = struct {
     /// exceeded the certifier's budget (incompleteness, not a finding). Exposed for
     /// tests/debugging; a nonzero value means certification was not exhaustive.
     skipped_proc_count: usize = 0,
-    /// First skipped procedures, for warning/panic context. The count above is
-    /// authoritative; this fixed-size list is only a bounded diagnostic sample.
+    /// Storage for the first skipped procedures. Read it only through
+    /// `skippedSample`, which bounds the slice; entries past the sample are
+    /// undefined.
     skipped_procs: [skipped_proc_record_limit]LIR.LirProcSpecId = undefined,
-    skipped_proc_len: usize = 0,
 
     pub const ChainLink = struct {
         value: u32,
@@ -94,11 +96,16 @@ pub const Diagnostic = struct {
     }
 
     fn recordSkippedProc(self: *Diagnostic, proc_id: LIR.LirProcSpecId) void {
-        if (self.skipped_proc_len < self.skipped_procs.len) {
-            self.skipped_procs[self.skipped_proc_len] = proc_id;
-            self.skipped_proc_len += 1;
+        if (self.skipped_proc_count < self.skipped_procs.len) {
+            self.skipped_procs[self.skipped_proc_count] = proc_id;
         }
         self.skipped_proc_count += 1;
+    }
+
+    /// The bounded sample of skipped procedures: the first
+    /// `skipped_proc_record_limit` of the `skipped_proc_count` total.
+    pub fn skippedSample(self: *const Diagnostic) []const LIR.LirProcSpecId {
+        return self.skipped_procs[0..@min(self.skipped_proc_count, self.skipped_procs.len)];
     }
 };
 
@@ -154,15 +161,16 @@ fn certifyStoreWithOptions(
     defer certifier.deinit();
 
     for (store.proc_specs.items, 0..) |proc, index| {
+        const proc_id: LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(index)));
         const body = proc.body orelse continue;
-        certifier.certifyProc(@enumFromInt(@as(u32, @intCast(index))), proc, body) catch |err| switch (err) {
+        certifier.certifyProc(proc_id, proc, body) catch |err| switch (err) {
             // Incompleteness, not a finding: this procedure's join-state space exceeded the
             // certifier's budget. Leave it unverified and keep certifying the rest, rather than
             // failing a valid build. `certifyProc` resets all per-proc state on the next call, and
             // its work stack is cleaned up on unwind, so skipping is safe. Real findings surface as
             // `error.Certification` and still propagate.
             error.CertifierCapacityExceeded => {
-                diag.recordSkippedProc(@enumFromInt(@as(u32, @intCast(index))));
+                diag.recordSkippedProc(proc_id);
                 continue;
             },
             else => |e| return e,
@@ -341,18 +349,33 @@ pub fn certifyStoreOrPanic(
                 }
                 writeFailureContext(&context, store, sigs, proc_id, diag.context_stmt, diag.context_local, extra_locals[0..diag.chain_len]);
             }
+            if (diag.skipped_proc_count != 0) {
+                context.append("\n", .{});
+                writeSkippedProcReport(&context, store, &diag);
+            }
             std.debug.panic("ARC borrow certifier: {s}{s}", .{ diag.message(), context.text() });
         },
     };
-    if (diag.skipped_proc_count != 0) {
+    const outcome = skipOutcome(diag.skipped_proc_count, forbid_skips);
+    if (outcome != .none) {
         var context = FailureContext{};
         writeSkippedProcReport(&context, store, &diag);
         // When the debug stats compiler from #9787/#9789 lands, route this count there too.
-        std.log.warn("{s}", .{context.text()});
-        if (comptime forbid_skips) {
-            std.debug.panic("{s}", .{context.text()});
+        switch (outcome) {
+            .none => unreachable,
+            .fail => std.debug.panic("{s}", .{context.text()}),
+            .warn => std.log.warn("{s}", .{context.text()}),
         }
     }
+}
+
+/// What `certifyStoreOrPanic` does about capacity skips. Split out from the
+/// wrapper so the escalation decision is unit-testable.
+const SkipOutcome = enum { none, warn, fail };
+
+fn skipOutcome(skipped_proc_count: usize, forbid: bool) SkipOutcome {
+    if (skipped_proc_count == 0) return .none;
+    return if (forbid) .fail else .warn;
 }
 
 /// Bounded, allocation-free text buffer for panic context. Output past the
@@ -381,14 +404,15 @@ fn writeSkippedProcReport(
         "ARC certifier skipped {d} procedure(s) whose join-state enumeration exceeded capacity; their RC schedules are UNVERIFIED.",
         .{diag.skipped_proc_count},
     );
-    for (diag.skipped_procs[0..diag.skipped_proc_len]) |proc_id| {
+    const sample = diag.skippedSample();
+    for (sample) |proc_id| {
         context.append("\n  proc={d}", .{@intFromEnum(proc_id)});
         if (store.procDebugName(proc_id)) |name| {
             context.append(" name={s}", .{name});
         }
     }
-    if (diag.skipped_proc_count > diag.skipped_proc_len) {
-        context.append("\n  ... and {d} more", .{diag.skipped_proc_count - diag.skipped_proc_len});
+    if (diag.skipped_proc_count > sample.len) {
+        context.append("\n  ... and {d} more", .{diag.skipped_proc_count - sample.len});
     }
 }
 
@@ -868,7 +892,7 @@ const Certifier = struct {
     /// Scratch bitset over store locals, reused by join-relevance extension.
     relevant_scratch: std.bit_set.DynamicBitSetUnmanaged = .{},
     diag: *Diagnostic,
-    join_state_capacity: usize = production_join_state_capacity,
+    join_state_capacity: usize,
     /// Proc and statement being certified; written by `certifyProc` and
     /// `runSegment` before any read.
     current_proc: LIR.LirProcSpecId = undefined,
@@ -2669,8 +2693,11 @@ const CertifyTest = struct {
     }
 };
 
-test "certifier production join-state capacity remains 4096" {
-    try testing.expectEqual(@as(usize, 4096), production_join_state_capacity);
+test "skip outcome escalates to fail only in forbid mode" {
+    try testing.expectEqual(SkipOutcome.none, skipOutcome(0, false));
+    try testing.expectEqual(SkipOutcome.none, skipOutcome(0, true));
+    try testing.expectEqual(SkipOutcome.warn, skipOutcome(3, false));
+    try testing.expectEqual(SkipOutcome.fail, skipOutcome(3, true));
 }
 
 test "certify accepts owned binding released once" {
@@ -2708,8 +2735,8 @@ test "certify records skipped proc when join-state capacity is exceeded" {
     try f.certifyWithOptions(.{ .join_state_capacity = 0 });
 
     try testing.expectEqual(@as(usize, 1), f.diag.skipped_proc_count);
-    try testing.expectEqual(@as(usize, 1), f.diag.skipped_proc_len);
-    try testing.expectEqual(proc, f.diag.skipped_procs[0]);
+    try testing.expectEqual(@as(usize, 1), f.diag.skippedSample().len);
+    try testing.expectEqual(proc, f.diag.skippedSample()[0]);
 
     var report = FailureContext{};
     writeSkippedProcReport(&report, &f.store, &f.diag);
@@ -2739,11 +2766,17 @@ test "skipped proc report caps listed names and preserves total count" {
     writeSkippedProcReport(&report, &f.store, &diag);
 
     try testing.expectEqual(@as(usize, skipped_proc_record_limit + 1), diag.skipped_proc_count);
-    try testing.expectEqual(@as(usize, skipped_proc_record_limit), diag.skipped_proc_len);
-    try testing.expect(std.mem.find(u8, report.text(), "ARC certifier skipped 17 procedure(s)") != null);
+    try testing.expectEqual(@as(usize, skipped_proc_record_limit), diag.skippedSample().len);
+    var header_buf: [64]u8 = undefined;
+    const header = try std.fmt.bufPrint(&header_buf, "ARC certifier skipped {d} procedure(s)", .{skipped_proc_record_limit + 1});
+    try testing.expect(std.mem.find(u8, report.text(), header) != null);
     try testing.expect(std.mem.find(u8, report.text(), "proc-0") != null);
-    try testing.expect(std.mem.find(u8, report.text(), "proc-15") != null);
-    try testing.expect(std.mem.find(u8, report.text(), "proc-16") == null);
+    var included_buf: [32]u8 = undefined;
+    const last_included = try std.fmt.bufPrint(&included_buf, "proc-{d}", .{skipped_proc_record_limit - 1});
+    try testing.expect(std.mem.find(u8, report.text(), last_included) != null);
+    var excluded_buf: [32]u8 = undefined;
+    const first_excluded = try std.fmt.bufPrint(&excluded_buf, "proc-{d}", .{skipped_proc_record_limit});
+    try testing.expect(std.mem.find(u8, report.text(), first_excluded) == null);
     try testing.expect(std.mem.find(u8, report.text(), "... and 1 more") != null);
 }
 
