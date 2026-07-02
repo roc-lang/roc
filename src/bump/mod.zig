@@ -10,9 +10,12 @@
 //!    structured change list.
 
 pub const PackageApi = @import("PackageApi.zig");
+pub const diff = @import("diff.zig");
 
 test "bump tests" {
     std.testing.refAllDecls(@import("PackageApi.zig"));
+    std.testing.refAllDecls(@import("diff.zig"));
+    std.testing.refAllDecls(@import("test/diff_test.zig"));
 }
 
 const std = @import("std");
