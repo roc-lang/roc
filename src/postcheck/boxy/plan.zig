@@ -1381,6 +1381,13 @@ const Builder = struct {
                 self.plan.workers.items[worker_index].hidden_descs = .{};
                 continue;
             }
+            if (worker.root_request != null) {
+                // Root workers have a fixed platform-facing ABI; every type
+                // they touch is concrete, so descriptor requirements are
+                // materialized inside the worker rather than passed in.
+                self.plan.workers.items[worker_index].hidden_descs = .{};
+                continue;
+            }
 
             var pending = std.ArrayList(HiddenDescriptorParam).empty;
             defer pending.deinit(self.allocator);
@@ -1411,6 +1418,13 @@ const Builder = struct {
     fn materializeWorkerHiddenDictionaryParams(self: *Builder) Allocator.Error!void {
         for (self.plan.workers.items, 0..) |worker, worker_index| {
             if (self.workerResolvesToHosted(worker.source)) {
+                self.plan.workers.items[worker_index].hidden_dicts = .{};
+                continue;
+            }
+            if (worker.root_request != null) {
+                // Root workers have a fixed platform-facing ABI; dictionary
+                // requirements are satisfied by static dictionaries since all
+                // their types are concrete.
                 self.plan.workers.items[worker_index].hidden_dicts = .{};
                 continue;
             }
