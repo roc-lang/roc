@@ -2959,9 +2959,16 @@ const ProcedureBuilder = struct {
             const worker_layout = self.layout_plan.workerLayoutFor(root.worker);
             const worker_proc = try self.emitWorker(root.worker);
             const worker_plan = self.plan.workers.items[@intFromEnum(root.worker)];
-            const worker_hidden = self.plan.hiddenDescriptorParamSlice(worker_plan.hidden_descs).len != 0 or
-                self.plan.hiddenDictionaryParamSlice(worker_plan.hidden_dicts).len != 0;
-            const root_proc = if (worker_hidden or root.wrapper_kind == .host_shaped_wrapper)
+            const hidden_count = self.plan.hiddenDescriptorParamSlice(worker_plan.hidden_descs).len +
+                self.plan.hiddenDictionaryParamSlice(worker_plan.hidden_dicts).len;
+            const host_arg_count = self.layout_plan.rootLayoutSlice(root_layout.host_args).len;
+            const worker_arg_count = self.result.store.getLocalSpan(self.result.store.getProcSpec(worker_proc).args).len;
+            // Hidden worker parameters never cross the platform boundary; when
+            // the host-facing arity plus the hidden parameters reconciles with
+            // the worker's actual arity, wrap the worker and materialize the
+            // hidden arguments statically.
+            const needs_hidden_wrapper = hidden_count != 0 and host_arg_count + hidden_count == worker_arg_count;
+            const root_proc = if (needs_hidden_wrapper or root.wrapper_kind == .host_shaped_wrapper)
                 try self.emitHostWrapper(root_layout, worker_layout, worker_proc, worker_plan)
             else
                 worker_proc;
@@ -3330,17 +3337,17 @@ const ProcedureBuilder = struct {
         worker_plan: Plan.WorkerPlan,
     ) Allocator.Error!LIR.LirProcSpecId {
         const host_args = self.layout_plan.rootLayoutSlice(root_layout.host_args);
-        const worker_args = self.layout_plan.workerLayoutSlice(worker_layout.args);
+        const worker_proc_args = self.result.store.getLocalSpan(self.result.store.getProcSpec(worker_proc).args);
         const hidden_desc_params = self.plan.hiddenDescriptorParamSlice(worker_plan.hidden_descs);
         const hidden_dict_params = self.plan.hiddenDictionaryParamSlice(worker_plan.hidden_dicts);
-        if (host_args.len != worker_args.len) {
+        if (host_args.len + hidden_desc_params.len + hidden_dict_params.len != worker_proc_args.len) {
             boxyLowerInvariant("boxy host wrapper needed argument adaptation before adapters were emitted");
         }
 
         const arg_locals = try self.allocator.alloc(LIR.LocalId, host_args.len);
         defer self.allocator.free(arg_locals);
-        for (host_args, worker_args, arg_locals) |host_arg, worker_arg, *local| {
-            if (host_arg.layoutIdx() != worker_arg.layoutIdx()) {
+        for (host_args, worker_proc_args[0..host_args.len], arg_locals) |host_arg, worker_arg, *local| {
+            if (host_arg.layoutIdx() != self.result.store.getLocal(worker_arg).layout_idx) {
                 boxyLowerInvariant("boxy host wrapper needed argument layout adaptation before adapters were emitted");
             }
             local.* = try self.addLocal(host_arg.layoutIdx());
