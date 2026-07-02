@@ -325,6 +325,24 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
             try low_level_map.put(ident, primitive.op);
         }
     }
+    const crypto_primitives = [_]struct {
+        name: []const u8,
+        op: CIR.Expr.LowLevel,
+    }{
+        .{ .name = "crypto_sha256_hash_bytes", .op = .crypto_sha256_hash_bytes },
+        .{ .name = "crypto_sha256_hasher_empty", .op = .crypto_sha256_hasher_empty },
+        .{ .name = "crypto_sha256_hasher_write", .op = .crypto_sha256_hasher_write },
+        .{ .name = "crypto_sha256_hasher_finish", .op = .crypto_sha256_hasher_finish },
+        .{ .name = "crypto_blake3_hash_bytes", .op = .crypto_blake3_hash_bytes },
+        .{ .name = "crypto_blake3_hasher_empty", .op = .crypto_blake3_hasher_empty },
+        .{ .name = "crypto_blake3_hasher_write", .op = .crypto_blake3_hasher_write },
+        .{ .name = "crypto_blake3_hasher_finish", .op = .crypto_blake3_hasher_finish },
+    };
+    for (crypto_primitives) |primitive| {
+        if (env.common.findIdent(primitive.name)) |ident| {
+            try low_level_map.put(ident, primitive.op);
+        }
+    }
     const numeric_types = [_][]const u8{ "U8", "I8", "U16", "I16", "U32", "I32", "U64", "I64", "U128", "I128", "Dec", "F32", "F64" };
     const signed_types = [_][]const u8{ "I8", "I16", "I32", "I64", "I128", "Dec", "F32", "F64" };
     // Numeric equality operations.

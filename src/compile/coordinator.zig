@@ -2905,6 +2905,10 @@ pub const Coordinator = struct {
             .parse_tag_union_spec => "Builtin.Encoding.ParseTagUnionSpec",
             .fields => "Builtin.Encoding.FieldName.FieldNames",
             .field => "Builtin.Encoding.FieldName",
+            .crypto_sha256_digest => "Builtin.Crypto.SHA256.Digest",
+            .crypto_sha256_hasher => "Builtin.Crypto.SHA256.Hasher",
+            .crypto_blake3_digest => "Builtin.Crypto.BLAKE3.Digest",
+            .crypto_blake3_hasher => "Builtin.Crypto.BLAKE3.Hasher",
         };
     }
 

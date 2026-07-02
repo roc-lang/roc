@@ -44,7 +44,7 @@ pub const io_spec_tests = [_]TestSpec{
     // Basic effectful function tests
     .{
         .roc_file = "test/fx/app.roc",
-        .io_spec = "1>Hello from stdout!|1>Line 1 to stdout|2>Line 2 to stderr|1>Line 3 to stdout|2>Error from stderr!",
+        .io_spec = "0<abc|1>Hello from stdout!|1>Line 1 to stdout|2>Line 2 to stderr|1>Line 3 to stdout|2>Error from stderr!|1>Crypto hashes ok",
         .description = "Basic effectful functions: Stdout.line!, Stderr.line!",
     },
     .{
