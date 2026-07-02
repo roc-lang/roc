@@ -24,7 +24,7 @@ History proves the hazard. PR 9721 changed nominal record layout
 kept emitting the OLD order the same day — shipped wrong bindings until
 PR 9738. That fix shared only the field-ORDERING function; the
 offset/size/padding arithmetic is still duplicated. Open issues in the
-same area: 9824 (glue mis-sizes unresolved type variables as zero-sized
+same area: 9824 (glue incorrectly sizes unresolved type variables as zero-sized
 — visible in `getSizeAlign`'s out-of-range and `.unknown` fallbacks
 returning `.{ .size = 0, ... }`) and 9645 (ZigGlue stale entrypoint ABI
 declarations).
