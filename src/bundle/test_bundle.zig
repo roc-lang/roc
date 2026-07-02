@@ -1371,6 +1371,13 @@ test "download URL validation" {
         try testing.expectEqual(download.Version{ .major = 1, .minor = 2, .patch = 3 }, parsed.version);
         try testing.expectEqualStrings("example.com/packages", parsed.urlId(url));
     }
+
+    // Invalid: version below 1.0.0
+    {
+        const url = "https://example.com/packages/0.1.0/4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf.tar.zst";
+        const result = download.validateUrl(url);
+        try testing.expectError(download.DownloadError.InvalidVersion, result);
+    }
 }
 
 // In-memory file system for testing

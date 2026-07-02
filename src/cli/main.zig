@@ -6030,11 +6030,15 @@ fn resolveUrlBundle(ctx: *CliCtx, url: []const u8) (CliError || error{OutOfMemor
     const download = unbundle.download;
 
     // 1. Validate URL and extract hash
-    const parsed_url = download.validateUrl(url) catch {
-        return ctx.fail(.{ .invalid_url = .{
+    const parsed_url = download.validateUrl(url) catch |err| switch (err) {
+        error.InvalidVersion => return ctx.fail(.{ .invalid_url = .{
+            .url = url,
+            .reason = "This URL uses a version below 1.0.0. Roc package versions start at 1.0.0.",
+        } }),
+        else => return ctx.fail(.{ .invalid_url = .{
             .url = url,
             .reason = "Invalid URL format or missing hash. URLs must end with a base58-encoded BLAKE3 hash filename (e.g., '<hash>.tar.zst').",
-        } });
+        } }),
     };
     const base58_hash = parsed_url.hash;
 

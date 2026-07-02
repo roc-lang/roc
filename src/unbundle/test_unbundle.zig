@@ -406,6 +406,19 @@ test "download URL validation only recognizes strict version components" {
     }
 }
 
+test "download URL validation rejects versions below 1.0.0" {
+    const urls = [_][]const u8{
+        "https://example.com/packages/0.0.0/4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf.tar.zst",
+        "https://example.com/packages/0.0.1/4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf.tar.zst",
+        "https://example.com/packages/0.9.9/4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf.tar.zst",
+        "https://example.com/packages/0.20.0/4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf.tar.zst",
+    };
+
+    for (urls) |url| {
+        try testing.expectError(download.DownloadError.InvalidVersion, download.validateUrl(url));
+    }
+}
+
 test "downloadAndExtract with bad archive returns error without crash" {
     const io = testing.io;
 
