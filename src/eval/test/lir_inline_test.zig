@@ -594,6 +594,21 @@ fn collectAssignCallProcs(
                 try work.append(allocator, stmt.body);
                 try work.append(allocator, stmt.remainder);
             },
+            .assign_boxy_desc_ref => |stmt| try work.append(allocator, stmt.next),
+            .assign_boxy_dict_ref => |stmt| try work.append(allocator, stmt.next),
+            .assign_boxy_box => |stmt| try work.append(allocator, stmt.next),
+            .assign_boxy_reuse_box => |stmt| try work.append(allocator, stmt.next),
+            .assign_boxy_unbox => |stmt| try work.append(allocator, stmt.next),
+            .assign_boxy_adapt => |stmt| try work.append(allocator, stmt.next),
+            .assign_boxy_inspect => |stmt| try work.append(allocator, stmt.next),
+            .assign_boxy_eq => |stmt| try work.append(allocator, stmt.next),
+            .assign_boxy_tag => |stmt| try work.append(allocator, stmt.next),
+            .assign_boxy_tag_payload => |stmt| try work.append(allocator, stmt.next),
+            .assign_call_dict => |stmt| try work.append(allocator, stmt.next),
+            .boxy_tag_match => |stmt| {
+                try work.append(allocator, stmt.on_match);
+                try work.append(allocator, stmt.on_miss);
+            },
             .runtime_error,
             .comptime_exhaustiveness_failed,
             .loop_continue,
@@ -719,6 +734,21 @@ fn collectProcShape(
             },
             .jump => {
                 shape.jump_count += 1;
+            },
+            .assign_boxy_desc_ref => |stmt| try work.append(allocator, stmt.next),
+            .assign_boxy_dict_ref => |stmt| try work.append(allocator, stmt.next),
+            .assign_boxy_box => |stmt| try work.append(allocator, stmt.next),
+            .assign_boxy_reuse_box => |stmt| try work.append(allocator, stmt.next),
+            .assign_boxy_unbox => |stmt| try work.append(allocator, stmt.next),
+            .assign_boxy_adapt => |stmt| try work.append(allocator, stmt.next),
+            .assign_boxy_inspect => |stmt| try work.append(allocator, stmt.next),
+            .assign_boxy_eq => |stmt| try work.append(allocator, stmt.next),
+            .assign_boxy_tag => |stmt| try work.append(allocator, stmt.next),
+            .assign_boxy_tag_payload => |stmt| try work.append(allocator, stmt.next),
+            .assign_call_dict => |stmt| try work.append(allocator, stmt.next),
+            .boxy_tag_match => |stmt| {
+                try work.append(allocator, stmt.on_match);
+                try work.append(allocator, stmt.on_miss);
             },
             .runtime_error,
             .comptime_exhaustiveness_failed,
@@ -1948,6 +1978,18 @@ test "LIR statements and procs carry resolved source locations" {
             .jump,
             .ret,
             .crash,
+            .assign_boxy_desc_ref,
+            .assign_boxy_dict_ref,
+            .assign_boxy_box,
+            .assign_boxy_reuse_box,
+            .assign_boxy_unbox,
+            .assign_boxy_adapt,
+            .assign_boxy_inspect,
+            .assign_boxy_eq,
+            .assign_boxy_tag,
+            .assign_boxy_tag_payload,
+            .assign_call_dict,
+            .boxy_tag_match,
             => true,
         };
         if (!has_source) {

@@ -143,7 +143,7 @@ test "box_alloc_zeroed cell is zeroed, writable through ptr_cast, and freed by d
     const ret = try store.addCFStmt(.{ .ret = .{ .value = sum } });
     const drop_cell = try store.addCFStmt(.{ .decref = .{
         .value = cell,
-        .rc = .{ .op = .decref, .layout_idx = box_u64 },
+        .rc = .{ .concrete = .{ .op = .decref, .layout_idx = box_u64 } },
         .next = ret,
     } });
     const add = try lowLevelStmt(&store, sum, .num_plus, &.{ pre, post }, drop_cell);
@@ -196,7 +196,7 @@ test "ptr ops round trip a multi-word payload through a heap cell" {
     const ret = try store.addCFStmt(.{ .ret = .{ .value = sum } });
     const drop_cell = try store.addCFStmt(.{ .decref = .{
         .value = cell,
-        .rc = .{ .op = .decref, .layout_idx = box_pair },
+        .rc = .{ .concrete = .{ .op = .decref, .layout_idx = box_pair } },
         .next = ret,
     } });
     const add = try lowLevelStmt(&store, sum, .num_plus, &.{ f0, f1 }, drop_cell);
@@ -410,7 +410,11 @@ fn hasSelfCall(allocator: Allocator, store: *const LirStore, proc_id: LIR.LirPro
                 try work.append(allocator, s.on_miss);
             },
             .jump, .ret, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
-            inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |s| {
+            .boxy_tag_match => |s| {
+                try work.append(allocator, s.on_match);
+                try work.append(allocator, s.on_miss);
+            },
+            inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict => |s| {
                 try work.append(allocator, s.next);
             },
         }
