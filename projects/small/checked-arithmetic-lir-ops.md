@@ -95,7 +95,7 @@ DEFINED at the LIR level so all five executors inherit one contract.
    the existing `assign_low_level` statement unchanged. (A
    `traps_on_overflow` flag on `assign_low_level` would also work, but
    every backend already switches on `op`; distinct ops keep those switches
-   flat and make unchecked ops impossible to mis-flag.) Define the
+   flat and make unchecked ops impossible to flag incorrectly.) Define the
    canonical crash message for each checked op in ONE table next to the op
    definitions; executors must use it verbatim.
 2. **Lowering**: both LIR lowerers emit the single checked op for integer
