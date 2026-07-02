@@ -824,8 +824,11 @@ fn testingJoinPath(_: ?*anyopaque, _: std.Io, parts: []const []const u8, allocat
     return std.fs.path.join(allocator, parts);
 }
 
-fn testingCanonicalize(_: ?*anyopaque, _: std.Io, _: []const u8, _: Allocator) CanonicalizeError![]const u8 {
-    @panic("canonicalize should not be called in this test");
+fn testingCanonicalize(_: ?*anyopaque, _: std.Io, path: []const u8, allocator: Allocator) CanonicalizeError![]const u8 {
+    // Tests have no real filesystem to resolve against; the lexically
+    // normalized path is the canonical form, matching the identity fallback
+    // used for paths with no on-disk resolution.
+    return std.fs.path.resolve(allocator, &.{path}) catch error.OutOfMemory;
 }
 
 fn testingMakePath(_: ?*anyopaque, _: std.Io, _: []const u8) MakePathError!void {

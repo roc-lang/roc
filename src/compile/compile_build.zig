@@ -640,7 +640,7 @@ pub const BuildEnv = struct {
             self.filesystem,
             if (self.synthetic_root_identity) .synthetic_app else .{ .local_path = root_abs },
         );
-        defer self.gpa.free(@constCast(root_identity));
+        defer self.gpa.free(root_identity);
 
         const key_pkg = try self.gpa.dupe(u8, root_identity);
         const pkg_root_file = try self.gpa.dupe(u8, root_abs);
@@ -716,6 +716,13 @@ pub const BuildEnv = struct {
             else
                 try coord.ensurePackage(entry.key_ptr.*, pkg.root_dir);
             try coord_pkg.setRootInput(self.gpa, pkg.root_file, pkg.root_file_state);
+
+            // The coordinator gates the hosted transform (and app-root artifact
+            // lookups) on knowing which package is the app; app modules must
+            // never have annotation-only defs rewritten into hosted lambdas.
+            if (is_main_pkg and (pkg.kind == .app or pkg.kind == .default_app)) {
+                coord.markAppPackage(coord_pkg.name);
+            }
 
             // Copy shorthands to coordinator package
             // Only copy shorthands that map to real packages, not module-as-package entries
@@ -1925,7 +1932,7 @@ pub const BuildEnv = struct {
 
         // Record notes for packages whose declared dependency versions were
         // bumped by solving, so errors inside them can explain the bump.
-        const bump_notes = try package_identity.versionBumpNotesForPackageKeys(resolved, package_keys, self.gpa);
+        const bump_notes = try package_resolution.versionBumpNotes(resolved, package_keys.identities, self.gpa);
         defer self.gpa.free(bump_notes);
         for (bump_notes) |note| {
             const gop = try self.version_notes.getOrPut(self.gpa, note.package_identity);
@@ -2464,6 +2471,26 @@ pub const BuildEnv = struct {
             }
         }
         return null;
+    }
+
+    /// User-facing display name for `pkg_name`: the alias the root package
+    /// uses for it when one exists, the root's role label ("app" or "module")
+    /// for the root package itself, and otherwise the internal identity.
+    /// Identity strings (full URLs, canonical paths) are cache and nominal
+    /// keys, not presentation; docs and other user output go through this.
+    pub fn displayNameForPackage(self: *BuildEnv, pkg_name: []const u8) []const u8 {
+        if (self.rootAliasForPackage(pkg_name)) |alias| return alias;
+        if (self.discovered_pkg_name) |root_name| {
+            if (std.mem.eql(u8, root_name, pkg_name)) {
+                if (self.packages.getPtr(root_name)) |root_pkg| {
+                    return switch (root_pkg.kind) {
+                        .app, .default_app => "app",
+                        else => "module",
+                    };
+                }
+            }
+        }
+        return pkg_name;
     }
 
     /// Whether a module belongs in a bundle of this build's root package.

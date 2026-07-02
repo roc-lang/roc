@@ -2,7 +2,10 @@
 //!
 //! Package identity is derived from the package's own provenance: a resolved URL,
 //! a canonical local root path, or one of the compiler-synthesized roots whose
-//! filesystem path is intentionally ephemeral.
+//! filesystem path is intentionally ephemeral. A local path that cannot be
+//! resolved on disk (missing file, editor-overlay-only file) falls back to its
+//! lexically normalized form so identity derivation never fails a build; later
+//! stages own the file-not-found diagnostics.
 
 const std = @import("std");
 const CoreCtx = @import("ctx").CoreCtx;
@@ -10,19 +13,24 @@ const package_resolution = @import("package_resolution.zig");
 
 const Allocator = std.mem.Allocator;
 
-/// Identity for compiler-synthesized default-app roots whose temp path is ephemeral.
+/// Identity for compiler-synthesized default-app roots, whose staged temp-dir
+/// paths are ephemeral and must not reach cache keys or nominal identity.
 pub const synthetic_app_identity = "app";
-/// Identity for compiler-synthesized default platforms whose temp path is ephemeral.
+
+/// Identity for compiler-synthesized default platforms (see
+/// `synthetic_app_identity` for why a path identity would be wrong).
 pub const synthetic_platform_identity = "pf";
 
-/// Errors that can occur while deriving an owned package identity string.
-pub const PackageIdentityError = Allocator.Error || CoreCtx.CanonicalizeError;
+/// Identity derivation allocates; unresolvable local paths fall back to their
+/// logical form instead of erroring, so allocation failure is the only error.
+pub const PackageIdentityError = Allocator.Error;
 
-/// Provenance that determines package identity.
+/// Where a package came from, which is the sole input to its identity.
 pub const PackageProvenance = union(enum) {
     /// A resolved package URL.
     url: []const u8,
-    /// A local package root path, canonicalized before use.
+    /// A local package root path, canonicalized before use (with a lexical
+    /// fallback when the path has no on-disk resolution).
     local_path: []const u8,
     /// Compiler-synthesized default-app root.
     synthetic_app,
@@ -30,33 +38,59 @@ pub const PackageProvenance = union(enum) {
     synthetic_platform,
 };
 
-/// Return an owned package identity string derived from package provenance.
+/// Derive the stable identity string for one package. URL packages key by the
+/// resolved URL verbatim; local packages key by canonical root path (falling
+/// back to the lexically normalized path when the file has no on-disk
+/// resolution); compiler-synthesized roots use the explicit synthetic
+/// identities. The caller owns the returned string.
 pub fn packageIdentityFor(
     allocator: Allocator,
     filesystem: CoreCtx,
     provenance: PackageProvenance,
-) PackageIdentityError![]const u8 {
+) PackageIdentityError![]u8 {
     return switch (provenance) {
         .url => |url| try allocator.dupe(u8, url),
-        .local_path => |path| try filesystem.canonicalize(path, allocator),
+        .local_path => |path| try canonicalOrLogicalPath(filesystem, path, allocator),
         .synthetic_app => try allocator.dupe(u8, synthetic_app_identity),
         .synthetic_platform => try allocator.dupe(u8, synthetic_platform_identity),
     };
 }
 
-/// Options for mapping a resolved package graph to package identity keys.
+fn canonicalOrLogicalPath(
+    filesystem: CoreCtx,
+    path: []const u8,
+    allocator: Allocator,
+) Allocator.Error![]u8 {
+    const canonical = filesystem.canonicalize(path, allocator) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        // A path with no on-disk resolution still needs a deterministic
+        // identity, and a missing file must not fail the build at identity
+        // time: registration proceeds so parsing renders the proper
+        // file-not-found diagnostic, and editor overlays serve files that
+        // exist only in memory. The lexically normalized path is that
+        // identity.
+        error.FileNotFound, error.AccessDenied, error.IoError => return std.fs.path.resolve(allocator, &.{path}),
+    };
+    return @constCast(canonical);
+}
+
+/// Which packages in a resolved graph are compiler-synthesized, and therefore
+/// take the synthetic identities instead of provenance-derived ones. Only the
+/// staging code that synthesizes a root or default platform sets these.
 pub const PackageKeyOptions = struct {
     /// Use the synthetic app identity for the resolved root package.
     synthetic_root: bool = false,
-    /// Use the synthetic platform identity for root platform dependencies.
+    /// Use the synthetic platform identity for resolved platform packages.
     synthetic_platform: bool = false,
 };
 
-/// Owned package identity strings indexed like package_resolution.Resolved.packages.
+/// Identity strings for every package in a resolved graph, indexed by the
+/// resolver's package index (`package_resolution.Resolved.packages` order).
 pub const PackageKeys = struct {
     allocator: Allocator,
     identities: []const []const u8,
 
+    /// Identity of `resolved.packages[index]`.
     pub fn identity(self: PackageKeys, index: usize) []const u8 {
         return self.identities[index];
     }
@@ -70,7 +104,9 @@ pub const PackageKeys = struct {
     }
 };
 
-/// Build all package identity keys for a resolved graph once, indexed by package index.
+/// Build the identity mapping for a resolved package graph. This is the single
+/// producer of package keys: every pipeline (BuildEnv, coordinator wiring in
+/// the CLI, glue, LSP) consumes this mapping rather than deriving names.
 pub fn buildPackageKeys(
     allocator: Allocator,
     filesystem: CoreCtx,
@@ -87,21 +123,10 @@ pub fn buildPackageKeys(
         }
     }
 
-    var synthetic_platform_targets = std.DynamicBitSetUnmanaged{};
-    try synthetic_platform_targets.resize(allocator, resolved.packages.len, false);
-    defer synthetic_platform_targets.deinit(allocator);
-
-    if (options.synthetic_platform and resolved.packages.len > package_resolution.Resolved.root_index) {
-        const root = resolved.packages[package_resolution.Resolved.root_index];
-        for (root.deps) |dep| {
-            if (dep.is_platform) synthetic_platform_targets.set(dep.target);
-        }
-    }
-
     for (resolved.packages, 0..) |package, i| {
         const provenance: PackageProvenance = if (i == package_resolution.Resolved.root_index and options.synthetic_root)
             .synthetic_app
-        else if (synthetic_platform_targets.isSet(i))
+        else if (options.synthetic_platform and package.kind == .platform)
             .synthetic_platform
         else if (package.url) |url|
             .{ .url = url.url }
@@ -118,56 +143,12 @@ pub fn buildPackageKeys(
     };
 }
 
-/// A version-bump note keyed by the package identity used for compilation.
-pub const VersionBumpNote = struct {
-    package_identity: []const u8,
-    message: []const u8,
-};
-
-/// Collect version-bump notes using helper-built package identity keys.
-pub fn versionBumpNotesForPackageKeys(
-    resolved: *const package_resolution.Resolved,
-    keys: PackageKeys,
-    allocator: Allocator,
-) Allocator.Error![]VersionBumpNote {
-    var notes = std.ArrayListUnmanaged(VersionBumpNote).empty;
-    for (resolved.packages, 0..) |package, package_index| {
-        for (package.deps) |dep| {
-            const declared = dep.declared_version orelse continue;
-            const target = resolved.packages[dep.target];
-            const resolved_url = target.url orelse continue;
-            if (declared.eql(resolved_url.version)) continue;
-            try notes.append(allocator, .{
-                .package_identity = try allocator.dupe(u8, keys.identity(package_index)),
-                .message = try std.fmt.allocPrint(
-                    allocator,
-                    "the package this error is in declares its dependency {s} as version {d}.{d}.{d}, " ++
-                        "but version solving resolved {s} to {s} because something else in the " ++
-                        "dependency graph mentions that higher version. " ++
-                        "Minor version bumps are supposed to be backwards-compatible, but that is " ++
-                        "a guideline and not an enforced invariant, and this particular minor " ++
-                        "version bump may not have been backwards-compatible in practice.",
-                    .{
-                        dep.alias,
-                        declared.major,
-                        declared.minor,
-                        declared.patch,
-                        dep.alias,
-                        resolved_url.url,
-                    },
-                ),
-            });
-        }
-    }
-    return notes.toOwnedSlice(allocator);
-}
-
 test "packageIdentityFor uses URL identity verbatim" {
     const allocator = std.testing.allocator;
     const filesystem = CoreCtx.testing(allocator, allocator);
 
     const identity = try packageIdentityFor(allocator, filesystem, .{ .url = "https://example.com/pkg/1.2.3/abcd" });
-    defer allocator.free(@constCast(identity));
+    defer allocator.free(identity);
 
     try std.testing.expectEqualStrings("https://example.com/pkg/1.2.3/abcd", identity);
 }
@@ -189,11 +170,30 @@ test "packageIdentityFor canonicalizes local paths" {
 
     const filesystem = CoreCtx.os(allocator, allocator, std.testing.io);
     const direct_identity = try packageIdentityFor(allocator, filesystem, .{ .local_path = direct });
-    defer allocator.free(@constCast(direct_identity));
+    defer allocator.free(direct_identity);
     const spelled_identity = try packageIdentityFor(allocator, filesystem, .{ .local_path = differently_spelled });
-    defer allocator.free(@constCast(spelled_identity));
+    defer allocator.free(spelled_identity);
 
     try std.testing.expectEqualStrings(direct_identity, spelled_identity);
+}
+
+test "packageIdentityFor falls back to the logical path when none exists on disk" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const tmp_root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", allocator);
+    defer allocator.free(tmp_root);
+    const missing_spelled = try std.fs.path.join(allocator, &.{ tmp_root, "missing", ".", "dir", "..", "main.roc" });
+    defer allocator.free(missing_spelled);
+    const missing_logical = try std.fs.path.join(allocator, &.{ tmp_root, "missing", "main.roc" });
+    defer allocator.free(missing_logical);
+
+    const filesystem = CoreCtx.os(allocator, allocator, std.testing.io);
+    const identity = try packageIdentityFor(allocator, filesystem, .{ .local_path = missing_spelled });
+    defer allocator.free(identity);
+
+    try std.testing.expectEqualStrings(missing_logical, identity);
 }
 
 test "packageIdentityFor canonicalizes symlinked local paths" {
@@ -216,9 +216,9 @@ test "packageIdentityFor canonicalizes symlinked local paths" {
 
     const filesystem = CoreCtx.os(allocator, allocator, std.testing.io);
     const real_identity = try packageIdentityFor(allocator, filesystem, .{ .local_path = real_path });
-    defer allocator.free(@constCast(real_identity));
+    defer allocator.free(real_identity);
     const link_identity = try packageIdentityFor(allocator, filesystem, .{ .local_path = link_path });
-    defer allocator.free(@constCast(link_identity));
+    defer allocator.free(link_identity);
 
     try std.testing.expectEqualStrings(real_identity, link_identity);
 }
@@ -228,9 +228,9 @@ test "packageIdentityFor uses synthetic identities for synthesized roots" {
     const filesystem = CoreCtx.testing(allocator, allocator);
 
     const app_identity = try packageIdentityFor(allocator, filesystem, .synthetic_app);
-    defer allocator.free(@constCast(app_identity));
+    defer allocator.free(app_identity);
     const platform_identity = try packageIdentityFor(allocator, filesystem, .synthetic_platform);
-    defer allocator.free(@constCast(platform_identity));
+    defer allocator.free(platform_identity);
 
     try std.testing.expectEqualStrings(synthetic_app_identity, app_identity);
     try std.testing.expectEqualStrings(synthetic_platform_identity, platform_identity);

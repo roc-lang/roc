@@ -192,18 +192,24 @@ pub const VersionBumpNote = struct {
 /// Collect a note for every package in the final graph that was compiled
 /// against a dependency version it did not declare. In a well-behaved
 /// ecosystem these bumps are compatible, so the notes are only worth showing
-/// when a package fails to compile, attached to the error itself. All
+/// when a package fails to compile, attached to the error itself. Notes are
+/// keyed by `identities[package_index]` (the caller's package-key mapping, in
+/// `Resolved.packages` order) so they match coordinator package names. All
 /// strings are allocated with `allocator`.
-pub fn versionBumpNotes(resolved: *const Resolved, allocator: Allocator) Allocator.Error![]VersionBumpNote {
+pub fn versionBumpNotes(
+    resolved: *const Resolved,
+    identities: []const []const u8,
+    allocator: Allocator,
+) Allocator.Error![]VersionBumpNote {
     var notes = std.ArrayListUnmanaged(VersionBumpNote).empty;
-    for (resolved.packages) |package| {
+    for (resolved.packages, 0..) |package, package_index| {
         for (package.deps) |dep| {
             const declared = dep.declared_version orelse continue;
             const target = resolved.packages[dep.target];
             const resolved_url = target.url orelse continue;
             if (declared.eql(resolved_url.version)) continue;
             try notes.append(allocator, .{
-                .package_identity = try allocator.dupe(u8, package.identity),
+                .package_identity = try allocator.dupe(u8, identities[package_index]),
                 .message = try std.fmt.allocPrint(
                     allocator,
                     "the package this error is in declares its dependency {s} as version {d}.{d}.{d}, " ++
@@ -2577,7 +2583,9 @@ test "versionBumpNotes reports packages compiled against undeclared versions" {
     // winner, so only the root gets a note.
     var note_arena = std.heap.ArenaAllocator.init(gpa);
     defer note_arena.deinit();
-    const notes = try versionBumpNotes(&resolved, note_arena.allocator());
+    const identities = try note_arena.allocator().alloc([]const u8, resolved.packages.len);
+    for (resolved.packages, identities) |package, *identity| identity.* = package.identity;
+    const notes = try versionBumpNotes(&resolved, identities, note_arena.allocator());
 
     try std.testing.expectEqual(@as(usize, 1), notes.len);
     try std.testing.expectEqualStrings("/app/main.roc", notes[0].package_identity);

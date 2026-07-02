@@ -1206,10 +1206,6 @@ pub const Coordinator = struct {
         entry_path: []const u8,
         /// Optional override for the app module's `source_dir_override`.
         source_dir_override: ?[]const u8 = null,
-        /// Use the synthetic app identity for compiler-generated default-app roots.
-        synthetic_root_identity: bool = false,
-        /// Use the synthetic platform identity for compiler-generated default platforms.
-        synthetic_platform_identity: bool = false,
     };
 
     pub const AppDiscoveryError = error{
@@ -1246,9 +1242,9 @@ pub const Coordinator = struct {
         const app_identity = try package_identity.packageIdentityFor(
             self.gpa,
             self.roc_ctx,
-            if (opts.synthetic_root_identity) .synthetic_app else .{ .local_path = opts.entry_path },
+            .{ .local_path = opts.entry_path },
         );
-        defer self.gpa.free(@constCast(app_identity));
+        defer self.gpa.free(app_identity);
 
         const app_pkg = try self.ensurePackage(app_identity, app_dir);
         self.markAppPackage(app_pkg.name);
@@ -1272,9 +1268,7 @@ pub const Coordinator = struct {
             const platform_main_path = try std.fs.path.join(arena, &.{ app_dir, header_info.platform_spec });
             const platform_dir = std.fs.path.dirname(platform_main_path) orelse return error.InvalidPlatformPath;
 
-            try self.registerPlatformPackageWithOptions(app_pkg, platform_dir, platform_main_path, header_info.platform_qualifier, null, .{
-                .synthetic_identity = opts.synthetic_platform_identity,
-            });
+            try self.registerPlatformPackageWithUrl(app_pkg, platform_dir, platform_main_path, header_info.platform_qualifier, null);
         }
 
         for (header_info.non_platform_packages) |entry| {
@@ -1289,22 +1283,8 @@ pub const Coordinator = struct {
         try self.enqueueParseTask(app_pkg.name, app_module_id);
     }
 
-    const PlatformIdentityOptions = struct {
-        synthetic_identity: bool = false,
-    };
-
     /// Register the platform package, wire the app's shorthand for it, ensure
     /// the platform's main module, and enqueue its parse task.
-    pub fn registerPlatformPackage(
-        self: *Coordinator,
-        app_pkg: *PackageState,
-        platform_dir: []const u8,
-        platform_main_path: []const u8,
-        qualifier: ?[]const u8,
-    ) package_identity.PackageIdentityError!void {
-        return self.registerPlatformPackageWithOptions(app_pkg, platform_dir, platform_main_path, qualifier, null, .{});
-    }
-
     pub fn registerPlatformPackageWithUrl(
         self: *Coordinator,
         app_pkg: *PackageState,
@@ -1313,29 +1293,15 @@ pub const Coordinator = struct {
         qualifier: ?[]const u8,
         url: ?package_source.UrlSourceView,
     ) package_identity.PackageIdentityError!void {
-        return self.registerPlatformPackageWithOptions(app_pkg, platform_dir, platform_main_path, qualifier, url, .{});
-    }
-
-    fn registerPlatformPackageWithOptions(
-        self: *Coordinator,
-        app_pkg: *PackageState,
-        platform_dir: []const u8,
-        platform_main_path: []const u8,
-        qualifier: ?[]const u8,
-        url: ?package_source.UrlSourceView,
-        options: PlatformIdentityOptions,
-    ) package_identity.PackageIdentityError!void {
         const platform_identity = try package_identity.packageIdentityFor(
             self.gpa,
             self.roc_ctx,
-            if (options.synthetic_identity)
-                .synthetic_platform
-            else if (url) |url_view|
+            if (url) |url_view|
                 .{ .url = url_view.url }
             else
                 .{ .local_path = platform_main_path },
         );
-        defer self.gpa.free(@constCast(platform_identity));
+        defer self.gpa.free(platform_identity);
 
         const pf_pkg = try self.ensurePackageWithUrl(platform_identity, platform_dir, url);
 
@@ -1377,11 +1343,9 @@ pub const Coordinator = struct {
         shorthand_on_app: ?[]const u8,
         url: ?package_source.UrlSourceView,
     ) package_identity.PackageIdentityError!*PackageState {
-        const identity = if (url) |url_view|
-            try package_identity.packageIdentityFor(self.gpa, self.roc_ctx, .{ .url = url_view.url })
-        else
-            try self.gpa.dupe(u8, package_identity_value);
-        defer self.gpa.free(@constCast(identity));
+        // For URL packages the resolved URL is the identity; `ensurePackageWithUrl`
+        // dupes whichever identity it stores, so no temporary copy is needed.
+        const identity = if (url) |url_view| url_view.url else package_identity_value;
 
         const pkg = try self.ensurePackageWithUrl(identity, package_root_dir, url);
         if (app_pkg) |a| {
@@ -1403,7 +1367,7 @@ pub const Coordinator = struct {
         shorthand_on_app: ?[]const u8,
     ) package_identity.PackageIdentityError!*PackageState {
         const identity = try package_identity.packageIdentityFor(self.gpa, self.roc_ctx, .{ .local_path = package_root_file });
-        defer self.gpa.free(@constCast(identity));
+        defer self.gpa.free(identity);
         return self.registerInlinePackage(identity, package_root_dir, app_pkg, shorthand_on_app);
     }
 
@@ -3120,7 +3084,12 @@ pub const Coordinator = struct {
     }
 
     pub fn appRootCheckedArtifact(self: *Coordinator) *const check.CheckedArtifact.CheckedModuleArtifact {
-        const app_package_name = self.app_package_name orelse package_identity.synthetic_app_identity;
+        const app_package_name = self.app_package_name orelse {
+            if (builtin.mode == .Debug) {
+                std.debug.panic("compile.coordinator.appRootCheckedArtifact called before markAppPackage", .{});
+            }
+            unreachable;
+        };
         return self.rootCheckedArtifact(app_package_name);
     }
 
@@ -4293,8 +4262,17 @@ pub const Coordinator = struct {
             if (can.BuiltinLowLevel.isBuiltinModule(env)) {
                 try can.BuiltinLowLevel.apply(env);
             } else if (self.enable_hosted_transform) {
-                // The app package doesn't need hosted lambdas.
-                if (self.app_package_name == null or !std.mem.eql(u8, result.package_name, self.app_package_name.?)) {
+                // The app package must never have annotation-only defs
+                // rewritten into hosted lambdas (they are user errors the
+                // checker reports), so enabling the transform requires
+                // marking which package is the app via markAppPackage.
+                const app_package_name = self.app_package_name orelse {
+                    if (builtin.mode == .Debug) {
+                        std.debug.panic("enable_hosted_transform requires markAppPackage", .{});
+                    }
+                    unreachable;
+                };
+                if (!std.mem.eql(u8, result.package_name, app_package_name)) {
                     if (can.HostedCompiler.replaceAnnoOnlyWithHosted(env)) |modified_defs| {
                         var defs = modified_defs;
                         defs.deinit(env.gpa);
