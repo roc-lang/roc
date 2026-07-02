@@ -341,6 +341,9 @@ fn buildCommand(
     try argv.append(allocator, zig_exe);
     try argv.append(allocator, "build");
     try argv.append(allocator, step);
+    // GitHub CI gets this via the option's CI-environment default; passing it
+    // explicitly keeps local MiniCI runs mirroring CI.
+    try argv.append(allocator, "-Dforbid-arc-certifier-skips");
     try argv.append(allocator, "--summary");
     try argv.append(allocator, "all");
     try argv.append(allocator, "--color");

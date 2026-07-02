@@ -2317,6 +2317,8 @@ pub fn build(b: *std.Build) void {
     const cli_test_llvm = b.option(bool, "cli-test-llvm", "Include LLVM size/speed backend jobs in CLI platform tests") orelse false;
     const trace_build = b.option(bool, "trace-build", "Enable detailed build pipeline tracing") orelse false;
     const debug_gpa = b.option(bool, "debug-gpa", "Use the leak-checking DebugAllocator for the roc binary even when libc is linked (default: off, so libc's malloc and its ASan/Valgrind/LD_PRELOAD tooling are used)") orelse false;
+    const ci_env_set = if (b.graph.environ_map.get("CI")) |ci| ci.len != 0 else false;
+    const forbid_arc_certifier_skips = b.option(bool, "forbid-arc-certifier-skips", "Panic in debug builds if the ARC certifier skips any procedure (defaults to on when the CI environment variable is set)") orelse ci_env_set;
     const shared_memory_size = b.option(u64, "shared-memory-size", "Explicitly set shared-memory arena sizes in bytes");
     const print_trmc = b.option(bool, "print-trmc", "Print one line for each transformed TRMC/TCE proc") orelse false;
     const print_ir_after_trmc = b.option(bool, "print-ir-after-trmc", "Print full LIR for each proc transformed by TRMC/TCE") orelse false;
@@ -2369,6 +2371,7 @@ pub fn build(b: *std.Build) void {
     build_options.addOption(bool, "trace_modules", trace_modules);
     build_options.addOption(bool, "trace_build", trace_build);
     build_options.addOption(bool, "debug_gpa", debug_gpa);
+    build_options.addOption(bool, "forbid_arc_certifier_skips", forbid_arc_certifier_skips);
     build_options.addOption(bool, "has_shared_memory_size", shared_memory_size != null);
     build_options.addOption(u64, "shared_memory_size", shared_memory_size orelse 0);
     build_options.addOption(bool, "print_trmc", print_trmc);
