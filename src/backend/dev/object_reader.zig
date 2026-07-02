@@ -930,6 +930,14 @@ fn resolveBuiltinWrapper(name: []const u8) ?usize {
         .{ .name = "roc_builtins_float_acos", .addr = @intFromPtr(&dev_wrappers.roc_builtins_float_acos) },
         .{ .name = "roc_builtins_float_atan", .addr = @intFromPtr(&dev_wrappers.roc_builtins_float_atan) },
         .{ .name = "roc_builtins_int_from_str", .addr = @intFromPtr(&dev_wrappers.roc_builtins_int_from_str) },
+        .{ .name = "roc_builtins_crypto_sha256_hash_bytes", .addr = @intFromPtr(&dev_wrappers.roc_builtins_crypto_sha256_hash_bytes) },
+        .{ .name = "roc_builtins_crypto_sha256_hasher_empty", .addr = @intFromPtr(&dev_wrappers.roc_builtins_crypto_sha256_hasher_empty) },
+        .{ .name = "roc_builtins_crypto_sha256_hasher_write", .addr = @intFromPtr(&dev_wrappers.roc_builtins_crypto_sha256_hasher_write) },
+        .{ .name = "roc_builtins_crypto_sha256_hasher_finish", .addr = @intFromPtr(&dev_wrappers.roc_builtins_crypto_sha256_hasher_finish) },
+        .{ .name = "roc_builtins_crypto_blake3_hash_bytes", .addr = @intFromPtr(&dev_wrappers.roc_builtins_crypto_blake3_hash_bytes) },
+        .{ .name = "roc_builtins_crypto_blake3_hasher_empty", .addr = @intFromPtr(&dev_wrappers.roc_builtins_crypto_blake3_hasher_empty) },
+        .{ .name = "roc_builtins_crypto_blake3_hasher_write", .addr = @intFromPtr(&dev_wrappers.roc_builtins_crypto_blake3_hasher_write) },
+        .{ .name = "roc_builtins_crypto_blake3_hasher_finish", .addr = @intFromPtr(&dev_wrappers.roc_builtins_crypto_blake3_hasher_finish) },
     };
 
     inline for (entries) |entry| {
