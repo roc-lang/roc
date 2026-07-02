@@ -22,6 +22,7 @@ pub const CliArgs = union(enum) {
     glue: GlueArgs,
     version,
     docs: DocsArgs,
+    bump: BumpArgs,
     experimental_lsp: ExperimentalLspArgs,
     help: []const u8,
     licenses,
@@ -214,6 +215,16 @@ pub const DocsArgs = struct {
     resolve_limits: ResolveLimitArgs = .{}, // package download size limits
 };
 
+/// Arguments for `roc bump`
+pub const BumpArgs = struct {
+    path: []const u8, // the new package's main .roc file
+    old: []const u8, // the old package: URL, .tar.zst bundle, directory, or .roc file (REQUIRED)
+    old_version: ?[]const u8 = null, // the old version (required unless `old` is a versioned URL)
+    no_cache: bool = false, // disable cache
+    verbose: bool = false, // enable verbose output
+    resolve_limits: ResolveLimitArgs = .{}, // package download size limits
+};
+
 /// Arguments for `roc experimental-lsp`
 pub const ExperimentalLspArgs = struct {
     debug_io: bool = false, // log the LSP messages to a temporary log file
@@ -255,6 +266,7 @@ pub fn parse(alloc: mem.Allocator, std_io: std.Io, args: []const []const u8) Par
     if (mem.eql(u8, args[0], "glue")) return parseGlue(args[1..]);
     if (mem.eql(u8, args[0], "version")) return parseVersion(args[1..]);
     if (mem.eql(u8, args[0], "docs")) return parseDocs(args[1..]);
+    if (mem.eql(u8, args[0], "bump")) return parseBump(args[1..]);
     if (mem.eql(u8, args[0], "experimental-lsp")) return parseExperimentalLsp(args[1..]);
     if (mem.eql(u8, args[0], "help")) return CliArgs{ .help = main_help };
     if (mem.eql(u8, args[0], "licenses")) return parseLicenses(args[1..]);
@@ -280,6 +292,7 @@ const main_help =
     \\  version          Print the Roc compiler's version
     \\  check            Check the code for problems, but don't build or run it
     \\  docs             Generate documentation for a Roc package or platform
+    \\  bump             Compare a package's public API against a previous version and report the required semver bump
     \\  experimental-lsp Start the experimental language server (LSP) implementation
     \\  help             Print this message
     \\  licenses         Prints license info for Roc as well as attributions to other projects used by Roc
@@ -1027,6 +1040,91 @@ fn parseDocs(args: []const []const u8) CliArgs {
 
     return CliArgs{ .docs = DocsArgs{ .path = path orelse "main.roc", .main = main, .output = output orelse "generated-docs", .time = time, .no_cache = no_cache, .verbose = verbose, .serve = serve, .resolve_limits = resolve_limits } };
 }
+
+fn parseBump(args: []const []const u8) CliArgs {
+    var path: ?[]const u8 = null;
+    var old: ?[]const u8 = null;
+    var old_version: ?[]const u8 = null;
+    var no_cache = false;
+    var verbose = false;
+    var resolve_limits: ResolveLimitArgs = .{};
+
+    var i: usize = 0;
+    while (i < args.len) : (i += 1) {
+        const arg = args[i];
+        if (isHelpFlag(arg)) {
+            return CliArgs{ .help = bump_help };
+        } else if (mem.eql(u8, arg, "--old")) {
+            if (i + 1 >= args.len) {
+                return CliArgs{ .problem = ArgProblem{ .missing_flag_value = .{ .flag = "--old" } } };
+            }
+            i += 1;
+            old = args[i];
+        } else if (mem.eql(u8, arg, "--old-version")) {
+            if (i + 1 >= args.len) {
+                return CliArgs{ .problem = ArgProblem{ .missing_flag_value = .{ .flag = "--old-version" } } };
+            }
+            i += 1;
+            old_version = args[i];
+        } else if (mem.startsWith(u8, arg, "--max-package-mb") or mem.startsWith(u8, arg, "--max-transitive-mb")) {
+            switch (parseResolveLimitFlag(arg, &resolve_limits)) {
+                .problem => |problem| return CliArgs{ .problem = problem },
+                else => {},
+            }
+        } else if (mem.eql(u8, arg, "--no-cache")) {
+            no_cache = true;
+        } else if (mem.eql(u8, arg, "--verbose")) {
+            verbose = true;
+        } else if (mem.startsWith(u8, arg, "--")) {
+            return CliArgs{ .problem = ArgProblem{ .unexpected_argument = .{ .cmd = "bump", .arg = arg } } };
+        } else {
+            if (path != null) {
+                return CliArgs{ .problem = ArgProblem{ .unexpected_argument = .{ .cmd = "bump", .arg = arg } } };
+            }
+            path = arg;
+        }
+    }
+
+    const old_value = old orelse {
+        return CliArgs{ .problem = ArgProblem{ .missing_flag_value = .{ .flag = "--old" } } };
+    };
+
+    return CliArgs{ .bump = BumpArgs{
+        .path = path orelse "main.roc",
+        .old = old_value,
+        .old_version = old_version,
+        .no_cache = no_cache,
+        .verbose = verbose,
+        .resolve_limits = resolve_limits,
+    } };
+}
+
+const bump_help =
+    \\Compare a package's public API against a previous version and report the
+    \\required semver bump (patch, minor, or major) plus the next version.
+    \\
+    \\Usage: roc bump --old <OLD> [OPTIONS] [ROC_FILE]
+    \\
+    \\Arguments:
+    \\  [ROC_FILE]  The new package's main .roc file [default: main.roc]
+    \\
+    \\Options:
+    \\      --old <OLD>            The previous package version: a package URL, a
+    \\                             .tar.zst bundle, a directory, or a main .roc file
+    \\      --old-version <X.Y.Z>  The previous version number (required unless
+    \\                             --old is a URL with a version path segment)
+    \\      --no-cache             Disable caching
+    \\      --verbose              Enable verbose output
+    \\  -h, --help                 Print help
+    \\
+    \\Both the old and new package must compile with this compiler. Only the
+    \\modules exposed by the package header are compared; platform
+    \\provides/requires are not yet part of the comparison.
+    \\
+    \\If this is the package's first release, there is nothing to compare —
+    \\publish it as 1.0.0.
+    \\
+;
 
 fn parseExperimentalLsp(args: []const []const u8) CliArgs {
     var debug_io = false;
@@ -1872,6 +1970,51 @@ test "roc docs" {
         const result = try parse(gpa, testing.io, &[_][]const u8{ "docs", "--verbose" });
         defer result.deinit(gpa);
         try testing.expectEqual(true, result.docs.verbose);
+    }
+}
+
+test "roc bump" {
+    const gpa = testing.allocator;
+    {
+        const result = try parse(gpa, testing.io, &[_][]const u8{ "bump", "--old", "https://example.com/pkg/1.2.3/hash.tar.zst" });
+        defer result.deinit(gpa);
+        try testing.expectEqualStrings("main.roc", result.bump.path);
+        try testing.expectEqualStrings("https://example.com/pkg/1.2.3/hash.tar.zst", result.bump.old);
+        try testing.expectEqual(null, result.bump.old_version);
+        try testing.expectEqual(false, result.bump.no_cache);
+    }
+    {
+        const result = try parse(gpa, testing.io, &[_][]const u8{ "bump", "--old", "old_pkg", "--old-version", "1.2.3", "new_pkg/main.roc" });
+        defer result.deinit(gpa);
+        try testing.expectEqualStrings("new_pkg/main.roc", result.bump.path);
+        try testing.expectEqualStrings("old_pkg", result.bump.old);
+        try testing.expectEqualStrings("1.2.3", result.bump.old_version.?);
+    }
+    {
+        const result = try parse(gpa, testing.io, &[_][]const u8{"bump"});
+        defer result.deinit(gpa);
+        try testing.expectEqualStrings("--old", result.problem.missing_flag_value.flag);
+    }
+    {
+        const result = try parse(gpa, testing.io, &[_][]const u8{ "bump", "--old" });
+        defer result.deinit(gpa);
+        try testing.expectEqualStrings("--old", result.problem.missing_flag_value.flag);
+    }
+    {
+        const result = try parse(gpa, testing.io, &[_][]const u8{ "bump", "--old", "a", "b.roc", "c.roc" });
+        defer result.deinit(gpa);
+        try testing.expectEqualStrings("c.roc", result.problem.unexpected_argument.arg);
+    }
+    {
+        const result = try parse(gpa, testing.io, &[_][]const u8{ "bump", "--help" });
+        defer result.deinit(gpa);
+        try testing.expectEqual(.help, std.meta.activeTag(result));
+    }
+    {
+        const result = try parse(gpa, testing.io, &[_][]const u8{ "bump", "--old", "a", "--no-cache", "--verbose" });
+        defer result.deinit(gpa);
+        try testing.expectEqual(true, result.bump.no_cache);
+        try testing.expectEqual(true, result.bump.verbose);
     }
 }
 

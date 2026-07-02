@@ -286,7 +286,7 @@ const Edge = struct {
     const InvalidSpec = enum {
         unparsable_url,
         insecure_url,
-        reserved_version,
+        below_minimum_version,
     };
 };
 
@@ -512,7 +512,7 @@ pub const Resolver = struct {
                             .spec = dep.spec,
                             .is_platform = dep.is_platform,
                             .target = .{ .invalid = switch (err) {
-                                error.InvalidVersion => .reserved_version,
+                                error.InvalidVersion => .below_minimum_version,
                                 else => .unparsable_url,
                             } },
                         });
@@ -849,10 +849,10 @@ pub const Resolver = struct {
                                 "Package URLs must use https (or http to localhost, for testing).",
                             .{ owner, edge.spec },
                         ),
-                        .reserved_version => try self.addDiagnostic(
+                        .below_minimum_version => try self.addDiagnostic(
                             "Invalid Package Version",
-                            "{s} depends on this URL, which uses the reserved version 0.0.0:\n\n    {s}\n\n" ++
-                                "The lowest publishable package version is 0.0.1.",
+                            "{s} depends on this URL, whose version is below 1.0.0:\n\n    {s}\n\n" ++
+                                "Roc package versions start at 1.0.0. (The version 0.0.0 is reserved to mean \"no version.\")",
                             .{ owner, edge.spec },
                         ),
                         .unparsable_url => try self.addDiagnostic(
@@ -2600,4 +2600,38 @@ test "insecure URLs are rejected" {
 
     try std.testing.expectError(error.ResolutionFailed, resolver.resolve("/app/main.roc"));
     try std.testing.expectEqualStrings("Insecure Package URL", resolver.diagnostics.items[0].title);
+}
+
+test "URL versions below 1.0.0 are rejected" {
+    const gpa = std.testing.allocator;
+    var registry = TestRegistry.init(gpa);
+    defer registry.deinit();
+
+    try registry.locals.put("/app/main.roc", .{
+        .kind = .package,
+        .deps = &.{.{ .alias = "a", .spec = "https://example.com/a/0.5.0/hashA.tar.zst", .is_platform = false }},
+    });
+
+    var resolver = Resolver.init(gpa, registry.fetcher(), .{});
+    defer resolver.deinit();
+
+    try std.testing.expectError(error.ResolutionFailed, resolver.resolve("/app/main.roc"));
+    try std.testing.expectEqualStrings("Invalid Package Version", resolver.diagnostics.items[0].title);
+}
+
+test "the reserved 0.0.0 version is rejected" {
+    const gpa = std.testing.allocator;
+    var registry = TestRegistry.init(gpa);
+    defer registry.deinit();
+
+    try registry.locals.put("/app/main.roc", .{
+        .kind = .package,
+        .deps = &.{.{ .alias = "a", .spec = "https://example.com/a/0.0.0/hashA.tar.zst", .is_platform = false }},
+    });
+
+    var resolver = Resolver.init(gpa, registry.fetcher(), .{});
+    defer resolver.deinit();
+
+    try std.testing.expectError(error.ResolutionFailed, resolver.resolve("/app/main.roc"));
+    try std.testing.expectEqualStrings("Invalid Package Version", resolver.diagnostics.items[0].title);
 }

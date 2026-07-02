@@ -259,6 +259,12 @@ pub const CliProblem = union(enum) {
         reason: []const u8,
     },
 
+    /// `roc bump` could not compare the packages
+    bump_failed: struct {
+        title: []const u8,
+        message: []const u8,
+    },
+
     /// Download failed
     download_failed: struct {
         url: []const u8,
@@ -360,6 +366,7 @@ pub const CliProblem = union(enum) {
             .object_compilation_failed,
             .shim_generation_failed,
             .invalid_url,
+            .bump_failed,
             .download_failed,
             .package_cache_error,
             .child_process_spawn_failed,
@@ -402,6 +409,7 @@ pub const CliProblem = union(enum) {
             .object_compilation_failed => |info| try createObjectCompilationFailedReport(allocator, info),
             .shim_generation_failed => |info| try createShimGenerationFailedReport(allocator, info),
             .invalid_url => |info| try createInvalidUrlReport(allocator, info),
+            .bump_failed => |info| try createBumpFailedReport(allocator, info),
             .download_failed => |info| try createDownloadFailedReport(allocator, info),
             .package_cache_error => |info| try createPackageCacheErrorReport(allocator, info),
             .child_process_spawn_failed => |info| try createChildProcessSpawnFailedReport(allocator, info),
@@ -747,6 +755,14 @@ fn createInvalidUrlReport(allocator: Allocator, info: anytype) Allocator.Error!R
     return report;
 }
 
+fn createBumpFailedReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
+    var report = try Report.init(allocator, info.title, "roc bump could not compare the packages.", .runtime_error);
+
+    try report.document.addText(info.message);
+
+    return report;
+}
+
 fn createDownloadFailedReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
     const headline = switch (info.err) {
         error.InvalidHash => try std.fmt.allocPrint(allocator, "Error: {s}.", .{@errorName(info.err)}),
@@ -764,15 +780,6 @@ fn createDownloadFailedReport(allocator: Allocator, info: anytype) Allocator.Err
             try report.document.addAnnotated(info.url, .emphasized);
             try report.document.addLineBreaks(2);
 
-            try report.document.addText("Possible Reasons: ");
-            try report.document.addLineBreak();
-            try report.document.addText("1. The ");
-            try report.document.addAnnotated("platform was built with the old Roc", .error_highlight);
-            try report.document.addText(" (Rust) compiler (alpha4 or older), instead of the new Roc (Zig) compiler. The new compiler is available at https://github.com/roc-lang/nightlies");
-            try report.document.addLineBreak();
-            try report.document.addText("2. The Hash portion of the URL is malformed.");
-
-            try report.document.addLineBreaks(2);
             try report.document.addText("Tips:");
             try report.document.addLineBreak();
             try report.document.addSuggestion("1. If there is a newer version of the platform available, try updating.");
