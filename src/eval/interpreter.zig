@@ -1285,7 +1285,9 @@ pub const Interpreter = struct {
                 }
                 if (list.len() == 0 or list.bytes == null) return;
 
-                const elem_layout = layout_val.getIdx();
+                // The raw list child can be an unresolved layout; the runtime
+                // buffer is laid out by the resolved element layout.
+                const elem_layout = self.layout_store.runtimeRepresentationLayoutIdx(layout_val.getIdx());
                 const elem_size = self.helper.sizeOf(elem_layout);
                 if (elem_size == 0) return;
 
