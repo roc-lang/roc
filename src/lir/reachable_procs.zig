@@ -225,6 +225,7 @@ const Pass = struct {
 
         switch (self.result.const_plans.items[index]) {
             .pending,
+            .layout_only,
             .zst,
             .scalar,
             .str,
