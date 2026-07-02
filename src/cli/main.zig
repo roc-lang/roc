@@ -6718,7 +6718,16 @@ fn rocBuildDefaultApp(ctx: *CliCtx, args: cli_args.BuildArgs, original_source: [
     const temp_dir = createUniqueTempDir(ctx) catch |err| {
         return ctx.fail(.{ .temp_dir_failed = .{ .err = err } });
     };
-    defer std.Io.Dir.cwd().deleteTree(ctx.io.std_io, temp_dir) catch {};
+
+    if (args.keep_temp) {
+        const palette = reporting.ColorUtils.getPaletteForConfig(reporting.ReportingConfig.initColorTerminal());
+        const config = reporting.ReportingConfig.initColorTerminal();
+        const headline = try std.fmt.allocPrint(ctx.arena, "Kept temporary directory: {s}.", .{temp_dir});
+        var report = try reporting.Report.init(ctx.arena, "Kept Temporary Directory", headline, .warning);
+        defer report.deinit();
+        reporting.renderReportToTerminal(&report, ctx.io.stderr(), palette, config) catch {};
+    }
+    defer if (!args.keep_temp) std.Io.Dir.cwd().deleteTree(ctx.io.std_io, temp_dir) catch {};
 
     const platform_dir = try std.fs.path.join(ctx.arena, &.{ temp_dir, ".roc_echo_platform" });
     try std.Io.Dir.cwd().createDirPath(ctx.io.std_io, platform_dir);
@@ -8284,7 +8293,16 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
             enable_default_platform_runtime,
             args.synthetic_default_platform,
         );
-        defer std.Io.Dir.cwd().deleteTree(ctx.io.std_io, app_object.artifact_dir) catch {};
+
+        if (args.keep_temp) {
+            const palette = reporting.ColorUtils.getPaletteForConfig(reporting.ReportingConfig.initColorTerminal());
+            const config = reporting.ReportingConfig.initColorTerminal();
+            const headline = try std.fmt.allocPrint(ctx.arena, "Kept temporary directory: {s}.", .{app_object.artifact_dir});
+            var report = try reporting.Report.init(ctx.arena, "Kept Temporary Directory", headline, .warning);
+            defer report.deinit();
+            reporting.renderReportToTerminal(&report, ctx.io.stderr(), palette, config) catch {};
+        }
+        defer if (!args.keep_temp) std.Io.Dir.cwd().deleteTree(ctx.io.std_io, app_object.artifact_dir) catch {};
 
         var static_data_obj_path: ?[]const u8 = null;
         if (static_data_exports.len > 0) {
