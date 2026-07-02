@@ -1,4 +1,9 @@
 :root {
+  /* Sidebar dropdown triangle, used as a mask on `.entry-toggle::before` so it
+     follows the toggle's color. Two back-to-back right triangles split along the
+     triangle's axis; the lower half is masked to ~55% alpha so it reads a touch
+     lighter than the upper half. */
+  --toggle-triangle: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 8 8'%3E%3Cpath d='M1.5 1L1.5 4L7 4Z'/%3E%3Cpath d='M1.5 4L1.5 7L7 4Z' fill-opacity='.55'/%3E%3C/svg%3E");
   /* WCAG AAA Compliant colors - important that luminance (the l in hsl) is 18% for font colors against the bg's luminance of 96-97% when the font-size is at least 14pt */
   --code-bg: hsl(262 33% 96% / 1);
   --code-color: #000;
@@ -61,12 +66,9 @@ a {
   color: var(--violet);
 }
 
-table tr th {
-  border: 1px solid var(--gray);
-}
-
 table tr th,
 table tr td {
+  border: 1px solid var(--gray);
   padding: 6px 13px;
 }
 
@@ -197,20 +199,6 @@ table tr td {
     margin-top: 0;
 }
 
-/* Type module badge */
-.module-kind-badge {
-    display: inline-block;
-    font-size: var(--font-xs);
-    font-weight: var(--weight-medium);
-    font-family: var(--font-sans);
-    background-color: var(--violet-bg);
-    color: var(--violet);
-    border: 1px solid var(--violet-border-subtle);
-    padding: 2px 8px;
-    vertical-align: middle;
-    margin-left: 8px;
-}
-
 /* Hierarchical entry layout */
 .entry {
     position: relative;
@@ -227,6 +215,10 @@ table tr td {
 .entry-children-container {
     margin-top: 16px;
     margin-left: var(--entry-anchor-offset);
+}
+
+.entry-doc {
+    padding-left: 20px;
 }
 
 /* Entry type vs value styling */
@@ -346,7 +338,7 @@ main > * {
     font-size: large;
 }
 
-section {
+section:not(.langref-article) {
   padding: 0px 0px 16px 20px;
 }
 
@@ -372,12 +364,51 @@ section > *:last-child {
   margin-bottom: 0;
 }
 
-section h1,
-section h2,
-section h3,
-section h4,
-section p {
+section:not(.langref-article) h1,
+section:not(.langref-article) h2,
+section:not(.langref-article) h3,
+section:not(.langref-article) h4,
+section:not(.langref-article) p {
 padding: 0px 16px;
+}
+
+/* Language reference articles reuse the module-page chrome and layout. These
+   rules give the converted Markdown block elements (lists, tables, code blocks)
+   their horizontal rhythm. Headings and the page title use the page font rather
+   than the monospace reserved for code identifiers. */
+.module-name.langref-title,
+.langref-article h1,
+.langref-article h2,
+.langref-article h3,
+.langref-article h4,
+.langref-article h5,
+.langref-article h6 {
+  font-family: var(--font-sans);
+}
+
+.langref-article ul,
+.langref-article ol {
+  margin: 12px 0;
+  padding-left: 40px;
+}
+
+.langref-article li {
+  margin: 4px 0;
+}
+
+.langref-article li > ul,
+.langref-article li > ol {
+  margin: 4px 0;
+}
+
+.langref-article pre {
+  margin-left: 16px;
+  margin-right: 16px;
+}
+
+.langref-article table {
+  border-collapse: collapse;
+  margin: 16px;
 }
 
 #sidebar-nav {
@@ -445,7 +476,7 @@ footer p {
 }
 
 .sidebar-sub-entries {
-    font-size: var(--font-sm);
+    font-size: var(--font-base);
     display: none;
     list-style: none;
     padding: 0;
@@ -454,6 +485,14 @@ footer p {
 
 .active + .sidebar-sub-entries {
     display: block;
+}
+
+/* When a module entry is itself nested inside another entry's sub-entry list
+   (e.g. the builtin type modules under "Builtin Types"), indent its members so
+   they sit underneath their type rather than level with it. Top-level modules
+   and types are not descendants of a sub-entry list, so they are unaffected. */
+.sidebar-sub-entries .sidebar-entry > .sidebar-sub-entries {
+    margin-left: 22px;
 }
 
 .sidebar-sub-entries a {
@@ -465,8 +504,16 @@ footer p {
   text-overflow: ellipsis;
   margin-left: 20px;
   padding-left: 16px;
-  border-left: 4px solid var(--gray-border-subtle);
+  /* Transparent by default so the indent is consistent; only values/methods
+     (`.sidebar-value`) get a visible bar — nested types, type-module entries,
+     and language-reference links do not. */
+  border-left: 4px solid transparent;
   white-space: nowrap;
+}
+
+.sidebar-sub-entries a.sidebar-value {
+  border-left-color: var(--gray-border-subtle);
+  padding-left: 20px;
 }
 
 .sidebar-sub-entries > li:first-child > a {
@@ -480,9 +527,23 @@ footer p {
 }
 
 .sidebar-sub-entries a:hover {
-    border-left-color: var(--violet-border-hover);
     color: var(--violet);
     text-decoration: none;
+}
+
+.sidebar-sub-entries a.sidebar-value:hover {
+    border-left-color: var(--violet-border-hover);
+}
+
+/* Builtin docs only (the langref-enabled site): the "Builtin Types" and
+   "Language Reference" sidebar entries, and the langref article links, are
+   prose labels rather than code identifiers, so they use the page font instead
+   of the monospace used elsewhere in the sidebar. Inline `code` inside a
+   langref article link keeps its monospace styling via the `code` rule. */
+.pkg-full-name.prose-label,
+.sidebar-module-link.prose-label,
+.langref-articles a {
+  font-family: var(--font-sans);
 }
 
 .sidebar-type {
@@ -613,7 +674,7 @@ a.sidebar-module-link {
     appearance: none;
     border: none;
     color: transparent;
-    color: rgba(from var(--text-color) r g b / .6);
+    color: rgba(from var(--text-color) r g b / .5);
     transition: all 80ms linear;
     text-decoration: none;
     font-size: 0.8rem;
@@ -625,9 +686,30 @@ a.sidebar-module-link {
     }
 }
 
+/* The triangle itself: a single SVG (`--toggle-triangle`) masked by the toggle's
+   current color, so it tracks the gray/hover-violet transitions. */
+.entry-toggle::before {
+    content: "";
+    display: inline-block;
+    width: 0.85rem;
+    height: 0.85rem;
+    vertical-align: middle;
+    background-color: currentColor;
+    -webkit-mask: var(--toggle-triangle) center / contain no-repeat;
+    mask: var(--toggle-triangle) center / contain no-repeat;
+}
+
 .sidebar-entry:hover > a > .entry-toggle,
 .sidebar-module-link:hover > .entry-toggle {
     color: var(--text-color);
+}
+
+/* Nested module toggles (e.g. the builtin types under "Builtin Types") sit in a
+   smaller-font line and read a touch low; nudge them up to center on the label.
+   `top` offsets the box before the `rotate` spins it, so both states stay aligned. */
+.sidebar-sub-entries .entry-toggle {
+    position: relative;
+    top: -2px;
 }
 
 .active .entry-toggle {
@@ -651,6 +733,18 @@ p code {
   padding: 0 4px;
 }
 
+/* Inline code in headings should blend in with the heading, not look like a
+   highlighted code chip. */
+h1 code,
+h2 code,
+h3 code,
+h4 code,
+h5 code,
+h6 code {
+  background-color: transparent;
+  padding: 0;
+}
+
 code a,
 a code {
   text-decoration: none;
@@ -669,6 +763,16 @@ code a:visited .type {
 code a:visited,
 a:visited code {
   color: var(--code-link-color);
+}
+
+/* Language-reference sidebar links are prose, so inline `code` in a langref
+   article title (e.g. the "`if` / `else`" heading) should read as part of the
+   link text rather than as a code link — inherit the link's own color instead
+   of the violet `--code-link-color`. Placed after the rules above so it wins
+   the specificity tie with `a:visited code` on source order. */
+.langref-articles a code,
+.langref-articles a:visited code {
+  color: inherit;
 }
 
 pre {
@@ -850,6 +954,12 @@ pre>code {
       scrollbar-color: #8f8f8f #2f2f2f;
   }
 
+  /* In dark mode "lighter" means more of the near-white text color, i.e. a
+     higher alpha (the opposite of light mode, where lighter means fading toward
+     the light background). */
+  .sidebar-module-link > .entry-toggle {
+      color: rgba(from var(--text-color) r g b / .8);
+  }
 }
 
 @media only screen and (max-width: 768px) {
