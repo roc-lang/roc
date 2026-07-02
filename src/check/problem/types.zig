@@ -74,7 +74,9 @@ pub const Problem = union(enum) {
 /// Error for when a platform expects an alias to be defined, but it's not there
 pub const PlatformAliasNotFound = struct {
     expected_alias_ident: Ident.Idx,
-    ctx: enum { not_found, found_but_not_alias },
+    app_region: base.Region,
+    platform_region: base.Region,
+    ctx: enum { not_found, found_but_not_type },
 };
 
 /// The platform's hosted section disagrees with the hosted functions its
@@ -103,6 +105,8 @@ pub const PlatformHostedSection = struct {
 /// Error for when a platform expects a def to be defined, but it's not there
 pub const PlatformDefNotFound = struct {
     expected_def_ident: Ident.Idx,
+    app_region: base.Region,
+    platform_region: base.Region,
     ctx: enum { not_found, found_but_not_exported },
 };
 

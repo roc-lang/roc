@@ -970,6 +970,7 @@ pub const BuildEnv = struct {
                     .Parse, .Parsing => .Parse,
                     .Canonicalize => .Canonicalize,
                     .WaitingOnImports => .WaitingOnImports,
+                    .WaitingOnPlatformRequirements => .WaitingOnImports,
                     .TypeCheck => .TypeCheck,
                     .Done => .Done,
                 };

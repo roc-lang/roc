@@ -77,8 +77,11 @@ const ParseTask = messages.ParseTask;
 const CanonicalizeTask = messages.CanonicalizeTask;
 const CanonicalizeImport = messages.CanonicalizeImport;
 const TypeCheckTask = messages.TypeCheckTask;
+const PlatformRequirementsCheckTask = messages.PlatformRequirementsCheckTask;
+const PlatformRequirementSurface = messages.PlatformRequirementSurface;
 const ParsedResult = messages.ParsedResult;
 const CanonicalizedResult = messages.CanonicalizedResult;
+const PlatformRequirementsCheckedResult = messages.PlatformRequirementsCheckedResult;
 
 const WorkerFailureError = Allocator.Error || error{ AccessDenied, FileNotFound, IoError, StreamTooLong } || compile_package.TypeCheckModuleError;
 const TypeCheckWorkerError = Allocator.Error || compile_package.TypeCheckModuleError;
@@ -118,7 +121,6 @@ const Thread = threading.Thread;
 const CheckedModuleArtifact = check.CheckedArtifact.CheckedModuleArtifact;
 const CheckedArtifact = check.CheckedArtifact;
 const canonical = check.CanonicalNames;
-const CanonicalTypeKey = canonical.CanonicalTypeKey;
 
 fn destroyCheckedArtifact(artifact: *CheckedModuleArtifact, retain_module_env: bool) void {
     const allocator = artifact.canonical_names.allocator;
@@ -319,6 +321,8 @@ pub const Phase = enum {
     Canonicalize,
     /// Canonicalized, waiting for imports to complete
     WaitingOnImports,
+    /// Canonicalized app root, waiting on the platform's checked requires surface.
+    WaitingOnPlatformRequirements,
     /// Imports ready, needs type checking
     TypeCheck,
     /// Fully compiled
@@ -342,6 +346,10 @@ pub const ModuleState = struct {
     /// Owned semantic module payload. Earlier phases populate only `module_env`;
     /// type checking later fills in the checked artifact.
     semantic: ?OwnedSemanticModuleData = null,
+    /// Checked platform requirement header surface for platform roots.
+    platform_requirement_surface: ?PlatformRequirementSurface = null,
+    /// True once the platform requirement surface worker has been queued.
+    platform_requirement_surface_queued: bool = false,
     /// Cached AST from parsing (owned, null after canonicalization)
     cached_ast: ?*AST,
     /// Current compilation phase
@@ -516,6 +524,9 @@ pub const ModuleState = struct {
                 env_alloc.destroy(env);
                 if (source.len > 0) env_alloc.free(@constCast(source));
             }
+        }
+        if (self.platform_requirement_surface) |*surface| {
+            surface.deinit();
         }
         for (self.explicit_root_ident_names) |name| gpa.free(name);
         gpa.free(self.explicit_root_ident_names);
@@ -776,102 +787,6 @@ pub const PackageState = struct {
 pub const ModuleRef = struct {
     pkg_name: []const u8,
     module_id: ModuleId,
-};
-
-const PlatformRequiredValidationSnapshot = struct {
-    dispatch_dispatcher_keys: []CanonicalTypeKey = &.{},
-    dispatch_callable_keys: []CanonicalTypeKey = &.{},
-    iterator_iter_dispatcher_keys: []CanonicalTypeKey = &.{},
-    iterator_next_dispatcher_keys: []CanonicalTypeKey = &.{},
-    pattern_type_keys: []CanonicalTypeKey = &.{},
-
-    fn init(
-        allocator: Allocator,
-        artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
-    ) Allocator.Error!PlatformRequiredValidationSnapshot {
-        var snapshot = PlatformRequiredValidationSnapshot{};
-        errdefer snapshot.deinit(allocator);
-
-        snapshot.dispatch_dispatcher_keys = try allocator.alloc(CanonicalTypeKey, artifact.static_dispatch_plans.plans.len);
-        snapshot.dispatch_callable_keys = try allocator.alloc(CanonicalTypeKey, artifact.static_dispatch_plans.plans.len);
-        for (artifact.static_dispatch_plans.plans, 0..) |plan, i| {
-            snapshot.dispatch_dispatcher_keys[i] = check.CheckedArtifact.checkedTypeRootKey(artifact, plan.dispatcher_ty);
-            snapshot.dispatch_callable_keys[i] = check.CheckedArtifact.checkedTypeRootKey(artifact, plan.callable_ty);
-        }
-
-        snapshot.iterator_iter_dispatcher_keys = try allocator.alloc(CanonicalTypeKey, artifact.static_dispatch_plans.iterator_for_plans.len);
-        snapshot.iterator_next_dispatcher_keys = try allocator.alloc(CanonicalTypeKey, artifact.static_dispatch_plans.iterator_for_plans.len);
-        for (artifact.static_dispatch_plans.iterator_for_plans, 0..) |plan, i| {
-            snapshot.iterator_iter_dispatcher_keys[i] = check.CheckedArtifact.checkedTypeRootKey(artifact, plan.iter.dispatcher_ty);
-            snapshot.iterator_next_dispatcher_keys[i] = check.CheckedArtifact.checkedTypeRootKey(artifact, plan.next.dispatcher_ty);
-        }
-
-        snapshot.pattern_type_keys = try allocator.alloc(CanonicalTypeKey, artifact.checked_bodies.patternCount());
-        for (snapshot.pattern_type_keys, 0..) |*key, i| {
-            const pattern_id: check.CheckedArtifact.CheckedPatternId = @enumFromInt(i);
-            key.* = check.CheckedArtifact.checkedTypeRootKey(artifact, artifact.checked_bodies.pattern(pattern_id).ty);
-        }
-
-        return snapshot;
-    }
-
-    fn deinit(self: *PlatformRequiredValidationSnapshot, allocator: Allocator) void {
-        allocator.free(self.dispatch_dispatcher_keys);
-        allocator.free(self.dispatch_callable_keys);
-        allocator.free(self.iterator_iter_dispatcher_keys);
-        allocator.free(self.iterator_next_dispatcher_keys);
-        allocator.free(self.pattern_type_keys);
-        self.* = .{};
-    }
-
-    fn dispatchPlanChanged(
-        self: *const PlatformRequiredValidationSnapshot,
-        artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
-        plan_index: usize,
-        plan: check.StaticDispatchRegistry.StaticDispatchCallPlan,
-    ) bool {
-        if (plan_index >= self.dispatch_dispatcher_keys.len or
-            plan_index >= self.dispatch_callable_keys.len)
-        {
-            return false;
-        }
-        return !typeKeyMatchesArtifactRoot(self.dispatch_dispatcher_keys[plan_index], artifact, plan.dispatcher_ty) or
-            !typeKeyMatchesArtifactRoot(self.dispatch_callable_keys[plan_index], artifact, plan.callable_ty);
-    }
-
-    fn iteratorPlanChanged(
-        self: *const PlatformRequiredValidationSnapshot,
-        artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
-        plan_index: usize,
-        plan: check.StaticDispatchRegistry.IteratorForPlan,
-    ) bool {
-        if (plan_index >= self.iterator_iter_dispatcher_keys.len or
-            plan_index >= self.iterator_next_dispatcher_keys.len)
-        {
-            return false;
-        }
-        return !typeKeyMatchesArtifactRoot(self.iterator_iter_dispatcher_keys[plan_index], artifact, plan.iter.dispatcher_ty) or
-            !typeKeyMatchesArtifactRoot(self.iterator_next_dispatcher_keys[plan_index], artifact, plan.next.dispatcher_ty);
-    }
-
-    fn patternTypeChanged(
-        self: *const PlatformRequiredValidationSnapshot,
-        artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
-        pattern_index: usize,
-        pattern: check.CheckedArtifact.CheckedPattern,
-    ) bool {
-        if (pattern_index >= self.pattern_type_keys.len) return false;
-        return !typeKeyMatchesArtifactRoot(self.pattern_type_keys[pattern_index], artifact, pattern.ty);
-    }
-
-    fn typeKeyMatchesArtifactRoot(
-        key: CanonicalTypeKey,
-        artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
-        root: check.CheckedArtifact.CheckedTypeId,
-    ) bool {
-        const current = check.CheckedArtifact.checkedTypeRootKey(artifact, root);
-        return std.meta.eql(key.bytes, current.bytes);
-    }
 };
 
 /// Coordinator manages all compilation state and coordinates workers
@@ -2221,29 +2136,7 @@ pub const Coordinator = struct {
         // Artifact presence is the single authority here, applied uniformly to the platform and
         // app roots (see the app-artifact guard below).
         const platform_declaration_artifact = platform_root.mod.checkedArtifact() orelse return;
-        const requirement_context = check.CheckedArtifact.platformRequirementContextKey(platform_declaration_artifact);
-
-        const original_app_artifact = app_root.mod.checkedArtifact() orelse return;
-        var validation_snapshot = try PlatformRequiredValidationSnapshot.init(self.gpa, original_app_artifact);
-        defer validation_snapshot.deinit(self.gpa);
-
-        try self.appendPlatformRequiredInvalidNumericExpressionReports(app_root.mod, original_app_artifact, platform_declaration_artifact);
-        if (self.hasUserErrors() and !allow_user_errors) return;
-
-        try self.republishCheckedArtifact(app_root.pkg, app_root.mod, .{
-            .platform_requirement_artifact = check.CheckedArtifact.importedView(platform_declaration_artifact),
-            .platform_requirement_context = requirement_context,
-        });
-
-        const app_artifact = app_root.mod.checkedArtifact() orelse {
-            if (builtin.mode == .Debug) {
-                std.debug.panic("compile.coordinator.finalizeExecutableArtifacts missing app artifact after co-finalization", .{});
-            }
-            unreachable;
-        };
-        try self.appendPlatformRequiredUnresolvedDispatchReports(app_root.mod, app_artifact, &validation_snapshot);
-        try self.appendPlatformRequiredInvalidNumericPatternReports(app_root.mod, app_artifact, &validation_snapshot);
-        if (self.hasUserErrors() and !allow_user_errors) return;
+        const app_artifact = app_root.mod.checkedArtifact() orelse return;
 
         var relation_result = try check.CheckedArtifact.buildPlatformAppRelation(
             self.gpa,
@@ -2255,23 +2148,8 @@ pub const Coordinator = struct {
 
         const relation = switch (relation_result) {
             .relation => |relation| relation,
-            .type_mismatch => |mismatch| {
-                try self.appendPlatformRequirementTypeMismatchReport(
-                    app_root.mod,
-                    platform_declaration_artifact,
-                    app_artifact,
-                    mismatch,
-                );
-                return;
-            },
-            .missing_value => |missing| {
-                try self.appendPlatformRequirementMissingValueReport(
-                    app_root.mod,
-                    platform_declaration_artifact,
-                    missing,
-                );
-                return;
-            },
+            .type_mismatch => coordinatorInvariant("platform/app relation type mismatch reached executable finalization after checking", .{}),
+            .missing_value => coordinatorInvariant("platform/app relation missing required app value reached executable finalization after checking", .{}),
         };
         const relation_artifacts = [_]check.CheckedArtifact.ImportedModuleView{
             check.CheckedArtifact.importedView(app_artifact),
@@ -2298,29 +2176,7 @@ pub const Coordinator = struct {
         // Artifact presence is the single authority here, applied uniformly to the platform and
         // app roots (see the app-artifact guard below).
         const platform_declaration_artifact = platform_root.mod.checkedArtifact() orelse return;
-        const requirement_context = check.CheckedArtifact.platformRequirementContextKey(platform_declaration_artifact);
-
-        const original_app_artifact = app_root.mod.checkedArtifact() orelse return;
-        var validation_snapshot = try PlatformRequiredValidationSnapshot.init(self.gpa, original_app_artifact);
-        defer validation_snapshot.deinit(self.gpa);
-
-        try self.appendPlatformRequiredInvalidNumericExpressionReports(app_root.mod, original_app_artifact, platform_declaration_artifact);
-        if (self.hasUserErrors()) return;
-
-        try self.republishCheckedArtifact(app_root.pkg, app_root.mod, .{
-            .platform_requirement_artifact = check.CheckedArtifact.importedView(platform_declaration_artifact),
-            .platform_requirement_context = requirement_context,
-        });
-
-        const app_artifact = app_root.mod.checkedArtifact() orelse {
-            if (builtin.mode == .Debug) {
-                std.debug.panic("compile.coordinator.validatePlatformAppRelationsForCheck missing app artifact after co-finalization", .{});
-            }
-            unreachable;
-        };
-        try self.appendPlatformRequiredUnresolvedDispatchReports(app_root.mod, app_artifact, &validation_snapshot);
-        try self.appendPlatformRequiredInvalidNumericPatternReports(app_root.mod, app_artifact, &validation_snapshot);
-        if (self.hasUserErrors()) return;
+        const app_artifact = app_root.mod.checkedArtifact() orelse return;
 
         var relation_result = try check.CheckedArtifact.buildPlatformAppRelation(
             self.gpa,
@@ -2332,611 +2188,9 @@ pub const Coordinator = struct {
 
         switch (relation_result) {
             .relation => {},
-            .type_mismatch => |mismatch| try self.appendPlatformRequirementTypeMismatchReport(
-                app_root.mod,
-                platform_declaration_artifact,
-                app_artifact,
-                mismatch,
-            ),
-            .missing_value => |missing| try self.appendPlatformRequirementMissingValueReport(
-                app_root.mod,
-                platform_declaration_artifact,
-                missing,
-            ),
+            .type_mismatch => coordinatorInvariant("platform/app relation type mismatch reached check validation after checking", .{}),
+            .missing_value => coordinatorInvariant("platform/app relation missing required app value reached check validation after checking", .{}),
         }
-    }
-
-    fn appendPlatformRequirementMissingValueReport(
-        self: *Coordinator,
-        app_mod: *ModuleState,
-        platform_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
-        missing: check.CheckedArtifact.PlatformRequirementMissingValue,
-    ) compile_package.PublishError!void {
-        const required_name = platform_artifact.canonical_names.exportNameText(missing.declaration.platform_name);
-        const headline = try std.fmt.allocPrint(self.gpa, "The app does not provide {s}, but the platform requires it.", .{required_name});
-        defer self.gpa.free(headline);
-        var report = try Report.init(self.gpa, "Missing Required Value", headline, .runtime_error);
-        errdefer report.deinit();
-
-        try self.appendNonLowerableReport(app_mod, report);
-    }
-
-    fn appendPlatformRequirementTypeMismatchReport(
-        self: *Coordinator,
-        app_mod: *ModuleState,
-        platform_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
-        app_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
-        mismatch: check.CheckedArtifact.PlatformRequirementTypeMismatch,
-    ) Allocator.Error!void {
-        const required_name = platform_artifact.canonical_names.exportNameText(mismatch.declaration.platform_name);
-        const headline = try std.fmt.allocPrint(self.gpa, "The app provides {s} with a type that does not match the platform's requires entry.", .{required_name});
-        defer self.gpa.free(headline);
-        var report = try Report.init(self.gpa, "Type Mismatch", headline, .runtime_error);
-        errdefer report.deinit();
-
-        const actual = try check.CheckedArtifact.formatCheckedTypeAlloc(self.gpa, app_artifact, mismatch.actual);
-        defer self.gpa.free(actual);
-        try report.document.addText("The app provides:");
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
-        try report.document.addCodeBlock(actual);
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
-
-        const expected = try check.CheckedArtifact.formatCheckedTypeAlloc(self.gpa, platform_artifact, mismatch.expected);
-        defer self.gpa.free(expected);
-        try report.document.addText("But the platform requires:");
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
-        try report.document.addCodeBlock(expected);
-
-        try self.appendNonLowerableReport(app_mod, report);
-    }
-
-    fn appendPlatformRequiredUnresolvedDispatchReports(
-        self: *Coordinator,
-        app_mod: *ModuleState,
-        app_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
-        validation_snapshot: *const PlatformRequiredValidationSnapshot,
-    ) Allocator.Error!void {
-        for (app_artifact.static_dispatch_plans.plans, 0..) |plan, plan_index| {
-            if (plan.result_mode != .value) continue;
-
-            if (try self.appendPlatformRequiredInvalidNumeralDispatchReportIfNeeded(
-                app_mod,
-                app_artifact,
-                plan,
-            )) continue;
-
-            const plan_changed = validation_snapshot.dispatchPlanChanged(app_artifact, plan_index, plan);
-            switch (plan.resolution) {
-                .resolved_target => |target| {
-                    if (!plan_changed) continue;
-
-                    const target_artifact = switch (target.kind) {
-                        .procedure => |procedure| blk: {
-                            const target_key = checkedArtifactKeyFromArtifactRef(procedure.template.artifact);
-                            break :blk self.checkedArtifactByKey(target_key) orelse {
-                                if (builtin.mode == .Debug) {
-                                    std.debug.panic("compile.coordinator missing checked artifact for resolved dispatch target", .{});
-                                }
-                                unreachable;
-                            };
-                        },
-                        .local_proc => app_artifact,
-                    };
-                    if (!try check.CheckedArtifact.checkedTypesCompatible(
-                        self.gpa,
-                        target_artifact,
-                        target.callable_ty,
-                        app_artifact,
-                        plan.callable_ty,
-                    )) {
-                        try self.appendPlatformRequiredDispatchTargetMismatchReport(
-                            app_mod,
-                            app_artifact,
-                            target_artifact,
-                            plan.method,
-                            target.callable_ty,
-                            plan.callable_ty,
-                        );
-                    }
-                    continue;
-                },
-                .unresolved_checked_plan => {},
-            }
-            if (!plan_changed) continue;
-            const dispatcher = self.platformRequiredDispatchReportDispatcherType(app_artifact, plan) orelse continue;
-            try self.appendPlatformRequiredUnresolvedDispatchReport(
-                app_mod,
-                app_artifact,
-                plan.method,
-                dispatcher.artifact,
-                dispatcher.ty,
-            );
-        }
-        for (app_artifact.static_dispatch_plans.iterator_for_plans, 0..) |plan, plan_index| {
-            if (!validation_snapshot.iteratorPlanChanged(app_artifact, plan_index, plan)) continue;
-            const dispatcher = self.platformRequiredIteratorReportDispatcherType(app_artifact, plan.iter) orelse continue;
-
-            try self.appendPlatformRequiredUnresolvedDispatchReport(
-                app_mod,
-                app_artifact,
-                plan.iter.method,
-                dispatcher.artifact,
-                dispatcher.ty,
-            );
-        }
-    }
-
-    const PlatformRequiredDispatchReportType = struct {
-        artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
-        ty: check.CheckedIds.CheckedTypeId,
-    };
-
-    fn platformRequiredDispatchReportDispatcherType(
-        self: *Coordinator,
-        app_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
-        plan: check.StaticDispatchRegistry.StaticDispatchCallPlan,
-    ) ?PlatformRequiredDispatchReportType {
-        if (!check.CheckedArtifact.checkedTypeRootIsIdentity(app_artifact, plan.dispatcher_ty)) {
-            return .{ .artifact = app_artifact, .ty = plan.dispatcher_ty };
-        }
-        const dispatcher_expr = staticDispatchPlanDispatcherExpr(app_artifact, plan) orelse return null;
-        return self.platformRequiredConcreteExprType(app_artifact, dispatcher_expr);
-    }
-
-    fn platformRequiredIteratorReportDispatcherType(
-        self: *Coordinator,
-        app_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
-        plan: check.StaticDispatchRegistry.IteratorDispatchCall,
-    ) ?PlatformRequiredDispatchReportType {
-        if (!check.CheckedArtifact.checkedTypeRootIsIdentity(app_artifact, plan.dispatcher_ty)) {
-            return .{ .artifact = app_artifact, .ty = plan.dispatcher_ty };
-        }
-        const dispatcher_expr = iteratorDispatchPlanDispatcherExpr(app_artifact, plan) orelse return null;
-        return self.platformRequiredConcreteExprType(app_artifact, dispatcher_expr);
-    }
-
-    fn staticDispatchPlanDispatcherExpr(
-        app_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
-        plan: check.StaticDispatchRegistry.StaticDispatchCallPlan,
-    ) ?check.CheckedArtifact.CheckedExprId {
-        const index = switch (plan.dispatcher) {
-            .arg => |arg| arg,
-            .type_only => return null,
-        };
-        const args = plan.argsSlice(&app_artifact.static_dispatch_plans);
-        if (index >= args.len) return null;
-        return switch (args[index]) {
-            .checked_expr => |expr| expr,
-            .generated_interpolation_iter,
-            .generated_numeral,
-            .generated_quote,
-            => null,
-        };
-    }
-
-    fn iteratorDispatchPlanDispatcherExpr(
-        app_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
-        plan: check.StaticDispatchRegistry.IteratorDispatchCall,
-    ) ?check.CheckedArtifact.CheckedExprId {
-        const args = plan.argsSlice(&app_artifact.static_dispatch_plans);
-        if (plan.dispatcher_arg_index >= args.len) return null;
-        return switch (args[plan.dispatcher_arg_index]) {
-            .checked_expr => |expr| expr,
-            .loop_iterator_state => null,
-        };
-    }
-
-    fn platformRequiredConcreteExprType(
-        self: *Coordinator,
-        app_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
-        expr_id: check.CheckedArtifact.CheckedExprId,
-    ) ?PlatformRequiredDispatchReportType {
-        const expr = app_artifact.checked_bodies.expr(expr_id);
-        const expr_ty: ?PlatformRequiredDispatchReportType = if (check.CheckedArtifact.checkedTypeRootIsIdentity(app_artifact, expr.ty))
-            null
-        else
-            .{ .artifact = app_artifact, .ty = expr.ty };
-        return switch (expr.data) {
-            .dispatch_call => |plan_id| if (plan_id) |id| self.platformRequiredResolvedDispatchReturnType(app_artifact, id) orelse expr_ty else expr_ty,
-            .method_eq => |plan_id| if (plan_id) |id| self.platformRequiredResolvedDispatchReturnType(app_artifact, id) orelse expr_ty else expr_ty,
-            .num_from_numeral,
-            .typed_num_from_numeral,
-            => |plan_id| if (plan_id) |id| self.platformRequiredResolvedDispatchReturnType(app_artifact, id) orelse expr_ty else expr_ty,
-            .str_from_quote => |quote| if (quote.plan) |id| self.platformRequiredResolvedDispatchReturnType(app_artifact, id) orelse expr_ty else expr_ty,
-            .match_ => |match| blk: {
-                if (!match.is_try_suffix) break :blk expr_ty;
-                const cond = self.platformRequiredConcreteExprType(app_artifact, match.cond) orelse {
-                    const cond_expr = app_artifact.checked_bodies.expr(match.cond);
-                    if (check.CheckedArtifact.checkedTypeRootIsIdentity(app_artifact, cond_expr.ty)) break :blk expr_ty;
-                    break :blk platformRequiredTryOkType(app_artifact, cond_expr.ty);
-                };
-                break :blk if (platformRequiredTryOkType(cond.artifact, cond.ty)) |ok| ok else expr_ty;
-            },
-            else => expr_ty,
-        };
-    }
-
-    fn platformRequiredTryOkType(
-        artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
-        root: check.CheckedArtifact.CheckedTypeId,
-    ) ?PlatformRequiredDispatchReportType {
-        var current = root;
-        var remaining = artifact.checked_types.payloads.items.len;
-        while (true) {
-            const payload = artifact.checked_types.payload(current);
-            switch (payload) {
-                .alias => |alias| current = alias.backing,
-                .nominal => |nominal| current = nominal.backing,
-                .tag_union => |tag_union| {
-                    if (platformRequiredOkTagPayload(artifact, tag_union.tags)) |ok| return .{ .artifact = artifact, .ty = ok };
-                    current = tag_union.ext;
-                },
-                .empty_tag_union => return null,
-                else => return null,
-            }
-            if (remaining == 0) {
-                coordinatorInvariant("platform-required Try success type lookup reached a cyclic checked type", .{});
-            }
-            remaining -= 1;
-        }
-    }
-
-    fn platformRequiredOkTagPayload(
-        artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
-        tags: []const check.CheckedArtifact.CheckedTag,
-    ) ?check.CheckedArtifact.CheckedTypeId {
-        for (tags) |tag| {
-            if (!std.mem.eql(u8, artifact.canonical_names.tagLabelText(tag.name), "Ok")) continue;
-            const args = tag.argsSlice(&artifact.checked_types);
-            if (args.len != 1) return null;
-            return args[0];
-        }
-        return null;
-    }
-
-    fn platformRequiredResolvedDispatchReturnType(
-        self: *Coordinator,
-        app_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
-        plan_id: check.StaticDispatchRegistry.StaticDispatchPlanId,
-    ) ?PlatformRequiredDispatchReportType {
-        const raw = @intFromEnum(plan_id);
-        if (raw >= app_artifact.static_dispatch_plans.plans.len) return null;
-        const plan = app_artifact.static_dispatch_plans.plans[raw];
-        const target = switch (plan.resolution) {
-            .resolved_target => |target| target,
-            .unresolved_checked_plan => return null,
-        };
-        const plan_ret = checkedFunctionReturnType(app_artifact, plan.callable_ty) orelse return null;
-        if (!check.CheckedArtifact.checkedTypeRootIsIdentity(app_artifact, plan_ret)) {
-            return .{ .artifact = app_artifact, .ty = plan_ret };
-        }
-        const target_artifact = self.platformRequiredDispatchTargetArtifact(app_artifact, target);
-        if (checkedFunctionReturnType(target_artifact, target.callable_ty)) |target_ret| {
-            if (!check.CheckedArtifact.checkedTypeRootIsIdentity(target_artifact, target_ret)) {
-                return .{ .artifact = target_artifact, .ty = target_ret };
-            }
-        }
-        return null;
-    }
-
-    fn platformRequiredDispatchTargetArtifact(
-        self: *Coordinator,
-        app_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
-        target: check.StaticDispatchRegistry.MethodTarget,
-    ) *const check.CheckedArtifact.CheckedModuleArtifact {
-        return switch (target.kind) {
-            .local_proc => app_artifact,
-            .procedure => |procedure| blk: {
-                const target_key = checkedArtifactKeyFromArtifactRef(procedure.template.artifact);
-                break :blk self.checkedArtifactByKey(target_key) orelse {
-                    coordinatorInvariant("platform-required dispatch target artifact was not available", .{});
-                };
-            },
-        };
-    }
-
-    fn checkedFunctionReturnType(
-        app_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
-        callable_ty: check.CheckedIds.CheckedTypeId,
-    ) ?check.CheckedIds.CheckedTypeId {
-        return switch (app_artifact.checked_types.payload(callable_ty)) {
-            .function => |function| function.ret,
-            else => null,
-        };
-    }
-
-    fn appendPlatformRequiredInvalidNumeralDispatchReportIfNeeded(
-        self: *Coordinator,
-        app_mod: *ModuleState,
-        app_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
-        plan: check.StaticDispatchRegistry.StaticDispatchCallPlan,
-    ) Allocator.Error!bool {
-        const method_name = app_artifact.canonical_names.methodNameText(plan.method);
-        if (!std.mem.eql(u8, method_name, "from_numeral")) return false;
-
-        const builtin_nominal = check.CheckedArtifact.checkedTypeBuiltinNominal(
-            app_artifact,
-            plan.dispatcher_ty,
-        ) orelse return false;
-        if (!check.CheckedArtifact.builtinNominalAcceptsNumeralLiteral(builtin_nominal)) return false;
-
-        const args = plan.argsSlice(&app_artifact.static_dispatch_plans);
-        if (args.len != 1) return false;
-        const literal = switch (args[0]) {
-            .generated_numeral => |literal| literal,
-            else => return false,
-        };
-
-        const expr = app_artifact.checked_bodies.expr(plan.expr);
-        const has_suffix = switch (expr.data) {
-            .typed_num_from_numeral => true,
-            else => false,
-        };
-
-        const module_env = app_mod.moduleEnv() orelse {
-            if (builtin.mode == .Debug) {
-                std.debug.panic("compile.coordinator missing module env for platform-required numeral validation", .{});
-            }
-            unreachable;
-        };
-        if (try check.CheckedArtifact.numeralLiteralFitsBuiltin(
-            self.gpa,
-            module_env,
-            literal,
-            builtin_nominal,
-            has_suffix,
-        )) return false;
-
-        try self.appendPlatformRequiredInvalidNumericExpressionReport(
-            app_mod,
-            expr,
-            builtin_nominal,
-        );
-        return true;
-    }
-
-    fn appendPlatformRequiredInvalidNumericExpressionReports(
-        self: *Coordinator,
-        app_mod: *ModuleState,
-        app_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
-        platform_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
-    ) Allocator.Error!void {
-        const expectations = try check.CheckedArtifact.collectPlatformRequiredNumericExpectations(
-            self.gpa,
-            platform_artifact,
-            app_artifact,
-        );
-        defer self.gpa.free(expectations);
-        if (expectations.len == 0) return;
-
-        var raw_expr: usize = 0;
-        while (raw_expr < app_artifact.checked_bodies.exprCount()) : (raw_expr += 1) {
-            const expr_id: check.CheckedArtifact.CheckedExprId = @enumFromInt(raw_expr);
-            const expr = app_artifact.checked_bodies.expr(expr_id);
-
-            const int_value = switch (expr.data) {
-                .num => |num| num.value,
-                .typed_int => |typed| typed.value,
-                else => continue,
-            };
-            const expr_key = check.CheckedArtifact.checkedTypeRootKey(app_artifact, expr.ty);
-            for (expectations) |expectation| {
-                if (!std.meta.eql(expectation.app_type.bytes, expr_key.bytes)) continue;
-                if (check.CheckedArtifact.intLiteralFitsBuiltin(int_value, expectation.expected_builtin)) continue;
-
-                try self.appendPlatformRequiredInvalidNumericExpressionReport(
-                    app_mod,
-                    expr,
-                    expectation.expected_builtin,
-                );
-                break;
-            }
-        }
-    }
-
-    fn appendPlatformRequiredDispatchTargetMismatchReport(
-        self: *Coordinator,
-        app_mod: *ModuleState,
-        app_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
-        target_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
-        method: check.CanonicalNames.MethodNameId,
-        expected_ty: check.CheckedIds.CheckedTypeId,
-        actual_ty: check.CheckedIds.CheckedTypeId,
-    ) Allocator.Error!void {
-        const method_name = app_artifact.canonical_names.methodNameText(method);
-        const expected = try check.CheckedArtifact.formatCheckedTypeAlloc(self.gpa, target_artifact, expected_ty);
-        defer self.gpa.free(expected);
-        const actual = try check.CheckedArtifact.formatCheckedTypeAlloc(self.gpa, app_artifact, actual_ty);
-        defer self.gpa.free(actual);
-
-        var report = try Report.init(self.gpa, "Type Mismatch", "", .runtime_error);
-        errdefer report.deinit();
-
-        try report.document.addText("This ");
-        try report.document.addAnnotated(method_name, .emphasized);
-        try report.document.addText(" method call does not match the method it resolves to after applying the platform-required signature.");
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
-        try report.document.addText("The resolved method has type:");
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
-        try report.document.addCodeBlock(expected);
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
-        try report.document.addText("But this call was inferred as:");
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
-        try report.document.addCodeBlock(actual);
-
-        try self.appendNonLowerableReport(app_mod, report);
-    }
-
-    fn appendPlatformRequiredInvalidNumericPatternReports(
-        self: *Coordinator,
-        app_mod: *ModuleState,
-        app_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
-        validation_snapshot: *const PlatformRequiredValidationSnapshot,
-    ) Allocator.Error!void {
-        var raw_pattern: usize = 0;
-        while (raw_pattern < app_artifact.checked_bodies.patternCount()) : (raw_pattern += 1) {
-            const pattern_id: check.CheckedArtifact.CheckedPatternId = @enumFromInt(raw_pattern);
-            const pattern = app_artifact.checked_bodies.pattern(pattern_id);
-            if (!validation_snapshot.patternTypeChanged(app_artifact, raw_pattern, pattern)) continue;
-            if (!checkedPatternIsNumericLiteral(pattern.data)) continue;
-
-            const builtin_nominal = check.CheckedArtifact.checkedTypeBuiltinNominal(
-                app_artifact,
-                pattern.ty,
-            ) orelse continue;
-            if (check.CheckedArtifact.builtinNominalAcceptsNumeralLiteral(builtin_nominal)) continue;
-
-            try self.appendPlatformRequiredNumericPatternTypeMismatchReport(
-                app_mod,
-                app_artifact,
-                pattern.ty,
-            );
-        }
-    }
-
-    fn appendPlatformRequiredInvalidNumericExpressionReport(
-        self: *Coordinator,
-        app_mod: *ModuleState,
-        expr: check.CheckedArtifact.CheckedExpr,
-        expected_builtin: check.CheckedArtifact.CheckedBuiltinNominal,
-    ) Allocator.Error!void {
-        const module_env = app_mod.moduleEnv() orelse {
-            coordinatorInvariant("platform-required invalid numeric report missing module env", .{});
-        };
-        var report = try Report.init(self.gpa, "Invalid Number", "", .runtime_error);
-        errdefer report.deinit();
-
-        try report.document.addText("This numeric literal does not fit in the type required by the platform.");
-        try report.document.addLineBreak();
-        const region_info = module_env.calcRegionInfo(expr.source_region);
-        try report.document.addSourceRegion(
-            region_info,
-            .error_highlight,
-            app_mod.path,
-            module_env.common.source,
-            module_env.getLineStarts(),
-        );
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
-        try report.document.addText("The platform-required signature expects:");
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
-        try report.document.addCodeBlock(platformRequiredBuiltinNominalText(expected_builtin));
-
-        try self.appendNonLowerableReport(app_mod, report);
-    }
-
-    fn platformRequiredBuiltinNominalText(builtin_nominal: check.CheckedArtifact.CheckedBuiltinNominal) []const u8 {
-        return switch (builtin_nominal) {
-            .u8 => "Builtin.Num.U8",
-            .i8 => "Builtin.Num.I8",
-            .u16 => "Builtin.Num.U16",
-            .i16 => "Builtin.Num.I16",
-            .u32 => "Builtin.Num.U32",
-            .i32 => "Builtin.Num.I32",
-            .u64 => "Builtin.Num.U64",
-            .i64 => "Builtin.Num.I64",
-            .u128 => "Builtin.Num.U128",
-            .i128 => "Builtin.Num.I128",
-            .f32 => "Builtin.Num.F32",
-            .f64 => "Builtin.Num.F64",
-            .dec => "Builtin.Num.Dec",
-            .str => "Builtin.Str",
-            .bool => "Builtin.Bool",
-            .list => "Builtin.List",
-            .box => "Builtin.Box",
-            .parse_tag_union_spec => "Builtin.ParseTagUnionSpec",
-            .fields => "Builtin.Fields",
-            .field => "Builtin.Field",
-        };
-    }
-
-    fn appendPlatformRequiredNumericPatternTypeMismatchReport(
-        self: *Coordinator,
-        app_mod: *ModuleState,
-        app_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
-        pattern_ty: check.CheckedArtifact.CheckedTypeId,
-    ) Allocator.Error!void {
-        const actual = try check.CheckedArtifact.formatCheckedTypeAlloc(self.gpa, app_artifact, pattern_ty);
-        defer self.gpa.free(actual);
-
-        var report = try Report.init(self.gpa, "Type Mismatch", "", .runtime_error);
-        errdefer report.deinit();
-
-        try report.document.addText("This numeric pattern cannot match the type required by the platform.");
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
-        try report.document.addText("The platform-required signature expects:");
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
-        try report.document.addCodeBlock(actual);
-
-        try self.appendNonLowerableReport(app_mod, report);
-    }
-
-    fn checkedPatternIsNumericLiteral(data: check.CheckedArtifact.CheckedPatternData) bool {
-        return switch (data) {
-            .num_literal,
-            .small_dec_literal,
-            .dec_literal,
-            .frac_f32_literal,
-            .frac_f64_literal,
-            => true,
-            else => false,
-        };
-    }
-
-    fn appendPlatformRequiredUnresolvedDispatchReport(
-        self: *Coordinator,
-        app_mod: *ModuleState,
-        method_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
-        method: check.CanonicalNames.MethodNameId,
-        dispatcher_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
-        dispatcher_ty: check.CheckedIds.CheckedTypeId,
-    ) Allocator.Error!void {
-        if (check.CheckedArtifact.checkedTypeRootIsIdentity(dispatcher_artifact, dispatcher_ty)) return;
-
-        const method_name = method_artifact.canonical_names.methodNameText(method);
-        const dispatcher_type = try check.CheckedArtifact.formatCheckedTypeAlloc(self.gpa, dispatcher_artifact, dispatcher_ty);
-        defer self.gpa.free(dispatcher_type);
-
-        if (std.mem.eql(u8, method_name, "from_numeral")) {
-            var report = try Report.init(self.gpa, "Type Mismatch", "", .runtime_error);
-            errdefer report.deinit();
-
-            try report.document.addText("This number is being used where a non-number type is needed.");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
-            try report.document.addText("The platform-required signature expects:");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
-            try report.document.addCodeBlock(dispatcher_type);
-
-            try self.appendNonLowerableReport(app_mod, report);
-            return;
-        }
-
-        var report = try Report.init(self.gpa, "Missing Method", "", .runtime_error);
-        errdefer report.deinit();
-
-        try report.document.addText("This ");
-        try report.document.addAnnotated(method_name, .emphasized);
-        try report.document.addText(" method is being called on a value whose type doesn't have that method.");
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
-        try report.document.addText("The value's type is:");
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
-        try report.document.addCodeBlock(dispatcher_type);
-
-        try self.appendNonLowerableReport(app_mod, report);
     }
 
     pub fn hasUserErrors(self: *const Coordinator) bool {
@@ -3121,24 +2375,7 @@ pub const Coordinator = struct {
             publication_with_availability.hoisted_roots = republish_hoisted_roots;
         }
 
-        var platform_requirement_available_artifacts: []CheckedArtifact.ImportedModuleView = &.{};
-        var platform_requirement_available_artifacts_owned = false;
-        defer if (platform_requirement_available_artifacts_owned) self.gpa.free(platform_requirement_available_artifacts);
-
-        var base_available_artifacts = available_artifacts;
-        if (publication.platform_requirement_artifact) |platform_requirement_artifact| {
-            var extended_available = std.ArrayList(CheckedArtifact.ImportedModuleView).empty;
-            errdefer extended_available.deinit(self.gpa);
-            try extended_available.appendSlice(self.gpa, available_artifacts);
-            try self.appendTypecheckAvailablePublicApiClosure(
-                &extended_available,
-                self.gpa,
-                platform_requirement_artifact,
-            );
-            platform_requirement_available_artifacts = try extended_available.toOwnedSlice(self.gpa);
-            platform_requirement_available_artifacts_owned = true;
-            base_available_artifacts = platform_requirement_available_artifacts;
-        }
+        const base_available_artifacts = available_artifacts;
 
         var relation_available_artifacts: []CheckedArtifact.ImportedModuleView = &.{};
         var relation_available_artifacts_owned = false;
@@ -3429,6 +2666,7 @@ pub const Coordinator = struct {
             switch (task) {
                 .parse => |t| std.debug.print("[COORD] ENQUEUE parse: pkg={s} module={s}\n", .{ t.package_name, t.module_name }),
                 .canonicalize => |t| std.debug.print("[COORD] ENQUEUE canonicalize: pkg={s} module={s}\n", .{ t.package_name, t.module_name }),
+                .platform_requirements_check => |t| std.debug.print("[COORD] ENQUEUE platform_requirements_check: pkg={s} module={s}\n", .{ t.package_name, t.module_name }),
                 .type_check => |t| std.debug.print("[COORD] ENQUEUE type_check: pkg={s} module={s}\n", .{ t.package_name, t.module_name }),
             }
         }
@@ -3624,6 +2862,7 @@ pub const Coordinator = struct {
         return switch (task) {
             .parse => |t| self.executeParse(t, allocators),
             .canonicalize => |t| self.executeCanonicalize(t, allocators),
+            .platform_requirements_check => |t| self.executePlatformRequirementsCheck(t, allocators),
             .type_check => |t| self.executeTypeCheck(t, allocators),
         };
     }
@@ -3721,11 +2960,125 @@ pub const Coordinator = struct {
         try serialized.serialize(value, arena_alloc, writer);
     }
 
+    fn cloneModuleEnvStorageForChecking(
+        self: *Coordinator,
+        env: *const ModuleEnv,
+        module_name: []const u8,
+    ) Allocator.Error!check.CheckedArtifact.ModuleEnvStorage {
+        const module_alloc = self.getModuleAllocator();
+
+        const source = try module_alloc.dupe(u8, env.common.source);
+        errdefer module_alloc.free(source);
+
+        var common = try env.common.clone(module_alloc);
+        errdefer common.deinit(module_alloc);
+        common.source = source;
+
+        var types = try env.types.clone(module_alloc);
+        errdefer types.deinit();
+
+        var external_decls = try env.external_decls.clone(module_alloc);
+        errdefer external_decls.deinit(module_alloc);
+
+        var requires_types = try env.requires_types.clone(module_alloc);
+        errdefer requires_types.deinit(module_alloc);
+
+        var for_clause_aliases = try env.for_clause_aliases.clone(module_alloc);
+        errdefer for_clause_aliases.deinit(module_alloc);
+
+        var provides_entries = try env.provides_entries.clone(module_alloc);
+        errdefer provides_entries.deinit(module_alloc);
+
+        var hosted_entries = try env.hosted_entries.clone(module_alloc);
+        errdefer hosted_entries.deinit(module_alloc);
+
+        var imports = try env.imports.clone(module_alloc);
+        errdefer imports.deinit(module_alloc);
+
+        var file_dependencies = try env.file_dependencies.clone(module_alloc);
+        errdefer file_dependencies.deinit(module_alloc);
+
+        var store = try env.store.clone(module_alloc);
+        errdefer store.deinit();
+
+        var import_mapping = try env.import_mapping.cloneWithAllocator(module_alloc);
+        errdefer import_mapping.deinit();
+
+        var method_idents = try env.method_idents.clone(module_alloc);
+        errdefer method_idents.deinit(module_alloc);
+
+        var method_defs = try env.method_defs.clone(module_alloc);
+        errdefer method_defs.deinit(module_alloc);
+
+        var for_loop_dispatch_plans = try env.for_loop_dispatch_plans.clone(module_alloc);
+        errdefer for_loop_dispatch_plans.deinit(module_alloc);
+
+        var numeral_digit_bytes = try env.numeral_digit_bytes.clone(module_alloc);
+        errdefer numeral_digit_bytes.deinit(module_alloc);
+
+        var numeral_literals = try env.numeral_literals.clone(module_alloc);
+        errdefer numeral_literals.deinit(module_alloc);
+
+        var numeral_dispatch_plans = try env.numeral_dispatch_plans.clone(module_alloc);
+        errdefer numeral_dispatch_plans.deinit(module_alloc);
+
+        var quote_dispatch_plans = try env.quote_dispatch_plans.clone(module_alloc);
+        errdefer quote_dispatch_plans.deinit(module_alloc);
+
+        var numeric_suffix_targets = try env.numeric_suffix_targets.clone(module_alloc);
+        errdefer numeric_suffix_targets.deinit(module_alloc);
+
+        const cloned_env = try module_alloc.create(ModuleEnv);
+        errdefer module_alloc.destroy(cloned_env);
+
+        cloned_env.* = .{
+            .gpa = module_alloc,
+            .common = common,
+            .types = types,
+            .module_kind = env.module_kind,
+            .module_role = env.module_role,
+            .all_defs = env.all_defs,
+            .global_value_defs = env.global_value_defs,
+            .all_statements = env.all_statements,
+            .type_decls = env.type_decls,
+            .forward_type_decls = env.forward_type_decls,
+            .exports = env.exports,
+            .requires_types = requires_types,
+            .for_clause_aliases = for_clause_aliases,
+            .provides_entries = provides_entries,
+            .hosted_entries = hosted_entries,
+            .builtin_statements = env.builtin_statements,
+            .external_decls = external_decls,
+            .imports = imports,
+            .file_dependencies = file_dependencies,
+            .module_name = module_name,
+            .display_module_name_idx = env.display_module_name_idx,
+            .qualified_module_ident = env.qualified_module_ident,
+            .diagnostics = env.diagnostics,
+            .store = store,
+            .evaluation_order = null,
+            .runtime_prepared = env.runtime_prepared,
+            .idents = env.idents,
+            .import_mapping = import_mapping,
+            .method_idents = method_idents,
+            .method_defs = method_defs,
+            .for_loop_dispatch_plans = for_loop_dispatch_plans,
+            .numeral_digit_bytes = numeral_digit_bytes,
+            .numeral_literals = numeral_literals,
+            .numeral_dispatch_plans = numeral_dispatch_plans,
+            .quote_dispatch_plans = quote_dispatch_plans,
+            .numeric_suffix_targets = numeric_suffix_targets,
+        };
+
+        return .{ .checked_source = cloned_env };
+    }
+
     fn checkedModuleCacheKey(
         self: *Coordinator,
         env: *ModuleEnv,
         imported_envs: []const *ModuleEnv,
         imported_artifacts: []const check.CheckedArtifact.PublishImportArtifact,
+        platform_requirement_context: ?check.CheckedArtifact.PlatformRequirementContextKey,
         explicit_roots: []const check.CheckedArtifact.ExplicitRootRequestInput,
     ) Allocator.Error!check.CheckedArtifact.CheckedModuleArtifactKey {
         var typed = try CheckedModules.initForRootModule(self.gpa, env, imported_envs);
@@ -3737,6 +3090,7 @@ pub const Coordinator = struct {
             typed.module_idx,
             .{
                 .imports = imported_artifacts,
+                .platform_requirement_context = platform_requirement_context,
                 .explicit_roots = explicit_roots,
             },
         );
@@ -3818,6 +3172,7 @@ pub const Coordinator = struct {
         mod: *ModuleState,
         imported_envs: []const *ModuleEnv,
         imported_artifacts: []const check.CheckedArtifact.PublishImportArtifact,
+        platform_requirement_context: ?check.CheckedArtifact.PlatformRequirementContextKey,
         explicit_roots: []const check.CheckedArtifact.ExplicitRootRequestInput,
     ) bool {
         const manager = self.cache_manager orelse return false;
@@ -3825,7 +3180,7 @@ pub const Coordinator = struct {
 
         const current_env = mod.moduleEnv() orelse return false;
         if (!resolvedDirectImportsHaveCheckedOutput(current_env, imported_artifacts)) return false;
-        const cache_key = self.checkedModuleCacheKey(current_env, imported_envs, imported_artifacts, explicit_roots) catch return false;
+        const cache_key = self.checkedModuleCacheKey(current_env, imported_envs, imported_artifacts, platform_requirement_context, explicit_roots) catch return false;
 
         return self.installCachedCheckedArtifact(pkg, mod, cache_key, current_env);
     }
@@ -4070,6 +3425,7 @@ pub const Coordinator = struct {
         switch (res) {
             .parsed => |*r| try self.handleParsed(r),
             .canonicalized => |*r| try self.handleCanonicalized(r),
+            .platform_requirements_checked => |*r| try self.handlePlatformRequirementsChecked(r),
             .type_checked => |*r| try self.handleTypeChecked(r),
             .parse_failed => |*r| try self.handleParseFailed(r),
             .compile_failed => |*r| try self.handleCompileFailed(r),
@@ -4253,6 +3609,21 @@ pub const Coordinator = struct {
         self.total_canonicalize_diag_ns += result.canonicalize_diagnostics_ns;
         mod.compile_time_ns += result.canonicalize_ns + result.canonicalize_diagnostics_ns;
 
+        try self.queuePlatformRequirementsCheckIfNeeded(pkg, mod);
+        if (self.platformRootCandidate()) |platform_root| {
+            try self.queuePlatformRequirementsCheckIfNeeded(platform_root.pkg, platform_root.mod);
+        }
+        try self.wakeAppsWaitingOnPlatformRequirements();
+        if (self.appShouldWaitForPlatformRequirements(mod)) {
+            mod.phase = .WaitingOnPlatformRequirements;
+            mod.visit_color = .black;
+            return;
+        }
+
+        const platform_surface = self.platformRequirementSurfaceForApp(mod);
+        const platform_requirement_input: ?check.Check.PlatformRequirementInput = if (platform_surface) |surface| surface.checkerInput() else null;
+        const platform_requirement_context: ?check.CheckedArtifact.PlatformRequirementContextKey = if (platform_surface) |surface| surface.context else null;
+
         const task_payload_alloc = self.getWorkerAllocator();
         const imported_envs = try self.buildTypecheckImportedEnvs(pkg, mod, task_payload_alloc);
         errdefer task_payload_alloc.free(imported_envs);
@@ -4264,7 +3635,7 @@ pub const Coordinator = struct {
         errdefer task_payload_alloc.free(explicit_roots);
 
         if (mod.reports.items.len == 0 and
-            self.tryLoadCachedCheckedModule(pkg, mod, imported_envs, imported_artifacts, explicit_roots))
+            self.tryLoadCachedCheckedModule(pkg, mod, imported_envs, imported_artifacts, platform_requirement_context, explicit_roots))
         {
             task_payload_alloc.free(imported_envs);
             task_payload_alloc.free(imported_artifacts);
@@ -4286,6 +3657,145 @@ pub const Coordinator = struct {
                 .imported_envs = imported_envs,
                 .imported_artifacts = imported_artifacts,
                 .available_artifacts = available_artifacts,
+                .platform_requirements = platform_requirement_input,
+                .platform_requirement_context = platform_requirement_context,
+                .explicit_roots = explicit_roots,
+            },
+        });
+    }
+
+    fn queuePlatformRequirementsCheckIfNeeded(
+        self: *Coordinator,
+        pkg: *PackageState,
+        mod: *ModuleState,
+    ) Allocator.Error!void {
+        const env = mod.moduleEnv() orelse return;
+        if (moduleKindTag(env.module_kind) != .platform) return;
+        if (env.requires_types.items.items.len == 0) return;
+        if (mod.platform_requirement_surface != null or mod.platform_requirement_surface_queued) return;
+
+        var env_storage = try self.cloneModuleEnvStorageForChecking(env, mod.name);
+        var env_storage_owned = true;
+        errdefer if (env_storage_owned) env_storage.deinit();
+
+        const cloned_env = env_storage.env();
+        const task_payload_alloc = self.getWorkerAllocator();
+        const imported_envs = try self.buildTypecheckImportedEnvsForEnv(pkg, mod, cloned_env, task_payload_alloc);
+        errdefer task_payload_alloc.free(imported_envs);
+
+        const module_id = moduleIdForPtr(pkg, mod) orelse {
+            if (builtin.mode == .Debug) {
+                std.debug.panic("compile.coordinator.queuePlatformRequirementsCheckIfNeeded could not find module id for {s}", .{mod.name});
+            }
+            unreachable;
+        };
+        mod.platform_requirement_surface_queued = true;
+        try self.enqueueTask(.{
+            .platform_requirements_check = .{
+                .package_name = pkg.name,
+                .module_id = module_id,
+                .module_name = mod.name,
+                .path = mod.path,
+                .env_storage = env_storage,
+                .imported_envs = imported_envs,
+            },
+        });
+        env_storage_owned = false;
+    }
+
+    fn platformRootCandidate(self: *Coordinator) ?RootModuleRef {
+        if (self.findRootModule(.platform)) |root| return root;
+        const pkg = self.packages.get("pf") orelse return null;
+        const root_id = pkg.root_module_id orelse return null;
+        const mod = pkg.getModule(root_id) orelse return null;
+        return .{ .pkg = pkg, .mod = mod };
+    }
+
+    fn platformRequirementSurfaceForApp(self: *Coordinator, mod: *ModuleState) ?*PlatformRequirementSurface {
+        const env = mod.moduleEnv() orelse return null;
+        switch (moduleKindTag(env.module_kind)) {
+            .app, .default_app => {},
+            else => return null,
+        }
+        const platform_root = self.platformRootCandidate() orelse return null;
+        if (platform_root.mod.platform_requirement_surface) |*surface| return surface;
+        return null;
+    }
+
+    fn appShouldWaitForPlatformRequirements(self: *Coordinator, mod: *ModuleState) bool {
+        const env = mod.moduleEnv() orelse return false;
+        switch (moduleKindTag(env.module_kind)) {
+            .app, .default_app => {},
+            else => return false,
+        }
+        const platform_root = self.platformRootCandidate() orelse return false;
+        if (platform_root.mod.platform_requirement_surface != null) return false;
+        if (platform_root.mod.moduleEnv()) |platform_env| {
+            if (moduleKindTag(platform_env.module_kind) == .platform) {
+                return platform_env.requires_types.items.items.len > 0 and
+                    platform_root.mod.platform_requirement_surface_queued;
+            }
+        }
+        return platform_root.mod.phase != .Done;
+    }
+
+    fn wakeAppsWaitingOnPlatformRequirements(self: *Coordinator) Allocator.Error!void {
+        var pkg_iter = self.packages.iterator();
+        while (pkg_iter.next()) |entry| {
+            const pkg = entry.value_ptr.*;
+            for (pkg.modules.items, 0..) |*mod, module_id| {
+                if (mod.phase != .WaitingOnPlatformRequirements) continue;
+                if (self.appShouldWaitForPlatformRequirements(mod)) continue;
+                try self.scheduleTypeCheckForCanonicalizedModule(pkg, @intCast(module_id), mod);
+            }
+        }
+    }
+
+    fn scheduleTypeCheckForCanonicalizedModule(
+        self: *Coordinator,
+        pkg: *PackageState,
+        module_id: ModuleId,
+        mod: *ModuleState,
+    ) Allocator.Error!void {
+        const platform_surface = self.platformRequirementSurfaceForApp(mod);
+        const platform_requirement_input: ?check.Check.PlatformRequirementInput = if (platform_surface) |surface| surface.checkerInput() else null;
+        const platform_requirement_context: ?check.CheckedArtifact.PlatformRequirementContextKey = if (platform_surface) |surface| surface.context else null;
+
+        const task_payload_alloc = self.getWorkerAllocator();
+        const imported_envs = try self.buildTypecheckImportedEnvs(pkg, mod, task_payload_alloc);
+        errdefer task_payload_alloc.free(imported_envs);
+        const imported_artifacts = try self.buildTypecheckImportedArtifacts(pkg, mod, task_payload_alloc);
+        errdefer task_payload_alloc.free(imported_artifacts);
+        const available_artifacts = try self.collectTypecheckAvailableArtifactViews(task_payload_alloc, imported_artifacts);
+        errdefer task_payload_alloc.free(available_artifacts);
+        const explicit_roots = try buildExplicitRootRequests(mod, task_payload_alloc);
+        errdefer task_payload_alloc.free(explicit_roots);
+
+        if (mod.reports.items.len == 0 and
+            self.tryLoadCachedCheckedModule(pkg, mod, imported_envs, imported_artifacts, platform_requirement_context, explicit_roots))
+        {
+            task_payload_alloc.free(imported_envs);
+            task_payload_alloc.free(imported_artifacts);
+            task_payload_alloc.free(available_artifacts);
+            task_payload_alloc.free(explicit_roots);
+            try self.finishCachedModule(pkg, mod);
+            return;
+        }
+
+        mod.phase = .TypeCheck;
+        mod.visit_color = .black;
+        try self.enqueueTask(.{
+            .type_check = .{
+                .package_name = pkg.name,
+                .module_id = module_id,
+                .module_name = mod.name,
+                .path = mod.path,
+                .module_env = mod.moduleEnv().?,
+                .imported_envs = imported_envs,
+                .imported_artifacts = imported_artifacts,
+                .available_artifacts = available_artifacts,
+                .platform_requirements = platform_requirement_input,
+                .platform_requirement_context = platform_requirement_context,
                 .explicit_roots = explicit_roots,
             },
         });
@@ -4331,6 +3841,44 @@ pub const Coordinator = struct {
             .as => |as_pattern| as_pattern.ident,
             else => null,
         };
+    }
+
+    fn handlePlatformRequirementsChecked(self: *Coordinator, result: *PlatformRequirementsCheckedResult) Allocator.Error!void {
+        if (comptime trace_build) {
+            std.debug.print("[COORD] PLATFORM_REQUIREMENTS_CHECKED: pkg={s} module={s} result_reports={}\n", .{ result.package_name, result.module_name, result.reports.items.len });
+        }
+        const pkg = self.packages.get(result.package_name) orelse {
+            self.bugReport("BUG: package '{s}' not found for platform requirements result (module={s}, id={})\n", .{
+                result.package_name, result.module_name, result.module_id,
+            });
+            unreachable;
+        };
+        const mod = pkg.getModule(result.module_id) orelse {
+            self.bugReport("BUG: module id={} not found in package '{s}' for platform requirements result (module={s})\n", .{
+                result.module_id, result.package_name, result.module_name,
+            });
+            unreachable;
+        };
+
+        for (result.reports.items) |rep| {
+            try mod.reports.append(self.gpa, rep);
+        }
+        result.reports.clearRetainingCapacity();
+        mod.platform_requirement_surface_queued = false;
+
+        if (result.surface) |surface| {
+            if (mod.platform_requirement_surface) |*old_surface| {
+                old_surface.deinit();
+            }
+            mod.platform_requirement_surface = surface;
+            result.surface = null;
+        }
+
+        self.total_typecheck_ns += result.check_ns;
+        self.total_typecheck_diag_ns += result.diagnostics_ns;
+        mod.compile_time_ns += result.check_ns + result.diagnostics_ns;
+
+        try self.wakeAppsWaitingOnPlatformRequirements();
     }
 
     /// Handle a successful type-check result
@@ -4433,6 +3981,7 @@ pub const Coordinator = struct {
 
         // Wake cross-package dependents (other packages that import this module)
         try self.wakeCrossPackageDependents(result.package_name, result.module_id);
+        try self.wakeAppsWaitingOnPlatformRequirements();
     }
 
     /// Handle a parse failure
@@ -4481,6 +4030,7 @@ pub const Coordinator = struct {
 
         // Wake cross-package dependents
         try self.wakeCrossPackageDependents(result.package_name, result.module_id);
+        try self.wakeAppsWaitingOnPlatformRequirements();
     }
 
     /// Handle a non-parsing compilation failure.
@@ -4521,6 +4071,7 @@ pub const Coordinator = struct {
         }
 
         try self.wakeCrossPackageDependents(result.package_name, result.module_id);
+        try self.wakeAppsWaitingOnPlatformRequirements();
     }
 
     /// Handle cycle detection
@@ -4554,6 +4105,7 @@ pub const Coordinator = struct {
         // Decrement counters
         if (pkg.remaining_modules > 0) pkg.remaining_modules -= 1;
         if (self.total_remaining > 0) self.total_remaining -= 1;
+        try self.wakeAppsWaitingOnPlatformRequirements();
     }
 
     /// Handle cycle detection inline during canonicalization result processing
@@ -4622,20 +4174,30 @@ pub const Coordinator = struct {
         mod: *ModuleState,
         allocator: Allocator,
     ) Allocator.Error![]const *ModuleEnv {
+        return self.buildTypecheckImportedEnvsForEnv(pkg, mod, mod.moduleEnv().?, allocator);
+    }
+
+    fn buildTypecheckImportedEnvsForEnv(
+        self: *Coordinator,
+        pkg: *PackageState,
+        mod: *ModuleState,
+        module_env: *ModuleEnv,
+        allocator: Allocator,
+    ) Allocator.Error![]const *ModuleEnv {
         const expected_capacity = 1 + mod.imports.items.len + mod.external_imports.items.len;
         var imported_envs = try std.ArrayList(*ModuleEnv).initCapacity(allocator, expected_capacity);
         errdefer imported_envs.deinit(allocator);
 
         try imported_envs.append(allocator, self.builtin_modules.builtin_module.env);
-        mod.moduleEnv().?.imports.clearResolvedModules();
+        module_env.imports.clearResolvedModules();
 
-        const direct_imports = mod.moduleEnv().?.imports.imports.items.items;
+        const direct_imports = module_env.imports.imports.items.items;
         for (direct_imports, 0..) |str_idx, i| {
             const import_idx: can.CIR.Import.Idx = @enumFromInt(i);
-            const import_name = mod.moduleEnv().?.getString(str_idx);
+            const import_name = module_env.getString(str_idx);
 
             if (can.CIR.Import.isCompilerBuiltinImportName(import_name)) {
-                mod.moduleEnv().?.imports.setResolvedModule(import_idx, 0);
+                module_env.imports.setResolvedModule(import_idx, 0);
                 continue;
             }
 
@@ -4644,7 +4206,7 @@ pub const Coordinator = struct {
                 if (imp.moduleEnv()) |env| {
                     const resolved_module_idx: u32 = @intCast(imported_envs.items.len);
                     try imported_envs.append(allocator, env);
-                    mod.moduleEnv().?.imports.setResolvedModule(import_idx, resolved_module_idx);
+                    module_env.imports.setResolvedModule(import_idx, resolved_module_idx);
                 }
                 continue;
             }
@@ -4652,12 +4214,12 @@ pub const Coordinator = struct {
             if (self.getExternalEnv(pkg.name, import_name)) |ext_env| {
                 const resolved_module_idx: u32 = @intCast(imported_envs.items.len);
                 try imported_envs.append(allocator, ext_env);
-                mod.moduleEnv().?.imports.setResolvedModule(import_idx, resolved_module_idx);
+                module_env.imports.setResolvedModule(import_idx, resolved_module_idx);
                 continue;
             }
         }
 
-        mod.moduleEnv().?.imports.markUnresolvedImportsFailedBeforeChecking();
+        module_env.imports.markUnresolvedImportsFailedBeforeChecking();
 
         if (builtin.mode == .Debug) {
             for (mod.imports.items) |imp_id| {
@@ -5178,6 +4740,96 @@ pub const Coordinator = struct {
         };
     }
 
+    fn executePlatformRequirementsCheck(self: *Coordinator, task: PlatformRequirementsCheckTask, allocators: WorkerTaskAllocators) WorkerResult {
+        return self.executePlatformRequirementsCheckFallible(task, allocators) catch |err| switch (err) {
+            error.OutOfMemory => WorkerResult{ .worker_oom = .{
+                .package_name = task.package_name,
+                .module_id = task.module_id,
+                .module_name = task.module_name,
+            } },
+            else => |e| WorkerResult{ .compile_failed = .{
+                .package_name = task.package_name,
+                .module_id = task.module_id,
+                .module_name = task.module_name,
+                .path = task.path,
+                .reports = self.workerFailureReports(allocators.result, "Platform Requirements Checking Failed", task.path, e),
+                .partial_env = null,
+            } },
+        };
+    }
+
+    fn executePlatformRequirementsCheckFallible(
+        self: *Coordinator,
+        task: PlatformRequirementsCheckTask,
+        task_allocs: WorkerTaskAllocators,
+    ) TypeCheckWorkerError!WorkerResult {
+        var env_storage = task.env_storage;
+        var env_storage_owned = true;
+        defer if (env_storage_owned) env_storage.deinit();
+        defer task_allocs.result.free(task.imported_envs);
+
+        var check_timer = startStageTimer(self.roc_ctx.std_io);
+
+        const env = env_storage.env();
+        const result_alloc = task_allocs.result;
+        var check_output = try compile_package.PackageEnv.checkPlatformRequirementsOnly(
+            result_alloc,
+            env,
+            self.builtin_modules.builtin_module.env,
+            task.imported_envs,
+        );
+        defer check_output.deinit();
+
+        const check_ns = readStageTimer(self.roc_ctx.std_io, &check_timer);
+
+        var diagnostics_timer = startStageTimer(self.roc_ctx.std_io);
+        var reports = try std.ArrayList(Report).initCapacity(result_alloc, 8);
+        errdefer deinitReports(&reports, result_alloc);
+
+        var rb = try check.ReportBuilder.init(
+            result_alloc,
+            env,
+            env,
+            &check_output.checker.snapshots,
+            &check_output.checker.problems,
+            task.path,
+            task.imported_envs,
+            &check_output.checker.import_mapping,
+            &check_output.checker.regions,
+            null,
+            "",
+        );
+        defer rb.deinit();
+
+        for (check_output.checker.problems.problems.items) |prob| {
+            const rep = try rb.build(prob);
+            try appendReportOwned(result_alloc, &reports, rep);
+        }
+
+        const diagnostics_ns = readStageTimer(self.roc_ctx.std_io, &diagnostics_timer);
+
+        const surface: ?PlatformRequirementSurface = if (reports.items.len == 0) surface: {
+            const context = try check.CheckedArtifact.platformRequirementContextKeyFromEnv(result_alloc, env);
+            env_storage_owned = false;
+            break :surface .{
+                .env_storage = env_storage,
+                .context = context,
+                .path = task.path,
+            };
+        } else null;
+
+        return .{ .platform_requirements_checked = .{
+            .package_name = task.package_name,
+            .module_id = task.module_id,
+            .module_name = task.module_name,
+            .path = task.path,
+            .surface = surface,
+            .reports = reports,
+            .check_ns = check_ns,
+            .diagnostics_ns = diagnostics_ns,
+        } };
+    }
+
     /// Execute a type-check task (pure function)
     fn executeTypeCheck(self: *Coordinator, task: TypeCheckTask, allocators: WorkerTaskAllocators) WorkerResult {
         return self.executeTypeCheckFallible(task, allocators) catch |err| switch (err) {
@@ -5219,6 +4871,8 @@ pub const Coordinator = struct {
             task.imported_envs,
             task.imported_artifacts,
             task.available_artifacts,
+            task.platform_requirements,
+            task.platform_requirement_context,
             task.explicit_roots,
             compile_package.compileTimeFinalizationOptions(self.max_threads, &self.roc_ctx),
         );
@@ -5241,6 +4895,8 @@ pub const Coordinator = struct {
             task.imported_envs,
             &typecheck_output.checker.import_mapping,
             &typecheck_output.checker.regions,
+            if (task.platform_requirements) |requirements| requirements.env else null,
+            if (task.platform_requirements) |requirements| requirements.path else "",
         );
         defer rb.deinit();
 

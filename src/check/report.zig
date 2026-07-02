@@ -118,6 +118,8 @@ pub const ReportBuilder = struct {
     source: []const u8,
     filename: []const u8,
     other_modules: []const *const ModuleEnv,
+    platform_requirement_env: ?*const ModuleEnv,
+    platform_requirement_filename: []const u8,
     import_mapping: *const @import("types").import_mapping.ImportMapping,
     /// The checker's full region list, which includes regions for type variables
     /// created during type checking that don't have corresponding CIR nodes.
@@ -142,6 +144,8 @@ pub const ReportBuilder = struct {
         other_modules: []const *const ModuleEnv,
         import_mapping: *const @import("types").import_mapping.ImportMapping,
         checker_regions: *const Region.List,
+        platform_requirement_env: ?*const ModuleEnv,
+        platform_requirement_filename: []const u8,
     ) Allocator.Error!Self {
         return .{
             .gpa = gpa,
@@ -155,6 +159,8 @@ pub const ReportBuilder = struct {
             .source = module_env.common.source,
             .filename = filename,
             .other_modules = other_modules,
+            .platform_requirement_env = platform_requirement_env,
+            .platform_requirement_filename = platform_requirement_filename,
             .diff_fields = try SnapshotRecordFieldSafeList.initCapacity(gpa, 8),
             .diff_tags = try SnapshotTagSafeList.initCapacity(gpa, 8),
             .typo_suggestions = try diff.TypoSuggestion.ArrayList.initCapacity(gpa, 16),
@@ -205,6 +211,18 @@ pub const ReportBuilder = struct {
             self.filename,
             self.source,
             self.module_env.getLineStarts(),
+        );
+    }
+
+    fn addPlatformRequirementSourceHighlight(self: *Self, report: *Report, region: Region) Allocator.Error!void {
+        const platform_env = self.platform_requirement_env orelse return;
+        const region_info = platform_env.calcRegionInfo(region);
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            self.platform_requirement_filename,
+            platform_env.common.source,
+            platform_env.getLineStarts(),
         );
     }
 
@@ -3417,31 +3435,33 @@ pub const ReportBuilder = struct {
         try D.renderSliceInto(&.{
             D.bytes("The platform expects your"),
             D.bytes("app").withAnnotation(.inline_code),
-            D.bytes("module to define a type alias named"),
+            D.bytes("module to define a type named"),
             D.ident(data.expected_alias_ident).withAnnotation(.type_variable),
             D.bytes(",").withNoPrecedingSpace(),
             D.bytes("but I couldn't find one."),
         }, self, &report, &report.headline);
 
+        try self.addSourceHighlightRegion(&report, data.app_region);
+        try report.document.addLineBreak();
+        try self.addPlatformRequirementSourceHighlight(&report, data.platform_region);
+        try report.document.addLineBreak();
+
         switch (data.ctx) {
             .not_found => {
                 try D.renderSlice(&.{
                     D.bytes("Hint:").withAnnotation(.emphasized),
-                    D.bytes("Add a type alias definition for"),
+                    D.bytes("Add a type alias or nominal type named"),
                     D.ident(data.expected_alias_ident).withAnnotation(.type_variable),
-                    D.bytes("to your app module. Check your platform's documentation for the expected type."),
+                    D.bytes("to your app module."),
                 }, self, &report);
             },
-            .found_but_not_alias => {
+            .found_but_not_type => {
                 try D.renderSlice(&.{
                     D.bytes("Hint:").withAnnotation(.emphasized),
-                    D.bytes("You have a definition named"),
+                    D.bytes("You have a value named"),
                     D.ident(data.expected_alias_ident).withAnnotation(.type_variable),
                     D.bytes(",").withNoPrecedingSpace(),
-                    D.bytes("but it's not a type alias. The platform requires a type alias (defined with"),
-                    D.bytes(":").withAnnotation(.inline_code).withNoPrecedingSpace(),
-                    D.bytes("),").withNoPrecedingSpace(),
-                    D.bytes("not a value definition."),
+                    D.bytes("but this platform requirement needs a type declaration with that name."),
                 }, self, &report);
             },
         }
@@ -3514,19 +3534,24 @@ pub const ReportBuilder = struct {
         try D.renderSliceInto(&.{
             D.bytes("The platform expects your"),
             D.bytes("app").withAnnotation(.inline_code),
-            D.bytes("module to export a definition named"),
+            D.bytes("module to expose a definition named"),
             D.ident(data.expected_def_ident).withAnnotation(.inline_code),
             D.bytes(",").withNoPrecedingSpace(),
             D.bytes("but I couldn't find one."),
         }, self, &report, &report.headline);
 
+        try self.addSourceHighlightRegion(&report, data.app_region);
+        try report.document.addLineBreak();
+        try self.addPlatformRequirementSourceHighlight(&report, data.platform_region);
+        try report.document.addLineBreak();
+
         switch (data.ctx) {
             .not_found => {
                 try D.renderSlice(&.{
                     D.bytes("Hint:").withAnnotation(.emphasized),
-                    D.bytes("Define and export"),
+                    D.bytes("Define and expose"),
                     D.ident(data.expected_def_ident).withAnnotation(.inline_code),
-                    D.bytes("in your app module. Check your platform's documentation for the expected type signature."),
+                    D.bytes("in your app header."),
                 }, self, &report);
             },
             .found_but_not_exported => {
@@ -3535,9 +3560,9 @@ pub const ReportBuilder = struct {
                     D.bytes("You have a definition named"),
                     D.ident(data.expected_def_ident).withAnnotation(.inline_code),
                     D.bytes(",").withNoPrecedingSpace(),
-                    D.bytes("but it's not exported. Add it to your module's"),
-                    D.bytes("exposes").withAnnotation(.inline_code),
-                    D.bytes("list in the module header."),
+                    D.bytes("but it is not listed in your"),
+                    D.bytes("app").withAnnotation(.inline_code),
+                    D.bytes("header. Add it there so the platform can use it."),
                 }, self, &report);
             },
         }

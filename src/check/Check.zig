@@ -57,6 +57,16 @@ const InterpolationConstraintMetadata = struct {
     checked_parts: bool = false,
 };
 
+pub const PlatformRequirementInput = struct {
+    env: *const ModuleEnv,
+    path: []const u8,
+};
+
+const PlatformRequiredDef = struct {
+    expected_var: Var,
+    required_ident: Ident.Idx,
+};
+
 gpa: std.mem.Allocator,
 // This module's types store
 types: *types_mod.Store,
@@ -149,6 +159,10 @@ expect_region_by_constraint_fn_var: std.AutoHashMap(Var, Region),
 current_expect_region: ?Region,
 /// Map representation all top level patterns, and if we've processed them yet
 top_level_ptrns: std.AutoHashMap(CIR.Pattern.Idx, DefProcessed),
+/// Read-only platform requirement surface used only when checking an app root.
+platform_requirements: ?PlatformRequirementInput,
+/// App defs constrained by platform requirements before their bodies are checked.
+platform_required_defs: std.AutoHashMapUnmanaged(CIR.Def.Idx, PlatformRequiredDef),
 /// Local block-statement (`s_decl`) function patterns whose body is currently
 /// being type-checked. Used to detect self-recursion (and references to an
 /// enclosing in-flight def) of LOCAL function defs so their recursive references
@@ -1157,6 +1171,8 @@ fn initAssumePrepared(
         .expect_region_by_constraint_fn_var = std.AutoHashMap(Var, Region).init(gpa),
         .current_expect_region = null,
         .top_level_ptrns = std.AutoHashMap(CIR.Pattern.Idx, DefProcessed).init(gpa),
+        .platform_requirements = null,
+        .platform_required_defs = .{},
         .enclosing_func_name = null,
         // Initialize with null import_mapping - caller should call fixupTypeWriter() after storing Check
         .type_writer = try types_mod.TypeWriter.initFromParts(gpa, types, cir.getIdentStore(), null),
@@ -1322,6 +1338,7 @@ pub fn deinit(self: *Self) void {
     self.reported_constraint_errors.deinit();
     self.expect_region_by_constraint_fn_var.deinit();
     self.top_level_ptrns.deinit();
+    self.platform_required_defs.deinit(self.gpa);
     self.local_processing_ptrns.deinit(self.gpa);
     self.local_recursive_refs.deinit(self.gpa);
     self.type_writer.deinit();
@@ -3180,6 +3197,29 @@ fn instantiateVarWithSubs(
     return self.instantiateVarHelp(var_to_instantiate, &instantiate_ctx, env, region_behavior);
 }
 
+/// Instantiate a variable, substituting rigids in the provided map and
+/// instantiating any other rigids normally.
+fn instantiateVarWithPartialSubs(
+    self: *Self,
+    var_to_instantiate: Var,
+    subs: *std.AutoHashMapUnmanaged(Ident.Idx, Var),
+    env: *Env,
+    region_behavior: InstantiateRegionBehavior,
+) std.mem.Allocator.Error!Var {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
+    var instantiate_ctx = Instantiator{
+        .store = self.types,
+        .idents = self.cir.getIdentStoreConst(),
+        .var_map = &self.var_map,
+
+        .current_rank = env.rank(),
+        .rigid_behavior = .{ .substitute_rigids_fresh = subs },
+    };
+    return self.instantiateVarHelp(var_to_instantiate, &instantiate_ctx, env, region_behavior);
+}
+
 /// Instantiate a variable
 fn instantiateVarHelp(
     self: *Self,
@@ -4534,6 +4574,73 @@ pub fn checkFile(self: *Self) std.mem.Allocator.Error!void {
     return self.checkFileInternal(false);
 }
 
+pub fn checkPlatformRequirementsOnly(self: *Self) std.mem.Allocator.Error!void {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
+    try self.prepareMethodFieldAccessExprs();
+    try ensureTypeStoreIsFilled(self);
+
+    var env = try self.env_pool.acquire();
+    defer self.env_pool.release(env);
+
+    std.debug.assert(env.rank() == .generalized);
+
+    if (self.builtin_ctx.builtin_module != null and self.isCheckingBuiltinModuleDirectly()) {
+        self.builtin_ctx.module_name = self.cir.idents.builtin_module;
+        self.cir.qualified_module_ident = self.cir.idents.builtin_module;
+    }
+
+    try self.copyBuiltinTypes();
+
+    for (0..self.cir.builtin_statements.span.len) |stmt_offset| {
+        const builtin_stmt_idx = self.cir.store.statementAt(self.cir.builtin_statements, stmt_offset);
+        try self.generateStmtTypeDeclType(builtin_stmt_idx, &env);
+    }
+
+    for (0..self.cir.type_decls.span.len) |stmt_offset| {
+        const stmt_idx = self.cir.store.statementAt(self.cir.type_decls, stmt_offset);
+        const stmt = self.cir.store.getStatement(stmt_idx);
+        const stmt_var = ModuleEnv.varFrom(stmt_idx);
+
+        switch (stmt) {
+            .s_alias_decl => |alias| {
+                try self.setVarRank(stmt_var, &env);
+                try self.predeclareAliasDecl(stmt_var, alias, &env);
+            },
+            .s_nominal_decl => |nominal| {
+                try self.setVarRank(stmt_var, &env);
+                try self.predeclareNominalDecl(stmt_var, nominal, &env);
+            },
+            else => {},
+        }
+    }
+
+    for (0..self.cir.all_statements.span.len) |stmt_offset| {
+        const stmt_idx = self.cir.store.statementAt(self.cir.all_statements, stmt_offset);
+        const stmt = self.cir.store.getStatement(stmt_idx);
+        const stmt_var = ModuleEnv.varFrom(stmt_idx);
+
+        switch (stmt) {
+            .s_alias_decl => |alias| try self.generateAliasDecl(stmt_idx, stmt_var, alias, &env),
+            .s_nominal_decl => |nominal| try self.generateNominalDecl(stmt_idx, stmt_var, nominal, &env),
+            .s_runtime_error => {
+                try self.setVarRank(stmt_var, &env);
+                try self.unifyWith(stmt_var, .err, &env);
+            },
+            .s_type_anno => |type_anno| {
+                try self.setVarRank(stmt_var, &env);
+                try self.generateStandaloneTypeAnno(stmt_var, type_anno, &env);
+            },
+            else => {},
+        }
+    }
+
+    try env.var_pool.pushRank();
+    std.debug.assert(env.rank() == .outermost);
+    try self.processRequiresTypes(&env);
+}
+
 fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator.Error!void {
     const trace = tracy.trace(@src());
     defer trace.end();
@@ -4644,6 +4751,8 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
     // Process requires_types annotations for platforms
     // This ensures the type store has the actual types for platform requirements
     try self.processRequiresTypes(&env);
+
+    try self.processAppPlatformRequirements(&env);
 
     // Then, iterate over defs again, inferring types
     for (0..self.cir.all_defs.span.len) |def_offset| {
@@ -7329,6 +7438,210 @@ fn processRequiresTypes(self: *Self, env: *Env) std.mem.Allocator.Error!void {
     }
 }
 
+fn processAppPlatformRequirements(self: *Self, env: *Env) std.mem.Allocator.Error!void {
+    const input = self.platform_requirements orelse return;
+    switch (self.cir.module_kind) {
+        .app, .default_app => {},
+        else => return,
+    }
+
+    for (input.env.requires_types.items.items) |required_type| {
+        const required_ident = try self.copyPlatformIdent(input.env, required_type.ident);
+        const expected_var = (try self.instantiatePlatformRequiredType(input, required_type, env)) orelse continue;
+
+        const def_idx = self.exposedAppDefByIdent(required_ident) orelse {
+            const top_level_def = self.topLevelDefByIdent(required_ident);
+            const app_region = if (top_level_def) |def_idx|
+                self.defPatternRegion(def_idx)
+            else
+                self.appModuleRegion();
+            _ = try self.problems.appendProblem(self.gpa, .{ .platform_def_not_found = .{
+                .expected_def_ident = required_ident,
+                .app_region = app_region,
+                .platform_region = required_type.region,
+                .ctx = if (top_level_def == null) .not_found else .found_but_not_exported,
+            } });
+            continue;
+        };
+
+        try self.platform_required_defs.put(self.gpa, def_idx, .{
+            .expected_var = expected_var,
+            .required_ident = required_ident,
+        });
+    }
+}
+
+fn instantiatePlatformRequiredType(
+    self: *Self,
+    input: PlatformRequirementInput,
+    required_type: ModuleEnv.RequiredType,
+    env: *Env,
+) std.mem.Allocator.Error!?Var {
+    self.rigid_var_substitutions.clearRetainingCapacity();
+    defer self.rigid_var_substitutions.clearRetainingCapacity();
+
+    const aliases = input.env.for_clause_aliases.sliceRange(required_type.type_aliases);
+    for (aliases) |alias| {
+        const alias_ident = try self.copyPlatformIdent(input.env, alias.alias_name);
+        const app_type_stmt = self.appTypeDeclByIdent(alias_ident) orelse {
+            const value_region = self.topLevelValueRegionByIdent(alias_ident);
+            const app_region = value_region orelse self.appModuleRegion();
+            _ = try self.problems.appendProblem(self.gpa, .{ .platform_alias_not_found = .{
+                .expected_alias_ident = alias_ident,
+                .app_region = app_region,
+                .platform_region = input.env.store.getNodeRegion(ModuleEnv.nodeIdxFrom(alias.alias_stmt_idx)),
+                .ctx = if (value_region == null) .not_found else .found_but_not_type,
+            } });
+            return null;
+        };
+
+        const app_type_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(app_type_stmt));
+        const app_type_var = try self.instantiateVar(ModuleEnv.varFrom(app_type_stmt), env, .{ .explicit = app_type_region });
+        const rigid_ident = try self.copyPlatformIdent(input.env, alias.rigid_name);
+        try self.rigid_var_substitutions.put(self.gpa, rigid_ident, app_type_var);
+    }
+
+    const copied = try self.copyVar(ModuleEnv.varFrom(required_type.type_anno), input.env, required_type.region);
+    if (self.rigid_var_substitutions.count() == 0) {
+        return try self.instantiateVar(copied, env, .{ .explicit = required_type.region });
+    }
+    const instantiated = try self.instantiateVarWithPartialSubs(
+        copied,
+        &self.rigid_var_substitutions,
+        env,
+        .{ .explicit = required_type.region },
+    );
+    return instantiated;
+}
+
+fn copyPlatformIdent(self: *Self, platform_env: *const ModuleEnv, ident: Ident.Idx) std.mem.Allocator.Error!Ident.Idx {
+    return try self.cir.insertIdent(Ident.for_text(platform_env.getIdent(ident)));
+}
+
+fn appTypeDeclByIdent(self: *Self, ident: Ident.Idx) ?CIR.Statement.Idx {
+    const wanted = self.cir.getIdent(ident);
+    for (0..self.cir.all_statements.span.len) |stmt_offset| {
+        const stmt_idx = self.cir.store.statementAt(self.cir.all_statements, stmt_offset);
+        const stmt = self.cir.store.getStatement(stmt_idx);
+        const header_idx = switch (stmt) {
+            .s_alias_decl => |alias| alias.header,
+            .s_nominal_decl => |nominal| nominal.header,
+            else => continue,
+        };
+        const header = self.cir.store.getTypeHeader(header_idx);
+        if (Ident.textEql(self.cir.getIdent(header.relative_name), wanted)) return stmt_idx;
+    }
+    return null;
+}
+
+fn exposedAppDefByIdent(self: *Self, ident: Ident.Idx) ?CIR.Def.Idx {
+    const wanted = self.cir.getIdent(ident);
+    const app_ident = self.cir.common.findIdent(wanted) orelse return null;
+    const node_idx = self.cir.getExposedValueNodeIndexById(app_ident) orelse return null;
+    if (node_idx >= self.cir.store.nodes.len()) return null;
+    const cir_node: CIR.Node.Idx = @enumFromInt(node_idx);
+    if (self.cir.store.nodes.get(cir_node).tag != .def) return null;
+    return @enumFromInt(node_idx);
+}
+
+fn topLevelDefByIdent(self: *Self, ident: Ident.Idx) ?CIR.Def.Idx {
+    const wanted = self.cir.getIdent(ident);
+    for (self.cir.store.sliceDefs(self.cir.global_value_defs)) |def_idx| {
+        const def_ident = self.getPatternIdent(self.cir.store.getDef(def_idx).pattern) orelse continue;
+        if (Ident.textEql(self.cir.getIdent(def_ident), wanted)) return def_idx;
+    }
+    return null;
+}
+
+fn topLevelValueRegionByIdent(self: *Self, ident: Ident.Idx) ?Region {
+    if (self.topLevelDefByIdent(ident)) |def_idx| {
+        return self.defPatternRegion(def_idx);
+    }
+    return self.topLevelTagConstructorRegionByIdent(ident);
+}
+
+fn topLevelTagConstructorRegionByIdent(self: *Self, ident: Ident.Idx) ?Region {
+    const wanted = self.cir.getIdent(ident);
+    for (0..self.cir.all_statements.span.len) |stmt_offset| {
+        const stmt_idx = self.cir.store.statementAt(self.cir.all_statements, stmt_offset);
+        const stmt = self.cir.store.getStatement(stmt_idx);
+        const anno_idx = switch (stmt) {
+            .s_alias_decl => |alias| alias.anno,
+            .s_nominal_decl => |nominal| nominal.anno,
+            else => continue,
+        };
+        if (self.typeAnnoTagRegionByIdent(anno_idx, wanted)) |region| return region;
+    }
+    return null;
+}
+
+fn typeAnnoTagRegionByIdent(self: *Self, anno_idx: CIR.TypeAnno.Idx, wanted: []const u8) ?Region {
+    const anno = self.cir.store.getTypeAnno(anno_idx);
+    switch (anno) {
+        .tag_union => |tag_union| {
+            for (self.cir.store.sliceTypeAnnos(tag_union.tags)) |tag_idx| {
+                if (self.typeAnnoTagRegionByIdent(tag_idx, wanted)) |region| return region;
+            }
+            if (tag_union.ext) |ext| return self.typeAnnoTagRegionByIdent(ext, wanted);
+            return null;
+        },
+        .tag => |tag| {
+            if (Ident.textEql(self.cir.getIdent(tag.name), wanted)) {
+                return self.cir.store.getTypeAnnoRegion(anno_idx);
+            }
+            for (self.cir.store.sliceTypeAnnos(tag.args)) |arg_idx| {
+                if (self.typeAnnoTagRegionByIdent(arg_idx, wanted)) |region| return region;
+            }
+            return null;
+        },
+        .apply => |apply| {
+            for (self.cir.store.sliceTypeAnnos(apply.args)) |arg_idx| {
+                if (self.typeAnnoTagRegionByIdent(arg_idx, wanted)) |region| return region;
+            }
+            return null;
+        },
+        .record => |record| {
+            for (self.cir.store.sliceAnnoRecordFields(record.fields)) |field_idx| {
+                const field = self.cir.store.getAnnoRecordField(field_idx);
+                if (self.typeAnnoTagRegionByIdent(field.ty, wanted)) |region| return region;
+            }
+            if (record.ext) |ext| return self.typeAnnoTagRegionByIdent(ext, wanted);
+            return null;
+        },
+        .tuple => |tuple| {
+            for (self.cir.store.sliceTypeAnnos(tuple.elems)) |elem_idx| {
+                if (self.typeAnnoTagRegionByIdent(elem_idx, wanted)) |region| return region;
+            }
+            return null;
+        },
+        .@"fn" => |func| {
+            for (self.cir.store.sliceTypeAnnos(func.args)) |arg_idx| {
+                if (self.typeAnnoTagRegionByIdent(arg_idx, wanted)) |region| return region;
+            }
+            return self.typeAnnoTagRegionByIdent(func.ret, wanted);
+        },
+        .parens => |parens| return self.typeAnnoTagRegionByIdent(parens.anno, wanted),
+        else => return null,
+    }
+}
+
+fn defPatternRegion(self: *Self, def_idx: CIR.Def.Idx) Region {
+    const def = self.cir.store.getDef(def_idx);
+    return self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(def.pattern));
+}
+
+fn appModuleRegion(self: *Self) Region {
+    if (self.cir.all_defs.span.len > 0) {
+        const def_idx = self.cir.store.defAt(self.cir.all_defs, 0);
+        return self.defPatternRegion(def_idx);
+    }
+    if (self.cir.all_statements.span.len > 0) {
+        const stmt_idx = self.cir.store.statementAt(self.cir.all_statements, 0);
+        return self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(stmt_idx));
+    }
+    return Region.zero();
+}
+
 /// Check if a statement index is a for-clause alias statement.
 /// For-clause alias statements are created during platform header processing
 /// for type aliases like [Model : model] in the requires clause.
@@ -7580,9 +7893,15 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx, env: *Env) std.mem.Allocator.Erro
     defer self.enclosing_func_name = saved_func_name;
 
     // Check the annotation, if it exists
+    const platform_required = self.platform_required_defs.get(def_idx);
     const expectation = blk: {
         if (def.annotation) |annotation_idx| {
             break :blk Expected.fromAnnotation(annotation_idx);
+        } else if (platform_required) |required| {
+            break :blk Expected.none().withExpectedType(.{
+                .var_ = required.expected_var,
+                .context = .{ .platform_requirement = .{ .required_ident = required.required_ident } },
+            });
         } else {
             break :blk Expected.none();
         }
@@ -7604,6 +7923,16 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx, env: *Env) std.mem.Allocator.Erro
     self.checking_binding_rhs = true;
     self.checking_binding_rhs_pattern = def.pattern;
     const def_does_fx = try self.checkExpr(def.expr, env, expectation);
+    if (def.annotation != null) {
+        if (platform_required) |required| {
+            _ = try self.unifyInContext(
+                required.expected_var,
+                ModuleEnv.varFrom(def.expr),
+                env,
+                .{ .platform_requirement = .{ .required_ident = required.required_ident } },
+            );
+        }
+    }
     if (def_does_fx) {
         _ = try self.problems.appendProblem(self.gpa, .{ .effectful_top_level = .{
             .region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(def.expr)),
@@ -8934,9 +9263,15 @@ fn setBuiltinTypeContent(
 
 const Expected = struct {
     annotation: ?CIR.Annotation.Idx = null,
+    expected_type: ?ExpectedType = null,
     branch_result: ?Var = null,
     return_result: ?Var = null,
     comptime_condition_warnings: enum { emit, suppress } = .emit,
+
+    const ExpectedType = struct {
+        var_: Var,
+        context: problem.Context,
+    };
 
     fn none() Expected {
         return .{};
@@ -8949,6 +9284,17 @@ const Expected = struct {
     fn withAnnotation(self: Expected, annotation_idx: CIR.Annotation.Idx) Expected {
         return .{
             .annotation = annotation_idx,
+            .expected_type = self.expected_type,
+            .branch_result = self.branch_result,
+            .return_result = self.return_result,
+            .comptime_condition_warnings = self.comptime_condition_warnings,
+        };
+    }
+
+    fn withExpectedType(self: Expected, expected_type: ExpectedType) Expected {
+        return .{
+            .annotation = self.annotation,
+            .expected_type = expected_type,
             .branch_result = self.branch_result,
             .return_result = self.return_result,
             .comptime_condition_warnings = self.comptime_condition_warnings,
@@ -8958,6 +9304,7 @@ const Expected = struct {
     fn withBranchResult(self: Expected, branch_result: Var) Expected {
         return .{
             .annotation = self.annotation,
+            .expected_type = self.expected_type,
             .branch_result = branch_result,
             .return_result = self.return_result orelse branch_result,
             .comptime_condition_warnings = self.comptime_condition_warnings,
@@ -8991,6 +9338,7 @@ const Expected = struct {
     fn suppressComptimeConditionWarnings(self: Expected) Expected {
         return .{
             .annotation = self.annotation,
+            .expected_type = self.expected_type,
             .branch_result = self.branch_result,
             .return_result = self.return_result,
             .comptime_condition_warnings = .suppress,
@@ -9784,7 +10132,27 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
 
             break :blk .{
                 try self.fresh(env, expr_region),
-                .{ .anno_var = anno_var, .anno_var_backup = anno_var_backup },
+                .{
+                    .anno_var = anno_var,
+                    .anno_var_backup = anno_var_backup,
+                    .context = .type_annotation,
+                },
+            };
+        } else if (expected.expected_type) |expected_type| {
+            const expected_var_backup = try self.instantiateVarOrphan(
+                expected_type.var_,
+                env,
+                env.rank(),
+                .use_last_var,
+            );
+
+            break :blk .{
+                try self.fresh(env, expr_region),
+                .{
+                    .anno_var = expected_type.var_,
+                    .anno_var_backup = expected_var_backup,
+                    .context = expected_type.context,
+                },
             };
         } else {
             break :blk .{ expr_var_raw, null };
@@ -10648,6 +11016,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     break :blk null;
                 }
             };
+            const anno_context = if (mb_anno_vars) |anno_vars| anno_vars.context else problem.Context.type_annotation;
 
             // Check the argument patterns
             // This must happen *before* checking against the expected type so
@@ -10727,7 +11096,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     // actual type
                     for (arg_vars, 0..) |arg_var, i| {
                         const expected_arg_var = self.types.getVarAt(anno_func_args_range, @intCast(i));
-                        _ = try self.unifyInContext(expected_arg_var, arg_var, env, .type_annotation);
+                        _ = try self.unifyInContext(expected_arg_var, arg_var, env, anno_context);
                     }
                 } else {
                     // This means the expected type and the actual lambda have
@@ -10753,7 +11122,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             const body_does_fx = if (mb_anno_func) |expected_func| blk: {
                 const lambda_body_does_fx = try self.checkExpr(lambda.body, env, Expected.none().withBranchResult(expected_func.ret));
                 try self.closeAbsentConstructedPayloadVars(lambda.body, body_var);
-                _ = try self.unifyInContext(expected_func.ret, body_var, env, .type_annotation);
+                _ = try self.unifyInContext(expected_func.ret, body_var, env, anno_context);
                 break :blk lambda_body_does_fx;
             } else blk: {
                 const lambda_body_does_fx = try self.checkExpr(lambda.body, env, Expected.none());
@@ -11504,7 +11873,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
     // Check if we have an annotation
     if (mb_anno_vars) |anno_vars| {
         // Unify the anno with the expr var
-        _ = try self.unifyInContext(anno_vars.anno_var, expr_var, env, .type_annotation);
+        _ = try self.unifyInContext(anno_vars.anno_var, expr_var, env, anno_vars.context);
 
         // Check if the expression type contains any errors anywhere in its
         // structure. If it does and we have an annotation, use the annotation
@@ -11998,7 +12367,11 @@ fn isExprNodeTag(tag: CIR.Node.Tag) bool {
     return Ident.textStartsWith(@tagName(tag), "expr_");
 }
 
-const AnnoVars = struct { anno_var: Var, anno_var_backup: Var };
+const AnnoVars = struct {
+    anno_var: Var,
+    anno_var_backup: Var,
+    context: problem.Context,
+};
 
 /// Check if an expression represents a function definition that should be generalized.
 /// This includes lambdas and function declarations (even those without bodies).

@@ -352,11 +352,19 @@ pub const TypeCheckOutput = struct {
     }
 };
 
+/// Owned output from checking a platform's requires surface.
+pub const PlatformRequirementsCheckOutput = struct {
+    checker: Check,
+
+    pub fn deinit(self: *PlatformRequirementsCheckOutput) void {
+        self.checker.deinit();
+    }
+};
+
 /// Public `ArtifactPublicationInputs` declaration.
 pub const ArtifactPublicationInputs = struct {
     available_artifacts: []const CheckedArtifact.ImportedModuleView = &.{},
     relation_artifacts: []const CheckedArtifact.ImportedModuleView = &.{},
-    platform_requirement_artifact: ?CheckedArtifact.ImportedModuleView = null,
     platform_requirement_context: ?CheckedArtifact.PlatformRequirementContextKey = null,
     platform_app_relation: ?CheckedArtifact.PlatformAppRelation = null,
     explicit_roots: []const CheckedArtifact.ExplicitRootRequestInput = &.{},
@@ -1764,6 +1772,8 @@ pub const PackageEnv = struct {
         imported_envs: []const *ModuleEnv,
         imported_artifacts: []const CheckedArtifact.PublishImportArtifact,
         available_artifacts: []const CheckedArtifact.ImportedModuleView,
+        platform_requirements: ?Check.PlatformRequirementInput,
+        platform_requirement_context: ?CheckedArtifact.PlatformRequirementContextKey,
         explicit_roots: []const CheckedArtifact.ExplicitRootRequestInput,
         ctfe_options: eval.CompileTimeFinalization.Options,
     ) TypeCheckModuleError!TypeCheckOutput {
@@ -1795,6 +1805,7 @@ pub const PackageEnv = struct {
             &env.store.regions,
             module_builtin_ctx,
         );
+        checker.platform_requirements = platform_requirements;
         checker.fixupTypeWriter();
         errdefer checker.deinit();
 
@@ -1836,7 +1847,7 @@ pub const PackageEnv = struct {
             imported_envs,
             imported_artifacts,
             .{
-                .platform_requirement_context = null,
+                .platform_requirement_context = platform_requirement_context,
                 .platform_app_relation = null,
                 .explicit_roots = explicit_roots,
                 .hoisted_roots = checker.selectedHoistedRoots(),
@@ -1862,6 +1873,45 @@ pub const PackageEnv = struct {
             .checked_artifact = checked_artifact,
             .user_errors_allow_lowering = user_errors_allow_lowering,
         };
+    }
+
+    pub fn checkPlatformRequirementsOnly(
+        check_alloc: Allocator,
+        env: *ModuleEnv,
+        builtin_module_env: *const ModuleEnv,
+        imported_envs: []const *ModuleEnv,
+    ) TypeCheckModuleError!PlatformRequirementsCheckOutput {
+        const builtin_indices = compiled_builtins.builtinIndices(can.CIR);
+
+        const module_builtin_ctx: Check.BuiltinContext = .{
+            .module_name = env.qualified_module_ident,
+            .bool_stmt = builtin_indices.bool_type,
+            .try_stmt = builtin_indices.try_type,
+            .str_stmt = builtin_indices.str_type,
+            .builtin_module = builtin_module_env,
+            .builtin_indices = builtin_indices,
+        };
+
+        var module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(check_alloc);
+        errdefer module_envs_map.deinit();
+
+        var checker = try Check.initWithOwnerModules(
+            check_alloc,
+            &env.types,
+            env,
+            imported_envs,
+            imported_envs,
+            &module_envs_map,
+            &env.store.regions,
+            module_builtin_ctx,
+        );
+        checker.fixupTypeWriter();
+        errdefer checker.deinit();
+
+        try checker.checkPlatformRequirementsOnly();
+        module_envs_map.deinit();
+
+        return .{ .checker = checker };
     }
 
     pub fn publishCheckedArtifactFromCheckedModule(
@@ -1916,7 +1966,6 @@ pub const PackageEnv = struct {
                 .imports = imported_artifacts,
                 .available_artifacts = publication.available_artifacts,
                 .relation_artifacts = publication.relation_artifacts,
-                .platform_requirement_artifact = publication.platform_requirement_artifact,
                 .platform_requirement_context = publication.platform_requirement_context,
                 .platform_app_relation = publication.platform_app_relation,
                 .explicit_roots = publication.explicit_roots,
@@ -2003,6 +2052,8 @@ pub const PackageEnv = struct {
             imported_envs.items,
             imported_artifacts.items,
             available_artifacts,
+            null,
+            null,
             &.{},
             compileTimeFinalizationOptions(self.max_threads, &self.roc_ctx),
         );
@@ -2024,6 +2075,8 @@ pub const PackageEnv = struct {
             imported_envs.items,
             &typecheck_output.checker.import_mapping,
             &typecheck_output.checker.regions,
+            null,
+            "",
         );
         defer rb.deinit();
         for (typecheck_output.checker.problems.problems.items) |prob| {
