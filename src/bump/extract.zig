@@ -35,24 +35,33 @@ pub const ModuleInput = struct {
     artifact: *const CheckedModuleArtifact,
 };
 
-/// Resolves an origin module name (as recorded in checked types) to the
-/// package that owns it. Built by the caller from resolver results.
+/// Resolves an origin module name (as recorded in checked types, which may be
+/// package-qualified like "json.Decode") to the package that owns it. Built
+/// by the caller from resolver results; register each module under both its
+/// bare and qualified names.
 pub const OriginMap = struct {
     map: std.StringHashMapUnmanaged(Origin) = .empty,
 
-    pub const Origin = union(enum) {
-        /// A module of the package being extracted.
-        self,
-        builtin,
-        /// A versioned URL dependency.
-        external: PackageApi.TypeOrigin.External,
-        /// A path dependency or versionless URL dependency; the payload is
-        /// the dependency spec, for error reporting.
-        unstable: []const u8,
+    pub const Origin = struct {
+        kind: Kind,
+        /// The module's bare (unqualified) name. Paths are built from this so
+        /// they stay stable when the root package renames a dependency alias.
+        module_name: []const u8,
+
+        pub const Kind = union(enum) {
+            /// A module of the package being extracted.
+            self,
+            builtin,
+            /// A versioned URL dependency.
+            external: PackageApi.TypeOrigin.External,
+            /// A path dependency or versionless URL dependency; the payload
+            /// is the dependency spec, for error reporting.
+            unstable: []const u8,
+        };
     };
 
-    pub fn put(self: *OriginMap, gpa: Allocator, module_name: []const u8, origin: Origin) Allocator.Error!void {
-        try self.map.put(gpa, module_name, origin);
+    pub fn put(self: *OriginMap, gpa: Allocator, key: []const u8, origin: Origin) Allocator.Error!void {
+        try self.map.put(gpa, key, origin);
     }
 
     pub fn deinit(self: *OriginMap, gpa: Allocator) void {
@@ -62,9 +71,9 @@ pub const OriginMap = struct {
 
 pub const ExtractError = error{ OutOfMemory, ExtractFailed };
 
-/// Structured description of why extraction failed. String slices borrow from
-/// the inputs (module envs / artifacts) and from static strings; they are
-/// valid as long as the inputs are.
+/// Structured description of why extraction failed. The strings are owned
+/// (duplicated with the allocator passed to `extractPackageApi`); free them
+/// with `deinit`.
 pub const Failure = struct {
     kind: Kind,
     module_name: []const u8,
@@ -77,6 +86,12 @@ pub const Failure = struct {
         unstable_dependency_in_public_api,
         private_type_in_public_api,
     };
+
+    pub fn deinit(self: Failure, gpa: Allocator) void {
+        gpa.free(self.module_name);
+        gpa.free(self.item_path);
+        gpa.free(self.detail);
+    }
 };
 
 /// Extract the public API of a package from its exposed modules' checked
@@ -120,11 +135,13 @@ const Extractor = struct {
     self_refs: std.StringArrayHashMapUnmanaged(void) = .empty,
 
     fn fail(self: *Extractor, kind: Failure.Kind, detail: []const u8) ExtractError {
+        // The failure outlives the PackageApi arena (which errdefer-frees on
+        // this same error), so its strings must be owned copies.
         self.failure.* = .{
             .kind = kind,
-            .module_name = self.current_module,
-            .item_path = self.current_item,
-            .detail = detail,
+            .module_name = try self.gpa.dupe(u8, self.current_module),
+            .item_path = try self.gpa.dupe(u8, self.current_item),
+            .detail = try self.gpa.dupe(u8, detail),
         };
         return error.ExtractFailed;
     }
@@ -402,21 +419,25 @@ const Extractor = struct {
     ) ExtractError!PackageApi.TypeId {
         const alloc = self.api.allocator();
 
+        var path_module = origin_module;
         const origin: PackageApi.TypeOrigin = if (is_builtin or std.mem.eql(u8, origin_module, "Builtin"))
             .builtin
-        else if (self.origins.map.get(origin_module)) |origin| switch (origin) {
-            .self => .self,
-            .builtin => .builtin,
-            .external => |external| .{ .external = .{
-                .url_id = try alloc.dupe(u8, external.url_id),
-                .major = external.major,
-            } },
-            .unstable => |spec| return self.fail(.unstable_dependency_in_public_api, spec),
+        else if (self.origins.map.get(origin_module)) |resolved| origin_blk: {
+            path_module = resolved.module_name;
+            break :origin_blk switch (resolved.kind) {
+                .self => .self,
+                .builtin => .builtin,
+                .external => |external| .{ .external = .{
+                    .url_id = try alloc.dupe(u8, external.url_id),
+                    .major = external.major,
+                } },
+                .unstable => |spec| return self.fail(.unstable_dependency_in_public_api, spec),
+            };
         } else {
             return self.fail(.unknown_origin_module, origin_module);
         };
 
-        const path = try qualifiedPath(alloc, origin, origin_module, type_name);
+        const path = try qualifiedPath(alloc, origin, path_module, type_name);
         if (origin == .self) {
             try self.self_refs.put(self.api.allocator(), path, {});
         }
@@ -474,7 +495,15 @@ fn qualifiedPath(
     origin_module: []const u8,
     type_name: []const u8,
 ) Allocator.Error![]const u8 {
-    if (origin == .builtin) return try alloc.dupe(u8, type_name);
+    if (origin == .builtin) {
+        // Builtin type names may arrive pre-qualified ("Builtin.Str"); users
+        // never write that namespace, so drop it (same policy as docs).
+        const bare = if (std.mem.startsWith(u8, type_name, "Builtin."))
+            type_name["Builtin.".len..]
+        else
+            type_name;
+        return try alloc.dupe(u8, bare);
+    }
     if (nameIsPublic(type_name, origin_module)) return try alloc.dupe(u8, type_name);
     return try std.fmt.allocPrint(alloc, "{s}.{s}", .{ origin_module, type_name });
 }

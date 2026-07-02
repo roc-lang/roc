@@ -259,6 +259,12 @@ pub const CliProblem = union(enum) {
         reason: []const u8,
     },
 
+    /// `roc bump` could not compare the packages
+    bump_failed: struct {
+        title: []const u8,
+        message: []const u8,
+    },
+
     /// Download failed
     download_failed: struct {
         url: []const u8,
@@ -360,6 +366,7 @@ pub const CliProblem = union(enum) {
             .object_compilation_failed,
             .shim_generation_failed,
             .invalid_url,
+            .bump_failed,
             .download_failed,
             .package_cache_error,
             .child_process_spawn_failed,
@@ -402,6 +409,7 @@ pub const CliProblem = union(enum) {
             .object_compilation_failed => |info| try createObjectCompilationFailedReport(allocator, info),
             .shim_generation_failed => |info| try createShimGenerationFailedReport(allocator, info),
             .invalid_url => |info| try createInvalidUrlReport(allocator, info),
+            .bump_failed => |info| try createBumpFailedReport(allocator, info),
             .download_failed => |info| try createDownloadFailedReport(allocator, info),
             .package_cache_error => |info| try createPackageCacheErrorReport(allocator, info),
             .child_process_spawn_failed => |info| try createChildProcessSpawnFailedReport(allocator, info),
@@ -743,6 +751,14 @@ fn createInvalidUrlReport(allocator: Allocator, info: anytype) Allocator.Error!R
 
     try report.document.addText("Reason: ");
     try report.document.addText(info.reason);
+
+    return report;
+}
+
+fn createBumpFailedReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
+    var report = try Report.init(allocator, info.title, "roc bump could not compare the packages.", .runtime_error);
+
+    try report.document.addText(info.message);
 
     return report;
 }
