@@ -248,6 +248,8 @@ import json.Parser
 
 ### Importing constants
 
+TODO
+
 ### Importing mutually recursive types
 
 Occasionally, you may want to define two types in terms of each other. For example:
@@ -357,6 +359,8 @@ package [] {
 
 ### Package Shorthands
 
+TODO
+
 ## Package Modules
 
 A _package module_ provides types to be shared with packages, applications and platforms. The module header specifies which types are exposed, and also includes package aliases for importing other packages:
@@ -457,6 +461,8 @@ The `app` placeholder represents the compiled Roc application. The order files a
 The default behaviour for `roc build` without a `--target` flag is the first compatible target in the `targets` section.
 
 ### Hosted type modules
+
+TODO
 
 ## Application Modules
 

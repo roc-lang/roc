@@ -13,19 +13,19 @@ Foo := [Whatever].{
 }
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - canon_revamp_forward_ref_to_anno_only.md:3:14:3:20
+NAME NOT IN SCOPE - canon_revamp_forward_ref_to_anno_only.md:3:14:3:20
 DECLARATION HAS NO VALUE - canon_revamp_forward_ref_to_anno_only.md:5:5:5:17
 # PROBLEMS
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `absent` in this scope. ─────────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `absent` in this scope. ──────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  callMe = absent                                                           │
  │           ‾‾‾‾‾‾                                                           │
  └───────────────────────────── canon_revamp_forward_ref_to_anno_only.md:3:14 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
 ┌──────────────────────────┐

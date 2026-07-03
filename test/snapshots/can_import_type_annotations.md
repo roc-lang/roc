@@ -47,21 +47,21 @@ combineTrys = |result1, result2|
 DUPLICATE DEFINITION - can_import_type_annotations.md:2:1:2:17
 UNDECLARED TYPE - can_import_type_annotations.md:5:18:5:25
 UNDECLARED TYPE - can_import_type_annotations.md:5:29:5:37
-UNDEFINED VARIABLE - can_import_type_annotations.md:6:24:6:44
+NAME NOT IN SCOPE - can_import_type_annotations.md:6:24:6:44
 UNUSED VARIABLE - can_import_type_annotations.md:6:19:6:22
 MODULE NOT FOUND - can_import_type_annotations.md:8:24:8:30
-UNDEFINED VARIABLE - can_import_type_annotations.md:9:21:9:31
+NAME NOT IN SCOPE - can_import_type_annotations.md:9:21:9:31
 MODULE NOT FOUND - can_import_type_annotations.md:11:17:11:25
 MODULE NOT FOUND - can_import_type_annotations.md:11:37:11:46
 MODULE NOT FOUND - can_import_type_annotations.md:11:52:11:58
-UNDEFINED VARIABLE - can_import_type_annotations.md:13:14:13:25
-UNDEFINED VARIABLE - can_import_type_annotations.md:15:24:15:36
+NAME NOT IN SCOPE - can_import_type_annotations.md:13:14:13:25
+NAME NOT IN SCOPE - can_import_type_annotations.md:15:24:15:36
 MODULE NOT FOUND - can_import_type_annotations.md:20:14:20:21
-UNDEFINED VARIABLE - can_import_type_annotations.md:21:10:21:28
+NAME NOT IN SCOPE - can_import_type_annotations.md:21:10:21:28
 MODULE NOT FOUND - can_import_type_annotations.md:24:29:24:36
 MODULE NOT FOUND - can_import_type_annotations.md:24:53:24:59
 MODULE NOT FOUND - can_import_type_annotations.md:24:72:24:78
-UNDEFINED VARIABLE - can_import_type_annotations.md:25:40:25:61
+NAME NOT IN SCOPE - can_import_type_annotations.md:25:40:25:61
 # PROBLEMS
 
 ┌──────────────────────┐
@@ -99,15 +99,15 @@ UNDEFINED VARIABLE - can_import_type_annotations.md:25:40:25:61
 
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `defaultResponse` in this scope. ────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `defaultResponse` in this scope. ─────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  processRequest = |req| Http.defaultResponse                               │
  │                         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                               │
  └─────────────────────────────────────── can_import_type_annotations.md:6:24 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
 ┌─────────────────┐
@@ -132,15 +132,15 @@ UNDEFINED VARIABLE - can_import_type_annotations.md:25:40:25:61
 
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `parse` in this scope. ──────────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `parse` in this scope. ───────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  parseJson = |input| Json.parse(input)                                     │
  │                      ‾‾‾‾‾‾‾‾‾‾                                            │
  └─────────────────────────────────────── can_import_type_annotations.md:9:21 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
 ┌──────────────────┐
@@ -173,26 +173,26 @@ UNDEFINED VARIABLE - can_import_type_annotations.md:25:40:25:61
 
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `decode` in this scope. ─────────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `decode` in this scope. ──────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  result = Json.decode(request.body)                                        │
  │           ‾‾‾‾‾‾‾‾‾‾‾                                                      │
  └────────────────────────────────────── can_import_type_annotations.md:13:14 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `success` in this scope. ────────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `success` in this scope. ─────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  Ok(data) => Ok(Http.success(data))                                        │
  │                 ‾‾‾‾‾‾‾‾‾‾‾‾                                               │
  └────────────────────────────────────── can_import_type_annotations.md:15:24 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
 ┌──────────────────┐
@@ -205,15 +205,15 @@ UNDEFINED VARIABLE - can_import_type_annotations.md:25:40:25:61
 
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `defaultConfig` in this scope. ──────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `defaultConfig` in this scope. ───────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  config = Json.defaultConfig                                               │
  │           ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                               │
  └────────────────────────────────────── can_import_type_annotations.md:21:10 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
 ┌──────────────────┐
@@ -246,15 +246,15 @@ UNDEFINED VARIABLE - can_import_type_annotations.md:25:40:25:61
 
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `parseWith` in this scope. ──────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `parseWith` in this scope. ───────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  … input| Json.Parser.parseWith(parserConfig, input)                       │
  │           ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                            │
  └────────────────────────────────────── can_import_type_annotations.md:25:40 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 # TOKENS
 ~~~zig

@@ -737,12 +737,7 @@ const Lowerer = struct {
         errdefer self.allocator.free(slots);
         for (fields, 0..) |field, index| {
             slots[index] = .{
-                .id = if (field.binder) |binder|
-                    .{ .binder = binder }
-                else if (field.capture_id) |capture_id|
-                    .{ .generated = capture_id }
-                else
-                    .{ .generated = @intFromEnum(field.symbol) },
+                .id = field.capture_id orelse Common.invariant("capture record field had no CaptureId"),
                 .slot = @intCast(index),
                 .ty = try self.constTypeOfType(field.ty),
                 .plan = try self.constPlanOfType(field.ty),
@@ -900,6 +895,14 @@ const Lowerer = struct {
                 break :blk try self.result.store.addCFStmt(.{ .assign_literal = .{
                     .target = target,
                     .value = .{ .str_literal = try self.result.store.insertStringView(str_lit.backing, str_lit.offset, str_lit.len) },
+                    .next = next,
+                } });
+            },
+            .bytes_lit => |literal| blk: {
+                const bytes_lit = self.program.stringLiteral(literal);
+                break :blk try self.result.store.addCFStmt(.{ .assign_literal = .{
+                    .target = target,
+                    .value = .{ .bytes_literal = try self.result.store.insertStringView(bytes_lit.backing, bytes_lit.offset, bytes_lit.len) },
                     .next = next,
                 } });
             },

@@ -2317,6 +2317,8 @@ pub fn build(b: *std.Build) void {
     const cli_test_llvm = b.option(bool, "cli-test-llvm", "Include LLVM size/speed backend jobs in CLI platform tests") orelse false;
     const trace_build = b.option(bool, "trace-build", "Enable detailed build pipeline tracing") orelse false;
     const debug_gpa = b.option(bool, "debug-gpa", "Use the leak-checking DebugAllocator for the roc binary even when libc is linked (default: off, so libc's malloc and its ASan/Valgrind/LD_PRELOAD tooling are used)") orelse false;
+    const ci_env_set = if (b.graph.environ_map.get("CI")) |ci| ci.len != 0 else false;
+    const forbid_arc_certifier_skips = b.option(bool, "forbid-arc-certifier-skips", "Panic in debug builds if the ARC certifier skips any procedure (defaults to on when the CI environment variable is set)") orelse ci_env_set;
     const shared_memory_size = b.option(u64, "shared-memory-size", "Explicitly set shared-memory arena sizes in bytes");
     const print_trmc = b.option(bool, "print-trmc", "Print one line for each transformed TRMC/TCE proc") orelse false;
     const print_ir_after_trmc = b.option(bool, "print-ir-after-trmc", "Print full LIR for each proc transformed by TRMC/TCE") orelse false;
@@ -2369,6 +2371,7 @@ pub fn build(b: *std.Build) void {
     build_options.addOption(bool, "trace_modules", trace_modules);
     build_options.addOption(bool, "trace_build", trace_build);
     build_options.addOption(bool, "debug_gpa", debug_gpa);
+    build_options.addOption(bool, "forbid_arc_certifier_skips", forbid_arc_certifier_skips);
     build_options.addOption(bool, "has_shared_memory_size", shared_memory_size != null);
     build_options.addOption(u64, "shared_memory_size", shared_memory_size orelse 0);
     build_options.addOption(bool, "print_trmc", print_trmc);
@@ -2580,6 +2583,10 @@ pub fn build(b: *std.Build) void {
 
     const run_minici = b.addRunArtifact(minici_exe);
     run_minici.addArg(b.graph.zig_exe);
+    for (b.search_prefixes.items) |search_prefix| {
+        run_minici.addArg("--search-prefix");
+        run_minici.addArg(search_prefix);
+    }
     run_minici.step.dependOn(&install_minici.step);
     run_minici_step.dependOn(&run_minici.step);
 
@@ -3162,7 +3169,11 @@ pub fn build(b: *std.Build) void {
         run_snapshot_tool_step,
         run_args,
     );
-    const check_snapshot_diff = b.addSystemCommand(&.{ "git", "diff", "--exit-code", "test/snapshots" });
+    const check_snapshot_diff = b.addSystemCommand(&.{
+        "sh",
+        "-c",
+        "if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then git diff --exit-code test/snapshots; elif test -d .jj; then test -z \"$(jj diff --summary test/snapshots)\"; else echo 'run-check-snapshots requires a Git or JJ workspace' >&2; exit 1; fi",
+    });
     check_snapshot_diff.step.dependOn(run_snapshot_tool_step);
     run_check_snapshots_step.dependOn(&check_snapshot_diff.step);
 
@@ -4356,12 +4367,11 @@ pub fn build(b: *std.Build) void {
     run_check_zig_format_step.dependOn(&check_fmt.step);
 
     // Parser code coverage with kcov
-    // Only supported on Linux ARM64 and macOS (kcov doesn't work on Windows)
-    // TODO ZIG 16: re-check if DWARF bug is fixed — may be able to enable x86_64 coverage
-    // Linux x86_64 is NOT supported due to Zig 0.15.2 generating invalid DWARF .debug_line
-    // sections that cause kcov to fail (see CoverageSummaryStep comments for details)
-    const is_linux_x86_64 = target.result.os.tag == .linux and target.result.cpu.arch == .x86_64;
-    const is_coverage_supported = (target.result.os.tag == .linux or target.result.os.tag == .macos) and !is_linux_x86_64;
+    // Only supported on Linux ARM64, matching CI's coverage runner. Other local
+    // targets still keep the run-coverage-parser step, but it reports unsupported
+    // instead of invoking a kcov binary that cannot trace reliably on that host.
+    const is_linux_arm64 = target.result.os.tag == .linux and target.result.cpu.arch == .aarch64;
+    const is_coverage_supported = is_linux_arm64;
     if (is_coverage_supported and isNativeishOrMusl(target)) {
         // Get the kcov dependency and build it from source
         // lazyDependency returns null on first pass; Zig re-runs build() after fetching
@@ -4554,7 +4564,7 @@ pub fn build(b: *std.Build) void {
                     std.debug.print("=" ** 60 ++ "\n", .{});
                     std.debug.print("COVERAGE NOT SUPPORTED\n", .{});
                     std.debug.print("=" ** 60 ++ "\n\n", .{});
-                    std.debug.print("kcov parser coverage is currently enabled only on Linux ARM64 and macOS targets with supported Zig DWARF.\n", .{});
+                    std.debug.print("kcov parser coverage is currently enabled only on Linux ARM64.\n", .{});
                     std.debug.print("Current platform: {s}\n\n", .{@tagName(builtin.target.os.tag)});
                     std.debug.print("=" ** 60 ++ "\n", .{});
                 }

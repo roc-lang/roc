@@ -26,7 +26,7 @@ TYPE MISMATCH - destructure_closed_match.md:2:18:2:18
 
     The first pattern is trying to match:
 
-        { x: _field, y: _field2 }
+        { x: _field, y: U64 }
 
     But the expression between the `match` parenthesis has the type:
 

@@ -51,7 +51,7 @@ pub const Capture = struct {
     local: @import("../monotype_lifted/ast.zig").LocalId,
     symbol: Common.Symbol,
     binder: ?check.CheckedModule.PatternBinderId,
-    capture_id: ?u32 = null,
+    capture_id: ?check.CheckedModule.CaptureId = null,
     ty: TypeVarId,
 };
 

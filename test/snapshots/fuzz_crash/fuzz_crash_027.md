@@ -201,22 +201,22 @@ UNDECLARED TYPE - fuzz_crash_027.md:38:8:38:11
 UNDECLARED TYPE - fuzz_crash_027.md:43:11:43:16
 UNDECLARED TYPE - fuzz_crash_027.md:43:26:43:31
 EMPTY TUPLE NOT ALLOWED - fuzz_crash_027.md:52:1:52:3
-UNDEFINED VARIABLE - fuzz_crash_027.md:65:4:65:5
-UNDEFINED VARIABLE - fuzz_crash_027.md:65:6:65:7
-UNDEFINED VARIABLE - fuzz_crash_027.md:71:7:71:11
+NAME NOT IN SCOPE - fuzz_crash_027.md:65:4:65:5
+NAME NOT IN SCOPE - fuzz_crash_027.md:65:6:65:7
+NAME NOT IN SCOPE - fuzz_crash_027.md:71:7:71:11
 UNUSED VARIABLE - fuzz_crash_027.md:1:1:1:1
 NOT IMPLEMENTED - fuzz_crash_027.md:74:7:74:12
 UNUSED VARIABLE - fuzz_crash_027.md:1:1:1:1
 UNUSED VARIABLE - fuzz_crash_027.md:76:1:76:4
 NOT IMPLEMENTED - fuzz_crash_027.md:81:7:81:12
-UNDEFINED VARIABLE - fuzz_crash_027.md:82:37:82:40
+NAME NOT IN SCOPE - fuzz_crash_027.md:82:37:82:40
 UNUSED VARIABLE - fuzz_crash_027.md:82:21:82:27
 NOT IMPLEMENTED - fuzz_crash_027.md:89:18:89:23
 UNUSED VARIABLE - fuzz_crash_027.md:62:2:62:3
-UNDEFINED VARIABLE - fuzz_crash_027.md:97:2:97:6
+NAME NOT IN SCOPE - fuzz_crash_027.md:97:2:97:6
 UNDECLARED TYPE - fuzz_crash_027.md:99:14:99:20
-UNDEFINED VARIABLE - fuzz_crash_027.md:103:9:103:13
-UNDEFINED VARIABLE - fuzz_crash_027.md:114:2:114:11
+NAME NOT IN SCOPE - fuzz_crash_027.md:103:9:103:13
+NAME NOT IN SCOPE - fuzz_crash_027.md:114:2:114:11
 UNRECOGNIZED SYNTAX - fuzz_crash_027.md:1:1:1:1
 UNUSED VARIABLE - fuzz_crash_027.md:119:2:119:10
 UNUSED VARIABLE - fuzz_crash_027.md:120:2:120:6
@@ -617,37 +617,37 @@ Numbers cannot have leading zeros.
     If you want to represent nothing, try using an empty record: `{}`.
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `x` in this scope. ──────────────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `x` in this scope. ───────────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  x x                                                                       │
  │  ‾                                                                         │
  └──────────────────────────────────────────────────── fuzz_crash_027.md:65:4 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `x` in this scope. ──────────────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `x` in this scope. ───────────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  x x                                                                       │
  │    ‾                                                                       │
  └──────────────────────────────────────────────────── fuzz_crash_027.md:65:6 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `ment` in this scope. ───────────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `ment` in this scope. ────────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  => ment                                                                   │
  │     ‾‾‾‾                                                                   │
  └──────────────────────────────────────────────────── fuzz_crash_027.md:71:7 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
 ┌─────────────────┐
@@ -710,15 +710,15 @@ Numbers cannot have leading zeros.
     want to help improve Roc's error messages!
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `add` in this scope. ────────────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `add` in this scope. ─────────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  { foo: 1, bar: 2, ..rest } => 12->add(34)                                 │
  │                                    ‾‾‾                                     │
  └─────────────────────────────────────────────────── fuzz_crash_027.md:82:37 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
 ┌─────────────────┐
@@ -757,15 +757,15 @@ Numbers cannot have leading zeros.
     suppress this warning.
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `blah` in this scope. ───────────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `blah` in this scope. ────────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  blah == 1 # Commnt                                                        │
  │  ‾‾‾‾                                                                      │
  └──────────────────────────────────────────────────── fuzz_crash_027.md:97:2 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
 ┌─────────────────┐
@@ -778,26 +778,26 @@ Numbers cannot have leading zeros.
 
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `blah` in this scope. ───────────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `blah` in this scope. ────────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  expect blah == 1                                                          │
  │         ‾‾‾‾                                                               │
  └─────────────────────────────────────────────────── fuzz_crash_027.md:103:9 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `some_func` in this scope. ──────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `some_func` in this scope. ───────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  some_func(                                                                │
  │  ‾‾‾‾‾‾‾‾‾                                                                 │
  └─────────────────────────────────────────────────── fuzz_crash_027.md:114:2 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
 ┌─────────────────────┐

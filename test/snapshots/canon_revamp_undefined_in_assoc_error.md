@@ -14,18 +14,18 @@ Foo := [Whatever].{
 }
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - canon_revamp_undefined_in_assoc_error.md:3:18:3:27
+NAME NOT IN SCOPE - canon_revamp_undefined_in_assoc_error.md:3:18:3:27
 # PROBLEMS
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `ghostName` in this scope. ──────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `ghostName` in this scope. ───────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  callsGhost = ghostName                                                    │
  │               ‾‾‾‾‾‾‾‾‾                                                    │
  └───────────────────────────── canon_revamp_undefined_in_assoc_error.md:3:18 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 # TOKENS
 ~~~zig

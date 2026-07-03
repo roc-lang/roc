@@ -561,7 +561,7 @@ pub fn definitionHandlerReturnsNullForUndefinedSymbol() integration_spec.SpecErr
     const initialized_msg = try frame(allocator, initialized_body);
     defer allocator.free(initialized_msg);
 
-    // Document with undefined variable usage
+    // Document with a name-not-in-scope usage
     const open_body = try std.fmt.allocPrint(allocator,
         \\{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"{s}","version":1,"text":"app [x] {{ pf: platform \"{s}\" }}\\n\\nx = undefined_var"}}}}}}
     , .{ file_uri, platform_path });
@@ -569,7 +569,7 @@ pub fn definitionHandlerReturnsNullForUndefinedSymbol() integration_spec.SpecErr
     const open_msg = try frame(allocator, open_body);
     defer allocator.free(open_msg);
 
-    // Request definition for undefined variable (line 2, character 4).
+    // Request definition for a name not in scope (line 2, character 4).
     const definition_body = try std.fmt.allocPrint(allocator,
         \\{{"jsonrpc":"2.0","id":2,"method":"textDocument/definition","params":{{"textDocument":{{"uri":"{s}"}},"position":{{"line":2,"character":4}}}}}}
     , .{file_uri});

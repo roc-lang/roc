@@ -10,18 +10,18 @@ import json.Json as MyJson
 main = MyJson.decode
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - can_import_with_alias.md:3:8:3:21
+NAME NOT IN SCOPE - can_import_with_alias.md:3:8:3:21
 # PROBLEMS
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `decode` in this scope. ─────────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `decode` in this scope. ──────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  main = MyJson.decode                                                      │
  │         ‾‾‾‾‾‾‾‾‾‾‾‾‾                                                      │
  └────────────────────────────────────────────── can_import_with_alias.md:3:8 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 # TOKENS
 ~~~zig

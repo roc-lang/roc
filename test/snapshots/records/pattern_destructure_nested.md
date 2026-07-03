@@ -11,19 +11,19 @@ match person {
 }
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - pattern_destructure_nested.md:1:7:1:13
+NAME NOT IN SCOPE - pattern_destructure_nested.md:1:7:1:13
 UNUSED VARIABLE - pattern_destructure_nested.md:2:38:2:45
 # PROBLEMS
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `person` in this scope. ─────────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `person` in this scope. ──────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  match person {                                                            │
  │        ‾‾‾‾‾‾                                                              │
  └───────────────────────────────────────── pattern_destructure_nested.md:1:7 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
 ┌─────────────────┐

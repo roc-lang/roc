@@ -15126,6 +15126,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                 .f32_literal => |lit| .{ .immediate_f64 = @floatCast(lit) },
                                 .dec_literal => |lit| try self.generateI128Literal(lit),
                                 .str_literal => |str_idx| try self.generateStrLiteral(str_idx),
+                                .bytes_literal => |bytes_idx| try self.generateBytesLiteral(bytes_idx),
                                 .null_ptr => .{ .immediate_i64 = 0 },
                                 .proc_ref => |proc_id| blk: {
                                     const proc = self.proc_registry.get(@intFromEnum(proc_id)) orelse unreachable;
@@ -16139,6 +16140,66 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
 
             return .{ .stack_str = base_offset };
+        }
+
+        /// Generate code for a byte-list literal.
+        fn generateBytesLiteral(self: *Self, literal: LIR.StrLiteral) Allocator.Error!ValueLocation {
+            const bytes = self.store.getStringLiteral(literal);
+            const backing_bytes = self.store.getStringLiteralBacking(literal);
+            const whole_backing = literal.offset == 0 and @as(usize, literal.len) == backing_bytes.len;
+            const base_offset = self.codegen.allocStackSlot(roc_list_size);
+
+            const ptr_reg = try self.allocTempGeneral();
+            defer self.codegen.freeGeneral(ptr_reg);
+
+            if (bytes.len == 0) {
+                try self.codegen.emitLoadImm(ptr_reg, 0);
+                try self.codegen.emitStoreStack(.w64, base_offset, ptr_reg);
+                try self.codegen.emitStoreStack(.w64, base_offset + 8, ptr_reg);
+                try self.codegen.emitStoreStack(.w64, base_offset + 16, ptr_reg);
+            } else {
+                switch (self.generation_mode) {
+                    .native_execution => {
+                        verifyStaticStringBytes(backing_bytes);
+                        try self.codegen.emitLoadImm(ptr_reg, @bitCast(@as(u64, @intFromPtr(bytes.ptr))));
+                    },
+                    .shim_execution, .object_file => {
+                        const symbol_name = self.staticStringSymbol(literal.backing);
+                        try self.codegen.emitLoadDataAddress(ptr_reg, symbol_name);
+                        try self.emitAddUsizeImm(ptr_reg, ptr_reg, literal.offset);
+                    },
+                }
+                try self.codegen.emitStoreStack(.w64, base_offset, ptr_reg);
+
+                try self.codegen.emitLoadImm(ptr_reg, @intCast(bytes.len));
+                try self.codegen.emitStoreStack(.w64, base_offset + 8, ptr_reg);
+
+                switch (self.generation_mode) {
+                    .native_execution => {
+                        const cap_or_alloc = if (whole_backing)
+                            bytes.len << 1
+                        else
+                            @intFromPtr(backing_bytes.ptr) | 1;
+                        try self.codegen.emitLoadImm(ptr_reg, @intCast(cap_or_alloc));
+                    },
+                    .shim_execution, .object_file => {
+                        if (whole_backing) {
+                            try self.codegen.emitLoadImm(ptr_reg, @intCast(bytes.len << 1));
+                        } else {
+                            const symbol_name = self.staticStringSymbol(literal.backing);
+                            try self.codegen.emitLoadDataAddress(ptr_reg, symbol_name);
+                            try self.emitAddUsizeImm(ptr_reg, ptr_reg, 1);
+                        }
+                    },
+                }
+                try self.codegen.emitStoreStack(.w64, base_offset + 16, ptr_reg);
+            }
+
+            return .{ .list_stack = .{
+                .struct_offset = base_offset,
+                .data_offset = 0,
+                .num_elements = @intCast(bytes.len),
+            } };
         }
 
         fn emitAddUsizeImm(self: *Self, dst: GeneralReg, src: GeneralReg, imm: usize) Allocator.Error!void {

@@ -14,7 +14,7 @@ for n in 1.to(5) {
 }
 ```
 
-> The `to` method returns a [range](numbers#ranges) which is an `Iter` of the number in question. For example, [`I64.to`](builtins/I64#to) returns `Iter(I64)`, and so `n` in this example would be an `I64`.
+> The `to` method returns a [range](numbers#ranges) which is an `Iter` of the number in question. For example, `I64.to` returns `Iter(I64)`, and so `n` in this example would be an `I64`.
 
 A loop body only includes statements; it does not have a final expression. The loop itself evaluates to `{}`.
 

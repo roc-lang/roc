@@ -32,7 +32,7 @@ DOES NOT EXIST - multi_qualified_import.md:4:16:4:45
 MODULE NOT IMPORTED - multi_qualified_import.md:7:11:7:33
 UNUSED VARIABLE - multi_qualified_import.md:8:12:8:19
 MODULE NOT IMPORTED - multi_qualified_import.md:11:8:11:34
-UNDEFINED VARIABLE - multi_qualified_import.md:12:8:12:12
+NAME NOT IN SCOPE - multi_qualified_import.md:12:8:12:12
 # PROBLEMS
 
 ┌─────────────┐
@@ -176,15 +176,15 @@ UNDEFINED VARIABLE - multi_qualified_import.md:12:8:12:12
 
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `json` in this scope. ───────────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `json` in this scope. ────────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  data = json.Core.Utf8.encode("hello")                                     │
  │         ‾‾‾‾                                                               │
  └──────────────────────────────────────────── multi_qualified_import.md:12:8 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 # TOKENS
 ~~~zig

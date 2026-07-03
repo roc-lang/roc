@@ -12,18 +12,18 @@ import pf.Stdout
 main! = |_| Stdout.line!("Hello, world!")
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - hello_world.md:5:13:5:25
+NAME NOT IN SCOPE - hello_world.md:5:13:5:25
 # PROBLEMS
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `line!` in this scope. ──────────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `line!` in this scope. ───────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  main! = |_| Stdout.line!("Hello, world!")                                 │
  │              ‾‾‾‾‾‾‾‾‾‾‾‾                                                  │
  └─────────────────────────────────────────────────────── hello_world.md:5:13 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 # TOKENS
 ~~~zig

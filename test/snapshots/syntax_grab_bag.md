@@ -227,7 +227,7 @@ UNDECLARED TYPE - syntax_grab_bag.md:45:8:45:10
 UNDECLARED TYPE - syntax_grab_bag.md:46:8:46:17
 UNDECLARED TYPE - syntax_grab_bag.md:52:4:52:6
 UNDECLARED TYPE - syntax_grab_bag.md:53:8:53:17
-UNDEFINED VARIABLE - syntax_grab_bag.md:72:4:72:13
+NAME NOT IN SCOPE - syntax_grab_bag.md:72:4:72:13
 UNUSED VARIABLE - syntax_grab_bag.md:97:3:97:8
 UNUSED VARIABLE - syntax_grab_bag.md:1:1:1:1
 NOT IMPLEMENTED - syntax_grab_bag.md:108:7:108:12
@@ -235,27 +235,27 @@ UNUSED VARIABLE - syntax_grab_bag.md:1:1:1:1
 NOT IMPLEMENTED - syntax_grab_bag.md:111:4:111:9
 UNUSED VARIABLE - syntax_grab_bag.md:1:1:1:1
 NOT IMPLEMENTED - syntax_grab_bag.md:120:7:120:12
-UNDEFINED VARIABLE - syntax_grab_bag.md:121:37:121:40
+NAME NOT IN SCOPE - syntax_grab_bag.md:121:37:121:40
 UNUSED VARIABLE - syntax_grab_bag.md:121:21:121:27
 UNUSED VARIABLE - syntax_grab_bag.md:127:4:128:9
 NOT IMPLEMENTED - syntax_grab_bag.md:130:18:130:23
 NOT IMPLEMENTED - syntax_grab_bag.md:133:9:133:14
 UNUSED VARIABLE - syntax_grab_bag.md:82:2:82:3
-UNDEFINED VARIABLE - syntax_grab_bag.md:141:2:141:6
+NAME NOT IN SCOPE - syntax_grab_bag.md:141:2:141:6
 UNDECLARED TYPE - syntax_grab_bag.md:143:14:143:20
-UNDEFINED VARIABLE - syntax_grab_bag.md:147:9:147:13
-UNDEFINED VARIABLE - syntax_grab_bag.md:158:2:158:11
-UNDEFINED VARIABLE - syntax_grab_bag.md:175:3:175:15
-UNDEFINED VARIABLE - syntax_grab_bag.md:178:63:178:69
-UNDEFINED VARIABLE - syntax_grab_bag.md:179:42:179:48
+NAME NOT IN SCOPE - syntax_grab_bag.md:147:9:147:13
+NAME NOT IN SCOPE - syntax_grab_bag.md:158:2:158:11
+NAME NOT IN SCOPE - syntax_grab_bag.md:175:3:175:15
+NAME NOT IN SCOPE - syntax_grab_bag.md:178:63:178:69
+NAME NOT IN SCOPE - syntax_grab_bag.md:179:42:179:48
 INVALID ASSIGNMENT TO ITSELF - syntax_grab_bag.md:179:50:179:55
-UNDEFINED VARIABLE - syntax_grab_bag.md:183:3:183:7
-UNDEFINED VARIABLE - syntax_grab_bag.md:185:4:185:10
-UNDEFINED VARIABLE - syntax_grab_bag.md:188:22:188:25
-UNDEFINED VARIABLE - syntax_grab_bag.md:189:26:189:33
-UNDEFINED VARIABLE - syntax_grab_bag.md:189:34:189:38
-UNDEFINED VARIABLE - syntax_grab_bag.md:190:2:190:14
-UNDEFINED VARIABLE - syntax_grab_bag.md:191:2:191:14
+NAME NOT IN SCOPE - syntax_grab_bag.md:183:3:183:7
+NAME NOT IN SCOPE - syntax_grab_bag.md:185:4:185:10
+NAME NOT IN SCOPE - syntax_grab_bag.md:188:22:188:25
+NAME NOT IN SCOPE - syntax_grab_bag.md:189:26:189:33
+NAME NOT IN SCOPE - syntax_grab_bag.md:189:34:189:38
+NAME NOT IN SCOPE - syntax_grab_bag.md:190:2:190:14
+NAME NOT IN SCOPE - syntax_grab_bag.md:191:2:191:14
 DOES NOT EXIST - syntax_grab_bag.md:193:4:193:13
 UNUSED VARIABLE - syntax_grab_bag.md:164:2:164:18
 UNUSED VARIABLE - syntax_grab_bag.md:178:2:178:8
@@ -416,15 +416,15 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
 
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `some_func` in this scope. ──────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `some_func` in this scope. ───────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  some_func() # After debug expr                                            │
  │  ‾‾‾‾‾‾‾‾‾                                                                 │
  └─────────────────────────────────────────────────── syntax_grab_bag.md:72:4 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
 ┌─────────────────┐
@@ -511,15 +511,15 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
     want to help improve Roc's error messages!
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `add` in this scope. ────────────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `add` in this scope. ─────────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  { foo: 1, bar: 2, ..rest } => 12->add(34)                                 │
  │                                    ‾‾‾                                     │
  └───────────────────────────────────────────────── syntax_grab_bag.md:121:37 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
 ┌─────────────────┐
@@ -583,15 +583,15 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
     suppress this warning.
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `blah` in this scope. ───────────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `blah` in this scope. ────────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  blah == 1 # Comment after expect statement                                │
  │  ‾‾‾‾                                                                      │
  └────────────────────────────────────────────────── syntax_grab_bag.md:141:2 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
 ┌─────────────────┐
@@ -604,59 +604,59 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
 
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `blah` in this scope. ───────────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `blah` in this scope. ────────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  expect blah == 1                                                          │
  │         ‾‾‾‾                                                               │
  └────────────────────────────────────────────────── syntax_grab_bag.md:147:9 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `some_func` in this scope. ──────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `some_func` in this scope. ───────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  some_func(                                                                │
  │  ‾‾‾‾‾‾‾‾‾                                                                 │
  └────────────────────────────────────────────────── syntax_grab_bag.md:158:2 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `line!` in this scope. ──────────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `line!` in this scope. ───────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  Stdout.line!("Adding ${n} to ${number}")                                  │
  │  ‾‾‾‾‾‾‾‾‾‾‾‾                                                              │
  └────────────────────────────────────────────────── syntax_grab_bag.md:175:3 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `punned` in this scope. ─────────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `punned` in this scope. ──────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  record = { foo: 123, bar: "Hello", baz: tag, qux: Ok(world), punned }     │
  │                                                               ‾‾‾‾‾‾       │
  └───────────────────────────────────────────────── syntax_grab_bag.md:178:63 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `nested` in this scope. ─────────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `nested` in this scope. ──────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  tuple = (123, "World", tag, Ok(world), (nested, tuple), [1, 2, 3])        │
  │                                          ‾‾‾‾‾‾                            │
  └───────────────────────────────────────────────── syntax_grab_bag.md:179:42 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
 ┌──────────────────────────────┐
@@ -673,81 +673,81 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
     the value being assigned.
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `tag1` in this scope. ───────────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `tag1` in this scope. ────────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  tag1,                                                                     │
  │  ‾‾‾‾                                                                      │
  └────────────────────────────────────────────────── syntax_grab_bag.md:183:3 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `nested` in this scope. ─────────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `nested` in this scope. ──────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  (nested, tuple),                                                          │
  │   ‾‾‾‾‾‾                                                                   │
  └────────────────────────────────────────────────── syntax_grab_bag.md:185:4 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `foo` in this scope. ────────────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `foo` in this scope. ─────────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  …t = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5 │
  │           ‾‾‾                                                              │
  └───────────────────────────────────────────────── syntax_grab_bag.md:188:22 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `some_fn` in this scope. ────────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `some_fn` in this scope. ─────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  …style = some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_me…│
  │           ‾‾‾‾‾‾‾                                                          │
  └───────────────────────────────────────────────── syntax_grab_bag.md:189:26 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `arg1` in this scope. ───────────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `arg1` in this scope. ────────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  …some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.…│
  │           ‾‾‾‾                                                             │
  └───────────────────────────────────────────────── syntax_grab_bag.md:189:34 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `line!` in this scope. ──────────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `line!` in this scope. ───────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  Stdout.line!(interpolated)?                                               │
  │  ‾‾‾‾‾‾‾‾‾‾‾‾                                                              │
  └────────────────────────────────────────────────── syntax_grab_bag.md:190:2 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `line!` in this scope. ──────────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `line!` in this scope. ───────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  Stdout.line!(                                                             │
  │  ‾‾‾‾‾‾‾‾‾‾‾‾                                                              │
  └────────────────────────────────────────────────── syntax_grab_bag.md:191:2 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
 ┌────────────────┐

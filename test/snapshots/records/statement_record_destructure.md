@@ -8,18 +8,18 @@ type=snippet
 { name, age, email } = person
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - statement_record_destructure.md:1:24:1:30
+NAME NOT IN SCOPE - statement_record_destructure.md:1:24:1:30
 # PROBLEMS
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `person` in this scope. ─────────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `person` in this scope. ──────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  { name, age, email } = person                                             │
  │                         ‾‾‾‾‾‾                                             │
  └────────────────────────────────────── statement_record_destructure.md:1:24 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 # TOKENS
 ~~~zig

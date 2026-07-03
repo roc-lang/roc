@@ -146,6 +146,8 @@ Compilers can optimize tail calls in various ways. Here are some that Roc's comp
 
 #### Modulo Cons
 
+TODO
+
 ## Mutually Recursive Functions
 
 _Mutually recursive_ functions are functions that call each another. If one function calls

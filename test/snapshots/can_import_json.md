@@ -11,7 +11,7 @@ main = Json.utf8
 ~~~
 # EXPECTED
 DUPLICATE DEFINITION - can_import_json.md:1:1:1:17
-UNDEFINED VARIABLE - can_import_json.md:3:8:3:17
+NAME NOT IN SCOPE - can_import_json.md:3:8:3:17
 # PROBLEMS
 
 ┌──────────────────────┐
@@ -29,15 +29,15 @@ UNDEFINED VARIABLE - can_import_json.md:3:8:3:17
       └─────────────────────────────────────────────── can_import_json.md:1:1 ┘
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `utf8` in this scope. ───────────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `utf8` in this scope. ────────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  main = Json.utf8                                                          │
  │         ‾‾‾‾‾‾‾‾‾                                                          │
  └──────────────────────────────────────────────────── can_import_json.md:3:8 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 # TOKENS
 ~~~zig

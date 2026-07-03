@@ -9,7 +9,7 @@ a=()->b()()()
 ~~~
 # EXPECTED
 EMPTY TUPLE NOT ALLOWED - formatter_idempotence_issue_8851_comment2.md:1:3:1:5
-UNDEFINED VARIABLE - formatter_idempotence_issue_8851_comment2.md:1:7:1:8
+NAME NOT IN SCOPE - formatter_idempotence_issue_8851_comment2.md:1:7:1:8
 # PROBLEMS
 
 ┌─────────────────────────┐
@@ -23,15 +23,15 @@ UNDEFINED VARIABLE - formatter_idempotence_issue_8851_comment2.md:1:7:1:8
     If you want to represent nothing, try using an empty record: `{}`.
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `b` in this scope. ──────────────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `b` in this scope. ───────────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  a=()->b()()()                                                             │
  │        ‾                                                                   │
  └────────────────────────── formatter_idempotence_issue_8851_comment2.md:1:7 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 # TOKENS
 ~~~zig

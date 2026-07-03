@@ -35,11 +35,11 @@ pub const ConstScalar = union(enum) {
     dec_bits: i128,
 };
 
-/// Identity for a captured value inside a compile-time function value.
-pub const CaptureId = union(enum) {
-    binder: checked_ids.PatternBinderId,
-    generated: u32,
-};
+/// Identity for a captured value inside a compile-time function value. This is
+/// the same canonical/generated CaptureId carried through every post-check IR;
+/// a compile-time closure's captures are either canonical (a checked binder) or
+/// generated (a compiler-synthesized capturable local, minted during CTFE).
+pub const CaptureId = checked_ids.CaptureId;
 
 /// Primitive type stored at the ConstStore boundary. This mirrors
 /// `CheckedPrimitive` without importing `checked_artifact.zig`, which owns the
@@ -807,7 +807,7 @@ test "ConstStore: build, serialize/relocate, and read back values, fns, strings"
     const str = try store.append(.{ .str = .{ .data = sd, .offset = 0, .len = 5 } });
     // A function value with a capture (exercises capture_pool).
     const capture_ty = try store.type_store.append(.{ .primitive = .u64 });
-    const caps = try gpa.dupe(ConstCapture, &.{.{ .id = .{ .binder = @enumFromInt(1) }, .ty = capture_ty, .value = a }});
+    const caps = try gpa.dupe(ConstCapture, &.{.{ .id = CaptureId.fromBinder(@enumFromInt(1)), .ty = capture_ty, .value = a }});
     defer gpa.free(caps);
     const fn_id = try store.appendFn(.{
         // Distinct non-zero ids: this test asserts captures round-trip; the fn_def
@@ -865,8 +865,8 @@ test "ConstStore.appendFn: no leak or double-free under allocation failure" {
             const a = try store.append(.{ .scalar = .{ .u64 = 7 } });
             const capture_ty = try store.type_store.append(.{ .primitive = .u64 });
             const caps = try allocator.dupe(ConstCapture, &.{
-                .{ .id = .{ .binder = @enumFromInt(1) }, .ty = capture_ty, .value = a },
-                .{ .id = .{ .binder = @enumFromInt(2) }, .ty = capture_ty, .value = a },
+                .{ .id = CaptureId.fromBinder(@enumFromInt(1)), .ty = capture_ty, .value = a },
+                .{ .id = CaptureId.fromBinder(@enumFromInt(2)), .ty = capture_ty, .value = a },
             });
             defer allocator.free(caps);
             _ = try store.appendFn(.{

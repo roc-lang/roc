@@ -1699,6 +1699,24 @@ test "unify - succeeds on nominal, tag union recursion" {
     try std.testing.expectEqual(.ok, result_tag_union);
 }
 
+test "unify - deeply nested tuples do not depend on native call stack" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    const depth = 128;
+    var a = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
+    var b = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
+
+    for (0..depth) |_| {
+        a = try env.module_env.types.freshFromContent(try env.mkTuple(&.{a}));
+        b = try env.module_env.types.freshFromContent(try env.mkTuple(&.{b}));
+    }
+
+    const result = try env.unify(a, b);
+    try std.testing.expectEqual(.ok, result);
+}
+
 // static dispatch constraints //
 
 test "unify - flex with no constraints unifies with flex with constraints" {

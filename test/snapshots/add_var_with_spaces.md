@@ -8,18 +8,18 @@ type=snippet
 add2 = x +      2
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - add_var_with_spaces.md:1:8:1:9
+NAME NOT IN SCOPE - add_var_with_spaces.md:1:8:1:9
 # PROBLEMS
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `x` in this scope. ──────────────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `x` in this scope. ───────────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  add2 = x +      2                                                         │
  │         ‾                                                                  │
  └──────────────────────────────────────────────── add_var_with_spaces.md:1:8 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 # TOKENS
 ~~~zig

@@ -506,6 +506,7 @@ pub const MappedProgramView = struct {
             .frac_f64_lit,
             .dec_lit,
             .str_lit,
+            .bytes_lit,
             .uninitialized,
             .crash,
             .comptime_exhaustiveness_failed,
@@ -524,7 +525,7 @@ pub const MappedProgramView = struct {
             .fn_def => |fn_def| self.fnRefInBounds(fn_def.fn_id) and self.fnDefCaptureSpanInBounds(fn_def.captures),
             .fn_ref => true,
             .call_value => |call| self.exprRefInBounds(call.callee) and self.exprIdSpanInBounds(call.args),
-            .call_proc => |call| self.exprIdSpanInBounds(call.args) and self.exprIdSpanInBounds(call.captures),
+            .call_proc => |call| self.exprIdSpanInBounds(call.args) and captureOperandSpanInBounds(call.captures),
             .low_level => |call| self.exprIdSpanInBounds(call.args),
             .field_access => |field| self.exprRefInBounds(field.receiver),
             .tuple_access => |tuple| self.exprRefInBounds(tuple.tuple),
@@ -653,6 +654,12 @@ pub const MappedProgramView = struct {
 
     fn fnDefCaptureSpanInBounds(self: MappedProgramView, span: Ast.Span(Ast.FnDefCapture)) bool {
         return spanInBounds(self.fn_def_captures.len, span.start, span.len);
+    }
+
+    fn captureOperandSpanInBounds(span: Ast.Span(Ast.CaptureOperand)) bool {
+        // The pre-lift Monotype program never carries capture operands; closure
+        // lifting resolves them, so the serialized program has none.
+        return span.len == 0;
     }
 
     fn recordDestructSpanInBounds(self: MappedProgramView, span: Ast.Span(Ast.RecordDestruct)) bool {

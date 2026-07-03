@@ -438,126 +438,126 @@ errTryLeaf = leaf1Val        # ERROR: not in scope
 errTryGrand = grandchildVal  # ERROR: not in scope
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - associated_items_comprehensive.md:350:24:350:29
-UNDEFINED VARIABLE - associated_items_comprehensive.md:361:17:361:26
-UNDEFINED VARIABLE - associated_items_comprehensive.md:372:28:372:35
-UNDEFINED VARIABLE - associated_items_comprehensive.md:387:31:387:39
-UNDEFINED VARIABLE - associated_items_comprehensive.md:401:27:401:40
-UNDEFINED VARIABLE - associated_items_comprehensive.md:423:25:423:33
-UNDEFINED VARIABLE - associated_items_comprehensive.md:428:15:428:24
-UNDEFINED VARIABLE - associated_items_comprehensive.md:429:14:429:21
-UNDEFINED VARIABLE - associated_items_comprehensive.md:430:14:430:22
-UNDEFINED VARIABLE - associated_items_comprehensive.md:431:15:431:28
+NAME NOT IN SCOPE - associated_items_comprehensive.md:350:24:350:29
+NAME NOT IN SCOPE - associated_items_comprehensive.md:361:17:361:26
+NAME NOT IN SCOPE - associated_items_comprehensive.md:372:28:372:35
+NAME NOT IN SCOPE - associated_items_comprehensive.md:387:31:387:39
+NAME NOT IN SCOPE - associated_items_comprehensive.md:401:27:401:40
+NAME NOT IN SCOPE - associated_items_comprehensive.md:423:25:423:33
+NAME NOT IN SCOPE - associated_items_comprehensive.md:428:15:428:24
+NAME NOT IN SCOPE - associated_items_comprehensive.md:429:14:429:21
+NAME NOT IN SCOPE - associated_items_comprehensive.md:430:14:430:22
+NAME NOT IN SCOPE - associated_items_comprehensive.md:431:15:431:28
 # PROBLEMS
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `value` in this scope. ──────────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `value` in this scope. ───────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  …ified = value  # ERROR: 'value' not in scope at module level             │
  │           ‾‾‾‾‾                                                            │
  └────────────────────────────────── associated_items_comprehensive.md:350:24 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `innerItem` in this scope. ──────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `innerItem` in this scope. ───────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  badAccess = innerItem  # ERROR: 'innerItem' not in scope here             │
  │              ‾‾‾‾‾‾‾‾‾                                                     │
  └────────────────────────────────── associated_items_comprehensive.md:361:17 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `sibAVal` in this scope. ────────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `sibAVal` in this scope. ─────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  badSiblingAccess = sibAVal  # ERROR: 'sibAVal' not in scope               │
  │                     ‾‾‾‾‾‾‾                                                │
  └────────────────────────────────── associated_items_comprehensive.md:372:28 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `leaf1Val` in this scope. ───────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `leaf1Val` in this scope. ────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  badCousinAccess = leaf1Val  # ERROR: 'leaf1Val' not in scope              │
  │                    ‾‾‾‾‾‾‾‾                                                │
  └────────────────────────────────── associated_items_comprehensive.md:387:31 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `grandchildVal` in this scope. ──────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `grandchildVal` in this scope. ───────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  badGrandchildAccess = grandchildVal  # ERROR: 'grandchildVal' not in scope│
  │                        ‾‾‾‾‾‾‾‾‾‾‾‾‾                                       │
  └────────────────────────────────── associated_items_comprehensive.md:401:27 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `otherVal` in this scope. ───────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `otherVal` in this scope. ────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  badDeepAccess = otherVal  # ERROR: 'otherVal' not in scope                │
  │                  ‾‾‾‾‾‾‾‾                                                  │
  └────────────────────────────────── associated_items_comprehensive.md:423:25 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `outerItem` in this scope. ──────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `outerItem` in this scope. ───────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  errTryOuter = outerItem      # ERROR: not in scope                        │
  │                ‾‾‾‾‾‾‾‾‾                                                   │
  └────────────────────────────────── associated_items_comprehensive.md:428:15 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `sibAVal` in this scope. ────────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `sibAVal` in this scope. ─────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  errTrySibA = sibAVal         # ERROR: not in scope                        │
  │               ‾‾‾‾‾‾‾                                                      │
  └────────────────────────────────── associated_items_comprehensive.md:429:14 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `leaf1Val` in this scope. ───────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `leaf1Val` in this scope. ────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  errTryLeaf = leaf1Val        # ERROR: not in scope                        │
  │               ‾‾‾‾‾‾‾‾                                                     │
  └────────────────────────────────── associated_items_comprehensive.md:430:14 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `grandchildVal` in this scope. ──────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `grandchildVal` in this scope. ───────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  errTryGrand = grandchildVal  # ERROR: not in scope                        │
  │                ‾‾‾‾‾‾‾‾‾‾‾‾‾                                               │
  └────────────────────────────────── associated_items_comprehensive.md:431:15 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 # TOKENS
 ~~~zig

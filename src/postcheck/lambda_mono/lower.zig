@@ -76,6 +76,7 @@ fn movedSolvedView(source: *const Solved.Program, moved: *const Ast.Program) Sol
             .typed_locals = source.lifted.typed_locals.items,
             .stmt_ids = source.lifted.stmt_ids.items,
             .field_exprs = source.lifted.field_exprs.items,
+            .capture_operands = source.lifted.capture_operands.items,
             .record_destructs = source.lifted.record_destructs.items,
             .str_pattern_steps = source.lifted.str_pattern_steps.items,
             .branches = source.lifted.branches.items,
@@ -491,7 +492,7 @@ const Lowerer = struct {
         if (captures.len != fields.len) Common.invariant("function capture argument arity differed from capture slots");
 
         for (captures, fields) |capture, field| {
-            if (capture.symbol != field.symbol or capture.binder != field.binder or capture.capture_id != field.capture_id) {
+            if (capture.capture_id != field.capture_id) {
                 Common.invariant("function capture argument fields differed from capture slots");
             }
             try self.captures.put(capture.local, .{
@@ -548,6 +549,7 @@ const Lowerer = struct {
             .frac_f64_lit => |value| .{ .frac_f64_lit = value },
             .dec_lit => |value| .{ .dec_lit = value },
             .str_lit => |value| .{ .str_lit = value },
+            .bytes_lit => |value| .{ .bytes_lit = value },
             .uninitialized => .uninitialized,
             .uninitialized_payload => |payload| .{ .uninitialized_payload = .{
                 .condition = try self.localFor(payload.condition, try self.lowerType(self.solved.local_tys[@intFromEnum(payload.condition)])),
@@ -707,12 +709,12 @@ const Lowerer = struct {
         self: *Lowerer,
         expr_id: Lifted.ExprId,
         fn_id: Lifted.FnId,
-        captures_span: Lifted.Span(Lifted.ExprId),
+        captures_span: Lifted.Span(Lifted.CaptureOperand),
         ty: Type.TypeId,
     ) Allocator.Error!Ast.ExprData {
         const captures = self.memberCapturesForExpr(expr_id, fn_id);
-        const capture_exprs = self.solved.lifted.exprSpan(captures_span);
-        if (self.solved.lifted.typedLocalSpan(self.solved.lifted.fns[@intFromEnum(fn_id)].captures).len != capture_exprs.len) {
+        const capture_operands = self.solved.lifted.captureOperandSpan(captures_span);
+        if (self.solved.lifted.typedLocalSpan(self.solved.lifted.fns[@intFromEnum(fn_id)].captures).len != capture_operands.len) {
             Common.invariant("function reference capture operand count differed from lifted function captures");
         }
         return switch (self.program.types.get(ty)) {
@@ -723,7 +725,7 @@ const Lowerer = struct {
                     break :blk .{ .callable = .{
                         .ty = ty,
                         .variant = variant.id,
-                        .payload = if (variant.capture_ty) |capture_ty| try self.buildCaptureRecordFromExprs(fn_id, captures, capture_exprs, capture_ty) else null,
+                        .payload = if (variant.capture_ty) |capture_ty| try self.buildCaptureRecordFromExprs(captures, capture_operands, capture_ty) else null,
                     } };
                 }
                 Common.invariant("finite callable type did not contain referenced function");
@@ -734,7 +736,7 @@ const Lowerer = struct {
                     if (variant.source != fn_symbol) continue;
                     break :blk .{ .packed_erased_fn = .{
                         .target = variant.target,
-                        .capture = if (variant.capture_ty) |capture_ty| try self.buildCaptureRecordFromExprs(fn_id, captures, capture_exprs, capture_ty) else null,
+                        .capture = if (variant.capture_ty) |capture_ty| try self.buildCaptureRecordFromExprs(captures, capture_operands, capture_ty) else null,
                     } };
                 }
                 Common.invariant("erased callable type did not contain referenced function");
@@ -766,25 +768,25 @@ const Lowerer = struct {
         self: *Lowerer,
         fn_id: Lifted.FnId,
         args_span: Lifted.Span(Lifted.ExprId),
-        capture_exprs_span: Lifted.Span(Lifted.ExprId),
+        capture_operands_span: Lifted.Span(Lifted.CaptureOperand),
     ) Allocator.Error!Ast.Span(Ast.ExprId) {
         const args = try self.lowerExprSlice(self.solved.lifted.exprSpan(args_span));
         defer self.allocator.free(args);
 
         const captures = self.capturesForFn(fn_id);
         if (captures.len != 0) {
-            const capture_exprs = self.solved.lifted.exprSpan(capture_exprs_span);
-            if (capture_exprs.len != captures.len) Common.invariant("direct call capture operand count differed from callee capture count");
+            const capture_operands = self.solved.lifted.captureOperandSpan(capture_operands_span);
+            if (capture_operands.len != captures.len) Common.invariant("direct call capture operand count differed from callee capture count");
             const target_fn = try self.ensureOwnFnSpec(fn_id, .finite);
             const capture_ty = self.fn_specs.items[@intFromEnum(target_fn)].capture_ty orelse
                 Common.invariant("capturing direct call target had no capture record type");
             const call_args = try self.allocator.alloc(Ast.ExprId, args.len + 1);
             defer self.allocator.free(call_args);
             @memcpy(call_args[0..args.len], args);
-            call_args[args.len] = try self.buildCaptureRecordFromExprs(fn_id, captures, capture_exprs, capture_ty);
+            call_args[args.len] = try self.buildCaptureRecordFromExprs(captures, capture_operands, capture_ty);
             return try self.program.addExprSpan(call_args);
         }
-        if (self.solved.lifted.exprSpan(capture_exprs_span).len != 0) {
+        if (self.solved.lifted.captureOperandSpan(capture_operands_span).len != 0) {
             Common.invariant("direct call carried capture operands for a capture-free callee");
         }
 
@@ -863,9 +865,8 @@ const Lowerer = struct {
 
     fn buildCaptureRecordFromExprs(
         self: *Lowerer,
-        fn_id: Lifted.FnId,
         capture_span: SolvedType.Span,
-        capture_exprs: []const Lifted.ExprId,
+        capture_operands: []const Lifted.CaptureOperand,
         capture_ty: Type.TypeId,
     ) Allocator.Error!Ast.ExprId {
         const captures = self.solved.types.captureSpan(capture_span);
@@ -874,45 +875,28 @@ const Lowerer = struct {
             else => Common.invariant("callable capture payload was not a capture record"),
         };
         if (captures.len != fields.len) Common.invariant("callable capture payload arity differed from captured locals");
-        if (self.solved.lifted.typedLocalSpan(self.solved.lifted.fns[@intFromEnum(fn_id)].captures).len != capture_exprs.len) {
+        if (captures.len != capture_operands.len) {
             Common.invariant("function reference capture operand count differed from lifted function captures");
         }
 
+        // Member captures, capture-record fields, and keyed operands are all in
+        // ascending CaptureId order, so the join is an exact indexed walk.
         const values = try self.allocator.alloc(Ast.ExprId, captures.len);
         defer self.allocator.free(values);
-        for (captures, fields, 0..) |capture, field, i| {
-            if (capture.symbol != field.symbol or capture.binder != field.binder or capture.capture_id != field.capture_id) {
+        for (captures, fields, capture_operands, 0..) |capture, field, operand, i| {
+            if (capture.capture_id != field.capture_id) {
                 Common.invariant("callable capture payload fields differed from captured locals");
             }
-            values[i] = if (self.captureExprForMemberCapture(fn_id, capture_exprs, capture)) |capture_expr_id|
-                try self.lowerExpr(capture_expr_id)
-            else
-                try self.lowerLocalValue(capture.local, field.ty);
+            const capture_id = capture.capture_id orelse Common.invariant("member capture had no CaptureId");
+            if (operand.id != capture_id) {
+                Common.invariant("capture operand CaptureId did not match its member capture slot");
+            }
+            values[i] = try self.lowerExpr(operand.value);
         }
         return try self.program.addExpr(.{
             .ty = capture_ty,
             .data = .{ .capture_record = try self.program.addExprSpan(values) },
         });
-    }
-
-    fn captureExprForMemberCapture(
-        self: *Lowerer,
-        fn_id: Lifted.FnId,
-        capture_exprs: []const Lifted.ExprId,
-        member_capture: SolvedType.Capture,
-    ) ?Lifted.ExprId {
-        const fn_captures = self.solved.lifted.typedLocalSpan(self.solved.lifted.fns[@intFromEnum(fn_id)].captures);
-        for (fn_captures, capture_exprs) |fn_capture, capture_expr| {
-            if (fn_capture.local == member_capture.local) return capture_expr;
-            const fn_binder = self.solved.lifted.locals[@intFromEnum(fn_capture.local)].binder;
-            if (fn_binder != null and member_capture.binder != null and fn_binder.? == member_capture.binder.?) return capture_expr;
-        }
-        return null;
-    }
-
-    fn lowerLocalValue(self: *Lowerer, local: Lifted.LocalId, ty: Type.TypeId) Allocator.Error!Ast.ExprId {
-        const data = try self.lowerLocalExpr(local, ty);
-        return try self.program.addExpr(.{ .ty = ty, .data = data });
     }
 
     fn lowerPat(self: *Lowerer, pat_id: Lifted.PatId) Allocator.Error!Ast.PatId {

@@ -9,34 +9,34 @@ canonicalize_diagnostics=true
 some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - static_dispatch_super_test.md:1:1:1:8
-UNDEFINED VARIABLE - static_dispatch_super_test.md:1:9:1:13
+NAME NOT IN SCOPE - static_dispatch_super_test.md:1:1:1:8
+NAME NOT IN SCOPE - static_dispatch_super_test.md:1:9:1:13
 TRY OPERATOR OUTSIDE FUNCTION - static_dispatch_super_test.md:1:1:1:15
 TRY OPERATOR OUTSIDE FUNCTION - static_dispatch_super_test.md:1:1:1:41
 TRY OPERATOR OUTSIDE FUNCTION - static_dispatch_super_test.md:1:1:1:72
 TRY OPERATOR OUTSIDE FUNCTION - static_dispatch_super_test.md:1:1:1:86
 # PROBLEMS
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `some_fn` in this scope. ────────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `some_fn` in this scope. ─────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.… │
  │  ‾‾‾‾‾‾‾                                                                   │
  └───────────────────────────────────────── static_dispatch_super_test.md:1:1 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `arg1` in this scope. ───────────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `arg1` in this scope. ────────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.… │
  │          ‾‾‾‾                                                              │
  └───────────────────────────────────────── static_dispatch_super_test.md:1:9 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
 ┌───────────────────────────────┐

@@ -16,8 +16,8 @@ main = {
 ~~~
 # EXPECTED
 DUPLICATE DEFINITION - import_exposing_basic.md:1:1:1:43
-UNDEFINED VARIABLE - import_exposing_basic.md:5:15:5:21
-UNDEFINED VARIABLE - import_exposing_basic.md:6:15:6:21
+NAME NOT IN SCOPE - import_exposing_basic.md:5:15:5:21
+NAME NOT IN SCOPE - import_exposing_basic.md:6:15:6:21
 # PROBLEMS
 
 ┌──────────────────────┐
@@ -35,26 +35,26 @@ UNDEFINED VARIABLE - import_exposing_basic.md:6:15:6:21
       └───────────────────────────────────────── import_exposing_basic.md:1:1 ┘
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `encode` in this scope. ─────────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `encode` in this scope. ──────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  encoded = encode(data)                                                    │
  │            ‾‾‾‾‾‾                                                          │
  └───────────────────────────────────────────── import_exposing_basic.md:5:15 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `decode` in this scope. ─────────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `decode` in this scope. ──────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  decoded = decode(encoded)                                                 │
  │            ‾‾‾‾‾‾                                                          │
  └───────────────────────────────────────────── import_exposing_basic.md:6:15 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 # TOKENS
 ~~~zig

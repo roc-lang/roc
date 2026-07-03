@@ -333,6 +333,7 @@ fn skipCommand(
 fn buildCommand(
     allocator: std.mem.Allocator,
     zig_exe: []const u8,
+    build_args: []const []const u8,
     step: []const u8,
     stats_path: ?[]const u8,
     run_args: []const []const u8,
@@ -341,10 +342,16 @@ fn buildCommand(
     try argv.append(allocator, zig_exe);
     try argv.append(allocator, "build");
     try argv.append(allocator, step);
+    // GitHub CI gets this via the option's CI-environment default; passing it
+    // explicitly keeps local MiniCI runs mirroring CI.
+    try argv.append(allocator, "-Dforbid-arc-certifier-skips");
     try argv.append(allocator, "--summary");
     try argv.append(allocator, "all");
     try argv.append(allocator, "--color");
     try argv.append(allocator, "off");
+    for (build_args) |arg| {
+        try argv.append(allocator, arg);
+    }
     if (stats_path != null or run_args.len != 0) {
         try argv.append(allocator, "--");
     }
@@ -778,6 +785,7 @@ pub fn main(init: std.process.Init) !void {
     const raw_args = try init.minimal.args.toSlice(allocator);
     const args: []const []const u8 = @ptrCast(raw_args);
     const zig_exe = if (args.len >= 2) args[1] else "zig";
+    const build_args = if (args.len > 2) args[2..] else &.{};
     const heartbeat_interval_ms = heartbeatIntervalMs(init.environ_map);
 
     std.Io.Dir.cwd().deleteTree(io, out_dir) catch {};
@@ -788,7 +796,7 @@ pub fn main(init: std.process.Init) !void {
     const run_started_ns = nowNs(io);
     const run_started_unix_ms = unixMs(io);
 
-    const build_argv = try buildCommand(allocator, zig_exe, "build-ci", null, &.{});
+    const build_argv = try buildCommand(allocator, zig_exe, build_args, "build-ci", null, &.{});
     const build_log = logs_dir ++ "/build-ci.txt";
     std.debug.print("Building CI steps ... ", .{});
     const build_result = try runCommand(allocator, io, build_argv, build_log, heartbeat_interval_ms, run_started_ns);
@@ -811,7 +819,7 @@ pub fn main(init: std.process.Init) !void {
             try std.fmt.allocPrint(allocator, "{s}/{s}.json", .{ raw_dir, job.name })
         else
             null;
-        const argv = try buildCommand(allocator, zig_exe, job.name, stats_path, job.args);
+        const argv = try buildCommand(allocator, zig_exe, build_args, job.name, stats_path, job.args);
         std.debug.print("Running `{s}` ... ", .{job.name});
         var result = if (job.skip_reason) |reason|
             try skipCommand(io, argv, log_path, reason, run_started_ns)

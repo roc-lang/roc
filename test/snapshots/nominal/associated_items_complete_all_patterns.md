@@ -750,83 +750,83 @@ PARSE ERROR - associated_items_complete_all_patterns.md:421:29:421:30
 PARSE ERROR - associated_items_complete_all_patterns.md:421:30:421:31
 PARSE ERROR - associated_items_complete_all_patterns.md:421:31:421:32
 PARSE ERROR - associated_items_complete_all_patterns.md:433:1:433:2
-UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:6:8:6:18
-UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:11:8:11:16
-UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:20:8:20:22
-UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:21:8:21:22
+NAME NOT IN SCOPE - associated_items_complete_all_patterns.md:6:8:6:18
+NAME NOT IN SCOPE - associated_items_complete_all_patterns.md:11:8:11:16
+NAME NOT IN SCOPE - associated_items_complete_all_patterns.md:20:8:20:22
+NAME NOT IN SCOPE - associated_items_complete_all_patterns.md:21:8:21:22
 TYPE REDECLARED - associated_items_complete_all_patterns.md:24:5:26:6
 DUPLICATE DEFINITION - associated_items_complete_all_patterns.md:28:5:28:14
-UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:30:8:30:27
+NAME NOT IN SCOPE - associated_items_complete_all_patterns.md:30:8:30:27
 DUPLICATE DEFINITION - associated_items_complete_all_patterns.md:33:5:33:14
-UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:33:17:33:36
+NAME NOT IN SCOPE - associated_items_complete_all_patterns.md:33:17:33:36
 TYPE REDECLARED - associated_items_complete_all_patterns.md:35:5:37:6
-UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:39:8:39:27
+NAME NOT IN SCOPE - associated_items_complete_all_patterns.md:39:8:39:27
 TYPE REDECLARED - associated_items_complete_all_patterns.md:42:5:44:6
-UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:46:26:46:39
-UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:51:16:51:27
-UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:58:8:58:19
-UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:71:8:71:26
-UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:72:8:72:26
-UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:73:8:73:26
+NAME NOT IN SCOPE - associated_items_complete_all_patterns.md:46:26:46:39
+NAME NOT IN SCOPE - associated_items_complete_all_patterns.md:51:16:51:27
+NAME NOT IN SCOPE - associated_items_complete_all_patterns.md:58:8:58:19
+NAME NOT IN SCOPE - associated_items_complete_all_patterns.md:71:8:71:26
+NAME NOT IN SCOPE - associated_items_complete_all_patterns.md:72:8:72:26
+NAME NOT IN SCOPE - associated_items_complete_all_patterns.md:73:8:73:26
 DUPLICATE DEFINITION - associated_items_complete_all_patterns.md:76:5:76:9
 TYPE REDECLARED - associated_items_complete_all_patterns.md:78:5:84:6
-UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:86:8:86:26
-UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:87:8:87:26
-UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:88:8:88:26
+NAME NOT IN SCOPE - associated_items_complete_all_patterns.md:86:8:86:26
+NAME NOT IN SCOPE - associated_items_complete_all_patterns.md:87:8:87:26
+NAME NOT IN SCOPE - associated_items_complete_all_patterns.md:88:8:88:26
 TYPE REDECLARED - associated_items_complete_all_patterns.md:91:5:95:6
-UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:97:14:97:24
+NAME NOT IN SCOPE - associated_items_complete_all_patterns.md:97:14:97:24
 TYPE REDECLARED - associated_items_complete_all_patterns.md:101:5:107:6
 TYPE REDECLARED - associated_items_complete_all_patterns.md:111:5:117:6
 DUPLICATE DEFINITION - associated_items_complete_all_patterns.md:119:5:119:9
-UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:121:8:121:27
-UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:122:8:122:27
-UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:123:8:123:27
+NAME NOT IN SCOPE - associated_items_complete_all_patterns.md:121:8:121:27
+NAME NOT IN SCOPE - associated_items_complete_all_patterns.md:122:8:122:27
+NAME NOT IN SCOPE - associated_items_complete_all_patterns.md:123:8:123:27
 TYPE REDECLARED - associated_items_complete_all_patterns.md:126:5:136:6
 DUPLICATE DEFINITION - associated_items_complete_all_patterns.md:138:5:138:9
-UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:140:8:140:30
+NAME NOT IN SCOPE - associated_items_complete_all_patterns.md:140:8:140:30
 DUPLICATE DEFINITION - associated_items_complete_all_patterns.md:143:5:143:9
 TYPE REDECLARED - associated_items_complete_all_patterns.md:145:5:155:6
-UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:157:8:157:30
+NAME NOT IN SCOPE - associated_items_complete_all_patterns.md:157:8:157:30
 TYPE REDECLARED - associated_items_complete_all_patterns.md:160:5:170:6
 DUPLICATE DEFINITION - associated_items_complete_all_patterns.md:172:5:172:9
-UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:174:8:174:24
+NAME NOT IN SCOPE - associated_items_complete_all_patterns.md:174:8:174:24
 DUPLICATE DEFINITION - associated_items_complete_all_patterns.md:177:5:177:9
 TYPE REDECLARED - associated_items_complete_all_patterns.md:179:5:189:6
-UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:191:8:191:22
+NAME NOT IN SCOPE - associated_items_complete_all_patterns.md:191:8:191:22
 TYPE REDECLARED - associated_items_complete_all_patterns.md:194:5:201:6
-UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:203:8:203:26
+NAME NOT IN SCOPE - associated_items_complete_all_patterns.md:203:8:203:26
 TYPE REDECLARED - associated_items_complete_all_patterns.md:206:5:216:6
-UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:218:8:218:26
+NAME NOT IN SCOPE - associated_items_complete_all_patterns.md:218:8:218:26
 TYPE REDECLARED - associated_items_complete_all_patterns.md:221:5:231:6
 DUPLICATE DEFINITION - associated_items_complete_all_patterns.md:233:5:233:9
-UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:235:8:235:26
+NAME NOT IN SCOPE - associated_items_complete_all_patterns.md:235:8:235:26
 TYPE REDECLARED - associated_items_complete_all_patterns.md:238:5:244:6
-UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:246:11:246:17
+NAME NOT IN SCOPE - associated_items_complete_all_patterns.md:246:11:246:17
 TYPE REDECLARED - associated_items_complete_all_patterns.md:250:5:258:6
 TYPE REDECLARED - associated_items_complete_all_patterns.md:262:5:270:6
 TYPE REDECLARED - associated_items_complete_all_patterns.md:274:5:288:6
 DUPLICATE DEFINITION - associated_items_complete_all_patterns.md:290:5:290:9
-UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:292:8:292:30
+NAME NOT IN SCOPE - associated_items_complete_all_patterns.md:292:8:292:30
 DUPLICATE DEFINITION - associated_items_complete_all_patterns.md:295:5:295:9
 TYPE REDECLARED - associated_items_complete_all_patterns.md:297:5:311:6
-UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:313:8:313:30
+NAME NOT IN SCOPE - associated_items_complete_all_patterns.md:313:8:313:30
 DUPLICATE DEFINITION - associated_items_complete_all_patterns.md:316:5:316:9
 TYPE REDECLARED - associated_items_complete_all_patterns.md:318:5:332:6
-UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:334:8:334:26
+NAME NOT IN SCOPE - associated_items_complete_all_patterns.md:334:8:334:26
 TYPE REDECLARED - associated_items_complete_all_patterns.md:337:5:347:6
-UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:349:8:349:26
+NAME NOT IN SCOPE - associated_items_complete_all_patterns.md:349:8:349:26
 TYPE REDECLARED - associated_items_complete_all_patterns.md:352:5:364:6
-UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:366:8:366:26
+NAME NOT IN SCOPE - associated_items_complete_all_patterns.md:366:8:366:26
 TYPE REDECLARED - associated_items_complete_all_patterns.md:369:5:383:6
 DUPLICATE DEFINITION - associated_items_complete_all_patterns.md:385:5:385:9
-UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:387:8:387:22
-UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:388:8:388:22
-UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:389:8:389:22
-UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:390:8:390:22
-UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:391:9:391:23
+NAME NOT IN SCOPE - associated_items_complete_all_patterns.md:387:8:387:22
+NAME NOT IN SCOPE - associated_items_complete_all_patterns.md:388:8:388:22
+NAME NOT IN SCOPE - associated_items_complete_all_patterns.md:389:8:389:22
+NAME NOT IN SCOPE - associated_items_complete_all_patterns.md:390:8:390:22
+NAME NOT IN SCOPE - associated_items_complete_all_patterns.md:391:9:391:23
 TYPE REDECLARED - associated_items_complete_all_patterns.md:394:5:402:6
 DUPLICATE DEFINITION - associated_items_complete_all_patterns.md:404:5:404:8
-UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:404:11:404:22
+NAME NOT IN SCOPE - associated_items_complete_all_patterns.md:404:11:404:22
 TYPE REDECLARED - associated_items_complete_all_patterns.md:408:5:418:6
 TYPE REDECLARED - associated_items_complete_all_patterns.md:422:5:432:6
 TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:1:433:2
@@ -4604,48 +4604,48 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
     This is an unexpected parsing error. Please check your syntax.
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `d1_forward` in this scope. ─────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `d1_forward` in this scope. ──────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  d1_1 = d1_forward.first                                                   │
  │         ‾‾‾‾‾‾‾‾‾‾                                                         │
  └───────────────────────────── associated_items_complete_all_patterns.md:6:8 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `d1_scope` in this scope. ───────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `d1_scope` in this scope. ────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  d1_2 = d1_scope.inner                                                     │
  │         ‾‾‾‾‾‾‾‾                                                           │
  └──────────────────────────── associated_items_complete_all_patterns.md:11:8 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `d2_inner_first` in this scope. ─────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `d2_inner_first` in this scope. ──────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  d2_1 = d2_inner_first.outer_val                                           │
  │         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                     │
  └──────────────────────────── associated_items_complete_all_patterns.md:20:8 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `d2_inner_first` in this scope. ─────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `d2_inner_first` in this scope. ──────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  d2_2 = d2_inner_first.Inner.inner_val                                     │
  │         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                     │
  └──────────────────────────── associated_items_complete_all_patterns.md:21:8 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
 ┌─────────────────┐
@@ -4683,15 +4683,15 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
        └───────────────────── associated_items_complete_all_patterns.md:15:21 ┘
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `d2_outer_val_middle` in this ───────┐
-└┬───────────────────┘  scope.                                                │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `d2_outer_val_middle` in this scope. ─┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  d2_3 = d2_outer_val_middle.Inner.inner_val                                │
  │         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                │
  └──────────────────────────── associated_items_complete_all_patterns.md:30:8 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
 ┌──────────────────────┐
@@ -4709,15 +4709,15 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
        └────────────────────── associated_items_complete_all_patterns.md:28:5 ┘
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `d2_outer_refs_inner` in this ───────┐
-└┬───────────────────┘  scope.                                                │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `d2_outer_refs_inner` in this scope. ─┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  outer_val = d2_outer_refs_inner.Inner.inner_val                           │
  │              ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                           │
  └─────────────────────────── associated_items_complete_all_patterns.md:33:17 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
 ┌─────────────────┐
@@ -4740,15 +4740,15 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
        └────────────────────── associated_items_complete_all_patterns.md:14:5 ┘
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `d2_outer_refs_inner` in this ───────┐
-└┬───────────────────┘  scope.                                                │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `d2_outer_refs_inner` in this scope. ─┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  d2_4 = d2_outer_refs_inner.outer_val                                      │
  │         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                │
  └──────────────────────────── associated_items_complete_all_patterns.md:39:8 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
 ┌─────────────────┐
@@ -4771,70 +4771,70 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
        └────────────────────── associated_items_complete_all_patterns.md:14:5 ┘
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `inner_private` in this scope. ──────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `inner_private` in this scope. ───────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  outer_trying_inner = inner_private                                        │
  │                       ‾‾‾‾‾‾‾‾‾‾‾‾‾                                        │
  └─────────────────────────── associated_items_complete_all_patterns.md:46:26 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `d2_siblings` in this scope. ────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `d2_siblings` in this scope. ─────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  valA = d2_siblings.InnerB.valB + 1                                        │
  │         ‾‾‾‾‾‾‾‾‾‾‾                                                        │
  └─────────────────────────── associated_items_complete_all_patterns.md:51:16 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `d2_siblings` in this scope. ────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `d2_siblings` in this scope. ─────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  d2_5 = d2_siblings.InnerA.valA                                            │
  │         ‾‾‾‾‾‾‾‾‾‾‾                                                        │
  └──────────────────────────── associated_items_complete_all_patterns.md:58:8 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `d3_types_then_vals` in this scope. ─┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `d3_types_then_vals` in this scope. ──┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  d3_1 = d3_types_then_vals.val1                                            │
  │         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                 │
  └──────────────────────────── associated_items_complete_all_patterns.md:71:8 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `d3_types_then_vals` in this scope. ─┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `d3_types_then_vals` in this scope. ──┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  d3_2 = d3_types_then_vals.L2.val2                                         │
  │         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                 │
  └──────────────────────────── associated_items_complete_all_patterns.md:72:8 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `d3_types_then_vals` in this scope. ─┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `d3_types_then_vals` in this scope. ──┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  d3_3 = d3_types_then_vals.L2.L3.val3                                      │
  │         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                 │
  └──────────────────────────── associated_items_complete_all_patterns.md:73:8 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
 ┌──────────────────────┐
@@ -4880,37 +4880,37 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
        └────────────────────── associated_items_complete_all_patterns.md:61:5 ┘
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `d3_vals_then_types` in this scope. ─┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `d3_vals_then_types` in this scope. ──┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  d3_4 = d3_vals_then_types.val1                                            │
  │         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                 │
  └──────────────────────────── associated_items_complete_all_patterns.md:86:8 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `d3_vals_then_types` in this scope. ─┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `d3_vals_then_types` in this scope. ──┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  d3_5 = d3_vals_then_types.L2.val2                                         │
  │         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                 │
  └──────────────────────────── associated_items_complete_all_patterns.md:87:8 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `d3_vals_then_types` in this scope. ─┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `d3_vals_then_types` in this scope. ──┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  d3_6 = d3_vals_then_types.L2.L3.val3                                      │
  │         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                 │
  └──────────────────────────── associated_items_complete_all_patterns.md:88:8 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
 ┌─────────────────┐
@@ -4939,15 +4939,15 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
        └────────────────────── associated_items_complete_all_patterns.md:61:5 ┘
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `l3_private` in this scope. ─────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `l3_private` in this scope. ──────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  bad_l1 = l3_private                                                       │
  │           ‾‾‾‾‾‾‾‾‾‾                                                       │
  └─────────────────────────── associated_items_complete_all_patterns.md:97:14 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
 ┌─────────────────┐
@@ -5021,37 +5021,37 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
        └────────────────────── associated_items_complete_all_patterns.md:76:5 ┘
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `d3_val_after_nested` in this ───────┐
-└┬───────────────────┘  scope.                                                │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `d3_val_after_nested` in this scope. ─┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  d3_7 = d3_val_after_nested.val1                                           │
  │         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                │
  └─────────────────────────── associated_items_complete_all_patterns.md:121:8 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `d3_val_after_nested` in this ───────┐
-└┬───────────────────┘  scope.                                                │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `d3_val_after_nested` in this scope. ─┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  d3_8 = d3_val_after_nested.L2.val2                                        │
  │         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                │
  └─────────────────────────── associated_items_complete_all_patterns.md:122:8 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `d3_val_after_nested` in this ───────┐
-└┬───────────────────┘  scope.                                                │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `d3_val_after_nested` in this scope. ─┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  d3_9 = d3_val_after_nested.L2.L3.val3                                     │
  │         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                │
  └─────────────────────────── associated_items_complete_all_patterns.md:123:8 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
 ┌─────────────────┐
@@ -5101,15 +5101,15 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
         └──────────────────── associated_items_complete_all_patterns.md:119:5 ┘
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `d4_all_types_then_vals` in this ────┐
-└┬───────────────────┘  scope.                                                │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `d4_all_types_then_vals` in this ─────┐
+└┬──────────────────┘  scope.                                                 │
  │                                                                            │
  │  d4_1 = d4_all_types_then_vals.L2.L3.L4.val4                               │
  │         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                             │
  └─────────────────────────── associated_items_complete_all_patterns.md:140:8 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
 ┌──────────────────────┐
@@ -5159,15 +5159,15 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
        └────────────────────── associated_items_complete_all_patterns.md:61:5 ┘
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `d4_all_vals_then_types` in this ────┐
-└┬───────────────────┘  scope.                                                │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `d4_all_vals_then_types` in this ─────┐
+└┬──────────────────┘  scope.                                                 │
  │                                                                            │
  │  d4_2 = d4_all_vals_then_types.L2.L3.L4.val4                               │
  │         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                             │
  └─────────────────────────── associated_items_complete_all_patterns.md:157:8 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
 ┌─────────────────┐
@@ -5217,15 +5217,15 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
         └──────────────────── associated_items_complete_all_patterns.md:143:5 ┘
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `d4_reverse_types` in this scope. ───┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `d4_reverse_types` in this scope. ────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  d4_3 = d4_reverse_types.L2.L3.L4.val4                                     │
  │         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                   │
  └─────────────────────────── associated_items_complete_all_patterns.md:174:8 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
 ┌──────────────────────┐
@@ -5275,15 +5275,15 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
        └────────────────────── associated_items_complete_all_patterns.md:61:5 ┘
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `d4_interleaved` in this scope. ─────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `d4_interleaved` in this scope. ──────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  d4_4 = d4_interleaved.L2.L3.L4.val4                                       │
  │         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                     │
  └─────────────────────────── associated_items_complete_all_patterns.md:191:8 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
 ┌─────────────────┐
@@ -5315,15 +5315,15 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
        └────────────────────── associated_items_complete_all_patterns.md:61:5 ┘
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `d4_l3_val_after_l4` in this scope. ─┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `d4_l3_val_after_l4` in this scope. ──┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  d4_5 = d4_l3_val_after_l4.L2.L3.L4.val4                                   │
  │         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                 │
  └─────────────────────────── associated_items_complete_all_patterns.md:203:8 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
 ┌─────────────────┐
@@ -5358,15 +5358,15 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
        └────────────────────── associated_items_complete_all_patterns.md:61:5 ┘
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `d4_l2_val_after_l3` in this scope. ─┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `d4_l2_val_after_l3` in this scope. ──┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  d4_6 = d4_l2_val_after_l3.L2.L3.L4.val4                                   │
  │         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                 │
  └─────────────────────────── associated_items_complete_all_patterns.md:218:8 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
 ┌─────────────────┐
@@ -5416,15 +5416,15 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
         └──────────────────── associated_items_complete_all_patterns.md:177:5 ┘
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `d4_l1_val_after_l2` in this scope. ─┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `d4_l1_val_after_l2` in this scope. ──┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  d4_7 = d4_l1_val_after_l2.L2.L3.L4.val4                                   │
  │         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                 │
  └─────────────────────────── associated_items_complete_all_patterns.md:235:8 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
 ┌─────────────────┐
@@ -5455,15 +5455,15 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
        └────────────────────── associated_items_complete_all_patterns.md:61:5 ┘
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `l4_val` in this scope. ─────────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `l4_val` in this scope. ──────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  bad = l4_val                                                              │
  │        ‾‾‾‾‾‾                                                              │
  └────────────────────────── associated_items_complete_all_patterns.md:246:11 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
 ┌─────────────────┐
@@ -5577,15 +5577,15 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
         └──────────────────── associated_items_complete_all_patterns.md:233:5 ┘
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `d5_all_types_then_vals` in this ────┐
-└┬───────────────────┘  scope.                                                │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `d5_all_types_then_vals` in this ─────┐
+└┬──────────────────┘  scope.                                                 │
  │                                                                            │
  │  d5_1 = d5_all_types_then_vals.L2.L3.L4.L5.val5                            │
  │         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                             │
  └─────────────────────────── associated_items_complete_all_patterns.md:292:8 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
 ┌──────────────────────┐
@@ -5639,15 +5639,15 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
        └────────────────────── associated_items_complete_all_patterns.md:61:5 ┘
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `d5_all_vals_then_types` in this ────┐
-└┬───────────────────┘  scope.                                                │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `d5_all_vals_then_types` in this ─────┐
+└┬──────────────────┘  scope.                                                 │
  │                                                                            │
  │  d5_2 = d5_all_vals_then_types.L2.L3.L4.L5.val5                            │
  │         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                             │
  └─────────────────────────── associated_items_complete_all_patterns.md:313:8 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
 ┌──────────────────────┐
@@ -5701,15 +5701,15 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
        └────────────────────── associated_items_complete_all_patterns.md:61:5 ┘
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `d5_deep_interleave` in this scope. ─┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `d5_deep_interleave` in this scope. ──┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  d5_3 = d5_deep_interleave.L2.L3.L4.L5.val5                                │
  │         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                 │
  └─────────────────────────── associated_items_complete_all_patterns.md:334:8 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
 ┌─────────────────┐
@@ -5744,15 +5744,15 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
        └────────────────────── associated_items_complete_all_patterns.md:61:5 ┘
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `d5_l4_val_after_l5` in this scope. ─┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `d5_l4_val_after_l5` in this scope. ──┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  d5_4 = d5_l4_val_after_l5.L2.L3.L4.L5.val5                                │
  │         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                 │
  └─────────────────────────── associated_items_complete_all_patterns.md:349:8 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
 ┌─────────────────┐
@@ -5789,15 +5789,15 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
        └────────────────────── associated_items_complete_all_patterns.md:61:5 ┘
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `d5_l3_val_after_l4` in this scope. ─┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `d5_l3_val_after_l4` in this scope. ──┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  d5_5 = d5_l3_val_after_l4.L2.L3.L4.L5.val5                                │
  │         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                 │
  └─────────────────────────── associated_items_complete_all_patterns.md:366:8 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
 ┌─────────────────┐
@@ -5851,59 +5851,59 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
         └──────────────────── associated_items_complete_all_patterns.md:316:5 ┘
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `d5_l1_val_last` in this scope. ─────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `d5_l1_val_last` in this scope. ──────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  d5_6 = d5_l1_val_last.val1                                                │
  │         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                     │
  └─────────────────────────── associated_items_complete_all_patterns.md:387:8 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `d5_l1_val_last` in this scope. ─────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `d5_l1_val_last` in this scope. ──────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  d5_7 = d5_l1_val_last.L2.val2                                             │
  │         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                     │
  └─────────────────────────── associated_items_complete_all_patterns.md:388:8 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `d5_l1_val_last` in this scope. ─────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `d5_l1_val_last` in this scope. ──────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  d5_8 = d5_l1_val_last.L2.L3.val3                                          │
  │         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                     │
  └─────────────────────────── associated_items_complete_all_patterns.md:389:8 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `d5_l1_val_last` in this scope. ─────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `d5_l1_val_last` in this scope. ──────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  d5_9 = d5_l1_val_last.L2.L3.L4.val4                                       │
  │         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                     │
  └─────────────────────────── associated_items_complete_all_patterns.md:390:8 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `d5_l1_val_last` in this scope. ─────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `d5_l1_val_last` in this scope. ──────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  d5_10 = d5_l1_val_last.L2.L3.L4.L5.val5                                   │
  │          ‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                    │
  └─────────────────────────── associated_items_complete_all_patterns.md:391:9 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
 ┌─────────────────┐
@@ -5951,15 +5951,15 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
         └──────────────────── associated_items_complete_all_patterns.md:246:5 ┘
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `deep_secret` in this scope. ────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `deep_secret` in this scope. ─────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  bad = deep_secret                                                         │
  │        ‾‾‾‾‾‾‾‾‾‾‾                                                         │
  └────────────────────────── associated_items_complete_all_patterns.md:404:11 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
 ┌─────────────────┐

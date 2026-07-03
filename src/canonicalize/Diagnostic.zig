@@ -643,16 +643,12 @@ pub const Diagnostic = union(enum) {
         source: []const u8,
         line_starts: []const u32,
     ) Allocator.Error!Report {
-        var report = try Report.init(allocator, "Undefined Variable", "", .runtime_error);
+        var report = try Report.init(allocator, "Name Not In Scope", "", .runtime_error);
         const owned_ident = try report.addOwnedString(ident_name);
         try report.headline.addReflowingText("Nothing is named ");
         try report.headline.addUnqualifiedSymbol(owned_ident);
         try report.headline.addReflowingText(" in this scope.");
-        try report.document.addReflowingText("Is there an ");
-        try report.document.addKeyword("import");
-        try report.document.addReflowingText(" or ");
-        try report.document.addKeyword("exposing");
-        try report.document.addReflowingText(" missing up-top?");
+        try report.document.addReflowingText("Is it misspelled, or is there an import missing?");
 
         // Check for common misspellings and add a tip if found
         if (reporting.CommonMisspellings.getIdentifierTip(ident_name)) |tip| {

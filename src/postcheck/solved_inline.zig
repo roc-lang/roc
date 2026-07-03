@@ -209,9 +209,10 @@ const WrapperAnalyzer = struct {
             .frac_f64_lit,
             .dec_lit,
             .str_lit,
+            .bytes_lit,
             .def_ref,
             => true,
-            .fn_ref => |fn_ref| self.exprSpanReadsOnlyArgs(fn_ref.captures, args),
+            .fn_ref => |fn_ref| self.captureOperandSpanReadsOnlyArgs(fn_ref.captures, args),
             .list,
             .tuple,
             => |items| self.exprSpanReadsOnlyArgs(items, args),
@@ -232,7 +233,7 @@ const WrapperAnalyzer = struct {
             .call_value => |call| self.exprReadsOnlyArgs(call.callee, args) and self.exprSpanReadsOnlyArgs(call.args, args),
             .call_proc => |call| !call.is_cold and
                 self.exprSpanReadsOnlyArgs(call.args, args) and
-                self.exprSpanReadsOnlyArgs(call.captures, args),
+                self.captureOperandSpanReadsOnlyArgs(call.captures, args),
             .low_level => |call| self.exprSpanReadsOnlyArgs(call.args, args),
             .field_access => |field| self.exprReadsOnlyArgs(field.receiver, args),
             .tuple_access => |access| self.exprReadsOnlyArgs(access.tuple, args),
@@ -261,6 +262,13 @@ const WrapperAnalyzer = struct {
     fn exprSpanReadsOnlyArgs(self: *const WrapperAnalyzer, span: Lifted.Span(Lifted.ExprId), args: []const Lifted.TypedLocal) bool {
         for (self.solved.lifted.exprSpan(span)) |expr| {
             if (!self.exprReadsOnlyArgs(expr, args)) return false;
+        }
+        return true;
+    }
+
+    fn captureOperandSpanReadsOnlyArgs(self: *const WrapperAnalyzer, span: Lifted.Span(Lifted.CaptureOperand), args: []const Lifted.TypedLocal) bool {
+        for (self.solved.lifted.captureOperandSpan(span)) |operand| {
+            if (!self.exprReadsOnlyArgs(operand.value, args)) return false;
         }
         return true;
     }
@@ -296,9 +304,10 @@ const WrapperAnalyzer = struct {
             .frac_f64_lit,
             .dec_lit,
             .str_lit,
+            .bytes_lit,
             .def_ref,
             => {},
-            .fn_ref => |fn_ref| try self.visitSpanCallees(fn_ref.captures),
+            .fn_ref => |fn_ref| try self.visitCaptureOperandSpanCallees(fn_ref.captures),
             .list,
             .tuple,
             => |items| try self.visitSpanCallees(items),
@@ -324,7 +333,7 @@ const WrapperAnalyzer = struct {
                     _ = try self.inlineBody(callee);
                 }
                 try self.visitSpanCallees(call.args);
-                try self.visitSpanCallees(call.captures);
+                try self.visitCaptureOperandSpanCallees(call.captures);
             },
             .low_level => |call| try self.visitSpanCallees(call.args),
             .field_access => |field| try self.visitBodyCallees(field.receiver),
@@ -360,6 +369,12 @@ const WrapperAnalyzer = struct {
     fn visitSpanCallees(self: *WrapperAnalyzer, span: Lifted.Span(Lifted.ExprId)) std.mem.Allocator.Error!void {
         for (self.solved.lifted.exprSpan(span)) |child| {
             try self.visitBodyCallees(child);
+        }
+    }
+
+    fn visitCaptureOperandSpanCallees(self: *WrapperAnalyzer, span: Lifted.Span(Lifted.CaptureOperand)) std.mem.Allocator.Error!void {
+        for (self.solved.lifted.captureOperandSpan(span)) |operand| {
+            try self.visitBodyCallees(operand.value);
         }
     }
 

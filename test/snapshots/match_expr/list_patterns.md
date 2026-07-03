@@ -13,8 +13,8 @@ match numbers {
 ~~~
 # EXPECTED
 BAD LIST REST PATTERN SYNTAX - list_patterns.md:3:13:3:19
-UNDEFINED VARIABLE - list_patterns.md:1:7:1:14
-UNDEFINED VARIABLE - list_patterns.md:2:11:2:14
+NAME NOT IN SCOPE - list_patterns.md:1:7:1:14
+NAME NOT IN SCOPE - list_patterns.md:2:11:2:14
 UNUSED VARIABLE - list_patterns.md:3:6:3:11
 UNUSED VARIABLE - list_patterns.md:3:15:3:15
 # PROBLEMS
@@ -30,26 +30,26 @@ UNUSED VARIABLE - list_patterns.md:3:15:3:15
     For example, use `[first, .. as rest]` instead of `[first, ..rest]`.
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `numbers` in this scope. ────────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `numbers` in this scope. ─────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  match numbers {                                                           │
  │        ‾‾‾‾‾‾‾                                                             │
  └────────────────────────────────────────────────────── list_patterns.md:1:7 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `acc` in this scope. ────────────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `acc` in this scope. ─────────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  [] => acc                                                                 │
  │        ‾‾‾                                                                 │
  └───────────────────────────────────────────────────── list_patterns.md:2:11 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
 ┌─────────────────┐

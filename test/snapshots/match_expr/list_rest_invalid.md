@@ -16,7 +16,7 @@ match items {
 BAD LIST REST PATTERN SYNTAX - list_rest_invalid.md:2:13:2:19
 BAD LIST REST PATTERN SYNTAX - list_rest_invalid.md:3:6:3:12
 BAD LIST REST PATTERN SYNTAX - list_rest_invalid.md:4:9:4:15
-UNDEFINED VARIABLE - list_rest_invalid.md:1:7:1:12
+NAME NOT IN SCOPE - list_rest_invalid.md:1:7:1:12
 UNUSED VARIABLE - list_rest_invalid.md:2:6:2:11
 UNUSED VARIABLE - list_rest_invalid.md:2:15:2:15
 UNUSED VARIABLE - list_rest_invalid.md:3:8:3:8
@@ -59,15 +59,15 @@ UNUSED VARIABLE - list_rest_invalid.md:4:17:4:18
     For example, use `[first, .. as rest]` instead of `[first, ..rest]`.
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `items` in this scope. ──────────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `items` in this scope. ───────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  match items {                                                             │
  │        ‾‾‾‾‾                                                               │
  └────────────────────────────────────────────────── list_rest_invalid.md:1:7 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
 ┌─────────────────┐

@@ -259,7 +259,11 @@ pub const Local = struct {
     symbol: Common.Symbol,
     ty: Type.TypeId,
     binder: ?checked.PatternBinderId = null,
-    capture_id: ?u32 = null,
+    /// Exact identity of this local as a closure capture, carried
+    /// immutably through every post-check IR. Non-null for a captured binding
+    /// (binder-derived) and for a compiler-synthesized
+    /// capturable local (generated).
+    capture_id: ?checked.CaptureId = null,
 };
 
 /// Local id paired with its monomorphic type.
@@ -293,12 +297,23 @@ pub const CallValue = struct {
     args: Span(ExprId),
 };
 
+/// One explicit capture operand supplied at a lifted function reference /
+/// direct call site. `id` is the `CaptureId` of the target function's capture
+/// slot this operand fills; `value` is the expression that supplies it. Operand
+/// spans are stored sorted by `id`, parallel to the target's canonically-sorted
+/// capture slots, so every operand↔slot join is an exact keyed lookup with no
+/// load-bearing order.
+pub const CaptureOperand = struct {
+    id: checked.CaptureId,
+    value: ExprId,
+};
+
 /// Reference to a lifted function value. `captures` contains the explicit
-/// values used to build the callable payload, parallel to that function's
-/// lifted capture span.
+/// operands used to build the callable payload, keyed by `CaptureId` and sorted
+/// to match that function's canonically-sorted capture slots.
 pub const LiftedFunctionValue = struct {
     fn_id: LiftedFnId,
-    captures: Span(ExprId) = Span(ExprId).empty(),
+    captures: Span(CaptureOperand) = Span(CaptureOperand).empty(),
 };
 
 /// Explicit operand for one checked closure capture before lifting. The `local`
@@ -344,10 +359,10 @@ pub fn importedProcCallee(imported: ImportedFnId) ProcCallee {
 pub const CallProc = struct {
     callee: ProcCallee,
     args: Span(ExprId),
-    /// Explicit values for the callee's lifted captures, parallel to that
-    /// callee's capture span. Empty before Monotype lifting has resolved direct
-    /// call targets.
-    captures: Span(ExprId) = Span(ExprId).empty(),
+    /// Explicit operands for the callee's lifted captures, keyed by `CaptureId`
+    /// and sorted to match that callee's canonically-sorted capture slots. Empty
+    /// before Monotype lifting has resolved direct call targets.
+    captures: Span(CaptureOperand) = Span(CaptureOperand).empty(),
     /// This direct call is on an explicitly generated cold path. Later stages
     /// may use this to avoid inlining and to attach backend cold-call metadata;
     /// they must not infer coldness from callee names or source paths.
@@ -474,6 +489,7 @@ pub const ExprData = union(enum(u8)) {
     frac_f64_lit: f64,
     dec_lit: builtins.dec.RocDec,
     str_lit: StringLiteralId,
+    bytes_lit: StringLiteralId,
     list: Span(ExprId),
     tuple: Span(ExprId),
     record: Span(FieldExpr),
@@ -795,6 +811,7 @@ pub const ProgramView = struct {
     stmt_ids: []const StmtId,
     field_exprs: []const FieldExpr,
     fn_def_captures: []const FnDefCapture,
+    capture_operands: []const CaptureOperand,
     record_destructs: []const RecordDestruct,
     str_pattern_steps: []const StrPatternStep,
     branches: []const Branch,
@@ -952,6 +969,9 @@ pub const ProgramBuilder = struct {
     stmt_ids: std.ArrayList(StmtId),
     field_exprs: std.ArrayList(FieldExpr),
     fn_def_captures: std.ArrayList(FnDefCapture),
+    /// Backing pool for lifted `Span(CaptureOperand)` capture operand spans.
+    /// Empty in the pre-lift Monotype program (populated by closure lifting).
+    capture_operands: std.ArrayList(CaptureOperand),
     record_destructs: std.ArrayList(RecordDestruct),
     str_pattern_steps: std.ArrayList(StrPatternStep),
     branches: std.ArrayList(Branch),
@@ -1004,6 +1024,7 @@ pub const ProgramBuilder = struct {
             .stmt_ids = .empty,
             .field_exprs = .empty,
             .fn_def_captures = .empty,
+            .capture_operands = .empty,
             .record_destructs = .empty,
             .str_pattern_steps = .empty,
             .branches = .empty,
@@ -1051,6 +1072,7 @@ pub const ProgramBuilder = struct {
         self.str_pattern_steps.deinit(self.allocator);
         self.record_destructs.deinit(self.allocator);
         self.fn_def_captures.deinit(self.allocator);
+        self.capture_operands.deinit(self.allocator);
         self.field_exprs.deinit(self.allocator);
         self.stmt_ids.deinit(self.allocator);
         self.typed_locals.deinit(self.allocator);
@@ -1118,6 +1140,7 @@ pub const ProgramBuilder = struct {
             .stmt_ids = self.stmt_ids.items,
             .field_exprs = self.field_exprs.items,
             .fn_def_captures = self.fn_def_captures.items,
+            .capture_operands = self.capture_operands.items,
             .record_destructs = self.record_destructs.items,
             .str_pattern_steps = self.str_pattern_steps.items,
             .branches = self.branches.items,
@@ -1262,13 +1285,24 @@ pub const ProgramBuilder = struct {
         binder: ?checked.PatternBinderId,
     ) std.mem.Allocator.Error!LocalId {
         const id: LocalId = @enumFromInt(@as(u32, @intCast(self.locals.items.len)));
-        try self.locals.append(self.allocator, .{ .id = id, .symbol = symbol, .ty = ty, .binder = binder });
+        try self.locals.append(self.allocator, .{
+            .id = id,
+            .symbol = symbol,
+            .ty = ty,
+            .binder = binder,
+            // A binder-backed local carries the exact capture identity of
+            // its binding, so any function that captures it joins by CaptureId.
+            .capture_id = if (binder) |b| checked.CaptureId.fromBinder(b) else null,
+        });
         try self.local_names.append(self.allocator, "");
         return id;
     }
 
+    /// Assign a generated capture identity to a synthesized capturable local.
+    /// `capture_id` is the per-owner generated index; it is stored in the
+    /// generated range of `CaptureId`.
     pub fn setLocalCaptureId(self: *ProgramBuilder, id: LocalId, capture_id: u32) void {
-        self.locals.items[@intFromEnum(id)].capture_id = capture_id;
+        self.locals.items[@intFromEnum(id)].capture_id = checked.CaptureId.generatedCheck(capture_id);
     }
 
     /// Record the source-level name of a local (dupes; empty means none).
@@ -1379,6 +1413,23 @@ pub const ProgramBuilder = struct {
 
     pub fn fnDefCaptureSpan(self: *const ProgramBuilder, span_: Span(FnDefCapture)) []const FnDefCapture {
         return self.fn_def_captures.items[span_.start..][0..span_.len];
+    }
+
+    pub fn addCaptureOperandSpan(self: *ProgramBuilder, values: []const CaptureOperand) std.mem.Allocator.Error!Span(CaptureOperand) {
+        const start: u32 = @intCast(self.capture_operands.items.len);
+        try self.capture_operands.appendSlice(self.allocator, values);
+        return .{ .start = start, .len = @intCast(values.len) };
+    }
+
+    pub fn captureOperandSpan(self: *const ProgramBuilder, span_: Span(CaptureOperand)) []const CaptureOperand {
+        return self.capture_operands.items[span_.start..][0..span_.len];
+    }
+
+    /// The CaptureId of a local. Every local that participates in a capture set
+    /// carries one; asserts it is present.
+    pub fn captureIdOfLocal(self: *const ProgramBuilder, id: LocalId) checked.CaptureId {
+        return self.locals.items[@intFromEnum(id)].capture_id orelse
+            Common.invariant("Monotype capture local had no CaptureId");
     }
 
     pub fn recordDestructSpan(self: *const ProgramBuilder, span_: Span(RecordDestruct)) []const RecordDestruct {

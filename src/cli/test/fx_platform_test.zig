@@ -451,6 +451,13 @@ test "fx platform expect with numeric literal (dev backend)" {
     try testRocTestSinglePass("--opt=dev", "test/fx/expect_with_literal.roc");
 }
 
+test "fx platform byte-list file import finalizes bytes correctly" {
+    // Repro for https://github.com/roc-lang/roc/issues/9866: importing a
+    // source-relative file as List(U8) should produce a byte list with the
+    // imported file length during compile-time finalization.
+    try testRocTestSinglePass("--opt=dev", "test/fx/file_import_bytes_check_crash.roc");
+}
+
 test "fx platform match returning string" {
     // Tests that match expressions with string returns work correctly
     const allocator = testing.allocator;
@@ -600,7 +607,7 @@ test "fx platform check unused state var reports correct errors" {
     // We should NOT get MODULE NOT FOUND or EXPOSED BUT NOT DEFINED errors
     // (those were the extraneous errors this test was created to catch)
     //
-    // Note: There are other errors (TYPE MISMATCH, UNDEFINED VARIABLE for main!,
+    // Note: There are other errors (TYPE MISMATCH, NAME NOT IN SCOPE for main!,
     // COMPTIME CRASH) that are pre-existing bugs related to platform/app interaction
     // and should be fixed separately.
     var test_passed = true;
@@ -686,8 +693,8 @@ test "custom platform and package qualifiers work in default roc command" {
     defer allocator.free(run_result.stdout);
     defer allocator.free(run_result.stderr);
 
-    // Check for undefined variable errors which would indicate qualifier mismatch
-    if (std.mem.find(u8, run_result.stderr, "UNDEFINED VARIABLE") != null) {
+    // Check for name-not-in-scope errors which would indicate qualifier mismatch
+    if (std.mem.find(u8, run_result.stderr, "NAME NOT IN SCOPE") != null) {
         std.debug.print("\n❌ Custom qualifiers not recognized\n", .{});
         std.debug.print("This indicates the qualifiers were not correctly extracted from the app header.\n", .{});
         std.debug.print("\n========== FULL OUTPUT ==========\n", .{});
@@ -1038,7 +1045,7 @@ test "run aborts on type errors by default" {
     try util.checkFailure(run_result);
 
     // Should show the errors
-    try testing.expect(std.mem.find(u8, run_result.stderr, "UNDEFINED VARIABLE") != null);
+    try testing.expect(std.mem.find(u8, run_result.stderr, "NAME NOT IN SCOPE") != null);
 }
 
 test "run aborts on parse errors by default" {
@@ -1072,7 +1079,7 @@ test "run with --allow-errors attempts execution despite type errors" {
     defer allocator.free(run_result.stderr);
 
     // Should still show the errors
-    try testing.expect(std.mem.find(u8, run_result.stderr, "UNDEFINED VARIABLE") != null);
+    try testing.expect(std.mem.find(u8, run_result.stderr, "NAME NOT IN SCOPE") != null);
 
     // The program will attempt to run and likely crash, which is expected behavior
     // We just verify it didn't abort during type checking

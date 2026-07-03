@@ -8,18 +8,18 @@ type=snippet
 a=0->b .c()
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - formatter_idempotence_issue_8851_comment3.md:1:6:1:7
+NAME NOT IN SCOPE - formatter_idempotence_issue_8851_comment3.md:1:6:1:7
 # PROBLEMS
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `b` in this scope. ──────────────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `b` in this scope. ───────────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  a=0->b .c()                                                               │
  │       ‾                                                                    │
  └────────────────────────── formatter_idempotence_issue_8851_comment3.md:1:6 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 # TOKENS
 ~~~zig

@@ -42,6 +42,8 @@ pub const ComptimeSite = Mono.ComptimeSite;
 pub const FieldExpr = Mono.FieldExpr;
 /// Keyed pre-lift function capture operand.
 pub const FnDefCapture = Mono.FnDefCapture;
+/// Keyed lifted capture operand (CaptureId + supplying expression).
+pub const CaptureOperand = Mono.CaptureOperand;
 /// Record destructuring field pattern.
 pub const RecordDestruct = Mono.RecordDestruct;
 /// Compiler-generated initialized-payload switch shared with Monotype IR.
@@ -137,6 +139,7 @@ pub const ProgramView = struct {
     typed_locals: []const TypedLocal,
     stmt_ids: []const StmtId,
     field_exprs: []const FieldExpr,
+    capture_operands: []const CaptureOperand,
     record_destructs: []const RecordDestruct,
     str_pattern_steps: []const Mono.StrPatternStep,
     branches: []const Branch,
@@ -182,6 +185,13 @@ pub const ProgramView = struct {
         return self.local_names[@intFromEnum(id)];
     }
 
+    /// The CaptureId of a local. Every local that participates in a capture set
+    /// carries one; asserts it is present.
+    pub fn captureIdOfLocal(self: ProgramView, id: LocalId) check.CheckedModule.CaptureId {
+        return self.locals[@intFromEnum(id)].capture_id orelse
+            Common.invariant("lifted capture local had no CaptureId");
+    }
+
     pub fn exprSpan(self: ProgramView, span_: Span(ExprId)) []const ExprId {
         return self.expr_ids[span_.start..][0..span_.len];
     }
@@ -192,6 +202,10 @@ pub const ProgramView = struct {
 
     pub fn typedLocalSpan(self: ProgramView, span_: Span(TypedLocal)) []const TypedLocal {
         return self.typed_locals[span_.start..][0..span_.len];
+    }
+
+    pub fn captureOperandSpan(self: ProgramView, span_: Span(CaptureOperand)) []const CaptureOperand {
+        return self.capture_operands[span_.start..][0..span_.len];
     }
 
     pub fn stmtSpan(self: ProgramView, span_: Span(StmtId)) []const StmtId {
@@ -349,12 +363,17 @@ pub const Program = struct {
     stmt_ids: std.ArrayList(StmtId),
     field_exprs: std.ArrayList(FieldExpr),
     fn_def_captures: std.ArrayList(FnDefCapture),
+    /// Backing pool for `Span(CaptureOperand)` capture operand spans on lifted
+    /// `fn_ref`/`call_proc` nodes.
+    capture_operands: std.ArrayList(CaptureOperand),
     record_destructs: std.ArrayList(RecordDestruct),
     str_pattern_steps: std.ArrayList(Mono.StrPatternStep),
     branches: std.ArrayList(Branch),
     if_branches: std.ArrayList(IfBranch),
     string_literals: std.ArrayList(Mono.StringLiteral),
     proc_debug_names: ProcDebugNameMap,
+    /// Next generated `CaptureId` index for a lift-synthesized capturable local.
+    next_lift_capture_id: u32,
     roots: std.ArrayList(Root),
     layout_requests: std.ArrayList(LayoutRequest),
     runtime_schema_requests: std.ArrayList(RuntimeSchemaRequest),
@@ -425,12 +444,14 @@ pub const Program = struct {
             .stmt_ids = stmt_ids,
             .field_exprs = field_exprs,
             .fn_def_captures = fn_def_captures,
+            .capture_operands = .empty,
             .record_destructs = record_destructs,
             .str_pattern_steps = str_pattern_steps,
             .branches = branches,
             .if_branches = if_branches,
             .string_literals = string_literals,
             .proc_debug_names = proc_debug_names,
+            .next_lift_capture_id = 0,
             .roots = .empty,
             .layout_requests = .empty,
             .runtime_schema_requests = .empty,
@@ -472,6 +493,7 @@ pub const Program = struct {
         self.str_pattern_steps.deinit(self.allocator);
         self.record_destructs.deinit(self.allocator);
         self.fn_def_captures.deinit(self.allocator);
+        self.capture_operands.deinit(self.allocator);
         self.field_exprs.deinit(self.allocator);
         self.stmt_ids.deinit(self.allocator);
         self.typed_locals.deinit(self.allocator);
@@ -503,6 +525,7 @@ pub const Program = struct {
             .typed_locals = self.typed_locals.items,
             .stmt_ids = self.stmt_ids.items,
             .field_exprs = self.field_exprs.items,
+            .capture_operands = self.capture_operands.items,
             .record_destructs = self.record_destructs.items,
             .str_pattern_steps = self.str_pattern_steps.items,
             .branches = self.branches.items,
@@ -598,9 +621,27 @@ pub const Program = struct {
         binder: ?check.CheckedModule.PatternBinderId,
     ) std.mem.Allocator.Error!LocalId {
         const id: LocalId = @enumFromInt(@as(u32, @intCast(self.locals.items.len)));
-        try self.locals.append(self.allocator, .{ .id = id, .symbol = symbol, .ty = ty, .binder = binder });
+        try self.locals.append(self.allocator, .{
+            .id = id,
+            .symbol = symbol,
+            .ty = ty,
+            .binder = binder,
+            // A binder-backed local carries the exact capture identity of
+            // its binding, so any function that captures it joins by CaptureId.
+            .capture_id = if (binder) |b| check.CheckedModule.CaptureId.fromBinder(b) else null,
+        });
         try self.local_names.append(self.allocator, "");
         return id;
+    }
+
+    /// Allocate the next generated `CaptureId` for a lift-synthesized capturable
+    /// local (a free local with no checked binder). The counter lives on the
+    /// program so the identity is stable across fixpoint rounds and unique
+    /// within the program.
+    pub fn nextLiftCaptureId(self: *Program) check.CheckedModule.CaptureId {
+        const index = self.next_lift_capture_id;
+        self.next_lift_capture_id += 1;
+        return check.CheckedModule.CaptureId.generatedLift(index);
     }
 
     pub fn addTypedLocalSpan(self: *Program, values: []const TypedLocal) std.mem.Allocator.Error!Span(TypedLocal) {
@@ -636,6 +677,12 @@ pub const Program = struct {
     pub fn addFnDefCaptureSpan(self: *Program, values: []const FnDefCapture) std.mem.Allocator.Error!Span(FnDefCapture) {
         const start: u32 = @intCast(self.fn_def_captures.items.len);
         try self.fn_def_captures.appendSlice(self.allocator, values);
+        return .{ .start = start, .len = @intCast(values.len) };
+    }
+
+    pub fn addCaptureOperandSpan(self: *Program, values: []const CaptureOperand) std.mem.Allocator.Error!Span(CaptureOperand) {
+        const start: u32 = @intCast(self.capture_operands.items.len);
+        try self.capture_operands.appendSlice(self.allocator, values);
         return .{ .start = start, .len = @intCast(values.len) };
     }
 
@@ -675,6 +722,13 @@ pub const Program = struct {
         return self.typed_locals.items[span_.start..][0..span_.len];
     }
 
+    /// The CaptureId of a local. Every local that participates in a capture set
+    /// carries one; asserts it is present.
+    pub fn captureIdOfLocal(self: *const Program, id: LocalId) check.CheckedModule.CaptureId {
+        return self.locals.items[@intFromEnum(id)].capture_id orelse
+            Common.invariant("lifted capture local had no CaptureId");
+    }
+
     pub fn stmtSpan(self: *const Program, span_: Span(StmtId)) []const StmtId {
         return self.stmt_ids.items[span_.start..][0..span_.len];
     }
@@ -685,6 +739,10 @@ pub const Program = struct {
 
     pub fn fnDefCaptureSpan(self: *const Program, span_: Span(FnDefCapture)) []const FnDefCapture {
         return self.fn_def_captures.items[span_.start..][0..span_.len];
+    }
+
+    pub fn captureOperandSpan(self: *const Program, span_: Span(CaptureOperand)) []const CaptureOperand {
+        return self.capture_operands.items[span_.start..][0..span_.len];
     }
 
     pub fn recordDestructSpan(self: *const Program, span_: Span(RecordDestruct)) []const RecordDestruct {

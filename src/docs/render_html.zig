@@ -7,10 +7,15 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const DocModel = @import("DocModel.zig");
+const render_markdown = @import("render_markdown.zig");
 const collections = @import("collections");
 const DocType = DocModel.DocType;
 /// Errors that can occur while rendering HTML documentation.
 pub const RenderError = Allocator.Error || std.Io.Dir.CreateDirPathError || std.Io.Dir.OpenError || std.Io.Dir.WriteFileError || std.Io.File.OpenError || std.Io.File.Writer.Error || std.Io.Writer.Error;
+
+/// Synthetic `data-module-name` used for the Language Reference sidebar entry,
+/// chosen so it cannot collide with a real module name.
+const langref_sidebar_id = "__lang_ref__";
 
 // Static assets embedded at compile time
 const embedded_css = @embedFile("static/styles.css");
@@ -56,10 +61,40 @@ const SidebarNode = struct {
     }
 };
 
-/// URL prefix for the published Builtin module documentation, used when the
-/// docs being generated reference builtin types but the Builtin module is not
-/// part of the package being documented.
-const builtins_docs_url_prefix = "https://roc-lang.org/builtins/main/#Builtin.";
+/// Base URL of the published builtin documentation, used when the docs being
+/// generated reference builtin types but the builtins are not part of the
+/// package being documented. Each builtin type is a top-level page here (e.g.
+/// `…/Str`), matching how `reshapeBuiltin` lays the site out.
+const builtins_docs_base_url = "https://roc-lang.org/builtins/main/";
+
+/// Builtin types documented as nested types on another type's page rather than
+/// on their own top-level page, mapped to the owning page. Mirrors the builtins'
+/// structure (the numeric types live under `Num`); an external reference to one
+/// of these resolves to `…/Num#U8`. Types not listed here are assumed to have
+/// their own page. Keep in sync with the builtins.
+const builtin_nested_type_owners = [_]struct { name: []const u8, owner: []const u8 }{
+    .{ .name = "U8", .owner = "Num" },   .{ .name = "U16", .owner = "Num" },
+    .{ .name = "U32", .owner = "Num" },  .{ .name = "U64", .owner = "Num" },
+    .{ .name = "U128", .owner = "Num" }, .{ .name = "I8", .owner = "Num" },
+    .{ .name = "I16", .owner = "Num" },  .{ .name = "I32", .owner = "Num" },
+    .{ .name = "I64", .owner = "Num" },  .{ .name = "I128", .owner = "Num" },
+    .{ .name = "F32", .owner = "Num" },  .{ .name = "F64", .owner = "Num" },
+    .{ .name = "Dec", .owner = "Num" },  .{ .name = "Numeral", .owner = "Num" },
+};
+
+/// Writes the published URL for a builtin type referenced from another package's
+/// docs: `…/Num#U8` for a nested type, `…/Str` for a top-level one.
+fn writeBuiltinTypeUrl(w: Writer, type_name: []const u8) (Allocator.Error || error{WriteFailed})!void {
+    try w.writeAll(builtins_docs_base_url);
+    for (builtin_nested_type_owners) |nested| {
+        if (std.mem.eql(u8, nested.name, type_name)) {
+            try writeHtmlEscaped(w, nested.owner);
+            try w.writeAll("#");
+            break;
+        }
+    }
+    try writeHtmlEscaped(w, type_name);
+}
 
 /// A `[Name]` shorthand reference that resolved to an HTML anchor that does
 /// not correspond to any `id="…"` in the rendered docs site.
@@ -106,6 +141,15 @@ const RenderContext = struct {
     /// True when the package being documented is Builtin itself, so references
     /// to builtin types stay local instead of pointing at roc-lang.org.
     documenting_builtin: bool = false,
+    /// Maps a builtin type's short name to its owning promoted module (e.g.
+    /// "U8" -> "Num", "Utf8Problem" -> "Str"), for the modules reshaped out of
+    /// `Builtin`. Lets a bare `[U8]` shorthand in one type's docs resolve to the
+    /// page that actually documents it. Keys/values are slices into the
+    /// PackageDocs and live for the duration of rendering.
+    builtin_type_owners: std.StringHashMapUnmanaged([]const u8) = .empty,
+    /// Names of the modules promoted out of `Builtin` by `reshapeBuiltin`. These
+    /// use bare anchors (no `<module>.` prefix). Keys are slices into PackageDocs.
+    builtin_modules: std.StringHashMapUnmanaged(void) = .empty,
     /// Every `id="…"` value that will be emitted across all module pages,
     /// computed up front so `writeDocRefHref` can verify each `[Name]`
     /// shorthand resolves to a real anchor. Keys are slices into
@@ -127,6 +171,10 @@ const RenderContext = struct {
     /// `current_source_path`. Used to translate a byte offset within
     /// the doc into a 1-based source line for broken-link diagnostics.
     active_doc: *ActiveDoc,
+    /// The loaded language-reference articles, when `--with-lang-ref` is used.
+    /// When set, a "Language Reference" section is added to the sidebar and the
+    /// articles are rendered as additional pages under `langref/`.
+    langref: ?*const render_markdown.LangRef = null,
 
     pub const ActiveDoc = struct {
         /// Full doc-comment string currently being walked.
@@ -140,9 +188,23 @@ const RenderContext = struct {
         var known = std.StringHashMapUnmanaged(void){};
         errdefer known.deinit(gpa);
         var documenting_builtin = false;
+        var builtin_type_owners = std.StringHashMapUnmanaged([]const u8){};
+        errdefer builtin_type_owners.deinit(gpa);
+        var builtin_modules = std.StringHashMapUnmanaged(void){};
+        errdefer builtin_modules.deinit(gpa);
         for (package_docs.modules) |mod| {
             try known.put(gpa, mod.name, {});
-            if (std.mem.eql(u8, mod.name, "Builtin")) documenting_builtin = true;
+            // A module literally named "Builtin" means we're rendering the
+            // builtins before reshaping; a `builtin_derived` module means the
+            // types have been promoted out of `Builtin`. Either way we're
+            // documenting the builtins, so builtin type refs stay on-site.
+            if (std.mem.eql(u8, mod.name, "Builtin") or mod.builtin_derived) documenting_builtin = true;
+            if (mod.builtin_derived) {
+                try builtin_modules.put(gpa, mod.name, {});
+                for (mod.entries) |*entry| {
+                    try collectBuiltinTypeOwners(&builtin_type_owners, gpa, entry, mod.name);
+                }
+            }
         }
 
         var arena = collections.SingleThreadArena.init(gpa);
@@ -154,7 +216,7 @@ const RenderContext = struct {
             // same-module `[Foo]` writes `#Foo` and a cross-module `[Foo]`
             // navigates to the module page (no fragment).
             try addAnchor(&anchors, gpa, arena.allocator(), mod.name);
-            try collectAnchorsForEntries(&anchors, gpa, arena.allocator(), mod.name, mod.entries, "");
+            try collectAnchorsForEntries(&anchors, gpa, arena.allocator(), mod.name, mod.entries, "", mod.builtin_derived);
         }
 
         const active_doc = try arena.allocator().create(ActiveDoc);
@@ -168,6 +230,8 @@ const RenderContext = struct {
             .current_module = null,
             .current_module_entries = null,
             .documenting_builtin = documenting_builtin,
+            .builtin_type_owners = builtin_type_owners,
+            .builtin_modules = builtin_modules,
             .all_anchors = anchors,
             .anchor_arena = arena,
             .current_source_path = current_source_path,
@@ -178,8 +242,22 @@ const RenderContext = struct {
     fn deinit(self: *RenderContext, gpa: Allocator) void {
         self.current_module_anchors.deinit(gpa);
         self.known_modules.deinit(gpa);
+        self.builtin_type_owners.deinit(gpa);
+        self.builtin_modules.deinit(gpa);
         self.all_anchors.deinit(gpa);
         self.anchor_arena.deinit();
+    }
+
+    /// The promoted module that documents builtin type `head` (e.g. "Num" for
+    /// "U8"), or null when `head` is not a builtin type.
+    fn builtinTypeOwner(self: *const RenderContext, head: []const u8) ?[]const u8 {
+        return self.builtin_type_owners.get(head);
+    }
+
+    /// Whether `module_name` was promoted out of `Builtin` and therefore uses
+    /// bare anchors (no `<module>.` prefix).
+    fn isBuiltinDerived(self: *const RenderContext, module_name: []const u8) bool {
+        return self.builtin_modules.contains(module_name);
     }
 
     /// Record a broken `[Name]` reference. `bracket_offset` is the byte
@@ -306,6 +384,25 @@ fn populateAnchorMap(
     }
 }
 
+/// Record every type (not value) reachable from `entry` as owned by `module`,
+/// keyed by its short name, so a bare `[U8]` reference resolves to the page that
+/// documents it. First-seen wins on short-name collisions.
+fn collectBuiltinTypeOwners(
+    map: *std.StringHashMapUnmanaged([]const u8),
+    gpa: Allocator,
+    entry: *const DocModel.DocEntry,
+    module: []const u8,
+) Allocator.Error!void {
+    if (entry.kind != .value) {
+        const short = if (std.mem.findScalarLast(u8, entry.name, '.')) |d| entry.name[d + 1 ..] else entry.name;
+        const result = try map.getOrPut(gpa, short);
+        if (!result.found_existing) result.value_ptr.* = module;
+    }
+    for (entry.children) |*child| {
+        try collectBuiltinTypeOwners(map, gpa, child, module);
+    }
+}
+
 fn moduleRelativeEntryName(module_name: []const u8, entry_name: []const u8) []const u8 {
     if (std.mem.startsWith(u8, entry_name, module_name) and
         entry_name.len > module_name.len and
@@ -344,6 +441,7 @@ fn collectAnchorsForEntries(
     module_name: []const u8,
     entries: []const DocModel.DocEntry,
     parent_path: []const u8,
+    builtin_derived: bool,
 ) Allocator.Error!void {
     for (entries) |entry| {
         const full_path = if (parent_path.len == 0) blk: {
@@ -353,19 +451,24 @@ fn collectAnchorsForEntries(
             break :blk try std.fmt.allocPrint(arena, "{s}.{s}", .{ module_name, entry.name });
         } else try std.fmt.allocPrint(arena, "{s}.{s}", .{ parent_path, entry.name });
 
-        // Add every dotted prefix of `full_path` as a valid anchor.
-        var i: usize = 0;
-        while (i <= full_path.len) : (i += 1) {
-            if (i == full_path.len or full_path[i] == '.') {
-                const result = try set.getOrPut(gpa, full_path[0..i]);
-                if (!result.found_existing) {
-                    // Key slice points into `full_path`, which lives in `arena`.
-                    result.key_ptr.* = full_path[0..i];
+        // Add every dotted prefix of `full_path` as a valid anchor. For promoted
+        // builtin modules, also add the prefix-stripped form, since their ids and
+        // links are bare (`U8` rather than `Num.U8`).
+        const variants = [_][]const u8{ full_path, if (builtin_derived) moduleRelativeEntryName(module_name, full_path) else full_path };
+        for (variants) |path| {
+            var i: usize = 0;
+            while (i <= path.len) : (i += 1) {
+                if (i == path.len or path[i] == '.') {
+                    const result = try set.getOrPut(gpa, path[0..i]);
+                    if (!result.found_existing) {
+                        // Key slice points into `path`, which lives in `arena`.
+                        result.key_ptr.* = path[0..i];
+                    }
                 }
             }
         }
 
-        try collectAnchorsForEntries(set, gpa, arena, module_name, entry.children, full_path);
+        try collectAnchorsForEntries(set, gpa, arena, module_name, entry.children, full_path, builtin_derived);
     }
 }
 
@@ -389,6 +492,7 @@ pub fn renderPackageDocs(
     package_docs: *const DocModel.PackageDocs,
     output_dir_path: []const u8,
     broken_links_out: ?*std.ArrayListUnmanaged(BrokenLink),
+    langref: ?*const render_markdown.LangRef,
 ) RenderError!void {
     // Ensure the output directory exists
     std.Io.Dir.cwd().createDirPath(io, output_dir_path) catch |err| switch (err) {
@@ -403,6 +507,7 @@ pub fn renderPackageDocs(
     defer ctx.deinit(gpa);
     ctx.broken_links = broken_links_out;
     ctx.broken_links_gpa = if (broken_links_out != null) gpa else null;
+    ctx.langref = langref;
 
     // Write static assets
     try writeStaticAssets(io, output_dir);
@@ -424,6 +529,89 @@ pub fn renderPackageDocs(
         }
         ctx.leaveModule();
     }
+
+    // Language Reference articles (rendered into a `langref/` subdirectory).
+    if (langref) |lr| {
+        try writeLangRefPages(&ctx, gpa, io, output_dir, lr);
+    }
+}
+
+/// Writes each langref article as a page under `langref/`: the README becomes
+/// `langref/index.html` (the section landing page, served at `/langref/`) and
+/// every other article becomes `langref/<slug>/index.html`, so its URL is the
+/// extensionless `/langref/<slug>`. The README sits one level below the site
+/// root and each article two levels below, so their relative asset/link bases
+/// differ (see `writeLangRefArticlePage`).
+fn writeLangRefPages(
+    ctx: *const RenderContext,
+    gpa: Allocator,
+    io: std.Io,
+    dir: std.Io.Dir,
+    langref: *const render_markdown.LangRef,
+) RenderError!void {
+    dir.createDirPath(io, "langref") catch |err| switch (err) {
+        error.PathAlreadyExists => {},
+        else => return err,
+    };
+    var sub_dir = try dir.openDir(io, "langref", .{});
+    defer sub_dir.close(io);
+
+    for (langref.articles) |*article| {
+        if (article.is_index) {
+            try writeLangRefArticlePage(ctx, gpa, io, sub_dir, langref, article, "index.html");
+            continue;
+        }
+
+        // Each article gets its own directory so the page can be `index.html`,
+        // giving the extensionless `/langref/<slug>` URL. Slugs are filename-safe.
+        sub_dir.createDirPath(io, article.slug) catch |err| switch (err) {
+            error.PathAlreadyExists => {},
+            else => return err,
+        };
+        var article_dir = try sub_dir.openDir(io, article.slug, .{});
+        defer article_dir.close(io);
+        try writeLangRefArticlePage(ctx, gpa, io, article_dir, langref, article, "index.html");
+    }
+}
+
+fn writeLangRefArticlePage(
+    ctx: *const RenderContext,
+    gpa: Allocator,
+    io: std.Io,
+    dir: std.Io.Dir,
+    langref: *const render_markdown.LangRef,
+    article: *const render_markdown.Article,
+    file_name: []const u8,
+) RenderError!void {
+    const file = try dir.createFile(io, file_name, .{});
+    defer file.close(io);
+    var buf: [4096]u8 = undefined;
+    var bw = file.writer(io, &buf);
+    const w = &bw.interface;
+
+    // Page title comes from the article's first heading; fall back to its slug.
+    var title_buf: [256]u8 = undefined;
+    const plain_title = render_markdown.titlePlainText(gpa, article) catch null;
+    defer if (plain_title) |t| gpa.free(t);
+    const title = std.fmt.bufPrint(&title_buf, "{s} Docs", .{plain_title orelse article.slug}) catch (plain_title orelse article.slug);
+
+    // The README landing page is served at `/langref/` (one level below the
+    // site root), while every other article is served at `/langref/<slug>/`
+    // (two levels below). `base` reaches the site root — for assets, module
+    // links and search entries — and `langref_base` reaches the `langref/`
+    // directory, for links to sibling articles.
+    const base = if (article.is_index) "../" else "../../";
+    const langref_base = if (article.is_index) "" else "../";
+    try writeHtmlHead(w, title, base);
+    try writeBodyOpen(w);
+    try renderSidebar(w, ctx, gpa, base);
+
+    try writeMainOpen(w, ctx, gpa, base);
+    try render_markdown.renderArticleBody(w, gpa, langref.articles, article, langref_base);
+    try writeFooter(w);
+    try w.writeAll("    </main>\n");
+    try writeBodyClose(w);
+    try bw.interface.flush();
 }
 
 fn writeStaticAssets(io: std.Io, dir: std.Io.Dir) RenderError!void {
@@ -439,8 +627,13 @@ fn writePackageIndex(ctx: *const RenderContext, gpa: Allocator, io: std.Io, dir:
     var bw = file.writer(io, &buf);
     const w = &bw.interface;
 
+    // The builtins package's real name ("Builtin") is an implementation detail
+    // we keep out of the docs; the site is presented generically as
+    // "Documentation".
+    const display_name = if (ctx.documenting_builtin) "Documentation" else ctx.package_docs.name;
+
     var index_title_buf: [256]u8 = undefined;
-    const index_title = std.fmt.bufPrint(&index_title_buf, "{s} Docs", .{ctx.package_docs.name}) catch ctx.package_docs.name;
+    const index_title = std.fmt.bufPrint(&index_title_buf, "{s} Docs", .{display_name}) catch display_name;
     try writeHtmlHead(w, index_title, "");
     try writeBodyOpen(w);
     try renderSidebar(w, ctx, gpa, "");
@@ -448,7 +641,7 @@ fn writePackageIndex(ctx: *const RenderContext, gpa: Allocator, io: std.Io, dir:
     // Main content
     try writeMainOpen(w, ctx, gpa, "");
     try w.writeAll("        <h1 class=\"module-name\">");
-    try writeHtmlEscaped(w, ctx.package_docs.name);
+    try writeHtmlEscaped(w, display_name);
     try w.writeAll("</h1>\n");
 
     // Module list
@@ -500,14 +693,11 @@ fn writeModulePageToDir(ctx: *const RenderContext, gpa: Allocator, io: std.Io, d
     try writeMainOpen(w, ctx, gpa, base);
     try w.writeAll("        <h1 class=\"module-name\">");
     try writeHtmlEscaped(w, mod.name);
-    if (mod.kind == .type_module) {
-        try w.writeAll(" <span class=\"module-kind-badge\">Type Module</span>");
-    }
     try w.writeAll("</h1>\n");
 
     // Build entry tree (automatically collapses redundant top-level node
     // matching the module name, e.g. Parser > Parser or Builtin > Builtin).
-    const entry_tree = try buildEntryTree(gpa, mod.entries, mod.name);
+    const entry_tree = try buildEntryTree(gpa, mod.entries, mod.name, mod.builtin_derived);
     defer entry_tree.deinit(gpa);
 
     // Show collapsed type definition at module level
@@ -649,7 +839,7 @@ const EntryTree = struct {
     }
 };
 
-fn buildEntryTree(gpa: Allocator, entries: []const DocModel.DocEntry, module_name: []const u8) Allocator.Error!EntryTree {
+fn buildEntryTree(gpa: Allocator, entries: []const DocModel.DocEntry, module_name: []const u8, builtin_derived: bool) Allocator.Error!EntryTree {
     const root = try SidebarNode.init(gpa, "", "", false);
 
     for (entries) |*entry| {
@@ -731,7 +921,33 @@ fn buildEntryTree(gpa: Allocator, entries: []const DocModel.DocEntry, module_nam
         collapsed.deinit(gpa);
     }
 
+    // Promoted builtin modules drop the redundant `<module>.` prefix from every
+    // anchor (id, sidebar, search, permalink all read `node.full_path`), so e.g.
+    // `Hasher.write_u8` renders as `write_u8`.
+    if (builtin_derived) {
+        for (root.children.items) |child| {
+            try stripModulePrefixFromTree(gpa, child, module_name);
+        }
+    }
+
     return .{ .root = root, .collapsed_entry = collapsed_entry };
+}
+
+/// Recursively rewrite each node's `full_path` to drop a leading `<module>.`.
+fn stripModulePrefixFromTree(gpa: Allocator, node: *SidebarNode, module_name: []const u8) Allocator.Error!void {
+    const fp = node.full_path;
+    if (fp.len > module_name.len and
+        std.mem.startsWith(u8, fp, module_name) and
+        fp[module_name.len] == '.')
+    {
+        const stripped = try gpa.dupe(u8, fp[module_name.len + 1 ..]);
+        if (node.owns_full_path) gpa.free(node.full_path);
+        node.full_path = stripped;
+        node.owns_full_path = true;
+    }
+    for (node.children.items) |child| {
+        try stripModulePrefixFromTree(gpa, child, module_name);
+    }
 }
 
 /// Add a child entry to the content tree, splitting its name on dots
@@ -1005,12 +1221,13 @@ fn renderSidebarTree(
                 try w.writeAll("                        ");
                 try w.writeAll("</li>\n");
             } else {
-                // Render as link
+                // Render as link. The `sidebar-value` class marks it as a value
+                // or method (not a type), which is what gets the left bar.
                 try w.writeAll("                        ");
                 for (0..depth - 1) |_| {
                     try w.writeAll("  ");
                 }
-                try w.writeAll("<li><a href=\"");
+                try w.writeAll("<li><a class=\"sidebar-value\" href=\"");
                 try w.writeAll(module_link_prefix);
                 try w.writeAll("#");
                 try writeHtmlEscaped(w, node.full_path);
@@ -1033,14 +1250,61 @@ fn renderSidebarEntries(
     module_name: []const u8,
     module_link_prefix: []const u8,
     entries: []const DocModel.DocEntry,
+    builtin_derived: bool,
     _depth: usize,
 ) (Allocator.Error || error{WriteFailed})!void {
     _ = _depth; // No longer needed
 
-    const entry_tree = try buildEntryTree(gpa, entries, module_name);
+    const entry_tree = try buildEntryTree(gpa, entries, module_name, builtin_derived);
     defer entry_tree.deinit(gpa);
 
     try renderSidebarTree(w, module_name, module_link_prefix, entry_tree.root, 0);
+}
+
+/// Render one module's sidebar entry: a `sidebar-entry` whose `sidebar-module-link`
+/// names the module and toggles a `sidebar-sub-entries` list of its members.
+fn renderSidebarModuleEntry(w: Writer, ctx: *const RenderContext, gpa: Allocator, base: []const u8, mod: DocModel.ModuleDocs) (Allocator.Error || error{WriteFailed})!void {
+    const is_active = if (ctx.current_module) |cur|
+        std.mem.eql(u8, cur, mod.name)
+    else
+        false;
+
+    // Build the href prefix for entries inside this module so that clicking a
+    // sidebar entry from another module's page navigates to the correct module
+    // page (not just changes the fragment on the current page).
+    var module_link_prefix = std.ArrayList(u8).empty;
+    defer module_link_prefix.deinit(gpa);
+    if (ctx.single_module_at_root) {
+        if (base.len != 0) try module_link_prefix.appendSlice(gpa, base);
+    } else {
+        try module_link_prefix.appendSlice(gpa, base);
+        // module names contain only identifier characters, no escaping needed for href
+        try module_link_prefix.appendSlice(gpa, mod.name);
+        try module_link_prefix.append(gpa, '/');
+    }
+
+    try w.writeAll("                <li class=\"sidebar-entry\">\n");
+    try w.writeAll("                    <a class=\"sidebar-module-link");
+    if (is_active) try w.writeAll(" active");
+    try w.writeAll("\" data-module-name=\"");
+    try writeHtmlEscaped(w, mod.name);
+    try w.writeAll("\" href=\"");
+    if (module_link_prefix.items.len == 0) {
+        try w.writeAll(".");
+    } else {
+        try w.writeAll(module_link_prefix.items);
+    }
+    try w.writeAll("\">");
+    try w.writeAll("<button class=\"entry-toggle\"></button>");
+    try w.writeAll("<span>");
+    try writeHtmlEscaped(w, mod.name);
+    try w.writeAll("</span></a>\n");
+
+    // Sub-entries - grouped hierarchically
+    try w.writeAll("                    <ul class=\"sidebar-sub-entries\">\n");
+    try renderSidebarEntries(w, gpa, mod.name, module_link_prefix.items, mod.entries, mod.builtin_derived, 0);
+    try w.writeAll("                    </ul>\n");
+    try w.writeAll("                </li>\n");
 }
 
 fn renderSidebar(w: Writer, ctx: *const RenderContext, gpa: Allocator, base: []const u8) (Allocator.Error || error{WriteFailed})!void {
@@ -1056,63 +1320,53 @@ fn renderSidebar(w: Writer, ctx: *const RenderContext, gpa: Allocator, base: []c
     try w.writeAll("\">");
     try w.writeAll(roc_logo_svg);
     try w.writeAll("</a>\n");
-    try w.writeAll("            <h1 class=\"pkg-full-name\"><a href=\"");
+    // The roc builtins site (the only docs rendered with a langref) covers the
+    // whole language, not just the "Builtin" package, so its title is the
+    // generic "Documentation" in the page font rather than the package name in
+    // the monospace used for code identifiers.
+    try w.writeAll("            <h1 class=\"pkg-full-name");
+    if (ctx.langref != null) try w.writeAll(" prose-label");
+    try w.writeAll("\"><a href=\"");
     try w.writeAll(base);
     try w.writeAll("\">");
-    try writeHtmlEscaped(w, ctx.package_docs.name);
+    if (ctx.langref != null) {
+        try w.writeAll("Documentation");
+    } else {
+        try writeHtmlEscaped(w, ctx.package_docs.name);
+    }
     try w.writeAll("</a></h1>\n");
     try w.writeAll("        </div>\n");
 
     try w.writeAll("        <div class=\"module-links-container\">\n");
     try w.writeAll("            <ul class=\"module-links\">\n");
 
+    // The promoted builtin types are grouped under one collapsible "Builtin
+    // Types" entry so the (long) list can be hidden in one click and doesn't
+    // push the Language Reference section down. Everything else renders as a
+    // top-level module entry.
+    var rendered_builtin_group = false;
     for (ctx.package_docs.modules) |mod| {
-        const is_active = if (ctx.current_module) |cur|
-            std.mem.eql(u8, cur, mod.name)
-        else
-            false;
-
-        // Build the href prefix for entries inside this module so that
-        // clicking a sidebar entry from another module's page navigates to
-        // the correct module page (not just changes the fragment on the
-        // current page).
-        var module_link_prefix = std.ArrayList(u8).empty;
-        defer module_link_prefix.deinit(gpa);
-        if (ctx.single_module_at_root) {
-            if (base.len == 0) {
-                // Root index page for the single module — same-page anchors.
-            } else {
-                try module_link_prefix.appendSlice(gpa, base);
+        if (mod.builtin_derived and !rendered_builtin_group) {
+            rendered_builtin_group = true;
+            try w.writeAll("                <li class=\"sidebar-entry\">\n");
+            try w.writeAll("                    <a class=\"sidebar-module-link active prose-label\" data-module-name=\"__builtin_types__\" href=\"");
+            try writeHtmlEscaped(w, base);
+            try w.writeAll("\">");
+            try w.writeAll("<button class=\"entry-toggle\"></button>");
+            try w.writeAll("<span>Builtin Types</span></a>\n");
+            try w.writeAll("                    <ul class=\"sidebar-sub-entries\">\n");
+            for (ctx.package_docs.modules) |inner| {
+                if (inner.builtin_derived) try renderSidebarModuleEntry(w, ctx, gpa, base, inner);
             }
-        } else {
-            try module_link_prefix.appendSlice(gpa, base);
-            // module names contain only identifier characters, no escaping needed for href
-            try module_link_prefix.appendSlice(gpa, mod.name);
-            try module_link_prefix.append(gpa, '/');
+            try w.writeAll("                    </ul>\n");
+            try w.writeAll("                </li>\n");
+        } else if (!mod.builtin_derived) {
+            try renderSidebarModuleEntry(w, ctx, gpa, base, mod);
         }
+    }
 
-        try w.writeAll("                <li class=\"sidebar-entry\">\n");
-        try w.writeAll("                    <a class=\"sidebar-module-link");
-        if (is_active) try w.writeAll(" active");
-        try w.writeAll("\" data-module-name=\"");
-        try writeHtmlEscaped(w, mod.name);
-        try w.writeAll("\" href=\"");
-        if (module_link_prefix.items.len == 0) {
-            try w.writeAll(".");
-        } else {
-            try w.writeAll(module_link_prefix.items);
-        }
-        try w.writeAll("\">");
-        try w.writeAll("<button class=\"entry-toggle\">&#9654;</button>");
-        try w.writeAll("<span>");
-        try writeHtmlEscaped(w, mod.name);
-        try w.writeAll("</span></a>\n");
-
-        // Sub-entries - grouped hierarchically
-        try w.writeAll("                    <ul class=\"sidebar-sub-entries\">\n");
-        try renderSidebarEntries(w, gpa, mod.name, module_link_prefix.items, mod.entries, 0);
-        try w.writeAll("                    </ul>\n");
-        try w.writeAll("                </li>\n");
+    if (ctx.langref) |lr| {
+        try renderLangRefSidebar(w, gpa, lr, base);
     }
 
     try w.writeAll("            </ul>\n");
@@ -1120,9 +1374,50 @@ fn renderSidebar(w: Writer, ctx: *const RenderContext, gpa: Allocator, base: []c
     try w.writeAll("    </nav>\n");
 }
 
+/// Renders the "Language Reference" sidebar section: an expandable entry (open
+/// by default) whose landing link points at `langref/` (the README) and whose
+/// sub-entries link to each article page.
+fn renderLangRefSidebar(
+    w: Writer,
+    gpa: Allocator,
+    langref: *const render_markdown.LangRef,
+    base: []const u8,
+) (Allocator.Error || error{WriteFailed})!void {
+    // Links to langref pages are always `<base>langref/…`, because `base`
+    // resolves to the site root from the current page and every langref page
+    // lives directly under `langref/`.
+    try w.writeAll("                <li class=\"sidebar-entry\">\n");
+    try w.writeAll("                    <a class=\"sidebar-module-link active prose-label\" data-module-name=\"");
+    try w.writeAll(langref_sidebar_id);
+    try w.writeAll("\" href=\"");
+    try writeHtmlEscaped(w, base);
+    try w.writeAll("langref/\">");
+    try w.writeAll("<button class=\"entry-toggle\"></button>");
+    try w.writeAll("<span>Language Reference</span></a>\n");
+
+    try w.writeAll("                    <ul class=\"sidebar-sub-entries langref-articles\">\n");
+    for (langref.articles) |*article| {
+        if (article.is_index) continue; // the README is the section landing page
+
+        try w.writeAll("                        <li><a href=\"");
+        try writeHtmlEscaped(w, base);
+        try w.writeAll("langref/");
+        // Slugs contain only filename-safe characters, but escape defensively.
+        // No `.html`: each article is served at the extensionless `/langref/<slug>`.
+        try writeHtmlEscaped(w, article.slug);
+        try w.writeAll("\">");
+        // Render the title inline so backtick spans (e.g. the "`if` / `else`"
+        // heading) become inline `<code>` rather than literal backticks.
+        try render_markdown.renderTitleInline(w, gpa, langref.articles, article);
+        try w.writeAll("</a></li>\n");
+    }
+    try w.writeAll("                    </ul>\n");
+    try w.writeAll("                </li>\n");
+}
+
 fn renderSearchEntries(w: Writer, ctx: *const RenderContext, gpa: Allocator, base: []const u8) (Allocator.Error || error{WriteFailed})!void {
     for (ctx.package_docs.modules) |mod| {
-        const entry_tree = try buildEntryTree(gpa, mod.entries, mod.name);
+        const entry_tree = try buildEntryTree(gpa, mod.entries, mod.name, mod.builtin_derived);
         defer entry_tree.deinit(gpa);
         try renderSearchTree(w, ctx, gpa, mod.name, entry_tree.root, base);
     }
@@ -1551,6 +1846,25 @@ fn writeDocRefHref(w: Writer, ctx: *const RenderContext, label: []const u8, brac
         else
             false;
 
+        // Promoted builtin modules use bare anchors, so the fragment drops the
+        // `<module>.` head: `[Str.reserve]` -> `#reserve`, `[List.first]` ->
+        // `../List/#first`, and `[Str]`/`[List]` land on the page itself.
+        if (ctx.isBuiltinDerived(head)) {
+            const frag = if (first_dot) |d| label[d + 1 ..] else "";
+            if (is_same_module) {
+                try w.writeAll("#");
+            } else {
+                if (ctx.current_module) |_| try w.writeAll("../");
+                try writeHtmlEscaped(w, head);
+                try w.writeAll("/");
+                if (frag.len > 0) try w.writeAll("#");
+            }
+            try writeHtmlEscaped(w, frag);
+            append(&anchor_buf, &anchor_len, &anchor_overflow, frag);
+            try validateAnchor(ctx, label, anchor_buf[0..anchor_len], anchor_overflow, bracket_offset);
+            return;
+        }
+
         if (is_same_module) {
             // Same-page anchor. Entry ids are prefixed with the module name.
             try w.writeAll("#");
@@ -1581,10 +1895,53 @@ fn writeDocRefHref(w: Writer, ctx: *const RenderContext, label: []const u8, brac
         return;
     }
 
+    // A bare reference to a builtin type that lives on another promoted page
+    // (e.g. `[U8]` from `Str`, where `U8` is documented under `Num`). Its id is
+    // `<owner>.<label>`, so link there directly.
+    if (ctx.builtinTypeOwner(head)) |owner| {
+        // Bare anchors: the owning page's id for this type is `label` itself
+        // (e.g. `U8`, `U8.default`), with no `<owner>.` prefix.
+        const is_same_module = if (ctx.current_module) |cur| std.mem.eql(u8, owner, cur) else false;
+        if (is_same_module) {
+            try w.writeAll("#");
+        } else {
+            if (ctx.current_module) |_| try w.writeAll("../");
+            try writeHtmlEscaped(w, owner);
+            try w.writeAll("/#");
+        }
+        try writeHtmlEscaped(w, label);
+        append(&anchor_buf, &anchor_len, &anchor_overflow, label);
+        try validateAnchor(ctx, label, anchor_buf[0..anchor_len], anchor_overflow, bracket_offset);
+        return;
+    }
+
     // Not a known module — treat as a reference relative to the current
     // module. Entry ids are `<module>.<label>`. Substitute the first segment
     // through the anchor map so a label like `U8` resolves to `Num.U8` and
     // `U8.default` resolves to `Num.U8.default`.
+    const resolved_head = ctx.lookupAnchorHead(head) orelse head;
+
+    // Promoted builtin modules use bare anchors, so strip any current-module
+    // prefix the anchor map left on the resolved head (`Num.F32` -> `F32`).
+    if (if (ctx.current_module) |cur| ctx.isBuiltinDerived(cur) else false) {
+        const bare_head = if (ctx.current_module) |cur|
+            (if (std.mem.startsWith(u8, resolved_head, cur) and resolved_head.len > cur.len and resolved_head[cur.len] == '.')
+                resolved_head[cur.len + 1 ..]
+            else
+                resolved_head)
+        else
+            resolved_head;
+        try w.writeAll("#");
+        try writeHtmlEscaped(w, bare_head);
+        append(&anchor_buf, &anchor_len, &anchor_overflow, bare_head);
+        if (first_dot) |d| {
+            try writeHtmlEscaped(w, label[d..]);
+            append(&anchor_buf, &anchor_len, &anchor_overflow, label[d..]);
+        }
+        try validateAnchor(ctx, label, anchor_buf[0..anchor_len], anchor_overflow, bracket_offset);
+        return;
+    }
+
     try w.writeAll("#");
     if (ctx.current_module) |cur| {
         try writeHtmlEscaped(w, cur);
@@ -1592,7 +1949,6 @@ fn writeDocRefHref(w: Writer, ctx: *const RenderContext, label: []const u8, brac
         append(&anchor_buf, &anchor_len, &anchor_overflow, cur);
         append(&anchor_buf, &anchor_len, &anchor_overflow, ".");
     }
-    const resolved_head = ctx.lookupAnchorHead(head) orelse head;
     try writeHtmlEscaped(w, resolved_head);
     append(&anchor_buf, &anchor_len, &anchor_overflow, resolved_head);
     if (first_dot) |d| {
@@ -1808,11 +2164,10 @@ fn writeTypeLink(
     type_name: []const u8,
 ) (Allocator.Error || error{WriteFailed})!void {
     // An empty module_path comes from `resolveModulePathFromBase` for `.builtin`
-    // references (Str, List, Bool, etc). When we are not documenting Builtin
-    // itself, point at the published Builtin docs instead of a same-page anchor.
+    // references (Str, List, Bool, etc). When we are not documenting the builtins
+    // ourselves, point at their published docs instead of a same-page anchor.
     if (module_path.len == 0 and !ctx.documenting_builtin) {
-        try w.writeAll(builtins_docs_url_prefix);
-        try writeHtmlEscaped(w, type_name);
+        try writeBuiltinTypeUrl(w, type_name);
         return;
     }
 
@@ -1861,6 +2216,15 @@ fn writeTypeLink(
         }
         try writeHtmlEscaped(w, target_module);
         try w.writeAll("/#");
+    }
+
+    // The promoted builtin modules use bare anchors (the `<module>.` prefix is
+    // stripped from their ids), so drop it from the fragment too.
+    if (ctx.isBuiltinDerived(target_module)) {
+        const bare_head = if (already_qualified) effective_head[target_module.len + 1 ..] else effective_head;
+        try writeHtmlEscaped(w, bare_head);
+        try writeHtmlEscaped(w, tail);
+        return;
     }
 
     if (!already_qualified) {
@@ -2008,7 +2372,7 @@ test "writeDocRefHref reports broken shorthand refs" {
         broken_links.deinit(gpa);
     }
 
-    try renderPackageDocs(gpa, std.testing.io, &package_docs, tmp_path, &broken_links);
+    try renderPackageDocs(gpa, std.testing.io, &package_docs, tmp_path, &broken_links, null);
 
     // Exactly the `[div_by]` ref should be flagged. It sits on the third
     // line of the doc, which started at source line 41 → expected line 43.
@@ -2019,4 +2383,37 @@ test "writeDocRefHref reports broken shorthand refs" {
     try testing.expectEqual(@as(u32, 43), bl.source_line);
     try testing.expectEqualStrings("div_by", bl.label);
     try testing.expectEqualStrings("Builtin.div_by", bl.resolved_anchor);
+}
+
+test "builtin_nested_type_owners lists every numeric type under Num" {
+    // External references to builtin numeric types (e.g. `U8` in another
+    // package's signature) link to `…/Num#U8` via `builtin_nested_type_owners`.
+    // The type system's precision enums are the source of truth for which
+    // numeric types exist, so if a new one is added there it must also be added
+    // to the table — otherwise its external links would 404 at `…/U8`.
+    const tt = @import("types").types;
+    inline for (.{ tt.Int.Precision, tt.Frac.Precision }) |Precision| {
+        inline for (@typeInfo(Precision).@"enum".fields) |field| {
+            var owner: ?[]const u8 = null;
+            for (builtin_nested_type_owners) |nested| {
+                // Enum fields are lower-case (`u8`, `dec`); the docs names are
+                // capitalized (`U8`, `Dec`).
+                if (std.ascii.eqlIgnoreCase(nested.name, field.name)) {
+                    owner = nested.owner;
+                    break;
+                }
+            }
+            if (owner) |o| {
+                try std.testing.expectEqualStrings("Num", o);
+            } else {
+                std.debug.print(
+                    "numeric type '{s}' is missing from builtin_nested_type_owners " ++
+                        "in render_html.zig; add it (owner \"Num\") so external doc " ++
+                        "links resolve to the right page.\n",
+                    .{field.name},
+                );
+                return error.NumericTypeMissingFromTable;
+            }
+        }
+    }
 }

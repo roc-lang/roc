@@ -758,6 +758,7 @@ pub const BuildEnv = struct {
             const pf_pkg = pf_entry.value_ptr.*;
             if (pf_pkg.kind == .platform) {
                 if (coord.getPackage(pf_entry.key_ptr.*)) |platform_coord_pkg| {
+                    coord.markPlatformPackage(platform_coord_pkg.name);
                     const plat_module_name = PackageEnv.moduleNameFromPath(pf_pkg.root_file);
                     const plat_root_id = try platform_coord_pkg.ensureModule(self.gpa, plat_module_name, pf_pkg.root_file);
                     if (platform_coord_pkg.modules.items[plat_root_id].phase == .Parse) {
@@ -970,6 +971,7 @@ pub const BuildEnv = struct {
                     .Parse, .Parsing => .Parse,
                     .Canonicalize => .Canonicalize,
                     .WaitingOnImports => .WaitingOnImports,
+                    .WaitingOnPlatformRequirements => .WaitingOnImports,
                     .TypeCheck => .TypeCheck,
                     .Done => .Done,
                 };

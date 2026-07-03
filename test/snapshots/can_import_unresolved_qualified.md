@@ -33,17 +33,17 @@ parser = Json.Parser.Advanced.NonExistent.create
 ~~~
 # EXPECTED
 DUPLICATE DEFINITION - can_import_unresolved_qualified.md:1:1:1:17
-UNDEFINED VARIABLE - can_import_unresolved_qualified.md:5:8:5:31
+NAME NOT IN SCOPE - can_import_unresolved_qualified.md:5:8:5:31
 MODULE NOT FOUND - can_import_unresolved_qualified.md:8:17:8:29
-UNDEFINED VARIABLE - can_import_unresolved_qualified.md:9:20:9:34
+NAME NOT IN SCOPE - can_import_unresolved_qualified.md:9:20:9:34
 MODULE NOT FOUND - can_import_unresolved_qualified.md:12:29:12:37
 MODULE NOT FOUND - can_import_unresolved_qualified.md:12:52:12:61
-UNDEFINED VARIABLE - can_import_unresolved_qualified.md:13:24:13:51
+NAME NOT IN SCOPE - can_import_unresolved_qualified.md:13:24:13:51
 UNUSED VARIABLE - can_import_unresolved_qualified.md:13:19:13:22
-UNDEFINED VARIABLE - can_import_unresolved_qualified.md:16:10:16:20
+NAME NOT IN SCOPE - can_import_unresolved_qualified.md:16:10:16:20
 DOES NOT EXIST - can_import_unresolved_qualified.md:19:10:19:31
-UNDEFINED VARIABLE - can_import_unresolved_qualified.md:22:10:22:28
-UNDEFINED VARIABLE - can_import_unresolved_qualified.md:25:10:25:49
+NAME NOT IN SCOPE - can_import_unresolved_qualified.md:22:10:22:28
+NAME NOT IN SCOPE - can_import_unresolved_qualified.md:25:10:25:49
 # PROBLEMS
 
 ┌──────────────────────┐
@@ -61,15 +61,15 @@ UNDEFINED VARIABLE - can_import_unresolved_qualified.md:25:10:25:49
       └─────────────────────────────── can_import_unresolved_qualified.md:1:1 ┘
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `method` in this scope. ─────────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `method` in this scope. ──────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  main = Json.NonExistent.method                                            │
  │         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                            │
  └──────────────────────────────────── can_import_unresolved_qualified.md:5:8 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
 ┌──────────────────┐
@@ -82,15 +82,15 @@ UNDEFINED VARIABLE - can_import_unresolved_qualified.md:25:10:25:49
 
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `stringify` in this scope. ──────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `stringify` in this scope. ───────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  parseData = |data| Json.stringify(data)                                   │
  │                     ‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                         │
  └─────────────────────────────────── can_import_unresolved_qualified.md:9:20 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
 ┌──────────────────┐
@@ -113,15 +113,15 @@ UNDEFINED VARIABLE - can_import_unresolved_qualified.md:25:10:25:49
 
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `defaultResponse` in this scope. ────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `defaultResponse` in this scope. ─────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  processRequest = |req| Http.Server.defaultResponse                        │
  │                         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                        │
  └────────────────────────────────── can_import_unresolved_qualified.md:13:24 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
 ┌─────────────────┐
@@ -136,15 +136,15 @@ UNDEFINED VARIABLE - can_import_unresolved_qualified.md:25:10:25:49
     to suppress this warning.
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `prase` in this scope. ──────────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `prase` in this scope. ───────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  result = Json.prase("test")                                               │
  │           ‾‾‾‾‾‾‾‾‾‾                                                       │
  └────────────────────────────────── can_import_unresolved_qualified.md:16:10 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
 ┌────────────────┐
@@ -157,26 +157,26 @@ UNDEFINED VARIABLE - can_import_unresolved_qualified.md:25:10:25:49
 
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `invalidMethod` in this scope. ──────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `invalidMethod` in this scope. ───────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  client = Http.invalidMethod                                               │
  │           ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                               │
  └────────────────────────────────── can_import_unresolved_qualified.md:22:10 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `create` in this scope. ─────────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `create` in this scope. ──────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  parser = Json.Parser.Advanced.NonExistent.create                          │
  │           ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                          │
  └────────────────────────────────── can_import_unresolved_qualified.md:25:10 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 # TOKENS
 ~~~zig

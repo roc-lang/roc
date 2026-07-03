@@ -267,6 +267,7 @@ pub const LiteralValue = union(enum) {
     f32_literal: f32,
     dec_literal: i128,
     str_literal: StrLiteral,
+    bytes_literal: StrLiteral,
     null_ptr,
     proc_ref: LirProcSpecId,
 };

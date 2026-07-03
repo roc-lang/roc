@@ -16,18 +16,18 @@ bad_function = |msg| Stdout.line!(msg)
 main! = bad_function("This should fail")
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - pure_annotation_effectful_body_error.md:7:22:7:34
+NAME NOT IN SCOPE - pure_annotation_effectful_body_error.md:7:22:7:34
 # PROBLEMS
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `line!` in this scope. ──────────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `line!` in this scope. ───────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  bad_function = |msg| Stdout.line!(msg)                                    │
  │                       ‾‾‾‾‾‾‾‾‾‾‾‾                                         │
  └────────────────────────────── pure_annotation_effectful_body_error.md:7:22 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 # TOKENS
 ~~~zig

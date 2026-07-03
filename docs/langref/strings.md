@@ -130,11 +130,15 @@ This can be a source of bugs! One way to prevent this problem is to perform stri
 
 ## String normalization
 
+TODO
+
 ## Why not normalize automatically
 
 It would be possible for Roc to perform string normalization automatically on every equality check, in order to prevent bugs like this. Unfortunately, normalization takes significantly more CPU time than equality comparisons do, which means it's much more efficient to perform normalization once and then fast equality checks from then on. This is the design that Roc encourages.
 
 ## UTF-8
+
+TODO
 
 ## When to use each of these
 

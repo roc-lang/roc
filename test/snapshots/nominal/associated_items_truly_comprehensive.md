@@ -479,33 +479,33 @@ anno1 = Annotated.typed                         # 888
 anno2 = Annotated.L2.alsoTyped                  # 889
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - associated_items_truly_comprehensive.md:382:20:382:24
-UNDEFINED VARIABLE - associated_items_truly_comprehensive.md:388:12:388:16
+NAME NOT IN SCOPE - associated_items_truly_comprehensive.md:382:20:382:24
+NAME NOT IN SCOPE - associated_items_truly_comprehensive.md:388:12:388:16
 CIRCULAR VALUE DEFINITION - associated_items_truly_comprehensive.md:167:13:167:17
 CIRCULAR VALUE DEFINITION - associated_items_truly_comprehensive.md:167:20:167:24
 CIRCULAR VALUE DEFINITION - associated_items_truly_comprehensive.md:167:27:167:31
 # PROBLEMS
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `val4` in this scope. ───────────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `val4` in this scope. ────────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  val3 = val4 + 1                                 # Unqualified             │
  │         ‾‾‾‾                                                               │
  └──────────────────────────── associated_items_truly_comprehensive.md:382:20 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `val2` in this scope. ───────────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `val2` in this scope. ────────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  val1 = val2 + 1                                         # Unqualified     │
  │         ‾‾‾‾                                                               │
  └──────────────────────────── associated_items_truly_comprehensive.md:388:12 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
 ┌───────────────────────────┐

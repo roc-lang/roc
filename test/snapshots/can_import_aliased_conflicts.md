@@ -15,7 +15,7 @@ main = {
 ~~~
 # EXPECTED
 DUPLICATE DEFINITION - can_import_aliased_conflicts.md:2:1:2:31
-UNDEFINED VARIABLE - can_import_aliased_conflicts.md:5:9:5:23
+NAME NOT IN SCOPE - can_import_aliased_conflicts.md:5:9:5:23
 # PROBLEMS
 
 ┌──────────────────────┐
@@ -33,15 +33,15 @@ UNDEFINED VARIABLE - can_import_aliased_conflicts.md:5:9:5:23
       └────────────────────────────────── can_import_aliased_conflicts.md:1:1 ┘
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `parse` in this scope. ──────────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `parse` in this scope. ───────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  x = MyModule.parse                                                        │
  │      ‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                        │
  └─────────────────────────────────────── can_import_aliased_conflicts.md:5:9 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 # TOKENS
 ~~~zig

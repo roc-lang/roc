@@ -1131,16 +1131,12 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             const region_info = self.calcRegionInfo(data.region);
             const ident_name = self.getIdent(data.ident);
 
-            var report = try Report.init(allocator, "Undefined Variable", "", .runtime_error);
+            var report = try Report.init(allocator, "Name Not In Scope", "", .runtime_error);
             const owned_ident = try report.addOwnedString(ident_name);
             try report.headline.addReflowingText("Nothing is named ");
             try report.headline.addUnqualifiedSymbol(owned_ident);
             try report.headline.addReflowingText(" in this scope.");
-            try report.document.addReflowingText("Is there an ");
-            try report.document.addKeyword("import");
-            try report.document.addReflowingText(" or ");
-            try report.document.addKeyword("exposing");
-            try report.document.addReflowingText(" missing up-top?");
+            try report.document.addReflowingText("Is it misspelled, or is there an import missing?");
             try report.document.addLineBreak();
             try report.document.addLineBreak();
             const owned_filename = try report.addOwnedString(filename);

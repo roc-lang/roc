@@ -41,7 +41,7 @@ pub const Field = struct {
 pub const CaptureField = struct {
     symbol: Common.Symbol,
     binder: ?check.CheckedModule.PatternBinderId,
-    capture_id: ?u32 = null,
+    capture_id: ?check.CheckedModule.CaptureId = null,
     ty: TypeId,
 };
 
