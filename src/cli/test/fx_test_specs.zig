@@ -113,6 +113,11 @@ pub const io_spec_tests = [_]TestSpec{
         .skip_on_windows = true,
     },
     .{
+        .roc_file = "test/fx/issue_9930_fold_large_list_stack.roc",
+        .io_spec = "0<x|1>total: 0",
+        .description = "Regression test: List.fold over a large list runs in constant stack space (issue #9930)",
+    },
+    .{
         .roc_file = "test/fx/list_for_each.roc",
         .io_spec = "1>Item: apple|1>Item: banana|1>Item: cherry",
         .description = "List.for_each! with effectful callback",
