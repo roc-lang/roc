@@ -60,9 +60,9 @@ Two wrappers drive the Coordinator today:
    hand-wires everything BuildEnv also does: parses the app header
    (`compile.app_header.parseAppHeader`), runs package version resolution,
    constructs the Coordinator, registers the "app" package and every
-   resolved package with `ensurePackage`/`ensurePackageWithUrl`, builds a
-   `package_names` array mapping root → `"app"` and the platform → `"pf"`,
-   wires shorthands, enqueues parse tasks, runs `coordinatorLoop`,
+   resolved package with `ensurePackage`/`ensurePackageWithUrl`, builds
+   package identity keys through `src/compile/package_identity.zig`, wires
+   shorthands, enqueues parse tasks, runs `coordinatorLoop`,
    finalizes executable artifacts, and renders reports via
    `renderCoordinatorReports`.
 
@@ -101,10 +101,12 @@ pass-through (`if (args.no_cache) null else build_env.cache_manager`) into
   `lowerLirWithCoordinator` renders early only under
   `coord.hasUserErrors()` and returns, otherwise renders exactly once
   after `finalizeExecutableArtifacts` / the AllowUserErrors variant.
-- The naming skew PR 9811 left behind: `lowerLirWithCoordinator` builds
-  `package_names` with root → `"app"`, platform → `"pf"`, justified only
-  by the comment "matching Coordinator.discoverAppFromPath". See
-  `../small/single-package-identity-function.md`.
+- Package identity construction is now centralized in
+  `src/compile/package_identity.zig`, and `lowerLirWithCoordinator` uses
+  `PackageKeys` instead of the old hand-built `package_names` array. The
+  larger duplication remains: the run path still performs its own
+  Coordinator construction, package-registration loop, shorthand wiring,
+  parse-task enqueueing, finalization, and report rendering.
 - A `null` cache manager call site still exists:
   `setupSharedMemoryWithCoordinator` (`src/cli/main.zig`) forwards to
   `buildLirImageWithCoordinator` with `null` for the cache manager (no
@@ -140,9 +142,8 @@ only (`roc check`), docs extraction, glue extraction.
    production becomes a back half consuming the core's finished
    Coordinator. DELETE from `src/cli/main.zig`: the hand-rolled header
    parse + `resolvePackages` + `ensurePackage`/`ensurePackageWithUrl`
-   loops, the `package_names` array and its "matching
-   Coordinator.discoverAppFromPath" comment, the shorthand wiring, and the
-   parse-task enqueueing — all of it exists in the core.
+   loops, the run-local package-key construction, the shorthand wiring, and
+   the parse-task enqueueing — all of it belongs in the core.
 3. **Make report rendering structurally idempotent.** Replace the
    "render exactly once by call-site discipline" contract with either a
    draining cursor (BuildEnv's `drainReports` model, extended to the run
@@ -161,10 +162,7 @@ only (`roc check`), docs extraction, glue extraction.
    the core — no new entry path may construct a Coordinator directly.
 6. **Enumerate the known divergences as the acceptance checklist**:
    caching parity, `--opt` parity, transitive package registration parity,
-   diagnostic single-render, warning exit codes, package-name parity.
-
-Land `../small/single-package-identity-function.md` first: it shrinks the
-naming surface the core must absorb to a single function.
+   diagnostic single-render, warning exit codes, and package-identity parity.
 
 ## What success looks like
 
@@ -222,8 +220,6 @@ work, it deduplicates it.
 
 ## Related projects
 
-- [Single package-identity function](../small/single-package-identity-function.md)
-  — land first; removes the naming skew the core must otherwise absorb.
 - [Cache hardening](../small/cache-hardening.md) — the cache the unified
   core wires everywhere; hardening its edges pays off more once every
   pipeline uses it.

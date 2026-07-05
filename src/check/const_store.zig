@@ -64,8 +64,13 @@ pub const Primitive = enum {
 
 /// Named type definition owner for stored monomorphic type evidence.
 pub const TypeDef = struct {
-    module_name: names.ModuleNameId,
+    /// Deep content identity of the declaring module (dense id in the owning
+    /// name store's module identity table).
+    module: names.ModuleIdentityId,
+    /// Declared (module-relative) type name.
     type_name: names.TypeNameId,
+    /// Declaring statement: within-module discriminator for same-named
+    /// block-local declarations.
     source_decl: ?u32 = null,
 };
 
@@ -452,7 +457,7 @@ pub const ConstTypeStore = struct {
     fn translateTypeDef(name_translation: ?NameTranslation, def: TypeDef) Allocator.Error!TypeDef {
         const translation = name_translation orelse return def;
         return .{
-            .module_name = try translation.target.internModuleName(translation.source.moduleNameText(def.module_name)),
+            .module = try translation.target.internModuleIdentity(translation.source.moduleIdentityBytes(def.module)),
             .type_name = try translation.target.internTypeName(translation.source.typeNameText(def.type_name)),
             .source_decl = def.source_decl,
         };

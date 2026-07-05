@@ -93,11 +93,10 @@ fold a monomorphized `from_numeral` call into a constant.
   union-find root became a nominal. Range/fit validation now exists in at
   least three independent implementations: `numeralInfoFitsDec`
   (src/check/unify.zig), `numeralLiteralFitsDec` and
-  `rangeNumeralDigitsFit` (src/check/Check.zig), and
-  `numeralLiteralFitsBuiltin` / `numeralTextFitsBuiltin`
-  (src/check/checked_artifact.zig) — the last validating against decimal
-  text reconstructed from base-256 limbs (`numeralLiteralDecimalText`,
-  `base256DecimalText`).
+  `rangeNumeralDigitsFit` (src/check/Check.zig), and `exactNumeralForBuiltin`
+  / `exactDecLiteral` (src/check/checked_artifact.zig) — the last still using
+  decimal text reconstructed from base-256 limbs for float conversions
+  (`numeralLiteralDecimalText`, `base256DecimalText`).
 
 ## Solution design
 
@@ -122,9 +121,8 @@ checking; decide the default in one module; produce bits exactly once.
 3. **Range/fit validation from exact facts**: one function `fits(exact,
    target_type) -> bool` computed on limbs (digit-count prefilter + u128
    checked arithmetic, per 9760). It runs whenever the concrete type
-   becomes known — entirely within the checker once
-   ../small/check-app-against-platform-requires.md lands, which removes the
-   second drop site where platform-implied types arrive after checking.
+   becomes known, entirely within the checker; platform-implied types are
+   already part of the check-time inputs.
    DELETE `numeralInfoFitsDec`, `numeralLiteralFitsDec`, and the
    text-reconstruction validation path; `rangeNumeralDigitsFit` becomes a
    call into the shared function.
@@ -198,8 +196,6 @@ panics for representability are deleted, not relocated.
 
 ## Related projects
 
-- [Check app against platform requires](../small/check-app-against-platform-requires.md)
-  — removes the post-checking type-arrival path this design depends on.
 - [Total dispatch plans](../big/total-dispatch-plans.md) — defines the
   single type-finalization point the defaulting oracle plugs into.
 - [Checked arithmetic ops in LIR](../small/checked-arithmetic-lir-ops.md)

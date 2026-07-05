@@ -27,7 +27,7 @@ pub fn main(init: std.process.Init) !void {
     try stdout.print("Checking for separator comments...\n", .{});
 
     {
-        var zig_files : PathList = .empty;
+        var zig_files: PathList = .empty;
         defer freePathList(&zig_files, gpa);
 
         // Scan src/, build.zig, and test/ (not ci/ since zig_lints.zig mentions the pattern)
@@ -60,7 +60,7 @@ pub fn main(init: std.process.Init) !void {
     // Lint 2: Check for pub declarations without doc comments
     try stdout.print("Checking for pub declarations without doc comments...\n", .{});
 
-    var zig_files : PathList = .empty;
+    var zig_files: PathList = .empty;
     defer freePathList(&zig_files, gpa);
 
     try walkTree(gpa, io, "src", &zig_files);
@@ -100,7 +100,7 @@ pub fn main(init: std.process.Init) !void {
         return;
     }
 
-    var failed_files : PathList = .empty;
+    var failed_files: PathList = .empty;
     defer freePathList(&failed_files, gpa);
 
     for (new_zig_files.items) |file_path| {
@@ -166,7 +166,7 @@ fn checkSeparatorComments(allocator: Allocator, io: std.Io, file_path: []const u
     };
     defer allocator.free(source);
 
-    var errors : std.ArrayList(u8) = .empty;
+    var errors: std.ArrayList(u8) = .empty;
     errdefer errors.deinit(allocator);
 
     var line_num: usize = 1;
@@ -278,7 +278,7 @@ fn checkPubDocComments(allocator: Allocator, io: std.Io, file_path: []const u8) 
     };
     defer allocator.free(source);
 
-    var errors : std.ArrayList(u8) = .empty;
+    var errors: std.ArrayList(u8) = .empty;
     errdefer errors.deinit(allocator);
 
     var line_num: usize = 1;
@@ -308,8 +308,8 @@ fn checkPubDocComments(allocator: Allocator, io: std.Io, file_path: []const u8) 
         if (isReExport(line)) continue;
 
         const msg = try std.fmt.allocPrint(allocator, "{s}:{d}: pub declaration without doc comment `///`\n", .{ file_path, line_num });
-                defer allocator.free(msg);
-                try errors.appendSlice(allocator, msg);
+        defer allocator.free(msg);
+        try errors.appendSlice(allocator, msg);
     }
 
     return errors.toOwnedSlice(allocator);
@@ -338,7 +338,7 @@ fn isReExport(line: []const u8) bool {
 }
 
 fn getNewZigFiles(allocator: Allocator, io: std.Io) !PathList {
-    var result : PathList = .empty;
+    var result: PathList = .empty;
     errdefer {
         for (result.items) |path| {
             allocator.free(path);

@@ -520,7 +520,7 @@ const Lowerer = struct {
 
     fn constTypeDef(self: *Lowerer, def: MonoType.TypeDef) std.mem.Allocator.Error!const_store.TypeDef {
         return .{
-            .module_name = try self.result.const_type_names.internModuleName(self.program.names.moduleNameText(def.module_name)),
+            .module = try self.result.const_type_names.internModuleIdentity(self.program.names.moduleIdentityBytes(def.module)),
             .type_name = try self.result.const_type_names.internTypeName(self.program.names.typeNameText(def.type_name)),
             .source_decl = def.source_decl,
         };
@@ -765,7 +765,7 @@ const Lowerer = struct {
             .named => |named| named,
             else => Common.invariant("runtime schema request did not reference a named Lambda Mono type"),
         };
-        if (named.def.module_name != request.def.module_name or named.def.type_name != request.def.type_name) {
+        if (named.def.module != request.def.module or named.def.type_name != request.def.type_name) {
             Common.invariant("runtime schema request named type identity changed before LIR lowering");
         }
 

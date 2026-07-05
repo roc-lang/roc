@@ -4,8 +4,8 @@
 
 Every traversal of checked types must guard against cycles, and today that
 discipline is per-site folklore. Grepping for the dominant idiom —
-`AutoHashMap(_, void).init` visited/active sets — finds **105** instantiation
-sites across `src/check`, `src/types`, and `src/postcheck`, **34 of them in
+`AutoHashMap(_, void).init` visited/active sets — finds **103** instantiation
+sites across `src/check`, `src/types`, and `src/postcheck`, **32 of them in
 `src/check/checked_artifact.zig` alone**. At least four *other* cycle-guard
 idioms coexist:
 
@@ -62,8 +62,8 @@ must tolerate.
 
 ## Evidence
 
-- Counts (verified by grep): `AutoHashMap(..., void).init` — 34 sites in
-  `src/check/checked_artifact.zig`, 105 total across `src/check`,
+- Counts (verified by grep): `AutoHashMap(..., void).init` — 32 sites in
+  `src/check/checked_artifact.zig`, 103 total across `src/check`,
   `src/types`, `src/postcheck`. Files include `Check.zig`,
   `exhaustive.zig`, `generalize.zig`, `monotype/lower.zig`,
   `monotype/type.zig`, `monotype/solve.zig`, `monotype_lifted/lift.zig`,

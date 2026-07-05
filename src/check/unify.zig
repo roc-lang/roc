@@ -120,7 +120,7 @@ pub const Env = struct {
     /// allocator that created the problem store (see `appendProblem` below).
     problems_gpa: Allocator,
     ident_store: *const Ident.Store,
-    qualified_module_ident: Ident.Idx,
+    self_module_identity: base.ModuleIdentity.Idx,
     types: *types_mod.Store,
     problems: *problem_mod.Store,
     snapshots: *snapshot_mod.Store,
@@ -161,7 +161,7 @@ pub fn unify(env: *const Env, a: Var, b: Var, opts: Options) std.mem.Allocator.E
     env.unify_scratch.reset();
 
     // Unify
-    var unifier = Unifier.init(env.ident_store, env.qualified_module_ident, env.types, env.unify_scratch, env.occurs_scratch);
+    var unifier = Unifier.init(env.ident_store, env.self_module_identity, env.types, env.unify_scratch, env.occurs_scratch);
     unifier.scheduleGuardedPair(a, b, .abort) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
     };
@@ -215,7 +215,7 @@ const Unifier = struct {
     const Self = @This();
 
     ident_store: *const Ident.Store,
-    qualified_module_ident: Ident.Idx,
+    self_module_identity: base.ModuleIdentity.Idx,
     types_store: *types_mod.Store,
     scratch: *Scratch,
     occurs_scratch: *occurs.Scratch,
@@ -226,14 +226,14 @@ const Unifier = struct {
     /// Init unifier
     pub fn init(
         ident_store: *const Ident.Store,
-        qualified_module_ident: Ident.Idx,
+        self_module_identity: base.ModuleIdentity.Idx,
         types_store: *types_mod.Store,
         scratch: *Scratch,
         occurs_scratch: *occurs.Scratch,
     ) Unifier {
         return .{
             .ident_store = ident_store,
-            .qualified_module_ident = qualified_module_ident,
+            .self_module_identity = self_module_identity,
             .types_store = types_store,
             .scratch = scratch,
             .occurs_scratch = occurs_scratch,
@@ -250,10 +250,31 @@ const Unifier = struct {
     /// Link the variables & updated the content in the type_store
     /// In the old compiler, this function was called "merge"
     fn merge(self: *Self, vars: *const ResolvedVarDescs, new_content: Content) std.mem.Allocator.Error!void {
+        const content = try self.contentForMerge(vars, new_content);
         try self.types_store.union_(vars.a.var_, vars.b.var_, .{
-            .content = new_content,
+            .content = content,
             .rank = Rank.min(vars.a.desc.rank, vars.b.desc.rank),
         });
+    }
+
+    fn contentForMerge(self: *Self, vars: *const ResolvedVarDescs, content: Content) std.mem.Allocator.Error!Content {
+        // If a row extension reaches the merge destination, union_ would overwrite
+        // that destination and turn the extension into a self-cycle. Preserve the
+        // destination's current row meaning before the overwrite happens.
+        switch (content) {
+            .structure => |flat_type| {
+                switch (flat_type) {
+                    .record => |record| {
+                        return Content{ .structure = FlatType{ .record = try self.recordForMerge(vars, record) } };
+                    },
+                    .tag_union => |tag_union| {
+                        return Content{ .structure = FlatType{ .tag_union = try self.tagUnionForMerge(vars, tag_union) } };
+                    },
+                    else => return content,
+                }
+            },
+            else => return content,
+        }
     }
 
     /// Create a new type variable *in this pool*
@@ -705,7 +726,7 @@ const Unifier = struct {
                     },
                     .empty_tag_union => {
                         // If this nominal is opaque and we're not in the origin module, error
-                        if (!a_type.canLiftInner(self.qualified_module_ident)) {
+                        if (!a_type.canLiftInner(self.self_module_identity)) {
                             return error.TypeMismatch;
                         }
 
@@ -727,7 +748,7 @@ const Unifier = struct {
                     },
                     .empty_record => {
                         // If this nominal is opaque and we're not in the origin module, error
-                        if (!a_type.canLiftInner(self.qualified_module_ident)) {
+                        if (!a_type.canLiftInner(self.self_module_identity)) {
                             return error.TypeMismatch;
                         }
 
@@ -827,7 +848,7 @@ const Unifier = struct {
                     },
                     .nominal_type => |b_type| {
                         // If this nominal is opaque and we're not in the origin module, error
-                        if (!b_type.canLiftInner(self.qualified_module_ident)) {
+                        if (!b_type.canLiftInner(self.self_module_identity)) {
                             return error.TypeMismatch;
                         }
 
@@ -873,7 +894,7 @@ const Unifier = struct {
                     },
                     .nominal_type => |b_type| {
                         // If this nominal is opaque and we're not in the origin module, error
-                        if (!b_type.canLiftInner(self.qualified_module_ident)) {
+                        if (!b_type.canLiftInner(self.self_module_identity)) {
                             return error.TypeMismatch;
                         }
 
@@ -954,7 +975,7 @@ const Unifier = struct {
                     },
                     .nominal_type => |b_type| {
                         // If this nominal is opaque and we're not in the origin module, error
-                        if (!b_type.canLiftInner(self.qualified_module_ident)) {
+                        if (!b_type.canLiftInner(self.self_module_identity)) {
                             return error.TypeMismatch;
                         }
 
@@ -1108,6 +1129,208 @@ const Unifier = struct {
         try self.scheduleGuardedPair(post.a_backing_var, post.b_backing_var, .ignore);
     }
 
+    fn rowExtMergeTarget(self: *Self, vars: *const ResolvedVarDescs) types_mod.DescStoreIdx {
+        return self.types_store.resolveVar(vars.b.var_).desc_idx;
+    }
+
+    fn recordExtReachesDesc(self: *Self, ext: Var, target_desc: types_mod.DescStoreIdx) bool {
+        var ext_var = ext;
+        var guard = types_mod.debug.IterationGuard.init("recordExtReachesDesc");
+
+        while (true) {
+            guard.tick();
+
+            const resolved = self.types_store.resolveVar(ext_var);
+            if (resolved.desc_idx == target_desc) return true;
+
+            switch (resolved.desc.content) {
+                .alias => |alias| {
+                    ext_var = self.types_store.getAliasBackingVar(alias);
+                },
+                .structure => |flat_type| {
+                    switch (flat_type) {
+                        .record => |record| {
+                            ext_var = record.ext;
+                        },
+                        else => return false,
+                    }
+                },
+                else => return false,
+            }
+        }
+    }
+
+    fn tagExtReachesDesc(self: *Self, ext: Var, target_desc: types_mod.DescStoreIdx) bool {
+        var ext_var = ext;
+        var guard = types_mod.debug.IterationGuard.init("tagExtReachesDesc");
+
+        while (true) {
+            guard.tick();
+
+            const resolved = self.types_store.resolveVar(ext_var);
+            if (resolved.desc_idx == target_desc) return true;
+
+            switch (resolved.desc.content) {
+                .alias => |alias| {
+                    ext_var = self.types_store.getAliasBackingVar(alias);
+                },
+                .structure => |flat_type| {
+                    switch (flat_type) {
+                        .tag_union => |tag_union| {
+                            ext_var = tag_union.ext;
+                        },
+                        else => return false,
+                    }
+                },
+                else => return false,
+            }
+        }
+    }
+
+    fn mergeRecordFieldsIntoScratch(self: *Self, range: *RecordFieldSafeList.Range, fields: RecordFieldSafeMultiList.Range) std.mem.Allocator.Error!void {
+        const next_fields = self.types_store.record_fields.sliceRange(fields);
+        try self.scratch.mergeSortedExtensionFields(
+            range,
+            next_fields.items(.name),
+            next_fields.items(.var_),
+            self.ident_store,
+        );
+    }
+
+    fn mergeTagsIntoScratch(self: *Self, range: *TagSafeList.Range, tags: TagSafeMultiList.Range) std.mem.Allocator.Error!void {
+        const next_tags = self.types_store.tags.sliceRange(tags);
+        try self.scratch.mergeSortedExtensionTags(
+            range,
+            next_tags.items(.name),
+            next_tags.items(.args),
+            self.ident_store,
+        );
+    }
+
+    fn finishRecordForMerge(self: *Self, range: RecordFieldSafeList.Range, ext: Var) std.mem.Allocator.Error!types_mod.Record {
+        const fields = try self.types_store.appendRecordFields(self.scratch.gathered_fields.sliceRange(range));
+        return .{ .fields = fields, .ext = ext };
+    }
+
+    fn finishTagUnionForMerge(self: *Self, range: TagSafeList.Range, ext: Var) std.mem.Allocator.Error!TagUnion {
+        const tags = try self.types_store.appendTags(self.scratch.gathered_tags.sliceRange(range));
+        return .{ .tags = tags, .ext = ext };
+    }
+
+    fn recordForMerge(self: *Self, vars: *const ResolvedVarDescs, record: types_mod.Record) std.mem.Allocator.Error!types_mod.Record {
+        const target_desc = self.rowExtMergeTarget(vars);
+        if (!self.recordExtReachesDesc(record.ext, target_desc)) return record;
+
+        var range = try self.scratch.copyGatherFieldsFromMultiList(
+            &self.types_store.record_fields,
+            record.fields,
+        );
+        var ext_var = record.ext;
+        var spliced_target = false;
+        var guard = types_mod.debug.IterationGuard.init("recordForMerge");
+
+        while (true) {
+            guard.tick();
+
+            const resolved = self.types_store.resolveVar(ext_var);
+            if (resolved.desc_idx == target_desc) {
+                if (spliced_target) {
+                    return try self.finishRecordForMerge(range, try self.fresh(vars, resolved.desc.content));
+                }
+
+                spliced_target = true;
+                switch (resolved.desc.content) {
+                    .structure => |flat_type| {
+                        switch (flat_type) {
+                            .record => |target_record| {
+                                try self.mergeRecordFieldsIntoScratch(&range, target_record.fields);
+                                ext_var = target_record.ext;
+                            },
+                            .record_unbound => |fields| {
+                                try self.mergeRecordFieldsIntoScratch(&range, fields);
+                                return try self.finishRecordForMerge(range, try self.fresh(vars, resolved.desc.content));
+                            },
+                            else => return try self.finishRecordForMerge(range, try self.fresh(vars, resolved.desc.content)),
+                        }
+                    },
+                    else => return try self.finishRecordForMerge(range, try self.fresh(vars, resolved.desc.content)),
+                }
+                continue;
+            }
+
+            switch (resolved.desc.content) {
+                .alias => |alias| {
+                    ext_var = self.types_store.getAliasBackingVar(alias);
+                },
+                .structure => |flat_type| {
+                    switch (flat_type) {
+                        .record => |ext_record| {
+                            try self.mergeRecordFieldsIntoScratch(&range, ext_record.fields);
+                            ext_var = ext_record.ext;
+                        },
+                        else => return try self.finishRecordForMerge(range, ext_var),
+                    }
+                },
+                else => return try self.finishRecordForMerge(range, ext_var),
+            }
+        }
+    }
+
+    fn tagUnionForMerge(self: *Self, vars: *const ResolvedVarDescs, tag_union: TagUnion) std.mem.Allocator.Error!TagUnion {
+        const target_desc = self.rowExtMergeTarget(vars);
+        if (!self.tagExtReachesDesc(tag_union.ext, target_desc)) return tag_union;
+
+        var range = try self.scratch.copyGatherTagsFromMultiList(
+            &self.types_store.tags,
+            tag_union.tags,
+        );
+        var ext_var = tag_union.ext;
+        var spliced_target = false;
+        var guard = types_mod.debug.IterationGuard.init("tagUnionForMerge");
+
+        while (true) {
+            guard.tick();
+
+            const resolved = self.types_store.resolveVar(ext_var);
+            if (resolved.desc_idx == target_desc) {
+                if (spliced_target) {
+                    return try self.finishTagUnionForMerge(range, try self.fresh(vars, resolved.desc.content));
+                }
+
+                spliced_target = true;
+                switch (resolved.desc.content) {
+                    .structure => |flat_type| {
+                        switch (flat_type) {
+                            .tag_union => |target_tag_union| {
+                                try self.mergeTagsIntoScratch(&range, target_tag_union.tags);
+                                ext_var = target_tag_union.ext;
+                            },
+                            else => return try self.finishTagUnionForMerge(range, try self.fresh(vars, resolved.desc.content)),
+                        }
+                    },
+                    else => return try self.finishTagUnionForMerge(range, try self.fresh(vars, resolved.desc.content)),
+                }
+                continue;
+            }
+
+            switch (resolved.desc.content) {
+                .alias => |alias| {
+                    ext_var = self.types_store.getAliasBackingVar(alias);
+                },
+                .structure => |flat_type| {
+                    switch (flat_type) {
+                        .tag_union => |ext_tag_union| {
+                            try self.mergeTagsIntoScratch(&range, ext_tag_union.tags);
+                            ext_var = ext_tag_union.ext;
+                        },
+                        else => return try self.finishTagUnionForMerge(range, ext_var),
+                    }
+                },
+                else => return try self.finishTagUnionForMerge(range, ext_var),
+            }
+        }
+    }
+
     fn processSharedFieldsAfterChildren(self: *Self, post: SharedFieldsAfterChildren) Error!void {
         if (self.scratch.mismatch_flags.items.items[post.did_field_error_flag]) {
             return error.TypeMismatch;
@@ -1179,7 +1402,7 @@ const Unifier = struct {
         defer trace.end();
 
         // If this nominal is opaque and we're not in the origin module, error
-        if (!nominal_type.canLiftInner(self.qualified_module_ident)) {
+        if (!nominal_type.canLiftInner(self.self_module_identity)) {
             return error.TypeMismatch;
         }
 
@@ -1270,7 +1493,7 @@ const Unifier = struct {
         defer trace.end();
 
         // If this nominal is opaque and we're not in the origin module, error
-        if (!nominal_type.canLiftInner(self.qualified_module_ident)) {
+        if (!nominal_type.canLiftInner(self.self_module_identity)) {
             return error.TypeMismatch;
         }
 
@@ -2557,28 +2780,28 @@ const WorkFrame = union(enum) {
 /// Public helper functions for tests
 pub fn partitionFields(
     ident_store: *const Ident.Store,
-    qualified_module_ident: Ident.Idx,
+    self_module_identity: base.ModuleIdentity.Idx,
     types_store: *types_mod.Store,
     scratch: *Scratch,
     occurs_scratch: *occurs.Scratch,
     a_fields_range: RecordFieldSafeList.Range,
     b_fields_range: RecordFieldSafeList.Range,
 ) std.mem.Allocator.Error!Unifier.PartitionedRecordFields {
-    var unifier = Unifier.init(ident_store, qualified_module_ident, types_store, scratch, occurs_scratch);
+    var unifier = Unifier.init(ident_store, self_module_identity, types_store, scratch, occurs_scratch);
     return try unifier.partitionFields(scratch, a_fields_range, b_fields_range);
 }
 
 /// Partitions tags from two tag ranges for unification.
 pub fn partitionTags(
     ident_store: *const Ident.Store,
-    qualified_module_ident: Ident.Idx,
+    self_module_identity: base.ModuleIdentity.Idx,
     types_store: *types_mod.Store,
     scratch: *Scratch,
     occurs_scratch: *occurs.Scratch,
     a_tags_range: TagSafeList.Range,
     b_tags_range: TagSafeList.Range,
 ) std.mem.Allocator.Error!Unifier.PartitionedTags {
-    var unifier = Unifier.init(ident_store, qualified_module_ident, types_store, scratch, occurs_scratch);
+    var unifier = Unifier.init(ident_store, self_module_identity, types_store, scratch, occurs_scratch);
     return try unifier.partitionTags(scratch, a_tags_range, b_tags_range);
 }
 
@@ -2892,8 +3115,19 @@ pub const Scratch = struct {
     }
 };
 
+// Identity equality is two integer comparisons with no ident-store access:
+// `origin_module` is an env-local index of the declaring module's deep
+// CONTENT identity (see `base.module_identity`), so the answer never depends
+// on which pipeline built an artifact, what the coordinator named a package,
+// or what directory the build ran in. The within-module discriminator is the
+// declaration: the packed source-decl statement when present (statement
+// indices are stable across checked modules because equal content identities
+// imply byte-identical module source), and the type ident only for
+// declaration-less synthetic nominals. The ident comparison cannot replace
+// the statement for decl-backed builtins, whose minted idents ("U8") and
+// declared relative names ("Num.U8") are spelled differently.
 fn sameAliasIdentity(a: Alias, b: Alias) bool {
-    if (!a.origin_module.eql(b.origin_module)) return false;
+    if (a.origin_module != b.origin_module) return false;
     if (a.source_decl.present or b.source_decl.present) {
         return a.source_decl.eql(b.source_decl);
     }
@@ -2901,7 +3135,7 @@ fn sameAliasIdentity(a: Alias, b: Alias) bool {
 }
 
 fn sameNominalIdentity(a: NominalType, b: NominalType) bool {
-    if (!a.origin_module.eql(b.origin_module)) return false;
+    if (a.origin_module != b.origin_module) return false;
     const a_source_decl = a.sourceDecl();
     const b_source_decl = b.sourceDecl();
     if (a_source_decl.present or b_source_decl.present) {

@@ -138,7 +138,6 @@ pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_
     const str_stmt_in_builtin_module = builtin_indices.str_type;
 
     const module_builtin_ctx: Check.BuiltinContext = .{
-        .module_name = try module_env.insertIdent(base.Ident.for_text(module_name)),
         .bool_stmt = bool_stmt_in_bool_module,
         .try_stmt = try_stmt_in_result_module,
         .str_stmt = str_stmt_in_builtin_module,
@@ -266,7 +265,6 @@ pub fn initWithExecutableRootNames(module_name: []const u8, source: []const u8, 
     const str_stmt_in_builtin_module = builtin_indices.str_type;
 
     const module_builtin_ctx: Check.BuiltinContext = .{
-        .module_name = try module_env.insertIdent(base.Ident.for_text(module_name)),
         .bool_stmt = bool_stmt_in_bool_module,
         .try_stmt = try_stmt_in_result_module,
         .str_stmt = str_stmt_in_builtin_module,

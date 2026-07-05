@@ -1046,7 +1046,7 @@ pub const Store = struct {
                 if (flat_type == .nominal_type) {
                     const nom = flat_type.nominal_type;
                     if (nom.ident.ident_idx.eql(nominal_key.ident_idx) and
-                        nom.origin_module.eql(nominal_key.origin_module))
+                        nom.origin_module == nominal_key.origin_module)
                     {
                         return self.getLayout(boxed_idx);
                     }
@@ -1912,7 +1912,7 @@ pub const Store = struct {
                                 if (self.builtin_str_ident) |builtin_str| {
                                     if (nominal_type.ident.ident_idx.eql(builtin_str)) break :blk true;
                                 }
-                                if (nominal_type.origin_module.eql(self.currentEnv().idents.builtin_module)) {
+                                if (nominal_type.originIsBuiltin()) {
                                     if (self.builtin_str_plain_ident) |plain_str| {
                                         if (nominal_type.ident.ident_idx.eql(plain_str)) break :blk true;
                                     }
@@ -1930,7 +1930,7 @@ pub const Store = struct {
                                 if (self.bool_ident) |bool_id| {
                                     if (nominal_type.ident.ident_idx.eql(bool_id)) break :blk true;
                                 }
-                                if (nominal_type.origin_module.eql(self.currentEnv().idents.builtin_module)) {
+                                if (nominal_type.originIsBuiltin()) {
                                     if (self.bool_plain_ident) |plain_bool| {
                                         if (nominal_type.ident.ident_idx.eql(plain_bool)) break :blk true;
                                     }
@@ -1945,7 +1945,7 @@ pub const Store = struct {
 
                             // Special handling for Builtin.Box
                             const is_builtin_box = if (self.box_ident) |box_ident|
-                                nominal_type.origin_module.eql(self.currentEnv().idents.builtin_module) and
+                                nominal_type.originIsBuiltin() and
                                     nominal_type.ident.ident_idx.eql(box_ident)
                             else
                                 false;
@@ -1985,7 +1985,7 @@ pub const Store = struct {
 
                             // Special handling for Builtin.List
                             const is_builtin_list = if (self.list_ident) |list_ident|
-                                nominal_type.origin_module.eql(self.currentEnv().idents.builtin_module) and
+                                nominal_type.originIsBuiltin() and
                                     nominal_type.ident.ident_idx.eql(list_ident)
                             else
                                 false;
@@ -2080,7 +2080,7 @@ pub const Store = struct {
 
                             // Special handling for built-in numeric types from Builtin module
                             // These have empty tag union backings but need scalar layouts
-                            if (nominal_type.origin_module.eql(self.currentEnv().idents.builtin_module)) {
+                            if (nominal_type.originIsBuiltin()) {
                                 const ident_idx = nominal_type.ident.ident_idx;
                                 const num_layout: ?Layout = blk: {
                                     if (self.u8_ident) |u8_id| if (ident_idx.eql(u8_id)) break :blk Layout.int(types.Int.Precision.u8);

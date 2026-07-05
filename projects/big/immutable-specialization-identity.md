@@ -232,8 +232,6 @@ in-memory lookup digests to 128 bits (collision authority remains exact
 
 ## Related projects
 
-- [Content-Based Nominal Identity](../big/content-based-nominal-identity.md)
-  — cleaner `CallableIdentity` components.
 - [Total Dispatch Plans](../big/total-dispatch-plans.md) — removes the other
   large identity-rederivation surface in `lower.zig`.
 - [Debug Generation Counters on Growable Stores](../small/store-generation-counters.md)

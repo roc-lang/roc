@@ -91,6 +91,21 @@ my @RULES = (
     { category => 'promoted-wrapper-bridge-retired-carrier', regex => qr/\barg_bridges\b/, allowed => {} },
     { category => 'promoted-wrapper-bridge-retired-carrier', regex => qr/\blowerPublishedPromotedWrapperBridge\b/, allowed => {} },
     { category => 'promoted-wrapper-bridge-retired-carrier', regex => qr/\blowerPromotedWrapperBridge[A-Za-z0-9_]*\b/, allowed => {} },
+    # Content-based nominal identity: module/type name TEXT must never decide
+    # identity downstream of import resolution. These deleted text-matching
+    # APIs must stay gone; identity crosses stores only as 32-byte content
+    # hashes (rebase via lookupModuleIdentity/internModuleIdentity).
+    { category => 'text-identity-module-view-match', regex => qr/\bmoduleViewNameMatches\b/, allowed => {} },
+    { category => 'text-identity-owner-remap', regex => qr/\bmethodOwnerInImportedNames\b/, allowed => {} },
+    { category => 'text-identity-owner-env-dedup', regex => qr/\bmoduleEnvNamesMatch\b/, allowed => {} },
+    { category => 'text-identity-owner-env-match', regex => qr/\bownerModuleEnvNameMatches\b/, allowed => {} },
+    { category => 'text-identity-owner-env-map', regex => qr/\bbuildOwnerModuleEnvMap\b/, allowed => {} },
+    { category => 'text-identity-owner-env-map', regex => qr/\bputOwnerModuleEnvNames\b/, allowed => {} },
+    { category => 'text-identity-imported-view-match', regex => qr/\bimportedViewModuleNameMatches\b/, allowed => {} },
+    { category => 'text-identity-public-api-dep', regex => qr/\bpublicApiDependencyViewByModuleName\b/, allowed => {} },
+    { category => 'text-identity-public-api-dep', regex => qr/\bisSelfPublicApiModuleName\b/, allowed => {} },
+    { category => 'text-identity-glue-def-probe', regex => qr/\bfindTopLevelDefByName\b/, allowed => {} },
+    { category => 'text-identity-artifact-env-match', regex => qr/\bmoduleEnvNameMatches\b/, allowed => {} },
 );
 
 sub iter_zig_files {

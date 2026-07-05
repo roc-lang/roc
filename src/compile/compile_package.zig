@@ -537,23 +537,19 @@ fn appendCheckOwnerEnvIfMissing(
     module_env: *const ModuleEnv,
 ) Allocator.Error!void {
     for (owner_envs.items) |existing| {
-        if (moduleEnvNamesMatch(existing, module_env)) return;
+        if (moduleEnvIdentitiesMatch(existing, module_env)) return;
     }
     try owner_envs.append(allocator, module_env);
 }
 
-fn moduleEnvNamesMatch(a: *const ModuleEnv, b: *const ModuleEnv) bool {
+/// Two owner envs are duplicates exactly when their deep content identities
+/// match: byte-identical transitive module content is interchangeable as a
+/// type owner. No name text participates.
+fn moduleEnvIdentitiesMatch(a: *const ModuleEnv, b: *const ModuleEnv) bool {
     if (@intFromPtr(a) == @intFromPtr(b)) return true;
-    if (!a.qualified_module_ident.isNone() and !b.qualified_module_ident.isNone()) {
-        return std.mem.eql(u8, a.getIdent(a.qualified_module_ident), b.getIdent(b.qualified_module_ident));
-    }
-    if (!a.display_module_name_idx.isNone() and !b.display_module_name_idx.isNone()) {
-        return std.mem.eql(u8, a.getIdent(a.display_module_name_idx), b.getIdent(b.display_module_name_idx));
-    }
-    if (a.qualified_module_ident.isNone() or b.qualified_module_ident.isNone()) {
-        if (std.mem.eql(u8, a.module_name, b.module_name)) return true;
-    }
-    return false;
+    const a_hash = a.contentIdentityHash() orelse return false;
+    const b_hash = b.contentIdentityHash() orelse return false;
+    return base.ModuleIdentity.eql(a_hash, b_hash);
 }
 
 fn availableArtifactByKey(
@@ -1561,7 +1557,6 @@ pub const PackageEnv = struct {
 
         // Type check using the SAME module_envs_map
         const module_builtin_ctx: Check.BuiltinContext = .{
-            .module_name = env.qualified_module_ident,
             .bool_stmt = builtin_indices.bool_type,
             .try_stmt = builtin_indices.try_type,
             .str_stmt = builtin_indices.str_type,
@@ -1780,7 +1775,6 @@ pub const PackageEnv = struct {
         const builtin_indices = compiled_builtins.builtinIndices(can.CIR);
 
         const module_builtin_ctx: Check.BuiltinContext = .{
-            .module_name = env.qualified_module_ident,
             .bool_stmt = builtin_indices.bool_type,
             .try_stmt = builtin_indices.try_type,
             .str_stmt = builtin_indices.str_type,

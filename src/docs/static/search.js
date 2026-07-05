@@ -173,6 +173,7 @@ const setupSearch = () => {
             }
           } else {
             entry.classList.add("hidden");
+            searchTypeAhead.scrollTop = 0;
           }
         });
         if (totalResults < 1) {

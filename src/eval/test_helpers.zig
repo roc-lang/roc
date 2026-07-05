@@ -1271,7 +1271,6 @@ pub fn parseCheckModule(
 
     try module_env.initCIRFields(module_name);
     const builtin_ctx: Check.BuiltinContext = .{
-        .module_name = try module_env.insertIdent(base.Ident.for_text(module_name)),
         .bool_stmt = builtin_indices.bool_type,
         .try_stmt = builtin_indices.try_type,
         .str_stmt = builtin_indices.str_type,

@@ -448,20 +448,20 @@ test "monotype spec builder uses exact type equality after digest match" {
     var type_store = Type.Store.init(std.testing.allocator);
     defer type_store.deinit();
 
-    const module_name = try name_store.internModuleName("Test");
+    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xCD} ** 32));
     const first_name = try name_store.internTypeName("First");
     const second_name = try name_store.internTypeName("Second");
 
     const first_ty = try type_store.add(.{ .named = .{
         .named_type = .{ .module = .{}, .ty = @enumFromInt(1) },
-        .def = .{ .module_name = module_name, .type_name = first_name },
+        .def = .{ .module = module_identity, .type_name = first_name },
         .kind = .alias,
         .args = Type.Span.empty(),
         .backing = null,
     } });
     const second_ty = try type_store.add(.{ .named = .{
         .named_type = .{ .module = .{}, .ty = @enumFromInt(2) },
-        .def = .{ .module_name = module_name, .type_name = second_name },
+        .def = .{ .module = module_identity, .type_name = second_name },
         .kind = .alias,
         .args = Type.Span.empty(),
         .backing = null,

@@ -83,10 +83,11 @@ regions: Region.List,
 imported_modules: []const *const ModuleEnv,
 /// Module envs whose public APIs are semantically visible through imported checked data.
 owner_modules: []const *const ModuleEnv,
-/// Module envs whose public APIs are semantically visible through direct imports.
-/// These are not lexically importable, and CIR import indexes never refer to
-/// this set. It exists only for owner lookups on copied imported types.
-owner_module_envs: std.StringHashMap(*const ModuleEnv),
+/// Env-local identity (in `cir`'s module identity table) that types minted
+/// from compiler-builtin declarations carry as their `origin_module`: the
+/// Builtin module's deep content identity (or this module's own identity when
+/// checking the Builtin module itself, whose content identity is identical).
+builtin_origin_identity: base.ModuleIdentity.Idx,
 /// Map of auto-imported type names (like "Str", "List", "Bool") to their defining modules.
 /// This is used to resolve type names that are automatically available without explicit imports.
 auto_imported_types: ?*const std.AutoHashMap(Ident.Idx, can.Can.AutoImportedType),
@@ -305,6 +306,10 @@ hoist_selected_bindings: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, u32),
 /// expression selection and local binding selection from duplicating the same
 /// root.
 hoist_selected_exprs: std.AutoHashMapUnmanaged(CIR.Expr.Idx, u32),
+/// Expressions whose original subtrees were replaced with explicit runtime
+/// errors after hoist selection had already seen them. Selected roots and
+/// dependencies inside these subtrees must be pruned before publication.
+hoist_invalidated_exprs: std.AutoHashMapUnmanaged(CIR.Expr.Idx, void),
 /// Sparse roots selected during checking. Publication consumes this slice and
 /// turns the entries into checked compile-time roots.
 selected_hoisted_roots: std.ArrayListUnmanaged(hoist_roots.SelectedHoistedRoot),
@@ -691,16 +696,18 @@ const HoistSelectionTransaction = struct {
         const known = self.checker.hoist_known_values.get(pattern) orelse return false;
         return switch (known) {
             .binding_rhs => |expr| {
+                if (self.checker.hoistExprInvalidated(expr)) return false;
                 const root_index = try self.stageExprRoot(expr, pattern);
                 try self.stageKnownUpdate(pattern, root_index);
                 return true;
             },
             .pattern_extraction => |extraction| {
+                if (self.checker.hoistExprInvalidated(extraction.base_expr)) return false;
                 const root_index = try self.stagePatternExtractionRoot(pattern, extraction);
                 try self.stageKnownUpdate(pattern, root_index);
                 return true;
             },
-            .selected_root => true,
+            .selected_root => |root_index| !self.checker.selectedHoistedRootInvalidated(root_index),
             .unavailable_runtime => false,
         };
     }
@@ -1026,8 +1033,6 @@ const Constraint = union(enum) {
 /// Context for type checking: module identity, builtin type references, and the Builtin module itself.
 /// This is passed to Check.init() to provide access to auto-imported types from Builtin.
 pub const BuiltinContext = struct {
-    /// The name of the module being type-checked
-    module_name: base.Ident.Idx,
     /// Statement index of Bool type in the current module (injected from Builtin.bin)
     bool_stmt: can.CIR.Statement.Idx,
     /// Statement index of Try type in the current module (injected from Builtin.bin)
@@ -1128,8 +1133,30 @@ fn initAssumePrepared(
     regions: *const Region.List,
     builtin_ctx: BuiltinContext,
 ) std.mem.Allocator.Error!Self {
-    var owner_module_envs = try buildOwnerModuleEnvMap(gpa, imported_modules, owner_modules);
-    errdefer owner_module_envs.deinit();
+    // Finalize this module's deep content identity before any unification: the
+    // unifier only ever compares precomputed identities. Idempotent — the
+    // coordinator already finalized coordinator-driven modules (it needs the
+    // identity for the checked-cache key probe); this covers every other
+    // checking entry point (tests, snapshot tool, playground, builtin bake)
+    // with the same inputs: the resolved direct imports.
+    try cir.ensureContentIdentity(imported_modules);
+
+    // Resolve the env-local identity that builtin-origin types minted during
+    // this check will carry. When a separate Builtin module env exists, rebase
+    // its content identity into this module's table; when checking the Builtin
+    // module itself, its own identity IS the builtin identity.
+    const builtin_origin_identity = blk: {
+        if (builtin_ctx.builtin_module) |builtin_env| {
+            const builtin_hash = builtin_env.contentIdentityHash() orelse {
+                std.debug.panic(
+                    "type checker invariant violated: Builtin module env has no content identity while checking module '{s}'",
+                    .{cir.module_name},
+                );
+            };
+            break :blk try cir.internModuleIdentity(builtin_hash, cir.idents.builtin_module);
+        }
+        break :blk cir.selfModuleIdentity();
+    };
 
     var import_mapping = try createImportMapping(
         gpa,
@@ -1146,7 +1173,7 @@ fn initAssumePrepared(
         .cir = cir,
         .imported_modules = imported_modules,
         .owner_modules = owner_modules,
-        .owner_module_envs = owner_module_envs,
+        .builtin_origin_identity = builtin_origin_identity,
         .auto_imported_types = auto_imported_types,
         .regions = blk: {
             var owned = Region.List{};
@@ -1208,6 +1235,7 @@ fn initAssumePrepared(
         .hoist_contextual_binding_scope_patterns = .empty,
         .hoist_selected_bindings = .{},
         .hoist_selected_exprs = .{},
+        .hoist_invalidated_exprs = .{},
         .selected_hoisted_roots = .empty,
         .executable_root_defs = .empty,
         .last_hoist_result = null,
@@ -1250,41 +1278,6 @@ fn initAssumePrepared(
     return self;
 }
 
-fn buildOwnerModuleEnvMap(
-    gpa: std.mem.Allocator,
-    imported_modules: []const *const ModuleEnv,
-    owner_modules: []const *const ModuleEnv,
-) std.mem.Allocator.Error!std.StringHashMap(*const ModuleEnv) {
-    var map = std.StringHashMap(*const ModuleEnv).init(gpa);
-    errdefer map.deinit();
-
-    for (imported_modules) |imported_env| {
-        if (imported_env.module_role == .builtin) continue;
-        try putOwnerModuleEnvNames(&map, imported_env);
-    }
-    for (owner_modules) |owner_env| {
-        if (owner_env.module_role == .builtin) continue;
-        try putOwnerModuleEnvNames(&map, owner_env);
-    }
-
-    return map;
-}
-
-fn putOwnerModuleEnvNames(
-    map: *std.StringHashMap(*const ModuleEnv),
-    module_env: *const ModuleEnv,
-) std.mem.Allocator.Error!void {
-    if (!module_env.qualified_module_ident.isNone()) {
-        try map.put(module_env.getIdent(module_env.qualified_module_ident), module_env);
-    }
-    if (!module_env.display_module_name_idx.isNone()) {
-        try map.put(module_env.getIdent(module_env.display_module_name_idx), module_env);
-    }
-    if (module_env.module_name.len > 0) {
-        try map.put(module_env.module_name, module_env);
-    }
-}
-
 /// Call this after Check has been stored at its final location to set up the import_mapping pointer.
 /// This is needed because returning Check by value invalidates the pointer set during init.
 pub fn fixupTypeWriter(self: *Self) void {
@@ -1297,7 +1290,6 @@ pub fn deinit(self: *Self) void {
     self.problems.deinit(self.gpa);
     self.snapshots.deinit();
     self.import_mapping.deinit();
-    self.owner_module_envs.deinit();
     self.unify_scratch.deinit();
     self.occurs_scratch.deinit();
     self.seen_annos.deinit();
@@ -1324,6 +1316,7 @@ pub fn deinit(self: *Self) void {
     self.hoist_contextual_binding_scope_patterns.deinit(self.gpa);
     self.hoist_selected_bindings.deinit(self.gpa);
     self.hoist_selected_exprs.deinit(self.gpa);
+    self.hoist_invalidated_exprs.deinit(self.gpa);
     for (self.selected_hoisted_roots.items) |*root| {
         hoist_roots.deinitSelectedRoot(self.gpa, root);
     }
@@ -1485,6 +1478,7 @@ fn finishHoistFrame(self: *Self, expr: CIR.Expr.Idx, does_fx: bool) Allocator.Er
 
         if (should_flush_child_candidates) {
             for (self.hoist_expr_candidates.items[frame.candidate_start..]) |candidate| {
+                if (self.hoistExprInvalidated(candidate)) continue;
                 _ = try transaction.stageExprRoot(candidate, null);
             }
         }
@@ -2013,10 +2007,9 @@ fn ensureHoistedBindingRoot(self: *Self, pattern: CIR.Pattern.Idx) Allocator.Err
 fn hoistKnownBindingAvailable(self: *Self, pattern: CIR.Pattern.Idx) bool {
     const known = self.hoist_known_values.get(pattern) orelse return false;
     return switch (known) {
-        .binding_rhs,
-        .pattern_extraction,
-        .selected_root,
-        => true,
+        .binding_rhs => |expr| !self.hoistExprInvalidated(expr),
+        .pattern_extraction => |extraction| !self.hoistExprInvalidated(extraction.base_expr),
+        .selected_root => |root_index| !self.selectedHoistedRootInvalidated(root_index),
         .unavailable_runtime => false,
     };
 }
@@ -2049,6 +2042,233 @@ fn ensureHoistedExprRoot(self: *Self, expr: CIR.Expr.Idx, pattern: ?CIR.Pattern.
     const root_index = try transaction.stageExprRoot(expr, pattern);
     try transaction.commit();
     return root_index;
+}
+
+fn hoistExprInvalidated(self: *const Self, expr: CIR.Expr.Idx) bool {
+    return self.hoist_invalidated_exprs.contains(expr);
+}
+
+fn moduleHoistExprInvalidated(self: *const Self, module: *const ModuleEnv, expr: CIR.Expr.Idx) bool {
+    return module == self.cir and self.hoistExprInvalidated(expr);
+}
+
+fn selectedHoistedRootInvalidated(self: *const Self, root_index: u32) bool {
+    if (root_index >= self.selected_hoisted_roots.items.len) {
+        std.debug.panic("check invariant violated: hoist-known selected root index out of range", .{});
+    }
+    return self.hoistExprInvalidated(self.selected_hoisted_roots.items[root_index].expr);
+}
+
+fn replaceExprWithRuntimeError(
+    self: *Self,
+    expr_idx: CIR.Expr.Idx,
+    diagnostic_idx: CIR.Diagnostic.Idx,
+) Allocator.Error!void {
+    try self.invalidateHoistedExprSubtree(expr_idx);
+    self.cir.store.replaceExprWithRuntimeError(expr_idx, diagnostic_idx);
+}
+
+fn invalidateHoistedExprSubtree(self: *Self, root: CIR.Expr.Idx) Allocator.Error!void {
+    var work: std.ArrayListUnmanaged(CIR.Expr.Idx) = .empty;
+    defer work.deinit(self.gpa);
+
+    try self.markHoistInvalidatedExprChildren(root, &work);
+    var next: usize = 0;
+    while (next < work.items.len) : (next += 1) {
+        try self.markHoistInvalidatedExprChildren(work.items[next], &work);
+    }
+}
+
+fn markHoistInvalidatedExpr(
+    self: *Self,
+    expr: CIR.Expr.Idx,
+    work: *std.ArrayListUnmanaged(CIR.Expr.Idx),
+) Allocator.Error!void {
+    const entry = try self.hoist_invalidated_exprs.getOrPut(self.gpa, expr);
+    if (entry.found_existing) return;
+    try work.append(self.gpa, expr);
+}
+
+fn markHoistInvalidatedExprSpan(
+    self: *Self,
+    span: CIR.Expr.Span,
+    work: *std.ArrayListUnmanaged(CIR.Expr.Idx),
+) Allocator.Error!void {
+    for (self.cir.store.sliceExpr(span)) |expr| {
+        try self.markHoistInvalidatedExpr(expr, work);
+    }
+}
+
+fn markHoistInvalidatedStatementSpan(
+    self: *Self,
+    span: CIR.Statement.Span,
+    work: *std.ArrayListUnmanaged(CIR.Expr.Idx),
+) Allocator.Error!void {
+    for (self.cir.store.sliceStatements(span)) |statement| {
+        try self.markHoistInvalidatedStatementExprs(statement, work);
+    }
+}
+
+fn markHoistInvalidatedStatementExprs(
+    self: *Self,
+    statement: CIR.Statement.Idx,
+    work: *std.ArrayListUnmanaged(CIR.Expr.Idx),
+) Allocator.Error!void {
+    switch (self.cir.store.getStatement(statement)) {
+        .s_decl => |decl| try self.markHoistInvalidatedExpr(decl.expr, work),
+        .s_var => |var_| try self.markHoistInvalidatedExpr(var_.expr, work),
+        .s_reassign => |reassign| try self.markHoistInvalidatedExpr(reassign.expr, work),
+        .s_dbg => |dbg| try self.markHoistInvalidatedExpr(dbg.expr, work),
+        .s_expr => |expr| try self.markHoistInvalidatedExpr(expr.expr, work),
+        .s_expect => |expect| try self.markHoistInvalidatedExpr(expect.body, work),
+        .s_for => |for_| {
+            try self.markHoistInvalidatedExpr(for_.expr, work);
+            try self.markHoistInvalidatedExpr(for_.body, work);
+        },
+        .s_while => |while_| {
+            try self.markHoistInvalidatedExpr(while_.cond, work);
+            try self.markHoistInvalidatedExpr(while_.body, work);
+        },
+        .s_infinite_loop => |loop| {
+            try self.markHoistInvalidatedExpr(loop.cond, work);
+            try self.markHoistInvalidatedExpr(loop.body, work);
+        },
+        .s_breakable_loop => |loop| {
+            try self.markHoistInvalidatedExpr(loop.cond, work);
+            try self.markHoistInvalidatedExpr(loop.body, work);
+        },
+        .s_return => |ret| {
+            try self.markHoistInvalidatedExpr(ret.expr, work);
+            try self.markHoistInvalidatedExpr(ret.lambda, work);
+        },
+        .s_var_uninitialized,
+        .s_crash,
+        .s_break,
+        .s_import,
+        .s_alias_decl,
+        .s_nominal_decl,
+        .s_type_anno,
+        .s_type_var_alias,
+        .s_runtime_error,
+        => {},
+    }
+}
+
+fn markHoistInvalidatedExprChildren(
+    self: *Self,
+    expr: CIR.Expr.Idx,
+    work: *std.ArrayListUnmanaged(CIR.Expr.Idx),
+) Allocator.Error!void {
+    switch (self.cir.store.getExpr(expr)) {
+        .e_str => |str| try self.markHoistInvalidatedExprSpan(str.span, work),
+        .e_list => |list| try self.markHoistInvalidatedExprSpan(list.elems, work),
+        .e_tuple => |tuple| try self.markHoistInvalidatedExprSpan(tuple.elems, work),
+        .e_match => |match| {
+            try self.markHoistInvalidatedExpr(match.cond, work);
+            for (self.cir.store.sliceMatchBranches(match.branches)) |branch_idx| {
+                const branch = self.cir.store.getMatchBranch(branch_idx);
+                if (branch.guard) |guard| try self.markHoistInvalidatedExpr(guard, work);
+                try self.markHoistInvalidatedExpr(branch.value, work);
+            }
+        },
+        .e_if => |if_| {
+            for (self.cir.store.sliceIfBranches(if_.branches)) |branch_idx| {
+                const branch = self.cir.store.getIfBranch(branch_idx);
+                try self.markHoistInvalidatedExpr(branch.cond, work);
+                try self.markHoistInvalidatedExpr(branch.body, work);
+            }
+            try self.markHoistInvalidatedExpr(if_.final_else, work);
+        },
+        .e_call => |call| {
+            try self.markHoistInvalidatedExpr(call.func, work);
+            try self.markHoistInvalidatedExprSpan(call.args, work);
+        },
+        .e_record => |record| {
+            for (self.cir.store.sliceRecordFields(record.fields)) |field_idx| {
+                try self.markHoistInvalidatedExpr(self.cir.store.getRecordField(field_idx).value, work);
+            }
+            if (record.ext) |ext| try self.markHoistInvalidatedExpr(ext, work);
+        },
+        .e_block => |block| {
+            try self.markHoistInvalidatedStatementSpan(block.stmts, work);
+            try self.markHoistInvalidatedExpr(block.final_expr, work);
+        },
+        .e_tag => |tag| try self.markHoistInvalidatedExprSpan(tag.args, work),
+        .e_nominal => |nominal| try self.markHoistInvalidatedExpr(nominal.backing_expr, work),
+        .e_nominal_external => |nominal| try self.markHoistInvalidatedExpr(nominal.backing_expr, work),
+        .e_closure => |closure| try self.markHoistInvalidatedExpr(closure.lambda_idx, work),
+        .e_lambda => |lambda| try self.markHoistInvalidatedExpr(lambda.body, work),
+        .e_binop => |binop| {
+            try self.markHoistInvalidatedExpr(binop.lhs, work);
+            try self.markHoistInvalidatedExpr(binop.rhs, work);
+        },
+        .e_unary_minus => |unary| try self.markHoistInvalidatedExpr(unary.expr, work),
+        .e_unary_not => |unary| try self.markHoistInvalidatedExpr(unary.expr, work),
+        .e_field_access => |field| try self.markHoistInvalidatedExpr(field.receiver, work),
+        .e_method_call => |call| {
+            try self.markHoistInvalidatedExpr(call.receiver, work);
+            try self.markHoistInvalidatedExprSpan(call.args, work);
+        },
+        .e_dispatch_call => |call| {
+            try self.markHoistInvalidatedExpr(call.receiver, work);
+            try self.markHoistInvalidatedExprSpan(call.args, work);
+        },
+        .e_interpolation => |interpolation| {
+            try self.markHoistInvalidatedExpr(interpolation.first, work);
+            try self.markHoistInvalidatedExprSpan(interpolation.parts, work);
+        },
+        .e_structural_eq => |eq| {
+            try self.markHoistInvalidatedExpr(eq.lhs, work);
+            try self.markHoistInvalidatedExpr(eq.rhs, work);
+        },
+        .e_structural_hash => |hash| {
+            try self.markHoistInvalidatedExpr(hash.value, work);
+            try self.markHoistInvalidatedExpr(hash.hasher, work);
+        },
+        .e_method_eq => |eq| {
+            try self.markHoistInvalidatedExpr(eq.lhs, work);
+            try self.markHoistInvalidatedExpr(eq.rhs, work);
+        },
+        .e_type_method_call => |call| try self.markHoistInvalidatedExprSpan(call.args, work),
+        .e_type_dispatch_call => |call| try self.markHoistInvalidatedExprSpan(call.args, work),
+        .e_tuple_access => |access| try self.markHoistInvalidatedExpr(access.tuple, work),
+        .e_dbg => |dbg| try self.markHoistInvalidatedExpr(dbg.expr, work),
+        .e_expect_err => |expect_err| try self.markHoistInvalidatedExpr(expect_err.expr, work),
+        .e_expect => |expect| try self.markHoistInvalidatedExpr(expect.body, work),
+        .e_return => |ret| {
+            try self.markHoistInvalidatedExpr(ret.expr, work);
+            try self.markHoistInvalidatedExpr(ret.lambda, work);
+        },
+        .e_for => |for_| {
+            try self.markHoistInvalidatedExpr(for_.expr, work);
+            try self.markHoistInvalidatedExpr(for_.body, work);
+        },
+        .e_run_low_level => |run| try self.markHoistInvalidatedExprSpan(run.args, work),
+        .e_num,
+        .e_frac_f32,
+        .e_frac_f64,
+        .e_dec,
+        .e_dec_small,
+        .e_num_from_numeral,
+        .e_typed_int,
+        .e_typed_frac,
+        .e_typed_num_from_numeral,
+        .e_str_segment,
+        .e_bytes_literal,
+        .e_lookup_local,
+        .e_lookup_external,
+        .e_lookup_required,
+        .e_empty_list,
+        .e_empty_record,
+        .e_zero_argument_tag,
+        .e_runtime_error,
+        .e_crash,
+        .e_ellipsis,
+        .e_anno_only,
+        .e_break,
+        .e_hosted_lambda,
+        => {},
+    }
 }
 
 fn debugAssertHoistSelectionConsistent(self: *const Self) void {
@@ -2105,6 +2325,7 @@ const HoistSelectionTestState = struct {
         checker.hoist_contextual_binding_scope_patterns = .empty;
         checker.hoist_selected_bindings = .{};
         checker.hoist_selected_exprs = .{};
+        checker.hoist_invalidated_exprs = .{};
         checker.selected_hoisted_roots = .empty;
         checker.last_hoist_result = null;
         checker.hoist_suppressed_depth = 0;
@@ -2131,6 +2352,7 @@ const HoistSelectionTestState = struct {
         self.checker.hoist_contextual_binding_scope_patterns.deinit(self.allocator);
         self.checker.hoist_selected_bindings.deinit(self.allocator);
         self.checker.hoist_selected_exprs.deinit(self.allocator);
+        self.checker.hoist_invalidated_exprs.deinit(self.allocator);
         for (self.checker.selected_hoisted_roots.items) |*root| {
             hoist_roots.deinitSelectedRoot(self.allocator, root);
         }
@@ -2454,6 +2676,7 @@ fn patternIsTopLevel(self: *Self, pattern: CIR.Pattern.Idx) bool {
 }
 
 fn exprCanBeHoistedRoot(self: *Self, expr: CIR.Expr.Idx) bool {
+    if (self.hoistExprInvalidated(expr)) return false;
     if (self.varIsFunctionType(ModuleEnv.varFrom(expr))) return false;
     return switch (self.cir.store.getExpr(expr)) {
         .e_lookup_local => false,
@@ -2521,6 +2744,7 @@ fn exprCanBeHoistedRoot(self: *Self, expr: CIR.Expr.Idx) bool {
 /// eligibility: function/lambda/closure and observable expression frames may
 /// contain closed child work, but they cannot cover that work as data roots.
 fn exprCanCoverHoistedChildren(self: *Self, expr: CIR.Expr.Idx) bool {
+    if (self.hoistExprInvalidated(expr)) return false;
     if (self.varIsFunctionType(ModuleEnv.varFrom(expr))) return false;
     return switch (self.cir.store.getExpr(expr)) {
         .e_lookup_local,
@@ -2584,6 +2808,7 @@ fn exprCanCoverHoistedChildren(self: *Self, expr: CIR.Expr.Idx) bool {
 }
 
 fn exprCanBeHoistedBindingRoot(self: *Self, expr: CIR.Expr.Idx) bool {
+    if (self.hoistExprInvalidated(expr)) return false;
     if (self.varIsFunctionType(ModuleEnv.varFrom(expr))) return false;
     return switch (self.cir.store.getExpr(expr)) {
         .e_lookup_local => true,
@@ -2805,7 +3030,7 @@ fn unifyEnv(self: *Self) unifier.Env {
         // problems is owned by self.gpa.
         .problems_gpa = self.gpa,
         .ident_store = self.cir.getIdentStoreConst(),
-        .qualified_module_ident = self.cir.qualified_module_ident,
+        .self_module_identity = self.cir.selfModuleIdentity(),
         .types = self.types,
         .problems = &self.problems,
         .snapshots = &self.snapshots,
@@ -2880,14 +3105,12 @@ fn checkForInfiniteType(self: *Self, comptime Idx: anytype, idx: Idx) std.mem.Al
     const occurs_result = try occurs.occurs(self.types, &self.occurs_scratch, var_);
 
     switch (occurs_result) {
-        .not_recursive, .recursive_nominal => {
-            // These are fine - no cycle, or valid recursion through a nominal type
+        .valid => {
+            // This is fine - no cycle, or valid recursion through a nominal type
         },
         .recursive_anonymous => {
-            const err_var = if (self.occurs_scratch.err_chain.len() > 0)
-                self.occurs_scratch.err_chain.items.items[0]
-            else
-                var_;
+            std.debug.assert(self.occurs_scratch.err_var != null);
+            const err_var = self.occurs_scratch.err_var.?;
 
             // Anonymous recursion (recursive type not through a nominal type)
             const snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, err_var);
@@ -2904,10 +3127,8 @@ fn checkForInfiniteType(self: *Self, comptime Idx: anytype, idx: Idx) std.mem.Al
             try self.types.setVarContent(var_, .err);
         },
         .infinite => {
-            const err_var = if (self.occurs_scratch.err_chain.len() > 0)
-                self.occurs_scratch.err_chain.items.items[0]
-            else
-                var_;
+            std.debug.assert(self.occurs_scratch.err_var != null);
+            const err_var = self.occurs_scratch.err_var.?;
 
             // Infinite type (like `a = List(a)`)
             const snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, err_var);
@@ -3470,11 +3691,8 @@ const BuiltinParseSpecDecl = enum {
     tag_union,
 };
 
-fn builtinOriginModule(self: *const Self) Ident.Idx {
-    return if (self.builtin_ctx.builtin_module) |_|
-        self.cir.idents.builtin_module
-    else
-        self.builtin_ctx.module_name;
+fn builtinOriginModule(self: *const Self) base.ModuleIdentity.Idx {
+    return self.builtin_origin_identity;
 }
 
 fn isCheckingBuiltinModuleDirectly(self: *const Self) bool {
@@ -4639,19 +4857,6 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
 
     std.debug.assert(env.rank() == .generalized);
 
-    // When checking the Builtin module directly (e.g., `roc check Builtin.roc`),
-    // the normal pipeline assigns a package-qualified module name like "module.Builtin".
-    // But the pre-compiled Builtin binary uses the unqualified "Builtin" as origin_module
-    // for all its types. This causes type mismatches when locally-defined types (using
-    // "module.Builtin") are unified with types from the pre-compiled module (using "Builtin").
-    // Fix: use the unqualified "Builtin" to match the pre-compiled module's convention.
-    if (self.builtin_ctx.builtin_module != null and self.isCheckingBuiltinModuleDirectly()) {
-        self.builtin_ctx.module_name = self.cir.idents.builtin_module;
-        // Also update qualified_module_ident so that opaque type checks
-        // (canLiftInner) allow pattern matching on types defined in this module.
-        self.cir.qualified_module_ident = self.cir.idents.builtin_module;
-    }
-
     // Copy builtin types (Bool, Try) into this module's type store
     // Note that bool_var and try_var will have generalized rank
     try self.copyBuiltinTypes();
@@ -4883,7 +5088,7 @@ fn pruneSelectedHoistedRootsAfterSolving(self: *Self) Allocator.Error!void {
     var kept_pattern_count: u32 = 0;
     for (self.selected_hoisted_roots.items, 0..) |root, i| {
         keep_oracle.current_root_index = i;
-        const intrinsic = try self.hoistedRootIsIntrinsicallyKept(root);
+        const intrinsic = !self.hoistExprInvalidated(root.expr) and try self.hoistedRootIsIntrinsicallyKept(root);
         const deps = intrinsic and try self.hoistedRootDependenciesAreKept(root.expr, &keep_oracle);
         if (!intrinsic) continue;
         if (!deps) continue;
@@ -4938,6 +5143,7 @@ fn hoistedRootIsIntrinsicallyKept(
         ModuleEnv.varFrom(pattern)
     else
         ModuleEnv.varFrom(root.expr);
+    if (self.cir.store.getExpr(root.expr) == .e_runtime_error) return true;
     if (isFunctionDef(&self.cir.store, self.cir.store.getExpr(root.expr))) return false;
     if (self.varIsFunctionType(type_var)) return false;
     return try self.varIsConcreteHoistedConstType(type_var);
@@ -5182,6 +5388,7 @@ fn hoistedRootDependenciesAreKeptInternal(
     context: *HoistedDependencyContext,
     keep_oracle: *const HoistedRootKeepOracle,
 ) Allocator.Error!bool {
+    if (self.hoistExprInvalidated(expr)) return false;
     if (self.exprHasDedicatedLiteralConversionRoot(expr)) return false;
 
     return switch (self.cir.store.getExpr(expr)) {
@@ -5203,9 +5410,9 @@ fn hoistedRootDependenciesAreKeptInternal(
         .e_empty_list,
         .e_empty_record,
         .e_zero_argument_tag,
+        .e_runtime_error,
         => true,
         .e_lookup_required,
-        .e_runtime_error,
         .e_ellipsis,
         .e_anno_only,
         .e_crash,
@@ -5308,6 +5515,7 @@ fn hoistedExprAllowsStoredConst(
     expr: CIR.Expr.Idx,
     context: *HoistedDependencyContext,
 ) Allocator.Error!bool {
+    if (self.moduleHoistExprInvalidated(module, expr)) return false;
     return switch (module.store.getExpr(expr)) {
         .e_run_low_level => |run| run.op != .dict_pseudo_seed and
             try self.hoistedExprSpanAllowsStoredConst(module, run.args, context),
@@ -6439,7 +6647,7 @@ fn reportAmbiguousStaticDispatchPerInstantiation(
                 const diagnostic_idx = try self.cir.addDiagnostic(.{ .erroneous_value_expr = .{
                     .region = dispatch_use.region,
                 } });
-                self.cir.store.replaceExprWithRuntimeError(dispatch_use.expr_idx, diagnostic_idx);
+                try self.replaceExprWithRuntimeError(dispatch_use.expr_idx, diagnostic_idx);
             }
         } else if (body_forced) {
             // A body-forced where-clause with no in-module dispatch use (the
@@ -6455,7 +6663,7 @@ fn reportAmbiguousStaticDispatchPerInstantiation(
                     const diagnostic_idx = try self.cir.addDiagnostic(.{ .erroneous_value_expr = .{
                         .region = primary.?,
                     } });
-                    self.cir.store.replaceExprWithRuntimeError(inst_expr, diagnostic_idx);
+                    try self.replaceExprWithRuntimeError(inst_expr, diagnostic_idx);
                 }
             } else {
                 // A dispatcher created outside `checkExpr` has no recorded source
@@ -6496,7 +6704,7 @@ fn reportAmbiguousStaticDispatchPerInstantiation(
                 const diagnostic_idx = try self.cir.addDiagnostic(.{ .erroneous_value_expr = .{
                     .region = self.cir.store.getExprRegion(expr_idx),
                 } });
-                self.cir.store.replaceExprWithRuntimeError(expr_idx, diagnostic_idx);
+                try self.replaceExprWithRuntimeError(expr_idx, diagnostic_idx);
                 runtime_error_inserted = true;
             }
         }
@@ -6662,7 +6870,7 @@ fn reportAmbiguousStaticDispatch(
         const diagnostic_idx = try self.cir.addDiagnostic(.{ .erroneous_value_expr = .{
             .region = region,
         } });
-        self.cir.store.replaceExprWithRuntimeError(expr_idx, diagnostic_idx);
+        try self.replaceExprWithRuntimeError(expr_idx, diagnostic_idx);
     }
 }
 
@@ -7994,8 +8202,8 @@ fn generateStmtTypeDeclType(
     }
 }
 
-fn aliasOriginModule(self: *const Self) Ident.Idx {
-    return self.builtin_ctx.module_name;
+fn aliasOriginModule(self: *const Self) base.ModuleIdentity.Idx {
+    return self.cir.selfModuleIdentity();
 }
 
 fn predeclareAliasDecl(
@@ -8040,7 +8248,7 @@ fn predeclareNominalDecl(
             .{ .ident_idx = header.relative_name },
             backing_var,
             header_vars,
-            self.builtin_ctx.module_name,
+            self.cir.selfModuleIdentity(),
             @intFromEnum(decl_var),
             nominal.is_opaque,
             self.cir.module_role == .builtin,
@@ -8147,7 +8355,7 @@ fn generateNominalDecl(
                 .{ .ident_idx = header.relative_name },
                 ModuleEnv.varFrom(nominal.anno),
                 header_vars,
-                self.builtin_ctx.module_name,
+                self.cir.selfModuleIdentity(),
                 @intFromEnum(decl_idx),
                 nominal.is_opaque,
                 self.cir.module_role == .builtin,
@@ -8471,7 +8679,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                                             .{ .ident_idx = this_decl.name },
                                             this_decl.backing_var,
                                             &.{},
-                                            self.builtin_ctx.module_name,
+                                            self.cir.selfModuleIdentity(),
                                             @intFromEnum(this_decl.idx),
                                             this_decl.is_opaque,
                                             self.cir.module_role == .builtin,
@@ -8579,7 +8787,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                                             .{ .ident_idx = this_decl.name },
                                             this_decl.backing_var,
                                             anno_arg_vars,
-                                            self.builtin_ctx.module_name,
+                                            self.cir.selfModuleIdentity(),
                                             @intFromEnum(this_decl.idx),
                                             this_decl.is_opaque,
                                             self.cir.module_role == .builtin,
@@ -12094,7 +12302,7 @@ fn toInspectMethodVarForAlias(
 
 fn methodOwnerEnv(
     self: *Self,
-    origin_module: Ident.Idx,
+    origin_module: base.ModuleIdentity.Idx,
     source_decl: ?u32,
     origin_is_builtin: bool,
 ) Allocator.Error!struct { *const ModuleEnv, bool } {
@@ -12106,9 +12314,14 @@ const OwnerEnvCandidate = struct {
     is_this_module: bool,
 };
 
+/// Resolve the module env that declares a type from the type's content-based
+/// origin identity: an exact 32-byte hash comparison against each candidate
+/// env's own content identity. No name matching — two envs match the same
+/// origin only when their transitive module content is byte-identical, in
+/// which case they are interchangeable as type owners by definition.
 fn ownerEnvForOriginModule(
     self: *const Self,
-    origin_module: Ident.Idx,
+    origin_module: base.ModuleIdentity.Idx,
     source_decl: ?u32,
     origin_is_builtin: bool,
     context: []const u8,
@@ -12117,42 +12330,49 @@ fn ownerEnvForOriginModule(
         return self.builtinOwnerEnvForSourceDecl(source_decl, context);
     }
 
-    const origin_text = self.cir.getIdent(origin_module);
-    const owner_source_decl = nonBuiltinOwnerSourceDecl(source_decl, context, origin_text);
+    const origin_hash = self.cir.moduleIdentityHash(origin_module);
+    const owner_source_decl = nonBuiltinOwnerSourceDecl(source_decl, context, self.cir.moduleIdentityDisplayText(origin_module));
 
-    var found: ?OwnerEnvCandidate = null;
-    considerOwnerEnvCandidate(&found, self.cir, true, origin_text, owner_source_decl, context);
+    if (ownerEnvIdentityMatches(self.cir, origin_hash)) {
+        debugAssertOwnerEnvSourceDecl(self.cir, owner_source_decl, context);
+        return .{ self.cir, true };
+    }
     for (self.imported_modules) |imported_env| {
         if (imported_env.module_role == .builtin) continue;
-        considerOwnerEnvCandidate(&found, imported_env, false, origin_text, owner_source_decl, context);
+        if (ownerEnvIdentityMatches(imported_env, origin_hash)) {
+            debugAssertOwnerEnvSourceDecl(imported_env, owner_source_decl, context);
+            return .{ imported_env, false };
+        }
     }
     for (self.owner_modules) |owner_env| {
         if (owner_env.module_role == .builtin) continue;
-        considerOwnerEnvCandidate(&found, owner_env, false, origin_text, owner_source_decl, context);
-    }
-
-    if (found) |owner| return .{ owner.env, owner.is_this_module };
-
-    if (self.owner_module_envs.get(origin_text)) |owner_env| {
-        if (!ownerModuleEnvSourceDeclMatches(owner_env, owner_source_decl)) {
-            if (builtin.mode == .Debug) {
-                std.debug.panic(
-                    "type checker invariant violated: {s} owner {s} resolved by name to an environment without source_decl={d}",
-                    .{ context, origin_text, owner_source_decl },
-                );
-            }
-            unreachable;
+        if (ownerEnvIdentityMatches(owner_env, origin_hash)) {
+            debugAssertOwnerEnvSourceDecl(owner_env, owner_source_decl, context);
+            return .{ owner_env, false };
         }
-        return .{ owner_env, false };
     }
 
     if (builtin.mode == .Debug) {
         std.debug.panic(
             "type checker invariant violated: unable to find module environment for {s} owner from module {s}, source_decl={d}, origin_is_builtin={}",
-            .{ context, origin_text, owner_source_decl, origin_is_builtin },
+            .{ context, self.cir.moduleIdentityDisplayText(origin_module), owner_source_decl, origin_is_builtin },
         );
     }
     unreachable;
+}
+
+fn ownerEnvIdentityMatches(candidate: *const ModuleEnv, origin_hash: *const base.ModuleIdentity.Hash) bool {
+    const candidate_hash = candidate.contentIdentityHash() orelse return false;
+    return base.ModuleIdentity.eql(candidate_hash, origin_hash);
+}
+
+fn debugAssertOwnerEnvSourceDecl(candidate: *const ModuleEnv, source_decl: u32, context: []const u8) void {
+    if (builtin.mode != .Debug) return;
+    if (ownerModuleEnvSourceDeclMatches(candidate, source_decl)) return;
+    std.debug.panic(
+        "type checker invariant violated: {s} owner resolved by content identity to module '{s}' whose node {d} is not a type declaration",
+        .{ context, candidate.module_name, source_decl },
+    );
 }
 
 fn nonBuiltinOwnerSourceDecl(source_decl: ?u32, context: []const u8, origin_text: []const u8) u32 {
@@ -12214,45 +12434,6 @@ fn maybeBuiltinOwnerEnvForSourceDecl(
     }
 
     return null;
-}
-
-fn considerOwnerEnvCandidate(
-    found: *?OwnerEnvCandidate,
-    candidate: *const ModuleEnv,
-    is_this_module: bool,
-    origin_text: []const u8,
-    source_decl: u32,
-    context: []const u8,
-) void {
-    if (!ownerModuleEnvNameMatches(candidate, origin_text)) return;
-    if (!ownerModuleEnvSourceDeclMatches(candidate, source_decl)) return;
-
-    if (found.*) |existing| {
-        if (existing.env == candidate) return;
-        if (builtin.mode == .Debug) {
-            std.debug.panic(
-                "type checker invariant violated: {s} owner {s} resolves to multiple module environments",
-                .{ context, origin_text },
-            );
-        }
-        unreachable;
-    }
-
-    found.* = .{ .env = candidate, .is_this_module = is_this_module };
-}
-
-fn ownerModuleEnvNameMatches(candidate: *const ModuleEnv, origin_text: []const u8) bool {
-    if (!candidate.qualified_module_ident.isNone() and
-        Ident.textEql(candidate.getIdent(candidate.qualified_module_ident), origin_text))
-    {
-        return true;
-    }
-    if (!candidate.display_module_name_idx.isNone() and
-        Ident.textEql(candidate.getIdent(candidate.display_module_name_idx), origin_text))
-    {
-        return true;
-    }
-    return candidate.module_name.len > 0 and Ident.textEql(candidate.module_name, origin_text);
 }
 
 fn ownerModuleEnvSourceDeclMatches(candidate: *const ModuleEnv, source_decl: u32) bool {
@@ -14827,8 +15008,8 @@ fn copyVar(self: *Self, other_module_var: Var, other_module_env: *const ModuleEn
         self.types,
         other_module_var,
         &self.var_map,
-        other_module_env.getIdentStoreConst(),
-        self.cir.getIdentStore(),
+        other_module_env,
+        self.cir,
         self.gpa,
     );
 
@@ -14908,7 +15089,7 @@ fn checkNominalTypeUsage(
 
         // If this nominal type is opaque and we're not in the defining module
         // then report an error
-        if (!nominal_type.canLiftInner(self.cir.qualified_module_ident)) {
+        if (!nominal_type.canLiftInner(self.cir.selfModuleIdentity())) {
             _ = try self.problems.appendProblem(self.cir.gpa, .{ .cannot_access_opaque_nominal = .{
                 .var_ = target_var,
                 .nominal_type_name = nominal_type.ident.ident_idx,
@@ -14996,14 +15177,14 @@ fn poisonRecursiveNonFunctionProcessingDef(
         } });
 
     if (self.cir.store.getExpr(def.expr) != .e_runtime_error) {
-        self.cir.store.replaceExprWithRuntimeError(def.expr, diagnostic_idx);
+        try self.replaceExprWithRuntimeError(def.expr, diagnostic_idx);
     }
     try self.erroneous_value_exprs.put(self.gpa, def.expr, {});
     try self.erroneous_value_patterns.put(self.gpa, def.pattern, {});
 
     if (use_expr) |expr_idx| {
         if (self.cir.store.getExpr(expr_idx) != .e_runtime_error) {
-            self.cir.store.replaceExprWithRuntimeError(expr_idx, diagnostic_idx);
+            try self.replaceExprWithRuntimeError(expr_idx, diagnostic_idx);
         }
         try self.erroneous_value_exprs.put(self.gpa, expr_idx, {});
         try self.unifyWith(ModuleEnv.varFrom(expr_idx), .err, env);
@@ -15067,7 +15248,7 @@ fn poisonErroneousValueUses(self: *Self) Allocator.Error!void {
             .ident = ident,
             .region = self.cir.store.getExprRegion(entry.expr_idx),
         } });
-        self.cir.store.replaceExprWithRuntimeError(entry.expr_idx, diagnostic_idx);
+        try self.replaceExprWithRuntimeError(entry.expr_idx, diagnostic_idx);
     }
 }
 
@@ -15078,7 +15259,7 @@ fn poisonErroneousValueExprs(self: *Self) Allocator.Error!void {
         const diagnostic_idx = try self.cir.addDiagnostic(.{ .erroneous_value_expr = .{
             .region = self.cir.store.getExprRegion(expr_idx.*),
         } });
-        self.cir.store.replaceExprWithRuntimeError(expr_idx.*, diagnostic_idx);
+        try self.replaceExprWithRuntimeError(expr_idx.*, diagnostic_idx);
     }
 }
 

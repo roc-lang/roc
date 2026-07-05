@@ -24,6 +24,7 @@ const base = @import("base");
 const collections = @import("collections");
 
 const Ident = base.Ident;
+const ModuleIdentity = base.ModuleIdentity;
 const MkSafeList = collections.SafeList;
 const MkSafeMultiList = collections.SafeMultiList;
 
@@ -315,11 +316,12 @@ pub const Rigid = struct {
 pub const Alias = struct {
     ident: TypeIdent,
     vars: Var.SafeList.NonEmptyRange,
-    /// The full module path where this alias type was originally defined
-    /// (e.g., "Json.Decode" or "mypackage.Data.Person")
-    origin_module: Ident.Idx,
+    /// Env-local index of the declaring module's deep content identity in the
+    /// owning module env's identity table (see `base.module_identity`).
+    origin_module: ModuleIdentity.Idx,
     /// CIR statement index of the source declaration in origin_module, when
-    /// this alias came from a concrete source declaration.
+    /// this alias came from a concrete source declaration. A decl LOCATOR for
+    /// resolving method tables in the owning env — never part of identity.
     source_decl: SourceDecl = .none,
 };
 
@@ -679,10 +681,12 @@ pub const NominalType = struct {
 
     ident: TypeIdent,
     vars: Var.SafeList.NonEmptyRange,
-    /// The full module path where this nominal type was originally defined
-    /// (e.g., "Json.Decode" or "mypackage.Data.Person")
-    origin_module: Ident.Idx,
-    /// Packed source-declaration and opacity bits.
+    /// Env-local index of the declaring module's deep content identity in the
+    /// owning module env's identity table (see `base.module_identity`).
+    origin_module: ModuleIdentity.Idx,
+    /// Packed source-declaration and opacity bits. The statement index is a
+    /// decl LOCATOR for resolving method tables in the owning env — never
+    /// part of identity.
     source: NominalSource,
 
     pub fn sourceDecl(self: NominalType) SourceDecl {
@@ -702,11 +706,11 @@ pub const NominalType = struct {
     }
 
     /// Checks if backing types can unify directly with this nominal type
-    pub fn canLiftInner(self: NominalType, cur_module_idx: Ident.Idx) bool {
+    pub fn canLiftInner(self: NominalType, cur_module_identity: ModuleIdentity.Idx) bool {
         if (self.isOpaque()) {
             // If opaque, then can only lift inner type if the current module is
             // the same
-            return self.origin_module.eql(cur_module_idx);
+            return self.origin_module == cur_module_identity;
         }
 
         // If not opaque, then the inner type can always be lifted

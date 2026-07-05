@@ -327,7 +327,7 @@ test "instantiate - alias preserves structure" {
 
     const rigid_a = try env.types.freshFromContentWithRank(try env.mkRigidVar("a"), .generalized);
     const list_ident_idx = try env.idents.insert(gpa, .for_text("List"));
-    const builtin_module_idx = try env.idents.insert(gpa, .for_text("Builtin"));
+    const builtin_module_idx = base.ModuleIdentity.Idx.NONE;
     const backing_content = try env.types.mkNominal(
         .{ .ident_idx = list_ident_idx },
         rigid_a,
@@ -377,7 +377,7 @@ test "instantiate - box and list" {
     // Test Box a
     {
         const box_ident_idx = try env.idents.insert(gpa, .for_text("Box"));
-        const builtin_module_idx = try env.idents.insert(gpa, .for_text("Builtin"));
+        const builtin_module_idx = base.ModuleIdentity.Idx.NONE;
         const box_content = try env.types.mkNominal(
             .{ .ident_idx = box_ident_idx },
             rigid_a,
@@ -408,7 +408,7 @@ test "instantiate - box and list" {
     // Test List a
     {
         const list_ident_idx = try env.idents.insert(gpa, .for_text("List"));
-        const builtin_module_idx = try env.idents.insert(gpa, .for_text("Builtin"));
+        const builtin_module_idx = base.ModuleIdentity.Idx.NONE;
         const list_content = try env.types.mkNominal(
             .{ .ident_idx = list_ident_idx },
             rigid_a,
@@ -521,7 +521,7 @@ const TestEnv = struct {
 
     // helpers - alias //
 
-    fn mkAlias(self: *Self, name: []const u8, backing_var: Var, args: []const Var, module_idx: Ident.Idx) std.mem.Allocator.Error!Content {
+    fn mkAlias(self: *Self, name: []const u8, backing_var: Var, args: []const Var, module_idx: base.ModuleIdentity.Idx) std.mem.Allocator.Error!Content {
         return try self.types.mkAlias(try self.mkTypeIdent(name), backing_var, args, module_idx);
     }
 

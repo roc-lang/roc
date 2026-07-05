@@ -1351,7 +1351,6 @@ fn compileSource(source: []const u8, module_name: []const u8) PlaygroundCompileE
     const str_stmt_in_builtin_module = builtin_indices.str_type;
 
     const module_builtin_ctx: Check.BuiltinContext = .{
-        .module_name = try module_env.insertIdent(base.Ident.for_text("main")),
         .bool_stmt = bool_stmt_in_builtin_module,
         .try_stmt = try_stmt_in_builtin_module,
         .str_stmt = str_stmt_in_builtin_module,

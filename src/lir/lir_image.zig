@@ -27,7 +27,8 @@ pub const MAGIC: u32 = 0x52494c52; // "RLIR" in little-endian bytes.
 /// v9: image is pointer-width independent; the target is supplied at view time
 ///     rather than recorded in the header.
 /// v10: LIR proc specs carry explicit native stack-probe requirements.
-pub const FORMAT_VERSION: u32 = 10;
+/// v11: LocalSpan lengths are u32 for large proc frame-local spans.
+pub const FORMAT_VERSION: u32 = 11;
 
 /// Public `ImageError` declaration.
 pub const ImageError = error{

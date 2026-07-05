@@ -491,6 +491,29 @@ app [main!] {
 }
 ```
 
+### Nominal type identity across packages
+
+A nominal type's identity is determined by the *content* of the module that
+declares it: the module's name, its source bytes, and (recursively) the same
+for every module it imports. Two nominal types are the same type exactly when
+they have the same declared name and their declaring modules have
+byte-identical content all the way down through their imports.
+
+A practical consequence: if the same module content is reached through two
+different package downloads — two versions of a package where that module did
+not change, the same package fetched from two mirror URLs, or a vendored copy
+of a dependency — the types it declares are all the same type, and values of
+those types interoperate freely. A type that did not change keeps working
+across a version bump. Conversely, if the declaring module (or anything it
+imports) changed at all, its types are new, distinct types, even when every
+name and structure looks the same.
+
+The exceptions are bindings whose meaning comes from outside the compiled
+program: `hosted` functions and `provides` entrypoints are identified by the
+symbol strings in the platform header, never by module content, so two
+identical hosted declarations bound to different symbols always remain
+distinct.
+
 ### Headerless Application Modules
 
 To facilitate tutorials, Roc permits application modules to omit the header entirely.

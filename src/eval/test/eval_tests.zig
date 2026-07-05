@@ -4584,6 +4584,80 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "(5, 108)" },
     },
     .{
+        // Issue 9875 repro: static dispatch must survive an alias re-export
+        // (ThingAlias : Thing) declared in an intermediate module. The alias
+        // walk plus content-based owner identity resolve the method on the
+        // declaring module.
+        .name = "inspect: static dispatch through alias re-export resolves declaring module (issue 9875)",
+        .source_kind = .module,
+        .source =
+        \\import ThingMod
+        \\import ApiMod
+        \\
+        \\main = {
+        \\    v : ApiMod.ThingAlias
+        \\    v = ThingMod.Thing.Make(7)
+        \\    v.get()
+        \\}
+        ,
+        .imports = &.{
+            .{
+                .name = "ThingMod",
+                .source =
+                \\Thing := [Make(U64)].{
+                \\  get : Thing -> U64
+                \\  get = |Thing.Make(n)| n
+                \\}
+                ,
+            },
+            .{
+                .name = "ApiMod",
+                .source =
+                \\import ThingMod
+                \\
+                \\ThingAlias : ThingMod.Thing
+                ,
+            },
+        },
+        .expected = .{ .inspect_str = "7" },
+    },
+    .{
+        // Issue 9864 shape: a module dispatches a method on a nominal owned
+        // by a module it imports (the cross-artifact method-owner rebase
+        // path), and the result flows through a second consuming module.
+        .name = "inspect: cross-module dispatch on nominal owned by transitive import (issue 9864 shape)",
+        .source_kind = .module,
+        .source =
+        \\import ThingMod
+        \\import WrapMod
+        \\
+        \\main = WrapMod.wrap(ThingMod.Thing(9))
+        ,
+        .imports = &.{
+            .{
+                .name = "ThingMod",
+                .source =
+                \\Thing := [Thing(U64)].{
+                \\  get : Thing -> U64
+                \\  get = |Thing.Thing(n)| n
+                \\}
+                ,
+            },
+            .{
+                .name = "WrapMod",
+                .source =
+                \\import ThingMod
+                \\
+                \\WrapMod := [].{
+                \\  wrap : ThingMod.Thing -> U64
+                \\  wrap = |t| t.get() + 100
+                \\}
+                ,
+            },
+        },
+        .expected = .{ .inspect_str = "109" },
+    },
+    .{
         .name = "inspect: cross-module attached method specialization on imported nominal",
         .source_kind = .module,
         .source =

@@ -131,12 +131,14 @@ pub const BuildSession = struct {
             }
         }
 
-        // Fallback: try to get root module from "app" scheduler
-        if (self.env.schedulers.get("app")) |sched| {
-            if (sched.getRootModule()) |rm| {
-                if (rm.moduleEnv()) |e| {
-                    self.cached_module_env = e;
-                    return e;
+        // Fallback: try to get the discovered root module by its package identity.
+        if (self.env.discovered_pkg_name) |root_pkg_name| {
+            if (self.env.schedulers.get(root_pkg_name)) |sched| {
+                if (sched.getRootModule()) |rm| {
+                    if (rm.moduleEnv()) |e| {
+                        self.cached_module_env = e;
+                        return e;
+                    }
                 }
             }
         }

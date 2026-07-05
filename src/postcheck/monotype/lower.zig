@@ -205,19 +205,11 @@ fn methodOwnerOrder(a: static_dispatch.MethodOwner, b: static_dispatch.MethodOwn
     return switch (a) {
         .nominal => |a_nominal| switch (b) {
             .nominal => |b_nominal| blk: {
-                const module_order = orderEnum(names.ModuleNameId, a_nominal.module_name, b_nominal.module_name);
+                const module_order = orderEnum(names.ModuleIdentityId, a_nominal.module, b_nominal.module);
                 if (module_order != .eq) break :blk module_order;
                 const type_order = orderEnum(names.TypeNameId, a_nominal.type_name, b_nominal.type_name);
                 if (type_order != .eq) break :blk type_order;
                 break :blk orderOptionalU32(a_nominal.source_decl, b_nominal.source_decl);
-            },
-            else => unreachable,
-        },
-        .source_decl => |a_decl| switch (b) {
-            .source_decl => |b_decl| blk: {
-                const module_order = orderEnum(names.ModuleNameId, a_decl.module_name, b_decl.module_name);
-                if (module_order != .eq) break :blk module_order;
-                break :blk orderU32(a_decl.statement, b_decl.statement);
             },
             else => unreachable,
         },
@@ -231,8 +223,7 @@ fn methodOwnerOrder(a: static_dispatch.MethodOwner, b: static_dispatch.MethodOwn
 fn methodOwnerTagRank(owner: static_dispatch.MethodOwner) u32 {
     return switch (owner) {
         .nominal => 0,
-        .source_decl => 1,
-        .builtin => 2,
+        .builtin => 1,
     };
 }
 
@@ -738,10 +729,10 @@ const Builder = struct {
         self.hosted_catalog = try entries.toOwnedSlice(self.allocator);
     }
 
-    /// Find the executable platform contract's hosted section and resolve it to
-    /// qualified keys + linker symbols. Imported availability artifacts can
-    /// carry platform metadata during app checking, but they do not define the
-    /// hosted dispatch order for that app-publication lowering pass.
+    /// Find the platform module's hosted section and resolve it to qualified
+    /// keys plus linker symbols. Imported modules can carry platform metadata
+    /// during app checking, but they do not define the hosted dispatch order
+    /// for this lowering pass.
     fn buildHostedSectionMap(self: *Builder) Allocator.Error!?HostedSectionMap {
         const platform_env = blk: {
             const root_env = moduleView(self.root_view).module_env;
@@ -836,10 +827,6 @@ const Builder = struct {
         Common.invariant("hosted procedure template was not output in the hosted catalog");
     }
 
-    fn moduleName(self: *Builder, view: ModuleView, id: names.ModuleNameId) Allocator.Error!names.ModuleNameId {
-        return self.program.names.internModuleName(view.names.moduleNameText(id));
-    }
-
     fn typeName(self: *Builder, view: ModuleView, id: names.TypeNameId) Allocator.Error!names.TypeNameId {
         return self.program.names.internTypeName(view.names.typeNameText(id));
     }
@@ -848,15 +835,15 @@ const Builder = struct {
         return self.program.names.internMethodName(view.names.methodNameText(id));
     }
 
+    fn moduleIdentity(self: *Builder, view: ModuleView, id: names.ModuleIdentityId) Allocator.Error!names.ModuleIdentityId {
+        return self.program.names.internModuleIdentity(view.names.moduleIdentityBytes(id));
+    }
+
     fn methodOwnerInProgramNames(self: *Builder, view: ModuleView, owner: static_dispatch.MethodOwner) Allocator.Error!static_dispatch.MethodOwner {
         return switch (owner) {
             .builtin => |builtin| .{ .builtin = builtin },
-            .source_decl => |decl| .{ .source_decl = .{
-                .module_name = try self.moduleName(view, decl.module_name),
-                .statement = decl.statement,
-            } },
             .nominal => |nominal| .{ .nominal = .{
-                .module_name = try self.moduleName(view, nominal.module_name),
+                .module = try self.moduleIdentity(view, nominal.module),
                 .type_name = try self.typeName(view, nominal.type_name),
                 .source_decl = nominal.source_decl,
             } },
@@ -874,12 +861,12 @@ const Builder = struct {
     fn typeDef(
         self: *Builder,
         view: ModuleView,
-        module_name: names.ModuleNameId,
+        origin_module: names.ModuleIdentityId,
         type_name: names.TypeNameId,
         source_decl: ?u32,
     ) Allocator.Error!Type.TypeDef {
         return .{
-            .module_name = try self.moduleName(view, module_name),
+            .module = try self.moduleIdentity(view, origin_module),
             .type_name = try self.typeName(view, type_name),
             .source_decl = source_decl,
         };
@@ -901,21 +888,25 @@ const Builder = struct {
         };
     }
 
-    fn moduleDigestForOrigin(self: *Builder, view: ModuleView, origin_module: names.ModuleNameId) names.CheckedModuleDigest {
-        const origin_name = view.names.moduleNameText(origin_module);
-        if (moduleViewNameMatches(view, origin_name)) return moduleDigestFromId(view.key);
+    /// Resolve a named type's declaring module by 32-byte content identity —
+    /// an exact comparison against each candidate view's module identity
+    /// hash. Byte-identical module content reached through several checked
+    /// modules is interchangeable as a declaring module; the first match wins.
+    fn moduleDigestForOrigin(self: *Builder, view: ModuleView, origin_module: names.ModuleIdentityId) names.CheckedModuleDigest {
+        const origin_hash = view.names.moduleIdentityBytes(origin_module);
+        if (moduleViewIdentityMatches(view, origin_hash)) return moduleDigestFromId(view.key);
 
         const root = moduleView(self.root_view);
-        if (moduleViewNameMatches(root, origin_name)) return moduleDigestFromId(root.key);
+        if (moduleViewIdentityMatches(root, origin_hash)) return moduleDigestFromId(root.key);
 
         for (self.modules.imports) |imported| {
             const imported_view = moduleView(imported);
-            if (moduleViewNameMatches(imported_view, origin_name)) return moduleDigestFromId(imported_view.key);
+            if (moduleViewIdentityMatches(imported_view, origin_hash)) return moduleDigestFromId(imported_view.key);
         }
 
         for (self.modules.root.relation_modules) |relation| {
             const relation_view = moduleView(relation);
-            if (moduleViewNameMatches(relation_view, origin_name)) return moduleDigestFromId(relation_view.key);
+            if (moduleViewIdentityMatches(relation_view, origin_hash)) return moduleDigestFromId(relation_view.key);
         }
 
         Common.invariant("checked named type origin module was not available to Monotype lowering");
@@ -1045,7 +1036,7 @@ const Builder = struct {
 
     fn appendRuntimeSchemaRequest(self: *Builder, request: Ast.RuntimeSchemaRequest) Allocator.Error!void {
         for (self.program.runtime_schema_requests.items) |existing| {
-            if (existing.def.module_name == request.def.module_name and existing.def.type_name == request.def.type_name) {
+            if (existing.def.module == request.def.module and existing.def.type_name == request.def.type_name) {
                 return;
             }
         }
@@ -1955,7 +1946,6 @@ const Builder = struct {
     fn typeHasBuiltinOwner(self: *Builder, ty: Type.TypeId, owner: static_dispatch.BuiltinOwner) bool {
         return switch (methodOwnerFromType(&self.program.types, ty) orelse return false) {
             .builtin => |actual| actual == owner,
-            .source_decl => false,
             .nominal => false,
         };
     }
@@ -2411,7 +2401,7 @@ const Builder = struct {
                 const source_view = self.moduleForDigest(self.moduleDigestForOrigin(view, nominal.origin_module));
                 const source_decl = nominal.source_decl orelse break :blk null;
                 for (source_view.types.nominal_declarations) |decl| {
-                    if (decl.nominal.source_decl != source_decl) continue;
+                    if (decl.source_statement != source_decl) continue;
                     break :blk .{ .view = source_view, .declaration = decl, .padding_field_tys = decl.paddingFieldTypes(source_view.types) };
                 }
                 break :blk null;
@@ -2427,7 +2417,7 @@ const Builder = struct {
     /// span feeds layout selection only; the lowered row stays lexicographic.
     fn declaredOrderForNominal(self: *Builder, view: ModuleView, nominal: checked.CheckedNominalType) Allocator.Error!Type.Span {
         const lookup = self.nominalDeclarationFor(view, nominal) orelse return Type.Span.empty();
-        const source_decl = lookup.declaration.nominal.source_decl orelse return Type.Span.empty();
+        const source_decl = lookup.declaration.source_statement;
         // Read declared field order from the declaration's record annotation,
         // which preserves source order (the checked row and every lowered row
         // sort lexicographically). `lookup.view` is the declaring module, so this
@@ -7789,7 +7779,7 @@ const BodyContext = struct {
         nominal: checked.CheckedNominalType,
     ) Allocator.Error![]const InstDeclaredField {
         const lookup = self.builder.nominalDeclarationFor(self.view, nominal) orelse return &.{};
-        const source_decl = lookup.declaration.nominal.source_decl orelse return &.{};
+        const source_decl = lookup.declaration.source_statement;
         const module_env = lookup.view.module_env;
         const anno_idx = switch (module_env.store.getStatement(@enumFromInt(source_decl))) {
             .s_nominal_decl => |decl| decl.anno,
@@ -15758,7 +15748,7 @@ const BodyContext = struct {
         visiting: *std.AutoHashMap(TypePair, void),
     ) bool {
         if (!std.mem.eql(u8, expected.named_type.module.bytes[0..], actual.named_type.module.bytes[0..])) return false;
-        if (expected.def.module_name != actual.def.module_name) return false;
+        if (expected.def.module != actual.def.module) return false;
         if (expected.def.source_decl != actual.def.source_decl) return false;
         if (expected.def.source_decl == null and expected.def.type_name != actual.def.type_name) return false;
         if (expected.kind != actual.kind) return false;
@@ -16459,7 +16449,6 @@ const BodyContext = struct {
     fn typeHasBuiltinOwner(self: *BodyContext, ty: Type.TypeId, owner: static_dispatch.BuiltinOwner) bool {
         return switch (methodOwnerFromType(&self.builder.program.types, ty) orelse return false) {
             .builtin => |actual| actual == owner,
-            .source_decl => false,
             .nominal => false,
         };
     }
@@ -22840,21 +22829,21 @@ test "monotype sameType keeps failed alias alternatives out of recursion stack" 
     var program = Ast.Program.init(std.testing.allocator);
     defer program.deinit();
 
-    const module_name = try program.names.internModuleName("Test");
+    const module_identity = try program.names.internModuleIdentity(&([_]u8{0xAB} ** 32));
     const type_name = try program.names.internTypeName("Alias");
     const checked_ty: checked.CheckedTypeId = @enumFromInt(1);
     const i64_ty = try program.types.add(.{ .primitive = .i64 });
     const str_ty = try program.types.add(.{ .primitive = .str });
     const alias_i64 = try program.types.add(.{ .named = .{
         .named_type = .{ .module = .{}, .ty = checked_ty },
-        .def = .{ .module_name = module_name, .type_name = type_name },
+        .def = .{ .module = module_identity, .type_name = type_name },
         .kind = .alias,
         .args = Type.Span.empty(),
         .backing = .{ .ty = i64_ty, .use = .inspectable },
     } });
     const alias_str = try program.types.add(.{ .named = .{
         .named_type = .{ .module = .{}, .ty = checked_ty },
-        .def = .{ .module_name = module_name, .type_name = type_name },
+        .def = .{ .module = module_identity, .type_name = type_name },
         .kind = .alias,
         .args = Type.Span.empty(),
         .backing = .{ .ty = str_ty, .use = .inspectable },
@@ -23350,10 +23339,8 @@ fn moduleView(view: checked.ImportedModuleView) ModuleView {
     };
 }
 
-fn moduleViewNameMatches(view: ModuleView, module_name: []const u8) bool {
-    return Ident.textEql(module_name, view.names.moduleNameText(view.module_identity.module_name)) or
-        Ident.textEql(module_name, view.names.moduleNameText(view.module_identity.display_module_name)) or
-        Ident.textEql(module_name, view.names.moduleNameText(view.module_identity.qualified_module_name));
+fn moduleViewIdentityMatches(view: ModuleView, origin_hash: *const [32]u8) bool {
+    return base.ModuleIdentity.eql(&view.module_identity.stable_hash, origin_hash);
 }
 
 fn restoreScalar(scalar: checked.ConstScalar) Ast.ExprData {
@@ -23648,16 +23635,11 @@ fn methodOwnerFromType(types: *const Type.Store, ty: Type.TypeId) ?static_dispat
     return switch (types.ownerHead(ty)) {
         .none => null,
         .builtin => |owner| .{ .builtin = owner },
-        .named_type => |def| if (def.source_decl) |source_decl|
-            .{ .source_decl = .{
-                .module_name = def.module_name,
-                .statement = source_decl,
-            } }
-        else
-            .{ .nominal = .{
-                .module_name = def.module_name,
-                .type_name = def.type_name,
-            } },
+        .named_type => |def| .{ .nominal = .{
+            .module = def.module,
+            .type_name = def.type_name,
+            .source_decl = def.source_decl,
+        } },
     };
 }
 
@@ -23840,7 +23822,7 @@ fn verifyMonotypeCallTargets(program: *const Ast.Program) void {
 }
 
 fn sameTypeDef(left: Type.TypeDef, right: Type.TypeDef) bool {
-    return left.module_name == right.module_name and
+    return left.module == right.module and
         left.type_name == right.type_name and
         left.source_decl == right.source_decl;
 }

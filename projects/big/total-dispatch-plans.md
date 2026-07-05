@@ -71,9 +71,9 @@ Principles ("consumers must not recover missing data from source syntax,
 names, body scans, ... or incidental data structure shape") are the part that
 stays; the monotype dispatch algorithm changes to consume explicit evidence.
 
-Prerequisite context: the app module must see the platform's `requires` types
-during checking (see Related projects), otherwise platform-typed dispatchers
-are still flex vars when plans freeze and cannot be resolved at check time.
+Context: the app module now sees the platform's `requires` types during
+checking, so platform-typed dispatchers are not left as standalone flex vars
+when plans freeze.
 
 ## Evidence
 
@@ -96,9 +96,11 @@ All symbols verified in the current tree.
   (runtime crash fallback reached), #9782/#9857/#9890 (coordinator-side
   dispatch revalidation cascade), #9889/#9890 (regressions from
   specialization-heavy roc-parser package code).
-- `src/check/checked_artifact.zig`: `specializeResolvedStaticDispatchPlanCallables`
-  (PR #9873) — publication-time re-projection of resolved plan callables,
-  part of place (5)/(6) above.
+- `src/check/checked_artifact.zig`: publication still requires every checked
+  dispatch expression to carry an explicit plan id, but the old
+  publication-time plan re-projection pass has been removed. The
+  total-dispatch fix must therefore produce complete callable evidence during
+  checking/static-dispatch planning, not by repairing plans during publication.
 
 ## Solution design
 
@@ -147,9 +149,9 @@ and generated code is unchanged.
 
 4. **Evidence through nested closures.** A where-clause evidence index used
    inside a nested closure behaves exactly like a compile-time capture: it is
-   introduced by the enclosing definition and threaded inward. Ride the same
-   identity discipline as canonical capture IDs (see Related projects) rather
-   than inventing a parallel mechanism.
+   introduced by the enclosing definition and threaded inward. Ride the
+   existing `CaptureId` discipline rather than inventing a parallel identity
+   mechanism.
 
 5. **Deletions (not fallbacks).** After migration:
    - `methodOwnerFromType`-based dispatch resolution in
@@ -243,12 +245,6 @@ cache serialization time must not measurably regress.
 
 ## Related projects
 
-- [../small/check-app-against-platform-requires.md](../small/check-app-against-platform-requires.md)
-  — prerequisite: plans cannot be total while platform-typed dispatchers are
-  flex vars at check time.
-- [../big/canonical-capture-id.md](../big/canonical-capture-id.md) — evidence
-  threading through nested closures rides the same compile-time-capture
-  discipline; do it before or together with step 4.
 - [../big/generalization-time-ambiguity.md](../big/generalization-time-ambiguity.md)
   — shares the constraint-provenance foundation; `constraint(k)` gives each
   dispatch constraint a stable identity that ambiguity reporting can also

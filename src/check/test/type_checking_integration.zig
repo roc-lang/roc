@@ -4236,6 +4236,67 @@ test "check type - equirecursive static dispatch with type annotation" {
     );
 }
 
+test "check type - static dispatch nested decoder error rows type-check" {
+    // repro for https://github.com/roc-lang/roc/issues/9893
+    const source =
+        \\generate_u8 : RandomDecoder, List(U8) -> (Try(U8, [TooShort]), List(U8))
+        \\generate_u8 = |_, bytes| (Err(TooShort), bytes)
+        \\
+        \\generate_list : RandomDecoder, List(U8), (List(U8), RandomDecoder -> (Try(elem, err), List(U8))) -> (Try(List(elem), [TooShort, ..err]), List(U8))
+        \\generate_list = |_, bytes, elem_decoder| {
+        \\    (result, rest) = elem_decoder(bytes, random_decoder)
+        \\    match result {
+        \\        Ok(value) => (Ok([value]), rest),
+        \\        Err(err) => (Err(err), rest)
+        \\    }
+        \\}
+        \\
+        \\RandomDecoder := {}.{
+        \\    decode_u8 = generate_u8
+        \\    decode_list = generate_list
+        \\}
+        \\
+        \\random_decoder = RandomDecoder.({})
+        \\
+        \\RandomState := List(U8)
+        \\
+        \\random_value : RandomState -> (a, RandomState) where [a.decode : (List(U8)), RandomDecoder -> (Try(a, err), List(U8))]
+        \\random_value = |RandomState.(bytes)| {
+        \\    Val : a
+        \\    (_, rest) = Val.decode(bytes, random_decoder)
+        \\    (Val, RandomState.(rest))
+        \\}
+        \\
+        \\Pair(a, b) := (a, b).{
+        \\    decode: (List(U8)), RandomDecoder -> (Try(Pair(a, b), err), List(U8)) where [
+        \\        a.decode : (List(U8)), RandomDecoder -> (Try(a, err), List(U8)),
+        \\        b.decode : (List(U8)), RandomDecoder -> (Try(b, err), List(U8)),
+        \\    ]
+        \\    decode = |bytes, format| {
+        \\        ValA : a
+        \\        ValB : b
+        \\        (_, bytes_a) = ValA.decode(bytes, format)
+        \\        (_, bytes_b) = ValB.decode(bytes_a, format)
+        \\        (Err(TooShort), bytes_b)
+        \\    }
+        \\}
+        \\
+        \\expect {
+        \\    state = RandomState.([])
+        \\    x : (Pair(List(Pair(U8, U8)), List(Pair(U8, U8))), RandomState)
+        \\    x = random_value(state)
+        \\    match x {
+        \\        _ => True
+        \\    }
+        \\}
+    ;
+
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertFirstTypeError("Type Mismatch");
+}
+
 test "check type - static dispatch method type mismatch - REGRESSION TEST" {
     // This test verifies that when a method is called with mismatched types,
     // we get a TYPE MISMATCH error. This is a regression test for the diagnostic

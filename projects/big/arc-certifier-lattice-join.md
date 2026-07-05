@@ -22,8 +22,10 @@ The in-code comment above the cap check is candid that a real
 per-iteration leak in such a procedure would be *skipped rather than
 reported*, and names the sound fix — a converging dataflow fixpoint over a
 finite-height lattice — as future work. `Diagnostic.skipped_proc_count`
-counts skips but is surfaced nowhere (see
-[Surface ARC Certifier Skips](../small/surface-arc-certifier-skips.md)).
+now feeds the debug wrapper: ordinary local debug builds warn with a sample
+of skipped procedure ids/names, and CI/MiniCI fail through
+`-Dforbid-arc-certifier-skips`. That makes the hole visible, but the
+procedure is still unverified until this project removes the skip path.
 
 Second: the RC inserter (`src/lir/arc.zig`) makes ownership-transfer
 decisions open-coded per instruction kind, at roughly 13 sites spread
@@ -221,14 +223,14 @@ hand-synchronized copies.
 
 ### Migration order
 
-1. Land [Surface ARC Certifier Skips](../small/surface-arc-certifier-skips.md)
-   so any regression during this work is visible.
+1. Keep the existing skip warning/CI gate in place so regressions during this
+   work are visible.
 2. Inserter keying refactor (Part 2), gated by a byte-identical-LIR check
    on the corpus (see below). No behavior change intended.
 3. Certifier fixpoint (Part 1) behind a comptime or option flag; run both
    old and new certifiers over the full test corpus and diff findings.
 4. Remove the enumeration path, the cap, the error, the counter, and the
-   stopgap surfacing.
+   temporary skip surfacing.
 
 ## What success looks like
 
@@ -288,9 +290,6 @@ diff and account for every change explicitly.
 
 ## Related projects
 
-- [Surface ARC Certifier Skips](../small/surface-arc-certifier-skips.md) —
-  the stopgap that makes the current hole visible until this project
-  removes it.
 - [Centralize the Seamless-Slice Allocation-Reuse Predicate](../small/centralize-slice-reuse-predicate.md)
   — the runtime-side twin: one predicate definition instead of per-site
   open-coded uniqueness checks.

@@ -98,7 +98,7 @@ where it does not.
   path) call `.get(checked_site)` on it and treat inconsistency as
   `finalizationInvariant` panics ("compile-time exhaustiveness failure had
   an impossible site policy"). The only existing top-level comptime check
-  is `relocatablePointerCount(Serialized) == 181`, which audits fields
+  is `relocatablePointerCount(Serialized) == 184`, which audits fields
   that ARE present — it cannot see an absent one.
 - (b) `decodeCheckedModuleCacheEntry` checks the env body only for
   `env_body.len < @sizeOf(ModuleEnv.Serialized)`; the load path
@@ -214,6 +214,3 @@ before/after must be within noise; no body hashing on read or write.
 
 - [Unify the build pipelines](../big/unify-build-pipelines.md) — makes
   every entry path use this cache, multiplying the value of hardening it.
-- [Content-based nominal identity](../big/content-based-nominal-identity.md)
-  — the identity inputs to the cache key; this project hardens the value
-  side, that one the key side.

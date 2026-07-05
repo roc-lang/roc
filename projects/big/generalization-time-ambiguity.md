@@ -250,7 +250,3 @@ check memory.
 - [../big/total-dispatch-plans.md](../big/total-dispatch-plans.md) — shares
   the constraint-provenance foundation; its `constraint(k)` indices are
   natural provenance carriers. Either order works; build provenance once.
-- [../small/check-app-against-platform-requires.md](../small/check-app-against-platform-requires.md)
-  — upstream of both dispatch projects: platform-typed receivers must be
-  concrete at check time for pinnability judgments to be meaningful in app
-  modules.

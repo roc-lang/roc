@@ -35,7 +35,8 @@ pub const Constants = struct {
     /// 10: ModuleEnv common identifiers include Crypto digest and hasher builtin names.
     /// 11: Builtin indices and common identifiers changed for Encoding.Json and Encoding.HttpHeader.
     /// 12: Builtin.Encoding.Json structural encode/parse support changed common identifiers.
-    pub const CACHE_VERSION = 12;
+    /// 13: ModuleEnv stores deep content identity hashes.
+    pub const CACHE_VERSION = 13;
 };
 
 /// Configuration for the Roc cache system.

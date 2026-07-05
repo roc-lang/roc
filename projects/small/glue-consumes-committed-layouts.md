@@ -208,9 +208,6 @@ comptime assertions already exist).
 
 ## Related projects
 
-- [Content-based nominal identity](../big/content-based-nominal-identity.md)
-  — fully fixes the declaring-module resolution class PR 9894 patched;
-  this project consumes its artifact-keyed resolution model.
 - [Cache hardening](../small/cache-hardening.md) — committed layouts read
   from cached artifacts are only as trustworthy as the cache's
   enforcement edges.

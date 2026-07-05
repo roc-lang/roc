@@ -101,7 +101,6 @@ const MonoTestEnv = struct {
         try can_instance.validateForChecking();
 
         const module_builtin_ctx: Check.BuiltinContext = .{
-            .module_name = try module_env.insertIdent(base.Ident.for_text(module_name)),
             .bool_stmt = builtin_indices.bool_type,
             .try_stmt = builtin_indices.try_type,
             .str_stmt = builtin_indices.str_type,
@@ -207,7 +206,6 @@ const MonoTestEnv = struct {
         try can_instance.validateForChecking();
 
         const module_builtin_ctx: Check.BuiltinContext = .{
-            .module_name = try module_env.insertIdent(base.Ident.for_text(module_name)),
             .bool_stmt = builtin_indices.bool_type,
             .try_stmt = builtin_indices.try_type,
             .str_stmt = builtin_indices.str_type,
@@ -325,7 +323,6 @@ const MonoTestEnv = struct {
         try can_instance.validateForChecking();
 
         const module_builtin_ctx: Check.BuiltinContext = .{
-            .module_name = try module_env.insertIdent(base.Ident.for_text(module_name)),
             .bool_stmt = builtin_indices.bool_type,
             .try_stmt = builtin_indices.try_type,
             .str_stmt = builtin_indices.str_type,
@@ -653,7 +650,6 @@ test "type checker catches polymorphic recursion (infinite type)" {
     try can_instance.validateForChecking();
 
     const module_builtin_ctx: Check.BuiltinContext = .{
-        .module_name = try module_env.insertIdent(base.Ident.for_text("Test")),
         .bool_stmt = builtin_indices.bool_type,
         .try_stmt = builtin_indices.try_type,
         .str_stmt = builtin_indices.str_type,

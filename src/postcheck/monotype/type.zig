@@ -42,8 +42,13 @@ pub const OwnerHead = union(enum(u8)) {
 
 /// Named type definition owner.
 pub const TypeDef = struct {
-    module_name: names.ModuleNameId,
+    /// Deep content identity of the declaring module (dense id in the owning
+    /// name store's module identity table).
+    module: names.ModuleIdentityId,
+    /// Declared (module-relative) type name.
     type_name: names.TypeNameId,
+    /// Declaring statement in the (content-identified) module: the
+    /// within-module discriminator for same-named block-local declarations.
     source_decl: ?u32 = null,
 };
 
@@ -781,7 +786,7 @@ pub const Store = struct {
                 }
                 writeBytes(hasher, "named");
                 hasher.update(&named.named_type.module.bytes);
-                writeBytes(hasher, name_store.moduleNameText(named.def.module_name));
+                writeBytes(hasher, name_store.moduleIdentityBytes(named.def.module));
                 writeOptionalU32(hasher, named.def.source_decl);
                 if (named.def.source_decl == null) {
                     writeBytes(hasher, name_store.typeNameText(named.def.type_name));
@@ -936,7 +941,7 @@ pub const Store = struct {
                 }
                 writeBytes(hasher, "named");
                 hasher.update(&named.named_type.module.bytes);
-                writeBytes(hasher, name_store.moduleNameText(named.def.module_name));
+                writeBytes(hasher, name_store.moduleIdentityBytes(named.def.module));
                 writeOptionalU32(hasher, named.def.source_decl);
                 if (named.def.source_decl == null) {
                     writeBytes(hasher, name_store.typeNameText(named.def.type_name));
@@ -1154,7 +1159,7 @@ fn namedTypeViewEql(
 ) std.mem.Allocator.Error!bool {
     if (lhs.kind != rhs.kind) return false;
     if (!std.mem.eql(u8, lhs.named_type.module.bytes[0..], rhs.named_type.module.bytes[0..])) return false;
-    if (!std.mem.eql(u8, name_store.moduleNameText(lhs.def.module_name), name_store.moduleNameText(rhs.def.module_name))) return false;
+    if (!std.mem.eql(u8, name_store.moduleIdentityBytes(lhs.def.module), name_store.moduleIdentityBytes(rhs.def.module))) return false;
     if (lhs.def.source_decl != rhs.def.source_decl) return false;
     if (lhs.def.source_decl == null and
         !std.mem.eql(u8, name_store.typeNameText(lhs.def.type_name), name_store.typeNameText(rhs.def.type_name)))
@@ -1470,7 +1475,7 @@ fn namedTypeEqlAcrossStores(
 ) std.mem.Allocator.Error!bool {
     if (lhs.kind != rhs.kind) return false;
     if (!std.mem.eql(u8, lhs.named_type.module.bytes[0..], rhs.named_type.module.bytes[0..])) return false;
-    if (!std.mem.eql(u8, name_store.moduleNameText(lhs.def.module_name), name_store.moduleNameText(rhs.def.module_name))) return false;
+    if (!std.mem.eql(u8, name_store.moduleIdentityBytes(lhs.def.module), name_store.moduleIdentityBytes(rhs.def.module))) return false;
     if (lhs.def.source_decl != rhs.def.source_decl) return false;
     if (lhs.def.source_decl == null and
         !std.mem.eql(u8, name_store.typeNameText(lhs.def.type_name), name_store.typeNameText(rhs.def.type_name)))
@@ -2166,7 +2171,7 @@ test "monotype type interner checks exact equality after digest match" {
     var name_store = names.NameStore.init(std.testing.allocator);
     defer name_store.deinit();
 
-    const module_name = try name_store.internModuleName("Test");
+    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xAB} ** 32));
     const first_name = try name_store.internTypeName("First");
     const second_name = try name_store.internTypeName("Second");
 
@@ -2175,13 +2180,13 @@ test "monotype type interner checks exact equality after digest match" {
 
     const first = try interner.internNamed(.{
         .named_type = .{ .module = .{}, .ty = @enumFromInt(1) },
-        .def = .{ .module_name = module_name, .type_name = first_name },
+        .def = .{ .module = module_identity, .type_name = first_name },
         .kind = .alias,
         .backing = null,
     });
     const second = try interner.internNamed(.{
         .named_type = .{ .module = .{}, .ty = @enumFromInt(2) },
-        .def = .{ .module_name = module_name, .type_name = second_name },
+        .def = .{ .module = module_identity, .type_name = second_name },
         .kind = .alias,
         .backing = null,
     });
@@ -2296,7 +2301,7 @@ test "monotype named type digest includes generic arguments" {
     var name_store = names.NameStore.init(std.testing.allocator);
     defer name_store.deinit();
 
-    const module_name = try name_store.internModuleName("Test");
+    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xAB} ** 32));
     const type_name = try name_store.internTypeName("Box");
 
     var store = Store.init(std.testing.allocator);
@@ -2310,13 +2315,13 @@ test "monotype named type digest includes generic arguments" {
 
     const named_i64 = try store.add(.{ .named = .{
         .named_type = .{ .module = .{}, .ty = checked_ty },
-        .def = .{ .module_name = module_name, .type_name = type_name },
+        .def = .{ .module = module_identity, .type_name = type_name },
         .kind = .nominal,
         .args = i64_args,
     } });
     const named_str = try store.add(.{ .named = .{
         .named_type = .{ .module = .{}, .ty = checked_ty },
-        .def = .{ .module_name = module_name, .type_name = type_name },
+        .def = .{ .module = module_identity, .type_name = type_name },
         .kind = .nominal,
         .args = str_args,
     } });
@@ -2540,21 +2545,21 @@ test "monotype digest treats aliases as their backing" {
     var store = Store.init(std.testing.allocator);
     defer store.deinit();
 
-    const module_name = try name_store.internModuleName("Test");
+    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xAB} ** 32));
     const type_name = try name_store.internTypeName("Pretty");
     const checked_ty: checked.CheckedTypeId = @enumFromInt(1);
 
     const str = try store.add(.{ .primitive = .str });
     const aliased = try store.add(.{ .named = .{
         .named_type = .{ .module = .{}, .ty = checked_ty },
-        .def = .{ .module_name = module_name, .type_name = type_name },
+        .def = .{ .module = module_identity, .type_name = type_name },
         .kind = .alias,
         .args = Span.empty(),
         .backing = .{ .ty = str, .use = .inspectable },
     } });
     const nominal = try store.add(.{ .named = .{
         .named_type = .{ .module = .{}, .ty = checked_ty },
-        .def = .{ .module_name = module_name, .type_name = type_name },
+        .def = .{ .module = module_identity, .type_name = type_name },
         .kind = .nominal,
         .args = Span.empty(),
         .backing = .{ .ty = str, .use = .inspectable },
@@ -2574,21 +2579,21 @@ test "monotype type equality treats aliases as their backing" {
     var store = Store.init(std.testing.allocator);
     defer store.deinit();
 
-    const module_name = try name_store.internModuleName("Test");
+    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xAB} ** 32));
     const type_name = try name_store.internTypeName("Pretty");
     const checked_ty: checked.CheckedTypeId = @enumFromInt(1);
 
     const str = try store.add(.{ .primitive = .str });
     const aliased = try store.add(.{ .named = .{
         .named_type = .{ .module = .{}, .ty = checked_ty },
-        .def = .{ .module_name = module_name, .type_name = type_name },
+        .def = .{ .module = module_identity, .type_name = type_name },
         .kind = .alias,
         .args = Span.empty(),
         .backing = .{ .ty = str, .use = .inspectable },
     } });
     const nominal = try store.add(.{ .named = .{
         .named_type = .{ .module = .{}, .ty = checked_ty },
-        .def = .{ .module_name = module_name, .type_name = type_name },
+        .def = .{ .module = module_identity, .type_name = type_name },
         .kind = .nominal,
         .args = Span.empty(),
         .backing = .{ .ty = str, .use = .inspectable },
@@ -2610,7 +2615,7 @@ test "monotype type equality compares exact types across stores" {
     defer loaded.deinit();
 
     const field_name = try name_store.internRecordFieldLabel("value");
-    const module_name = try name_store.internModuleName("Test");
+    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xAB} ** 32));
     const type_name = try name_store.internTypeName("Alias");
 
     const current_unit = try current.add(.zst);
@@ -2623,7 +2628,7 @@ test "monotype type equality compares exact types across stores" {
     } });
     const current_alias = try current.add(.{ .named = .{
         .named_type = .{ .module = .{}, .ty = @enumFromInt(1) },
-        .def = .{ .module_name = module_name, .type_name = type_name },
+        .def = .{ .module = module_identity, .type_name = type_name },
         .kind = .alias,
         .args = Span.empty(),
         .backing = .{ .ty = current_record, .use = .inspectable },
@@ -2666,20 +2671,20 @@ test "monotype type equality rejects digest-equal aliases without backing" {
     var store = Store.init(std.testing.allocator);
     defer store.deinit();
 
-    const module_name = try name_store.internModuleName("Test");
+    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xAB} ** 32));
     const first_name = try name_store.internTypeName("First");
     const second_name = try name_store.internTypeName("Second");
 
     const first = try store.add(.{ .named = .{
         .named_type = .{ .module = .{}, .ty = @enumFromInt(1) },
-        .def = .{ .module_name = module_name, .type_name = first_name },
+        .def = .{ .module = module_identity, .type_name = first_name },
         .kind = .alias,
         .args = Span.empty(),
         .backing = null,
     } });
     const second = try store.add(.{ .named = .{
         .named_type = .{ .module = .{}, .ty = @enumFromInt(2) },
-        .def = .{ .module_name = module_name, .type_name = second_name },
+        .def = .{ .module = module_identity, .type_name = second_name },
         .kind = .alias,
         .args = Span.empty(),
         .backing = null,
@@ -2698,7 +2703,7 @@ test "monotype named type digest includes backing" {
     var store = Store.init(std.testing.allocator);
     defer store.deinit();
 
-    const module_name = try name_store.internModuleName("Test");
+    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xAB} ** 32));
     const type_name = try name_store.internTypeName("Wrap");
     const checked_ty: checked.CheckedTypeId = @enumFromInt(1);
     const i64_ty = try store.add(.{ .primitive = .i64 });
@@ -2706,14 +2711,14 @@ test "monotype named type digest includes backing" {
 
     const named_i64 = try store.add(.{ .named = .{
         .named_type = .{ .module = .{}, .ty = checked_ty },
-        .def = .{ .module_name = module_name, .type_name = type_name },
+        .def = .{ .module = module_identity, .type_name = type_name },
         .kind = .nominal,
         .args = Span.empty(),
         .backing = .{ .ty = i64_ty, .use = .inspectable },
     } });
     const named_str = try store.add(.{ .named = .{
         .named_type = .{ .module = .{}, .ty = checked_ty },
-        .def = .{ .module_name = module_name, .type_name = type_name },
+        .def = .{ .module = module_identity, .type_name = type_name },
         .kind = .nominal,
         .args = Span.empty(),
         .backing = .{ .ty = str_ty, .use = .inspectable },
@@ -2735,7 +2740,7 @@ test "monotype specialization digest includes builtin evidence backing" {
     var store = Store.init(std.testing.allocator);
     defer store.deinit();
 
-    const module_name = try name_store.internModuleName("Builtin.Str.FieldName");
+    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xAB} ** 32));
     const type_name = try name_store.internTypeName("FieldNames");
     const checked_ty: checked.CheckedTypeId = @enumFromInt(1);
     const i64_ty = try store.add(.{ .primitive = .i64 });
@@ -2743,7 +2748,7 @@ test "monotype specialization digest includes builtin evidence backing" {
 
     const fields_i64 = try store.add(.{ .named = .{
         .named_type = .{ .module = .{}, .ty = checked_ty },
-        .def = .{ .module_name = module_name, .type_name = type_name },
+        .def = .{ .module = module_identity, .type_name = type_name },
         .kind = .@"opaque",
         .builtin_owner = .fields,
         .args = Span.empty(),
@@ -2751,7 +2756,7 @@ test "monotype specialization digest includes builtin evidence backing" {
     } });
     const fields_str = try store.add(.{ .named = .{
         .named_type = .{ .module = .{}, .ty = checked_ty },
-        .def = .{ .module_name = module_name, .type_name = type_name },
+        .def = .{ .module = module_identity, .type_name = type_name },
         .kind = .@"opaque",
         .builtin_owner = .fields,
         .args = Span.empty(),
@@ -2770,7 +2775,7 @@ test "monotype named type digest includes nested named backing" {
     var store = Store.init(std.testing.allocator);
     defer store.deinit();
 
-    const module_name = try name_store.internModuleName("Test");
+    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xAB} ** 32));
     const outer_type_name = try name_store.internTypeName("Outer");
     const inner_type_name = try name_store.internTypeName("Inner");
     const outer_checked_ty: checked.CheckedTypeId = @enumFromInt(1);
@@ -2780,28 +2785,28 @@ test "monotype named type digest includes nested named backing" {
 
     const inner_i64 = try store.add(.{ .named = .{
         .named_type = .{ .module = .{}, .ty = inner_checked_ty },
-        .def = .{ .module_name = module_name, .type_name = inner_type_name },
+        .def = .{ .module = module_identity, .type_name = inner_type_name },
         .kind = .nominal,
         .args = Span.empty(),
         .backing = .{ .ty = i64_ty, .use = .inspectable },
     } });
     const inner_str = try store.add(.{ .named = .{
         .named_type = .{ .module = .{}, .ty = inner_checked_ty },
-        .def = .{ .module_name = module_name, .type_name = inner_type_name },
+        .def = .{ .module = module_identity, .type_name = inner_type_name },
         .kind = .nominal,
         .args = Span.empty(),
         .backing = .{ .ty = str_ty, .use = .inspectable },
     } });
     const outer_i64 = try store.add(.{ .named = .{
         .named_type = .{ .module = .{}, .ty = outer_checked_ty },
-        .def = .{ .module_name = module_name, .type_name = outer_type_name },
+        .def = .{ .module = module_identity, .type_name = outer_type_name },
         .kind = .nominal,
         .args = Span.empty(),
         .backing = .{ .ty = inner_i64, .use = .inspectable },
     } });
     const outer_str = try store.add(.{ .named = .{
         .named_type = .{ .module = .{}, .ty = outer_checked_ty },
-        .def = .{ .module_name = module_name, .type_name = outer_type_name },
+        .def = .{ .module = module_identity, .type_name = outer_type_name },
         .kind = .nominal,
         .args = Span.empty(),
         .backing = .{ .ty = inner_str, .use = .inspectable },
@@ -2819,7 +2824,7 @@ test "monotype named type digest includes declared field order" {
     var store = Store.init(std.testing.allocator);
     defer store.deinit();
 
-    const module_name = try name_store.internModuleName("Test");
+    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xAB} ** 32));
     const type_name = try name_store.internTypeName("Pair");
     const field_a = try name_store.internRecordFieldLabel("a");
     const field_b = try name_store.internRecordFieldLabel("b");
@@ -2841,7 +2846,7 @@ test "monotype named type digest includes declared field order" {
 
     const named_ab = try store.add(.{ .named = .{
         .named_type = .{ .module = .{}, .ty = checked_ty },
-        .def = .{ .module_name = module_name, .type_name = type_name },
+        .def = .{ .module = module_identity, .type_name = type_name },
         .kind = .nominal,
         .args = Span.empty(),
         .backing = .{ .ty = backing, .use = .inspectable },
@@ -2849,7 +2854,7 @@ test "monotype named type digest includes declared field order" {
     } });
     const named_ba = try store.add(.{ .named = .{
         .named_type = .{ .module = .{}, .ty = checked_ty },
-        .def = .{ .module_name = module_name, .type_name = type_name },
+        .def = .{ .module = module_identity, .type_name = type_name },
         .kind = .nominal,
         .args = Span.empty(),
         .backing = .{ .ty = backing, .use = .inspectable },
@@ -2868,7 +2873,7 @@ test "monotype named type digest includes padding backing" {
     var store = Store.init(std.testing.allocator);
     defer store.deinit();
 
-    const module_name = try name_store.internModuleName("Test");
+    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xAB} ** 32));
     const type_name = try name_store.internTypeName("Padded");
     const checked_ty: checked.CheckedTypeId = @enumFromInt(1);
     const i64_ty = try store.add(.{ .primitive = .i64 });
@@ -2878,14 +2883,14 @@ test "monotype named type digest includes padding backing" {
 
     const named_i64 = try store.add(.{ .named = .{
         .named_type = .{ .module = .{}, .ty = checked_ty },
-        .def = .{ .module_name = module_name, .type_name = type_name },
+        .def = .{ .module = module_identity, .type_name = type_name },
         .kind = .nominal,
         .args = Span.empty(),
         .declared_order = order_i64,
     } });
     const named_str = try store.add(.{ .named = .{
         .named_type = .{ .module = .{}, .ty = checked_ty },
-        .def = .{ .module_name = module_name, .type_name = type_name },
+        .def = .{ .module = module_identity, .type_name = type_name },
         .kind = .nominal,
         .args = Span.empty(),
         .declared_order = order_str,

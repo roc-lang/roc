@@ -100,7 +100,7 @@ pub const Local = struct {
 /// Span into flat local-id storage.
 pub const LocalSpan = extern struct {
     start: u32,
-    len: u16,
+    len: u32,
 
     /// Returns an empty local-id span.
     pub fn empty() LocalSpan {

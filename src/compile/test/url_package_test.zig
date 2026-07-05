@@ -58,7 +58,8 @@ test "URL dependency resolves from a warm cache with no network, and its modules
     try std.testing.expectEqualStrings("example.com/foo/util", util_pkg.url.?.urlId());
 
     // The root's shorthand points at the URL package.
-    const root_pkg = build_env.packages.getPtr("module") orelse return error.TestUnexpectedResult;
+    const root_pkg_name = build_env.discovered_pkg_name orelse return error.TestUnexpectedResult;
+    const root_pkg = build_env.packages.getPtr(root_pkg_name) orelse return error.TestUnexpectedResult;
     const shorthand = root_pkg.shorthands.get("util") orelse return error.TestUnexpectedResult;
     try std.testing.expectEqualStrings(util_url, shorthand.name);
 
@@ -67,7 +68,7 @@ test "URL dependency resolves from a warm cache with no network, and its modules
 
     // Bundling the consumer must include its own modules but exclude the URL
     // dependency's modules (both by package and by cache location).
-    try std.testing.expect(build_env.isBundleableModule("module", consumer_main));
+    try std.testing.expect(build_env.isBundleableModule(root_pkg_name, consumer_main));
     try std.testing.expect(!build_env.isBundleableModule(util_url, util_pkg.root_file));
 
     const cached_local_path = try std.fs.path.join(gpa, &.{ cache_dir, fake_hash, "Util.roc" });

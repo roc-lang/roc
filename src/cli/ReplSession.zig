@@ -1344,7 +1344,7 @@ test "Repl - 4-arg lambda call (dev)" {
     try expectStateful(.wasm, steps);
 }
 
-fn expectSplit(input: []const u8, expected: []const []const u8) Allocator.Error!void {
+fn expectSplit(input: []const u8, expected: []const []const u8) ReplTestError!void {
     var repl = try testRepl(.interpreter);
     defer repl.deinit();
 

@@ -115,6 +115,7 @@ comptime {
         std.testing.refAllDecls(cli_problem);
         std.testing.refAllDecls(@import("embedded_lld").stack_probe);
         std.testing.refAllDecls(@import("ReplLine.zig"));
+        std.testing.refAllDecls(@import("ReplSession.zig"));
     }
 }
 const libc_finder = @import("libc_finder.zig");
@@ -1743,16 +1744,20 @@ fn updatePlatformAppRelationIdentity(
     hasher: *std.crypto.hash.sha2.Sha256,
     root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
 ) void {
-    updateHashBytes(hasher, "platform-app-relations-v1");
+    // Host-boundary fingerprint: hash the relation/binding SHAPE only, never
+    // checked type keys. Type keys are deep content digests (they embed the
+    // app module's content identity), so hashing them would change the host
+    // interface fingerprint on every app source edit and break hot reload of
+    // unchanged interfaces. Interface compatibility itself is enforced by the
+    // rebuild's type check, and ABI stability by the host callable layout
+    // identity hashed alongside this.
+    updateHashBytes(hasher, "platform-app-relations-v2");
 
     const relations = root_artifact.platform_requirement_relations.relations;
     updateHashU32(hasher, @intCast(relations.len));
     for (relations) |relation| {
         updateHashU32(hasher, @intFromEnum(relation.declaration));
         updateHashU32(hasher, relation.requires_idx);
-        hasher.update(&relation.declared_source_ty.bytes);
-        hasher.update(&relation.requested_source_ty.bytes);
-        hasher.update(&relation.app_value_source_scheme.bytes);
         updateHashU32(hasher, @intFromEnum(relation.value_kind));
     }
 
@@ -1761,7 +1766,6 @@ fn updatePlatformAppRelationIdentity(
     for (bindings) |binding| {
         updateHashU32(hasher, @intFromEnum(binding.declaration));
         updateHashU32(hasher, binding.requires_idx);
-        hasher.update(&binding.requested_source_ty.bytes);
         updateHashU32(hasher, @intFromEnum(binding.checked_relation));
         updateHashU32(hasher, @intFromEnum(std.meta.activeTag(binding.value_use)));
     }
@@ -2305,6 +2309,7 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
                 ctx.gpa,
                 args.path,
                 null,
+                false,
                 args.max_threads,
                 inlineExpectModeForOpt(args.opt),
                 resolutionConfigFromLimits(args.resolve_limits),
@@ -2324,6 +2329,7 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
                 ctx,
                 args.path,
                 null,
+                false,
                 args.max_threads,
                 inlineExpectModeForOpt(args.opt),
                 resolutionConfigFromLimits(args.resolve_limits),
@@ -2956,7 +2962,7 @@ fn rocRunDefaultApp(ctx: *CliCtx, args: cli_args.RunArgs, original_source: []con
     var reporter = makeReporter(ctx, "roc", args.timings);
     defer reporter.deinit();
     reporter.start();
-    const shm_result = try buildLirImageWithCoordinator(ctx, app_path, original_source_dir, args.max_threads, inlineExpectModeForOpt(args.opt), resolutionConfigFromLimits(args.resolve_limits), &cache_manager, &reporter, true);
+    const shm_result = try buildLirImageWithCoordinator(ctx, app_path, original_source_dir, true, args.max_threads, inlineExpectModeForOpt(args.opt), resolutionConfigFromLimits(args.resolve_limits), &cache_manager, &reporter, true);
     defer closeSharedMemoryHandle(shm_result.handle);
 
     if (shm_result.error_count > 0 and shm_result.entrypoint_names.len == 0) {
@@ -3071,6 +3077,7 @@ fn rocRunDefaultAppSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, origin
         ctx.gpa,
         app_path,
         original_source_dir,
+        true,
         args.max_threads,
         inlineExpectModeForOpt(args.opt),
         resolutionConfigFromLimits(args.resolve_limits),
@@ -5119,6 +5126,7 @@ fn rocInternalHotReloadDev(ctx: *CliCtx, raw_args: []const []const u8) CliMainEr
         ctx.gpa,
         args.path,
         if (source_rewrite) |rewrite| rewrite.source_dir_override else null,
+        source_rewrite != null,
         args.max_threads,
         inlineExpectModeForOpt(.dev),
         resolutionConfigFromLimits(args.resolve_limits),
@@ -5424,6 +5432,7 @@ fn lowerLirWithCoordinator(
     lir_allocator: Allocator,
     roc_file_path: []const u8,
     source_dir_override: ?[]const u8,
+    synthetic_default_app: bool,
     max_threads: ?usize,
     inline_expects: lir.CheckedPipeline.InlineExpectMode,
     resolution_config: compile.package_resolution.Config,
@@ -5459,25 +5468,19 @@ fn lowerLirWithCoordinator(
 
     // Run global package version resolution: downloads every (transitive)
     // URL dependency, solves versions, and yields the final package graph.
-    // Use a logical absolute path (cwd-based) rather than a realpath syscall,
-    // matching how the rest of the build resolves paths and avoiding musl's
-    // realpath reading uninitialized bytes under valgrind.
+    // Resolution still receives a logical absolute path; package identities
+    // are canonicalized separately by compile.package_identity.
     const roc_file_abs = std.fs.path.resolve(ctx.arena, &.{roc_file_path}) catch
         try ctx.arena.dupe(u8, roc_file_path);
     var resolved = try resolvePackages(ctx, roc_file_abs, resolution_config);
     defer resolved.deinit();
     const resolved_packages = resolved.packages;
 
-    const package_names = try ctx.gpa.alloc([]const u8, resolved_packages.len);
-    defer ctx.gpa.free(package_names);
-    for (package_names, resolved_packages, 0..) |*package_name, package, i| {
-        package_name.* = if (i == compile.package_resolution.Resolved.root_index) "app" else package.identity;
-    }
-    for (resolved_packages[compile.package_resolution.Resolved.root_index].deps) |dep| {
-        if (dep.is_platform) {
-            package_names[dep.target] = "pf";
-        }
-    }
+    var package_keys = try compile.package_identity.buildPackageKeys(ctx.gpa, ctx.coreCtx(), &resolved, .{
+        .synthetic_root = synthetic_default_app,
+        .synthetic_platform = synthetic_default_app,
+    });
+    defer package_keys.deinit();
     if (reporter) |r| r.end();
 
     const thread_count: usize = max_threads orelse (std.Thread.getCpuCount() catch 1);
@@ -5499,7 +5502,8 @@ fn lowerLirWithCoordinator(
 
     try coord.start();
 
-    const app_pkg = try coord.ensurePackage("app", app_dir);
+    const app_pkg = try coord.ensurePackage(package_keys.identity(compile.package_resolution.Resolved.root_index), app_dir);
+    coord.markAppPackage(app_pkg.name);
     const root_package = resolved_packages[compile.package_resolution.Resolved.root_index];
     try app_pkg.setRootInput(ctx.gpa, root_package.root_file, try currentCompilerWatchInputState(ctx, root_package.root_file));
     const app_module_name = base.module_path.getModuleName(roc_file_path);
@@ -5512,12 +5516,10 @@ fn lowerLirWithCoordinator(
     app_pkg.remaining_modules += 1;
     coord.total_remaining += 1;
 
-    // Register resolved packages under the coordinator package names that
-    // participate in checked module identity. Non-platform packages keep their
-    // resolved identities; the root platform package uses the stable "pf" name,
-    // matching Coordinator.discoverAppFromPath.
+    // Register resolved packages under the package identities that participate
+    // in checked module identity.
     for (resolved_packages[1..], 1..) |package, package_idx| {
-        const package_name = package_names[package_idx];
+        const package_name = package_keys.identity(package_idx);
         const url_view: ?package_source.UrlSourceView = if (package.url) |url| .{
             .url = url.url,
             .url_id = url.url_id,
@@ -5533,7 +5535,7 @@ fn lowerLirWithCoordinator(
     {
         // Record notes for packages whose declared dependency versions were
         // bumped by solving, so errors inside them can explain the bump.
-        const bump_notes = try compile.package_resolution.versionBumpNotes(&resolved, ctx.gpa);
+        const bump_notes = try compile.package_identity.versionBumpNotesForPackageKeys(&resolved, package_keys, ctx.gpa);
         defer ctx.gpa.free(bump_notes);
         for (bump_notes) |note| {
             const gop = try coord.version_notes.getOrPut(note.package_identity);
@@ -5551,11 +5553,11 @@ fn lowerLirWithCoordinator(
         const from_pkg = if (i == compile.package_resolution.Resolved.root_index)
             app_pkg
         else
-            coord.packages.get(package_names[i]) orelse return error.CliError;
+            coord.packages.get(package_keys.identity(i)) orelse return error.CliError;
 
         for (package.deps) |dep| {
             const target = resolved_packages[dep.target];
-            const target_name = package_names[dep.target];
+            const target_name = package_keys.identity(dep.target);
             try from_pkg.shorthands.put(
                 try ctx.gpa.dupe(u8, dep.alias),
                 try ctx.gpa.dupe(u8, target_name),
@@ -5579,7 +5581,7 @@ fn lowerLirWithCoordinator(
     }
 
     if (reporter) |r| r.begin("Type Checking");
-    try coord.enqueueParseTask("app", app_module_id);
+    try coord.enqueueParseTask(app_pkg.name, app_module_id);
     coord.coordinatorLoop() catch |err| {
         if (reporter) |r| r.fail();
         _ = renderCoordinatorReports(ctx, &coord, roc_file_path);
@@ -5695,6 +5697,7 @@ pub fn buildLirImageWithCoordinator(
     ctx: *CliCtx,
     roc_file_path: []const u8,
     source_dir_override: ?[]const u8,
+    synthetic_default_app: bool,
     max_threads: ?usize,
     inline_expects: lir.CheckedPipeline.InlineExpectMode,
     resolution_config: compile.package_resolution.Config,
@@ -5716,6 +5719,7 @@ pub fn buildLirImageWithCoordinator(
         shm_allocator,
         roc_file_path,
         source_dir_override,
+        synthetic_default_app,
         max_threads,
         inline_expects,
         resolution_config,
@@ -5758,7 +5762,7 @@ pub fn buildLirImageWithCoordinator(
 /// Wrapper around buildLirImageWithCoordinator for callers that pass allow_errors.
 /// The allow_errors flag is handled by the caller; this function ignores it.
 pub fn setupSharedMemoryWithCoordinator(ctx: *CliCtx, roc_file_path: []const u8, _: bool) CliMainError!SharedMemoryResult {
-    return buildLirImageWithCoordinator(ctx, roc_file_path, null, null, .run, .{}, null, null, true);
+    return buildLirImageWithCoordinator(ctx, roc_file_path, null, false, null, .run, .{}, null, null, true);
 }
 
 /// Platform resolution result containing the platform source path

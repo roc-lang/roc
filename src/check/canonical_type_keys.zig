@@ -8,8 +8,11 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const base = @import("base");
+const can = @import("can");
 const types = @import("types");
 const canonical = @import("canonical_names.zig");
+
+const ModuleEnv = can.ModuleEnv;
 
 const Allocator = std.mem.Allocator;
 const Ident = base.Ident;
@@ -27,20 +30,20 @@ pub const TypeKeyInfo = struct {
 pub fn fromVar(
     allocator: Allocator,
     store: *const TypeStore,
-    idents: *const Ident.Store,
+    env: *const ModuleEnv,
     var_: Var,
 ) Allocator.Error!canonical.CanonicalTypeKey {
-    return (try fromVarInfo(allocator, store, idents, var_)).key;
+    return (try fromVarInfo(allocator, store, env, var_)).key;
 }
 
 /// Public `fromVarInfo` function.
 pub fn fromVarInfo(
     allocator: Allocator,
     store: *const TypeStore,
-    idents: *const Ident.Store,
+    env: *const ModuleEnv,
     var_: Var,
 ) Allocator.Error!TypeKeyInfo {
-    var builder = Builder.init(allocator, store, idents);
+    var builder = Builder.init(allocator, store, env);
     defer builder.deinit();
     try builder.writeVar(var_);
     return .{
@@ -53,10 +56,10 @@ pub fn fromVarInfo(
 pub fn fromConcreteVar(
     allocator: Allocator,
     store: *const TypeStore,
-    idents: *const Ident.Store,
+    env: *const ModuleEnv,
     var_: Var,
 ) Allocator.Error!canonical.CanonicalTypeKey {
-    var builder = Builder.init(allocator, store, idents);
+    var builder = Builder.init(allocator, store, env);
     defer builder.deinit();
     builder.require_concrete = true;
     try builder.writeVar(var_);
@@ -85,10 +88,10 @@ pub fn defaultDec(idents: *const Ident.Store) canonical.CanonicalTypeKey {
 pub fn schemeFromVar(
     allocator: Allocator,
     store: *const TypeStore,
-    idents: *const Ident.Store,
+    env: *const ModuleEnv,
     var_: Var,
 ) Allocator.Error!canonical.CanonicalTypeSchemeKey {
-    var builder = Builder.init(allocator, store, idents);
+    var builder = Builder.init(allocator, store, env);
     defer builder.deinit();
     builder.writeTag("canonical_type_scheme");
     try builder.writeVar(var_);
@@ -98,6 +101,7 @@ pub fn schemeFromVar(
 const Builder = struct {
     allocator: Allocator,
     store: *const TypeStore,
+    env: *const ModuleEnv,
     idents: *const Ident.Store,
     hasher: std.crypto.hash.sha2.Sha256,
     active: std.ArrayList(Var),
@@ -105,11 +109,12 @@ const Builder = struct {
     require_concrete: bool = false,
     contains_identity_variables: bool = false,
 
-    fn init(allocator: Allocator, store: *const TypeStore, idents: *const Ident.Store) Builder {
+    fn init(allocator: Allocator, store: *const TypeStore, env: *const ModuleEnv) Builder {
         return .{
             .allocator = allocator,
             .store = store,
-            .idents = idents,
+            .env = env,
+            .idents = env.getIdentStoreConst(),
             .hasher = std.crypto.hash.sha2.Sha256.init(.{}),
             .active = .empty,
             .identity_variables = .empty,
@@ -570,8 +575,13 @@ const Builder = struct {
         }
     }
 
-    fn writeNamedSourceIdentity(self: *Builder, origin_module: Ident.Idx, ident: Ident.Idx, source_decl: ?u32) void {
-        self.writeIdent(origin_module);
+    /// Write a named type's source identity: the declaring module's 32-byte
+    /// deep CONTENT identity plus the within-module discriminator, mirroring
+    /// `sameNominalIdentity` in unify.zig exactly. No name text participates
+    /// in the module component, so the digest never depends on coordinator
+    /// naming or build directories.
+    fn writeNamedSourceIdentity(self: *Builder, origin_module: base.ModuleIdentity.Idx, ident: Ident.Idx, source_decl: ?u32) void {
+        self.writeBytes(self.env.moduleIdentityHash(origin_module));
         self.writeOptionalU32(source_decl);
         if (source_decl == null) {
             self.writeIdent(ident);
@@ -655,13 +665,13 @@ test "canonical type key declarations are referenced" {
 test "concrete keys default open literal flex vars per kind (numeral -> Dec, quote -> Str)" {
     const allocator = std.testing.allocator;
 
-    var idents = try Ident.Store.initCapacity(allocator, 8);
-    defer idents.deinit(allocator);
-    _ = try idents.insert(allocator, Ident.for_text("Builtin"));
-    _ = try idents.insert(allocator, Ident.for_text("Builtin.Num.Dec"));
-    _ = try idents.insert(allocator, Ident.for_text("Builtin.Str"));
-    const from_numeral_ident = try idents.insert(allocator, Ident.for_text("from_numeral"));
-    const from_quote_ident = try idents.insert(allocator, Ident.for_text("from_quote"));
+    var env = try ModuleEnv.init(allocator, "");
+    defer env.deinit();
+    _ = try env.insertIdent(Ident.for_text("Builtin"));
+    _ = try env.insertIdent(Ident.for_text("Builtin.Num.Dec"));
+    _ = try env.insertIdent(Ident.for_text("Builtin.Str"));
+    const from_numeral_ident = try env.insertIdent(Ident.for_text("from_numeral"));
+    const from_quote_ident = try env.insertIdent(Ident.for_text("from_quote"));
 
     var store = try TypeStore.initCapacity(allocator, 16, 8);
     defer store.deinit();
@@ -686,23 +696,23 @@ test "concrete keys default open literal flex vars per kind (numeral -> Dec, quo
         .flex = types.Flex.init().withConstraints(quote_constraints),
     });
 
-    const numeral_key = try fromConcreteVar(allocator, &store, &idents, numeral_var);
-    const quote_key = try fromConcreteVar(allocator, &store, &idents, quote_var);
+    const numeral_key = try fromConcreteVar(allocator, &store, &env, numeral_var);
+    const quote_key = try fromConcreteVar(allocator, &store, &env, quote_var);
 
     // The two defaults must key as different nominals (Dec vs Str); before
     // per-kind defaulting, a quote-only flex var keyed identically to Dec.
     try std.testing.expect(!std.meta.eql(numeral_key, quote_key));
 
     // Keying is deterministic per kind.
-    const quote_key_again = try fromConcreteVar(allocator, &store, &idents, quote_var);
+    const quote_key_again = try fromConcreteVar(allocator, &store, &env, quote_var);
     try std.testing.expect(std.meta.eql(quote_key, quote_key_again));
 }
 
 test "source type keys normalize closed empty records to empty record" {
     const allocator = std.testing.allocator;
 
-    var idents = try Ident.Store.initCapacity(allocator, 4);
-    defer idents.deinit(allocator);
+    var env = try ModuleEnv.init(allocator, "");
+    defer env.deinit();
 
     var store = try TypeStore.initCapacity(allocator, 16, 8);
     defer store.deinit();
@@ -714,8 +724,8 @@ test "source type keys normalize closed empty records to empty record" {
         .ext = empty,
     } } });
 
-    const empty_key = try fromVar(allocator, &store, &idents, empty);
-    const closed_key = try fromVar(allocator, &store, &idents, closed_empty);
+    const empty_key = try fromVar(allocator, &store, &env, empty);
+    const closed_key = try fromVar(allocator, &store, &env, closed_empty);
 
     try std.testing.expectEqualSlices(u8, empty_key.bytes[0..], closed_key.bytes[0..]);
 }
@@ -723,8 +733,8 @@ test "source type keys normalize closed empty records to empty record" {
 test "source type keys normalize closed empty tag unions to empty tag union" {
     const allocator = std.testing.allocator;
 
-    var idents = try Ident.Store.initCapacity(allocator, 4);
-    defer idents.deinit(allocator);
+    var env = try ModuleEnv.init(allocator, "");
+    defer env.deinit();
 
     var store = try TypeStore.initCapacity(allocator, 16, 8);
     defer store.deinit();
@@ -736,8 +746,8 @@ test "source type keys normalize closed empty tag unions to empty tag union" {
         .ext = empty,
     } } });
 
-    const empty_key = try fromVar(allocator, &store, &idents, empty);
-    const closed_key = try fromVar(allocator, &store, &idents, closed_empty);
+    const empty_key = try fromVar(allocator, &store, &env, empty);
+    const closed_key = try fromVar(allocator, &store, &env, closed_empty);
 
     try std.testing.expectEqualSlices(u8, empty_key.bytes[0..], closed_key.bytes[0..]);
 }
