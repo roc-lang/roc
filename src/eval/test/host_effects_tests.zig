@@ -1073,4 +1073,22 @@ pub const tests = [_]TestCase{
         .returned,
         0,
     ),
+    exprTestWithLiveAllocations(
+        "rc balance: successful Json.parse releases the input string",
+        \\{
+        \\    json = Str.concat("{ \"name\": \"", "a value long enough to force a heap allocation for the whole json string\" }")
+        \\    result : Try({ name : Str }, _)
+        \\    result = Json.parse(json)
+        \\    n = match result {
+        \\        Ok(rec) => Str.count_utf8_bytes(rec.name)
+        \\        Err(_) => 0
+        \\    }
+        \\    expect n > 0
+        \\    {}
+        \\}
+    ,
+        &.{},
+        .returned,
+        0,
+    ),
 };
