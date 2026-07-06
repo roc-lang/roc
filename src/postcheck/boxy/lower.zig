@@ -92,6 +92,7 @@ const ProcedureModuleView = struct {
     const_templates: *const checked.ConstTemplateTable,
     interface_capabilities: *const checked.ModuleInterfaceCapabilities,
     const_store: *const check.ConstStore.ConstStore,
+    module_env: *const can.ModuleEnv,
 };
 
 const ResolvedWorker = struct {
@@ -500,6 +501,7 @@ fn rootProcedureModule(modules: Common.CheckedModules) ProcedureModuleView {
         .const_templates = &artifact.const_templates,
         .interface_capabilities = &artifact.interface_capabilities,
         .const_store = &artifact.const_store,
+        .module_env = artifact.moduleEnvConst(),
     };
 }
 
@@ -524,6 +526,7 @@ fn procedureModuleFromImport(import: checked.ImportedModuleView) ProcedureModule
         .const_templates = import.const_templates,
         .interface_capabilities = import.interface_capabilities,
         .const_store = import.const_store,
+        .module_env = import.module_env,
     };
 }
 
@@ -4016,7 +4019,12 @@ const ProcBodyBuilder = struct {
             .runtime_error => try self.parent.result.store.addCFStmt(.runtime_error),
             .lambda => try self.lowerCallableExprInto(target, expr_id, next),
             .closure => try self.lowerCallableExprInto(target, expr_id, next),
+            .num_from_numeral => |maybe_plan| try self.lowerNumFromNumeralInto(target, maybe_plan, next),
+            .typed_num_from_numeral => |maybe_plan| try self.lowerNumFromNumeralInto(target, maybe_plan, next),
             else => {
+                if (@import("builtin").mode == .Debug) {
+                    std.debug.print("boxy lowering unimplemented checked expression form: {s}\n", .{@tagName(expr.data)});
+                }
                 boxyLowerInvariant("checked expression form reached boxy body lowering before its LIR lowering was implemented");
             },
         };
@@ -4725,8 +4733,14 @@ const ProcBodyBuilder = struct {
         maybe_expr: ?checked.CheckedExprId,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
-        const worker_id = self.parent.plan.workerForSourceType(source, .{ .module = self.module.key, .ty = checked_ty }) orelse
-            boxyLowerInvariant("boxy callable value reached lowering without a planned worker");
+        const worker_id = self.parent.plan.workerForSourceType(source, .{ .module = self.module.key, .ty = checked_ty }) orelse {
+            // A callable-eval binding whose compile-time root is still pending
+            // (roc test finalizes only what its expects reach) has no worker;
+            // reaching its value at runtime is a crash, not a plan error.
+            return try self.parent.result.store.addCFStmt(.{ .crash = .{
+                .msg = try self.parent.result.store.insertString("value referenced before its compile-time evaluation was finalized"),
+            } });
+        };
         const worker = self.parent.plan.workers.items[@intFromEnum(worker_id)];
         const value_function = self.functionChildrenForRep(self.repForType(checked_ty)) orelse
             boxyLowerInvariant("boxy callable value type was not an erased-callable representation");
@@ -12748,6 +12762,50 @@ const ProcBodyBuilder = struct {
             .i128 => builtins.compiler_rt_128.i128_to_f64(@as(i128, @bitCast(value.bytes))),
             .u128 => builtins.compiler_rt_128.u128_to_f64(@as(u128, @bitCast(value.bytes))),
         };
+    }
+
+    /// Lower a from_numeral conversion. Boxy has no monomorphization stage to
+    /// fold these at, so the fold happens here: integral numerals encode
+    /// through the literal machinery (which handles concrete, statically
+    /// described, and runtime-described dynamic targets alike), and fractional
+    /// numerals encode at their concrete fractional target.
+    fn lowerNumFromNumeralInto(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        maybe_plan: ?static_dispatch.StaticDispatchPlanId,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const plan = self.staticDispatchPlan(maybe_plan);
+        const operands = plan.argsSlice(self.module.static_dispatch_plans);
+        if (operands.len != 1) {
+            boxyLowerInvariant("from_numeral plan did not carry exactly one operand");
+        }
+        const literal = switch (operands[0]) {
+            .generated_numeral => |lit| lit,
+            else => boxyLowerInvariant("from_numeral plan operand was not a generated numeral"),
+        };
+        const text = try checked.numeralLiteralDecimalText(self.parent.allocator, self.module.module_env, literal);
+        defer self.parent.allocator.free(text);
+
+        const target_layout = self.parent.result.store.getLocal(target).layout_idx;
+        if (std.fmt.parseInt(i128, text, 10)) |value| {
+            return switch (target_layout) {
+                .f32 => try self.assignF32Literal(target, @floatFromInt(value), next),
+                .f64 => try self.assignF64Literal(target, @floatFromInt(value), next),
+                .dec => try self.assignDecLiteral(target, .{ .num = value * builtins.dec.RocDec.one_point_zero_i128 }, next),
+                else => try self.assignIntLiteral(target, value, next),
+            };
+        } else |_| {
+            return switch (target_layout) {
+                .f32 => try self.assignF32Literal(target, std.fmt.parseFloat(f32, text) catch
+                    boxyLowerInvariant("from_numeral fractional literal did not parse as f32"), next),
+                .f64 => try self.assignF64Literal(target, std.fmt.parseFloat(f64, text) catch
+                    boxyLowerInvariant("from_numeral fractional literal did not parse as f64"), next),
+                .dec => try self.assignDecLiteral(target, builtins.dec.RocDec.fromNonemptySlice(text) orelse
+                    boxyLowerInvariant("from_numeral fractional literal did not parse as Dec"), next),
+                else => boxyLowerInvariant("fractional from_numeral literal reached a non-fractional boxy target"),
+            };
+        }
     }
 
     fn assignIntLiteral(self: *ProcBodyBuilder, target: LIR.LocalId, value: i128, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {

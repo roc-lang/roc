@@ -115,6 +115,34 @@ Earlier hypotheses about the plan-side tandem walk misattributing params (previo
 - CI boxy-vs-lss benchmark section added (c4f9c6329c). Smoke test run
   started (sandboxed, long-running).
 
+## Smoke test findings (task #10) — first run + fixes in flight
+
+First sandboxed run: 38 checked / 20 built / 21 tested green; 20 failures, all
+reproducible locally via `roc test` on package example repos (e.g.
+`roc-random/examples/simple.roc`). Peeled so far (committed):
+1. Plan panic "pending callable eval root…": `roc test` finalizes only what
+   its expects reach, so lookups can hit bindings with pending compile-time
+   roots. The plan now skips eager worker creation for them
+   (`procedureBindingBodyIsPendingEval`) and lowering emits a crash statement
+   if such a value is actually reached.
+2. Compiler SIGSEGV: `ensureStaticDictionaryWorkers` iterated a dictionary
+   requirement slice across `analyzeType`/`ensureWorker`, which can grow the
+   pool — same dangling-slice class as the children pools; now index-based.
+3. "checked expression form … not implemented" = `num_from_numeral` /
+   `typed_num_from_numeral`: boxy has no monomorphization stage to fold these
+   at (monotype's `lowerNumeralFold` does it there), so
+   `lowerNumFromNumeralInto` folds them at boxy lowering: integral numerals go
+   through the literal machinery (concrete, static-desc, and runtime-desc
+   targets alike), fractional ones encode at concrete f32/f64/Dec targets.
+   `ProcedureModuleView` gained `module_env` for numeral text decoding.
+
+NEXT LAYER (uncommitted, reproducible): ARC panic "noop RC helper for
+refcounted local … layout tag_union#46 desc=null" in roc-random's proc 16 —
+a concrete tag union containing dynamic boxes needs a descriptor for its RC
+plan but the local has none attached. After that layer, re-run the smoke
+test; remaining failure families were roc-http check errors (exit 1, possibly
+pre-existing) and the -6 aborts (roc-platform-template-zig, roc-parser).
+
 ## Backend implementation plan (task #8) — decided architecture
 
 The interpreter's boxy semantics (descriptor-guided materialization, tag

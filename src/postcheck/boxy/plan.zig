@@ -1955,7 +1955,12 @@ const Builder = struct {
             return;
         };
 
-        for (self.plan.dictionarySlice(worker_dictionaries)) |requirement| {
+        // analyzeType/ensureWorker can append dictionary requirements, growing
+        // the pool and invalidating any held slice; requirements are re-read
+        // by index on every iteration.
+        var requirement_index: usize = 0;
+        while (requirement_index < worker_dictionaries.len) : (requirement_index += 1) {
+            const requirement = self.plan.dictionaries.items[worker_dictionaries.start + requirement_index];
             const requirement_view = self.moduleForId(requirement.source_type.module);
             const lookup = self.lookupMethodTarget(source_view, owner, requirement_view, requirement.fn_name) orelse
                 boxyPlanInvariant("static boxy dictionary could not resolve a checked method target");
@@ -2395,6 +2400,23 @@ const Builder = struct {
         } };
     }
 
+    /// Whether this binding's body is a callable-eval whose compile-time root
+    /// is still pending (an unfinalized binding the running roots never
+    /// reference; `roc test` finalizes only what its expects reach). Such a
+    /// body cannot be planned; callers skip eager work for it and the panic is
+    /// deferred to an actual attempt to lower it.
+    fn procedureBindingBodyIsPendingEval(self: *Builder, view: ModuleView, binding_ref: checked.TopLevelProcedureBindingRef) bool {
+        const binding = view.top_level_procedure_bindings.get(binding_ref);
+        return switch (binding.body) {
+            .direct_template => false,
+            .callable_eval_template => |template_id| blk: {
+                const template = self.callableEvalTemplate(view, template_id);
+                const root = view.compile_time_roots.root(template.root);
+                break :blk root.payload == .pending;
+            },
+        };
+    }
+
     fn rootProcedureBindingBody(self: *Builder, view: ModuleView, binding_ref: checked.TopLevelProcedureBindingRef) WorkerBody {
         const binding = view.top_level_procedure_bindings.get(binding_ref);
         return switch (binding.body) {
@@ -2755,6 +2777,12 @@ const Builder = struct {
         const ref_id = maybe_ref orelse return;
         try self.analyzeConstDefinitionTypes(view, ref_id);
         const source = self.workerSourceForProcedureValueRef(view, ref_id) orelse return;
+        switch (source) {
+            .procedure_binding => |binding| {
+                if (self.procedureBindingBodyIsPendingEval(self.moduleForId(binding.artifact), binding.binding)) return;
+            },
+            else => {},
+        }
         _ = try self.ensureWorker(source, typeRef(view, expr.ty), null);
     }
 
@@ -3275,12 +3303,16 @@ const Builder = struct {
         return switch (procedure.binding) {
             .top_level => |top_level| blk: {
                 const view = self.moduleForId(top_level.artifact);
-                _ = self.rootProcedureBindingBody(view, top_level.binding);
+                if (!self.procedureBindingBodyIsPendingEval(view, top_level.binding)) {
+                    _ = self.rootProcedureBindingBody(view, top_level.binding);
+                }
                 break :blk .{ .procedure_binding = top_level };
             },
             .platform_required => |required| blk: {
                 const view = self.moduleForId(required.app_value.artifact);
-                _ = self.rootProcedureBindingBody(view, required.procedure_binding);
+                if (!self.procedureBindingBodyIsPendingEval(view, required.procedure_binding)) {
+                    _ = self.rootProcedureBindingBody(view, required.procedure_binding);
+                }
                 break :blk .{ .procedure_binding = .{
                     .artifact = required.app_value.artifact,
                     .binding = required.procedure_binding,
