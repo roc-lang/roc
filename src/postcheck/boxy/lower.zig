@@ -13241,6 +13241,8 @@ const ProcBodyBuilder = struct {
                     adapted
                 else if (try self.assignConcreteTagUnionToConcreteBoundary(target, source, canonical_target_rep, canonical_source_rep, next)) |adapted|
                     adapted
+                else if (try self.assignConcreteTagUnionToScalarBoundary(target, source, canonical_target_rep, canonical_source_rep, next)) |adapted|
+                    adapted
                 else if (try self.assignConcreteRecordToConcreteBoundary(target, source, canonical_target_rep, canonical_source_rep, next)) |adapted|
                     adapted
                 else
@@ -13738,6 +13740,113 @@ const ProcBodyBuilder = struct {
             .op = .{ .discriminant = .{ .source = source } },
             .next = switch_stmt,
         } });
+    }
+
+    /// Adapt a concrete tag union into a target whose every payload is
+    /// zero-sized, so its layout collapsed to a bare scalar discriminant.
+    /// Concrete tag-union layouts on both sides order variants the same way
+    /// (alphabetically, over the same checked tag set), so the discriminant
+    /// carries over positionally; only its byte position and width change.
+    fn assignConcreteTagUnionToScalarBoundary(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        source: LIR.LocalId,
+        target_rep: Plan.TypeRepId,
+        source_rep: Plan.TypeRepId,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!?LIR.CFStmtId {
+        const target_layout = self.parent.result.store.getLocal(target).layout_idx;
+        const source_layout = self.parent.result.store.getLocal(source).layout_idx;
+        const target_layout_value = self.parent.result.layouts.getLayout(target_layout);
+        const source_layout_value = self.parent.result.layouts.getLayout(source_layout);
+        if (source_layout_value.tag != .tag_union) return null;
+        switch (target_layout_value.tag) {
+            .scalar => {},
+            .tag_union => {
+                // Only a target whose variants all have zero-sized payloads is
+                // a bare discriminant; other unions need payload conversion.
+                const target_info = self.parent.result.layouts.getTagUnionInfo(target_layout_value);
+                var variant_index: u32 = 0;
+                while (variant_index < target_info.variants.len) : (variant_index += 1) {
+                    const payload_layout = target_info.variants.get(variant_index).payload_layout;
+                    if (!self.parent.result.layouts.isZeroSized(self.parent.result.layouts.getLayout(payload_layout))) return null;
+                }
+            },
+            else => return null,
+        }
+
+        const source_tag_count = self.checkedTagUnionCountForBoundary(source_rep) orelse return null;
+        const target_tag_count = self.checkedTagUnionCountForBoundary(target_rep) orelse return null;
+        if (source_tag_count != target_tag_count) return null;
+        const source_layout_info = self.parent.result.layouts.getTagUnionInfo(source_layout_value);
+        if (source_layout_info.variants.len != source_tag_count) return null;
+
+        const branches = try self.parent.allocator.alloc(LIR.CFSwitchBranch, source_tag_count);
+        defer self.parent.allocator.free(branches);
+        for (branches, 0..) |*branch, index| {
+            branch.* = .{
+                .value = @intCast(index),
+                .body = try self.parent.result.store.addCFStmt(.{ .assign_literal = .{
+                    .target = target,
+                    .value = .{ .i64_literal = .{
+                        .value = @intCast(index),
+                        .layout_idx = target_layout,
+                    } },
+                    .next = next,
+                } }),
+            };
+        }
+
+        const bad_discriminant = try self.parent.result.store.addCFStmt(.runtime_error);
+        const discriminant = try self.addFrameLocal(.u16);
+        const switch_stmt = try self.parent.result.store.addCFStmt(.{ .switch_stmt = .{
+            .cond = discriminant,
+            .branches = try self.parent.result.store.addCFSwitchBranches(branches),
+            .default_branch = bad_discriminant,
+            .continuation = null,
+        } });
+        return try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
+            .target = discriminant,
+            .op = .{ .discriminant = .{ .source = source } },
+            .next = switch_stmt,
+        } });
+    }
+
+    /// The number of tags in the checked tag-union type behind this
+    /// representation, following alias and transparent-nominal wrappers, or
+    /// null when the representation does not resolve to a closed checked tag
+    /// union.
+    fn checkedTagUnionCountForBoundary(self: *const ProcBodyBuilder, rep_id: Plan.TypeRepId) ?usize {
+        var current = rep_id;
+        var depth: u16 = 0;
+        while (true) {
+            if (depth == 1024) boxyLowerInvariant("tag representation wrapper chain exceeded boxy lowerer limit");
+            depth += 1;
+
+            const rep = self.parent.plan.representations.items[@intFromEnum(current)];
+            switch (rep.kind) {
+                .alias => current = self.requiredSingleChild(current, .alias_backing).rep,
+                .nominal => |kind| switch (kind) {
+                    .transparent, .builtin_other => current = self.requiredSingleChild(current, .nominal_backing).rep,
+                    .opaque_nominal => return null,
+                },
+                .tag_union => {
+                    const view = procedureModuleById(self.parent.modules, rep.source_type.module);
+                    var ty = rep.source_type.ty;
+                    var type_depth: u16 = 0;
+                    while (true) {
+                        if (type_depth == 1024) boxyLowerInvariant("checked type alias chain exceeded boxy lowerer limit");
+                        type_depth += 1;
+                        switch (view.checked_types.payload(ty)) {
+                            .alias => |alias| ty = alias.backing,
+                            .tag_union => |tag_union| return tag_union.tags.len,
+                            else => return null,
+                        }
+                    }
+                },
+                else => return null,
+            }
+        }
     }
 
     fn assignConcreteTagVariantToConcrete(
