@@ -2140,6 +2140,36 @@ pub const Interpreter = struct {
                         );
                     }
                     const method_slot = method_slots[assign.method_slot];
+                    if (method_slot.structural_eq) {
+                        const eq_arg_locals = self.store.getLocalSpan(assign.args);
+                        if (eq_arg_locals.len != 2) {
+                            return self.invariantFailedError(
+                                "LIR/interpreter invariant violated: structural equality dictionary slot received {d} args",
+                                .{eq_arg_locals.len},
+                            );
+                        }
+                        const eq_slot_descs = self.requireBoxyDescRefs(method_slot.hidden_descs);
+                        if (eq_slot_descs.len != 1) {
+                            return self.invariantFailedError(
+                                "LIR/interpreter invariant violated: structural equality dictionary slot carried {d} descriptors",
+                                .{eq_slot_descs.len},
+                            );
+                        }
+                        const operand_desc = try self.resolveBoxyDescRef(frame, eq_slot_descs[0]);
+                        const lhs_value = try self.getLocalChecked(frame, eq_arg_locals[0]);
+                        const rhs_value = try self.getLocalChecked(frame, eq_arg_locals[1]);
+                        const result = try self.alloc(self.store.getLocal(assign.target).layout_idx);
+                        result.write(u8, if (try self.boxyValuesEqual(
+                            frame,
+                            lhs_value,
+                            rhs_value,
+                            self.store.getLocal(eq_arg_locals[0]).layout_idx,
+                            operand_desc,
+                        )) 1 else 0);
+                        self.setLocalChecked(frame, current, assign.target, result);
+                        current = assign.next;
+                        continue;
+                    }
                     if (method_slot.adapter.ret_layout != null or
                         method_slot.adapter.ret_desc != null or
                         method_slot.adapter.nested_dicts.len != 0)
@@ -6311,7 +6341,11 @@ pub const Interpreter = struct {
             .list_capacity => blk: {
                 const rl = self.valueToRocListForLayout(args[0], arg_layout);
                 const val = try self.alloc(ll.ret_layout);
-                val.write(u64, @intCast(rl.getCapacity()));
+                // Canonical zero-width lists carry no allocation, so their
+                // stored capacity is zero even when they hold elements; every
+                // held element is trivially within capacity.
+                const capacity = @max(rl.getCapacity(), rl.len());
+                val.write(u64, @intCast(capacity));
                 break :blk val;
             },
             .list_get_unsafe => blk: {

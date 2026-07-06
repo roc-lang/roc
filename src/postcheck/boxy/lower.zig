@@ -971,6 +971,16 @@ const ProcedureBuilder = struct {
         const requirements = self.plan.dictionarySlice(worker_dictionaries);
         const method_start: u32 = @intCast(self.result.boxy_method_slots.items.len);
         for (requirements) |requirement| {
+            if (self.staticDictionarySlotIsStructuralEq(rep_id, requirement)) {
+                const operand_desc = try self.staticDescRefForRep(rep_id);
+                try self.result.boxy_method_slots.append(self.allocator, .{
+                    .method = requirement.fn_name,
+                    .proc = @enumFromInt(0),
+                    .hidden_descs = try self.appendStaticHiddenDescRefs(&.{operand_desc}),
+                    .structural_eq = true,
+                });
+                continue;
+            }
             const resolved = self.methodWorkerForStaticDictionary(rep_id, requirement) orelse
                 boxyLowerInvariant("static boxy dictionary method target was not planned");
             var descriptor_sources = StaticDescriptorSourceMap{};
@@ -2058,6 +2068,25 @@ const ProcedureBuilder = struct {
             found = child;
         }
         return found;
+    }
+
+    /// Whether this dictionary slot is fulfilled by the runtime's structural
+    /// comparison: the source type is an anonymous structural type (no method
+    /// namespace) and the requirement is the equality method.
+    fn staticDictionarySlotIsStructuralEq(
+        self: *ProcedureBuilder,
+        rep_id: Plan.TypeRepId,
+        requirement: Plan.DictionaryRequirement,
+    ) bool {
+        const source_rep = self.plan.representations.items[@intFromEnum(rep_id)];
+        const source_module = procedureModuleById(self.modules, source_rep.source_type.module);
+        if (methodOwnerForProcedureType(source_module, source_rep.source_type.ty) != null) return false;
+        const requirement_module = procedureModuleById(self.modules, requirement.source_type.module);
+        const method_text = requirement_module.canonical_names.methodNameText(requirement.fn_name);
+        if (!std.mem.eql(u8, method_text, "is_eq")) {
+            boxyLowerInvariant("static boxy dictionary on a structural type required a non-equality method");
+        }
+        return true;
     }
 
     fn methodWorkerForStaticDictionary(
@@ -4318,6 +4347,17 @@ const ProcBodyBuilder = struct {
 
         const rep_id = self.repForType(checked_ty);
         const rep = self.parent.plan.representations.items[@intFromEnum(rep_id)];
+        if (rep.kind == .empty_record) {
+            if (items.len != 0) {
+                boxyLowerInvariant("ConstStore empty record carried field values");
+            }
+            return try self.assignZst(target, next);
+        }
+        // A record whose fields are all zero-sized restores as a unit value;
+        // constant nodes carry no effects, so the fields need no restoration.
+        if (self.isZstLocal(target)) {
+            return try self.assignZst(target, next);
+        }
         const record_target, const record_next = switch (rep.kind) {
             .record,
             .record_unbound,

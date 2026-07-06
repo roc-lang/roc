@@ -1922,8 +1922,21 @@ const Builder = struct {
     ) Allocator.Error!void {
         const source_rep = self.plan.representations.items[@intFromEnum(source_rep_id)];
         const source_view = self.moduleForId(source_rep.source_type.module);
-        const owner = methodOwnerForModuleType(source_view, source_rep.source_type.ty) orelse
-            boxyPlanInvariant("static boxy dictionary source type had no checked method owner");
+        const owner = methodOwnerForModuleType(source_view, source_rep.source_type.ty) orelse {
+            // Anonymous structural types have no method namespace; their
+            // equality dictionary slots dispatch to the runtime's structural
+            // comparison, so there is no worker to plan for them.
+            for (self.plan.dictionarySlice(worker_dictionaries)) |requirement| {
+                const requirement_view = self.moduleForId(requirement.source_type.module);
+                const requirement_names = requirement_view.canonical_names orelse
+                    boxyPlanInvariant("structural dictionary requirement module had no canonical names");
+                const method_text = requirement_names.methodNameText(requirement.fn_name);
+                if (!std.mem.eql(u8, method_text, "is_eq")) {
+                    boxyPlanInvariant("static boxy dictionary on a structural type required a non-equality method");
+                }
+            }
+            return;
+        };
 
         for (self.plan.dictionarySlice(worker_dictionaries)) |requirement| {
             const requirement_view = self.moduleForId(requirement.source_type.module);
