@@ -4192,11 +4192,40 @@ const ProcBodyBuilder = struct {
 
         const store_module = procedureModuleByKey(self.parent.modules, checked.constModuleId(const_use.const_ref));
         const template = store_module.const_templates.get(const_use.const_ref);
-        return switch (template.state) {
-            .stored_const => |stored| try self.restoreConstNodeInto(target, store_module, self.module, stored.node, requested_ty, next),
+        const stored = switch (template.state) {
+            .stored_const => |stored| stored,
             .reserved => boxyLowerInvariant("reserved checked const template reached runtime boxy lowering"),
             .eval_template => boxyLowerInvariant("const eval template reached runtime boxy lowering before compile-time finalization stored its value"),
         };
+
+        const requested_rep = self.repForType(requested_ty);
+        if (self.parent.plan.representations.items[@intFromEnum(requested_rep)].contains_dynamic) {
+            // The use site's checked types are generic (the const is an
+            // argument to a generic worker), so they cannot guide restoration
+            // of the concrete stored value. Restore through the definition's
+            // concrete checked type and adapt across the representation
+            // boundary like any other concrete-to-erased argument.
+            const definition_ty: ?checked.CheckedTypeId = switch (const_use.const_ref.owner) {
+                .top_level_binding => |owner| if (@intFromEnum(owner.pattern) < store_module.checked_bodies.stored_patterns.len)
+                    store_module.checked_bodies.pattern(owner.pattern).ty
+                else
+                    null,
+                .hoisted_expr => |owner| if (@intFromEnum(owner.expr) < store_module.checked_bodies.stored_exprs.len)
+                    store_module.checked_bodies.expr(owner.expr).ty
+                else
+                    null,
+            };
+            if (definition_ty) |def_ty| {
+                const definition_rep = self.repForTypeRef(.{ .module = store_module.key, .ty = def_ty });
+                if (!self.parent.plan.representations.items[@intFromEnum(definition_rep)].contains_dynamic) {
+                    const temp = try self.addFrameLocalForRep(definition_rep);
+                    const convert = try self.assignRepresentationBoundary(target, temp, requested_rep, definition_rep, next);
+                    return try self.restoreConstNodeInto(temp, store_module, store_module, stored.node, def_ty, convert);
+                }
+            }
+        }
+
+        return try self.restoreConstNodeInto(target, store_module, self.module, stored.node, requested_ty, next);
     }
 
     fn restoreConstNodeInto(
@@ -4440,9 +4469,108 @@ const ProcBodyBuilder = struct {
         return switch (rep.kind) {
             .bool_tag_union => try self.restoreConstBoolTagInto(target, tag, next),
             .tag_union => try self.restoreConstPlannedTagInto(target, store_module, type_module, rep, tag, checked_ty, next),
+            .dynamic => try self.restoreConstDynamicTagInto(target, store_module, type_module, rep_id, tag, checked_ty, next),
             .empty_tag_union => boxyLowerInvariant("ConstStore tag value reached empty tag-union representation"),
             else => boxyLowerInvariant("ConstStore tag restored with a non-tag-union representation"),
         };
+    }
+
+    /// Restore a constant tag value into a dynamic representation (an open
+    /// tag-union row). The stored value's checked tag-union type supplies the
+    /// concrete payload types; the row's payload storage conventions come from
+    /// the representation's children, and construction goes through the
+    /// descriptor-guided tag statement like any other dynamic tag expression.
+    fn restoreConstDynamicTagInto(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        store_module: ProcedureModuleView,
+        type_module: ProcedureModuleView,
+        rep_id: Plan.TypeRepId,
+        tag: anytype,
+        checked_ty: checked.CheckedTypeId,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const checked_tag = constTagPayloadTypesAllowOpen(type_module, checked_ty, tag.tag_name);
+        const payload_tys = checked_tag.payload_tys;
+        if (payload_tys.len != tag.payloads.len) {
+            boxyLowerInvariant("ConstStore tag payload count differed from checked tag type");
+        }
+        try self.bindConstructedTargetDescriptor(target, rep_id);
+        const target_desc = try self.constructedTargetDescForRep(rep_id);
+
+        if (tag.payloads.len == 0) {
+            const assign_tag = try self.parent.result.store.addCFStmt(.{ .assign_boxy_tag = .{
+                .target = target,
+                .target_desc = target_desc,
+                .tag_name = try self.lirTagName(checked_tag.name),
+                .next = next,
+            } });
+            return try self.prependConstructedDescriptorRebindForRep(rep_id, assign_tag);
+        }
+
+        const payloads = try self.dynamicTagPayloadsForName(rep_id, checked_tag.name);
+        if (payloads.len != tag.payloads.len) {
+            boxyLowerInvariant("ConstStore tag payload count disagreed with its dynamic representation");
+        }
+        const payload = try self.dynamicTagPayloadLocalForChildren(payloads);
+        const payload_desc = if (payload.desc_rep) |payload_rep| try self.descriptorRefForKnownRep(payload_rep) else null;
+        const assign_tag = try self.parent.result.store.addCFStmt(.{ .assign_boxy_tag = .{
+            .target = target,
+            .target_desc = target_desc,
+            .tag_name = try self.lirTagName(checked_tag.name),
+            .payload = payload.local,
+            .payload_layout = payload.layout_idx,
+            .payload_desc = payload_desc,
+            .payload_mode = .move,
+            .next = next,
+        } });
+        var continuation = try self.prependConstructedDescriptorRebindForRep(rep_id, assign_tag);
+
+        if (tag.payloads.len == 1) {
+            return try self.restoreConstIntoStorageRep(payload.local, store_module, type_module, tag.payloads[0], payload_tys[0], payloads[0].rep, continuation);
+        }
+
+        const field_locals = try self.parent.allocator.alloc(LIR.LocalId, tag.payloads.len);
+        defer self.parent.allocator.free(field_locals);
+        for (payloads, field_locals) |child, *local| {
+            local.* = try self.addFrameLocal(self.tagPayloadStorageLayoutForRep(child.rep));
+        }
+        continuation = try self.parent.result.store.addCFStmt(.{ .assign_struct = .{
+            .target = payload.local,
+            .fields = try self.parent.result.store.addLocalSpan(field_locals),
+            .next = continuation,
+        } });
+        var index = tag.payloads.len;
+        while (index > 0) {
+            index -= 1;
+            continuation = try self.restoreConstIntoStorageRep(field_locals[index], store_module, type_module, tag.payloads[index], payload_tys[index], payloads[index].rep, continuation);
+        }
+        return continuation;
+    }
+
+    /// Restore a constant node into a local whose layout follows a (possibly
+    /// dynamic) storage representation: restore through the value's own
+    /// checked type and adapt across the representation boundary.
+    fn restoreConstIntoStorageRep(
+        self: *ProcBodyBuilder,
+        storage_local: LIR.LocalId,
+        store_module: ProcedureModuleView,
+        type_module: ProcedureModuleView,
+        node: checked.ConstNodeId,
+        value_ty: checked.CheckedTypeId,
+        storage_rep: Plan.TypeRepId,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const value_rep = self.repForTypeRef(.{ .module = type_module.key, .ty = value_ty });
+        if (self.parent.result.store.getLocal(storage_local).layout_idx ==
+            self.workerRuntimeLayoutForRep(value_rep).layoutIdx() and
+            self.canonicalDescriptorRep(value_rep) == self.canonicalDescriptorRep(storage_rep))
+        {
+            return try self.restoreConstNodeInto(storage_local, store_module, type_module, node, value_ty, next);
+        }
+        const temp = try self.addFrameLocalForRep(value_rep);
+        const convert = try self.assignRepresentationBoundary(storage_local, temp, storage_rep, value_rep, next);
+        return try self.restoreConstNodeInto(temp, store_module, type_module, node, value_ty, convert);
     }
 
     fn restoreConstBoolTagInto(
@@ -7270,6 +7398,34 @@ const ProcBodyBuilder = struct {
                     0,
                     bound,
                 );
+            }
+            const slot_layout = self.tagUnionPayloadLayout(self.parent.result.store.getLocal(source).layout_idx, concrete_variant);
+            if (slot_layout != self.parent.result.store.getLocal(payload_local).layout_idx) {
+                // The union stores this payload in a different representation
+                // than the binder's checked type (a row instantiation whose
+                // fields erase); read the slot in its own layout and adapt
+                // across the representation boundary.
+                const source_payloads = try self.dynamicTagPayloadsForName(source_rep, tag_name);
+                if (source_payloads.len != 1) {
+                    boxyLowerInvariant("concrete tag match pattern payload count disagreed with planned source representation");
+                }
+                const slot_local = try self.addFrameLocal(slot_layout);
+                const adapt = try self.assignRepresentationBoundary(
+                    payload_local,
+                    slot_local,
+                    self.repForType(payload_pattern.ty),
+                    source_payloads[0].rep,
+                    bound,
+                );
+                return try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
+                    .target = slot_local,
+                    .op = .{ .tag_payload_struct = .{
+                        .source = source,
+                        .variant_index = concrete_variant,
+                        .tag_discriminant = concrete_variant,
+                    } },
+                    .next = adapt,
+                } });
             }
             return try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
                 .target = payload_local,
@@ -16687,19 +16843,22 @@ fn constRecordFields(allocator: Allocator, module: ProcedureModuleView, checked_
 }
 
 fn constRowExtensionIsClosed(module: ProcedureModuleView, checked_ty: checked.CheckedTypeId, expected: checked.RowDefault) void {
-    if (!constRowExtensionIsClosedInner(module, checked_ty, expected)) {
+    if (!constRowExtensionIsClosedInner(module, checked_ty, expected, 0)) {
         boxyLowerInvariant("ConstStore value restored with an open checked row");
     }
 }
 
-fn constRowExtensionIsClosedInner(module: ProcedureModuleView, checked_ty: checked.CheckedTypeId, expected: checked.RowDefault) bool {
+fn constRowExtensionIsClosedInner(module: ProcedureModuleView, checked_ty: checked.CheckedTypeId, expected: checked.RowDefault, depth: u16) bool {
+    if (depth == 1024) {
+        boxyLowerInvariant("ConstStore row extension chain exceeded boxy lowering limit");
+    }
     return switch (resolvedTypePayload(module, checked_ty)) {
         .empty_record => expected == .empty_record,
         .empty_tag_union => expected == .empty_tag_union,
-        .alias => |alias| constRowExtensionIsClosedInner(module, alias.backing, expected),
+        .alias => |alias| constRowExtensionIsClosedInner(module, alias.backing, expected, depth + 1),
         .flex, .rigid => |variable| variable.row_default == expected,
-        .record => |record| if (expected == .empty_record) constRowExtensionIsClosedInner(module, record.ext, expected) else false,
-        .tag_union => |tag_union| if (expected == .empty_tag_union) constRowExtensionIsClosedInner(module, tag_union.ext, expected) else false,
+        .record => |record| if (expected == .empty_record) constRowExtensionIsClosedInner(module, record.ext, expected, depth + 1) else false,
+        .tag_union => |tag_union| if (expected == .empty_tag_union) constRowExtensionIsClosedInner(module, tag_union.ext, expected, depth + 1) else false,
         else => boxyLowerInvariant("ConstStore record restored with a non-record checked type"),
     };
 }
@@ -16747,6 +16906,37 @@ fn constTagPayloadTypes(
         }
     }
     boxyLowerInvariant("ConstStore tag name was missing from checked tag-union type");
+}
+
+/// Like `constTagPayloadTypes`, but for restoration into a dynamic (open-row)
+/// representation, where openness is fine: the named tag is searched through
+/// the row's extension chain instead of demanding a closed row.
+fn constTagPayloadTypesAllowOpen(
+    module: ProcedureModuleView,
+    checked_ty: checked.CheckedTypeId,
+    tag_name: []const u8,
+) ConstTagPayloadTypes {
+    var current = checked_ty;
+    var depth: u16 = 0;
+    while (true) {
+        if (depth == 1024) {
+            boxyLowerInvariant("ConstStore row extension chain exceeded boxy lowering limit");
+        }
+        depth += 1;
+        const tag_union = switch (resolvedTypePayload(module, current)) {
+            .tag_union => |tag_union| tag_union,
+            else => boxyLowerInvariant("ConstStore tag name was missing from checked tag-union row"),
+        };
+        for (tag_union.tags) |tag| {
+            if (std.mem.eql(u8, module.canonical_names.tagLabelText(tag.name), tag_name)) {
+                return .{
+                    .name = tag.name,
+                    .payload_tys = tag.argsSlice(module.checked_types),
+                };
+            }
+        }
+        current = tag_union.ext;
+    }
 }
 
 fn resolvedNominalPayload(module: ProcedureModuleView, checked_ty: checked.CheckedTypeId) checked.CheckedNominalType {

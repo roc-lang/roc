@@ -2736,8 +2736,39 @@ const Builder = struct {
             else => boxyPlanInvariant("non-lookup expression reached callable lookup worker planning"),
         };
         const ref_id = maybe_ref orelse return;
+        try self.analyzeConstDefinitionTypes(view, ref_id);
         const source = self.workerSourceForProcedureValueRef(view, ref_id) orelse return;
         _ = try self.ensureWorker(source, typeRef(view, expr.ty), null);
+    }
+
+    /// A constant referenced at a use site whose checked types are generic
+    /// (an argument to a generic worker) is restored through its definition's
+    /// concrete checked type and boundary-converted; analyze that type so the
+    /// lowerer can rely on its representation being planned.
+    fn analyzeConstDefinitionTypes(
+        self: *Builder,
+        view: ModuleView,
+        ref_id: checked.ResolvedValueRefId,
+    ) Allocator.Error!void {
+        const record = self.resolvedValueRecord(view, ref_id);
+        const const_use = switch (record.ref) {
+            .selected_hoisted_const => |selected| selected.const_use,
+            .top_level_const, .imported_const => |const_use| const_use,
+            .platform_required_const => |required| required.const_use,
+            else => return,
+        };
+        const store_view = self.moduleForId(checked.constModuleId(const_use.const_ref));
+        const definition_ty = switch (const_use.const_ref.owner) {
+            .top_level_binding => |owner| blk: {
+                if (@intFromEnum(owner.pattern) >= store_view.checked_bodies.stored_patterns.len) return;
+                break :blk store_view.checked_bodies.pattern(owner.pattern).ty;
+            },
+            .hoisted_expr => |owner| blk: {
+                if (@intFromEnum(owner.expr) >= store_view.checked_bodies.stored_exprs.len) return;
+                break :blk store_view.checked_bodies.expr(owner.expr).ty;
+            },
+        };
+        _ = try self.analyzeType(store_view, definition_ty);
     }
 
     fn ensureNestedCallableWorker(

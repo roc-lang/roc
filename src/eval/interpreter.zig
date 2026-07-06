@@ -2371,7 +2371,22 @@ pub const Interpreter = struct {
                             const payload_is_box_value = payload_layout_tag == .box or payload_layout_tag == .box_of_zst;
                             const alloc_payload_tag = self.layout_store.getLayout(alloc_desc.payload_layout).tag;
                             const alloc_payload_is_box = alloc_payload_tag == .box or alloc_payload_tag == .box_of_zst;
-                            if (payload_is_box_value and !alloc_payload_is_box) {
+                            // The relabel is only sound when the target box's
+                            // own label carries no conflicting element
+                            // expectation: an erased box (or a box of erased
+                            // boxes) has none, and a concrete box must expect
+                            // exactly the payload layout the descriptor
+                            // describes.
+                            const target_accepts_relabel = switch (target_layout_tag) {
+                                .box_of_zst => true,
+                                .box => elem_check: {
+                                    const elem = self.layout_store.getLayout(target_layout).getIdx();
+                                    break :elem_check elem == alloc_desc.payload_layout or
+                                        self.layout_store.getLayout(elem).tag == .box_of_zst;
+                                },
+                                else => false,
+                            };
+                            if (payload_is_box_value and !alloc_payload_is_box and target_accepts_relabel) {
                                 // The payload is already a dynamic box whose
                                 // interior this allocation descriptor
                                 // describes; boxing it is a relabel of the
@@ -2435,14 +2450,24 @@ pub const Interpreter = struct {
                     else
                         assign.target_layout;
                     const source_layout_tag = self.layout_store.getLayout(source_layout).tag;
-                    const target_layout_tag = self.layout_store.getLayout(assign.target_layout).tag;
+                    const target_layout_value = self.layout_store.getLayout(assign.target_layout);
                     const source_is_box = source_layout_tag == .box or source_layout_tag == .box_of_zst;
-                    const target_is_box = target_layout_tag == .box or target_layout_tag == .box_of_zst;
                     const payload_is_box = if (payload_desc) |resolved| blk: {
                         const payload_tag = self.layout_store.getLayout(resolved.payload_layout).tag;
                         break :blk payload_tag == .box or payload_tag == .box_of_zst;
                     } else false;
-                    if (source_is_box and target_is_box and payload_desc != null and !payload_is_box) {
+                    // The relabel is only sound when the target box's own label
+                    // carries no conflicting element expectation: an erased box
+                    // (or a box of erased boxes) has none, and a concrete box
+                    // must expect exactly the payload layout the descriptor
+                    // describes.
+                    const target_accepts_relabel = switch (target_layout_value.tag) {
+                        .box_of_zst => true,
+                        .box => target_layout_value.getIdx() == payload_desc.?.payload_layout or
+                            self.layout_store.getLayout(target_layout_value.getIdx()).tag == .box_of_zst,
+                        else => false,
+                    };
+                    if (source_is_box and target_accepts_relabel and payload_desc != null and !payload_is_box) {
                         // Unboxing a box-family value into another box-family
                         // label with a non-box payload is a pure relabel: the
                         // result IS the source allocation. Rewrapping would
@@ -4640,6 +4665,16 @@ pub const Interpreter = struct {
         const payload_layout_val = self.layout_store.getLayout(variant.payload_layout);
         switch (payload_layout_val.tag) {
             .struct_ => {
+                // A single-argument tag's recorded payload descriptor
+                // describes the whole payload area; the per-field pairing
+                // below is for multi-argument tags.
+                if (self.findBoxyPayloadDesc(variant, 0)) |first_desc_ref| single: {
+                    const first_desc = try self.resolveBoxyDescRef(frame, first_desc_ref);
+                    if (first_desc.payload_layout != variant.payload_layout) break :single;
+                    try self.appendLayoutInspect(frame, out, tag_base.value, variant.payload_layout, first_desc);
+                    try out.append(self.evalAllocator(), ')');
+                    return;
+                }
                 const struct_idx = payload_layout_val.getStruct().idx;
                 const struct_data = self.layout_store.getStructData(struct_idx);
                 var original_index: u32 = 0;
@@ -5102,6 +5137,18 @@ pub const Interpreter = struct {
         const payload_layout_val = self.layout_store.getLayout(actual_payload_layout);
         switch (payload_layout_val.tag) {
             .struct_ => {
+                // A single-argument tag stores its argument as the whole
+                // payload area, and its recorded payload descriptor describes
+                // that whole value; the per-field pairing below is for
+                // multi-argument tags, whose payload area is a struct with one
+                // field per argument.
+                if (self.findBoxyPayloadDesc(variant, 0)) |first_desc_ref| {
+                    const first_desc = try self.resolveBoxyDescRef(frame, first_desc_ref);
+                    if (first_desc.payload_layout == actual_payload_layout) {
+                        try self.performBoxyLayoutDrop(frame, tag_base.value, actual_payload_layout, first_desc, op, count, atomicity);
+                        return;
+                    }
+                }
                 const struct_idx = payload_layout_val.getStruct().idx;
                 const struct_data = self.layout_store.getStructData(struct_idx);
                 var original_index: u32 = 0;
@@ -7648,6 +7695,16 @@ pub const Interpreter = struct {
                     const payload_layout_val = self.layout_store.getLayout(variant.payload_layout);
                     switch (payload_layout_val.tag) {
                         .struct_ => {
+                            // A single-argument tag stores its argument as the
+                            // whole payload area and its recorded descriptor
+                            // describes that whole value; the per-field pairing
+                            // below is for multi-argument tags.
+                            if (self.findBoxyPayloadDesc(variant, 0)) |first_desc_ref| {
+                                const first_desc = try self.resolveBoxyDescRef(frame, first_desc_ref);
+                                if (first_desc.payload_layout == variant.payload_layout) {
+                                    break :blk try self.valuesEqualWithDesc(frame, a_base.value, b_base.value, variant.payload_layout, first_desc);
+                                }
+                            }
                             const struct_idx = payload_layout_val.getStruct().idx;
                             const struct_data = self.layout_store.getStructData(struct_idx);
                             var original_index: u32 = 0;
@@ -9772,6 +9829,23 @@ pub const Interpreter = struct {
         const expected_layout_val = self.layout_store.getLayout(expected_layout);
         const payload_layout_val = self.layout_store.getLayout(payload_layout);
         if (expected_layout_val.tag == .struct_ and payload_layout_val.tag == .struct_) {
+            // A single-argument tag's recorded payload descriptor describes
+            // the whole payload area; the per-field pairing below is for
+            // multi-argument tags.
+            if (self.findBoxyPayloadDesc(variant, 0)) |first_desc_ref| single: {
+                const first_desc = try self.resolveBoxyDescRef(frame, first_desc_ref);
+                if (first_desc.payload_layout != expected_layout) break :single;
+                const materialized = try self.materializeBoxyPayloadToLayoutWithTargetDesc(
+                    frame,
+                    payload_value,
+                    payload_layout,
+                    first_desc,
+                    first_desc,
+                    expected_layout,
+                );
+                destination.copyFrom(materialized, self.helper.sizeOf(expected_layout));
+                return;
+            }
             const expected_struct_idx = expected_layout_val.getStruct().idx;
             const actual_struct_idx = payload_layout_val.getStruct().idx;
             const expected_data = self.layout_store.getStructData(expected_struct_idx);
@@ -9852,8 +9926,16 @@ pub const Interpreter = struct {
             const actual_payload_layout = self.requireBoxyTagPayloadLayout(tag_base.layout, variant.discriminant);
             const payload_desc_ref = self.findBoxyPayloadDesc(variant, payload_index);
             const payload_value = if (payload_desc_ref) |desc_ref| blk: {
-                const raw_payload = try self.readRawBoxyTagPayloadValue(tag_base.value, actual_payload_layout, payload_index);
                 const payload_desc = try self.resolveBoxyDescRef(frame, desc_ref);
+                // A single-argument tag's recorded payload descriptor
+                // describes the whole payload area, not a field of it.
+                const raw_payload = if (payload_index == 0 and payload_desc.payload_layout == actual_payload_layout)
+                    RawBoxyTagPayloadRead{
+                        .value = try self.materializeLocalValue(tag_base.value, actual_payload_layout),
+                        .layout = actual_payload_layout,
+                    }
+                else
+                    try self.readRawBoxyTagPayloadValue(tag_base.value, actual_payload_layout, payload_index);
                 break :blk try self.materializeBoxyPayloadToLayout(
                     frame,
                     raw_payload.value,
@@ -11300,6 +11382,21 @@ pub const Interpreter = struct {
         const actual_layout_val = self.layout_store.getLayout(actual_layout);
         const expected_layout_val = self.layout_store.getLayout(expected_layout);
         if (actual_layout_val.tag == .struct_ and expected_layout_val.tag == .struct_) {
+            // A single-argument tag's recorded payload descriptor describes
+            // the whole payload area; the per-field pairing below is for
+            // multi-argument tags.
+            if (self.findBoxyPayloadDesc(variant, 0)) |first_desc_ref| single: {
+                const first_desc = try self.resolveBoxyDescRef(frame, first_desc_ref);
+                if (first_desc.payload_layout != actual_layout) break :single;
+                return try self.writeBoxyPayloadToDestination(
+                    frame,
+                    destination,
+                    expected_layout,
+                    value,
+                    actual_layout,
+                    first_desc,
+                );
+            }
             const actual_struct_idx = actual_layout_val.getStruct().idx;
             const expected_struct_idx = expected_layout_val.getStruct().idx;
             const expected_data = self.layout_store.getStructData(expected_struct_idx);
@@ -11356,6 +11453,26 @@ pub const Interpreter = struct {
         const actual_layout_val = self.layout_store.getLayout(actual_layout);
         const expected_layout_val = self.layout_store.getLayout(expected_layout);
         if (actual_layout_val.tag == .struct_ and expected_layout_val.tag == .struct_) {
+            // A single-argument tag's recorded payload descriptor describes
+            // the whole payload area; the per-field pairing below is for
+            // multi-argument tags.
+            if (self.findBoxyPayloadDesc(source_variant, 0)) |first_desc_ref| single: {
+                const first_desc = try self.resolveBoxyDescRef(frame, first_desc_ref);
+                if (first_desc.payload_layout != actual_layout) break :single;
+                const target_payload_desc = if (self.findBoxyPayloadDesc(target_variant, 0)) |desc_ref|
+                    try self.resolveBoxyDescRef(frame, desc_ref)
+                else
+                    null;
+                return try self.writeBoxyPayloadToDestinationWithTargetDesc(
+                    frame,
+                    destination,
+                    expected_layout,
+                    value,
+                    actual_layout,
+                    first_desc,
+                    target_payload_desc,
+                );
+            }
             const actual_struct_idx = actual_layout_val.getStruct().idx;
             const expected_struct_idx = expected_layout_val.getStruct().idx;
             const expected_data = self.layout_store.getStructData(expected_struct_idx);
