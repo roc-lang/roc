@@ -693,4 +693,23 @@ pub const tests = [_]TestCase{
         ,
         .expected = .{ .inspect_str = "Ok(3)" },
     },
+    .{
+        // #9971: Unannotated polymorphic `==` instantiated at two different
+        // types panics postcheck monotype lowering ("instantiation unified two
+        // different primitive types"). `roc check` passes, the crash happens
+        // while building in the dev/interpreter path. Annotating `is_eq` with
+        // an explicit `where [a.is_eq : a, a -> Bool]` clause solves it.
+        .name = "regression issue 9971: unannotated polymorphic == at two types (monotype instantiation panic)",
+        .source_kind = .module,
+        .source =
+        \\is_eq = |a, b| a == b
+        \\
+        \\main = {
+        \\    x = is_eq(1.U8, 1.U8)
+        \\    y = is_eq("a", "a")
+        \\    x and y
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
 };
