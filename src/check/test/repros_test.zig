@@ -831,3 +831,44 @@ test "check - repro - B092 - ambiguous List.sum on empty list is rejected" {
 
     try std.testing.expect(test_env.checker.problems.problems.items.len > 0);
 }
+
+test "check - repro - issue 9973 - `?` on two static-dispatch methods plus a forward helper inside a nested closure" {
+    // Calling two different static-dispatch methods with `?`, alongside a call to a
+    // function defined further down, all inside a closure that is itself nested in
+    // another function body, panics generalization with "trying to add var at
+    // rank 3, but current rank is 2".
+    //
+    // Every ingredient is required: with a single method, with the helper defined
+    // before the outer function, or with the statements hoisted to the outer body
+    // (no nested closure), the program type-checks cleanly.
+    const src =
+        \\Cmd := { name : Str }.{
+        \\    new : Str -> Cmd
+        \\    new = |n| { name: n }
+        \\
+        \\    spawn : Cmd -> Try({}, [SpawnFailed, ..])
+        \\    spawn = |_c| Ok({})
+        \\
+        \\    wait : Cmd -> Try({}, [WaitFailed, ..])
+        \\    wait = |_c| Ok({})
+        \\}
+        \\
+        \\main! = |_| {
+        \\    run = || {
+        \\        c = Cmd.new("x")
+        \\        _ = c.spawn()?
+        \\        _ = c.wait()?
+        \\        _ = helper({})
+        \\        Ok({})
+        \\    }
+        \\    run()
+        \\}
+        \\
+        \\helper = |x| Ok(x)
+    ;
+
+    var test_env = try TestEnv.init("Test", src);
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+}
