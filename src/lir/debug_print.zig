@@ -91,6 +91,7 @@ const Printer = struct {
                         .f32_literal => |f| try writer.print("literal f32 {d}", .{f}),
                         .dec_literal => |d| try writer.print("literal dec {d}", .{d}),
                         .str_literal => try writer.writeAll("literal str"),
+                        .boxy_dynamic_num_literal => |l| try writer.print("literal boxy_dynamic_num {d}", .{l.value}),
                         .null_ptr => try writer.writeAll("literal null_ptr"),
                         .proc_ref => |p| try writer.print("literal proc_ref p{d}", .{@intFromEnum(p)}),
                     }

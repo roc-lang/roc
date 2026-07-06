@@ -386,6 +386,14 @@ pub const LiteralValue = union(enum) {
     f32_literal: f32,
     dec_literal: i128,
     str_literal: StrLiteral,
+    /// A numeric literal whose runtime representation is only known through a
+    /// descriptor (a literal pattern matched against an erased scrutinee).
+    /// The runtime encodes `value` per the descriptor's payload layout and
+    /// boxes it into the dynamic-storage target.
+    boxy_dynamic_num_literal: struct {
+        value: i128,
+        desc: BoxyDescRef,
+    },
     null_ptr,
     proc_ref: LirProcSpecId,
 };

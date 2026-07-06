@@ -15131,6 +15131,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                 .f32_literal => |lit| .{ .immediate_f64 = @floatCast(lit) },
                                 .dec_literal => |lit| try self.generateI128Literal(lit),
                                 .str_literal => |str_idx| try self.generateStrLiteral(str_idx),
+                                .boxy_dynamic_num_literal => std.debug.panic(
+                                    "Dev/codegen invariant violated: boxy LIR statement reached dev codegen before boxy codegen is implemented",
+                                    .{},
+                                ),
                                 .null_ptr => .{ .immediate_i64 = 0 },
                                 .proc_ref => |proc_id| blk: {
                                     const proc = self.proc_registry.get(@intFromEnum(proc_id)) orelse unreachable;

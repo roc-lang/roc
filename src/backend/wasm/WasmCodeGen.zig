@@ -7870,6 +7870,10 @@ fn generateLiteral(self: *Self, value: LIR.LiteralValue) Allocator.Error!void {
         },
         .dec_literal => |lit| try self.generateI128Literal(lit),
         .str_literal => |str_idx| try self.generateStrLiteral(str_idx),
+        .boxy_dynamic_num_literal => wasmInvariantFmt(
+            "Wasm/codegen invariant violated: boxy LIR statement reached wasm codegen before boxy codegen is implemented",
+            .{},
+        ),
         .null_ptr => {
             self.currentCode().append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
             WasmModule.leb128WriteI32(self.allocator, self.currentCode(), 0) catch return error.OutOfMemory;

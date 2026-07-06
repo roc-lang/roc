@@ -8940,7 +8940,42 @@ const ProcBodyBuilder = struct {
         const lowered = try self.lowerExprsToTemps(args);
         defer self.parent.allocator.free(lowered);
 
-        var continuation = try self.parent.result.store.addCFStmt(.{ .assign_low_level = .{
+        // list_sublist's { start, len } argument has a fixed concrete ABI; a
+        // generic caller supplies it erased, so adapt it out of its dynamic
+        // box before the call.
+        var sublist_record_adapt: ?LIR.CFStmtId = null;
+        if (op == .list_sublist and lowered.len == 2 and
+            self.layoutIsBoxyDynamicStorage(self.parent.result.store.getLocal(lowered[1]).layout_idx))
+        {
+            const fields = [_]layout.StructField{
+                .{ .index = 0, .layout = .u64 },
+                .{ .index = 1, .layout = .u64 },
+            };
+            const record_layout = try self.parent.result.layouts.putStructFields(&fields);
+            const concrete = try self.addFrameLocal(record_layout);
+            const arg_expr = self.module.checked_bodies.expr(args[1]);
+            const source_desc = try self.descriptorRefForSourceLocalRep(lowered[1], self.repForType(arg_expr.ty));
+            const arg_locals = [_]LIR.LocalId{ lowered[0], concrete };
+            var continuation = try self.parent.result.store.addCFStmt(.{ .assign_low_level = .{
+                .target = target,
+                .op = op,
+                .rc_effect = op.rcEffect(),
+                .args = try self.parent.result.store.addLocalSpan(&arg_locals),
+                .next = next,
+            } });
+            continuation = try self.parent.result.store.addCFStmt(.{ .assign_boxy_unbox = .{
+                .target = concrete,
+                .source = lowered[1],
+                .source_desc = source_desc,
+                .target_desc = null,
+                .target_layout = record_layout,
+                .source_mode = .borrow,
+                .next = continuation,
+            } });
+            sublist_record_adapt = continuation;
+        }
+
+        var continuation = sublist_record_adapt orelse try self.parent.result.store.addCFStmt(.{ .assign_low_level = .{
             .target = target,
             .op = op,
             .rc_effect = op.rcEffect(),
@@ -12544,6 +12579,19 @@ const ProcBodyBuilder = struct {
         payload_desc: LIR.BoxyDescRef,
     };
 
+    /// The runtime descriptor reference of a dynamic-storage literal target
+    /// whose payload layout is not statically known, or null when the target
+    /// is concrete or statically described.
+    fn dynamicLiteralRuntimeDesc(self: *ProcBodyBuilder, target: LIR.LocalId) ?LIR.BoxyDescRef {
+        const target_layout = self.parent.result.store.getLocal(target).layout_idx;
+        if (!self.layoutIsBoxyDynamicStorage(target_layout)) return null;
+        const payload_desc = self.parent.result.store.getLocal(target).boxy_desc orelse return null;
+        return switch (payload_desc) {
+            .static => null,
+            .local, .runtime => payload_desc,
+        };
+    }
+
     fn dynamicLiteralTarget(self: *ProcBodyBuilder, target: LIR.LocalId) ?DynamicLiteralTarget {
         const target_layout = self.parent.result.store.getLocal(target).layout_idx;
         if (!self.layoutIsBoxyDynamicStorage(target_layout)) return null;
@@ -12690,6 +12738,18 @@ const ProcBodyBuilder = struct {
     }
 
     fn assignIntLiteral(self: *ProcBodyBuilder, target: LIR.LocalId, value: i128, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
+        if (self.dynamicLiteralRuntimeDesc(target)) |desc_ref| {
+            // The target's numeric representation is only known through the
+            // runtime descriptor; the literal encodes itself against it.
+            return try self.parent.result.store.addCFStmt(.{ .assign_literal = .{
+                .target = target,
+                .value = .{ .boxy_dynamic_num_literal = .{
+                    .value = value,
+                    .desc = desc_ref,
+                } },
+                .next = next,
+            } });
+        }
         if (self.dynamicLiteralTarget(target)) |info| {
             const payload = try self.addFrameLocal(info.payload_layout);
             const box = try self.assignBoxedLiteralPayload(target, payload, info, next);
@@ -12897,6 +12957,31 @@ const ProcBodyBuilder = struct {
                 boxyLowerInvariant("nominal boundary tried to store non-zero-sized source into zero-sized target");
             }
             return try self.assignZst(target, next);
+        }
+
+        // A concrete non-box value crossing into dynamic box storage must be
+        // boxed, not reinterpreted; the descriptor records the payload layout.
+        const target_layout_value = self.parent.result.layouts.getLayout(target_layout);
+        const source_layout_value = self.parent.result.layouts.getLayout(source_layout);
+        const target_is_box = target_layout_value.tag == .box or target_layout_value.tag == .box_of_zst;
+        const source_is_box = source_layout_value.tag == .box or source_layout_value.tag == .box_of_zst;
+        const source_is_list = source_layout_value.tag == .list or source_layout_value.tag == .list_of_zst;
+        if (target_is_box and !source_is_box and !source_is_list) {
+            const desc_id: LIR.BoxyTypeDescId = @enumFromInt(@as(u32, @intCast(self.parent.result.boxy_type_descs.items.len)));
+            try self.parent.result.boxy_type_descs.append(self.parent.allocator, .{
+                .payload_layout = source_layout,
+                .contains_refcounted = self.parent.result.layouts.layoutContainsRefcounted(source_layout_value),
+            });
+            const payload_desc = LIR.BoxyDescRef{ .static = desc_id };
+            self.parent.result.store.replaceLocalBoxyDesc(target, payload_desc);
+            return try self.parent.result.store.addCFStmt(.{ .assign_boxy_box = .{
+                .target = target,
+                .payload = source,
+                .payload_layout = source_layout,
+                .payload_desc = payload_desc,
+                .payload_mode = .move,
+                .next = next,
+            } });
         }
 
         return try self.parent.result.store.addCFStmt(.{ .assign_ref = .{

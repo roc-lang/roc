@@ -1894,7 +1894,8 @@ pub const Interpreter = struct {
                 const actual_layout_val = self.layout_store.getLayout(arg_layout);
                 const expected_layout_val = self.layout_store.getLayout(param_layout);
                 if (actual_layout_val.tag == .struct_ or expected_layout_val.tag == .struct_ or
-                    actual_layout_val.tag == .tag_union or expected_layout_val.tag == .tag_union)
+                    actual_layout_val.tag == .tag_union or expected_layout_val.tag == .tag_union or
+                    (actual_layout_val.tag == .scalar and (expected_layout_val.tag == .box or expected_layout_val.tag == .box_of_zst)))
                 {
                     debugPrint(
                         "LIR/interpreter invariant violated before proc arg coercion: proc={d} name={d} arg_index={d} actual_layout={d} ({s}) expected_layout={d} ({s}) param_local={d}\n",
@@ -2053,6 +2054,15 @@ pub const Interpreter = struct {
                     current = assign.next;
                 },
                 .assign_literal => |assign| {
+                    if (assign.value == .boxy_dynamic_num_literal) {
+                        const lit = assign.value.boxy_dynamic_num_literal;
+                        const desc = try self.resolveBoxyDescRef(frame, lit.desc);
+                        const boxed = try self.evalBoxyDynamicNumLiteral(lit.value, desc, self.store.getLocal(assign.target).layout_idx);
+                        self.setLocalChecked(frame, current, assign.target, boxed);
+                        frame.setLocalDesc(assign.target, desc);
+                        current = assign.next;
+                        continue;
+                    }
                     self.setLocalChecked(frame, current, assign.target, try self.evalLiteral(assign.value));
                     current = assign.next;
                 },
@@ -3527,9 +3537,44 @@ pub const Interpreter = struct {
             .f32_literal => |value| self.evalF32Literal(value),
             .dec_literal => |value| self.evalDecLiteral(value),
             .str_literal => |idx| self.evalStrLiteral(idx),
+            .boxy_dynamic_num_literal => self.invariantFailedError(
+                "LIR/interpreter invariant violated: descriptor-guided numeric literal reached plain literal evaluation",
+                .{},
+            ),
             .null_ptr => self.evalNullPtrLiteral(),
             .proc_ref => |proc_id| self.evalProcRefLiteral(proc_id),
         };
+    }
+
+    /// Encode a numeric literal per the descriptor's payload layout and box it
+    /// into dynamic storage. Literal patterns against erased scrutinees only
+    /// learn their numeric representation from the scrutinee's descriptor.
+    fn evalBoxyDynamicNumLiteral(
+        self: *LirInterpreter,
+        value: i128,
+        desc: *const LirProgram.BoxyTypeDesc,
+        target_layout: layout_mod.Idx,
+    ) Error!Value {
+        const payload_layout = desc.payload_layout;
+        const payload = switch (payload_layout) {
+            .f32 => blk: {
+                const val = try self.alloc(.f32);
+                val.write(f32, @floatFromInt(value));
+                break :blk val;
+            },
+            .f64 => blk: {
+                const val = try self.alloc(.f64);
+                val.write(f64, @floatFromInt(value));
+                break :blk val;
+            },
+            .dec => blk: {
+                const val = try self.alloc(.dec);
+                val.write(i128, value * builtins.dec.RocDec.one_point_zero_i128);
+                break :blk val;
+            },
+            else => try self.evalI128Literal(value, payload_layout),
+        };
+        return try self.allocBoxyDynamicPayload(payload, payload_layout, desc, target_layout);
     }
 
     fn evalNullPtrLiteral(self: *LirInterpreter) Error!Value {
@@ -11587,6 +11632,46 @@ pub const Interpreter = struct {
         actual_layout: layout_mod.Idx,
         expected_layout: layout_mod.Idx,
     ) Error!Value {
+        {
+            // Concrete values cross the erased ABI boundary boxed: a non-box
+            // value expected as a box is wrapped into a fresh allocation, and
+            // a boxed value expected concretely is read back out of it.
+            const actual_val = self.layout_store.getLayout(actual_layout);
+            const expected_val = self.layout_store.getLayout(expected_layout);
+            const actual_is_box = actual_val.tag == .box or actual_val.tag == .box_of_zst;
+            const expected_is_box = expected_val.tag == .box or expected_val.tag == .box_of_zst;
+            const actual_is_listish = actual_val.tag == .list or actual_val.tag == .list_of_zst;
+            const expected_is_listish = expected_val.tag == .list or expected_val.tag == .list_of_zst;
+            const actual_is_erased_ptr = actual_val.tag == .scalar and actual_val.getScalar().tag == .opaque_ptr;
+            const expected_is_erased_ptr = expected_val.tag == .scalar and expected_val.getScalar().tag == .opaque_ptr;
+            if (expected_is_box and !actual_is_box and !actual_is_listish and !actual_is_erased_ptr) {
+                const sa = self.helper.sizeAlignOf(actual_layout);
+                const boxed = try self.alloc(expected_layout);
+                if (sa.size == 0) {
+                    self.writeBoxedDataPointer(boxed, null);
+                    return boxed;
+                }
+                const data_ptr = try self.allocRocDataWithRc(
+                    sa.size,
+                    @intCast(sa.alignment.toByteUnits()),
+                    self.layoutContainsRc(actual_layout),
+                );
+                @memcpy(data_ptr[0..sa.size], value.ptr[0..sa.size]);
+                self.writeBoxedDataPointer(boxed, data_ptr);
+                return boxed;
+            }
+            if (actual_is_box and !expected_is_box and !expected_is_listish and !expected_is_erased_ptr) {
+                const size = self.helper.sizeOf(expected_layout);
+                if (size == 0) return Value.zst;
+                const data_ptr = self.readBoxedDataPointer(value) orelse self.invariantFailed(
+                    "LIR/interpreter invariant violated: erased boundary unbox found a null box for layout {d}",
+                    .{@intFromEnum(expected_layout)},
+                );
+                const result = try self.alloc(expected_layout);
+                result.copyFrom(.{ .ptr = data_ptr }, size);
+                return result;
+            }
+        }
         if (builtin.mode == .Debug) {
             const actual_layout_val = self.layout_store.getLayout(actual_layout);
             const expected_layout_val = self.layout_store.getLayout(expected_layout);
