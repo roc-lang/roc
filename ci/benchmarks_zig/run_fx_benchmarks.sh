@@ -590,6 +590,47 @@ for fx_file in "${BUILD_FILES[@]}"; do
     benchmark_file "$fx_file" "build" "$extra_args" ""
 done
 
+# Files benchmarked in both interpreter lowering modes within the PR binary.
+# The main-vs-PR runs above compare across branches; this compares boxy
+# (the default, --specialize=no) against lambda-set specialization within the
+# same binary so boxy-specific regressions stay visible. Informational only:
+# it never fails the job.
+BOXY_VS_LSS_FILES=(
+    test/fx/aoc_day2.roc
+    test/fx/host_boxed_fn_boundary.roc
+    test/fx/record_builder_cli_parser.roc
+    test/fx/index_oob_instantiate.roc
+    test/fx/primitive_encode.roc
+)
+
+echo ""
+echo "=== Running boxy vs lambda-set-specialization interpreter benchmarks (PR binary) ==="
+for fx_file in "${BOXY_VS_LSS_FILES[@]}"; do
+    filename=$(basename "$fx_file")
+    json_file="/tmp/bench_boxy_${filename}.json"
+    echo "Benchmarking $fx_file (boxy vs lss, PR binary)"
+    if hyperfine \
+        --warmup 1 \
+        --min-runs 3 \
+        --shell=none \
+        --export-json "$json_file" \
+        --ignore-failure \
+        -n "boxy" "$PR_ROC --opt=interpreter $fx_file --no-cache" \
+        -n "lss" "$PR_ROC --opt=interpreter --specialize=yes $fx_file --no-cache" 2>&1; then
+        if [ -f "$json_file" ]; then
+            boxy_median=$(jq -r '.results[] | select(.command | contains("specialize") | not) | .median' "$json_file")
+            lss_median=$(jq -r '.results[] | select(.command | contains("specialize")) | .median' "$json_file")
+            if [ -n "$boxy_median" ] && [ -n "$lss_median" ] && [ "$boxy_median" != "null" ] && [ "$lss_median" != "null" ]; then
+                pct=$(awk "BEGIN {printf \"%.2f\", (($boxy_median - $lss_median) / $lss_median) * 100}")
+                echo "  boxy vs lss: ${pct}% (boxy median $(awk "BEGIN {printf \"%.1f\", $boxy_median * 1000}") ms, lss median $(awk "BEGIN {printf \"%.1f\", $lss_median * 1000}") ms)"
+            fi
+        fi
+    else
+        echo "  boxy-vs-lss benchmark failed for $fx_file (informational only, continuing)"
+    fi
+    echo ""
+done
+
 # Summary
 echo "=== FX Benchmark Summary ==="
 if [ "${#SKIPPED_BASELINE_FILES[@]}" -gt 0 ]; then
