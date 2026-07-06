@@ -8251,6 +8251,12 @@ const ProcBodyBuilder = struct {
         if (!self.isZstLocal(target)) {
             boxyLowerInvariant("checked iterator for reached boxy lowering with non-Unit result layout");
         }
+        // Descriptor locals reserved and bound while lowering this loop are
+        // positional: they do not dominate statements lowered afterwards
+        // (which execute earlier), so their bound-ness must not leak out.
+        const outer_descriptors = try self.snapshotDescriptorBindings();
+        defer outer_descriptors.deinit(self.parent.allocator);
+        defer self.restoreDescriptorBindings(outer_descriptors);
         try self.reserveMatchPatternBindings(for_.pattern);
         try self.reserveMatchPatternDescriptors(for_.pattern);
 
