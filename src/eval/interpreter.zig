@@ -502,6 +502,12 @@ pub const Interpreter = struct {
     const EvalProcResult = struct {
         value: Value,
         desc: ?*const LirProgram.BoxyTypeDesc = null,
+        /// The layout `value` and `desc` actually describe. This is the
+        /// returned local's layout whenever the declared return layout is only
+        /// a bitwise relabel of it (e.g. a concrete box local returned through
+        /// a dynamic-box return layout); descriptor conventions such as
+        /// box-self detection are keyed on this layout, not the declared one.
+        layout: layout_mod.Idx,
     };
 
     pub const EvalResult = union(enum) {
@@ -1825,7 +1831,10 @@ pub const Interpreter = struct {
             for (args, arg_layouts, param_layouts, 0..) |arg, arg_layout, param_layout, i| {
                 normalized_args[i] = try self.coerceExplicitRefValueToLayout(arg, arg_layout, param_layout);
             }
-            return .{ .value = try self.callHostedProc(proc_id, hosted, normalized_args, param_layouts, proc_spec.ret_layout) };
+            return .{
+                .value = try self.callHostedProc(proc_id, hosted, normalized_args, param_layouts, proc_spec.ret_layout),
+                .layout = proc_spec.ret_layout,
+            };
         }
 
         trace.log(
@@ -1943,6 +1952,12 @@ pub const Interpreter = struct {
                     defer visited.deinit(self.evalAllocator());
                     self.debugAssertValueMatchesLayout(proc_id, null, ret_local, raw_result, raw_layout, &visited);
                 }
+                const raw_layout_val = self.layout_store.getLayout(raw_layout);
+                const coercion_unwraps = raw_layout != proc_spec.ret_layout and switch (raw_layout_val.tag) {
+                    .box => raw_layout_val.getIdx() == proc_spec.ret_layout,
+                    .box_of_zst => proc_spec.ret_layout == .zst,
+                    else => false,
+                };
                 const coerced_result = try self.coerceExplicitRefValueToLayout(
                     raw_result,
                     raw_layout,
@@ -1953,9 +1968,22 @@ pub const Interpreter = struct {
                     defer visited.deinit(self.evalAllocator());
                     self.debugAssertValueMatchesLayout(proc_id, null, ret_local, coerced_result, proc_spec.ret_layout, &visited);
                 }
+                // When the declared return layout merely relabels the returned
+                // local's bytes, keep the local's own layout so the descriptor
+                // stays interpretable (box-self detection compares against it).
+                // When the coercion truly unwrapped a box, the descriptor must
+                // follow it down to the payload.
+                if (coercion_unwraps) {
+                    break :blk .{
+                        .value = try self.materializeLocalValue(coerced_result, proc_spec.ret_layout),
+                        .desc = if (result_desc) |desc| try self.boxyBoxAllocationPayloadDesc(&frame, raw_layout, desc) else null,
+                        .layout = proc_spec.ret_layout,
+                    };
+                }
                 break :blk .{
-                    .value = try self.materializeLocalValue(coerced_result, proc_spec.ret_layout),
+                    .value = try self.materializeLocalValue(coerced_result, raw_layout),
                     .desc = result_desc,
+                    .layout = raw_layout,
                 };
             },
             .loop_continue => return self.invariantFailedError(
@@ -2048,7 +2076,7 @@ pub const Interpreter = struct {
                     const materialized_result = try self.materializeCallResultToLayout(
                         frame,
                         result.value,
-                        self.store.getProcSpec(assign.proc).ret_layout,
+                        result.layout,
                         result.desc,
                         assign.result_desc,
                         self.store.getLocal(assign.target).layout_idx,
@@ -2246,7 +2274,7 @@ pub const Interpreter = struct {
                     const materialized_result = try self.materializeCallResultToLayout(
                         frame,
                         result.value,
-                        self.store.getProcSpec(method_slot.proc).ret_layout,
+                        result.layout,
                         result.desc,
                         assign.result_desc,
                         self.store.getLocal(assign.target).layout_idx,
@@ -2309,6 +2337,17 @@ pub const Interpreter = struct {
                                 }
                                 break :blk try self.allocBoxOfZstValue(target_layout);
                             };
+                            const payload_layout_tag = self.layout_store.getLayout(assign.payload_layout).tag;
+                            const payload_is_box_value = payload_layout_tag == .box or payload_layout_tag == .box_of_zst;
+                            const alloc_payload_tag = self.layout_store.getLayout(alloc_desc.payload_layout).tag;
+                            const alloc_payload_is_box = alloc_payload_tag == .box or alloc_payload_tag == .box_of_zst;
+                            if (payload_is_box_value and !alloc_payload_is_box) {
+                                // The payload is already a dynamic box whose
+                                // interior this allocation descriptor
+                                // describes; boxing it is a relabel of the
+                                // same allocation, not a new wrap.
+                                break :blk try self.materializeLocalValue(payload_value, target_layout);
+                            }
                             if (source_desc == alloc_desc) {
                                 break :blk try self.allocBoxyDynamicPayload(
                                     payload_value,
@@ -2365,6 +2404,26 @@ pub const Interpreter = struct {
                         resolved.payload_layout
                     else
                         assign.target_layout;
+                    const source_layout_tag = self.layout_store.getLayout(source_layout).tag;
+                    const target_layout_tag = self.layout_store.getLayout(assign.target_layout).tag;
+                    const source_is_box = source_layout_tag == .box or source_layout_tag == .box_of_zst;
+                    const target_is_box = target_layout_tag == .box or target_layout_tag == .box_of_zst;
+                    const payload_is_box = if (payload_desc) |resolved| blk: {
+                        const payload_tag = self.layout_store.getLayout(resolved.payload_layout).tag;
+                        break :blk payload_tag == .box or payload_tag == .box_of_zst;
+                    } else false;
+                    if (source_is_box and target_is_box and payload_desc != null and !payload_is_box) {
+                        // Unboxing a box-family value into another box-family
+                        // label with a non-box payload is a pure relabel: the
+                        // result IS the source allocation. Rewrapping would
+                        // duplicate interior references the surrounding RC
+                        // statements never account for.
+                        const relabeled = try self.materializeLocalValue(source_value, assign.target_layout);
+                        self.setLocalChecked(frame, current, assign.target, relabeled);
+                        frame.setLocalDesc(assign.target, target_desc orelse payload_desc);
+                        current = assign.next;
+                        continue;
+                    }
                     const data_ptr = self.readBoxedDataPointer(source_value);
                     const result = if (data_ptr) |ptr| blk: {
                         if (target_desc) |target_payload_desc| {
@@ -4849,7 +4908,7 @@ pub const Interpreter = struct {
         box_layout: layout_mod.Idx,
         desc: *const LirProgram.BoxyTypeDesc,
     ) Error!?*const LirProgram.BoxyTypeDesc {
-        if (desc.payload_layout != box_layout) return desc;
+        if (desc.payload_layout != box_layout and !self.boxyDescIsBoxSelfForBoxValue(box_layout, desc)) return desc;
         if (try self.firstNestedBoxyDesc(frame, desc)) |nested_desc| return nested_desc;
         if (self.layout_store.getLayout(box_layout).tag == .box_of_zst) return null;
 
@@ -4858,6 +4917,24 @@ pub const Interpreter = struct {
         // the only explicit source of the outer allocation's RC header shape.
         if (desc.contains_refcounted) return desc;
         return null;
+    }
+
+    /// A box-self descriptor can arrive attached to a value whose static label
+    /// is a different box-family layout: concrete Box locals erase to dynamic
+    /// box storage (and back) as pure relabels, with the descriptor unchanged.
+    /// The descriptor still describes the box value itself. A box-family
+    /// payload layout on a box-family value can only mean box-self, because a
+    /// box's erasure is the box pointer itself — a dynamic box interior is
+    /// never a bare box value.
+    fn boxyDescIsBoxSelfForBoxValue(
+        self: *LirInterpreter,
+        box_layout: layout_mod.Idx,
+        desc: *const LirProgram.BoxyTypeDesc,
+    ) bool {
+        const value_tag = self.layout_store.getLayout(box_layout).tag;
+        if (value_tag != .box and value_tag != .box_of_zst) return false;
+        const desc_payload_tag = self.layout_store.getLayout(desc.payload_layout).tag;
+        return desc_payload_tag == .box or desc_payload_tag == .box_of_zst;
     }
 
     fn performBoxyListDrop(
@@ -9601,7 +9678,7 @@ pub const Interpreter = struct {
                         desc_for_payload,
                     );
                 } else {
-                    try self.writeVariantPayloadValue(allocated.base, variant.payload_layout, payload_value, payload_layout);
+                    try self.writeConstructedVariantPayload(frame, allocated.base, variant, payload_value, payload_layout);
                 }
             } else if (self.helper.sizeOf(variant.payload_layout) != 0) {
                 return self.invariantFailedError(
@@ -9637,6 +9714,75 @@ pub const Interpreter = struct {
         }
         try self.writeVariantPayloadValue(allocated.base, ext_payload_layout, ext_value, ext_payload_layout);
         return try self.allocBoxyDynamicPayload(allocated.outer, desc.payload_layout, desc, target_layout);
+    }
+
+    /// Write a freshly constructed tag payload into its descriptor slot. The
+    /// payload value was prepared for this descriptor's conventions, so the
+    /// variant's recorded payload descriptors are its description; use them to
+    /// guide any conversion the slot layout requires (e.g. boxing a by-value
+    /// field into a descriptor-backed box).
+    fn writeConstructedVariantPayload(
+        self: *LirInterpreter,
+        frame: *const Frame,
+        destination: Value,
+        variant: *const LirProgram.BoxyTagVariant,
+        payload_value: Value,
+        payload_layout: layout_mod.Idx,
+    ) Error!void {
+        const expected_layout = variant.payload_layout;
+        if (self.helper.sizeOf(expected_layout) == 0) return;
+        if (expected_layout == payload_layout or variant.payload_descs.len == 0) {
+            return try self.writeVariantPayloadValue(destination, expected_layout, payload_value, payload_layout);
+        }
+
+        const expected_layout_val = self.layout_store.getLayout(expected_layout);
+        const payload_layout_val = self.layout_store.getLayout(payload_layout);
+        if (expected_layout_val.tag == .struct_ and payload_layout_val.tag == .struct_) {
+            const expected_struct_idx = expected_layout_val.getStruct().idx;
+            const actual_struct_idx = payload_layout_val.getStruct().idx;
+            const expected_data = self.layout_store.getStructData(expected_struct_idx);
+            var original_index: u32 = 0;
+            while (original_index < expected_data.fields.count) : (original_index += 1) {
+                const expected_field_layout = self.layout_store.getStructFieldLayoutByOriginalIndex(expected_struct_idx, original_index);
+                if (self.helper.sizeOf(expected_field_layout) == 0) continue;
+                const actual_field_layout = self.layout_store.getStructFieldLayoutByOriginalIndex(actual_struct_idx, original_index);
+                const actual_field_offset = self.layout_store.getStructFieldOffsetByOriginalIndex(actual_struct_idx, original_index);
+                const expected_field_offset = self.layout_store.getStructFieldOffsetByOriginalIndex(expected_struct_idx, original_index);
+                const field_value = payload_value.offset(actual_field_offset);
+                const materialized = if (self.findBoxyPayloadDesc(variant, original_index)) |field_desc_ref| blk: {
+                    const field_desc = try self.resolveBoxyDescRef(frame, field_desc_ref);
+                    break :blk try self.materializeBoxyPayloadToLayoutWithTargetDesc(
+                        frame,
+                        field_value,
+                        actual_field_layout,
+                        field_desc,
+                        field_desc,
+                        expected_field_layout,
+                    );
+                } else try self.materializeLocalValue(
+                    self.normalizeValueToLayout(field_value, actual_field_layout, expected_field_layout),
+                    expected_field_layout,
+                );
+                destination.offset(expected_field_offset).copyFrom(materialized, self.helper.sizeOf(expected_field_layout));
+            }
+            return;
+        }
+
+        if (self.findBoxyPayloadDesc(variant, 0)) |payload_desc_ref| {
+            const slot_desc = try self.resolveBoxyDescRef(frame, payload_desc_ref);
+            const materialized = try self.materializeBoxyPayloadToLayoutWithTargetDesc(
+                frame,
+                payload_value,
+                payload_layout,
+                slot_desc,
+                slot_desc,
+                expected_layout,
+            );
+            destination.copyFrom(materialized, self.helper.sizeOf(expected_layout));
+            return;
+        }
+
+        try self.writeVariantPayloadValue(destination, expected_layout, payload_value, payload_layout);
     }
 
     const BoxyTagPayloadRead = struct {
@@ -11019,6 +11165,12 @@ pub const Interpreter = struct {
         target_desc: *const LirProgram.BoxyTypeDesc,
         expected_layout: layout_mod.Idx,
     ) Error!Value {
+        if (actual_layout == expected_layout and source_desc == target_desc) {
+            // Identical convention on both sides: the bytes are already in the
+            // target's shape, and the surrounding RC statements account for the
+            // references they share with the source.
+            return try self.materializeLocalValue(value, expected_layout);
+        }
         const actual_base = self.resolveBoxyTagBaseValue(value, actual_layout, source_desc);
         const source_discriminant = if (self.helper.sizeOf(actual_base.layout) == 0)
             @as(u16, 0)
@@ -11044,10 +11196,36 @@ pub const Interpreter = struct {
         }
         const source_variant = self.requireBoxyTagVariantByDiscriminant(source_desc, source_discriminant);
         const target_variant = self.findLocalBoxyTagVariant(target_desc, source_variant.name) orelse {
-            return self.invariantFailedError(
-                "LIR/interpreter invariant violated: target boxy tag descriptor for layout {d} had no variant named {s}",
-                .{ @intFromEnum(expected_layout), self.store.getString(source_variant.name) },
+            // The variant lives in the target row's extension: encode it
+            // through the extension slot (discriminant = local variant count,
+            // payload boxed as the extension union).
+            const target_ext_discriminant = self.boxyTagExtDiscriminant(target_desc) orelse {
+                return self.invariantFailedError(
+                    "LIR/interpreter invariant violated: target boxy tag descriptor for layout {d} had no variant named {s}",
+                    .{ @intFromEnum(expected_layout), self.store.getString(source_variant.name) },
+                );
+            };
+            const target_ext_desc = try self.resolveBoxyTagExtDesc(frame, target_desc);
+            const target = try self.allocTagValue(expected_layout);
+            if (self.helper.sizeOf(target.base_layout) > 0) {
+                self.helper.writeTagDiscriminant(target.base, target.base_layout, target_ext_discriminant);
+            } else if (target_ext_discriminant != 0) {
+                return self.invariantFailedError(
+                    "LIR/interpreter invariant violated: boxy tag materialization wrote nonzero extension discriminant {d} into zero-sized layout {d}",
+                    .{ target_ext_discriminant, @intFromEnum(expected_layout) },
+                );
+            }
+            const ext_slot_layout = self.requireBoxyTagPayloadLayout(target.base_layout, target_ext_discriminant);
+            const ext_value = try self.materializeBoxyPayloadToLayoutWithTargetDesc(
+                frame,
+                value,
+                actual_layout,
+                source_desc,
+                target_ext_desc,
+                ext_slot_layout,
             );
+            try self.writeVariantPayloadValue(target.base, ext_slot_layout, ext_value, ext_slot_layout);
+            return target.outer;
         };
 
         const target = try self.allocTagValue(expected_layout);

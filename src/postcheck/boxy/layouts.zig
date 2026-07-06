@@ -436,14 +436,35 @@ const Builder = struct {
 
     fn immediateBoxLayout(self: *Builder, mode: LayoutMode, rep_id: Plan.TypeRepId) Allocator.Error!?RuntimeLayout {
         const child = self.requiredSingleChild(rep_id, .box_payload);
-        const child_rep = self.program.representations.items[@intFromEnum(child.rep)];
+        // Box payloads reach here behind alias chains (`I64ToI64 : I64 -> I64`);
+        // the erased-callable collapse below is a host ABI convention keyed on
+        // the underlying value type, so resolve aliases before classifying.
+        const payload_rep_id = self.aliasResolvedRep(child.rep);
+        const child_rep = self.program.representations.items[@intFromEnum(payload_rep_id)];
         switch (child_rep.kind) {
             .dynamic => return switch (mode) {
-                .worker => try self.runtimeLayoutForRep(.worker, child.rep),
+                .worker => try self.runtimeLayoutForRep(.worker, payload_rep_id),
                 .host => .{ .concrete = try self.dynamicStorageLayout() },
             },
-            .erased_callable => return try self.runtimeLayoutForRep(mode, child.rep),
+            // A boxed erased callable is one flat refcounted allocation whose
+            // data pointer IS the callable value (see builtins.erased_callable),
+            // so Box(fn) shares the callable's layout instead of boxing it.
+            .erased_callable => return try self.runtimeLayoutForRep(mode, payload_rep_id),
             else => return null,
+        }
+    }
+
+    fn aliasResolvedRep(self: *Builder, rep_id: Plan.TypeRepId) Plan.TypeRepId {
+        var current = rep_id;
+        var depth: u16 = 0;
+        while (true) {
+            if (depth == 1024) boxyLayoutInvariant("alias chain exceeded boxy layout limit");
+            depth += 1;
+            const rep = self.program.representations.items[@intFromEnum(current)];
+            switch (rep.kind) {
+                .alias => current = self.requiredSingleChild(current, .alias_backing).rep,
+                else => return current,
+            }
         }
     }
 
