@@ -26138,30 +26138,48 @@ test "boxy lowerer emits const plans for zero-payload tag variants" {
     }
 }
 
+/// A shared empty ModuleEnv for test artifacts, so lowering paths that read
+/// through the artifact's module environment (e.g. the hosted-entry section
+/// scan) see valid empty data instead of undefined memory. Allocated once
+/// from the page allocator so the testing allocator's leak detection stays
+/// clean.
+fn testEmptyModuleEnv() *can.ModuleEnv {
+    const S = struct {
+        var env: ?*can.ModuleEnv = null;
+    };
+    if (S.env) |existing| return existing;
+    const page_allocator = std.heap.page_allocator;
+    const env = page_allocator.create(can.ModuleEnv) catch unreachable;
+    env.* = can.ModuleEnv.init(page_allocator, "") catch unreachable;
+    env.initCIRFields("Test") catch unreachable;
+    S.env = env;
+    return env;
+}
+
 fn minimalCheckedArtifact(allocator: Allocator) checked.CheckedModuleArtifact {
     return .{
         .key = moduleKey(1),
         .canonical_names = names.CanonicalNameStore.init(allocator),
         .module_identity = undefined,
         .checking_context_identity = undefined,
-        .module_env = undefined,
+        .module_env = .{ .checked_source = testEmptyModuleEnv() },
         .exports = undefined,
         .provides_requires = undefined,
-        .method_registry = undefined,
-        .static_dispatch_plans = undefined,
-        .resolved_value_refs = undefined,
-        .checked_procedure_templates = undefined,
-        .top_level_procedure_bindings = undefined,
-        .root_requests = undefined,
+        .method_registry = .{},
+        .static_dispatch_plans = .{},
+        .resolved_value_refs = .{},
+        .checked_procedure_templates = .{},
+        .top_level_procedure_bindings = .{},
+        .root_requests = .{},
         .hosted_procs = .{},
-        .platform_required_declarations = undefined,
-        .platform_required_bindings = undefined,
+        .platform_required_declarations = .{},
+        .platform_required_bindings = .{},
         .interface_capabilities = .{},
-        .compile_time_roots = undefined,
-        .top_level_values = undefined,
-        .hoisted_constants = undefined,
-        .const_templates = undefined,
-        .const_store = undefined,
+        .compile_time_roots = .{},
+        .top_level_values = .{},
+        .hoisted_constants = .{},
+        .const_templates = .{},
+        .const_store = check.ConstStore.ConstStore.init(allocator),
     };
 }
 
