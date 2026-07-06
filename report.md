@@ -11,6 +11,20 @@ Continuation of the boxy (`--specialize=no`) implementation effort. This report 
 - Checkpoint commits as verified progress lands; cleanup/squash before review.
 - Perfect correctness first, then maximum performance given correctness — do not blanket-disable fast paths where a real safety proof is possible.
 
+## Fixed and committed (fourth stretch, 2026-07-06)
+
+- 2b7d59ad57 — iterator-loop descriptor bindings snapshot/restored (`lowerIteratorForInto`); fixes var_interp_segfault's "local used before assignment" (worker-wide `descriptor_bound` leak suppressed rebinds in later-lowered/earlier-executed regions).
+- 3e4624e3c1 — host_boxed_fn_boundary passes end to end. Chain of fixes: (1) Box(fn) behind ALIAS chains now collapses to flat erased_callable in boxy layouts (`aliasResolvedRep` in layouts.zig) matching lss's host ABI convention; (2) proc returns carry the returned local's actual layout (`EvalProcResult.layout`) so box-self descriptors survive the concrete(20)/dynamic(18) box relabel; (3) box-self detection accepts box-family labels on both sides (`boxyDescIsBoxSelfForBoxValue` — a dynamic box interior is never a bare box value); (4) target-guided tag materialization encodes variants living in the TARGET row's extension; (5) tag construction converts payloads through the variant's own payload descriptors (`writeConstructedVariantPayload`); (6) unbox/box recognize pure relabels of already-boxed values and alias instead of rewrapping (RC statements assume aliasing).
+- 1a5ce9e783 — static dictionaries for anonymous structural types: is_eq slots are `structural_eq`-marked (`BoxyMethodSlot.structural_eq`) and the interpreter fulfills them via `boxyValuesEqual` with the concrete type's descriptor in the slot; plan skips worker planning for them. Const restoration handles empty/all-zst records; `list_capacity` reports at least len (canonical zero-width lists store capacity 0).
+- ab80d4bf11 — concrete tag union → bare-discriminant-layout boundary (all-zst-payload target union or scalar): switch on source discriminant, positional write (both sides alphabetical over the same checked tag set). Fixes Try(zstT, [ListWasEmpty..]) crossing from the worker's row layout (payload+disc) into main's 1-byte union.
+
+### zst_nested_singleton_shapes: 4/8 sections pass; CURRENT failure
+The non-zst sections crash: "boxy descriptor had no tag variant with discriminant 0 payload_layout=119" — a descriptor with EMPTY variants is used to read a tag union (nonZstValueA's nested `[OneTag({n: U64})]`). Suspect: a static desc built from a rep whose `tag_variants` were not populated, or a record desc's nested chain handing the wrong desc to a union field. Debugging aids that worked: env-gated desc-table dump at eval entry (see git history of this session's TEMPDBG blocks for ready-made instrumentation patterns).
+
+### Known deficiencies (not test failures today)
+- Conversion-leak class: borrow-mode unbox + representation-changing materialization leaks the fresh root allocations (arc solver's incref assumes aliasing). host_boxed tests leak 2-18 allocations (host cleans up; io_specs pass). Proper fix = owned-result contract for materializers + arc noteBirth for converting unboxes, or lowering-side mode split.
+- Boundary conversions box/unbox roundtrip per level (performance; correctness first).
+
 ## Fixed and committed this session
 
 ### fd8b1a5906 — Resolve boxy box payload descriptors like box readers do
