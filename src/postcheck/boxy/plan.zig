@@ -1661,9 +1661,14 @@ const Builder = struct {
         defer seen_reps.deinit();
         var next_param: usize = 0;
 
-        const worker_children = self.plan.childSlice(self.plan.representations.items[@intFromEnum(worker_function.rep)].children);
-        for (worker_children[worker_function.args_start..][0..worker_function.arg_count], arg_types) |worker_child, arg_type| {
-            const arg_rep = self.plan.repForSourceType(arg_type) orelse
+        // The recursion below can analyze new types, growing the children
+        // pool and invalidating any held slice; children are re-read by index
+        // on every iteration.
+        const fn_children_span = self.plan.representations.items[@intFromEnum(worker_function.rep)].children;
+        var arg_index: usize = 0;
+        while (arg_index < worker_function.arg_count) : (arg_index += 1) {
+            const worker_child = self.plan.children.items[fn_children_span.start + worker_function.args_start + arg_index];
+            const arg_rep = self.plan.repForSourceType(arg_types[arg_index]) orelse
                 boxyPlanInvariant("boxy worker call argument type was not analyzed");
             try self.collectCallHiddenDictionaryArgs(worker_child.rep, arg_rep, params, &next_param, &pending, &seen_reps);
         }
@@ -1795,17 +1800,23 @@ const Builder = struct {
 
         if (worker_rep.children.len == 0) return;
 
+        // The recursion can analyze new types, growing the children pool and
+        // invalidating any held slice; children are re-read by index on every
+        // iteration.
         if (call_rep.kind == .empty_tag_union) {
-            for (self.plan.childSlice(worker_rep.children)) |worker_child| {
+            var child_index: usize = 0;
+            while (child_index < worker_rep.children.len) : (child_index += 1) {
+                const worker_child = self.plan.children.items[worker_rep.children.start + child_index];
                 if (!try self.repSubtreeHasDescriptor(worker_child.rep)) continue;
                 try self.collectCallHiddenDescriptorArgs(worker_child.rep, call_rep_id, source_arg_index, params, next_param, pending, seen_reps);
             }
             return;
         }
 
-        const worker_children = self.plan.childSlice(worker_rep.children);
-        const call_children = self.plan.childSlice(call_rep.children);
-        for (worker_children) |worker_child| {
+        var child_index: usize = 0;
+        while (child_index < worker_rep.children.len) : (child_index += 1) {
+            const worker_child = self.plan.children.items[worker_rep.children.start + child_index];
+            const call_children = self.plan.childSlice(call_rep.children);
             if (!try self.repSubtreeHasDescriptor(worker_child.rep)) continue;
             if (self.findMatchingChildByRole(call_children, worker_child)) |call_child| {
                 try self.collectCallHiddenDescriptorArgs(worker_child.rep, call_child.rep, source_arg_index, params, next_param, pending, seen_reps);
@@ -1872,17 +1883,23 @@ const Builder = struct {
 
         if (worker_rep.children.len == 0) return;
 
+        // The recursion can analyze new types, growing the children pool and
+        // invalidating any held slice; children are re-read by index on every
+        // iteration.
         if (call_rep.kind == .empty_tag_union) {
-            for (self.plan.childSlice(worker_rep.children)) |worker_child| {
+            var child_index: usize = 0;
+            while (child_index < worker_rep.children.len) : (child_index += 1) {
+                const worker_child = self.plan.children.items[worker_rep.children.start + child_index];
                 if (!try self.repSubtreeHasDictionary(worker_child.rep)) continue;
                 try self.collectCallHiddenDictionaryArgs(worker_child.rep, call_rep_id, params, next_param, pending, seen_reps);
             }
             return;
         }
 
-        const worker_children = self.plan.childSlice(worker_rep.children);
-        const call_children = self.plan.childSlice(call_rep.children);
-        for (worker_children) |worker_child| {
+        var child_index: usize = 0;
+        while (child_index < worker_rep.children.len) : (child_index += 1) {
+            const worker_child = self.plan.children.items[worker_rep.children.start + child_index];
+            const call_children = self.plan.childSlice(call_rep.children);
             if (!try self.repSubtreeHasDictionary(worker_child.rep)) continue;
             if (self.findMatchingChildByRole(call_children, worker_child)) |call_child| {
                 try self.collectCallHiddenDictionaryArgs(worker_child.rep, call_child.rep, params, next_param, pending, seen_reps);

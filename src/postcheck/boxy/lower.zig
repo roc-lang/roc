@@ -12643,7 +12643,20 @@ const ProcBodyBuilder = struct {
             boxyLowerInvariant("boxy dynamic numeric literal target had no descriptor");
         const needs_default_payload = switch (current_desc) {
             .static => |desc_id| self.parent.result.boxy_type_descs.items[@intFromEnum(desc_id)].payload_layout == target_layout,
-            .local, .runtime => true,
+            .local, .runtime => {
+                // A live binding knows the target's representation; the
+                // literal encodes itself against it at runtime instead of
+                // assuming the kind's default layout.
+                return try self.parent.result.store.addCFStmt(.{ .assign_literal = .{
+                    .target = target,
+                    .value = .{ .boxy_dynamic_num_literal = .{
+                        .value = value.toI128(),
+                        .desc = current_desc,
+                        .default_layout = builtinNumLiteralPayloadLayout(kind),
+                    } },
+                    .next = next,
+                } });
+            },
         };
         if (!needs_default_payload) return null;
 
@@ -12746,6 +12759,7 @@ const ProcBodyBuilder = struct {
                 .value = .{ .boxy_dynamic_num_literal = .{
                     .value = value,
                     .desc = desc_ref,
+                    .default_layout = .dec,
                 } },
                 .next = next,
             } });

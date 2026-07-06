@@ -2056,8 +2056,16 @@ pub const Interpreter = struct {
                 .assign_literal => |assign| {
                     if (assign.value == .boxy_dynamic_num_literal) {
                         const lit = assign.value.boxy_dynamic_num_literal;
-                        const desc = try self.resolveBoxyDescRef(frame, lit.desc);
-                        const boxed = try self.evalBoxyDynamicNumLiteral(lit.value, desc, self.store.getLocal(assign.target).layout_idx);
+                        var desc = try self.resolveBoxyDescRef(frame, lit.desc);
+                        const target_layout = self.store.getLocal(assign.target).layout_idx;
+                        if (!self.boxyDescHasConcreteScalarPayload(desc)) {
+                            // The binding is erased; the value encodes with
+                            // the literal kind's default layout, matching how
+                            // the values it meets were encoded, and carries a
+                            // descriptor that records that choice.
+                            desc = try self.makeRuntimeScalarDesc(lit.default_layout);
+                        }
+                        const boxed = try self.evalBoxyDynamicNumLiteral(lit.value, desc, target_layout);
                         self.setLocalChecked(frame, current, assign.target, boxed);
                         frame.setLocalDesc(assign.target, desc);
                         current = assign.next;
@@ -3544,6 +3552,30 @@ pub const Interpreter = struct {
             .null_ptr => self.evalNullPtrLiteral(),
             .proc_ref => |proc_id| self.evalProcRefLiteral(proc_id),
         };
+    }
+
+    fn boxyDescHasConcreteScalarPayload(self: *const LirInterpreter, desc: *const LirProgram.BoxyTypeDesc) bool {
+        const payload_val = self.layout_store.getLayout(desc.payload_layout);
+        return payload_val.tag == .scalar and payload_val.getScalar().tag != .opaque_ptr;
+    }
+
+    fn makeRuntimeScalarDesc(self: *LirInterpreter, payload_layout: layout_mod.Idx) Error!*const LirProgram.BoxyTypeDesc {
+        for (self.runtime_boxy_type_descs.items) |existing| {
+            if (existing.payload_layout == payload_layout and
+                existing.nested_descs.len == 0 and
+                existing.tag_variants.len == 0 and
+                !existing.contains_refcounted)
+            {
+                return existing;
+            }
+        }
+        const desc = try self.evalAllocator().create(LirProgram.BoxyTypeDesc);
+        desc.* = .{
+            .payload_layout = payload_layout,
+            .contains_refcounted = false,
+        };
+        try self.runtime_boxy_type_descs.append(self.allocator, desc);
+        return desc;
     }
 
     /// Encode a numeric literal per the descriptor's payload layout and box it

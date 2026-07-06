@@ -393,6 +393,11 @@ pub const LiteralValue = union(enum) {
     boxy_dynamic_num_literal: struct {
         value: i128,
         desc: BoxyDescRef,
+        /// Encoding used when the descriptor is erased (carries no concrete
+        /// payload layout): the literal kind's default numeric layout, which
+        /// is also how the checker's defaulting encodes the values such a
+        /// literal meets.
+        default_layout: layout.Idx,
     },
     null_ptr,
     proc_ref: LirProcSpecId,
