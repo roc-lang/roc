@@ -96,6 +96,25 @@ Earlier hypotheses about the plan-side tandem walk misattributing params (previo
 - `builtin_compiler` failed once during a test-pipeline build and passed on retry — builtin compilation runs the interpreter for compile-time eval, so pre-fix descriptor bugs could surface there; watch whether it recurs after the descriptor fixes.
 - Unit test filtering works as `zig build run-test-zig -- --test-filter <text>` (args go after `--`).
 
+## Suite status snapshot (2026-07-06, end of session)
+
+- `zig build run-test-eval`: **1444/1444 pass** — including dev/wasm/llvm
+  columns. Concrete programs lower without boxy statements, so all four LIR
+  consumers already work for them; only dynamic-rep (generic) code emits boxy
+  statements.
+- `zig build run-test-cli`: 335 pass, 69 run-fail, 97 crash, 26 skip — the
+  failures are overwhelmingly `[dev]`-mode generic programs hitting the
+  "boxy LIR statement reached dev codegen" panic. This is task #8's blast
+  radius, now quantified.
+- postcheck unit tests: 99/100 (the one order-dependent test; fixture
+  hardening landed, root interaction still unidentified — bisection is
+  awkward because --test-filter builds separate binaries).
+- fx interpreter-real failures remaining: zst_nested_singleton_shapes (3
+  non-zst comparisons; open-row/closed-row conversion joint, diagnosed
+  above), repeating_pattern_segfault (numeric literal dictionaries).
+- CI boxy-vs-lss benchmark section added (c4f9c6329c). Smoke test run
+  started (sandboxed, long-running).
+
 ## Backend implementation plan (task #8) — decided architecture
 
 The interpreter's boxy semantics (descriptor-guided materialization, tag
