@@ -96,6 +96,47 @@ Earlier hypotheses about the plan-side tandem walk misattributing params (previo
 - `builtin_compiler` failed once during a test-pipeline build and passed on retry — builtin compilation runs the interpreter for compile-time eval, so pre-fix descriptor bugs could surface there; watch whether it recurs after the descriptor fixes.
 - Unit test filtering works as `zig build run-test-zig -- --test-filter <text>` (args go after `--`).
 
+## Backend implementation plan (task #8) — decided architecture
+
+The interpreter's boxy semantics (descriptor-guided materialization, tag
+construction/matching, structural equality, RC drops) are far too large to
+reimplement three times in machine code. Decided approach: **interpreter core
+as a runtime library**.
+
+1. **Extract a boxy runtime core** from `src/eval/interpreter.zig`: the
+   functions that only need (layout store view, boxy tables, string store,
+   RocOps, scratch allocator) and operate on raw pointers — the materialize
+   family, `constructBoxyTagValue`, `boxyValuesEqual`, `performBoxyLayoutDrop`,
+   `boxyTagMatches`, inspect, and the desc/dict runtime-copy machinery. They
+   currently take `*LirInterpreter`; the refactor introduces a `BoxyRuntime`
+   context struct holding exactly those dependencies, and the interpreter
+   delegates to it (interpreter and compiled code share semantics by
+   construction). Frame-local descriptor RESOLUTION stays in the interpreter;
+   at the machine level descriptor handles are ordinary 8-byte values, so the
+   runtime API takes resolved `*const BoxyTypeDesc` pointers. Results are
+   written through caller-provided out-pointers instead of arena Values.
+2. **Expose C-ABI wrappers** (`roc_boxy_box`, `roc_boxy_unbox`,
+   `roc_boxy_tag`, `roc_boxy_tag_payload`, `roc_boxy_eq`, `roc_boxy_drop`,
+   `roc_boxy_tag_match`, `roc_boxy_call_dict`, `roc_boxy_desc_copy`,
+   `roc_boxy_dynamic_num_literal`) in `builtins.dev_wrappers`-style form,
+   linked into the machine-code shim and LLVM/wasm outputs.
+3. **Ship the tables**: the dev `RunImage` (header/code/data/relocations/data
+   symbols — see `src/backend/dev/RunImage.zig`) gains a boxy sidecar: the
+   serialized boxy tables + committed layout data (both already serialize for
+   the LIR image — reuse `lir_image.zig`'s `BoxyTablesImage` and the layout
+   commit). The machine-code shim initializes one process-global `BoxyRuntime`
+   from the sidecar at startup, before calling entrypoints. LLVM/wasm embed
+   the same bytes as a data section with an init call.
+4. **Codegen per statement** (dev first): each `assign_boxy_*` /
+   `assign_call_dict` / `boxy_tag_match` lowers to a helper call with (out
+   ptr, arg ptrs, layout ids, desc handle values). Static desc refs become
+   data-section addresses into the sidecar; `.local` refs are plain local
+   reads. RC `.boxy` plans call `roc_boxy_drop`.
+5. **Verification order**: dev backend first (unblocks the fx/CLI suites whose
+   default opt is `.dev`), then LLVM (same helper calls via its call
+   machinery), then wasm (uniform `(args, ret)` helper ABI). Reuse the
+   interpreter-green fx corpus as the oracle at each step.
+
 ## Backend scope discovery
 
 All three machine-code backends currently REJECT boxy LIR statements (`assign_boxy_*`, `assign_call_dict`, `boxy_tag_match`): dev and wasm panic with "boxy LIR statement reached … codegen before boxy codegen is implemented"; LLVM returns `error.CompilationFailed`. Only the interpreter executes boxy LIR today. Implementing boxy codegen in all three backends is a major remaining work item (tracked as task #8), not a verification pass.
