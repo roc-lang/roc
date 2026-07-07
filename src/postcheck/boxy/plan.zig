@@ -806,7 +806,17 @@ const Builder = struct {
         while (current) |ext_ty| {
             const source = typeRef(view, ext_ty);
             const entry = try seen.getOrPut(source);
-            if (entry.found_existing) return false;
+            // A cycle here is only reachable through the structural `.record`/
+            // `.alias` links below (`.flex`/`.rigid`/`.record_unbound`/
+            // `.empty_record` all return on their first visit). The checker
+            // encodes a closed row's empty tail as a zero-field record whose
+            // extension is itself, so reaching that fixpoint after collecting at
+            // least one field means the whole field set is resolved and the
+            // record is a closed concrete record. This is what lets a host-facing
+            // entry point whose argument is a concrete record (e.g. `FrameInput`)
+            // keep its concrete struct layout across the platform boundary
+            // instead of erasing to a dynamic box.
+            if (entry.found_existing) return children.items.len > 0;
 
             switch (view.checked_types.payload(ext_ty)) {
                 .empty_record => return true,
