@@ -764,13 +764,15 @@ const StaticMethodCallDescSourceMap = struct {
                     },
                     .call => entry.source = source,
                 },
-                .call => |old_call| switch (source) {
+                .call => switch (source) {
                     .slot => {},
-                    .call => |new_call| {
-                        if (old_call != new_call) {
-                            boxyLowerInvariant("static dictionary method descriptor source map assigned one worker descriptor to two call sources");
-                        }
-                    },
+                    // A recursive type folds into a single worker rep with one
+                    // descriptor, while the generic requirement unrolls the same
+                    // type into distinct descriptor slots. Both slots unify to the
+                    // worker's concrete type, so the caller passes the same runtime
+                    // descriptor to each; the worker descriptor may draw from any of
+                    // them. The outermost occurrence is recorded first and kept.
+                    .call => {},
                 },
             }
             return;
