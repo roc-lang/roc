@@ -12396,6 +12396,96 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return self.stackLocationForLayout(target_layout, out_slot);
         }
 
+        /// Marshal an `assign_call_dict` into a `roc_boxy_call_dict` call. The
+        /// explicit-argument array (value pointer, layout id, source
+        /// descriptor per entry) and the hidden-argument pointer array are
+        /// built on the machine stack; the dictionary and optional result
+        /// descriptor resolve to pointer slots. The wrapper runs
+        /// structural-equality slots inline and routes worker slots to the
+        /// dispatch thunk registered for the slot's proc.
+        fn generateCallDict(self: *Self, assign: anytype) Allocator.Error!ValueLocation {
+            const target_layout = self.localLayout(assign.target);
+            const arg_locals = self.store.getLocalSpan(assign.args);
+            const hidden_locals = self.store.getLocalSpan(assign.hidden_args);
+
+            // `RocBoxyCallArg` in boxy_abi.zig is
+            // `extern struct { value: ?[*]const u8, layout: u32, desc: ?*const BoxyTypeDesc }`.
+            const call_arg_stride: i32 = 24;
+            const call_arg_value_off: i32 = 0;
+            const call_arg_layout_off: i32 = 8;
+            const call_arg_desc_off: i32 = 16;
+
+            // Phase 1: resolve everything that may itself emit calls (static
+            // descriptor/dictionary resolution) before holding temp registers.
+            const dict_slot = try self.boxyDictRefToSlot(assign.dict);
+            const result_desc_slot: ?i32 = if (assign.result_desc) |ref| try self.boxyDescRefToSlot(ref) else null;
+
+            const ArgPlan = struct { value_off: ?i32, layout: layout.Idx, desc_slot: ?i32 };
+            const arg_plans = try self.allocator.alloc(ArgPlan, arg_locals.len);
+            defer self.allocator.free(arg_plans);
+            for (arg_locals, 0..) |arg_local, i| {
+                arg_plans[i] = .{
+                    .value_off = try self.boxyLocalBytesOffset(arg_local),
+                    .layout = self.localLayout(arg_local),
+                    .desc_slot = if (self.store.getLocal(arg_local).boxy_desc) |ref|
+                        try self.boxyDescRefToSlot(ref)
+                    else
+                        null,
+                };
+            }
+            const hidden_offs = try self.allocator.alloc(?i32, hidden_locals.len);
+            defer self.allocator.free(hidden_offs);
+            for (hidden_locals, 0..) |hidden_local, i| {
+                hidden_offs[i] = try self.boxyLocalBytesOffset(hidden_local);
+            }
+
+            // Phase 2: build the argument arrays with temp registers (no calls).
+            const args_slot: i32 = if (arg_locals.len == 0)
+                0
+            else
+                self.codegen.allocStackSlot(@intCast(@as(i32, @intCast(arg_locals.len)) * call_arg_stride));
+            for (arg_plans, 0..) |plan, i| {
+                const entry_base = args_slot + @as(i32, @intCast(i)) * call_arg_stride;
+                const reg = try self.allocTempGeneral();
+                if (plan.value_off) |off| try self.emitLeaStack(reg, off) else try self.codegen.emitLoadImm(reg, 0);
+                try self.emitStore(.w64, frame_ptr, entry_base + call_arg_value_off, reg);
+                try self.codegen.emitLoadImm(reg, @intFromEnum(plan.layout));
+                try self.emitStore(.w32, frame_ptr, entry_base + call_arg_layout_off, reg);
+                if (plan.desc_slot) |s| try self.emitLoad(.w64, reg, frame_ptr, s) else try self.codegen.emitLoadImm(reg, 0);
+                try self.emitStore(.w64, frame_ptr, entry_base + call_arg_desc_off, reg);
+                self.codegen.freeGeneral(reg);
+            }
+
+            const hidden_slot: i32 = if (hidden_locals.len == 0)
+                0
+            else
+                self.codegen.allocStackSlot(@intCast(@as(i32, @intCast(hidden_locals.len)) * 8));
+            for (hidden_offs, 0..) |off_opt, i| {
+                const hoff = hidden_slot + @as(i32, @intCast(i)) * 8;
+                const reg = try self.allocTempGeneral();
+                if (off_opt) |off| try self.emitLoad(.w64, reg, frame_ptr, off) else try self.codegen.emitLoadImm(reg, 0);
+                try self.emitStore(.w64, frame_ptr, hoff, reg);
+                self.codegen.freeGeneral(reg);
+            }
+
+            const out_slot = try self.allocBoxyOutSlot(target_layout);
+            const out_desc_slot = self.codegen.allocStackSlot(8);
+
+            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            try builder.addLeaArg(frame_ptr, out_slot);
+            try builder.addLeaArg(frame_ptr, out_desc_slot);
+            try builder.addMemArg(frame_ptr, dict_slot);
+            try builder.addImmArg(@intCast(assign.method_slot));
+            if (arg_locals.len == 0) try builder.addImmArg(0) else try builder.addLeaArg(frame_ptr, args_slot);
+            try builder.addImmArg(@intCast(arg_locals.len));
+            if (hidden_locals.len == 0) try builder.addImmArg(0) else try builder.addLeaArg(frame_ptr, hidden_slot);
+            try builder.addImmArg(@intCast(hidden_locals.len));
+            if (result_desc_slot) |s| try builder.addMemArg(frame_ptr, s) else try builder.addImmArg(0);
+            try builder.addImmArg(@intFromEnum(target_layout));
+            try self.callBoxyBuiltin(&builder, .call_dict);
+            return self.stackLocationForLayout(target_layout, out_slot);
+        }
+
         fn generateBoxyDynamicNumLiteral(self: *Self, target_local: LocalId, lit: anytype) Allocator.Error!ValueLocation {
             const target_layout = self.localLayout(target_local);
             const desc_slot = try self.boxyDescRefToSlot(lit.desc);
@@ -15683,10 +15773,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             .{},
                         ),
 
-                        .assign_call_dict => std.debug.panic(
-                            "Dev/codegen invariant violated: assign_call_dict is not implemented in dev codegen",
-                            .{},
-                        ),
+                        .assign_call_dict => |assign| {
+                            const value_loc = try self.generateCallDict(assign);
+                            try self.bindAssignedLocal(assign.target, value_loc);
+                            try work.append(wa, .{ .node = assign.next });
+                        },
 
                         .assign_low_level => |assign| {
                             const value_loc = try self.generateLowLevel(.{
