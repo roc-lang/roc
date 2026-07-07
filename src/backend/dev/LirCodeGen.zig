@@ -461,6 +461,47 @@ pub const BuiltinFn = enum {
     }
 };
 
+/// Boxy runtime C-ABI wrapper identifiers for the dev backend.
+///
+/// These name exported symbols in `eval.boxy_abi`. Because `builtins.dev_wrappers`
+/// cannot reference `eval`, boxy calls are kept in a separate enum resolved by the
+/// machine-code shim against `eval.boxy_abi`, not through `dev_wrappers`.
+pub const BoxyBuiltinFn = enum {
+    static_desc,
+    inspect,
+    box,
+    unbox,
+    tag,
+    tag_payload,
+    eq,
+    drop,
+    tag_match,
+    desc_copy,
+    dynamic_num_literal,
+    call_dict,
+    register_proc,
+
+    /// Get the exported symbol name for shim relocation resolution. Each name
+    /// must match a `pub fn` in `src/eval/boxy_abi.zig`.
+    pub fn symbolName(self: BoxyBuiltinFn) []const u8 {
+        return switch (self) {
+            .static_desc => "roc_boxy_static_desc",
+            .inspect => "roc_boxy_inspect",
+            .box => "roc_boxy_box",
+            .unbox => "roc_boxy_unbox",
+            .tag => "roc_boxy_tag",
+            .tag_payload => "roc_boxy_tag_payload",
+            .eq => "roc_boxy_eq",
+            .drop => "roc_boxy_drop",
+            .tag_match => "roc_boxy_tag_match",
+            .desc_copy => "roc_boxy_desc_copy",
+            .dynamic_num_literal => "roc_boxy_dynamic_num_literal",
+            .call_dict => "roc_boxy_call_dict",
+            .register_proc => "roc_boxy_register_proc",
+        };
+    }
+};
+
 /// Special layout index for List I64 type (must match dev_evaluator.zig).
 /// Lists are (ptr, len, capacity) = 24 bytes and need special handling when returning results.
 

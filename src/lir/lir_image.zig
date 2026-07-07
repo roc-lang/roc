@@ -356,6 +356,87 @@ pub const BoxySidecar = extern struct {
     }
 };
 
+/// A self-contained boxy sidecar: a byte buffer holding cloned copies of every
+/// array a boxy runtime needs, plus a `BoxySidecar` whose offsets are relative
+/// to `bytes.ptr`. Embedders that lower with a private allocator (whose arrays
+/// are not already in the run image) build one of these, copy `bytes` verbatim
+/// into the image, and view the sidecar with the copy's base pointer.
+pub const SidecarBlob = struct {
+    bytes: []align(16) u8,
+    sidecar: BoxySidecar,
+
+    pub fn deinit(self: *SidecarBlob, gpa: std.mem.Allocator) void {
+        gpa.free(self.bytes);
+        self.* = undefined;
+    }
+};
+
+fn cloneStdArrayList(comptime T: type, gpa: std.mem.Allocator, list: std.ArrayList(T)) std.mem.Allocator.Error!std.ArrayList(T) {
+    var out: std.ArrayList(T) = .empty;
+    try out.appendSlice(gpa, list.items);
+    return out;
+}
+
+fn serializeSidecarInto(
+    gpa: std.mem.Allocator,
+    buffer: []align(16) u8,
+    lowered: *const Program.Result,
+) (ImageError || std.mem.Allocator.Error)!BoxySidecar {
+    var shell = try Program.Result.init(gpa, lowered.layouts.target_usize);
+
+    shell.layouts.layouts = try lowered.layouts.layouts.clone(gpa);
+    shell.layouts.resolved_list_layouts = try cloneStdArrayList(?layout_mod.Idx, gpa, lowered.layouts.resolved_list_layouts);
+    shell.layouts.tuple_elems = try lowered.layouts.tuple_elems.clone(gpa);
+    shell.layouts.struct_fields = try lowered.layouts.struct_fields.clone(gpa);
+    shell.layouts.struct_data = try lowered.layouts.struct_data.clone(gpa);
+    shell.layouts.tag_union_variants = try lowered.layouts.tag_union_variants.clone(gpa);
+    shell.layouts.tag_union_data = try lowered.layouts.tag_union_data.clone(gpa);
+
+    shell.store.strings = try lowered.store.strings.clone(gpa);
+
+    shell.boxy_type_descs = try cloneStdArrayList(Program.BoxyTypeDesc, gpa, lowered.boxy_type_descs);
+    shell.boxy_dicts = try cloneStdArrayList(Program.BoxyDict, gpa, lowered.boxy_dicts);
+    shell.boxy_adapters = try cloneStdArrayList(Program.BoxyAdapter, gpa, lowered.boxy_adapters);
+    shell.boxy_desc_refs = try cloneStdArrayList(Program.BoxyDescRef, gpa, lowered.boxy_desc_refs);
+    shell.boxy_dict_refs = try cloneStdArrayList(Program.BoxyDictRef, gpa, lowered.boxy_dict_refs);
+    shell.boxy_tag_variants = try cloneStdArrayList(Program.BoxyTagVariant, gpa, lowered.boxy_tag_variants);
+    shell.boxy_tag_payload_descs = try cloneStdArrayList(Program.BoxyTagPayloadDesc, gpa, lowered.boxy_tag_payload_descs);
+    shell.boxy_field_names = try cloneStdArrayList(base.StringLiteral.Idx, gpa, lowered.boxy_field_names);
+    shell.boxy_adapt_steps = try cloneStdArrayList(Program.BoxyAdaptStep, gpa, lowered.boxy_adapt_steps);
+    shell.boxy_payload_steps = try cloneStdArrayList(Program.BoxyPayloadStep, gpa, lowered.boxy_payload_steps);
+    shell.boxy_method_slots = try cloneStdArrayList(Program.BoxyMethodSlot, gpa, lowered.boxy_method_slots);
+    shell.boxy_method_arg_layouts = try cloneStdArrayList(layout_mod.Idx, gpa, lowered.boxy_method_arg_layouts);
+    shell.boxy_method_hidden_desc_sources = try cloneStdArrayList(Program.BoxyMethodHiddenDescSource, gpa, lowered.boxy_method_hidden_desc_sources);
+
+    return BoxySidecar.fromProgram(buffer.ptr, buffer.len, &shell);
+}
+
+/// Serialize the boxy sidecar (layout store, string store, and boxy tables) of
+/// a lowered program into a fresh self-contained buffer allocated from `gpa`.
+/// The returned sidecar's offsets are relative to the buffer's base pointer.
+pub fn buildSidecarBlob(
+    gpa: std.mem.Allocator,
+    lowered: *const Program.Result,
+) (ImageError || std.mem.Allocator.Error)!SidecarBlob {
+    var capacity: usize = 1 << 16;
+    while (true) {
+        const bytes = try gpa.alignedAlloc(u8, .@"16", capacity);
+        var fba = std.heap.FixedBufferAllocator.init(bytes);
+        if (serializeSidecarInto(fba.allocator(), bytes, lowered)) |sidecar| {
+            return .{ .bytes = bytes, .sidecar = sidecar };
+        } else |err| switch (err) {
+            error.OutOfMemory => {
+                gpa.free(bytes);
+                capacity = std.math.mul(usize, capacity, 2) catch return error.OutOfMemory;
+            },
+            else => |image_err| {
+                gpa.free(bytes);
+                return image_err;
+            },
+        }
+    }
+}
+
 /// Fill the reserved LIR image header in a contiguous buffer.
 ///
 /// `lowered` must already have been allocated from an allocator that owns

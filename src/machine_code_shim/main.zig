@@ -7,8 +7,11 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
+const base_mod = @import("base");
 const backend = @import("backend");
 const builtins = @import("builtins");
+const eval = @import("eval");
+const lir = @import("lir");
 const ipc = @import("ipc");
 const shim_host_abi = @import("shim_host_abi");
 const shim_io = @import("shim_io");
@@ -111,7 +114,29 @@ fn viewRuntimeImage(
     return RunImage.viewMappedImage(header, shm.base_ptr, image_bound);
 }
 
-fn openRuntimeState(gpa: Allocator) RuntimeStateError!RuntimeState {
+/// Initialize the process-global boxy runtime from a run image's sidecar. The
+/// decoded sidecar view and its layout store's interned-layout map live for the
+/// shim process, so this leaks the view on purpose. Boxy descriptor tables stay
+/// pinned to the first image loaded in this process.
+fn initBoxyRuntime(gpa: Allocator, ops: *RocOps, view: *const RunImage.ProgramView) RuntimeStateError!void {
+    if (view.boxy_blob.len == 0) return;
+
+    const boxy_view = try gpa.create(lir.LirImage.BoxySidecar.View);
+    errdefer gpa.destroy(boxy_view);
+    boxy_view.* = view.boxy_sidecar.view(
+        view.boxy_blob.ptr,
+        view.boxy_blob.len,
+        base_mod.target.TargetUsize.native,
+        gpa,
+    ) catch return error.InvalidDevRunImage;
+
+    eval.boxy_abi.initGlobalFromSidecarView(gpa, boxy_view, ops) catch |err| switch (err) {
+        error.AlreadyInitialized => gpa.destroy(boxy_view),
+        error.OutOfMemory => return error.OutOfMemory,
+    };
+}
+
+fn openRuntimeState(gpa: Allocator, ops: *RocOps) RuntimeStateError!RuntimeState {
     const page_size = try SharedMemoryAllocator.getSystemPageSize();
     var shm = try SharedMemoryAllocator.fromCoordination(gpa, shimIo(), page_size);
     errdefer shm.deinit(gpa);
@@ -130,6 +155,7 @@ fn openRuntimeState(gpa: Allocator) RuntimeStateError!RuntimeState {
     const image_bound = if (retained_image) |image| image.image_size else shm.total_size;
 
     const view = try viewRuntimeImage(&shm, image_offset, image_bound);
+    try initBoxyRuntime(gpa, ops, &view);
     const program = try createDevProgram(
         gpa,
         &view,
@@ -155,7 +181,7 @@ fn ensureRuntimeState(ops: *RocOps) ShimError!*RuntimeState {
 
     if (runtime_state_initialized.load(.acquire)) return &runtime_state;
 
-    runtime_state = openRuntimeState(allocator()) catch {
+    runtime_state = openRuntimeState(allocator(), ops) catch {
         ops.crash("Machine-code shim could not map the compiled Roc image");
         return error.ImageUnavailable;
     };
@@ -399,6 +425,21 @@ fn resolveShimFunction(name: []const u8) ?usize {
         const symbol_name = comptime builtin_fn.symbolName();
         if (std.mem.eql(u8, name, symbol_name)) {
             return @intFromPtr(&@field(dev_wrappers, symbol_name));
+        }
+    }
+    return resolveBoxyShimFunction(name);
+}
+
+/// Resolve a boxy runtime wrapper symbol to its address in `eval.boxy_abi`.
+/// The boxy wrappers live in `eval`, which `builtins.dev_wrappers` cannot
+/// reference, so codegen names them through a separate `BoxyBuiltinFn` enum
+/// that this loop resolves against the linked `eval` module.
+fn resolveBoxyShimFunction(name: []const u8) ?usize {
+    inline for (std.meta.fields(backend.LirCodeGenMod.BoxyBuiltinFn)) |field| {
+        const boxy_fn: backend.LirCodeGenMod.BoxyBuiltinFn = @enumFromInt(field.value);
+        const symbol_name = comptime boxy_fn.symbolName();
+        if (std.mem.eql(u8, name, symbol_name)) {
+            return @intFromPtr(&@field(eval.boxy_abi, symbol_name));
         }
     }
     return null;
@@ -761,6 +802,8 @@ test "loaded dev program borrows direct shared image metadata" {
         &entrypoints,
         &.{},
         &.{},
+        &.{},
+        std.mem.zeroes(RunImage.BoxySidecar),
     );
     const view = try RunImage.viewMappedImage(header, shm.base_ptr, @intCast(header.image_size));
 

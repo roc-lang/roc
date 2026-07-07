@@ -5259,6 +5259,9 @@ fn writeDevRunImageToSharedMemory(
         const generated_code = codegen.getGeneratedCode();
         const relocations = codegen.getRelocations();
 
+        var sidecar_blob = try lir.LirImage.buildSidecarBlob(ctx.gpa, &lowered.lir_result);
+        defer sidecar_blob.deinit(ctx.gpa);
+
         var empty_region_buffer: [0]u8 = .{};
         var fixed_region_buffer = std.heap.FixedBufferAllocator.init(&empty_region_buffer);
         var image_allocator = shm.allocator();
@@ -5282,6 +5285,7 @@ fn writeDevRunImageToSharedMemory(
                 entrypoints,
                 relocations,
                 static_strings.exports,
+                sidecar_blob.bytes,
             );
             const required_capacity = required_bound - allocation.region_start;
 
@@ -5311,6 +5315,8 @@ fn writeDevRunImageToSharedMemory(
             entrypoints,
             relocations,
             static_strings.exports,
+            sidecar_blob.bytes,
+            sidecar_blob.sidecar,
         );
         const image_offset = @intFromPtr(header) - @intFromPtr(shm.base_ptr);
         const image_bound: usize = @intCast(header.image_size);
