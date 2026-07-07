@@ -6492,7 +6492,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return switch (op) {
                 .local => |local| blk: {
                     const raw_loc = try self.emitValueLocal(local);
-                    break :blk self.requireExactValueLocationToLayout(
+                    break :blk try self.coerceRefLocalValueToLayout(
                         raw_loc,
                         self.localLayout(local),
                         target_layout,
@@ -9296,6 +9296,45 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
 
             return self.coerceImmediateToLayout(loc, expected_layout);
+        }
+
+        /// Coerce a local read by an `assign_ref` `.local` reinterpret to the
+        /// target layout. A boxed value (an erased boxy allocation) reinterpreted
+        /// as its concrete non-box counterpart is unboxed out of its allocation,
+        /// mirroring how the interpreter reads such references. Every other
+        /// mismatch keeps the strict `requireExactValueLocationToLayout` check.
+        fn coerceRefLocalValueToLayout(
+            self: *Self,
+            loc: ValueLocation,
+            actual_layout: layout.Idx,
+            expected_layout: layout.Idx,
+            comptime site: []const u8,
+        ) Allocator.Error!ValueLocation {
+            if (actual_layout != expected_layout) {
+                const ls = self.layout_store;
+                const actual_val = ls.getLayout(actual_layout);
+                const expected_val = ls.getLayout(expected_layout);
+                const actual_is_box = actual_val.tag == .box or actual_val.tag == .box_of_zst;
+                const expected_is_box = expected_val.tag == .box or expected_val.tag == .box_of_zst;
+                const expected_is_list = expected_val.tag == .list or expected_val.tag == .list_of_zst;
+                const expected_is_erased_ptr = expected_val.tag == .scalar and expected_val.getScalar().tag == .opaque_ptr;
+                if (actual_is_box and !expected_is_box and !expected_is_list and !expected_is_erased_ptr) {
+                    const expected_size = self.getLayoutSize(expected_layout);
+                    if (expected_size == 0) return .{ .immediate_i64 = 0 };
+
+                    const box_reg = try self.ensureInGeneralReg(loc);
+                    defer self.codegen.freeGeneral(box_reg);
+
+                    const result_offset = self.codegen.allocStackSlot(expected_size);
+                    const temp_reg = try self.allocTempGeneral();
+                    defer self.codegen.freeGeneral(temp_reg);
+                    try self.copyChunked(temp_reg, box_reg, 0, frame_ptr, result_offset, expected_size);
+
+                    return self.stackLocationForLayout(expected_layout, result_offset);
+                }
+            }
+
+            return self.requireExactValueLocationToLayout(loc, actual_layout, expected_layout, site);
         }
 
         fn requireExplicitNominalValueLocationToLayout(
