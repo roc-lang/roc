@@ -559,6 +559,18 @@ pub fn roc_boxy_static_dict(dict_id: u32) callconv(.c) *const BoxyDict {
     return g.runtime.requireBoxyDict(@enumFromInt(dict_id));
 }
 
+/// Navigate to the nested descriptor at `nested_index` of an already-resolved
+/// descriptor pointer. Used when a boxy descriptor reference names a nested
+/// descriptor of a descriptor already materialized into a local.
+pub fn roc_boxy_nested_desc(desc: *const BoxyTypeDesc, nested_index: u32) callconv(.c) *const BoxyTypeDesc {
+    const g = requireGlobal();
+    enter(g);
+    defer leave(g);
+    const nested = g.runtime.requireBoxyDescRefs(desc.nested_descs);
+    if (nested_index >= nested.len) abiCrash(g, "nested descriptor navigation");
+    return hooks(g).resolveDescRef(nested[nested_index]) catch abiCrash(g, "nested descriptor resolution");
+}
+
 /// Encode a numeric literal per the descriptor's payload layout and box it
 /// into dynamic storage.
 pub fn roc_boxy_dynamic_num_literal(

@@ -469,6 +469,7 @@ pub const BuiltinFn = enum {
 pub const BoxyBuiltinFn = enum {
     static_desc,
     static_dict,
+    nested_desc,
     inspect,
     box,
     unbox,
@@ -489,6 +490,7 @@ pub const BoxyBuiltinFn = enum {
         return switch (self) {
             .static_desc => "roc_boxy_static_desc",
             .static_dict => "roc_boxy_static_dict",
+            .nested_desc => "roc_boxy_nested_desc",
             .inspect => "roc_boxy_inspect",
             .box => "roc_boxy_box",
             .unbox => "roc_boxy_unbox",
@@ -12199,8 +12201,25 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             const desc_id = switch (assign.desc) {
                 .static => |id| id,
-                else => std.debug.panic(
-                    "Dev/codegen invariant violated: boxy desc copy requires a static descriptor template",
+                .local => |local| {
+                    // A local descriptor base resolves to the pointer already
+                    // stored in the local; capture bindings do not apply. When a
+                    // nested index is present, navigate to that nested
+                    // descriptor from the resolved base pointer.
+                    if (assign.nested_index) |idx| {
+                        const base_slot = try self.boxyDescRefToSlot(.{ .local = local });
+                        var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                        try builder.addMemArg(frame_ptr, base_slot);
+                        try builder.addImmArg(@intCast(idx));
+                        try self.callBoxyBuiltin(&builder, .nested_desc);
+                        const slot = self.codegen.allocStackSlot(8);
+                        try self.emitStore(.w64, frame_ptr, slot, ret_reg_0);
+                        return self.stackLocationForLayout(target_layout, slot);
+                    }
+                    return try self.emitValueLocal(local);
+                },
+                .runtime => std.debug.panic(
+                    "Dev/codegen invariant violated: runtime boxy desc ref in dev codegen not implemented",
                     .{},
                 ),
             };
@@ -12407,7 +12426,16 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try builder.addMemArg(frame_ptr, source_desc_slot);
             try builder.addImmArg(@intFromEnum(tag_match.tag_name));
             try self.callBoxyBuiltin(&builder, .tag_match);
-            try self.emitCmpImm(ret_reg_0, 0);
+            // The wrapper returns a C `bool` in the low byte of the return
+            // register; the upper bits are undefined, so mask before testing.
+            const result_reg = try self.allocTempGeneral();
+            defer self.codegen.freeGeneral(result_reg);
+            try self.emitMovRegReg(result_reg, ret_reg_0);
+            const mask_reg = try self.allocTempGeneral();
+            try self.codegen.emitLoadImm(mask_reg, 0xFF);
+            try self.codegen.emitAnd(.w64, result_reg, result_reg, mask_reg);
+            self.codegen.freeGeneral(mask_reg);
+            try self.emitCmpImm(result_reg, 0);
             return try self.emitJumpIfEqual();
         }
 
