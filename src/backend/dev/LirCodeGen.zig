@@ -6525,7 +6525,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     target_layout,
                     "assign_ref.list_reinterpret",
                 ),
-                .nominal => |nominal| self.requireExplicitNominalValueLocationToLayout(
+                .nominal => |nominal| try self.requireExplicitNominalValueLocationToLayout(
                     try self.emitValueLocal(nominal.backing_ref),
                     self.localLayout(nominal.backing_ref),
                     target_layout,
@@ -9302,7 +9302,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             actual_layout: layout.Idx,
             expected_layout: layout.Idx,
             comptime site: []const u8,
-        ) ValueLocation {
+        ) Allocator.Error!ValueLocation {
             if (builtin.mode == .Debug) {
                 const actual_layout_val = self.layout_store.getLayout(actual_layout);
                 const expected_layout_val = self.layout_store.getLayout(expected_layout);
@@ -9329,7 +9329,61 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     );
                 }
             }
+
+            // Widening a nominal value into a larger layout (for example a
+            // closed tag union reinterpreted as its open counterpart, whose
+            // storage adds a discriminant slot) grows the storage. The source
+            // bytes only fill the low part; the remaining bytes encode the
+            // wider layout's discriminant and padding and must read as zero, so
+            // materialize into a fresh zeroed slot rather than aliasing the
+            // narrower source in place.
+            const actual_size = self.getLayoutSize(actual_layout);
+            const expected_size = self.getLayoutSize(expected_layout);
+            if (expected_size > actual_size and actual_size > 0) {
+                const src_off = try self.ensureOnStack(loc, actual_size);
+                const dst_off = self.codegen.allocStackSlot(@intCast(expected_size));
+                try self.zeroStackArea(dst_off, expected_size);
+                try self.copyStackRange(dst_off, src_off, actual_size);
+                return self.stackLocationForLayout(expected_layout, dst_off);
+            }
+
             return self.coerceImmediateToLayout(loc, expected_layout);
+        }
+
+        /// Copy `size` bytes between two frame-relative stack offsets using the
+        /// widest aligned chunks that fit.
+        fn copyStackRange(self: *Self, dst_offset: i32, src_offset: i32, size: u32) Allocator.Error!void {
+            const reg = try self.allocTempGeneral();
+            defer self.codegen.freeGeneral(reg);
+
+            var remaining = size;
+            var d = dst_offset;
+            var s = src_offset;
+            while (remaining >= 8) {
+                try self.codegen.emitLoadStack(.w64, reg, s);
+                try self.codegen.emitStoreStack(.w64, d, reg);
+                d += 8;
+                s += 8;
+                remaining -= 8;
+            }
+            if (remaining >= 4) {
+                try self.codegen.emitLoadStack(.w32, reg, s);
+                try self.codegen.emitStoreStack(.w32, d, reg);
+                d += 4;
+                s += 4;
+                remaining -= 4;
+            }
+            if (remaining >= 2) {
+                try self.emitLoadStackW16(reg, s);
+                try self.emitStoreStackW16(d, reg);
+                d += 2;
+                s += 2;
+                remaining -= 2;
+            }
+            if (remaining >= 1) {
+                try self.emitLoadStackW8(reg, s);
+                try self.emitStoreStackW8(d, reg);
+            }
         }
 
         fn requireExplicitListValueLocationToLayout(
