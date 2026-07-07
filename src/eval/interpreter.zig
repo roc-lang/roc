@@ -21,6 +21,10 @@ const host_trampoline = @import("host_trampoline.zig");
 const builtins = @import("builtins");
 const sljmp = @import("sljmp");
 const build_options = @import("build_options");
+const boxy_runtime = @import("boxy_runtime.zig");
+const BoxyRuntime = boxy_runtime.BoxyRuntime;
+const runtimeBoxySpanStart = boxy_runtime.runtimeBoxySpanStart;
+const makeRuntimeBoxySpan = boxy_runtime.makeRuntimeBoxySpan;
 const is_freestanding = builtin.target.os.tag == .freestanding;
 
 /// Comptime-gated tracing for the interpreter eval loop.
@@ -307,6 +311,9 @@ pub const Interpreter = struct {
     runtime_boxy_tag_variants: std.ArrayList(LirProgram.BoxyTagVariant) = .empty,
     runtime_boxy_tag_payload_descs: std.ArrayList(LirProgram.BoxyTagPayloadDesc) = .empty,
     runtime_boxy_payload_steps: std.ArrayList(LirProgram.BoxyPayloadStep) = .empty,
+    /// Descriptor-guided boxy value machinery, bound to this interpreter's live
+    /// descriptor tables by `bindBoxyRuntime` before each evaluation.
+    boxy_runtime: BoxyRuntime,
     /// Bound recursive function-call depth so the interpreter reports a Roc crash
     /// instead of overflowing the native stack.
     call_depth: usize = 0,
@@ -522,57 +529,7 @@ pub const Interpreter = struct {
         ret_ptr: ?*anyopaque = null,
     };
 
-    pub const BoxyTables = struct {
-        type_descs: []const LirProgram.BoxyTypeDesc = &.{},
-        dicts: []const LirProgram.BoxyDict = &.{},
-        adapters: []const LirProgram.BoxyAdapter = &.{},
-        desc_refs: []const LirProgram.BoxyDescRef = &.{},
-        dict_refs: []const LirProgram.BoxyDictRef = &.{},
-        tag_variants: []const LirProgram.BoxyTagVariant = &.{},
-        tag_payload_descs: []const LirProgram.BoxyTagPayloadDesc = &.{},
-        field_names: []const base.StringLiteral.Idx = &.{},
-        adapt_steps: []const LirProgram.BoxyAdaptStep = &.{},
-        payload_steps: []const LirProgram.BoxyPayloadStep = &.{},
-        method_slots: []const LirProgram.BoxyMethodSlot = &.{},
-        method_arg_layouts: []const layout_mod.Idx = &.{},
-        method_hidden_desc_sources: []const LirProgram.BoxyMethodHiddenDescSource = &.{},
-
-        pub fn fromResult(result: *const LirProgram.Result) BoxyTables {
-            return .{
-                .type_descs = result.boxy_type_descs.items,
-                .dicts = result.boxy_dicts.items,
-                .adapters = result.boxy_adapters.items,
-                .desc_refs = result.boxy_desc_refs.items,
-                .dict_refs = result.boxy_dict_refs.items,
-                .tag_variants = result.boxy_tag_variants.items,
-                .tag_payload_descs = result.boxy_tag_payload_descs.items,
-                .field_names = result.boxy_field_names.items,
-                .adapt_steps = result.boxy_adapt_steps.items,
-                .payload_steps = result.boxy_payload_steps.items,
-                .method_slots = result.boxy_method_slots.items,
-                .method_arg_layouts = result.boxy_method_arg_layouts.items,
-                .method_hidden_desc_sources = result.boxy_method_hidden_desc_sources.items,
-            };
-        }
-
-        pub fn fromImageView(view: *const lir.LirImage.ProgramView) BoxyTables {
-            return .{
-                .type_descs = view.boxy_type_descs,
-                .dicts = view.boxy_dicts,
-                .adapters = view.boxy_adapters,
-                .desc_refs = view.boxy_desc_refs,
-                .dict_refs = view.boxy_dict_refs,
-                .tag_variants = view.boxy_tag_variants,
-                .tag_payload_descs = view.boxy_tag_payload_descs,
-                .field_names = view.boxy_field_names,
-                .adapt_steps = view.boxy_adapt_steps,
-                .payload_steps = view.boxy_payload_steps,
-                .method_slots = view.boxy_method_slots,
-                .method_arg_layouts = view.boxy_method_arg_layouts,
-                .method_hidden_desc_sources = view.boxy_method_hidden_desc_sources,
-            };
-        }
-    };
+    pub const BoxyTables = boxy_runtime.BoxyTables;
 
     pub fn init(
         allocator: Allocator,
@@ -636,6 +593,16 @@ pub const Interpreter = struct {
             .runtime_boxy_tag_variants = .empty,
             .runtime_boxy_tag_payload_descs = .empty,
             .runtime_boxy_payload_steps = .empty,
+            .boxy_runtime = .{
+                .store = store,
+                .layout_store = layout_store,
+                .boxy_tables = boxy_tables,
+                .runtime_boxy_tag_variants = undefined,
+                .runtime_boxy_desc_refs = undefined,
+                .runtime_boxy_tag_payload_descs = undefined,
+                .roc_ops = undefined,
+                .scratch = allocator,
+            },
             .call_stack = .empty,
             .failed_call_stack = .empty,
             .comptime_branch_hits = .empty,
@@ -833,6 +800,7 @@ pub const Interpreter = struct {
     /// Decrements reference counts for any heap-allocated data (strings, lists, boxes)
     /// according to the value's layout. No-op for non-refcounted types (ints, bools, etc).
     pub fn dropValue(self: *LirInterpreter, val: Value, layout_idx: layout_mod.Idx) void {
+        self.bindBoxyRuntime();
         self.performInterpreterApiRc(.decref, val, layout_idx, 0);
     }
 
@@ -888,6 +856,17 @@ pub const Interpreter = struct {
 
     fn invariantFailedError(self: *const LirInterpreter, comptime fmt: []const u8, args: anytype) Error {
         self.invariantFailed(fmt, args);
+    }
+
+    /// Point the boxy runtime at this interpreter's live descriptor tables and
+    /// `RocOps`. Their addresses are fixed once the interpreter is pinned, so a
+    /// single binding at each evaluation entry keeps the runtime valid for every
+    /// boxy operation reached from it.
+    fn bindBoxyRuntime(self: *LirInterpreter) void {
+        self.boxy_runtime.runtime_boxy_tag_variants = &self.runtime_boxy_tag_variants;
+        self.boxy_runtime.runtime_boxy_desc_refs = &self.runtime_boxy_desc_refs;
+        self.boxy_runtime.runtime_boxy_tag_payload_descs = &self.runtime_boxy_tag_payload_descs;
+        self.boxy_runtime.roc_ops = &self.roc_ops;
     }
 
     fn currentRocOps(self: *LirInterpreter) *RocOps {
@@ -1038,6 +1017,7 @@ pub const Interpreter = struct {
 
     /// Evaluate a proc-root LIR program using the RocOps bound at initialization time.
     pub fn eval(self: *LirInterpreter, request: EvalRequest) Error!EvalResult {
+        self.bindBoxyRuntime();
         self.roc_env.resetForEval();
         self.call_stack.clearRetainingCapacity();
         self.failed_call_stack.clearRetainingCapacity();
@@ -3555,8 +3535,7 @@ pub const Interpreter = struct {
     }
 
     fn boxyDescHasConcreteScalarPayload(self: *const LirInterpreter, desc: *const LirProgram.BoxyTypeDesc) bool {
-        const payload_val = self.layout_store.getLayout(desc.payload_layout);
-        return payload_val.tag == .scalar and payload_val.getScalar().tag != .opaque_ptr;
+        return self.boxy_runtime.boxyDescHasConcreteScalarPayload(desc);
     }
 
     fn makeRuntimeScalarDesc(self: *LirInterpreter, payload_layout: layout_mod.Idx) Error!*const LirProgram.BoxyTypeDesc {
@@ -5073,10 +5052,7 @@ pub const Interpreter = struct {
         box_layout: layout_mod.Idx,
         desc: *const LirProgram.BoxyTypeDesc,
     ) bool {
-        const value_tag = self.layout_store.getLayout(box_layout).tag;
-        if (value_tag != .box and value_tag != .box_of_zst) return false;
-        const desc_payload_tag = self.layout_store.getLayout(desc.payload_layout).tag;
-        return desc_payload_tag == .box or desc_payload_tag == .box_of_zst;
+        return self.boxy_runtime.boxyDescIsBoxSelfForBoxValue(box_layout, desc);
     }
 
     fn performBoxyListDrop(
@@ -9220,14 +9196,7 @@ pub const Interpreter = struct {
     }
 
     fn requireBoxyTypeDesc(self: *const LirInterpreter, desc_id: LIR.BoxyTypeDescId) *const LirProgram.BoxyTypeDesc {
-        const index = @intFromEnum(desc_id);
-        if (index >= self.boxy_tables.type_descs.len) {
-            self.invariantFailed(
-                "LIR/interpreter invariant violated: boxy descriptor id {d} exceeded descriptor table length {d}",
-                .{ index, self.boxy_tables.type_descs.len },
-            );
-        }
-        return &self.boxy_tables.type_descs[index];
+        return self.boxy_runtime.requireBoxyTypeDesc(desc_id);
     }
 
     fn requireBoxyDict(self: *const LirInterpreter, dict_id: LIR.BoxyDictId) *const LirProgram.BoxyDict {
@@ -9259,20 +9228,6 @@ pub const Interpreter = struct {
         return self.boxy_tables.method_slots[start..end];
     }
 
-    const runtimeBoxySpanTag: u32 = 0x8000_0000;
-
-    fn runtimeBoxySpanStart(span: LIR.BoxySpan) ?usize {
-        if ((span.start & runtimeBoxySpanTag) == 0) return null;
-        return @intCast(span.start & ~runtimeBoxySpanTag);
-    }
-
-    fn makeRuntimeBoxySpan(start: usize, len: usize) LIR.BoxySpan {
-        if (start >= runtimeBoxySpanTag) {
-            @panic("LIR/interpreter invariant violated: runtime boxy span exceeded encodable range");
-        }
-        return .{ .start = runtimeBoxySpanTag | @as(u32, @intCast(start)), .len = @intCast(len) };
-    }
-
     fn requireBoxyFieldNames(self: *const LirInterpreter, span: LIR.BoxySpan) []const base.StringLiteral.Idx {
         const start: usize = span.start;
         const end = start + span.len;
@@ -9286,49 +9241,11 @@ pub const Interpreter = struct {
     }
 
     fn requireBoxyTagVariants(self: *const LirInterpreter, span: LIR.BoxySpan) []const LirProgram.BoxyTagVariant {
-        if (runtimeBoxySpanStart(span)) |start| {
-            const end = start + span.len;
-            if (end > self.runtime_boxy_tag_variants.items.len) {
-                self.invariantFailed(
-                    "LIR/interpreter invariant violated: runtime boxy tag variant span [{d}, {d}) exceeded tag variant table length {d}",
-                    .{ start, end, self.runtime_boxy_tag_variants.items.len },
-                );
-            }
-            return self.runtime_boxy_tag_variants.items[start..end];
-        }
-
-        const start: usize = span.start;
-        const end = start + span.len;
-        if (end > self.boxy_tables.tag_variants.len) {
-            self.invariantFailed(
-                "LIR/interpreter invariant violated: boxy tag variant span [{d}, {d}) exceeded tag variant table length {d}",
-                .{ start, end, self.boxy_tables.tag_variants.len },
-            );
-        }
-        return self.boxy_tables.tag_variants[start..end];
+        return self.boxy_runtime.requireBoxyTagVariants(span);
     }
 
     fn requireBoxyDescRefs(self: *const LirInterpreter, span: LIR.BoxySpan) []const LIR.BoxyDescRef {
-        if (runtimeBoxySpanStart(span)) |start| {
-            const end = start + span.len;
-            if (end > self.runtime_boxy_desc_refs.items.len) {
-                self.invariantFailed(
-                    "LIR/interpreter invariant violated: runtime boxy descriptor-ref span [{d}, {d}) exceeded descriptor-ref table length {d}",
-                    .{ start, end, self.runtime_boxy_desc_refs.items.len },
-                );
-            }
-            return self.runtime_boxy_desc_refs.items[start..end];
-        }
-
-        const start: usize = span.start;
-        const end = start + span.len;
-        if (end > self.boxy_tables.desc_refs.len) {
-            self.invariantFailed(
-                "LIR/interpreter invariant violated: boxy descriptor-ref span [{d}, {d}) exceeded descriptor-ref table length {d}",
-                .{ start, end, self.boxy_tables.desc_refs.len },
-            );
-        }
-        return self.boxy_tables.desc_refs[start..end];
+        return self.boxy_runtime.requireBoxyDescRefs(span);
     }
 
     fn requireBoxyDictRefs(self: *const LirInterpreter, span: LIR.BoxySpan) []const LIR.BoxyDictRef {
@@ -9392,26 +9309,7 @@ pub const Interpreter = struct {
     }
 
     fn requireBoxyTagPayloadDescs(self: *const LirInterpreter, span: LIR.BoxySpan) []const LirProgram.BoxyTagPayloadDesc {
-        if (runtimeBoxySpanStart(span)) |start| {
-            const end = start + span.len;
-            if (end > self.runtime_boxy_tag_payload_descs.items.len) {
-                self.invariantFailed(
-                    "LIR/interpreter invariant violated: runtime boxy tag payload descriptor span [{d}, {d}) exceeded table length {d}",
-                    .{ start, end, self.runtime_boxy_tag_payload_descs.items.len },
-                );
-            }
-            return self.runtime_boxy_tag_payload_descs.items[start..end];
-        }
-
-        const start: usize = span.start;
-        const end = start + span.len;
-        if (end > self.boxy_tables.tag_payload_descs.len) {
-            self.invariantFailed(
-                "LIR/interpreter invariant violated: boxy tag payload descriptor span [{d}, {d}) exceeded table length {d}",
-                .{ start, end, self.boxy_tables.tag_payload_descs.len },
-            );
-        }
-        return self.boxy_tables.tag_payload_descs[start..end];
+        return self.boxy_runtime.requireBoxyTagPayloadDescs(span);
     }
 
     fn resolveBoxyDescRef(self: *LirInterpreter, frame: *const Frame, desc_ref: LIR.BoxyDescRef) Error!*const LirProgram.BoxyTypeDesc {
@@ -9715,11 +9613,7 @@ pub const Interpreter = struct {
         desc: *const LirProgram.BoxyTypeDesc,
         tag_name: base.StringLiteral.Idx,
     ) ?*const LirProgram.BoxyTagVariant {
-        const wanted = self.store.getString(tag_name);
-        for (self.requireBoxyTagVariants(desc.tag_variants)) |*variant| {
-            if (std.mem.eql(u8, wanted, self.store.getString(variant.name))) return variant;
-        }
-        return null;
+        return self.boxy_runtime.findLocalBoxyTagVariant(desc, tag_name);
     }
 
     fn firstNestedBoxyDesc(
@@ -9737,21 +9631,7 @@ pub const Interpreter = struct {
         desc: *const LirProgram.BoxyTypeDesc,
         discriminant: u16,
     ) *const LirProgram.BoxyTagVariant {
-        if (self.findBoxyTagVariantByDiscriminant(desc, discriminant)) |variant| return variant;
-        if (builtin.mode == .Debug) {
-            debugPrint("boxy descriptor variants for payload_layout={d}:", .{@intFromEnum(desc.payload_layout)});
-            for (self.requireBoxyTagVariants(desc.tag_variants)) |*variant| {
-                debugPrint(" {s}:{d}", .{ self.store.getString(variant.name), variant.discriminant });
-            }
-            debugPrint(" tag_ext_desc={any}\n", .{desc.tag_ext_desc});
-        }
-        self.invariantFailed(
-            "LIR/interpreter invariant violated: boxy descriptor had no tag variant with discriminant {d} payload_layout={d}",
-            .{
-                discriminant,
-                @intFromEnum(desc.payload_layout),
-            },
-        );
+        return self.boxy_runtime.requireBoxyTagVariantByDiscriminant(desc, discriminant);
     }
 
     fn findBoxyTagVariantByDiscriminant(
@@ -9759,21 +9639,11 @@ pub const Interpreter = struct {
         desc: *const LirProgram.BoxyTypeDesc,
         discriminant: u16,
     ) ?*const LirProgram.BoxyTagVariant {
-        for (self.requireBoxyTagVariants(desc.tag_variants)) |*variant| {
-            if (variant.discriminant == discriminant) return variant;
-        }
-        return null;
+        return self.boxy_runtime.findBoxyTagVariantByDiscriminant(desc, discriminant);
     }
 
     fn boxyTagExtDiscriminant(self: *const LirInterpreter, desc: *const LirProgram.BoxyTypeDesc) ?u16 {
-        if (desc.tag_ext_desc == null) return null;
-        if (desc.tag_variants.len > std.math.maxInt(u16)) {
-            self.invariantFailed(
-                "LIR/interpreter invariant violated: boxy tag descriptor had too many variants for row-extension discriminant: {d}",
-                .{desc.tag_variants.len},
-            );
-        }
-        return @intCast(desc.tag_variants.len);
+        return self.boxy_runtime.boxyTagExtDiscriminant(desc);
     }
 
     fn resolveBoxyTagExtDesc(
@@ -9795,29 +9665,7 @@ pub const Interpreter = struct {
         union_layout: layout_mod.Idx,
         discriminant: u16,
     ) layout_mod.Idx {
-        const union_layout_val = self.layout_store.getLayout(union_layout);
-        if (union_layout_val.tag == .zst) {
-            if (discriminant == 0) return .zst;
-            self.invariantFailed(
-                "LIR/interpreter invariant violated: zero-sized boxy tag descriptor payload layout {d} received nonzero discriminant {d}",
-                .{ @intFromEnum(union_layout), discriminant },
-            );
-        }
-        if (union_layout_val.tag != .tag_union) {
-            self.invariantFailed(
-                "LIR/interpreter invariant violated: boxy tag descriptor payload layout {d} was not a tag union",
-                .{@intFromEnum(union_layout)},
-            );
-        }
-        const tu_data = self.layout_store.getTagUnionData(union_layout_val.getTagUnion().idx);
-        const variants = self.layout_store.getTagUnionVariants(tu_data);
-        if (discriminant >= variants.len) {
-            self.invariantFailed(
-                "LIR/interpreter invariant violated: boxy tag discriminant {d} exceeded payload layout {d} variant count {d}",
-                .{ discriminant, @intFromEnum(union_layout), variants.len },
-            );
-        }
-        return variants.get(discriminant).payload_layout;
+        return self.boxy_runtime.requireBoxyTagPayloadLayout(union_layout, discriminant);
     }
 
     fn constructBoxyTagValue(
@@ -10111,10 +9959,7 @@ pub const Interpreter = struct {
         variant: *const LirProgram.BoxyTagVariant,
         payload_index: u32,
     ) ?LIR.BoxyDescRef {
-        for (self.requireBoxyTagPayloadDescs(variant.payload_descs)) |payload_desc| {
-            if (payload_desc.payload_index == payload_index) return payload_desc.desc;
-        }
-        return null;
+        return self.boxy_runtime.findBoxyPayloadDesc(variant, payload_index);
     }
 
     fn allocBoxyDynamicPayload(
