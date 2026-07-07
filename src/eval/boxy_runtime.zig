@@ -106,6 +106,35 @@ pub const ResolvedTagUnionBase = struct {
     layout: layout_mod.Idx,
 };
 
+pub fn canonicalZstList(len: usize) RocList {
+    return .{
+        .bytes = null,
+        .length = len,
+        .capacity_or_alloc_ptr = 0,
+    };
+}
+
+pub const BoxyTagPayloadRead = struct {
+    value: Value,
+    desc: ?LIR.BoxyDescRef,
+};
+
+pub const RawBoxyTagPayloadRead = struct {
+    value: Value,
+    layout: layout_mod.Idx,
+};
+
+pub const BoxyPayloadValue = struct {
+    value: Value,
+    layout: layout_mod.Idx,
+    desc: ?*const LirProgram.BoxyTypeDesc,
+};
+
+pub const SingleFieldPayloadInfo = struct {
+    layout: layout_mod.Idx,
+    offset: u32,
+};
+
 /// The boxy descriptor tables lowered with a program: the static side inputs to
 /// the boxy runtime.
 pub const BoxyTables = struct {
@@ -1400,5 +1429,1570 @@ pub const BoxyRuntime = struct {
                 try self.performBoxyLayoutDrop(hooks, tag_base.value, actual_payload_layout, payload_desc, op, count, atomicity);
             },
         }
+    }
+
+    pub fn singleFieldPayloadInfo(self: *const BoxyRuntime, layout_idx: layout_mod.Idx) ?SingleFieldPayloadInfo {
+        const layout_val = self.layout_store.getLayout(layout_idx);
+        if (layout_val.tag != .struct_) return null;
+
+        const struct_idx = layout_val.getStruct().idx;
+        const struct_data = self.layout_store.getStructData(struct_idx);
+        const fields = self.layout_store.struct_fields.sliceRange(struct_data.getFields());
+        if (fields.len != 1) return null;
+
+        const field = fields.get(0);
+        if (field.index != 0) return null;
+        return .{
+            .layout = field.layout,
+            .offset = self.layout_store.getStructFieldOffsetByOriginalIndex(struct_idx, 0),
+        };
+    }
+
+    pub fn unwrapSingleFieldPayloadLayout(self: *const BoxyRuntime, layout_idx: layout_mod.Idx) ?layout_mod.Idx {
+        const layout_val = self.layout_store.getLayout(layout_idx);
+        if (layout_val.tag != .struct_) return null;
+
+        const struct_data = self.layout_store.getStructData(layout_val.getStruct().idx);
+        const fields = self.layout_store.struct_fields.sliceRange(struct_data.getFields());
+        if (fields.len != 1) return null;
+
+        const field = fields.get(0);
+        if (field.index != 0) return null;
+        return field.layout;
+    }
+
+    pub fn allocBoxyDynamicPayload(
+        self: *const BoxyRuntime,
+        hooks: anytype,
+        payload: Value,
+        payload_layout: layout_mod.Idx,
+        desc: *const LirProgram.BoxyTypeDesc,
+        target_layout: layout_mod.Idx,
+    ) Error!Value {
+        const boxed = try hooks.allocValue(target_layout);
+        const payload_size = self.helper.sizeOf(desc.payload_layout);
+        if (payload_size == 0) {
+            self.writeBoxedDataPointer(boxed, null);
+            return boxed;
+        }
+
+        const payload_sa = self.helper.sizeAlignOf(desc.payload_layout);
+        const data_ptr = try hooks.allocRocDataWithRc(
+            payload_size,
+            @intCast(payload_sa.alignment.toByteUnits()),
+            self.boxyDynamicPayloadAllocationContainsRc(desc, target_layout),
+        );
+        const coerced = try hooks.coerceToLayout(payload, payload_layout, desc.payload_layout);
+        @memcpy(data_ptr[0..payload_size], coerced.readBytes(payload_size));
+        self.writeBoxedDataPointer(boxed, data_ptr);
+        return boxed;
+    }
+
+    pub fn freeMovedBoxyDynamicPayload(
+        self: *const BoxyRuntime,
+        source: Value,
+        source_layout: layout_mod.Idx,
+        desc: *const LirProgram.BoxyTypeDesc,
+    ) void {
+        const data_ptr = self.readBoxedDataPointer(source) orelse return;
+        const payload_sa = self.helper.sizeAlignOf(desc.payload_layout);
+        builtins.utils.freeDataPtrC(
+            data_ptr,
+            @intCast(payload_sa.alignment.toByteUnits()),
+            self.boxyDynamicPayloadAllocationContainsRc(desc, source_layout),
+            self.roc_ops,
+        );
+    }
+
+    pub fn constructBoxyTagValue(
+        self: *const BoxyRuntime,
+        hooks: anytype,
+        desc: *const LirProgram.BoxyTypeDesc,
+        tag_name: base.StringLiteral.Idx,
+        payload: ?Value,
+        payload_layout: layout_mod.Idx,
+        payload_desc: ?*const LirProgram.BoxyTypeDesc,
+        target_layout: layout_mod.Idx,
+    ) Error!Value {
+        if (self.findLocalBoxyTagVariant(desc, tag_name)) |variant| {
+            const allocated = try hooks.allocTagValue(desc.payload_layout);
+            if (self.helper.sizeOf(allocated.base_layout) > 0) {
+                self.helper.writeTagDiscriminant(allocated.base, allocated.base_layout, variant.discriminant);
+            }
+            if (payload) |payload_value| {
+                if (payload_desc) |desc_for_payload| {
+                    try self.writeBoxyPayloadToDestination(
+                        hooks,
+                        allocated.base,
+                        variant.payload_layout,
+                        payload_value,
+                        payload_layout,
+                        desc_for_payload,
+                    );
+                } else {
+                    try self.writeConstructedVariantPayload(hooks, allocated.base, variant, payload_value, payload_layout);
+                }
+            } else if (self.helper.sizeOf(variant.payload_layout) != 0) {
+                return self.invariantFailedError(
+                    "LIR/interpreter invariant violated: boxy tag {s} required a payload but construction had none",
+                    .{self.store.getString(tag_name)},
+                );
+            }
+            return try self.allocBoxyDynamicPayload(hooks, allocated.outer, desc.payload_layout, desc, target_layout);
+        }
+
+        const ext_discriminant = self.boxyTagExtDiscriminant(desc) orelse {
+            if (builtin.mode == .Debug) {
+                debugPrint(
+                    "debug_construct_missing_tag proc={d} tag={s} desc_payload={d} debug_ty={any} variants=",
+                    .{ hooks.traceProcId(), self.store.getString(tag_name), @intFromEnum(desc.payload_layout), desc.debug_checked_type },
+                );
+                for (self.requireBoxyTagVariants(desc.tag_variants)) |variant| {
+                    debugPrint("{s}:{d} ", .{ self.store.getString(variant.name), variant.discriminant });
+                }
+                debugPrint("tag_ext={any}\n", .{desc.tag_ext_desc});
+            }
+            return self.invariantFailedError(
+                "LIR/interpreter invariant violated: boxy descriptor had no tag variant named {s}",
+                .{self.store.getString(tag_name)},
+            );
+        };
+        const ext_desc = try self.resolveBoxyTagExtDesc(hooks, desc);
+        const ext_payload_layout = self.requireBoxyTagPayloadLayout(desc.payload_layout, ext_discriminant);
+        const ext_value = try self.constructBoxyTagValue(hooks, ext_desc, tag_name, payload, payload_layout, payload_desc, ext_payload_layout);
+        const allocated = try hooks.allocTagValue(desc.payload_layout);
+        if (self.helper.sizeOf(allocated.base_layout) > 0) {
+            self.helper.writeTagDiscriminant(allocated.base, allocated.base_layout, ext_discriminant);
+        }
+        try hooks.writeVariantPayloadValue(allocated.base, ext_payload_layout, ext_value, ext_payload_layout);
+        return try self.allocBoxyDynamicPayload(hooks, allocated.outer, desc.payload_layout, desc, target_layout);
+    }
+
+    /// Write a freshly constructed tag payload into its descriptor slot. The
+    /// payload value was prepared for this descriptor's conventions, so the
+    /// variant's recorded payload descriptors are its description; use them to
+    /// guide any conversion the slot layout requires (e.g. boxing a by-value
+    /// field into a descriptor-backed box).
+    fn writeConstructedVariantPayload(
+        self: *const BoxyRuntime,
+        hooks: anytype,
+        destination: Value,
+        variant: *const LirProgram.BoxyTagVariant,
+        payload_value: Value,
+        payload_layout: layout_mod.Idx,
+    ) Error!void {
+        const expected_layout = variant.payload_layout;
+        if (self.helper.sizeOf(expected_layout) == 0) return;
+        if (expected_layout == payload_layout or variant.payload_descs.len == 0) {
+            return try hooks.writeVariantPayloadValue(destination, expected_layout, payload_value, payload_layout);
+        }
+
+        const expected_layout_val = self.layout_store.getLayout(expected_layout);
+        const payload_layout_val = self.layout_store.getLayout(payload_layout);
+        if (expected_layout_val.tag == .struct_ and payload_layout_val.tag == .struct_) {
+            // A single-argument tag's recorded payload descriptor describes
+            // the whole payload area; the per-field pairing below is for
+            // multi-argument tags.
+            if (self.findBoxyPayloadDesc(variant, 0)) |first_desc_ref| single: {
+                const first_desc = try hooks.resolveDescRef(first_desc_ref);
+                if (first_desc.payload_layout != expected_layout) break :single;
+                const materialized = try self.materializeBoxyPayloadToLayoutWithTargetDesc(
+                    hooks,
+                    payload_value,
+                    payload_layout,
+                    first_desc,
+                    first_desc,
+                    expected_layout,
+                );
+                destination.copyFrom(materialized, self.helper.sizeOf(expected_layout));
+                return;
+            }
+            const expected_struct_idx = expected_layout_val.getStruct().idx;
+            const actual_struct_idx = payload_layout_val.getStruct().idx;
+            const expected_data = self.layout_store.getStructData(expected_struct_idx);
+            var original_index: u32 = 0;
+            while (original_index < expected_data.fields.count) : (original_index += 1) {
+                const expected_field_layout = self.layout_store.getStructFieldLayoutByOriginalIndex(expected_struct_idx, original_index);
+                if (self.helper.sizeOf(expected_field_layout) == 0) continue;
+                const actual_field_layout = self.layout_store.getStructFieldLayoutByOriginalIndex(actual_struct_idx, original_index);
+                const actual_field_offset = self.layout_store.getStructFieldOffsetByOriginalIndex(actual_struct_idx, original_index);
+                const expected_field_offset = self.layout_store.getStructFieldOffsetByOriginalIndex(expected_struct_idx, original_index);
+                const field_value = payload_value.offset(actual_field_offset);
+                const materialized = if (self.findBoxyPayloadDesc(variant, original_index)) |field_desc_ref| blk: {
+                    const field_desc = try hooks.resolveDescRef(field_desc_ref);
+                    break :blk try self.materializeBoxyPayloadToLayoutWithTargetDesc(
+                        hooks,
+                        field_value,
+                        actual_field_layout,
+                        field_desc,
+                        field_desc,
+                        expected_field_layout,
+                    );
+                } else try hooks.materializeValue(
+                    self.normalizeValueToLayout(field_value, actual_field_layout, expected_field_layout),
+                    expected_field_layout,
+                );
+                destination.offset(expected_field_offset).copyFrom(materialized, self.helper.sizeOf(expected_field_layout));
+            }
+            return;
+        }
+
+        if (self.findBoxyPayloadDesc(variant, 0)) |payload_desc_ref| {
+            const slot_desc = try hooks.resolveDescRef(payload_desc_ref);
+            const materialized = try self.materializeBoxyPayloadToLayoutWithTargetDesc(
+                hooks,
+                payload_value,
+                payload_layout,
+                slot_desc,
+                slot_desc,
+                expected_layout,
+            );
+            destination.copyFrom(materialized, self.helper.sizeOf(expected_layout));
+            return;
+        }
+
+        try hooks.writeVariantPayloadValue(destination, expected_layout, payload_value, payload_layout);
+    }
+
+    pub fn readBoxyTagPayloadByName(
+        self: *const BoxyRuntime,
+        hooks: anytype,
+        source_value: Value,
+        source_layout: layout_mod.Idx,
+        source_desc: *const LirProgram.BoxyTypeDesc,
+        tag_name: base.StringLiteral.Idx,
+        payload_index: u32,
+        target_layout: layout_mod.Idx,
+    ) Error!BoxyTagPayloadRead {
+        const tag_base = self.resolveBoxyTagBaseValue(source_value, source_layout, source_desc);
+        const disc = self.helper.readTagDiscriminant(tag_base.value, tag_base.layout);
+
+        if (self.findLocalBoxyTagVariant(source_desc, tag_name)) |variant| {
+            if (disc != variant.discriminant) {
+                return self.invariantFailedError(
+                    "LIR/interpreter invariant violated: boxy tag payload access expected discriminant {d} but observed {d}",
+                    .{ variant.discriminant, disc },
+                );
+            }
+            const actual_payload_layout = self.requireBoxyTagPayloadLayout(tag_base.layout, variant.discriminant);
+            const payload_desc_ref = self.findBoxyPayloadDesc(variant, payload_index);
+            const payload_value = if (payload_desc_ref) |desc_ref| blk: {
+                const payload_desc = try hooks.resolveDescRef(desc_ref);
+                // A single-argument tag's recorded payload descriptor
+                // describes the whole payload area, not a field of it.
+                const raw_payload = if (payload_index == 0 and payload_desc.payload_layout == actual_payload_layout)
+                    RawBoxyTagPayloadRead{
+                        .value = try hooks.materializeValue(tag_base.value, actual_payload_layout),
+                        .layout = actual_payload_layout,
+                    }
+                else
+                    try self.readRawBoxyTagPayloadValue(hooks, tag_base.value, actual_payload_layout, payload_index);
+                break :blk try self.materializeBoxyPayloadToLayout(
+                    hooks,
+                    raw_payload.value,
+                    raw_payload.layout,
+                    payload_desc,
+                    target_layout,
+                );
+            } else try self.readBoxyTagPayloadValue(hooks, tag_base.value, actual_payload_layout, payload_index, target_layout);
+            return .{
+                .value = payload_value,
+                .desc = payload_desc_ref,
+            };
+        }
+
+        const ext_discriminant = self.boxyTagExtDiscriminant(source_desc) orelse {
+            if (builtin.mode == .Debug) {
+                debugPrint(
+                    "debug_missing_tag_payload_variant proc={d} source_layout={d} source_desc_payload={d} wanted={s} disc={d} variants=",
+                    .{
+                        hooks.traceProcId(),
+                        @intFromEnum(source_layout),
+                        @intFromEnum(source_desc.payload_layout),
+                        self.store.getString(tag_name),
+                        disc,
+                    },
+                );
+                for (self.requireBoxyTagVariants(source_desc.tag_variants)) |variant| {
+                    debugPrint("{s}:{d}:{d} ", .{
+                        self.store.getString(variant.name),
+                        variant.discriminant,
+                        @intFromEnum(variant.payload_layout),
+                    });
+                }
+                debugPrint("tag_ext={any}\n", .{source_desc.tag_ext_desc});
+                hooks.debugDumpProc();
+            }
+            return self.invariantFailedError(
+                "LIR/interpreter invariant violated: boxy descriptor had no tag variant named {s}",
+                .{self.store.getString(tag_name)},
+            );
+        };
+        if (disc != ext_discriminant) {
+            return self.invariantFailedError(
+                "LIR/interpreter invariant violated: boxy tag payload access expected row-extension discriminant {d} but observed {d}",
+                .{ ext_discriminant, disc },
+            );
+        }
+
+        const ext_desc = try self.resolveBoxyTagExtDesc(hooks, source_desc);
+        const ext_payload_layout = self.requireBoxyTagPayloadLayout(source_desc.payload_layout, ext_discriminant);
+        const ext_value = try hooks.materializeValue(tag_base.value, ext_payload_layout);
+        return try self.readBoxyTagPayloadByName(hooks, ext_value, ext_payload_layout, ext_desc, tag_name, payload_index, target_layout);
+    }
+
+    pub fn readBoxyTagPayloadValue(
+        self: *const BoxyRuntime,
+        hooks: anytype,
+        tag_base: Value,
+        actual_payload_layout: layout_mod.Idx,
+        payload_index: u32,
+        target_layout: layout_mod.Idx,
+    ) Error!Value {
+        const raw_payload = try self.readRawBoxyTagPayloadValue(hooks, tag_base, actual_payload_layout, payload_index);
+        const payload_value = try hooks.coerceToLayout(raw_payload.value, raw_payload.layout, target_layout);
+        return try hooks.materializeValue(payload_value, target_layout);
+    }
+
+    fn readActiveTagPayloadValue(
+        self: *const BoxyRuntime,
+        hooks: anytype,
+        tag_value: Value,
+        tag_layout: layout_mod.Idx,
+    ) Error!RawBoxyTagPayloadRead {
+        const discriminant = if (self.helper.sizeOf(tag_layout) == 0)
+            @as(u16, 0)
+        else
+            self.helper.readTagDiscriminant(tag_value, tag_layout);
+        const payload_layout = self.requireBoxyTagPayloadLayout(tag_layout, discriminant);
+        return try self.readRawBoxyTagPayloadValue(hooks, tag_value, payload_layout, 0);
+    }
+
+    pub fn readRawBoxyTagPayloadValue(
+        self: *const BoxyRuntime,
+        hooks: anytype,
+        tag_base: Value,
+        actual_payload_layout: layout_mod.Idx,
+        payload_index: u32,
+    ) Error!RawBoxyTagPayloadRead {
+        const payload_layout_val = self.layout_store.getLayout(actual_payload_layout);
+        switch (payload_layout_val.tag) {
+            .struct_ => {
+                const field_offset = self.layout_store.getStructFieldOffsetByOriginalIndex(
+                    payload_layout_val.getStruct().idx,
+                    payload_index,
+                );
+                const actual_field_layout = self.layout_store.getStructFieldLayoutByOriginalIndex(
+                    payload_layout_val.getStruct().idx,
+                    payload_index,
+                );
+                return .{
+                    .value = try hooks.materializeValue(tag_base.offset(field_offset), actual_field_layout),
+                    .layout = actual_field_layout,
+                };
+            },
+            else => {
+                if (builtin.mode == .Debug and payload_index != 0) {
+                    self.invariantFailed(
+                        "LIR/interpreter invariant violated: scalar boxy tag payload access requested payload_idx {d} from non-struct payload layout {d}",
+                        .{ payload_index, @intFromEnum(actual_payload_layout) },
+                    );
+                }
+                return .{
+                    .value = try hooks.materializeValue(tag_base, actual_payload_layout),
+                    .layout = actual_payload_layout,
+                };
+            },
+        }
+    }
+
+    pub fn materializeBoxyPayloadToLayout(
+        self: *const BoxyRuntime,
+        hooks: anytype,
+        value: Value,
+        actual_layout: layout_mod.Idx,
+        desc: ?*const LirProgram.BoxyTypeDesc,
+        expected_layout: layout_mod.Idx,
+    ) Error!Value {
+        if (actual_layout == expected_layout) {
+            return try hooks.materializeValue(value, expected_layout);
+        }
+
+        const actual_layout_val = self.layout_store.getLayout(actual_layout);
+        const expected_layout_val = self.layout_store.getLayout(expected_layout);
+        if ((expected_layout_val.tag == .box or expected_layout_val.tag == .box_of_zst) and
+            actual_layout_val.tag != .box and actual_layout_val.tag != .box_of_zst)
+        {
+            const payload_desc = desc orelse {
+                return self.invariantFailedError(
+                    "LIR/interpreter invariant violated: concrete payload layout {d} needed descriptor-guided boxing into layout {d}",
+                    .{ @intFromEnum(actual_layout), @intFromEnum(expected_layout) },
+                );
+            };
+            return try self.allocBoxyDynamicPayload(hooks, value, actual_layout, payload_desc, expected_layout);
+        }
+        if (actual_layout_val.tag == .box or actual_layout_val.tag == .box_of_zst) {
+            if (desc) |box_desc| {
+                const payload_desc = try self.boxyBoxAllocationPayloadDesc(hooks, actual_layout, box_desc);
+                const payload_layout = if (payload_desc) |resolved| resolved.payload_layout else expected_layout;
+                const payload_size = self.helper.sizeOf(payload_layout);
+                const data_ptr = self.readBoxedDataPointer(value);
+                if (data_ptr == null) {
+                    if (payload_size == 0) return try hooks.materializeValue(Value.zst, expected_layout);
+                    return self.invariantFailedError(
+                        "LIR/interpreter invariant violated: descriptor-backed box layout {d} had null payload pointer for nonzero payload layout {d}",
+                        .{ @intFromEnum(actual_layout), @intFromEnum(payload_layout) },
+                    );
+                }
+                return try self.materializeBoxyPayloadToLayout(
+                    hooks,
+                    .{ .ptr = data_ptr.? },
+                    payload_layout,
+                    payload_desc,
+                    expected_layout,
+                );
+            }
+        }
+        if (actual_layout_val.tag == .struct_ and expected_layout_val.tag == .struct_) {
+            const payload_desc = desc orelse {
+                return self.invariantFailedError(
+                    "LIR/interpreter invariant violated: boxy struct payload layout {d} needed descriptor-guided materialization into layout {d}",
+                    .{ @intFromEnum(actual_layout), @intFromEnum(expected_layout) },
+                );
+            };
+            return try self.materializeBoxyStructPayloadToLayout(hooks, value, actual_layout, payload_desc, expected_layout);
+        }
+
+        if (self.singleFieldPayloadInfo(expected_layout)) |target_field| {
+            const target = try hooks.allocValue(expected_layout);
+            const field_size = self.helper.sizeOf(target_field.layout);
+            if (field_size == 0) return target;
+            const materialized_field = try self.materializeBoxyPayloadToLayout(
+                hooks,
+                value,
+                actual_layout,
+                desc,
+                target_field.layout,
+            );
+            target.offset(target_field.offset).copyFrom(materialized_field, field_size);
+            return target;
+        }
+
+        if (actual_layout_val.tag == .zst and expected_layout_val.tag == .tag_union) {
+            const payload_desc = desc orelse {
+                return self.invariantFailedError(
+                    "LIR/interpreter invariant violated: zero-sized boxy tag payload needed descriptor-guided materialization into layout {d}",
+                    .{@intFromEnum(expected_layout)},
+                );
+            };
+            const variants = self.requireBoxyTagVariants(payload_desc.tag_variants);
+            if (variants.len != 1) {
+                return self.invariantFailedError(
+                    "LIR/interpreter invariant violated: zero-sized boxy tag payload descriptor for layout {d} had {d} variants",
+                    .{ @intFromEnum(expected_layout), variants.len },
+                );
+            }
+            const variant = variants[0];
+            if (variant.payload_layout != .zst or variant.payload_descs.len != 0) {
+                return self.invariantFailedError(
+                    "LIR/interpreter invariant violated: zero-sized boxy tag payload descriptor variant {s} had nonzero payload metadata",
+                    .{self.store.getString(variant.name)},
+                );
+            }
+            const target = try hooks.allocTagValue(expected_layout);
+            const expected_payload_layout = self.requireBoxyTagPayloadLayout(target.base_layout, variant.discriminant);
+            if (self.helper.sizeOf(expected_payload_layout) != 0) {
+                return self.invariantFailedError(
+                    "LIR/interpreter invariant violated: zero-sized boxy tag payload materialized into nonzero target payload layout {d}",
+                    .{@intFromEnum(expected_payload_layout)},
+                );
+            }
+            if (self.helper.sizeOf(target.base_layout) > 0) {
+                self.helper.writeTagDiscriminant(target.base, target.base_layout, variant.discriminant);
+            } else if (variant.discriminant != 0) {
+                return self.invariantFailedError(
+                    "LIR/interpreter invariant violated: zero-sized boxy tag payload wrote nonzero discriminant {d} into zero-sized layout {d}",
+                    .{ variant.discriminant, @intFromEnum(target.base_layout) },
+                );
+            }
+            return target.outer;
+        }
+
+        const actual_is_tag = actual_layout_val.tag == .tag_union or actual_layout_val.tag == .box;
+        const expected_is_tag = expected_layout_val.tag == .tag_union or expected_layout_val.tag == .box;
+        if (actual_is_tag and expected_is_tag) {
+            const payload_desc = desc orelse {
+                return self.invariantFailedError(
+                    "LIR/interpreter invariant violated: boxy tag payload layout {d} needed descriptor-guided materialization into layout {d}",
+                    .{ @intFromEnum(actual_layout), @intFromEnum(expected_layout) },
+                );
+            };
+            return try self.materializeBoxyTagPayloadToLayout(hooks, value, actual_layout, payload_desc, expected_layout);
+        }
+        if (actual_layout_val.tag == .tag_union and !expected_is_tag) {
+            const payload_desc = desc orelse {
+                return self.invariantFailedError(
+                    "LIR/interpreter invariant violated: tag wrapper payload layout {d} needed descriptor-guided materialization into layout {d}",
+                    .{ @intFromEnum(actual_layout), @intFromEnum(expected_layout) },
+                );
+            };
+            if (payload_desc.tag_variants.len != 0) {
+                return try self.materializeBoxyTagPayloadToNonTagLayout(
+                    hooks,
+                    value,
+                    actual_layout,
+                    payload_desc,
+                    expected_layout,
+                );
+            }
+            if (payload_desc.tag_variants.len == 0 and payload_desc.payload_layout != actual_layout) {
+                const raw_payload = try self.readActiveTagPayloadValue(hooks, value, actual_layout);
+                return try self.materializeBoxyPayloadToLayout(
+                    hooks,
+                    raw_payload.value,
+                    raw_payload.layout,
+                    payload_desc,
+                    expected_layout,
+                );
+            }
+        }
+
+        const coerced = try hooks.coerceToLayout(value, actual_layout, expected_layout);
+        return try hooks.materializeValue(coerced, expected_layout);
+    }
+
+    fn materializeBoxyTagPayloadToNonTagLayout(
+        self: *const BoxyRuntime,
+        hooks: anytype,
+        value: Value,
+        actual_layout: layout_mod.Idx,
+        source_desc: *const LirProgram.BoxyTypeDesc,
+        expected_layout: layout_mod.Idx,
+    ) Error!Value {
+        const actual_base = self.resolveBoxyTagBaseValue(value, actual_layout, source_desc);
+        const source_discriminant = if (self.helper.sizeOf(actual_base.layout) == 0)
+            @as(u16, 0)
+        else
+            self.helper.readTagDiscriminant(actual_base.value, actual_base.layout);
+        const source_variant = self.requireBoxyTagVariantByDiscriminant(source_desc, source_discriminant);
+        const actual_payload_layout = self.requireBoxyTagPayloadLayout(actual_base.layout, source_discriminant);
+        const source_payload_desc = if (self.findBoxyPayloadDesc(source_variant, 0)) |desc_ref|
+            try hooks.resolveDescRef(desc_ref)
+        else
+            null;
+        const actual_payload_layout_val = self.layout_store.getLayout(actual_payload_layout);
+        const expected_layout_val = self.layout_store.getLayout(expected_layout);
+        const payload = if (actual_payload_layout_val.tag == .struct_ and expected_layout_val.tag == .struct_)
+            RawBoxyTagPayloadRead{
+                .value = try hooks.materializeValue(actual_base.value, actual_payload_layout),
+                .layout = actual_payload_layout,
+            }
+        else
+            try self.readRawBoxyTagPayloadValue(hooks, actual_base.value, actual_payload_layout, 0);
+        return try self.materializeBoxyPayloadToLayout(
+            hooks,
+            payload.value,
+            payload.layout,
+            source_payload_desc,
+            expected_layout,
+        );
+    }
+
+    pub fn materializeBoxyPayloadToLayoutWithOptionalSourceDesc(
+        self: *const BoxyRuntime,
+        hooks: anytype,
+        value: Value,
+        actual_layout: layout_mod.Idx,
+        source_desc: ?*const LirProgram.BoxyTypeDesc,
+        target_desc: *const LirProgram.BoxyTypeDesc,
+        expected_layout: layout_mod.Idx,
+    ) Error!Value {
+        const actual_layout_val = self.layout_store.getLayout(actual_layout);
+        const expected_layout_val = self.layout_store.getLayout(expected_layout);
+        if ((actual_layout_val.tag == .list or actual_layout_val.tag == .list_of_zst) and
+            (expected_layout_val.tag == .list or expected_layout_val.tag == .list_of_zst))
+        {
+            return try self.materializeBoxyListPayloadToLayoutWithTargetDesc(
+                hooks,
+                value,
+                actual_layout,
+                source_desc,
+                target_desc,
+                expected_layout,
+            );
+        }
+
+        if (source_desc) |resolved_source_desc| {
+            return try self.materializeBoxyPayloadToLayoutWithTargetDesc(
+                hooks,
+                value,
+                actual_layout,
+                resolved_source_desc,
+                target_desc,
+                expected_layout,
+            );
+        }
+
+        return try self.materializeBoxyPayloadToLayout(
+            hooks,
+            value,
+            actual_layout,
+            target_desc,
+            expected_layout,
+        );
+    }
+
+    pub fn materializeBoxyListPayloadToLayoutWithTargetDesc(
+        self: *const BoxyRuntime,
+        hooks: anytype,
+        value: Value,
+        actual_layout: layout_mod.Idx,
+        source_desc: ?*const LirProgram.BoxyTypeDesc,
+        target_desc: *const LirProgram.BoxyTypeDesc,
+        expected_layout: layout_mod.Idx,
+    ) Error!Value {
+        const source_list = self.valueToRocListForLayout(value, actual_layout);
+        if (source_list.len() == 0) {
+            return try hooks.rocListToValue(canonicalZstList(0), expected_layout);
+        }
+
+        const source_elem_desc = if (source_desc) |resolved_source_desc|
+            try self.firstNestedBoxyDesc(hooks, resolved_source_desc)
+        else
+            null;
+        const target_elem_desc = try self.firstNestedBoxyDesc(hooks, target_desc);
+        // The list's storage layout is the only truth about element stride and
+        // shape. The element descriptor may legitimately describe the payload
+        // INSIDE a boxed element (payload-direct convention), so it must not
+        // decide how the buffer is walked.
+        const source_elem_layout = self.listElemLayout(actual_layout);
+        const target_elem_layout = self.listElemLayout(expected_layout);
+        const source_elem_size = self.helper.sizeOf(source_elem_layout);
+        const target_elem_size = self.helper.sizeOf(target_elem_layout);
+
+        if (target_elem_size == 0) {
+            return try hooks.rocListToValue(canonicalZstList(source_list.len()), expected_layout);
+        }
+        const source_bytes = source_list.bytes orelse {
+            return self.invariantFailedError(
+                "LIR/interpreter invariant violated: non-empty boxy list payload had null source bytes for layout {d}",
+                .{@intFromEnum(actual_layout)},
+            );
+        };
+
+        const total_elem_bytes = target_elem_size * source_list.len();
+        const target_sa = self.helper.sizeAlignOf(target_elem_layout);
+        const target_alignment: u32 = @intCast(target_sa.alignment.toByteUnits());
+        const elems_rc = hooks.layoutContainsRc(target_elem_layout);
+        const target_bytes = try hooks.allocRocDataWithRc(total_elem_bytes, target_alignment, elems_rc);
+        errdefer builtins.utils.decref(
+            target_bytes,
+            builtins.list.RocList.encodeCapacity(source_list.len()),
+            target_alignment,
+            elems_rc,
+            .atomic,
+            self.roc_ops,
+        );
+
+        const desc_for_element_materialization = if (target_elem_desc) |resolved_target_elem_desc| blk: {
+            const target_elem_layout_val = self.layout_store.getLayout(target_elem_layout);
+            if (target_elem_layout_val.tag == .box or target_elem_layout_val.tag == .box_of_zst) {
+                const payload_desc = try self.boxyBoxAllocationPayloadDesc(hooks, target_elem_layout, resolved_target_elem_desc) orelse resolved_target_elem_desc;
+                if (payload_desc == resolved_target_elem_desc and
+                    resolved_target_elem_desc.payload_layout == target_elem_layout)
+                {
+                    break :blk source_elem_desc orelse payload_desc;
+                }
+                break :blk payload_desc;
+            }
+            break :blk resolved_target_elem_desc;
+        } else source_elem_desc;
+
+        var index: usize = 0;
+        while (index < source_list.len()) : (index += 1) {
+            const source_elem = if (source_elem_size == 0)
+                Value.zst
+            else
+                Value{ .ptr = source_bytes + index * source_elem_size };
+            try self.performBoxyLayoutDrop(hooks, source_elem, source_elem_layout, source_elem_desc, .incref, 1, .atomic);
+            const materialized = try self.materializeBoxyPayloadToLayout(
+                hooks,
+                source_elem,
+                source_elem_layout,
+                desc_for_element_materialization,
+                target_elem_layout,
+            );
+            @memcpy(target_bytes[index * target_elem_size ..][0..target_elem_size], materialized.readBytes(target_elem_size));
+        }
+
+        return try hooks.rocListToValue(.{
+            .bytes = target_bytes,
+            .length = source_list.len(),
+            .capacity_or_alloc_ptr = builtins.list.RocList.encodeCapacity(source_list.len()),
+        }, expected_layout);
+    }
+
+    pub fn materializeBoxyPayloadToLayoutWithTargetDesc(
+        self: *const BoxyRuntime,
+        hooks: anytype,
+        value: Value,
+        actual_layout: layout_mod.Idx,
+        source_desc: *const LirProgram.BoxyTypeDesc,
+        target_desc: *const LirProgram.BoxyTypeDesc,
+        expected_layout: layout_mod.Idx,
+    ) Error!Value {
+        const actual_layout_val = self.layout_store.getLayout(actual_layout);
+        const expected_layout_val = self.layout_store.getLayout(expected_layout);
+        if ((actual_layout_val.tag == .list or actual_layout_val.tag == .list_of_zst) and
+            (expected_layout_val.tag == .list or expected_layout_val.tag == .list_of_zst))
+        {
+            return try self.materializeBoxyListPayloadToLayoutWithTargetDesc(
+                hooks,
+                value,
+                actual_layout,
+                source_desc,
+                target_desc,
+                expected_layout,
+            );
+        }
+        if (actual_layout_val.tag == .struct_ and expected_layout_val.tag == .struct_) {
+            return try self.materializeBoxyStructPayloadToLayoutWithTargetDesc(
+                hooks,
+                value,
+                actual_layout,
+                source_desc,
+                target_desc,
+                expected_layout,
+            );
+        }
+
+        const expected_is_box = expected_layout_val.tag == .box or expected_layout_val.tag == .box_of_zst;
+        if (expected_is_box) {
+            const source_payload_desc = if (actual_layout_val.tag == .box or actual_layout_val.tag == .box_of_zst)
+                try self.boxyBoxAllocationPayloadDesc(hooks, actual_layout, source_desc)
+            else
+                source_desc;
+            const target_payload_desc = try self.boxyBoxAllocationPayloadDesc(hooks, expected_layout, target_desc);
+            if (actual_layout == expected_layout and source_payload_desc == null and target_payload_desc == null) {
+                return try hooks.materializeValue(value, expected_layout);
+            }
+            if (actual_layout == expected_layout and
+                source_payload_desc != null and
+                target_payload_desc != null and
+                source_payload_desc.?.payload_layout == target_payload_desc.?.payload_layout)
+            {
+                return try hooks.materializeValue(value, expected_layout);
+            }
+
+            const target_allocation_desc = target_payload_desc orelse {
+                switch (expected_layout_val.tag) {
+                    .box_of_zst => return try hooks.allocBoxOfZstValue(expected_layout),
+                    .box => {
+                        const target_payload_layout = expected_layout_val.getIdx();
+                        const materialized_payload = try self.materializeBoxyPayloadToLayout(
+                            hooks,
+                            value,
+                            actual_layout,
+                            source_desc,
+                            target_payload_layout,
+                        );
+                        return try hooks.boxBox(materialized_payload, expected_layout);
+                    },
+                    else => unreachable,
+                }
+            };
+            const source_payload = try self.boxyPayloadValueForTargetDesc(
+                hooks,
+                value,
+                actual_layout,
+                source_desc,
+                target_allocation_desc,
+            );
+            const materialized_payload = try self.materializeBoxyPayloadToLayoutWithTargetDesc(
+                hooks,
+                source_payload.value,
+                source_payload.layout,
+                source_payload.desc orelse source_desc,
+                target_allocation_desc,
+                target_allocation_desc.payload_layout,
+            );
+            return try self.allocBoxyDynamicPayload(hooks, materialized_payload, target_allocation_desc.payload_layout, target_allocation_desc, expected_layout);
+        }
+
+        if (actual_layout_val.tag == .box or actual_layout_val.tag == .box_of_zst) {
+            const source_payload = try self.boxyPayloadValueForTargetDesc(
+                hooks,
+                value,
+                actual_layout,
+                source_desc,
+                target_desc,
+            );
+            return try self.materializeBoxyPayloadToLayoutWithTargetDesc(
+                hooks,
+                source_payload.value,
+                source_payload.layout,
+                source_payload.desc orelse source_desc,
+                target_desc,
+                expected_layout,
+            );
+        }
+
+        const actual_is_tag = actual_layout_val.tag == .tag_union;
+        const expected_is_tag = expected_layout_val.tag == .tag_union;
+        if (actual_is_tag and expected_is_tag and target_desc.tag_variants.len != 0) {
+            return try self.materializeBoxyTagPayloadToLayoutWithTargetDesc(
+                hooks,
+                value,
+                actual_layout,
+                source_desc,
+                target_desc,
+                expected_layout,
+            );
+        }
+        if (actual_layout_val.tag == .tag_union and !expected_is_tag and
+            source_desc.tag_variants.len == 0 and source_desc.payload_layout != actual_layout)
+        {
+            const raw_payload = try self.readActiveTagPayloadValue(hooks, value, actual_layout);
+            return try self.materializeBoxyPayloadToLayoutWithTargetDesc(
+                hooks,
+                raw_payload.value,
+                raw_payload.layout,
+                source_desc,
+                target_desc,
+                expected_layout,
+            );
+        }
+        if (actual_is_tag and !expected_is_tag and source_desc.tag_variants.len != 0) {
+            return try self.materializeBoxyTagPayloadToNonTagLayoutWithTargetDesc(
+                hooks,
+                value,
+                actual_layout,
+                source_desc,
+                target_desc,
+                expected_layout,
+            );
+        }
+
+        if (self.singleFieldPayloadInfo(expected_layout)) |target_field| {
+            const target = try hooks.allocValue(expected_layout);
+            const field_size = self.helper.sizeOf(target_field.layout);
+            if (field_size == 0) return target;
+
+            const target_field_desc = try self.firstNestedBoxyDesc(hooks, target_desc);
+            const materialized_field = if (target_field_desc) |field_desc|
+                try self.materializeBoxyPayloadToLayoutWithTargetDesc(
+                    hooks,
+                    value,
+                    actual_layout,
+                    source_desc,
+                    field_desc,
+                    target_field.layout,
+                )
+            else
+                try self.materializeBoxyPayloadToLayout(
+                    hooks,
+                    value,
+                    actual_layout,
+                    source_desc,
+                    target_field.layout,
+                );
+            target.offset(target_field.offset).copyFrom(materialized_field, field_size);
+            return target;
+        }
+
+        return try self.materializeBoxyPayloadToLayout(hooks, value, actual_layout, source_desc, expected_layout);
+    }
+
+    fn materializeBoxyTagPayloadToNonTagLayoutWithTargetDesc(
+        self: *const BoxyRuntime,
+        hooks: anytype,
+        value: Value,
+        actual_layout: layout_mod.Idx,
+        source_desc: *const LirProgram.BoxyTypeDesc,
+        target_desc: *const LirProgram.BoxyTypeDesc,
+        expected_layout: layout_mod.Idx,
+    ) Error!Value {
+        const actual_base = self.resolveBoxyTagBaseValue(value, actual_layout, source_desc);
+        const source_discriminant = if (self.helper.sizeOf(actual_base.layout) == 0)
+            @as(u16, 0)
+        else
+            self.helper.readTagDiscriminant(actual_base.value, actual_base.layout);
+        const source_variant = self.requireBoxyTagVariantByDiscriminant(source_desc, source_discriminant);
+        const actual_payload_layout = self.requireBoxyTagPayloadLayout(actual_base.layout, source_discriminant);
+        const source_payload_desc = if (self.findBoxyPayloadDesc(source_variant, 0)) |desc_ref|
+            try hooks.resolveDescRef(desc_ref)
+        else
+            null;
+        const actual_payload_layout_val = self.layout_store.getLayout(actual_payload_layout);
+        const expected_layout_val = self.layout_store.getLayout(expected_layout);
+        const payload = if (actual_payload_layout_val.tag == .struct_ and expected_layout_val.tag == .struct_)
+            RawBoxyTagPayloadRead{
+                .value = try hooks.materializeValue(actual_base.value, actual_payload_layout),
+                .layout = actual_payload_layout,
+            }
+        else
+            try self.readRawBoxyTagPayloadValue(hooks, actual_base.value, actual_payload_layout, 0);
+
+        if (source_payload_desc) |payload_desc| {
+            return try self.materializeBoxyPayloadToLayoutWithTargetDesc(
+                hooks,
+                payload.value,
+                payload.layout,
+                payload_desc,
+                target_desc,
+                expected_layout,
+            );
+        }
+
+        return try self.materializeBoxyPayloadToLayoutWithOptionalSourceDesc(
+            hooks,
+            payload.value,
+            payload.layout,
+            null,
+            target_desc,
+            expected_layout,
+        );
+    }
+
+    pub fn increfBoxyTransferSourceIfCopied(
+        self: *const BoxyRuntime,
+        hooks: anytype,
+        value: Value,
+        layout_idx: layout_mod.Idx,
+        desc: *const LirProgram.BoxyTypeDesc,
+        mode: LIR.BoxyTransferMode,
+    ) Error!void {
+        switch (mode) {
+            .move => {},
+            .borrow, .copy => try self.performBoxyLayoutDrop(hooks, value, layout_idx, desc, .incref, 1, .atomic),
+        }
+    }
+
+    fn boxyPayloadValueForDesc(
+        self: *const BoxyRuntime,
+        hooks: anytype,
+        value: Value,
+        layout_idx: layout_mod.Idx,
+        desc: *const LirProgram.BoxyTypeDesc,
+    ) Error!BoxyPayloadValue {
+        const layout_val = self.layout_store.getLayout(layout_idx);
+        if (layout_val.tag == .box or layout_val.tag == .box_of_zst) {
+            const payload_desc = (try self.boxyBoxAllocationPayloadDesc(hooks, layout_idx, desc)) orelse blk: {
+                if (layout_val.tag == .box_of_zst) {
+                    return .{ .value = Value.zst, .layout = .zst, .desc = null };
+                }
+                break :blk desc;
+            };
+            const data_ptr = self.readBoxedDataPointer(value);
+            if (data_ptr == null) {
+                if (self.helper.sizeOf(payload_desc.payload_layout) == 0) {
+                    return .{ .value = Value.zst, .layout = payload_desc.payload_layout, .desc = payload_desc };
+                }
+                trace_rc.log(
+                    "debug_null_box_payload proc={d} layout={d} desc_payload={d} desc_nested={d}+{d} payload_desc_payload={d} payload_desc_nested={d}+{d} payload_desc_contains={}",
+                    .{
+                        hooks.traceProcId(),
+                        @intFromEnum(layout_idx),
+                        @intFromEnum(desc.payload_layout),
+                        desc.nested_descs.start,
+                        desc.nested_descs.len,
+                        @intFromEnum(payload_desc.payload_layout),
+                        payload_desc.nested_descs.start,
+                        payload_desc.nested_descs.len,
+                        payload_desc.contains_refcounted,
+                    },
+                );
+                return self.invariantFailedError(
+                    "LIR/interpreter invariant violated: boxy source box layout {d} had null data for payload layout {d}",
+                    .{ @intFromEnum(layout_idx), @intFromEnum(payload_desc.payload_layout) },
+                );
+            }
+            return .{ .value = .{ .ptr = data_ptr.? }, .layout = payload_desc.payload_layout, .desc = payload_desc };
+        }
+        return .{ .value = value, .layout = layout_idx, .desc = desc };
+    }
+
+    pub fn boxyPayloadValueForTargetDesc(
+        self: *const BoxyRuntime,
+        hooks: anytype,
+        value: Value,
+        layout_idx: layout_mod.Idx,
+        source_desc: *const LirProgram.BoxyTypeDesc,
+        target_payload_desc: ?*const LirProgram.BoxyTypeDesc,
+    ) Error!BoxyPayloadValue {
+        const layout_val = self.layout_store.getLayout(layout_idx);
+        if (layout_val.tag != .box and layout_val.tag != .box_of_zst) {
+            return .{ .value = value, .layout = layout_idx, .desc = source_desc };
+        }
+
+        if (try self.boxyBoxAllocationPayloadDesc(hooks, layout_idx, source_desc)) |source_payload_desc| {
+            const data_ptr = self.readBoxedDataPointer(value);
+            if (data_ptr == null) {
+                if (self.helper.sizeOf(source_payload_desc.payload_layout) == 0) {
+                    return .{ .value = Value.zst, .layout = source_payload_desc.payload_layout, .desc = source_payload_desc };
+                }
+                return self.invariantFailedError(
+                    "LIR/interpreter invariant violated: boxy source box layout {d} had null data for payload layout {d}",
+                    .{ @intFromEnum(layout_idx), @intFromEnum(source_payload_desc.payload_layout) },
+                );
+            }
+            return .{ .value = .{ .ptr = data_ptr.? }, .layout = source_payload_desc.payload_layout, .desc = source_payload_desc };
+        }
+
+        if (target_payload_desc) |payload_desc| {
+            const data_ptr = self.readBoxedDataPointer(value);
+            if (data_ptr == null) {
+                if (self.helper.sizeOf(payload_desc.payload_layout) == 0) {
+                    return .{ .value = Value.zst, .layout = payload_desc.payload_layout, .desc = payload_desc };
+                }
+                return self.invariantFailedError(
+                    "LIR/interpreter invariant violated: target-guided boxy source box layout {d} had null data for payload layout {d}",
+                    .{ @intFromEnum(layout_idx), @intFromEnum(payload_desc.payload_layout) },
+                );
+            }
+            return .{ .value = .{ .ptr = data_ptr.? }, .layout = payload_desc.payload_layout, .desc = payload_desc };
+        }
+
+        if (layout_val.tag == .box_of_zst) {
+            if (self.readBoxedDataPointer(value) != null) {
+                return self.invariantFailedError(
+                    "LIR/interpreter invariant violated: erased box layout {d} had a dynamic payload but no source or target payload descriptor",
+                    .{@intFromEnum(layout_idx)},
+                );
+            }
+            return .{ .value = Value.zst, .layout = .zst, .desc = null };
+        }
+
+        return try self.boxyPayloadValueForDesc(hooks, value, layout_idx, source_desc);
+    }
+
+    pub fn writeBoxyPayloadToDestination(
+        self: *const BoxyRuntime,
+        hooks: anytype,
+        destination: Value,
+        expected_layout: layout_mod.Idx,
+        value: Value,
+        actual_layout: layout_mod.Idx,
+        desc: ?*const LirProgram.BoxyTypeDesc,
+    ) Error!void {
+        const expected_size = self.helper.sizeOf(expected_layout);
+        if (expected_size == 0) return;
+        if (expected_layout == actual_layout) {
+            destination.copyFrom(value, expected_size);
+            return;
+        }
+
+        if (self.unwrapSingleFieldPayloadLayout(expected_layout)) |field_layout| {
+            const expected_layout_val = self.layout_store.getLayout(expected_layout);
+            const field_offset = self.layout_store.getStructFieldOffsetByOriginalIndex(expected_layout_val.getStruct().idx, 0);
+            const field_value = try self.materializeBoxyPayloadToLayout(hooks, value, actual_layout, desc, field_layout);
+            destination.offset(field_offset).copyFrom(field_value, self.helper.sizeOf(field_layout));
+            return;
+        }
+
+        const materialized = try self.materializeBoxyPayloadToLayout(hooks, value, actual_layout, desc, expected_layout);
+        destination.copyFrom(materialized, expected_size);
+    }
+
+    fn materializeBoxyStructPayloadToLayout(
+        self: *const BoxyRuntime,
+        hooks: anytype,
+        value: Value,
+        actual_layout: layout_mod.Idx,
+        desc: *const LirProgram.BoxyTypeDesc,
+        expected_layout: layout_mod.Idx,
+    ) Error!Value {
+        const actual_layout_val = self.layout_store.getLayout(actual_layout);
+        const expected_layout_val = self.layout_store.getLayout(expected_layout);
+        if (actual_layout_val.tag != .struct_ or expected_layout_val.tag != .struct_) {
+            return self.invariantFailedError(
+                "LIR/interpreter invariant violated: descriptor-guided struct materialization expected struct layouts, got actual={d} ({s}) expected={d} ({s})",
+                .{
+                    @intFromEnum(actual_layout),
+                    @tagName(actual_layout_val.tag),
+                    @intFromEnum(expected_layout),
+                    @tagName(expected_layout_val.tag),
+                },
+            );
+        }
+
+        const actual_struct_idx = actual_layout_val.getStruct().idx;
+        const expected_struct_idx = expected_layout_val.getStruct().idx;
+        const expected_data = self.layout_store.getStructData(expected_struct_idx);
+        const desc_refs = self.requireBoxyDescRefs(desc.nested_descs);
+        var next_desc: usize = 0;
+
+        const target = try hooks.allocValue(expected_layout);
+        var original_index: u32 = 0;
+        while (original_index < expected_data.fields.count) : (original_index += 1) {
+            const expected_field_layout = self.layout_store.getStructFieldLayoutByOriginalIndex(expected_struct_idx, original_index);
+            const expected_field_size = self.helper.sizeOf(expected_field_layout);
+            const actual_field_layout = self.layout_store.getStructFieldLayoutByOriginalIndex(actual_struct_idx, original_index);
+
+            const field_desc = if (self.layoutNeedsBoxyStructuralDesc(actual_field_layout)) blk: {
+                if (next_desc >= desc_refs.len) {
+                    return self.invariantFailedError(
+                        "LIR/interpreter invariant violated: boxy struct descriptor for layout {d} was missing nested descriptor {d}",
+                        .{ @intFromEnum(actual_layout), next_desc },
+                    );
+                }
+                const resolved = try hooks.resolveDescRef(desc_refs[next_desc]);
+                next_desc += 1;
+                break :blk resolved;
+            } else null;
+
+            if (expected_field_size == 0) continue;
+            const actual_field_offset = self.layout_store.getStructFieldOffsetByOriginalIndex(actual_struct_idx, original_index);
+            const expected_field_offset = self.layout_store.getStructFieldOffsetByOriginalIndex(expected_struct_idx, original_index);
+            try self.writeBoxyPayloadToDestination(
+                hooks,
+                target.offset(expected_field_offset),
+                expected_field_layout,
+                value.offset(actual_field_offset),
+                actual_field_layout,
+                field_desc,
+            );
+        }
+
+        return target;
+    }
+
+    fn materializeBoxyStructPayloadToLayoutWithTargetDesc(
+        self: *const BoxyRuntime,
+        hooks: anytype,
+        value: Value,
+        actual_layout: layout_mod.Idx,
+        source_desc: *const LirProgram.BoxyTypeDesc,
+        target_desc: *const LirProgram.BoxyTypeDesc,
+        expected_layout: layout_mod.Idx,
+    ) Error!Value {
+        const actual_layout_val = self.layout_store.getLayout(actual_layout);
+        const expected_layout_val = self.layout_store.getLayout(expected_layout);
+        if (actual_layout_val.tag != .struct_ or expected_layout_val.tag != .struct_) {
+            return self.invariantFailedError(
+                "LIR/interpreter invariant violated: target-guided struct materialization expected struct layouts, got actual={d} ({s}) expected={d} ({s})",
+                .{
+                    @intFromEnum(actual_layout),
+                    @tagName(actual_layout_val.tag),
+                    @intFromEnum(expected_layout),
+                    @tagName(expected_layout_val.tag),
+                },
+            );
+        }
+
+        const actual_struct_idx = actual_layout_val.getStruct().idx;
+        const expected_struct_idx = expected_layout_val.getStruct().idx;
+        const expected_data = self.layout_store.getStructData(expected_struct_idx);
+        const source_desc_refs = self.requireBoxyDescRefs(source_desc.nested_descs);
+        const target_desc_refs = self.requireBoxyDescRefs(target_desc.nested_descs);
+        var next_source_desc: usize = 0;
+        var next_target_desc: usize = 0;
+
+        const target = try hooks.allocValue(expected_layout);
+        var original_index: u32 = 0;
+        while (original_index < expected_data.fields.count) : (original_index += 1) {
+            const expected_field_layout = self.layout_store.getStructFieldLayoutByOriginalIndex(expected_struct_idx, original_index);
+            const expected_field_size = self.helper.sizeOf(expected_field_layout);
+            const actual_field_layout = self.layout_store.getStructFieldLayoutByOriginalIndex(actual_struct_idx, original_index);
+
+            const source_field_desc = if (self.layoutNeedsBoxyStructuralDesc(actual_field_layout)) blk: {
+                if (next_source_desc >= source_desc_refs.len) {
+                    return self.invariantFailedError(
+                        "LIR/interpreter invariant violated: source boxy struct descriptor for layout {d} was missing nested descriptor {d}",
+                        .{ @intFromEnum(actual_layout), next_source_desc },
+                    );
+                }
+                const resolved = try hooks.resolveDescRef(source_desc_refs[next_source_desc]);
+                next_source_desc += 1;
+                break :blk resolved;
+            } else null;
+            const target_field_desc = if (self.layoutNeedsBoxyStructuralDesc(expected_field_layout)) blk: {
+                if (next_target_desc >= target_desc_refs.len) {
+                    if (builtin.mode == .Debug) {
+                        debugPrint(
+                            "debug_struct_target_missing actual={d} expected={d} field={d} expected_field={d} expected_field_tag={s} source_payload={d} source_nested={d}+{d} target_payload={d} target_nested={d}+{d} target_variants={d}+{d}\n",
+                            .{
+                                @intFromEnum(actual_layout),
+                                @intFromEnum(expected_layout),
+                                original_index,
+                                @intFromEnum(expected_field_layout),
+                                @tagName(self.layout_store.getLayout(expected_field_layout).tag),
+                                @intFromEnum(source_desc.payload_layout),
+                                source_desc.nested_descs.start,
+                                source_desc.nested_descs.len,
+                                @intFromEnum(target_desc.payload_layout),
+                                target_desc.nested_descs.start,
+                                target_desc.nested_descs.len,
+                                target_desc.tag_variants.start,
+                                target_desc.tag_variants.len,
+                            },
+                        );
+                    }
+                    return self.invariantFailedError(
+                        "LIR/interpreter invariant violated: target boxy struct descriptor for layout {d} was missing nested descriptor {d}",
+                        .{ @intFromEnum(expected_layout), next_target_desc },
+                    );
+                }
+                const resolved = try hooks.resolveDescRef(target_desc_refs[next_target_desc]);
+                next_target_desc += 1;
+                break :blk resolved;
+            } else null;
+
+            if (expected_field_size == 0) continue;
+            const actual_field_offset = self.layout_store.getStructFieldOffsetByOriginalIndex(actual_struct_idx, original_index);
+            const expected_field_offset = self.layout_store.getStructFieldOffsetByOriginalIndex(expected_struct_idx, original_index);
+            try self.writeBoxyPayloadToDestinationWithTargetDesc(
+                hooks,
+                target.offset(expected_field_offset),
+                expected_field_layout,
+                value.offset(actual_field_offset),
+                actual_field_layout,
+                source_field_desc,
+                target_field_desc,
+            );
+        }
+
+        return target;
+    }
+
+    fn materializeBoxyTagPayloadToLayout(
+        self: *const BoxyRuntime,
+        hooks: anytype,
+        value: Value,
+        actual_layout: layout_mod.Idx,
+        desc: *const LirProgram.BoxyTypeDesc,
+        expected_layout: layout_mod.Idx,
+    ) Error!Value {
+        const actual_base = self.resolveTagUnionBaseValue(value, actual_layout);
+        const target = try hooks.allocTagValue(expected_layout);
+        const discriminant = if (self.helper.sizeOf(actual_base.layout) == 0)
+            @as(u16, 0)
+        else
+            self.helper.readTagDiscriminant(actual_base.value, actual_base.layout);
+
+        if (self.helper.sizeOf(target.base_layout) > 0) {
+            self.helper.writeTagDiscriminant(target.base, target.base_layout, discriminant);
+        } else if (discriminant != 0) {
+            return self.invariantFailedError(
+                "LIR/interpreter invariant violated: boxy tag materialization wrote nonzero discriminant {d} into zero-sized layout {d}",
+                .{ discriminant, @intFromEnum(target.base_layout) },
+            );
+        }
+
+        const expected_payload_layout = self.requireBoxyTagPayloadLayout(target.base_layout, discriminant);
+        if (self.helper.sizeOf(expected_payload_layout) == 0) return target.outer;
+
+        if (self.boxyTagExtDiscriminant(desc)) |ext_discriminant| {
+            if (discriminant == ext_discriminant) {
+                const ext_desc = try self.resolveBoxyTagExtDesc(hooks, desc);
+                const actual_payload_layout = self.requireBoxyTagPayloadLayout(desc.payload_layout, ext_discriminant);
+                try self.writeBoxyPayloadToDestination(
+                    hooks,
+                    target.base,
+                    expected_payload_layout,
+                    actual_base.value,
+                    actual_payload_layout,
+                    ext_desc,
+                );
+                return target.outer;
+            }
+        }
+
+        const variant = self.requireBoxyTagVariantByDiscriminant(desc, discriminant);
+        try self.writeBoxyTagVariantPayloadToDestination(
+            hooks,
+            target.base,
+            expected_payload_layout,
+            actual_base.value,
+            variant,
+        );
+        return target.outer;
+    }
+
+    pub fn materializeBoxyTagPayloadToLayoutWithTargetDesc(
+        self: *const BoxyRuntime,
+        hooks: anytype,
+        value: Value,
+        actual_layout: layout_mod.Idx,
+        source_desc: *const LirProgram.BoxyTypeDesc,
+        target_desc: *const LirProgram.BoxyTypeDesc,
+        expected_layout: layout_mod.Idx,
+    ) Error!Value {
+        if (actual_layout == expected_layout and source_desc == target_desc) {
+            // Identical convention on both sides: the bytes are already in the
+            // target's shape, and the surrounding RC statements account for the
+            // references they share with the source.
+            return try hooks.materializeValue(value, expected_layout);
+        }
+        const actual_base = self.resolveBoxyTagBaseValue(value, actual_layout, source_desc);
+        const source_discriminant = if (self.helper.sizeOf(actual_base.layout) == 0)
+            @as(u16, 0)
+        else
+            self.helper.readTagDiscriminant(actual_base.value, actual_base.layout);
+        if (self.boxyTagExtDiscriminant(source_desc)) |ext_discriminant| {
+            if (source_discriminant == ext_discriminant) {
+                // The source value sits in the row-extension slot, whose payload
+                // is the extension union itself. Flatten it into the expected
+                // target union by materializing the extension payload with the
+                // extension descriptor as the new source.
+                const ext_desc = try self.resolveBoxyTagExtDesc(hooks, source_desc);
+                const actual_payload_layout = self.requireBoxyTagPayloadLayout(actual_base.layout, ext_discriminant);
+                return try self.materializeBoxyPayloadToLayoutWithTargetDesc(
+                    hooks,
+                    actual_base.value,
+                    actual_payload_layout,
+                    ext_desc,
+                    target_desc,
+                    expected_layout,
+                );
+            }
+        }
+        const source_variant = self.requireBoxyTagVariantByDiscriminant(source_desc, source_discriminant);
+        const target_variant = self.findLocalBoxyTagVariant(target_desc, source_variant.name) orelse {
+            // The variant lives in the target row's extension: encode it
+            // through the extension slot (discriminant = local variant count,
+            // payload boxed as the extension union).
+            const target_ext_discriminant = self.boxyTagExtDiscriminant(target_desc) orelse {
+                return self.invariantFailedError(
+                    "LIR/interpreter invariant violated: target boxy tag descriptor for layout {d} had no variant named {s}",
+                    .{ @intFromEnum(expected_layout), self.store.getString(source_variant.name) },
+                );
+            };
+            const target_ext_desc = try self.resolveBoxyTagExtDesc(hooks, target_desc);
+            const target = try hooks.allocTagValue(expected_layout);
+            if (self.helper.sizeOf(target.base_layout) > 0) {
+                self.helper.writeTagDiscriminant(target.base, target.base_layout, target_ext_discriminant);
+            } else if (target_ext_discriminant != 0) {
+                return self.invariantFailedError(
+                    "LIR/interpreter invariant violated: boxy tag materialization wrote nonzero extension discriminant {d} into zero-sized layout {d}",
+                    .{ target_ext_discriminant, @intFromEnum(expected_layout) },
+                );
+            }
+            const ext_slot_layout = self.requireBoxyTagPayloadLayout(target.base_layout, target_ext_discriminant);
+            const ext_value = try self.materializeBoxyPayloadToLayoutWithTargetDesc(
+                hooks,
+                value,
+                actual_layout,
+                source_desc,
+                target_ext_desc,
+                ext_slot_layout,
+            );
+            try hooks.writeVariantPayloadValue(target.base, ext_slot_layout, ext_value, ext_slot_layout);
+            return target.outer;
+        };
+
+        const target = try hooks.allocTagValue(expected_layout);
+        if (self.helper.sizeOf(target.base_layout) > 0) {
+            self.helper.writeTagDiscriminant(target.base, target.base_layout, target_variant.discriminant);
+        } else if (target_variant.discriminant != 0) {
+            return self.invariantFailedError(
+                "LIR/interpreter invariant violated: boxy tag materialization wrote nonzero discriminant {d} into zero-sized layout {d}",
+                .{ target_variant.discriminant, @intFromEnum(target.base_layout) },
+            );
+        }
+
+        const expected_payload_layout = self.requireBoxyTagPayloadLayout(target.base_layout, target_variant.discriminant);
+        if (self.helper.sizeOf(expected_payload_layout) == 0) return target.outer;
+
+        const actual_payload_layout = self.requireBoxyTagPayloadLayout(actual_base.layout, source_discriminant);
+        try self.writeBoxyTagVariantPayloadToDestinationWithTargetDesc(
+            hooks,
+            target.base,
+            expected_payload_layout,
+            actual_base.value,
+            actual_payload_layout,
+            source_variant,
+            target_variant,
+        );
+        return target.outer;
+    }
+
+    fn writeBoxyTagVariantPayloadToDestination(
+        self: *const BoxyRuntime,
+        hooks: anytype,
+        destination: Value,
+        expected_layout: layout_mod.Idx,
+        value: Value,
+        variant: *const LirProgram.BoxyTagVariant,
+    ) Error!void {
+        const actual_layout = variant.payload_layout;
+        const actual_layout_val = self.layout_store.getLayout(actual_layout);
+        const expected_layout_val = self.layout_store.getLayout(expected_layout);
+        if (actual_layout_val.tag == .struct_ and expected_layout_val.tag == .struct_) {
+            // A single-argument tag's recorded payload descriptor describes
+            // the whole payload area; the per-field pairing below is for
+            // multi-argument tags.
+            if (self.findBoxyPayloadDesc(variant, 0)) |first_desc_ref| single: {
+                const first_desc = try hooks.resolveDescRef(first_desc_ref);
+                if (first_desc.payload_layout != actual_layout) break :single;
+                return try self.writeBoxyPayloadToDestination(
+                    hooks,
+                    destination,
+                    expected_layout,
+                    value,
+                    actual_layout,
+                    first_desc,
+                );
+            }
+            const actual_struct_idx = actual_layout_val.getStruct().idx;
+            const expected_struct_idx = expected_layout_val.getStruct().idx;
+            const expected_data = self.layout_store.getStructData(expected_struct_idx);
+            var original_index: u32 = 0;
+            while (original_index < expected_data.fields.count) : (original_index += 1) {
+                const expected_field_layout = self.layout_store.getStructFieldLayoutByOriginalIndex(expected_struct_idx, original_index);
+                const expected_field_size = self.helper.sizeOf(expected_field_layout);
+                if (expected_field_size == 0) continue;
+
+                const actual_field_layout = self.layout_store.getStructFieldLayoutByOriginalIndex(actual_struct_idx, original_index);
+                const actual_field_offset = self.layout_store.getStructFieldOffsetByOriginalIndex(actual_struct_idx, original_index);
+                const expected_field_offset = self.layout_store.getStructFieldOffsetByOriginalIndex(expected_struct_idx, original_index);
+                const field_desc = if (self.findBoxyPayloadDesc(variant, original_index)) |payload_desc|
+                    try hooks.resolveDescRef(payload_desc)
+                else
+                    null;
+                try self.writeBoxyPayloadToDestination(
+                    hooks,
+                    destination.offset(expected_field_offset),
+                    expected_field_layout,
+                    value.offset(actual_field_offset),
+                    actual_field_layout,
+                    field_desc,
+                );
+            }
+            return;
+        }
+
+        const payload_desc = if (self.findBoxyPayloadDesc(variant, 0)) |desc_ref|
+            try hooks.resolveDescRef(desc_ref)
+        else
+            null;
+        const payload_value = try self.readBoxyTagPayloadValue(hooks, value, actual_layout, 0, actual_layout);
+        try self.writeBoxyPayloadToDestination(
+            hooks,
+            destination,
+            expected_layout,
+            payload_value,
+            actual_layout,
+            payload_desc,
+        );
+    }
+
+    fn writeBoxyTagVariantPayloadToDestinationWithTargetDesc(
+        self: *const BoxyRuntime,
+        hooks: anytype,
+        destination: Value,
+        expected_layout: layout_mod.Idx,
+        value: Value,
+        actual_layout: layout_mod.Idx,
+        source_variant: *const LirProgram.BoxyTagVariant,
+        target_variant: *const LirProgram.BoxyTagVariant,
+    ) Error!void {
+        const actual_layout_val = self.layout_store.getLayout(actual_layout);
+        const expected_layout_val = self.layout_store.getLayout(expected_layout);
+        if (actual_layout_val.tag == .struct_ and expected_layout_val.tag == .struct_) {
+            // A single-argument tag's recorded payload descriptor describes
+            // the whole payload area; the per-field pairing below is for
+            // multi-argument tags.
+            if (self.findBoxyPayloadDesc(source_variant, 0)) |first_desc_ref| single: {
+                const first_desc = try hooks.resolveDescRef(first_desc_ref);
+                if (first_desc.payload_layout != actual_layout) break :single;
+                const target_payload_desc = if (self.findBoxyPayloadDesc(target_variant, 0)) |desc_ref|
+                    try hooks.resolveDescRef(desc_ref)
+                else
+                    null;
+                return try self.writeBoxyPayloadToDestinationWithTargetDesc(
+                    hooks,
+                    destination,
+                    expected_layout,
+                    value,
+                    actual_layout,
+                    first_desc,
+                    target_payload_desc,
+                );
+            }
+            const actual_struct_idx = actual_layout_val.getStruct().idx;
+            const expected_struct_idx = expected_layout_val.getStruct().idx;
+            const expected_data = self.layout_store.getStructData(expected_struct_idx);
+            var original_index: u32 = 0;
+            while (original_index < expected_data.fields.count) : (original_index += 1) {
+                const expected_field_layout = self.layout_store.getStructFieldLayoutByOriginalIndex(expected_struct_idx, original_index);
+                const expected_field_size = self.helper.sizeOf(expected_field_layout);
+                if (expected_field_size == 0) continue;
+
+                const actual_field_layout = self.layout_store.getStructFieldLayoutByOriginalIndex(actual_struct_idx, original_index);
+                const actual_field_offset = self.layout_store.getStructFieldOffsetByOriginalIndex(actual_struct_idx, original_index);
+                const expected_field_offset = self.layout_store.getStructFieldOffsetByOriginalIndex(expected_struct_idx, original_index);
+                const source_field_desc = if (self.findBoxyPayloadDesc(source_variant, original_index)) |desc_ref|
+                    try hooks.resolveDescRef(desc_ref)
+                else
+                    null;
+                const target_field_desc = if (self.findBoxyPayloadDesc(target_variant, original_index)) |desc_ref|
+                    try hooks.resolveDescRef(desc_ref)
+                else
+                    null;
+                try self.writeBoxyPayloadToDestinationWithTargetDesc(
+                    hooks,
+                    destination.offset(expected_field_offset),
+                    expected_field_layout,
+                    value.offset(actual_field_offset),
+                    actual_field_layout,
+                    source_field_desc,
+                    target_field_desc,
+                );
+            }
+            return;
+        }
+
+        const source_payload_desc = if (self.findBoxyPayloadDesc(source_variant, 0)) |desc_ref|
+            try hooks.resolveDescRef(desc_ref)
+        else
+            null;
+        const target_payload_desc = if (self.findBoxyPayloadDesc(target_variant, 0)) |desc_ref|
+            try hooks.resolveDescRef(desc_ref)
+        else
+            null;
+        const payload_value = try self.readBoxyTagPayloadValue(hooks, value, actual_layout, 0, actual_layout);
+        try self.writeBoxyPayloadToDestinationWithTargetDesc(
+            hooks,
+            destination,
+            expected_layout,
+            payload_value,
+            actual_layout,
+            source_payload_desc,
+            target_payload_desc,
+        );
+    }
+
+    pub fn writeBoxyPayloadToDestinationWithTargetDesc(
+        self: *const BoxyRuntime,
+        hooks: anytype,
+        destination: Value,
+        expected_layout: layout_mod.Idx,
+        value: Value,
+        actual_layout: layout_mod.Idx,
+        source_desc: ?*const LirProgram.BoxyTypeDesc,
+        target_desc: ?*const LirProgram.BoxyTypeDesc,
+    ) Error!void {
+        if (self.helper.sizeOf(expected_layout) == 0) return;
+        if (target_desc) |resolved_target_desc| {
+            const materialized = try self.materializeBoxyPayloadToLayoutWithOptionalSourceDesc(
+                hooks,
+                value,
+                actual_layout,
+                source_desc,
+                resolved_target_desc,
+                expected_layout,
+            );
+            destination.copyFrom(materialized, self.helper.sizeOf(expected_layout));
+            return;
+        }
+        try self.writeBoxyPayloadToDestination(
+            hooks,
+            destination,
+            expected_layout,
+            value,
+            actual_layout,
+            source_desc orelse target_desc,
+        );
     }
 };
