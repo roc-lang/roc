@@ -4219,17 +4219,21 @@ pub const Interpreter = struct {
         count: u16,
         atomicity: RcAtomicity,
     ) Error!void {
-        const desc = try self.resolveBoxyDescRef(frame, desc_ref);
-
         switch (op) {
             .incref => {
+                // An incref only bumps the outermost allocation's refcount, a
+                // shallow operation the value's layout describes on its own. The
+                // descriptor guides deep field drops, which increfs never
+                // perform, so it is not resolved here.
                 const payload_helper = self.rcHelperForLayout(op, value_layout);
                 self.performRcHelperIfNeeded(payload_helper, val, count, atomicity);
             },
             .decref => {
+                const desc = try self.resolveBoxyDescRef(frame, desc_ref);
                 try self.performBoxyLayoutDrop(frame, val, value_layout, desc, .decref, count, atomicity);
             },
             .free => {
+                const desc = try self.resolveBoxyDescRef(frame, desc_ref);
                 try self.performBoxyLayoutDrop(frame, val, value_layout, desc, .free, count, atomicity);
             },
         }
