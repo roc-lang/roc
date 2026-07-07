@@ -966,6 +966,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// platform runtime contract.
         enable_default_platform_runtime: bool = false,
 
+        /// Set when a boxy runtime C-ABI wrapper is emitted. Object-file
+        /// entrypoints read this to decide whether to install the process-global
+        /// boxy runtime (via `roc_boxy_init_embedded`) before running procs.
+        boxy_runtime_used: bool = false,
+
         /// Scratch buffer for argument locations during lambda body inlining
         scratch_arg_locs: base.Scratch(ValueLocation),
 
@@ -12194,6 +12199,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// which the native evaluator cannot reference by pointer, so they are
         /// only reachable through the machine-code shim's symbol resolution.
         fn callBoxyBuiltin(self: *Self, builder: *Builder, boxy_fn: BoxyBuiltinFn) Allocator.Error!void {
+            self.boxy_runtime_used = true;
             switch (self.generation_mode) {
                 .shim_execution, .object_file => {
                     try builder.callRelocatable(boxy_fn.symbolName(), self.allocator, &self.codegen.relocations);
@@ -12203,6 +12209,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     .{},
                 ),
             }
+        }
+
+        /// Emit a no-argument call to `roc_boxy_init_embedded`, which installs
+        /// the process-global boxy runtime from the sidecar embedded in the
+        /// linked program. Object-file entrypoints emit this before running any
+        /// proc; the linked `roc_boxy_runtime` object provides the symbol.
+        fn emitBoxyRuntimeInit(self: *Self) Allocator.Error!void {
+            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            try builder.callRelocatable("roc_boxy_init_embedded", self.allocator, &self.codegen.relocations);
         }
 
         /// Resolve a boxy descriptor reference to an 8-byte stack slot holding
@@ -17456,6 +17471,17 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 }
             }
 
+            // The kernel enters `_start` with a 16-byte-aligned stack, whereas
+            // the prologue sizes the frame for call-entry (a return address
+            // already pushed). On x86_64 that leaves the stack pointer eight
+            // bytes short of the 16-byte alignment the System V ABI requires at
+            // a call site, so realign it before any host or proc call. The frame
+            // is addressed through the base pointer, so lowering the stack
+            // pointer does not disturb locals, and `_start` never returns.
+            if (comptime target.toCpuArch() == .x86_64) {
+                try self.codegen.emit.andRegImm32(.RSP, -16);
+            }
+
             const null_ops_reg: GeneralReg = if (comptime target.toCpuArch() == .aarch64) .X19 else .R12;
             try self.codegen.emitLoadImm(null_ops_reg, 0);
             self.roc_ops_reg = null_ops_reg;
@@ -17463,6 +17489,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             {
                 var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
                 try builder.callRelocatable("roc_default_runtime_init", self.allocator, &self.codegen.relocations);
+            }
+
+            // Install the process-global boxy runtime from the embedded sidecar
+            // before running the proc. The call is idempotent and takes no
+            // arguments, so it is safe here after the runtime init.
+            if (self.boxy_runtime_used) {
+                try self.emitBoxyRuntimeInit();
             }
 
             const arg_infos_start = self.scratch_arg_infos.top();
@@ -17698,6 +17731,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const null_ops_reg: GeneralReg = if (comptime target.toCpuArch() == .aarch64) .X19 else .R12;
             try self.codegen.emitLoadImm(null_ops_reg, 0);
             self.roc_ops_reg = null_ops_reg;
+
+            // Install the process-global boxy runtime from the embedded sidecar
+            // before running the proc. Every incoming argument is already spilled
+            // to the frame and the RocOps register is callee-saved, so this
+            // no-argument C-ABI call preserves the entrypoint's live state. The
+            // call is idempotent, so emitting it per entrypoint is safe.
+            if (self.boxy_runtime_used) {
+                try self.emitBoxyRuntimeInit();
+            }
 
             // Pass 2: x86_64 reads the caller's stack slots at a fixed frame
             // offset, so its copies happen here in the body. (On aarch64 the

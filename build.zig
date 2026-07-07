@@ -5206,6 +5206,46 @@ fn addMacosAflFuzzExe(
     return exe.getEmittedBin();
 }
 
+/// Build the standalone boxy runtime object for `target`: the `roc_boxy_*`
+/// C-ABI wrappers plus `roc_boxy_init_embedded`, compiled under the extern
+/// symbol ABI so host operations resolve as linker symbols. `roc build
+/// --opt=dev` links this beside the app and builtins objects for programs that
+/// emit boxy statements.
+fn buildBoxyRuntimeObject(
+    b: *std.Build,
+    roc_modules: modules.RocModules,
+    target: ResolvedTarget,
+    optimize: OptimizeMode,
+    strip: bool,
+    omit_frame_pointer: ?bool,
+    name: []const u8,
+) *Step.Compile {
+    const obj = b.addObject(.{
+        .name = name,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/boxy_runtime/main.zig"),
+            .target = target,
+            .optimize = optimize,
+            .strip = strip,
+            .omit_frame_pointer = omit_frame_pointer,
+            .pic = true,
+        }),
+    });
+    roc_modules.addAll(obj);
+    obj.root_module.addImport("vendor_parse_float", roc_modules.vendor_parse_float);
+    obj.root_module.addImport("vendor_ryu", roc_modules.vendor_ryu);
+    obj.root_module.addImport("shim_io", b.addModule(
+        b.fmt("shim_io_{s}", .{name}),
+        .{ .root_source_file = b.path("src/shim_io.zig") },
+    ));
+    // Bundle compiler-rt on non-macOS so any math libcalls the runtime lowers
+    // to resolve inside the -nostdlib executable; macOS resolves them against
+    // -lSystem at the final link.
+    obj.bundle_compiler_rt = target.result.os.tag != .macos;
+    configureBackend(obj, target);
+    return obj;
+}
+
 fn addMainExe(
     b: *std.Build,
     roc_modules: modules.RocModules,
@@ -5613,6 +5653,33 @@ fn addMainExe(
             b.pathJoin(&.{ "src/cli/targets", cross_target.name, builtins_extern_ext }),
         );
         exe.step.dependOn(&copy_cross_builtins_extern.step);
+
+        // Boxy runtime object for this target, linked by `roc build --opt=dev`
+        // into programs that emit boxy statements. The runtime shares the
+        // interpreter's boxy core, whose module graph only compiles for
+        // x86_64-linux (the same reason the interpreter shim is host-only), so
+        // it is built only for those targets; other targets fall back to the
+        // in-process shim run path for boxy programs.
+        const cross_supports_boxy_runtime = std.mem.eql(u8, cross_target.name, "x64musl") or
+            std.mem.eql(u8, cross_target.name, "x64glibc");
+        if (cross_supports_boxy_runtime) {
+            const cross_boxy_runtime_obj = buildBoxyRuntimeObject(
+                b,
+                roc_modules,
+                cross_resolved_target,
+                optimize,
+                strip,
+                omit_frame_pointer,
+                b.fmt("roc_boxy_runtime_{s}", .{cross_target.name}),
+            );
+            add_tracy(b, roc_modules.build_options, cross_boxy_runtime_obj, b.graph.host, false, flag_enable_tracy);
+            const copy_cross_boxy_runtime = b.addUpdateSourceFiles();
+            copy_cross_boxy_runtime.addCopyFileToSource(
+                cross_boxy_runtime_obj.getEmittedBin(),
+                b.pathJoin(&.{ "src/cli/targets", cross_target.name, "roc_boxy_runtime.o" }),
+            );
+            exe.step.dependOn(&copy_cross_boxy_runtime.step);
+        }
 
         if (!cross_is_wasm) {
             const default_platform_runtime_obj = b.addObject(.{

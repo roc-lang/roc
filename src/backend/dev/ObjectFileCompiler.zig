@@ -49,6 +49,11 @@ pub const CompilationResult = struct {
     object_bytes: []const u8,
     /// Allocator used - caller must free object_bytes with this
     allocator: Allocator,
+    /// Whether the compiled procs emit boxy runtime calls. When set, the object
+    /// references `roc_boxy_*` symbols and its entrypoints call
+    /// `roc_boxy_init_embedded`, so the link must include the boxy runtime
+    /// object and the embedded sidecar.
+    uses_boxy: bool = false,
 
     pub fn deinit(self: *CompilationResult) void {
         self.allocator.free(self.object_bytes);
@@ -93,7 +98,9 @@ pub const ObjectFileCompiler = struct {
         return crossCompileDispatch(self.allocator, lir_store, layout_store, entrypoints, static_data_exports, proc_specs, target, self.enable_default_platform_runtime);
     }
 
-    /// Compile to an object file and write it to a path.
+    /// Compile to an object file and write it to a path. Returns whether the
+    /// compiled object emits boxy runtime calls; when set, the caller must add
+    /// the boxy runtime object and the embedded sidecar to the link.
     pub fn compileToObjectFileAndWrite(
         self: *ObjectFileCompiler,
         lir_store: *const LirStore,
@@ -104,7 +111,7 @@ pub const ObjectFileCompiler = struct {
         target: RocTarget,
         output_path: []const u8,
         roc_ctx: CoreCtx,
-    ) CompilationError!void {
+    ) CompilationError!bool {
         var result = try self.compileToObjectFile(
             lir_store,
             layout_store,
@@ -122,6 +129,7 @@ pub const ObjectFileCompiler = struct {
             std.log.err("failed to write object file {s}: {}", .{ output_path, err });
             return CompilationError.ObjectGenerationFailed;
         };
+        return result.uses_boxy;
     }
 
     /// Emit a data-only object from already materialized readonly exports.
@@ -447,6 +455,7 @@ fn compileWithCodeGen(
             return CompilationError.OutOfMemory;
         },
         .allocator = allocator,
+        .uses_boxy = codegen.boxy_runtime_used,
     };
 }
 

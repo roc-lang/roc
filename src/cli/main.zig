@@ -474,6 +474,25 @@ const DefaultPlatformRuntimeObjects = struct {
     }
 };
 
+/// Prebuilt boxy runtime objects (the `roc_boxy_*` C-ABI wrappers plus
+/// `roc_boxy_init_embedded`), linked by `roc build --opt=dev` into programs that
+/// emit boxy statements. The runtime shares the interpreter's boxy core, whose
+/// module graph only compiles for x86_64-linux, so only those targets carry one.
+const BoxyRuntimeObjects = struct {
+    const x64musl = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64musl/roc_boxy_runtime.o");
+    const x64glibc = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64glibc/roc_boxy_runtime.o");
+
+    /// The boxy runtime object bytes for `target`, or null when the target has
+    /// no runtime and boxy programs cannot be built standalone for it.
+    pub fn forTarget(target: RocTarget) ?[]const u8 {
+        return switch (target) {
+            .x64musl => x64musl,
+            .x64glibc, .x64linux => x64glibc,
+            else => null,
+        };
+    }
+};
+
 // Workaround for Zig standard library compilation issue on macOS ARM64.
 //
 // The Problem:
@@ -7044,6 +7063,56 @@ fn writeDefaultPlatformRuntimeObject(ctx: *CliCtx, artifact_dir: []const u8, tar
     return runtime_path;
 }
 
+/// Add the boxy runtime object and its embedded sidecar to a standalone dev
+/// link. The runtime object provides the `roc_boxy_*` wrappers and
+/// `roc_boxy_init_embedded`; a companion data object carries the sidecar those
+/// symbols read (the descriptor tables, layout store, and string store the
+/// program's boxy statements index).
+fn appendBoxyRuntimeLinkInputs(
+    ctx: *CliCtx,
+    object_files: *std.array_list.Managed([]const u8),
+    scratch_dir: []const u8,
+    target: RocTarget,
+    lir_result: *const lir.Program.Result,
+) CliMainError!void {
+    const runtime_bytes = BoxyRuntimeObjects.forTarget(target) orelse {
+        try ctx.io.stderr().print(
+            "Error: standalone dev builds of generic (boxy) programs are not supported for the '{s}' target.\n",
+            .{@tagName(target)},
+        );
+        return error.UnsupportedTarget;
+    };
+
+    const runtime_path = try std.fs.path.join(ctx.arena, &.{ scratch_dir, "roc_boxy_runtime.o" });
+    backend.writeFileWindowsAvSafe(ctx.io.std_io, runtime_path, runtime_bytes) catch {
+        return error.NativeCompilationFailed;
+    };
+
+    var sidecar_blob = lir.LirImage.buildSidecarBlob(ctx.gpa, lir_result) catch {
+        return error.NativeCompilationFailed;
+    };
+    defer sidecar_blob.deinit(ctx.gpa);
+
+    const blob_len_val: u64 = @intCast(sidecar_blob.bytes.len);
+    const blob_len_bytes = try ctx.arena.dupe(u8, std.mem.asBytes(&blob_len_val));
+    const desc_bytes = try ctx.arena.dupe(u8, std.mem.asBytes(&sidecar_blob.sidecar));
+
+    const sidecar_exports = [_]backend.StaticDataExport{
+        .{ .symbol_name = "roc_boxy_sidecar_blob", .bytes = sidecar_blob.bytes, .alignment = 16, .is_global = true },
+        .{ .symbol_name = "roc_boxy_sidecar_blob_len", .bytes = blob_len_bytes, .alignment = 8, .is_global = true },
+        .{ .symbol_name = "roc_boxy_sidecar_desc", .bytes = desc_bytes, .alignment = 8, .is_global = true },
+    };
+
+    const sidecar_path = try std.fs.path.join(ctx.arena, &.{ scratch_dir, "roc_boxy_sidecar.o" });
+    var sidecar_compiler = backend.ObjectFileCompiler.init(ctx.gpa);
+    sidecar_compiler.compileStaticDataObjectAndWrite(&sidecar_exports, target, sidecar_path, ctx.coreCtx()) catch {
+        return error.NativeCompilationFailed;
+    };
+
+    try object_files.append(sidecar_path);
+    try object_files.append(runtime_path);
+}
+
 /// The host inputs of a link, in link order.
 fn hostInputPaths(ctx: *CliCtx, link_inputs: PlatformLinkInputs) std.mem.Allocator.Error![]const []const u8 {
     var paths = try std.array_list.Managed([]const u8).initCapacity(
@@ -8671,7 +8740,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
 
     const obj_filename = try std.fmt.allocPrint(ctx.arena, "roc_app_{s}.o", .{@tagName(target)});
     const obj_path = try std.fs.path.join(ctx.arena, &.{ build_scratch_dir, obj_filename });
-    object_compiler.compileToObjectFileAndWrite(
+    const uses_boxy = object_compiler.compileToObjectFileAndWrite(
         &lowered.lir_result.store,
         &lowered.lir_result.layouts,
         entrypoints,
@@ -8702,6 +8771,12 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
         } else {
             return error.UnsupportedTarget;
         }
+    }
+    // Boxy programs reference the `roc_boxy_*` runtime and, in their
+    // entrypoints, call `roc_boxy_init_embedded`. Link the boxy runtime object
+    // and a data object carrying the sidecar those symbols read.
+    if (uses_boxy) {
+        try appendBoxyRuntimeLinkInputs(ctx, &object_files, build_scratch_dir, target, &lowered.lir_result);
     }
     reporter.end();
 
