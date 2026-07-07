@@ -552,6 +552,36 @@ pub fn roc_boxy_static_desc(desc_id: u32) callconv(.c) *const BoxyTypeDesc {
     return g.runtime.requireBoxyTypeDesc(@enumFromInt(desc_id));
 }
 
+/// Materialize a worker call's raw return value into the caller's declared
+/// target layout, guided by the callee's returned descriptor (`actual_desc`,
+/// null for erased returns) and the call site's result descriptor. Writes the
+/// materialized bytes through `out` and the result's descriptor through
+/// `out_desc`. Mirrors the result reconciliation the interpreter performs for
+/// `assign_call`/`assign_call_erased`.
+pub fn roc_boxy_materialize_call_result(
+    out: ?[*]u8,
+    out_desc: *?*const BoxyTypeDesc,
+    value: ?[*]const u8,
+    actual_layout: u32,
+    actual_desc: ?*const BoxyTypeDesc,
+    result_desc: ?*const BoxyTypeDesc,
+    expected_layout: u32,
+) callconv(.c) void {
+    const g = requireGlobal();
+    enter(g);
+    defer leave(g);
+    const materialized = g.runtime.materializeCallResult(
+        hooks(g),
+        valueAt(value),
+        layoutIdx(actual_layout),
+        actual_desc,
+        result_desc,
+        layoutIdx(expected_layout),
+    ) catch abiCrash(g, "call result materialization");
+    writeResult(g, out, materialized, layoutIdx(expected_layout));
+    out_desc.* = result_desc orelse actual_desc;
+}
+
 /// Resolve a static dictionary id to its dictionary pointer in the global
 /// dictionary table.
 pub fn roc_boxy_static_dict(dict_id: u32) callconv(.c) *const BoxyDict {

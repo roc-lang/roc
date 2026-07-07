@@ -482,6 +482,7 @@ pub const BoxyBuiltinFn = enum {
     dynamic_num_literal,
     dynamic_num_literal_ref,
     call_dict,
+    materialize_call_result,
     register_proc,
 
     /// Get the exported symbol name for shim relocation resolution. Each name
@@ -503,6 +504,7 @@ pub const BoxyBuiltinFn = enum {
             .dynamic_num_literal => "roc_boxy_dynamic_num_literal",
             .dynamic_num_literal_ref => "roc_boxy_dynamic_num_literal_ref",
             .call_dict => "roc_boxy_call_dict",
+            .materialize_call_result => "roc_boxy_materialize_call_result",
             .register_proc => "roc_boxy_register_proc",
         };
     }
