@@ -5986,11 +5986,28 @@ const ProcBodyBuilder = struct {
 
         var target_desc_ref: ?LIR.BoxyDescRef = null;
         var target_desc_materialize: ?DescriptorArgLocal = null;
+        // A concrete union that carries erased boxes in its payloads has no
+        // usable concrete RC plan (their layout label is box_of_zst, which the
+        // layout store treats as unrefcounted); the value's descriptor is what
+        // ARC uses to release it, so record one even when the representation
+        // itself has no descriptor requirement.
         if (rep.descriptor != null) {
             const materialization = try self.descriptorMaterializationForSourceRep(rep_id);
             const target_desc_info = try self.descriptorForConstructedTargetMaterialization(target, materialization);
             target_desc_ref = target_desc_info.desc;
             target_desc_materialize = target_desc_info.materialize;
+        } else if (rep.contains_dynamic) {
+            const materialization = try self.descriptorMaterializationForSourceRep(rep_id);
+            if (materialization.captures.len == 0) {
+                // A shared static descriptor: constructions of this union in
+                // different branches must record the same descriptor for the
+                // target local's release plan.
+                target_desc_ref = materialization.desc;
+            } else {
+                const target_desc_info = try self.descriptorForConstructedTargetMaterialization(target, materialization);
+                target_desc_ref = target_desc_info.desc;
+                target_desc_materialize = target_desc_info.materialize;
+            }
         }
 
         if (args.len == 0) {
@@ -10555,6 +10572,28 @@ const ProcBodyBuilder = struct {
         return try self.descriptorRefForKnownRep(canonical_rep);
     }
 
+    /// The descriptor a representation-boundary conversion records for its
+    /// concrete tag-union target local. A boundary target already carries the
+    /// descriptor it was allocated with, and the release plan keys one
+    /// descriptor per local, so the conversion reuses that descriptor. When the
+    /// exact representation reserving the target local and the canonical
+    /// representation the boundary was dispatched on reserve distinct
+    /// descriptor requirement locals, deriving afresh from the representation
+    /// would record a second descriptor for the same local. Reusing the local's
+    /// own descriptor keeps a single descriptor per local. A target with no
+    /// recorded descriptor yet takes the representation-derived one, which is
+    /// then recorded on the local.
+    fn boundaryTargetDesc(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        target_rep: Plan.TypeRepId,
+    ) Allocator.Error!?LIR.BoxyDescRef {
+        if (self.parent.result.store.getLocal(target).boxy_desc) |existing| return existing;
+        const derived = try self.descriptorRefForRepIfNeeded(target_rep) orelse return null;
+        self.parent.result.store.setLocalBoxyDesc(target, derived);
+        return derived;
+    }
+
     fn descriptorRefForTypeIfNeeded(
         self: *ProcBodyBuilder,
         ty: checked.CheckedTypeId,
@@ -13984,7 +14023,7 @@ const ProcBodyBuilder = struct {
             if (self.isZstLocal(target)) return try self.assignZst(target, next);
             return try self.parent.result.store.addCFStmt(.{ .assign_tag = .{
                 .target = target,
-                .target_desc = try self.descriptorRefForRepIfNeeded(target_rep),
+                .target_desc = try self.boundaryTargetDesc(target, target_rep),
                 .variant_index = @intCast(index),
                 .discriminant = @intCast(index),
                 .payload = null,
@@ -14003,7 +14042,7 @@ const ProcBodyBuilder = struct {
         source_rep: Plan.TypeRepId,
         next: LIR.CFStmtId,
     ) Allocator.Error!?LIR.CFStmtId {
-        const target_desc = try self.descriptorRefForRepIfNeeded(target_rep) orelse return null;
+        const target_desc = try self.boundaryTargetDesc(target, target_rep) orelse return null;
         const target_tag_rep = self.tagVariantRepForBoundary(target_rep) orelse return null;
         const source_tag_rep = self.tagVariantRepForBoundary(source_rep) orelse return null;
 

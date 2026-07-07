@@ -473,6 +473,10 @@ pub fn analyzeProgram(
     try builder.materializeWorkerHiddenDictionaryParams();
     try builder.materializeDirectCallHiddenDictionaryArgs();
     try builder.materializeIteratorCallHiddenDictionaryArgs();
+    // The dictionary phases above analyze new types (static dictionary
+    // workers), so representations created there need the dynamic-content
+    // propagation re-run before descriptor requirements are derived from it.
+    builder.propagateDynamicRequirements();
     try builder.materializeDescriptorRequirements();
     try builder.materializeWorkerHiddenDescriptorParams();
     try builder.materializeWorkerHiddenDictionaryParams();
@@ -481,6 +485,7 @@ pub fn analyzeProgram(
     try builder.materializeDirectCallHiddenDictionaryArgs();
     try builder.materializeIteratorCallHiddenDescriptorArgs();
     try builder.materializeIteratorCallHiddenDictionaryArgs();
+    builder.propagateDynamicRequirements();
 
     const out = builder.plan;
     builder.plan = ProgramPlan.init(allocator);
