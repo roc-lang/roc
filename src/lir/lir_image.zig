@@ -285,7 +285,7 @@ pub const BoxyTablesImage = extern struct {
     }
 };
 
-const BoxyTablesView = struct {
+pub const BoxyTablesView = struct {
     type_descs: []Program.BoxyTypeDesc,
     dicts: []Program.BoxyDict,
     adapters: []Program.BoxyAdapter,
@@ -299,6 +299,61 @@ const BoxyTablesView = struct {
     method_slots: []Program.BoxyMethodSlot,
     method_arg_layouts: []layout_mod.Idx,
     method_hidden_desc_sources: []Program.BoxyMethodHiddenDescSource,
+};
+
+/// The boxy runtime's table subset of a LIR image: the descriptor tables,
+/// the committed layout store, and the string literal store the descriptors
+/// index. Machine-code embedders view this to initialize a process-global
+/// boxy runtime without decoding procs or statements.
+pub const BoxySidecar = extern struct {
+    layouts: LayoutStoreImage,
+    strings: StringLiteralStoreImage,
+    boxy_tables: BoxyTablesImage,
+
+    /// The sidecar embedded in a full LIR image header.
+    pub fn fromHeader(header: *const Header) BoxySidecar {
+        return .{
+            .layouts = header.layouts,
+            .strings = header.store.strings,
+            .boxy_tables = header.boxy_tables,
+        };
+    }
+
+    /// Record sidecar offsets for a lowered program whose arrays live inside
+    /// the buffer at `base_ptr`.
+    pub fn fromProgram(
+        base_ptr: [*]align(1) const u8,
+        image_size: usize,
+        lowered: *const Program.Result,
+    ) ImageError!BoxySidecar {
+        return .{
+            .layouts = try LayoutStoreImage.fromStore(base_ptr, image_size, &lowered.layouts),
+            .strings = try StringLiteralStoreImage.fromStore(base_ptr, image_size, &lowered.store.strings),
+            .boxy_tables = try BoxyTablesImage.fromProgram(base_ptr, image_size, lowered),
+        };
+    }
+
+    /// Stores and table slices decoded in place from a mapped buffer. The
+    /// view owns no storage; keep the buffer mapped for its lifetime.
+    pub const View = struct {
+        layouts: layout_mod.Store,
+        strings: base.StringLiteral.Store,
+        tables: BoxyTablesView,
+    };
+
+    pub fn view(
+        self: BoxySidecar,
+        base_ptr: [*]align(1) u8,
+        image_size: usize,
+        target_usize: base.target.TargetUsize,
+        allocator: std.mem.Allocator,
+    ) ImageError!View {
+        return .{
+            .layouts = try self.layouts.view(base_ptr, image_size, target_usize, allocator),
+            .strings = try self.strings.view(base_ptr, image_size),
+            .tables = try self.boxy_tables.view(base_ptr, image_size),
+        };
+    }
 };
 
 /// Fill the reserved LIR image header in a contiguous buffer.
