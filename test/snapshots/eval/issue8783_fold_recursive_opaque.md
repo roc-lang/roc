@@ -172,12 +172,12 @@ NO CHANGE
 						(p-assign (ident "acc"))))
 				(s-let
 					(p-assign (ident "#interp_1"))
-					(e-call (constraint-fn-var 312)
+					(e-call (constraint-fn-var 315)
 						(e-lookup-local
 							(p-assign (ident "process")))
 						(e-lookup-local
 							(p-assign (ident "child")))))
-				(e-interpolation (constraint-fn-var 370)
+				(e-interpolation (constraint-fn-var 373)
 					(first
 						(e-literal (string "")))
 					(parts
@@ -215,7 +215,7 @@ NO CHANGE
 											(p-assign (ident "tag"))))
 									(s-let
 										(p-assign (ident "#interp_3"))
-										(e-call (constraint-fn-var 221)
+										(e-call (constraint-fn-var 224)
 											(e-lookup-external
 												(builtin))
 											(e-lookup-local
@@ -224,7 +224,7 @@ NO CHANGE
 												(e-literal (string "")))
 											(e-lookup-local
 												(p-assign (ident "process_child")))))
-									(e-interpolation (constraint-fn-var 279)
+									(e-interpolation (constraint-fn-var 282)
 										(first
 											(e-literal (string "")))
 										(parts
@@ -261,7 +261,7 @@ NO CHANGE
 			(ty-lookup (name "Elem") (local))))
 	(d-let
 		(p-assign (ident "result"))
-		(e-call (constraint-fn-var 495)
+		(e-call (constraint-fn-var 498)
 			(e-lookup-local
 				(p-assign (ident "process")))
 			(e-lookup-local

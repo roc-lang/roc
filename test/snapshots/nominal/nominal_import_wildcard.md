@@ -17,21 +17,27 @@ green : Color
 green = Green
 ~~~
 # EXPECTED
-PARSE ERROR - nominal_import_wildcard.md:1:13:1:15
+UNEXPECTED STATEMENT - nominal_import_wildcard.md:1:13:1:15
 UNDECLARED TYPE - nominal_import_wildcard.md:3:7:3:12
 UNDECLARED TYPE - nominal_import_wildcard.md:6:8:6:13
 UNDECLARED TYPE - nominal_import_wildcard.md:9:9:9:14
 # PROBLEMS
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  import Color.*                                                            │
  │              ‾‾                                                            │
  └─────────────────────────────────────────── nominal_import_wildcard.md:1:13 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `.*` here.
 
 
 ┌─────────────────┐

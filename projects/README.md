@@ -26,52 +26,25 @@ completely.
 
 ### Start here
 
-1. [small/check-app-against-platform-requires.md](small/check-app-against-platform-requires.md)
-   — highest leverage per unit of work in the whole set. Deletes the
-   coordinator's shadow-validation layer, kills the most active bug cascade,
-   and is a prerequisite for two big projects (total dispatch plans, exact
-   numeral pipeline).
+1. [small/cross-phase-coverage-parity-tests.md](small/cross-phase-coverage-parity-tests.md)
+   — cheap insurance before larger migrations: it pins producer/consumer
+   predicate parity so later refactors have a focused regression net.
 
 ### Dependency chains
 
 **Chain A — dispatch:**
-1. `small/check-app-against-platform-requires.md` (prerequisite: dispatch
-   plans cannot be total while platform-typed values are still flex at check
-   time)
-2. [big/total-dispatch-plans.md](big/total-dispatch-plans.md)
-3. [big/generalization-time-ambiguity.md](big/generalization-time-ambiguity.md)
-   — shares the constraint-provenance foundation with total dispatch plans;
-   doable before it, but cheaper after.
+1. [big/generalization-time-ambiguity.md](big/generalization-time-ambiguity.md)
+   — builds on the landed total static-dispatch plan work and replaces the
+   remaining ambiguity sweep with a generalization-time rule.
 
-**Chain B — identity:**
-1. [small/single-package-identity-function.md](small/single-package-identity-function.md)
-   — the interim fix; small and immediately useful.
-2. [big/content-based-nominal-identity.md](big/content-based-nominal-identity.md)
-   — the durable fix; absorbs and supersedes the interim one.
-3. [big/immutable-specialization-identity.md](big/immutable-specialization-identity.md)
-   — can proceed independently using today's module digests, but its
-   `CallableIdentity` components get cleaner after content-based identity.
+**Chain B — ARC:**
+1. [big/arc-inserter-join-summaries.md](big/arc-inserter-join-summaries.md)
+   — applies the certifier's landed finite-summary/dataflow discipline to
+   production ARC insertion, replacing join and liveness re-walks that make
+   generated structural encoders compile in minutes.
 
-Chain B also strengthens Chain A (stable cross-module references for resolved
-dispatch targets) and the glue project, but does not block them.
-
-**Chain C — captures:**
-- [big/canonical-capture-id.md](big/canonical-capture-id.md) is independent,
-  but do it before or together with the evidence-threading part of
-  `big/total-dispatch-plans.md`: where-clause evidence flows through nested
-  closures exactly like a compile-time capture, and it should ride the same
-  identity discipline rather than invent a parallel one.
-
-**Chain D — ARC:**
-1. [small/surface-arc-certifier-skips.md](small/surface-arc-certifier-skips.md)
-   — trivial; do immediately so the current certification hole is visible.
-2. [big/arc-certifier-lattice-join.md](big/arc-certifier-lattice-join.md)
-   — closes the hole for real and centralizes ownership-transfer keying.
-
-**Chain E — numerics:**
-1. `small/check-app-against-platform-requires.md` (removes one of the two
-   places literal range facts get dropped)
-2. [big/exact-numeral-pipeline.md](big/exact-numeral-pipeline.md)
+**Chain C — numerics:**
+1. [big/exact-numeral-pipeline.md](big/exact-numeral-pipeline.md)
 - [small/checked-arithmetic-lir-ops.md](small/checked-arithmetic-lir-ops.md)
   is independent of both and can land any time.
 
@@ -82,10 +55,9 @@ Small:
   — cheap insurance; ideally land early so later projects inherit the harness.
 - [small/centralize-slice-reuse-predicate.md](small/centralize-slice-reuse-predicate.md)
 - [small/store-generation-counters.md](small/store-generation-counters.md)
+- [small/checked-arithmetic-lir-ops.md](small/checked-arithmetic-lir-ops.md)
 - [small/shared-checked-type-traversal.md](small/shared-checked-type-traversal.md)
-- [small/cache-hardening.md](small/cache-hardening.md)
 - [small/glue-consumes-committed-layouts.md](small/glue-consumes-committed-layouts.md)
-  — benefits mildly from content-based identity but does not depend on it.
 - [small/structural-hoist-contexts.md](small/structural-hoist-contexts.md)
 
 Big:
@@ -94,36 +66,23 @@ Big:
   and pairs naturally with pipeline unification (below) since today every
   match-lowering change must be made twice.
 - [big/unify-build-pipelines.md](big/unify-build-pipelines.md) — independent;
-  benefits from `small/single-package-identity-function.md` landing first so
-  the shared layer starts with one naming scheme.
-- [big/row-subsumption.md](big/row-subsumption.md) — independent of all other
-  projects, but requires a language-semantics decision before implementation
-  starts (see the file).
+  package identity is already centralized, but the run path still hand-wires
+  coordinator setup and report rendering.
 
 ### Suggested overall sequence
 
 If one person or agent works through everything serially, this order front-loads
 leverage and keeps prerequisites satisfied:
 
-1. `small/surface-arc-certifier-skips.md`
-2. `small/cross-phase-coverage-parity-tests.md`
-3. `small/check-app-against-platform-requires.md`
-4. `small/single-package-identity-function.md`
-5. `small/centralize-slice-reuse-predicate.md`
-6. `small/store-generation-counters.md`
-7. `small/checked-arithmetic-lir-ops.md`
-8. `big/total-dispatch-plans.md`
-9. `big/canonical-capture-id.md` (or interleave with 8; see Chain C)
-10. `big/content-based-nominal-identity.md`
-11. `big/immutable-specialization-identity.md`
-12. `small/shared-checked-type-traversal.md`
-13. `small/cache-hardening.md`
-14. `big/arc-certifier-lattice-join.md`
-15. `big/exact-numeral-pipeline.md`
-16. `big/generalization-time-ambiguity.md`
-17. `big/unify-build-pipelines.md`
-18. `big/decision-tree-match-compiler.md`
-19. `small/glue-consumes-committed-layouts.md`
-20. `small/structural-hoist-contexts.md`
-21. `big/row-subsumption.md` (whenever the language decision is made; nothing
-    blocks on it)
+1. `small/cross-phase-coverage-parity-tests.md`
+2. `small/centralize-slice-reuse-predicate.md`
+3. `small/store-generation-counters.md`
+4. `small/checked-arithmetic-lir-ops.md`
+5. `small/shared-checked-type-traversal.md`
+6. `big/arc-inserter-join-summaries.md`
+7. `big/exact-numeral-pipeline.md`
+8. `big/generalization-time-ambiguity.md`
+9. `big/unify-build-pipelines.md`
+10. `big/decision-tree-match-compiler.md`
+11. `small/glue-consumes-committed-layouts.md`
+12. `small/structural-hoist-contexts.md`

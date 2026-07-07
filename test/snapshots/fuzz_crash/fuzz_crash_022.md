@@ -15,17 +15,17 @@ getUser = |id| if (id > 1!) "big" else "l"
 -ain! = |_| getUser(900)
 ~~~
 # EXPECTED
-PARSE ERROR - fuzz_crash_022.md:1:1:1:4
-UNEXPECTED TOKEN IN TYPE ANNOTATION - fuzz_crash_022.md:1:19:1:27
-PARSE ERROR - fuzz_crash_022.md:1:28:1:29
-PARSE ERROR - fuzz_crash_022.md:1:29:1:30
-PARSE ERROR - fuzz_crash_022.md:1:30:1:31
-PARSE ERROR - fuzz_crash_022.md:1:32:1:33
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_022.md:6:27:6:28
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_022.md:6:35:6:39
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_022.md:8:7:8:8
-PARSE ERROR - fuzz_crash_022.md:9:1:9:1
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_022.md:9:1:9:1
+EXPECTED DEPENDENCY NAME - fuzz_crash_022.md:1:1:1:4
+UNEXPECTED TYPE SYNTAX - fuzz_crash_022.md:1:19:1:27
+UNEXPECTED STATEMENT - fuzz_crash_022.md:1:28:1:29
+UNEXPECTED STATEMENT - fuzz_crash_022.md:1:29:1:30
+UNEXPECTED STATEMENT - fuzz_crash_022.md:1:30:1:31
+UNEXPECTED STATEMENT - fuzz_crash_022.md:1:32:1:33
+UNEXPECTED EXPRESSION SYNTAX - fuzz_crash_022.md:6:27:6:28
+UNEXPECTED EXPRESSION SYNTAX - fuzz_crash_022.md:6:35:6:39
+UNEXPECTED EXPRESSION SYNTAX - fuzz_crash_022.md:8:7:8:8
+EXPECTED TUPLE SEPARATOR - fuzz_crash_022.md:9:1:9:1
+UNEXPECTED EXPRESSION SYNTAX - fuzz_crash_022.md:9:1:9:1
 MALFORMED TYPE - fuzz_crash_022.md:1:19:1:27
 INVALID IF CONDITION - :0:0:0:0
 UNUSED VARIABLE - fuzz_crash_022.md:6:12:6:14
@@ -33,125 +33,201 @@ DECLARATION HAS NO VALUE - fuzz_crash_022.md:1:16:1:27
 DECLARATION HAS NO VALUE - fuzz_crash_022.md:5:1:5:20
 # PROBLEMS
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: expected_package_or_platform_name ─┐
-└┬────────────┘                                                               │
+┌──────────────────────────┐
+│ EXPECTED DEPENDENCY NAME ├─ I was parsing an app dependency record, and I ──┐
+└┬─────────────────────────┘  expected a lowercase field name.                │
  │                                                                            │
  │  app [main!] { |f: platform "c" }                                          │
  │  ‾‾‾                                                                       │
  └───────────────────────────────────────────────────── fuzz_crash_022.md:1:1 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Each package or platform entry starts with a lowercase field name, followed
+    by `:` and a string path or `platform` path.
+
+    For example:
+        pf: platform "../platform/main.roc"
+
+    I found `app` here.
+    That word is reserved by Roc, so it cannot be used as a name in this
+    position.
 
 
-┌─────────────────────────────────────┐
-│ UNEXPECTED TOKEN IN TYPE ANNOTATION ├─ The token platform is not expected ──┐
-└┬────────────────────────────────────┘  in a type annotation.                │
+┌────────────────────────┐
+│ UNEXPECTED TYPE SYNTAX ├─ I was parsing a type annotation, and this token ──┐
+└┬───────────────────────┘  cannot start a type here.                         │
  │                                                                            │
  │  app [main!] { |f: platform "c" }                                          │
  │                    ‾‾‾‾‾‾‾‾                                                │
  └──────────────────────────────────────────────────── fuzz_crash_022.md:1:19 ┘
 
-    Type annotations should contain types like Str, Num a, or List U64.
+    Types can be type variables, uppercase type names, function types, tuples,
+    records, or tag unions.
+
+    For example:
+        List(U64)
+
+    I found `platform` here.
+    That word is reserved by Roc, so it cannot be used as a name in this
+    position.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  app [main!] { |f: platform "c" }                                          │
  │                             ‾                                              │
  └──────────────────────────────────────────────────── fuzz_crash_022.md:1:28 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `"` here.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  app [main!] { |f: platform "c" }                                          │
  │                              ‾                                             │
  └──────────────────────────────────────────────────── fuzz_crash_022.md:1:29 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `c` here.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  app [main!] { |f: platform "c" }                                          │
  │                               ‾                                            │
  └──────────────────────────────────────────────────── fuzz_crash_022.md:1:30 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `"` here.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  app [main!] { |f: platform "c" }                                          │
  │                                 ‾                                          │
  └──────────────────────────────────────────────────── fuzz_crash_022.md:1:32 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `}` here.
+    This closes the current construct, so the parser was looking for the
+    missing item before it.
 
 
-┌────────────────────────────────┐
-│ UNEXPECTED TOKEN IN EXPRESSION ├─ The token ) is not expected in an ────────┐
-└┬───────────────────────────────┘  expression.                               │
+┌──────────────────────────────┐
+│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
+└┬─────────────────────────────┘  token cannot start an expression here.      │
  │                                                                            │
  │  getUser = |id| if (id > 1!) "big" else "l"                                │
  │                            ‾                                               │
  └──────────────────────────────────────────────────── fuzz_crash_022.md:6:27 ┘
 
-    Expressions can be identifiers, literals, function calls, or operators.
+    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+    blocks, conditionals, matches, or function calls.
+
+    For example:
+        add(1, 2)
+
+    I found `)` here.
+    This closes the current construct, so the parser was looking for the
+    missing item before it.
 
 
-┌────────────────────────────────┐
-│ UNEXPECTED TOKEN IN EXPRESSION ├─ The token else is not expected in an ─────┐
-└┬───────────────────────────────┘  expression.                               │
+┌──────────────────────────────┐
+│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
+└┬─────────────────────────────┘  token cannot start an expression here.      │
  │                                                                            │
  │  getUser = |id| if (id > 1!) "big" else "l"                                │
  │                                    ‾‾‾‾                                    │
  └──────────────────────────────────────────────────── fuzz_crash_022.md:6:35 ┘
 
-    Expressions can be identifiers, literals, function calls, or operators.
+    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+    blocks, conditionals, matches, or function calls.
+
+    For example:
+        add(1, 2)
+
+    I found `else` here.
+    That word is reserved by Roc, so it cannot be used as a name in this
+    position.
 
 
-┌────────────────────────────────┐
-│ UNEXPECTED TOKEN IN EXPRESSION ├─ The token = is not expected in an ────────┐
-└┬───────────────────────────────┘  expression.                               │
+┌──────────────────────────────┐
+│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
+└┬─────────────────────────────┘  token cannot start an expression here.      │
  │                                                                            │
  │  -ain! = |_| getUser(900)                                                  │
  │        ‾                                                                   │
  └───────────────────────────────────────────────────── fuzz_crash_022.md:8:7 ┘
 
-    Expressions can be identifiers, literals, function calls, or operators.
+    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+    blocks, conditionals, matches, or function calls.
+
+    For example:
+        add(1, 2)
+
+    I found `=` here.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: ───────────────────────────────────┐
-└┬────────────┘  expected_expr_close_round_or_comma                           │
+┌──────────────────────────┐
+│ EXPECTED TUPLE SEPARATOR ├─ I was parsing a parenthesized expression or ────┐
+└┬─────────────────────────┘  tuple, and I expected `,` or `)`.               │
  │                                                                            │
  │                                                                            │
  │  ‾                                                                         │
  └───────────────────────────────────────────────────── fuzz_crash_022.md:9:1 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Separate tuple elements with commas and close the tuple or parenthesized
+    expression with `)`.
+
+    For example:
+        (x, y)
+
+    I reached the end of the file before this construct was complete.
 
 
-┌────────────────────────────────┐
-│ UNEXPECTED TOKEN IN EXPRESSION ├─ The token  is not expected in an ─────────┐
-└┬───────────────────────────────┘  expression.                               │
+┌──────────────────────────────┐
+│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
+└┬─────────────────────────────┘  token cannot start an expression here.      │
  │                                                                            │
  │                                                                            │
  │  ‾                                                                         │
  └───────────────────────────────────────────────────── fuzz_crash_022.md:9:1 ┘
 
-    Expressions can be identifiers, literals, function calls, or operators.
+    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+    blocks, conditionals, matches, or function calls.
+
+    For example:
+        add(1, 2)
+
+    I reached the end of the file before this construct was complete.
 
 
 ┌────────────────┐

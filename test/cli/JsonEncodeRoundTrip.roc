@@ -6,12 +6,12 @@ Token := { raw : Str }.{
 		Ok({ value: Token.{ raw: parsed.value }, rest: parsed.rest })
 	}
 
-	encode_to = |token, encoding| |state| Json.encode_str(encoding, token.raw, state)
+	encoder_for = |encoding| |token, state| Json.encode_str(encoding, token.raw, state)
 }
 
 AutoToken := { raw : Str, count : U64 }.{
 	parser_for : _
-	encode_to : _
+	encoder_for : _
 }
 
 Shape : {
@@ -19,8 +19,6 @@ Shape : {
 	coords : (Str, U64, Bool),
 	dec : Dec,
 	explicit_optional : Try(Str, [Missing]),
-	f32 : F32,
-	f64 : F64,
 	flag : Bool,
 	foo : Str,
 	i8 : I8,
@@ -50,30 +48,26 @@ NullableShape : {
 }
 
 source : Str
-source = "{\"foo\":\"abc\",\"flag\":true,\"boxed\":\"wrapped\",\"coords\":[\"north\",7,false],\"u8\":8,\"i8\":-8,\"u16\":16,\"i16\":-16,\"u32\":32,\"i32\":-32,\"i64\":-64,\"u128\":128,\"i128\":-128,\"dec\":12.5,\"f32\":1.5,\"f64\":-2.25,\"explicit_optional\":\"present\",\"items\":[\"one\",\"two\"],\"multi\":{\"Multi\":[\"tag\",9,true]},\"nested\":{\"bar\":\"xyz\",\"count\":42},\"pair\":{\"Pair\":{\"first\":\"left\",\"second\":\"right\"}},\"labels\":[\"red\",\"blue\",\"red\"],\"scores\":{\"alpha\":1,\"beta\":2,\"alpha\":3},\"status\":\"Active\",\"token\":\"tok\"}"
+source = "{\"foo\":\"abc\",\"flag\":true,\"boxed\":\"wrapped\",\"coords\":[\"north\",7,false],\"u8\":8,\"i8\":-8,\"u16\":16,\"i16\":-16,\"u32\":32,\"i32\":-32,\"i64\":-64,\"u128\":128,\"i128\":-128,\"dec\":12.5,\"explicit_optional\":\"present\",\"items\":[\"one\",\"two\"],\"multi\":{\"Multi\":[\"tag\",9,true]},\"nested\":{\"bar\":\"xyz\",\"count\":42},\"pair\":{\"Pair\":{\"first\":\"left\",\"second\":\"right\"}},\"labels\":[\"red\",\"blue\",\"red\"],\"scores\":{\"alpha\":1,\"beta\":2,\"alpha\":3},\"status\":\"Active\",\"token\":\"tok\"}"
 
 nullable_source : Str
 nullable_source = "{\"required_nullable\":null,\"optional_nullable\":null}"
 
 auto_nominal_round_trips : Str -> Bool
 auto_nominal_round_trips = |json| {
-	first_result : Try(AutoToken, Json)
+	first_result : Try(AutoToken, Json.ParseErr)
 	first_result = Json.parse(json)
 
 	match first_result {
 		Ok(first) => {
-			encoded1_result : Try(Str, [])
-			encoded1_result = Json.encode(first)
-			Ok(encoded1) = encoded1_result
+			encoded1 = Json.to_str(first)
 
-			second_result : Try(AutoToken, Json)
+			second_result : Try(AutoToken, Json.ParseErr)
 			second_result = Json.parse(encoded1)
 
 			match second_result {
 				Ok(second) => {
-					encoded2_result : Try(Str, [])
-					encoded2_result = Json.encode(second)
-					Ok(encoded2) = encoded2_result
+					encoded2 = Json.to_str(second)
 
 					auto_token_eq(first, second) and Str.is_eq(encoded1, encoded2)
 				}
@@ -93,40 +87,27 @@ expect {
 	value : AutoToken
 	value = AutoToken.{ raw: "tok", count: 2 }
 
-	encoded_result : Try(Str, [])
-	encoded_result = Json.encode(value)
-	Ok(encoded) = encoded_result
+	encoded = Json.to_str(value)
 
 	Str.is_eq(encoded, "{\"count\":2,\"raw\":\"tok\"}")
 }
 
 round_trips : Str -> Bool
 round_trips = |json| {
-	first_result : Try(Shape, Json)
+	first_result : Try(Shape, Json.ParseErr)
 	first_result = Json.parse(json)
 
 	match first_result {
 		Ok(first) => {
-			encoded1_result : Try(Str, [Infinity, NaN, NegativeInfinity])
-			encoded1_result = Json.encode(first)
+			encoded1 = Json.to_str(first)
 
-			match encoded1_result {
-				Ok(encoded1) => {
-					second_result : Try(Shape, Json)
-					second_result = Json.parse(encoded1)
+			second_result : Try(Shape, Json.ParseErr)
+			second_result = Json.parse(encoded1)
 
-					match second_result {
-						Ok(second) => {
-							encoded2_result : Try(Str, [Infinity, NaN, NegativeInfinity])
-							encoded2_result = Json.encode(second)
-
-							match encoded2_result {
-								Ok(encoded2) => shape_eq(first, second) and Str.is_eq(encoded1, encoded2)
-								Err(_) => False
-							}
-						}
-						Err(_) => False
-					}
+			match second_result {
+				Ok(second) => {
+					encoded2 = Json.to_str(second)
+					shape_eq(first, second) and Str.is_eq(encoded1, encoded2)
 				}
 				Err(_) => False
 			}
@@ -137,23 +118,19 @@ round_trips = |json| {
 
 nullable_round_trips : Str -> Bool
 nullable_round_trips = |json| {
-	first_result : Try(NullableShape, Json)
+	first_result : Try(NullableShape, Json.ParseErr)
 	first_result = Json.parse(json)
 
 	match first_result {
 		Ok(first) => {
-			encoded1_result : Try(Str, [])
-			encoded1_result = Json.encode(first)
-			Ok(encoded1) = encoded1_result
+			encoded1 = Json.to_str(first)
 
-			second_result : Try(NullableShape, Json)
+			second_result : Try(NullableShape, Json.ParseErr)
 			second_result = Json.parse(encoded1)
 
 			match second_result {
 				Ok(second) => {
-					encoded2_result : Try(Str, [])
-					encoded2_result = Json.encode(second)
-					Ok(encoded2) = encoded2_result
+					encoded2 = Json.to_str(second)
 
 					nullable_shape_eq(first, second) and Str.is_eq(encoded1, encoded2)
 				}
@@ -181,18 +158,16 @@ shape_eq = |left, right|
 													and left.u128 == right.u128
 														and left.i128 == right.i128
 															and left.dec == right.dec
-																and F32.is_float_eq(left.f32, right.f32)
-																	and F64.is_float_eq(left.f64, right.f64)
-																		and optional_str_eq(left.explicit_optional, right.explicit_optional)
-																			and optional_str_eq(left.missing_optional, right.missing_optional)
-																				and left.items == right.items
-																					and Str.is_eq(left.nested.bar, right.nested.bar)
-																						and multi_eq(left.multi, right.multi)
-																							and pair_eq(left.pair, right.pair)
-																								and left.labels == right.labels
-																									and left.scores == right.scores
-																										and status_eq(left.status, right.status)
-																											and Str.is_eq(left.token.raw, right.token.raw)
+																and optional_str_eq(left.explicit_optional, right.explicit_optional)
+																	and optional_str_eq(left.missing_optional, right.missing_optional)
+																		and left.items == right.items
+																			and Str.is_eq(left.nested.bar, right.nested.bar)
+																				and multi_eq(left.multi, right.multi)
+																					and pair_eq(left.pair, right.pair)
+																						and left.labels == right.labels
+																							and left.scores == right.scores
+																								and status_eq(left.status, right.status)
+																									and Str.is_eq(left.token.raw, right.token.raw)
 
 nullable_shape_eq : NullableShape, NullableShape -> Bool
 nullable_shape_eq = |left, right|
@@ -294,23 +269,19 @@ expect nullable_round_trips(nullable_source)
 
 list_round_trips : Str -> Bool
 list_round_trips = |json| {
-	first_result : Try(List(Try(Str, [Null])), Json)
+	first_result : Try(List(Try(Str, [Null])), Json.ParseErr)
 	first_result = Json.parse(json)
 
 	match first_result {
 		Ok(first) => {
-			encoded1_result : Try(Str, [])
-			encoded1_result = Json.encode(first)
-			Ok(encoded1) = encoded1_result
+			encoded1 = Json.to_str(first)
 
-			second_result : Try(List(Try(Str, [Null])), Json)
+			second_result : Try(List(Try(Str, [Null])), Json.ParseErr)
 			second_result = Json.parse(encoded1)
 
 			match second_result {
 				Ok(second) => {
-					encoded2_result : Try(Str, [])
-					encoded2_result = Json.encode(second)
-					Ok(encoded2) = encoded2_result
+					encoded2 = Json.to_str(second)
 
 					first == second and Str.is_eq(encoded1, encoded2)
 				}
@@ -325,23 +296,19 @@ expect list_round_trips("[\"one\",null,\"two\"]")
 
 set_round_trips : Str -> Bool
 set_round_trips = |json| {
-	first_result : Try(Set(Str), Json)
+	first_result : Try(Set(Str), Json.ParseErr)
 	first_result = Json.parse(json)
 
 	match first_result {
 		Ok(first) => {
-			encoded1_result : Try(Str, [])
-			encoded1_result = Json.encode(first)
-			Ok(encoded1) = encoded1_result
+			encoded1 = Json.to_str(first)
 
-			second_result : Try(Set(Str), Json)
+			second_result : Try(Set(Str), Json.ParseErr)
 			second_result = Json.parse(encoded1)
 
 			match second_result {
 				Ok(second) => {
-					encoded2_result : Try(Str, [])
-					encoded2_result = Json.encode(second)
-					Ok(encoded2) = encoded2_result
+					encoded2 = Json.to_str(second)
 
 					first == second and Str.is_eq(encoded1, encoded2)
 				}
@@ -358,32 +325,26 @@ expect {
 	value : Set(Str)
 	value = Set.from_list(["alpha", "beta", "alpha"])
 
-	encoded_result : Try(Str, [])
-	encoded_result = Json.encode(value)
-	Ok(encoded) = encoded_result
+	encoded = Json.to_str(value)
 
 	Str.is_eq(encoded, "[\"alpha\",\"beta\"]")
 }
 
 dict_round_trips : Str -> Bool
 dict_round_trips = |json| {
-	first_result : Try(Dict(Str, U64), Json)
+	first_result : Try(Dict(Str, U64), Json.ParseErr)
 	first_result = Json.parse(json)
 
 	match first_result {
 		Ok(first) => {
-			encoded1_result : Try(Str, [])
-			encoded1_result = Json.encode(first)
-			Ok(encoded1) = encoded1_result
+			encoded1 = Json.to_str(first)
 
-			second_result : Try(Dict(Str, U64), Json)
+			second_result : Try(Dict(Str, U64), Json.ParseErr)
 			second_result = Json.parse(encoded1)
 
 			match second_result {
 				Ok(second) => {
-					encoded2_result : Try(Str, [])
-					encoded2_result = Json.encode(second)
-					Ok(encoded2) = encoded2_result
+					encoded2 = Json.to_str(second)
 
 					first == second and Str.is_eq(encoded1, encoded2)
 				}
@@ -400,32 +361,26 @@ expect {
 	value : Dict(Str, U64)
 	value = Dict.from_list([("alpha", 1), ("beta", 2), ("alpha", 3)])
 
-	encoded_result : Try(Str, [])
-	encoded_result = Json.encode(value)
-	Ok(encoded) = encoded_result
+	encoded = Json.to_str(value)
 
 	Str.is_eq(encoded, "{\"alpha\":3,\"beta\":2}")
 }
 
 numeric_key_dict_round_trips : Str -> Bool
 numeric_key_dict_round_trips = |json| {
-	first_result : Try(Dict(U64, Bool), Json)
+	first_result : Try(Dict(U64, Bool), Json.ParseErr)
 	first_result = Json.parse(json)
 
 	match first_result {
 		Ok(first) => {
-			encoded1_result : Try(Str, [])
-			encoded1_result = Json.encode(first)
-			Ok(encoded1) = encoded1_result
+			encoded1 = Json.to_str(first)
 
-			second_result : Try(Dict(U64, Bool), Json)
+			second_result : Try(Dict(U64, Bool), Json.ParseErr)
 			second_result = Json.parse(encoded1)
 
 			match second_result {
 				Ok(second) => {
-					encoded2_result : Try(Str, [])
-					encoded2_result = Json.encode(second)
-					Ok(encoded2) = encoded2_result
+					encoded2 = Json.to_str(second)
 
 					first == second and Str.is_eq(encoded1, encoded2)
 				}
@@ -440,23 +395,19 @@ expect numeric_key_dict_round_trips("{\"7\":true,\"8\":false}")
 
 unit_tag_key_dict_round_trips : Str -> Bool
 unit_tag_key_dict_round_trips = |json| {
-	first_result : Try(Dict([Active, Paused], U64), Json)
+	first_result : Try(Dict([Active, Paused], U64), Json.ParseErr)
 	first_result = Json.parse(json)
 
 	match first_result {
 		Ok(first) => {
-			encoded1_result : Try(Str, [])
-			encoded1_result = Json.encode(first)
-			Ok(encoded1) = encoded1_result
+			encoded1 = Json.to_str(first)
 
-			second_result : Try(Dict([Active, Paused], U64), Json)
+			second_result : Try(Dict([Active, Paused], U64), Json.ParseErr)
 			second_result = Json.parse(encoded1)
 
 			match second_result {
 				Ok(second) => {
-					encoded2_result : Try(Str, [])
-					encoded2_result = Json.encode(second)
-					Ok(encoded2) = encoded2_result
+					encoded2 = Json.to_str(second)
 
 					first == second and Str.is_eq(encoded1, encoded2)
 				}
@@ -473,43 +424,29 @@ expect {
 	value : Dict(Bool, Str)
 	value = Dict.from_list([(True, "yes"), (False, "no")])
 
-	encoded_result : Try(Str, [])
-	encoded_result = Json.encode(value)
-	Ok(encoded) = encoded_result
+	encoded = Json.to_str(value)
 
 	Str.is_eq(encoded, "{\"true\":\"yes\",\"false\":\"no\"}")
 }
 
 expect {
-	result : Try(Dict(U8, Str), Json)
+	result : Try(Dict(U8, Str), Json.ParseErr)
 	result = Json.parse("{\"999\":\"too big\"}")
 
 	result == Err(Json.invalid_json)
 }
 
 expect {
-	value : Dict(F32, Str)
-	value = Dict.empty().insert(F32.infinity, "bad")
-
-	result : Try(Str, [Infinity, NaN, NegativeInfinity])
-	result = Json.encode(value)
-
-	result == Err(Infinity)
-}
-
-expect {
 	value : List(Str)
 	value = ["alpha", "beta"]
 
-	encoded_result : Try(Str, [])
-	encoded_result = Json.encode(value)
-	Ok(encoded) = encoded_result
+	encoded = Json.to_str(value)
 
 	Str.is_eq(encoded, "[\"alpha\",\"beta\"]")
 }
 
 expect {
-	result : Try(List(Str), Json)
+	result : Try(List(Str), Json.ParseErr)
 	result = Json.parse_trailing_commas("[\"alpha\",]")
 
 	result == Ok(["alpha"])
@@ -517,23 +454,19 @@ expect {
 
 tuple_round_trips : Str -> Bool
 tuple_round_trips = |json| {
-	first_result : Try((Str, U64, Bool), Json)
+	first_result : Try((Str, U64, Bool), Json.ParseErr)
 	first_result = Json.parse(json)
 
 	match first_result {
 		Ok(first) => {
-			encoded1_result : Try(Str, [])
-			encoded1_result = Json.encode(first)
-			Ok(encoded1) = encoded1_result
+			encoded1 = Json.to_str(first)
 
-			second_result : Try((Str, U64, Bool), Json)
+			second_result : Try((Str, U64, Bool), Json.ParseErr)
 			second_result = Json.parse(encoded1)
 
 			match second_result {
 				Ok(second) => {
-					encoded2_result : Try(Str, [])
-					encoded2_result = Json.encode(second)
-					Ok(encoded2) = encoded2_result
+					encoded2 = Json.to_str(second)
 
 					first == second and Str.is_eq(encoded1, encoded2)
 				}
@@ -550,29 +483,27 @@ expect {
 	value : (Str, U64, Bool)
 	value = ("north", 7, False)
 
-	encoded_result : Try(Str, [])
-	encoded_result = Json.encode(value)
-	Ok(encoded) = encoded_result
+	encoded = Json.to_str(value)
 
 	Str.is_eq(encoded, "[\"north\",7,false]")
 }
 
 expect {
-	result : Try((Str, U64), Json)
+	result : Try((Str, U64), Json.ParseErr)
 	result = Json.parse("[\"only\"]")
 
 	result == Err(Json.invalid_json)
 }
 
 expect {
-	result : Try((Str, U64), Json)
+	result : Try((Str, U64), Json.ParseErr)
 	result = Json.parse("[\"too\",2,true]")
 
 	result == Err(Json.invalid_json)
 }
 
 expect {
-	result : Try(Try(Str, [Null]), Json)
+	result : Try(Try(Str, [Null]), Json.ParseErr)
 	result = Json.parse("null")
 
 	result == Ok(Err(Null))
@@ -582,9 +513,7 @@ expect {
 	value : Try(Str, [Null])
 	value = Err(Null)
 
-	encoded_result : Try(Str, [])
-	encoded_result = Json.encode(value)
-	Ok(encoded) = encoded_result
+	encoded = Json.to_str(value)
 
 	Str.is_eq(encoded, "null")
 }
@@ -593,16 +522,14 @@ expect {
 	value : { text : Str }
 	value = { text: "quote \" slash \\" }
 
-	encoded_result : Try(Str, [])
-	encoded_result = Json.encode(value)
-	Ok(encoded) = encoded_result
+	encoded = Json.to_str(value)
 
 	Str.is_eq(encoded, "{\"text\":\"quote \\\" slash \\\\\"}")
 }
 
 box_parses : Str -> Bool
 box_parses = |json| {
-	result : Try(Box(Str), Json)
+	result : Try(Box(Str), Json.ParseErr)
 	result = Json.parse(json)
 
 	match result {
@@ -617,9 +544,7 @@ expect {
 	boxed : Box(Str)
 	boxed = Box.box("boxed")
 
-	encoded_result : Try(Str, [])
-	encoded_result = Json.encode(boxed)
-	Ok(encoded) = encoded_result
+	encoded = Json.to_str(boxed)
 
 	Str.is_eq(encoded, "\"boxed\"")
 }
@@ -628,9 +553,7 @@ expect {
 	value : [Active, Paused]
 	value = Active
 
-	encoded_result : Try(Str, [])
-	encoded_result = Json.encode(value)
-	Ok(encoded) = encoded_result
+	encoded = Json.to_str(value)
 
 	Str.is_eq(encoded, "\"Active\"")
 }
@@ -639,37 +562,14 @@ expect {
 	value : [Multi(Str, U64, Bool)]
 	value = Multi("tag", 9, True)
 
-	encoded_result : Try(Str, [])
-	encoded_result = Json.encode(value)
-	Ok(encoded) = encoded_result
+	encoded = Json.to_str(value)
 
 	Str.is_eq(encoded, "{\"Multi\":[\"tag\",9,true]}")
 }
 
 expect {
-	result : Try([Multi(Str, U64, Bool)], Json)
+	result : Try([Multi(Str, U64, Bool)], Json.ParseErr)
 	result = Json.parse("{\"Multi\":[\"tag\",9,true]}")
 
 	result == Ok(Multi("tag", 9, True))
-}
-
-expect {
-	result : Try(Str, [Infinity, NaN, NegativeInfinity])
-	result = Json.encode(F32.nan)
-
-	result == Err(NaN)
-}
-
-expect {
-	result : Try(Str, [Infinity, NaN, NegativeInfinity])
-	result = Json.encode(F32.infinity)
-
-	result == Err(Infinity)
-}
-
-expect {
-	result : Try(Str, [Infinity, NaN, NegativeInfinity])
-	result = Json.encode(F64.negate(F64.infinity))
-
-	result == Err(NegativeInfinity)
 }

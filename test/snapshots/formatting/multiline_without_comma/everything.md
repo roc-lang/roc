@@ -115,88 +115,88 @@ h = |x, y| {
 }
 ~~~
 # EXPECTED
-WHERE CLAUSE ERROR - everything.md:13:2:13:7
-PARSE ERROR - everything.md:14:3:14:9
-PARSE ERROR - everything.md:14:9:14:10
-PARSE ERROR - everything.md:14:10:14:11
-PARSE ERROR - everything.md:14:11:14:12
-PARSE ERROR - everything.md:14:12:14:15
-PARSE ERROR - everything.md:14:16:14:17
-PARSE ERROR - everything.md:14:18:14:19
-PARSE ERROR - everything.md:15:4:15:5
-PARSE ERROR - everything.md:15:5:15:6
-PARSE ERROR - everything.md:16:4:16:5
-PARSE ERROR - everything.md:17:3:17:4
-PARSE ERROR - everything.md:17:5:17:7
-PARSE ERROR - everything.md:17:11:17:12
-PARSE ERROR - everything.md:18:3:18:9
-PARSE ERROR - everything.md:18:9:18:10
-PARSE ERROR - everything.md:18:10:18:11
-PARSE ERROR - everything.md:18:11:18:12
-PARSE ERROR - everything.md:18:12:18:15
-PARSE ERROR - everything.md:18:16:18:17
-PARSE ERROR - everything.md:18:18:18:19
-PARSE ERROR - everything.md:19:4:19:5
-PARSE ERROR - everything.md:19:5:19:6
-PARSE ERROR - everything.md:20:4:20:5
-PARSE ERROR - everything.md:21:3:21:4
-PARSE ERROR - everything.md:21:5:21:7
-PARSE ERROR - everything.md:22:1:22:2
-PARSE ERROR - everything.md:22:2:22:3
-PARSE ERROR - everything.md:22:3:22:4
-PARSE ERROR - everything.md:22:4:22:5
-PARSE ERROR - everything.md:22:6:22:7
-PARSE ERROR - everything.md:22:8:22:9
-PARSE ERROR - everything.md:23:2:23:7
-PARSE ERROR - everything.md:24:3:24:9
-PARSE ERROR - everything.md:24:9:24:10
-PARSE ERROR - everything.md:24:10:24:11
-PARSE ERROR - everything.md:24:11:24:12
-PARSE ERROR - everything.md:24:12:24:15
-PARSE ERROR - everything.md:24:16:24:17
-PARSE ERROR - everything.md:24:18:24:19
-PARSE ERROR - everything.md:25:4:25:5
-PARSE ERROR - everything.md:25:5:25:6
-PARSE ERROR - everything.md:26:4:26:5
-PARSE ERROR - everything.md:27:3:27:4
-PARSE ERROR - everything.md:27:5:27:7
-PARSE ERROR - everything.md:27:11:27:12
-PARSE ERROR - everything.md:28:3:28:9
-PARSE ERROR - everything.md:28:9:28:10
-PARSE ERROR - everything.md:28:10:28:11
-PARSE ERROR - everything.md:28:11:28:12
-PARSE ERROR - everything.md:28:12:28:15
-PARSE ERROR - everything.md:28:16:28:17
-PARSE ERROR - everything.md:28:18:28:19
-PARSE ERROR - everything.md:29:4:29:5
-PARSE ERROR - everything.md:29:5:29:6
-PARSE ERROR - everything.md:30:4:30:5
-PARSE ERROR - everything.md:31:3:31:4
-PARSE ERROR - everything.md:31:5:31:7
-PARSE ERROR - everything.md:33:1:33:2
-PARSE ERROR - everything.md:33:2:33:3
-PARSE ERROR - everything.md:34:2:34:3
-PARSE ERROR - everything.md:34:3:34:4
-PARSE ERROR - everything.md:35:2:35:3
-PARSE ERROR - everything.md:36:1:36:2
-PARSE ERROR - everything.md:36:3:36:4
-PARSE ERROR - everything.md:36:5:36:6
-PARSE ERROR - everything.md:37:2:37:3
-PARSE ERROR - everything.md:37:3:37:4
-PARSE ERROR - everything.md:38:2:38:3
-PARSE ERROR - everything.md:39:1:39:2
-WHERE CLAUSE ERROR - everything.md:56:12:56:17
-PARSE ERROR - everything.md:56:18:56:24
-PARSE ERROR - everything.md:56:24:56:25
-PARSE ERROR - everything.md:56:25:56:26
-PARSE ERROR - everything.md:56:26:56:27
-PARSE ERROR - everything.md:56:27:56:29
-PARSE ERROR - everything.md:56:29:56:30
-PARSE ERROR - everything.md:56:31:56:37
-PARSE ERROR - everything.md:56:37:56:38
-PARSE ERROR - everything.md:56:38:56:39
-PARSE ERROR - everything.md:56:39:56:40
-PARSE ERROR - everything.md:56:40:56:42
+EXPECTED WHERE CLAUSE LIST - everything.md:13:2:13:7
+UNEXPECTED STATEMENT - everything.md:14:3:14:9
+UNEXPECTED STATEMENT - everything.md:14:9:14:10
+UNEXPECTED STATEMENT - everything.md:14:10:14:11
+UNEXPECTED STATEMENT - everything.md:14:11:14:12
+UNEXPECTED STATEMENT - everything.md:14:12:14:15
+UNEXPECTED STATEMENT - everything.md:14:16:14:17
+UNEXPECTED STATEMENT - everything.md:14:18:14:19
+UNEXPECTED STATEMENT - everything.md:15:4:15:5
+UNEXPECTED STATEMENT - everything.md:15:5:15:6
+UNEXPECTED STATEMENT - everything.md:16:4:16:5
+UNEXPECTED STATEMENT - everything.md:17:3:17:4
+AMBIGUOUS FUNCTION TYPE - everything.md:17:5:17:7
+TYPE APPLICATION NEEDS PARENTHESES - everything.md:17:11:17:12
+UNEXPECTED STATEMENT - everything.md:18:3:18:9
+UNEXPECTED STATEMENT - everything.md:18:9:18:10
+UNEXPECTED STATEMENT - everything.md:18:10:18:11
+UNEXPECTED STATEMENT - everything.md:18:11:18:12
+UNEXPECTED STATEMENT - everything.md:18:12:18:15
+UNEXPECTED STATEMENT - everything.md:18:16:18:17
+UNEXPECTED STATEMENT - everything.md:18:18:18:19
+UNEXPECTED STATEMENT - everything.md:19:4:19:5
+UNEXPECTED STATEMENT - everything.md:19:5:19:6
+UNEXPECTED STATEMENT - everything.md:20:4:20:5
+UNEXPECTED STATEMENT - everything.md:21:3:21:4
+AMBIGUOUS FUNCTION TYPE - everything.md:21:5:21:7
+TYPE APPLICATION NEEDS PARENTHESES - everything.md:22:1:22:2
+UNEXPECTED STATEMENT - everything.md:22:2:22:3
+UNEXPECTED STATEMENT - everything.md:22:3:22:4
+UNEXPECTED STATEMENT - everything.md:22:4:22:5
+UNEXPECTED STATEMENT - everything.md:22:6:22:7
+UNEXPECTED STATEMENT - everything.md:22:8:22:9
+UNEXPECTED STATEMENT - everything.md:23:2:23:7
+UNEXPECTED STATEMENT - everything.md:24:3:24:9
+UNEXPECTED STATEMENT - everything.md:24:9:24:10
+UNEXPECTED STATEMENT - everything.md:24:10:24:11
+UNEXPECTED STATEMENT - everything.md:24:11:24:12
+UNEXPECTED STATEMENT - everything.md:24:12:24:15
+UNEXPECTED STATEMENT - everything.md:24:16:24:17
+UNEXPECTED STATEMENT - everything.md:24:18:24:19
+UNEXPECTED STATEMENT - everything.md:25:4:25:5
+UNEXPECTED STATEMENT - everything.md:25:5:25:6
+UNEXPECTED STATEMENT - everything.md:26:4:26:5
+UNEXPECTED STATEMENT - everything.md:27:3:27:4
+AMBIGUOUS FUNCTION TYPE - everything.md:27:5:27:7
+TYPE APPLICATION NEEDS PARENTHESES - everything.md:27:11:27:12
+UNEXPECTED STATEMENT - everything.md:28:3:28:9
+UNEXPECTED STATEMENT - everything.md:28:9:28:10
+UNEXPECTED STATEMENT - everything.md:28:10:28:11
+UNEXPECTED STATEMENT - everything.md:28:11:28:12
+UNEXPECTED STATEMENT - everything.md:28:12:28:15
+UNEXPECTED STATEMENT - everything.md:28:16:28:17
+UNEXPECTED STATEMENT - everything.md:28:18:28:19
+UNEXPECTED STATEMENT - everything.md:29:4:29:5
+UNEXPECTED STATEMENT - everything.md:29:5:29:6
+UNEXPECTED STATEMENT - everything.md:30:4:30:5
+UNEXPECTED STATEMENT - everything.md:31:3:31:4
+AMBIGUOUS FUNCTION TYPE - everything.md:31:5:31:7
+TYPE APPLICATION NEEDS PARENTHESES - everything.md:33:1:33:2
+UNEXPECTED STATEMENT - everything.md:33:2:33:3
+UNEXPECTED STATEMENT - everything.md:34:2:34:3
+UNEXPECTED STATEMENT - everything.md:34:3:34:4
+UNEXPECTED STATEMENT - everything.md:35:2:35:3
+UNEXPECTED STATEMENT - everything.md:36:1:36:2
+UNEXPECTED STATEMENT - everything.md:36:3:36:4
+UNEXPECTED STATEMENT - everything.md:36:5:36:6
+UNEXPECTED STATEMENT - everything.md:37:2:37:3
+UNEXPECTED STATEMENT - everything.md:37:3:37:4
+UNEXPECTED STATEMENT - everything.md:38:2:38:3
+UNEXPECTED STATEMENT - everything.md:39:1:39:2
+EXPECTED WHERE CLAUSE LIST - everything.md:56:12:56:17
+UNEXPECTED STATEMENT - everything.md:56:18:56:24
+UNEXPECTED STATEMENT - everything.md:56:24:56:25
+UNEXPECTED STATEMENT - everything.md:56:25:56:26
+UNEXPECTED STATEMENT - everything.md:56:26:56:27
+UNEXPECTED STATEMENT - everything.md:56:27:56:29
+UNEXPECTED STATEMENT - everything.md:56:29:56:30
+UNEXPECTED STATEMENT - everything.md:56:31:56:37
+UNEXPECTED STATEMENT - everything.md:56:37:56:38
+UNEXPECTED STATEMENT - everything.md:56:38:56:39
+UNEXPECTED STATEMENT - everything.md:56:39:56:40
+UNEXPECTED STATEMENT - everything.md:56:40:56:42
 WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION - everything.md:12:1:13:7
 UNDECLARED TYPE - everything.md:43:5:43:6
 MALFORMED WHERE CLAUSE - everything.md:56:12:56:17
@@ -213,970 +213,1505 @@ DECLARATION HAS NO VALUE - everything.md:56:1:56:17
 NON EXHAUSTIVE MATCH - everything.md:84:2:107:3
 # PROBLEMS
 
-┌────────────────────┐
-│ WHERE CLAUSE ERROR ├─ Expected an opening bracket [ after where. ───────────┐
-└┬───────────────────┘                                                        │
+┌────────────────────────────┐
+│ EXPECTED WHERE CLAUSE LIST ├─ I was parsing a `where` clause, and I ────────┐
+└┬───────────────────────────┘  expected `[`.                                 │
  │                                                                            │
  │  where                                                                     │
  │  ‾‾‾‾‾                                                                     │
  └──────────────────────────────────────────────────────── everything.md:13:2 ┘
 
-    Where clauses should look like:     where [a.method : Type]
+    Where constraints are written in a square-bracketed list after `where`.
+
+    For example:
+        where [a.hash : a -> U64]
+
+    I found `where` here.
+    That word is reserved by Roc, so it cannot be used as a name in this
+    position.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  module(a).a1 : (                                                          │
  │  ‾‾‾‾‾‾                                                                    │
  └──────────────────────────────────────────────────────── everything.md:14:3 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `module` here.
+    That word is reserved by Roc, so it cannot be used as a name in this
+    position.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  module(a).a1 : (                                                          │
  │        ‾                                                                   │
  └──────────────────────────────────────────────────────── everything.md:14:9 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `(` here.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  module(a).a1 : (                                                          │
  │         ‾                                                                  │
  └─────────────────────────────────────────────────────── everything.md:14:10 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `a` here.
+    Names that start with lowercase letters are value names or record field
+    names, depending on the surrounding syntax.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  module(a).a1 : (                                                          │
  │          ‾                                                                 │
  └─────────────────────────────────────────────────────── everything.md:14:11 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `)` here.
+    This closes the current construct, so the parser was looking for the
+    missing item before it.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  module(a).a1 : (                                                          │
  │           ‾‾‾                                                              │
  └─────────────────────────────────────────────────────── everything.md:14:12 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `.a1` here.
+    Names that start with lowercase letters are value names or record field
+    names, depending on the surrounding syntax.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  module(a).a1 : (                                                          │
  │               ‾                                                            │
  └─────────────────────────────────────────────────────── everything.md:14:16 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `:` here.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  module(a).a1 : (                                                          │
  │                 ‾                                                          │
  └─────────────────────────────────────────────────────── everything.md:14:18 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `(` here.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  a,                                                                        │
  │  ‾                                                                         │
  └──────────────────────────────────────────────────────── everything.md:15:4 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `a` here.
+    Names that start with lowercase letters are value names or record field
+    names, depending on the surrounding syntax.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  a,                                                                        │
  │   ‾                                                                        │
  └──────────────────────────────────────────────────────── everything.md:15:5 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `,` here.
+    A comma separates items, but there must be a valid item on both sides of it.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  a                                                                         │
  │  ‾                                                                         │
  └──────────────────────────────────────────────────────── everything.md:16:4 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `a` here.
+    Names that start with lowercase letters are value names or record field
+    names, depending on the surrounding syntax.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  ) -> Str,                                                                 │
  │  ‾                                                                         │
  └──────────────────────────────────────────────────────── everything.md:17:3 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `)` here.
+    This closes the current construct, so the parser was looking for the
+    missing item before it.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ Function types with multiple arrows need parentheses. ───────┐
-└┬────────────┘                                                               │
+┌─────────────────────────┐
+│ AMBIGUOUS FUNCTION TYPE ├─ I was parsing a function type, and multiple ─────┐
+└┬────────────────────────┘  arrows need parentheses.                         │
  │                                                                            │
  │  ) -> Str,                                                                 │
  │    ‾‾                                                                      │
  └──────────────────────────────────────────────────────── everything.md:17:5 ┘
 
-    Instead of writing a -> b -> c, use parentheses to clarify which you mean:
-            a -> (b -> c) for a curried function (a function that returns
-            another function)
-            (a -> b) -> c for a higher-order function (a function that takes
-            another function)
+    Use parentheses to say whether the function returns another function or
+    takes a function as an argument.
+
+    For example:
+        a -> (b -> c)
+        (a -> b) -> c
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ Type applications require parentheses around their type ─────┐
-└┬────────────┘  arguments.                                                   │
+┌────────────────────────────────────┐
+│ TYPE APPLICATION NEEDS PARENTHESES ├─ I was parsing a type annotation, ─────┐
+└┬───────────────────────────────────┘  and I found a type argument without   │
+ │                                      parentheses.                          │
  │                                                                            │
  │  ) -> Str,                                                                 │
  │          ‾                                                                 │
  └─────────────────────────────────────────────────────── everything.md:17:11 ┘
 
-    I found a type followed by what looks like a type argument, but they need
-    to be connected with parentheses.
+    Roc type applications use parentheses around their arguments. Write
+    `List(U8)`, not `List U8`.
 
-    Instead of:
-        List U8
-
-    Use:
+    For example:
         List(U8)
 
-    Other valid examples:
-        Dict(Str, Num)
-        Try(a, Str)
-        Maybe(List(U64))
+    I found `,` here.
+    A comma separates items, but there must be a valid item on both sides of it.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  module(a).a2 : (                                                          │
  │  ‾‾‾‾‾‾                                                                    │
  └──────────────────────────────────────────────────────── everything.md:18:3 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `module` here.
+    That word is reserved by Roc, so it cannot be used as a name in this
+    position.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  module(a).a2 : (                                                          │
  │        ‾                                                                   │
  └──────────────────────────────────────────────────────── everything.md:18:9 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `(` here.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  module(a).a2 : (                                                          │
  │         ‾                                                                  │
  └─────────────────────────────────────────────────────── everything.md:18:10 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `a` here.
+    Names that start with lowercase letters are value names or record field
+    names, depending on the surrounding syntax.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  module(a).a2 : (                                                          │
  │          ‾                                                                 │
  └─────────────────────────────────────────────────────── everything.md:18:11 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `)` here.
+    This closes the current construct, so the parser was looking for the
+    missing item before it.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  module(a).a2 : (                                                          │
  │           ‾‾‾                                                              │
  └─────────────────────────────────────────────────────── everything.md:18:12 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `.a2` here.
+    Names that start with lowercase letters are value names or record field
+    names, depending on the surrounding syntax.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  module(a).a2 : (                                                          │
  │               ‾                                                            │
  └─────────────────────────────────────────────────────── everything.md:18:16 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `:` here.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  module(a).a2 : (                                                          │
  │                 ‾                                                          │
  └─────────────────────────────────────────────────────── everything.md:18:18 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `(` here.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  a,                                                                        │
  │  ‾                                                                         │
  └──────────────────────────────────────────────────────── everything.md:19:4 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `a` here.
+    Names that start with lowercase letters are value names or record field
+    names, depending on the surrounding syntax.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  a,                                                                        │
  │   ‾                                                                        │
  └──────────────────────────────────────────────────────── everything.md:19:5 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `,` here.
+    A comma separates items, but there must be a valid item on both sides of it.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  a                                                                         │
  │  ‾                                                                         │
  └──────────────────────────────────────────────────────── everything.md:20:4 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `a` here.
+    Names that start with lowercase letters are value names or record field
+    names, depending on the surrounding syntax.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  ) -> Str                                                                  │
  │  ‾                                                                         │
  └──────────────────────────────────────────────────────── everything.md:21:3 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `)` here.
+    This closes the current construct, so the parser was looking for the
+    missing item before it.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ Function types with multiple arrows need parentheses. ───────┐
-└┬────────────┘                                                               │
+┌─────────────────────────┐
+│ AMBIGUOUS FUNCTION TYPE ├─ I was parsing a function type, and multiple ─────┐
+└┬────────────────────────┘  arrows need parentheses.                         │
  │                                                                            │
  │  ) -> Str                                                                  │
  │    ‾‾                                                                      │
  └──────────────────────────────────────────────────────── everything.md:21:5 ┘
 
-    Instead of writing a -> b -> c, use parentheses to clarify which you mean:
-            a -> (b -> c) for a curried function (a function that returns
-            another function)
-            (a -> b) -> c for a higher-order function (a function that takes
-            another function)
+    Use parentheses to say whether the function returns another function or
+    takes a function as an argument.
+
+    For example:
+        a -> (b -> c)
+        (a -> b) -> c
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ Type applications require parentheses around their type ─────┐
-└┬────────────┘  arguments.                                                   │
+┌────────────────────────────────────┐
+│ TYPE APPLICATION NEEDS PARENTHESES ├─ I was parsing a type annotation, ─────┐
+└┬───────────────────────────────────┘  and I found a type argument without   │
+ │                                      parentheses.                          │
  │                                                                            │
  │  B(b) : b                                                                  │
  │  ‾                                                                         │
  └──────────────────────────────────────────────────────── everything.md:22:1 ┘
 
-    I found a type followed by what looks like a type argument, but they need
-    to be connected with parentheses.
+    Roc type applications use parentheses around their arguments. Write
+    `List(U8)`, not `List U8`.
 
-    Instead of:
-        List U8
-
-    Use:
+    For example:
         List(U8)
 
-    Other valid examples:
-        Dict(Str, Num)
-        Try(a, Str)
-        Maybe(List(U64))
+    I found `B` here.
+    Names that start with uppercase letters are used for tags, type names, and
+    module names in Roc.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  B(b) : b                                                                  │
  │   ‾                                                                        │
  └──────────────────────────────────────────────────────── everything.md:22:2 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `(` here.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  B(b) : b                                                                  │
  │    ‾                                                                       │
  └──────────────────────────────────────────────────────── everything.md:22:3 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `b` here.
+    Names that start with lowercase letters are value names or record field
+    names, depending on the surrounding syntax.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  B(b) : b                                                                  │
  │     ‾                                                                      │
  └──────────────────────────────────────────────────────── everything.md:22:4 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `)` here.
+    This closes the current construct, so the parser was looking for the
+    missing item before it.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  B(b) : b                                                                  │
  │       ‾                                                                    │
  └──────────────────────────────────────────────────────── everything.md:22:6 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `:` here.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  B(b) : b                                                                  │
  │         ‾                                                                  │
  └──────────────────────────────────────────────────────── everything.md:22:8 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `b` here.
+    Names that start with lowercase letters are value names or record field
+    names, depending on the surrounding syntax.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  where                                                                     │
  │  ‾‾‾‾‾                                                                     │
  └──────────────────────────────────────────────────────── everything.md:23:2 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `where` here.
+    That word is reserved by Roc, so it cannot be used as a name in this
+    position.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  module(b).b1 : (                                                          │
  │  ‾‾‾‾‾‾                                                                    │
  └──────────────────────────────────────────────────────── everything.md:24:3 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `module` here.
+    That word is reserved by Roc, so it cannot be used as a name in this
+    position.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  module(b).b1 : (                                                          │
  │        ‾                                                                   │
  └──────────────────────────────────────────────────────── everything.md:24:9 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `(` here.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  module(b).b1 : (                                                          │
  │         ‾                                                                  │
  └─────────────────────────────────────────────────────── everything.md:24:10 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `b` here.
+    Names that start with lowercase letters are value names or record field
+    names, depending on the surrounding syntax.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  module(b).b1 : (                                                          │
  │          ‾                                                                 │
  └─────────────────────────────────────────────────────── everything.md:24:11 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `)` here.
+    This closes the current construct, so the parser was looking for the
+    missing item before it.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  module(b).b1 : (                                                          │
  │           ‾‾‾                                                              │
  └─────────────────────────────────────────────────────── everything.md:24:12 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `.b1` here.
+    Names that start with lowercase letters are value names or record field
+    names, depending on the surrounding syntax.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  module(b).b1 : (                                                          │
  │               ‾                                                            │
  └─────────────────────────────────────────────────────── everything.md:24:16 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `:` here.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  module(b).b1 : (                                                          │
  │                 ‾                                                          │
  └─────────────────────────────────────────────────────── everything.md:24:18 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `(` here.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  b,                                                                        │
  │  ‾                                                                         │
  └──────────────────────────────────────────────────────── everything.md:25:4 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `b` here.
+    Names that start with lowercase letters are value names or record field
+    names, depending on the surrounding syntax.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  b,                                                                        │
  │   ‾                                                                        │
  └──────────────────────────────────────────────────────── everything.md:25:5 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `,` here.
+    A comma separates items, but there must be a valid item on both sides of it.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  b                                                                         │
  │  ‾                                                                         │
  └──────────────────────────────────────────────────────── everything.md:26:4 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `b` here.
+    Names that start with lowercase letters are value names or record field
+    names, depending on the surrounding syntax.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  ) -> Str,                                                                 │
  │  ‾                                                                         │
  └──────────────────────────────────────────────────────── everything.md:27:3 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `)` here.
+    This closes the current construct, so the parser was looking for the
+    missing item before it.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ Function types with multiple arrows need parentheses. ───────┐
-└┬────────────┘                                                               │
+┌─────────────────────────┐
+│ AMBIGUOUS FUNCTION TYPE ├─ I was parsing a function type, and multiple ─────┐
+└┬────────────────────────┘  arrows need parentheses.                         │
  │                                                                            │
  │  ) -> Str,                                                                 │
  │    ‾‾                                                                      │
  └──────────────────────────────────────────────────────── everything.md:27:5 ┘
 
-    Instead of writing a -> b -> c, use parentheses to clarify which you mean:
-            a -> (b -> c) for a curried function (a function that returns
-            another function)
-            (a -> b) -> c for a higher-order function (a function that takes
-            another function)
+    Use parentheses to say whether the function returns another function or
+    takes a function as an argument.
+
+    For example:
+        a -> (b -> c)
+        (a -> b) -> c
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ Type applications require parentheses around their type ─────┐
-└┬────────────┘  arguments.                                                   │
+┌────────────────────────────────────┐
+│ TYPE APPLICATION NEEDS PARENTHESES ├─ I was parsing a type annotation, ─────┐
+└┬───────────────────────────────────┘  and I found a type argument without   │
+ │                                      parentheses.                          │
  │                                                                            │
  │  ) -> Str,                                                                 │
  │          ‾                                                                 │
  └─────────────────────────────────────────────────────── everything.md:27:11 ┘
 
-    I found a type followed by what looks like a type argument, but they need
-    to be connected with parentheses.
+    Roc type applications use parentheses around their arguments. Write
+    `List(U8)`, not `List U8`.
 
-    Instead of:
-        List U8
-
-    Use:
+    For example:
         List(U8)
 
-    Other valid examples:
-        Dict(Str, Num)
-        Try(a, Str)
-        Maybe(List(U64))
+    I found `,` here.
+    A comma separates items, but there must be a valid item on both sides of it.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  module(b).b2 : (                                                          │
  │  ‾‾‾‾‾‾                                                                    │
  └──────────────────────────────────────────────────────── everything.md:28:3 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `module` here.
+    That word is reserved by Roc, so it cannot be used as a name in this
+    position.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  module(b).b2 : (                                                          │
  │        ‾                                                                   │
  └──────────────────────────────────────────────────────── everything.md:28:9 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `(` here.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  module(b).b2 : (                                                          │
  │         ‾                                                                  │
  └─────────────────────────────────────────────────────── everything.md:28:10 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `b` here.
+    Names that start with lowercase letters are value names or record field
+    names, depending on the surrounding syntax.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  module(b).b2 : (                                                          │
  │          ‾                                                                 │
  └─────────────────────────────────────────────────────── everything.md:28:11 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `)` here.
+    This closes the current construct, so the parser was looking for the
+    missing item before it.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  module(b).b2 : (                                                          │
  │           ‾‾‾                                                              │
  └─────────────────────────────────────────────────────── everything.md:28:12 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `.b2` here.
+    Names that start with lowercase letters are value names or record field
+    names, depending on the surrounding syntax.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  module(b).b2 : (                                                          │
  │               ‾                                                            │
  └─────────────────────────────────────────────────────── everything.md:28:16 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `:` here.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  module(b).b2 : (                                                          │
  │                 ‾                                                          │
  └─────────────────────────────────────────────────────── everything.md:28:18 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `(` here.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  b,                                                                        │
  │  ‾                                                                         │
  └──────────────────────────────────────────────────────── everything.md:29:4 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `b` here.
+    Names that start with lowercase letters are value names or record field
+    names, depending on the surrounding syntax.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  b,                                                                        │
  │   ‾                                                                        │
  └──────────────────────────────────────────────────────── everything.md:29:5 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `,` here.
+    A comma separates items, but there must be a valid item on both sides of it.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  b                                                                         │
  │  ‾                                                                         │
  └──────────────────────────────────────────────────────── everything.md:30:4 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `b` here.
+    Names that start with lowercase letters are value names or record field
+    names, depending on the surrounding syntax.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  ) -> Str                                                                  │
  │  ‾                                                                         │
  └──────────────────────────────────────────────────────── everything.md:31:3 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `)` here.
+    This closes the current construct, so the parser was looking for the
+    missing item before it.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ Function types with multiple arrows need parentheses. ───────┐
-└┬────────────┘                                                               │
+┌─────────────────────────┐
+│ AMBIGUOUS FUNCTION TYPE ├─ I was parsing a function type, and multiple ─────┐
+└┬────────────────────────┘  arrows need parentheses.                         │
  │                                                                            │
  │  ) -> Str                                                                  │
  │    ‾‾                                                                      │
  └──────────────────────────────────────────────────────── everything.md:31:5 ┘
 
-    Instead of writing a -> b -> c, use parentheses to clarify which you mean:
-            a -> (b -> c) for a curried function (a function that returns
-            another function)
-            (a -> b) -> c for a higher-order function (a function that takes
-            another function)
+    Use parentheses to say whether the function returns another function or
+    takes a function as an argument.
+
+    For example:
+        a -> (b -> c)
+        (a -> b) -> c
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ Type applications require parentheses around their type ─────┐
-└┬────────────┘  arguments.                                                   │
+┌────────────────────────────────────┐
+│ TYPE APPLICATION NEEDS PARENTHESES ├─ I was parsing a type annotation, ─────┐
+└┬───────────────────────────────────┘  and I found a type argument without   │
+ │                                      parentheses.                          │
  │                                                                            │
  │  C(                                                                        │
  │  ‾                                                                         │
  └──────────────────────────────────────────────────────── everything.md:33:1 ┘
 
-    I found a type followed by what looks like a type argument, but they need
-    to be connected with parentheses.
+    Roc type applications use parentheses around their arguments. Write
+    `List(U8)`, not `List U8`.
 
-    Instead of:
-        List U8
-
-    Use:
+    For example:
         List(U8)
 
-    Other valid examples:
-        Dict(Str, Num)
-        Try(a, Str)
-        Maybe(List(U64))
+    I found `C` here.
+    Names that start with uppercase letters are used for tags, type names, and
+    module names in Roc.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  C(                                                                        │
  │   ‾                                                                        │
  └──────────────────────────────────────────────────────── everything.md:33:2 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `(` here.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  a,                                                                        │
  │  ‾                                                                         │
  └──────────────────────────────────────────────────────── everything.md:34:2 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `a` here.
+    Names that start with lowercase letters are value names or record field
+    names, depending on the surrounding syntax.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  a,                                                                        │
  │   ‾                                                                        │
  └──────────────────────────────────────────────────────── everything.md:34:3 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `,` here.
+    A comma separates items, but there must be a valid item on both sides of it.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  b                                                                         │
  │  ‾                                                                         │
  └──────────────────────────────────────────────────────── everything.md:35:2 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `b` here.
+    Names that start with lowercase letters are value names or record field
+    names, depending on the surrounding syntax.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  ) : (                                                                     │
  │  ‾                                                                         │
  └──────────────────────────────────────────────────────── everything.md:36:1 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `)` here.
+    This closes the current construct, so the parser was looking for the
+    missing item before it.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  ) : (                                                                     │
  │    ‾                                                                       │
  └──────────────────────────────────────────────────────── everything.md:36:3 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `:` here.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  ) : (                                                                     │
  │      ‾                                                                     │
  └──────────────────────────────────────────────────────── everything.md:36:5 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `(` here.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  a,                                                                        │
  │  ‾                                                                         │
  └──────────────────────────────────────────────────────── everything.md:37:2 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `a` here.
+    Names that start with lowercase letters are value names or record field
+    names, depending on the surrounding syntax.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  a,                                                                        │
  │   ‾                                                                        │
  └──────────────────────────────────────────────────────── everything.md:37:3 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `,` here.
+    A comma separates items, but there must be a valid item on both sides of it.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  b                                                                         │
  │  ‾                                                                         │
  └──────────────────────────────────────────────────────── everything.md:38:2 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `b` here.
+    Names that start with lowercase letters are value names or record field
+    names, depending on the surrounding syntax.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  )                                                                         │
  │  ‾                                                                         │
  └──────────────────────────────────────────────────────── everything.md:39:1 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `)` here.
+    This closes the current construct, so the parser was looking for the
+    missing item before it.
 
 
-┌────────────────────┐
-│ WHERE CLAUSE ERROR ├─ Expected an opening bracket [ after where. ───────────┐
-└┬───────────────────┘                                                        │
+┌────────────────────────────┐
+│ EXPECTED WHERE CLAUSE LIST ├─ I was parsing a `where` clause, and I ────────┐
+└┬───────────────────────────┘  expected `[`.                                 │
  │                                                                            │
  │  g : e -> e where module(e).A, module(e).B                                 │
  │             ‾‾‾‾‾                                                          │
  └─────────────────────────────────────────────────────── everything.md:56:12 ┘
 
-    Where clauses should look like:     where [a.method : Type]
+    Where constraints are written in a square-bracketed list after `where`.
+
+    For example:
+        where [a.hash : a -> U64]
+
+    I found `where` here.
+    That word is reserved by Roc, so it cannot be used as a name in this
+    position.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  g : e -> e where module(e).A, module(e).B                                 │
  │                   ‾‾‾‾‾‾                                                   │
  └─────────────────────────────────────────────────────── everything.md:56:18 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `module` here.
+    That word is reserved by Roc, so it cannot be used as a name in this
+    position.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  g : e -> e where module(e).A, module(e).B                                 │
  │                         ‾                                                  │
  └─────────────────────────────────────────────────────── everything.md:56:24 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `(` here.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  g : e -> e where module(e).A, module(e).B                                 │
  │                          ‾                                                 │
  └─────────────────────────────────────────────────────── everything.md:56:25 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `e` here.
+    Names that start with lowercase letters are value names or record field
+    names, depending on the surrounding syntax.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  g : e -> e where module(e).A, module(e).B                                 │
  │                           ‾                                                │
  └─────────────────────────────────────────────────────── everything.md:56:26 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `)` here.
+    This closes the current construct, so the parser was looking for the
+    missing item before it.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  g : e -> e where module(e).A, module(e).B                                 │
  │                            ‾‾                                              │
  └─────────────────────────────────────────────────────── everything.md:56:27 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `.A` here.
+    Names that start with uppercase letters are used for tags, type names, and
+    module names in Roc.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  g : e -> e where module(e).A, module(e).B                                 │
  │                              ‾                                             │
  └─────────────────────────────────────────────────────── everything.md:56:29 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `,` here.
+    A comma separates items, but there must be a valid item on both sides of it.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  g : e -> e where module(e).A, module(e).B                                 │
  │                                ‾‾‾‾‾‾                                      │
  └─────────────────────────────────────────────────────── everything.md:56:31 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `module` here.
+    That word is reserved by Roc, so it cannot be used as a name in this
+    position.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  g : e -> e where module(e).A, module(e).B                                 │
  │                                      ‾                                     │
  └─────────────────────────────────────────────────────── everything.md:56:37 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `(` here.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  g : e -> e where module(e).A, module(e).B                                 │
  │                                       ‾                                    │
  └─────────────────────────────────────────────────────── everything.md:56:38 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `e` here.
+    Names that start with lowercase letters are value names or record field
+    names, depending on the surrounding syntax.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  g : e -> e where module(e).A, module(e).B                                 │
  │                                        ‾                                   │
  └─────────────────────────────────────────────────────── everything.md:56:39 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `)` here.
+    This closes the current construct, so the parser was looking for the
+    missing item before it.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  g : e -> e where module(e).A, module(e).B                                 │
  │                                         ‾‾                                 │
  └─────────────────────────────────────────────────────── everything.md:56:40 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `.B` here.
+    Names that start with uppercase letters are used for tags, type names, and
+    module names in Roc.
 
 
 ┌──────────────────────────────────────────────┐
@@ -1829,7 +2364,7 @@ h = |x, y| {
 												(p-assign (ident "y"))))))))))
 				(s-let
 					(p-assign (ident "h2"))
-					(e-call (constraint-fn-var 144)
+					(e-call (constraint-fn-var 147)
 						(e-lookup-local
 							(p-assign (ident "h")))
 						(e-lookup-local

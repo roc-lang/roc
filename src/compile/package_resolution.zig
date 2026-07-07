@@ -287,6 +287,7 @@ const Edge = struct {
         unparsable_url,
         insecure_url,
         reserved_version,
+        ambiguous_version,
     };
 };
 
@@ -513,16 +514,14 @@ pub const Resolver = struct {
                             .is_platform = dep.is_platform,
                             .target = .{ .invalid = switch (err) {
                                 error.InvalidVersion => .reserved_version,
+                                error.AmbiguousVersion => .ambiguous_version,
                                 else => .unparsable_url,
                             } },
                         });
                         continue;
                     };
 
-                    const group = if (parsed.version.isPresent())
-                        try std.fmt.allocPrint(self.arena(), "v{d}@{s}", .{ parsed.version.major, parsed.urlId(dep.spec) })
-                    else
-                        try std.fmt.allocPrint(self.arena(), "u@{s}", .{dep.spec});
+                    const group = try self.urlGroupKey(parsed, dep.spec);
 
                     const target = UrlTarget{
                         .group = group,
@@ -817,14 +816,35 @@ pub const Resolver = struct {
         }
     }
 
+    /// Build the sharing-group key for a parsed package URL. Versions in the
+    /// same group may be swapped for one another during solving: 1.0.0+
+    /// versions group by major, 0.X.Y versions group by 0.X (a 0.minor bump
+    /// signals a breaking change), and versionless URLs only ever match
+    /// themselves exactly. The url id is the prefix and suffix around the
+    /// version, so URLs that only differ in version share a key.
+    fn urlGroupKey(self: *Resolver, parsed: base.url.ParsedUrl, spec: []const u8) Allocator.Error![]const u8 {
+        if (!parsed.version.isPresent()) {
+            return try std.fmt.allocPrint(self.arena(), "u@{s}", .{spec});
+        }
+        if (parsed.version.major == 0) {
+            return try std.fmt.allocPrint(self.arena(), "v0.{d}@{s}{s}", .{
+                parsed.version.minor,
+                parsed.urlIdPrefix(spec),
+                parsed.urlIdSuffix(spec),
+            });
+        }
+        return try std.fmt.allocPrint(self.arena(), "v{d}@{s}{s}", .{
+            parsed.version.major,
+            parsed.urlIdPrefix(spec),
+            parsed.urlIdSuffix(spec),
+        });
+    }
+
     fn groupKeyForSpec(self: *Resolver, parent_dir: []const u8, spec: []const u8) Allocator.Error!?[]const u8 {
         if (specIsUrlLike(spec)) {
             if (!base.url.isSafeUrl(spec)) return null;
             const parsed = base.url.parseUrlPath(spec) catch return null;
-            if (parsed.version.isPresent()) {
-                return try std.fmt.allocPrint(self.arena(), "v{d}@{s}", .{ parsed.version.major, parsed.urlId(spec) });
-            }
-            return try std.fmt.allocPrint(self.arena(), "u@{s}", .{spec});
+            return try self.urlGroupKey(parsed, spec);
         }
         const abs = try self.resolveLocalPath(parent_dir, spec);
         return try std.fmt.allocPrint(self.arena(), "l@{s}", .{abs});
@@ -853,6 +873,12 @@ pub const Resolver = struct {
                             "Invalid Package Version",
                             "{s} depends on this URL, which uses the reserved version 0.0.0:\n\n    {s}\n\n" ++
                                 "The lowest publishable package version is 0.0.1.",
+                            .{ owner, edge.spec },
+                        ),
+                        .ambiguous_version => try self.addDiagnostic(
+                            "Ambiguous Package Version",
+                            "{s} depends on this URL, which contains more than one version number:\n\n    {s}\n\n" ++
+                                "A package URL must contain exactly one MAJOR.MINOR.PATCH version before its hash, so the version is unambiguous.",
                             .{ owner, edge.spec },
                         ),
                         .unparsable_url => try self.addDiagnostic(
@@ -1720,7 +1746,7 @@ test "selects the highest minor.patch within a major version" {
 
     const a_123 = "https://example.com/foo/a/1.2.3/hashA123.tar.zst";
     const a_131 = "https://example.com/foo/a/1.3.1/hashA131.tar.zst";
-    const b_url = "https://example.com/foo/b/2.0.0/hashB200.tar.zst";
+    const b_url = "https://example.com/foo/b/2.0.0/hashB2oo.tar.zst";
 
     try registry.locals.put("/app/main.roc", .{
         .kind = .package,
@@ -1795,11 +1821,11 @@ test "retraction: versions mentioned only by losers do not count" {
     // root -> q 1.2.0 and s 1.0.0; q 1.2.0 -> r 1.5.0; s -> q 1.4.0;
     // q 1.4.0 -> r 1.2.0. Once q resolves to 1.4.0, the mention of r 1.5.0
     // is retracted and r resolves to 1.2.0.
-    const q_120 = "https://example.com/q/1.2.0/hashQ120.tar.zst";
-    const q_140 = "https://example.com/q/1.4.0/hashQ140.tar.zst";
-    const r_150 = "https://example.com/r/1.5.0/hashR150.tar.zst";
-    const r_120 = "https://example.com/r/1.2.0/hashR120.tar.zst";
-    const s_100 = "https://example.com/s/1.0.0/hashS100.tar.zst";
+    const q_120 = "https://example.com/q/1.2.0/hashQ12o.tar.zst";
+    const q_140 = "https://example.com/q/1.4.0/hashQ14o.tar.zst";
+    const r_150 = "https://example.com/r/1.5.0/hashR15o.tar.zst";
+    const r_120 = "https://example.com/r/1.2.0/hashR12o.tar.zst";
+    const s_100 = "https://example.com/s/1.0.0/hashS1oo.tar.zst";
 
     try registry.locals.put("/app/main.roc", .{
         .kind = .package,
@@ -1906,7 +1932,7 @@ test "app declaring two versions of the same package is an error" {
 
     const platform_url = "https://example.com/pf/1.0.0/hashPf.tar.zst";
     const a_123 = "https://example.com/foo/a/1.2.3/hashA123.tar.zst";
-    const a_140 = "https://example.com/foo/a/1.4.0/hashA140.tar.zst";
+    const a_140 = "https://example.com/foo/a/1.4.0/hashA14o.tar.zst";
 
     try registry.locals.put("/app/main.roc", .{
         .kind = .app,
@@ -1932,7 +1958,7 @@ test "same version with two different hashes is an error" {
     var registry = TestRegistry.init(gpa);
     defer registry.deinit();
 
-    const a_via_one = "https://example.com/foo/a/1.3.1/hashOne.tar.zst";
+    const a_via_one = "https://example.com/foo/a/1.3.1/hashFirst.tar.zst";
     const a_via_two = "https://example.com/foo/a/1.3.1/hashTwo.tar.zst";
     const b_url = "https://example.com/foo/b/1.0.0/hashB.tar.zst";
 
@@ -1963,8 +1989,8 @@ test "versionless URLs do not participate in solving" {
 
     // The same url id, hashless-versionless in two different bundles, plus a
     // versioned release of the same url id: all three coexist.
-    const a_plain_one = "https://example.com/foo/a/hashOldOne.tar.zst";
-    const a_plain_two = "https://example.com/foo/a/hashOldTwo.tar.zst";
+    const a_plain_one = "https://example.com/foo/a/hashRetiredA.tar.zst";
+    const a_plain_two = "https://example.com/foo/a/hashRetiredB.tar.zst";
     const a_versioned = "https://example.com/foo/a/1.2.3/hashNew.tar.zst";
     const b_url = "https://example.com/foo/b/1.0.0/hashB.tar.zst";
 
@@ -2002,9 +2028,9 @@ test "oscillating graphs are reported instead of looping" {
     // root -> b 1.0.0; b 1.0.0 -> c 1.0.0; c 1.0.0 -> b 1.1.0; b 1.1.0 has no
     // deps. No stable solution exists: choosing b 1.1.0 retracts c, which
     // retracts the b 1.1.0 mention, which restores b 1.0.0, which restores c.
-    const b_100 = "https://example.com/b/1.0.0/hashB100.tar.zst";
-    const b_110 = "https://example.com/b/1.1.0/hashB110.tar.zst";
-    const c_100 = "https://example.com/c/1.0.0/hashC100.tar.zst";
+    const b_100 = "https://example.com/b/1.0.0/hashB1oo.tar.zst";
+    const b_110 = "https://example.com/b/1.1.0/hashB11o.tar.zst";
+    const c_100 = "https://example.com/c/1.0.0/hashC1oo.tar.zst";
 
     try registry.locals.put("/app/main.roc", .{
         .kind = .package,
@@ -2170,8 +2196,8 @@ test "pin violations report the full chain through deep indirect dependencies" {
     var registry = TestRegistry.init(gpa);
     defer registry.deinit();
 
-    const a_100 = "https://example.com/a/1.0.0/hashA100.tar.zst";
-    const a_101 = "https://example.com/a/1.0.1/hashA101.tar.zst";
+    const a_100 = "https://example.com/a/1.0.0/hashA1oo.tar.zst";
+    const a_101 = "https://example.com/a/1.0.1/hashA1o1.tar.zst";
     const b_url = "https://example.com/b/1.0.0/hashB.tar.zst";
     const c_url = "https://example.com/c/1.0.0/hashC.tar.zst";
     const d_url = "https://example.com/d/1.0.0/hashD.tar.zst";
@@ -2213,11 +2239,11 @@ test "retraction prunes a loser's entire subtree without downloading it" {
     // q 1.2.0 pulls in r, which pulls in t — but s bumps q to 1.4.0 (which
     // has no deps) before q 1.2.0's subtree is ever followed, so r and t are
     // never even downloaded.
-    const q_120 = "https://example.com/q/1.2.0/hashQ120.tar.zst";
-    const q_140 = "https://example.com/q/1.4.0/hashQ140.tar.zst";
-    const r_150 = "https://example.com/r/1.5.0/hashR150.tar.zst";
-    const t_100 = "https://example.com/t/1.0.0/hashT100.tar.zst";
-    const s_100 = "https://example.com/s/1.0.0/hashS100.tar.zst";
+    const q_120 = "https://example.com/q/1.2.0/hashQ12o.tar.zst";
+    const q_140 = "https://example.com/q/1.4.0/hashQ14o.tar.zst";
+    const r_150 = "https://example.com/r/1.5.0/hashR15o.tar.zst";
+    const t_100 = "https://example.com/t/1.0.0/hashT1oo.tar.zst";
+    const s_100 = "https://example.com/s/1.0.0/hashS1oo.tar.zst";
 
     try registry.locals.put("/app/main.roc", .{
         .kind = .package,
@@ -2243,8 +2269,8 @@ test "retraction prunes a loser's entire subtree without downloading it" {
     try std.testing.expect(testFindPackage(&resolved, t_100) == null);
     // The subtree was retracted before ever being followed, so it was never
     // fetched at all.
-    try std.testing.expect(!resolver.url_nodes.contains("hashR150"));
-    try std.testing.expect(!resolver.url_nodes.contains("hashT100"));
+    try std.testing.expect(!resolver.url_nodes.contains("hashR15o"));
+    try std.testing.expect(!resolver.url_nodes.contains("hashT1oo"));
 }
 
 test "an over-downloaded intermediate version is retracted and does not violate the app's pin" {
@@ -2258,10 +2284,10 @@ test "an over-downloaded intermediate version is retracted and does not violate 
     // pinned 1.2.3, and reporting no conflict. The intermediate download is
     // intended waste.
     const a_123 = "https://example.com/a/1.2.3/hashA123.tar.zst";
-    const a_130 = "https://example.com/a/1.3.0/hashA130.tar.zst";
+    const a_130 = "https://example.com/a/1.3.0/hashA13o.tar.zst";
     const b_url = "https://example.com/b/1.0.0/hashB.tar.zst";
-    const c_120 = "https://example.com/c/1.2.0/hashC120.tar.zst";
-    const c_150 = "https://example.com/c/1.5.0/hashC150.tar.zst";
+    const c_120 = "https://example.com/c/1.2.0/hashC12o.tar.zst";
+    const c_150 = "https://example.com/c/1.5.0/hashC15o.tar.zst";
     const d_url = "https://example.com/d/1.0.0/hashD.tar.zst";
 
     try registry.locals.put("/app/main.roc", .{
@@ -2292,7 +2318,7 @@ test "an over-downloaded intermediate version is retracted and does not violate 
     try std.testing.expect(testFindPackage(&resolved, c_150) != null);
     try std.testing.expect(testFindPackage(&resolved, c_120) == null);
     // The losing version really was downloaded along the way.
-    try std.testing.expect(resolver.url_nodes.contains("hashA130"));
+    try std.testing.expect(resolver.url_nodes.contains("hashA13o"));
 }
 
 test "a bumped winner's new dependencies join the graph" {
@@ -2301,8 +2327,8 @@ test "a bumped winner's new dependencies join the graph" {
     defer registry.deinit();
 
     // x 1.0.0 has no deps, but the winning x 1.1.0 introduces z.
-    const x_100 = "https://example.com/x/1.0.0/hashX100.tar.zst";
-    const x_110 = "https://example.com/x/1.1.0/hashX110.tar.zst";
+    const x_100 = "https://example.com/x/1.0.0/hashX1oo.tar.zst";
+    const x_110 = "https://example.com/x/1.1.0/hashX11o.tar.zst";
     const y_url = "https://example.com/y/1.0.0/hashY.tar.zst";
     const z_url = "https://example.com/z/1.0.0/hashZ.tar.zst";
 
@@ -2438,8 +2464,8 @@ test "transitive tally counts retracted downloads against every root that reache
     // it is a safety mechanism over everything resolution caused to enter
     // the graph — and counts it against both direct dependencies, since
     // both reach it.
-    const q_100 = "https://example.com/q/1.0.0/hashQ100.tar.zst";
-    const q_110 = "https://example.com/q/1.1.0/hashQ110.tar.zst";
+    const q_100 = "https://example.com/q/1.0.0/hashQ1oo.tar.zst";
+    const q_110 = "https://example.com/q/1.1.0/hashQ11o.tar.zst";
     const s_url = "https://example.com/s/1.0.0/hashS.tar.zst";
     const t_url = "https://example.com/t/1.0.0/hashT.tar.zst";
     const big_url = "https://example.com/big/1.0.0/hashBig.tar.zst";
@@ -2517,7 +2543,7 @@ test "version solving spans local packages bridging URL dependencies" {
     var registry = TestRegistry.init(gpa);
     defer registry.deinit();
 
-    const a_10 = "https://example.com/a/1.0.0/hashA10.tar.zst";
+    const a_10 = "https://example.com/a/1.0.0/hashA1o.tar.zst";
     const a_11 = "https://example.com/a/1.1.0/hashA11.tar.zst";
 
     try registry.locals.put("/app/main.roc", .{
@@ -2552,7 +2578,7 @@ test "versionBumpNotes reports packages compiled against undeclared versions" {
 
     const a_123 = "https://example.com/foo/a/1.2.3/hashA123.tar.zst";
     const a_131 = "https://example.com/foo/a/1.3.1/hashA131.tar.zst";
-    const b_url = "https://example.com/foo/b/2.0.0/hashB200.tar.zst";
+    const b_url = "https://example.com/foo/b/2.0.0/hashB2oo.tar.zst";
 
     try registry.locals.put("/app/main.roc", .{
         .kind = .package,
@@ -2600,4 +2626,133 @@ test "insecure URLs are rejected" {
 
     try std.testing.expectError(error.ResolutionFailed, resolver.resolve("/app/main.roc"));
     try std.testing.expectEqualStrings("Insecure Package URL", resolver.diagnostics.items[0].title);
+}
+
+test "0.x versions within the same 0.minor share one package" {
+    const gpa = std.testing.allocator;
+    var registry = TestRegistry.init(gpa);
+    defer registry.deinit();
+
+    const a_url = "https://example.com/a/1.0.0/hashA.tar.zst";
+    const b_url = "https://example.com/b/1.0.0/hashB.tar.zst";
+    const c_050 = "https://example.com/c/0.5.0/hashCo5o.tar.zst";
+    const c_052 = "https://example.com/c/0.5.2/hashCo52.tar.zst";
+
+    try registry.locals.put("/app/main.roc", .{
+        .kind = .package,
+        .deps = &.{
+            .{ .alias = "a", .spec = a_url, .is_platform = false },
+            .{ .alias = "b", .spec = b_url, .is_platform = false },
+        },
+    });
+    try registry.urls.put(a_url, .{ .deps = &.{.{ .alias = "c", .spec = c_050, .is_platform = false }} });
+    try registry.urls.put(b_url, .{ .deps = &.{.{ .alias = "c", .spec = c_052, .is_platform = false }} });
+    try registry.urls.put(c_050, .{});
+    try registry.urls.put(c_052, .{});
+
+    var resolver = Resolver.init(gpa, registry.fetcher(), .{});
+    defer resolver.deinit();
+
+    var resolved = try resolver.resolve("/app/main.roc");
+    defer resolved.deinit();
+
+    // 0.5.0 and 0.5.2 are the same compatibility group; the max wins.
+    try std.testing.expectEqual(@as(usize, 4), resolved.packages.len);
+    const a = testFindPackage(&resolved, a_url).?;
+    const b = testFindPackage(&resolved, b_url).?;
+    try std.testing.expectEqual(a.deps[0].target, b.deps[0].target);
+    try std.testing.expectEqualStrings(c_052, resolved.packages[a.deps[0].target].identity);
+}
+
+test "different 0.minor versions are different packages" {
+    const gpa = std.testing.allocator;
+    var registry = TestRegistry.init(gpa);
+    defer registry.deinit();
+
+    const a_05 = "https://example.com/a/0.5.0/hashAo5.tar.zst";
+    const a_06 = "https://example.com/a/0.6.1/hashAo6.tar.zst";
+    const b_url = "https://example.com/b/1.0.0/hashB.tar.zst";
+
+    try registry.locals.put("/app/main.roc", .{
+        .kind = .app,
+        .deps = &.{
+            .{ .alias = "a", .spec = a_05, .is_platform = false },
+            .{ .alias = "b", .spec = b_url, .is_platform = false },
+        },
+    });
+    try registry.urls.put(a_05, .{});
+    try registry.urls.put(a_06, .{});
+    try registry.urls.put(b_url, .{ .deps = &.{.{ .alias = "a", .spec = a_06, .is_platform = false }} });
+
+    var resolver = Resolver.init(gpa, registry.fetcher(), .{});
+    defer resolver.deinit();
+
+    var resolved = try resolver.resolve("/app/main.roc");
+    defer resolved.deinit();
+
+    // A 0.minor bump is a breaking change, so 0.5.x and 0.6.x are different
+    // packages: no conflict, both present.
+    try std.testing.expect(testFindPackage(&resolved, a_05) != null);
+    try std.testing.expect(testFindPackage(&resolved, a_06) != null);
+}
+
+test "app pins constrain their own 0.minor group" {
+    const gpa = std.testing.allocator;
+    var registry = TestRegistry.init(gpa);
+    defer registry.deinit();
+
+    const a_050 = "https://example.com/a/0.5.0/hashAo5o.tar.zst";
+    const a_052 = "https://example.com/a/0.5.2/hashAo52.tar.zst";
+    const b_url = "https://example.com/b/1.0.0/hashB.tar.zst";
+
+    try registry.locals.put("/app/main.roc", .{
+        .kind = .app,
+        .deps = &.{
+            .{ .alias = "a", .spec = a_050, .is_platform = false },
+            .{ .alias = "b", .spec = b_url, .is_platform = false },
+        },
+    });
+    try registry.urls.put(a_050, .{});
+    try registry.urls.put(a_052, .{});
+    try registry.urls.put(b_url, .{ .deps = &.{.{ .alias = "a", .spec = a_052, .is_platform = false }} });
+
+    var resolver = Resolver.init(gpa, registry.fetcher(), .{});
+    defer resolver.deinit();
+
+    try std.testing.expectError(error.ResolutionFailed, resolver.resolve("/app/main.roc"));
+    try std.testing.expectEqualStrings("Package Version Conflict", resolver.diagnostics.items[0].title);
+}
+
+test "URLs with more than one version are rejected as ambiguous" {
+    const gpa = std.testing.allocator;
+    var registry = TestRegistry.init(gpa);
+    defer registry.deinit();
+
+    try registry.locals.put("/app/main.roc", .{
+        .kind = .package,
+        .deps = &.{.{ .alias = "a", .spec = "https://example.com/1.2.3/a-4.5.6-hashA.tar.zst", .is_platform = false }},
+    });
+
+    var resolver = Resolver.init(gpa, registry.fetcher(), .{});
+    defer resolver.deinit();
+
+    try std.testing.expectError(error.ResolutionFailed, resolver.resolve("/app/main.roc"));
+    try std.testing.expectEqualStrings("Ambiguous Package Version", resolver.diagnostics.items[0].title);
+}
+
+test "the reserved 0.0.0 version is rejected" {
+    const gpa = std.testing.allocator;
+    var registry = TestRegistry.init(gpa);
+    defer registry.deinit();
+
+    try registry.locals.put("/app/main.roc", .{
+        .kind = .package,
+        .deps = &.{.{ .alias = "a", .spec = "https://example.com/a/0.0.0/hashA.tar.zst", .is_platform = false }},
+    });
+
+    var resolver = Resolver.init(gpa, registry.fetcher(), .{});
+    defer resolver.deinit();
+
+    try std.testing.expectError(error.ResolutionFailed, resolver.resolve("/app/main.roc"));
+    try std.testing.expectEqualStrings("Invalid Package Version", resolver.diagnostics.items[0].title);
 }

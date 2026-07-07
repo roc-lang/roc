@@ -8,18 +8,26 @@ type=file
 modu
 ~~~
 # EXPECTED
-PARSE ERROR - fuzz_crash_005.md:1:1:1:5
+UNEXPECTED STATEMENT - fuzz_crash_005.md:1:1:1:5
 # PROBLEMS
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  modu                                                                      │
  │  ‾‾‾‾                                                                      │
  └───────────────────────────────────────────────────── fuzz_crash_005.md:1:1 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `modu` here.
+    Names that start with lowercase letters are value names or record field
+    names, depending on the surrounding syntax.
 
 # TOKENS
 ~~~zig

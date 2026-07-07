@@ -189,6 +189,51 @@ test "bare .. in expression position is a helpful parse error" {
     );
 }
 
+test "dollar-prefixed record field names are rejected with a single diagnostic" {
+    const gpa = std.testing.allocator;
+
+    const Case = struct {
+        source: []const u8,
+        parse: *const fn (Allocator, *CommonEnv) Allocator.Error!*AST,
+    };
+
+    for ([_]Case{
+        .{
+            .source = "{ $field : \"value\" }",
+            .parse = expr,
+        },
+        .{
+            .source = "value : { $field : Str }",
+            .parse = statement,
+        },
+        .{
+            .source = "match value { { $field } => \"matched\" }",
+            .parse = expr,
+        },
+        .{
+            .source = "app [main!] { $pf: platform \"./platform/main.roc\" }",
+            .parse = header,
+        },
+        .{
+            .source = "package [Foo] { $dep: \"../dep/main.roc\" }",
+            .parse = header,
+        },
+    }) |case| {
+        var env = try CommonEnv.init(gpa, case.source);
+        defer env.deinit(gpa);
+
+        const ast = try case.parse(gpa, &env);
+        defer ast.deinit();
+
+        try std.testing.expectEqual(@as(usize, 0), ast.tokenize_diagnostics.items.len);
+        try std.testing.expectEqual(@as(usize, 1), ast.parse_diagnostics.items.len);
+        try std.testing.expectEqual(
+            AST.Diagnostic.Tag.record_field_name_cannot_be_var,
+            ast.parse_diagnostics.items[0].tag,
+        );
+    }
+}
+
 fn vmExprAllocationFailureImpl(allocator: Allocator, tokens: tokenize.TokenizedBuffer) Allocator.Error!void {
     var parser = try Parser.init(tokens, allocator);
     defer parser.store.deinit();

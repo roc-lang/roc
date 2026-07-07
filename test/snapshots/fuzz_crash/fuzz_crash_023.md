@@ -214,11 +214,10 @@ expect {
 }
 ~~~
 # EXPECTED
-PARSE ERROR - fuzz_crash_023.md:178:37:178:38
-PARSE ERROR - fuzz_crash_023.md:178:38:178:40
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_023.md:178:40:178:41
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_023.md:178:45:178:46
-PARSE ERROR - fuzz_crash_023.md:178:52:178:54
+EXPECTED RECORD ACCESSOR - fuzz_crash_023.md:154:2:154:5
+EXPECTED RECORD FIELD - fuzz_crash_023.md:178:37:178:38
+UNEXPECTED EXPRESSION SYNTAX - fuzz_crash_023.md:178:45:178:46
+EXPECTED FUNCTION ARROW - fuzz_crash_023.md:178:52:178:54
 NOT IMPLEMENTED - fuzz_crash_023.md:6:1:12:4
 MODULE NOT FOUND - fuzz_crash_023.md:16:1:16:27
 MODULE NOT FOUND - fuzz_crash_023.md:17:1:20:20
@@ -249,10 +248,10 @@ UNUSED VARIABLE - fuzz_crash_023.md:82:2:82:3
 NAME NOT IN SCOPE - fuzz_crash_023.md:141:2:141:6
 UNDECLARED TYPE - fuzz_crash_023.md:143:14:143:20
 NAME NOT IN SCOPE - fuzz_crash_023.md:147:9:147:13
+UNRECOGNIZED SYNTAX - fuzz_crash_023.md:154:2:154:5
 NAME NOT IN SCOPE - fuzz_crash_023.md:158:2:158:11
 NAME NOT IN SCOPE - fuzz_crash_023.md:175:3:175:15
-UNRECOGNIZED SYNTAX - fuzz_crash_023.md:178:38:178:40
-UNRECOGNIZED SYNTAX - fuzz_crash_023.md:178:40:178:41
+UNRECOGNIZED SYNTAX - fuzz_crash_023.md:178:11:178:45
 UNRECOGNIZED SYNTAX - fuzz_crash_023.md:178:45:178:46
 MALFORMED TYPE - fuzz_crash_023.md:178:52:178:71
 NAME NOT IN SCOPE - fuzz_crash_023.md:179:42:179:48
@@ -277,7 +276,6 @@ MISSING METHOD - fuzz_crash_023.md:99:3:99:8
 MISSING METHOD - fuzz_crash_023.md:101:3:101:8
 TYPE MISMATCH - fuzz_crash_023.md:84:2:84:2
 DECLARATION HAS NO VALUE - fuzz_crash_023.md:178:47:178:71
-TYPE MISMATCH - fuzz_crash_023.md:150:3:150:6
 TOO FEW ARGS - fuzz_crash_023.md:155:2:157:3
 TYPE MISMATCH - fuzz_crash_023.md:167:3:167:3
 DECLARATION HAS NO VALUE - fuzz_crash_023.md:178:47:178:71
@@ -286,59 +284,78 @@ MISSING METHOD - fuzz_crash_023.md:189:26:189:40
 MISSING METHOD - fuzz_crash_023.md:189:26:189:66
 # PROBLEMS
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: expected_expr_record_field_name ───┐
-└┬────────────┘                                                               │
+┌──────────────────────────┐
+│ EXPECTED RECORD ACCESSOR ├─ I was parsing access after `.`, and I ──────────┐
+└┬─────────────────────────┘  expected a field name or tuple index.           │
+ │                                                                            │
+ │  ...                                                                       │
+ │  ‾‾‾                                                                       │
+ └─────────────────────────────────────────────────── fuzz_crash_023.md:154:2 ┘
+
+    Record access uses a lowercase field name like `.name`. Tuple access uses a
+    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
+    valid accessors.
+
+    For example:
+        person.name
+        pair.0
+
+    I found `...` here.
+
+
+┌───────────────────────┐
+│ EXPECTED RECORD FIELD ├─ I was parsing a record expression, and I ──────────┐
+└┬──────────────────────┘  expected a lowercase field name.                   │
  │                                                                            │
  │  record = { foo: 123, bar: "Hello", ;az: tag, qux: Ok(world), punned }     │
  │                                     ‾                                      │
  └────────────────────────────────────────────────── fuzz_crash_023.md:178:37 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Record fields start with lowercase names. After the name, either write `:
+    value` or omit the value to use field punning.
+
+    For example:
+        { name: "Ada", age }
+
+    I found `;` here.
+    This token is malformed, so it cannot be used as ordinary Roc syntax.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: ───────────────────────────────────┐
-└┬────────────┘  expected_expr_close_curly_or_comma                           │
- │                                                                            │
- │  record = { foo: 123, bar: "Hello", ;az: tag, qux: Ok(world), punned }     │
- │                                      ‾‾                                    │
- └────────────────────────────────────────────────── fuzz_crash_023.md:178:38 ┘
-
-    This is an unexpected parsing error. Please check your syntax.
-
-
-┌────────────────────────────────┐
-│ UNEXPECTED TOKEN IN EXPRESSION ├─ The token : is not expected in an ────────┐
-└┬───────────────────────────────┘  expression.                               │
- │                                                                            │
- │  record = { foo: 123, bar: "Hello", ;az: tag, qux: Ok(world), punned }     │
- │                                        ‾                                   │
- └────────────────────────────────────────────────── fuzz_crash_023.md:178:40 ┘
-
-    Expressions can be identifiers, literals, function calls, or operators.
-
-
-┌────────────────────────────────┐
-│ UNEXPECTED TOKEN IN EXPRESSION ├─ The token , is not expected in an ────────┐
-└┬───────────────────────────────┘  expression.                               │
+┌──────────────────────────────┐
+│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
+└┬─────────────────────────────┘  token cannot start an expression here.      │
  │                                                                            │
  │  record = { foo: 123, bar: "Hello", ;az: tag, qux: Ok(world), punned }     │
  │                                             ‾                              │
  └────────────────────────────────────────────────── fuzz_crash_023.md:178:45 ┘
 
-    Expressions can be identifiers, literals, function calls, or operators.
+    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+    blocks, conditionals, matches, or function calls.
+
+    For example:
+        add(1, 2)
+
+    I found `,` here.
+    A comma separates items, but there must be a valid item on both sides of it.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: expected_arrow ────────────────────┐
-└┬────────────┘                                                               │
+┌─────────────────────────┐
+│ EXPECTED FUNCTION ARROW ├─ I was parsing a function type, and I expected ───┐
+└┬────────────────────────┘  `->` or `=>` before the return type.             │
  │                                                                            │
  │  record = { foo: 123, bar: "Hello", ;az: tag, qux: Ok(world), punned }     │
  │                                                    ‾‾                      │
  └────────────────────────────────────────────────── fuzz_crash_023.md:178:52 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Function types list argument types first, then an arrow, then the return
+    type.
+
+    For example:
+        Str, U64 -> Bool
+
+    I found `Ok` here.
+    Names that start with uppercase letters are used for tags, type names, and
+    module names in Roc.
 
 
 ┌─────────────────┐
@@ -681,6 +698,17 @@ MISSING METHOD - fuzz_crash_023.md:189:26:189:66
     Is it misspelled, or is there an import missing?
 
 
+┌─────────────────────┐
+│ UNRECOGNIZED SYNTAX ├─ I don't recognize this syntax. ──────────────────────┐
+└┬────────────────────┘                                                       │
+ │                                                                            │
+ │  ...                                                                       │
+ │  ‾‾‾                                                                       │
+ └─────────────────────────────────────────────────── fuzz_crash_023.md:154:2 ┘
+
+    This might be a syntax error, an unsupported language feature, or a typo.
+
+
 ┌───────────────────┐
 │ NAME NOT IN SCOPE ├─ Nothing is named `some_func` in this scope. ───────────┐
 └┬──────────────────┘                                                         │
@@ -708,19 +736,8 @@ MISSING METHOD - fuzz_crash_023.md:189:26:189:66
 └┬────────────────────┘                                                       │
  │                                                                            │
  │  record = { foo: 123, bar: "Hello", ;az: tag, qux: Ok(world), punned }     │
- │                                      ‾‾                                    │
- └────────────────────────────────────────────────── fuzz_crash_023.md:178:38 ┘
-
-    This might be a syntax error, an unsupported language feature, or a typo.
-
-
-┌─────────────────────┐
-│ UNRECOGNIZED SYNTAX ├─ I don't recognize this syntax. ──────────────────────┐
-└┬────────────────────┘                                                       │
- │                                                                            │
- │  record = { foo: 123, bar: "Hello", ;az: tag, qux: Ok(world), punned }     │
- │                                        ‾                                   │
- └────────────────────────────────────────────────── fuzz_crash_023.md:178:40 ┘
+ │           ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                               │
+ └────────────────────────────────────────────────── fuzz_crash_023.md:178:11 ┘
 
     This might be a syntax error, an unsupported language feature, or a typo.
 
@@ -1068,26 +1085,6 @@ MISSING METHOD - fuzz_crash_023.md:189:26:189:66
 
     Add a value body here, or put hosted functions in a platform type module so
     they are published through the host boundary.
-
-
-┌───────────────┐
-│ TYPE MISMATCH ├─ This `return` does not match the function's return type. ──┐
-└┬──────────────┘                                                             │
- │                                                                            │
- │  tag # Comment after return statement                                      │
- │  ‾‾‾                                                                       │
- └─────────────────────────────────────────────────── fuzz_crash_023.md:150:3 ┘
-
-    It has the type:
-
-        [Blue, ..]
-
-    But the function's return type is:
-
-        Try({}, _d)
-
-    Hint: All `return` statements and the final expression in a function must
-    have the same type.
 
 
 ┌──────────────┐
@@ -1725,8 +1722,7 @@ EndOfFile,
 							(p-ident (raw "tag"))
 							(e-tag (raw "Blue")))
 						(s-return
-							(e-ident (raw "tag")))
-						(e-ellipsis)
+							(e-malformed (reason "expr_dot_suffix_not_allowed")))
 						(e-apply
 							(e-ident (raw "match_time"))
 							(e-ellipsis))
@@ -1777,9 +1773,7 @@ EndOfFile,
 											(e-ident (raw "n")))))))
 						(s-decl
 							(p-ident (raw "record"))
-							(e-malformed (reason "expected_expr_close_curly_or_comma")))
-						(e-malformed (reason "expr_unexpected_token"))
-						(e-ident (raw "tag"))
+							(e-malformed (reason "expected_expr_record_field_name")))
 						(e-malformed (reason "expr_unexpected_token"))
 						(s-type-anno (name "qux")
 							(ty-malformed (tag "expected_arrow")))
@@ -2050,12 +2044,11 @@ main! = |_| { # Yeah I can leave a comment here
 	var number = 123
 	expect blah == 1
 	tag = Blue
-	return # Comment after return keyword
-		tag # Comment after return statement
+	return # Comment after return statement
 
 	# Just a random comment!
 
-	...
+		
 	match_time(
 		..., # Single args with comment
 	)
@@ -2080,7 +2073,6 @@ main! = |_| { # Yeah I can leave a comment here
 		number = number + n
 	}
 	record = 
-		tag
 		qux : 
 	tuple = (123, "World", tag, Ok(world), (nested, tuple), [1, 2, 3])
 	multiline_tuple = (
@@ -2397,12 +2389,9 @@ expect {
 					(p-assign (ident "tag"))
 					(e-tag (name "Blue")))
 				(s-return
-					(e-lookup-local
-						(p-assign (ident "tag"))))
+					(e-runtime-error (tag "expr_not_canonicalized")))
 				(s-expr
-					(e-not-implemented))
-				(s-expr
-					(e-call (constraint-fn-var 4273)
+					(e-call (constraint-fn-var 4269)
 						(e-lookup-local
 							(p-assign (ident "match_time")))
 						(e-not-implemented)))
@@ -2425,7 +2414,7 @@ expect {
 							(p-assign (ident "#interp_0"))
 							(e-lookup-local
 								(p-assign (ident "world"))))
-						(e-interpolation (constraint-fn-var 4364)
+						(e-interpolation (constraint-fn-var 4360)
 							(first
 								(e-literal (string "Hello, ")))
 							(parts
@@ -2473,7 +2462,7 @@ expect {
 											(e-literal (string "")))))))
 						(s-reassign
 							(p-assign (ident "number"))
-							(e-dispatch-call (method "plus") (constraint-fn-var 4622)
+							(e-dispatch-call (method "plus") (constraint-fn-var 4618)
 								(receiver
 									(e-lookup-local
 										(p-assign (ident "number"))))
@@ -2484,11 +2473,6 @@ expect {
 				(s-let
 					(p-assign (ident "record"))
 					(e-runtime-error (tag "expr_not_canonicalized")))
-				(s-expr
-					(e-runtime-error (tag "expr_not_canonicalized")))
-				(s-expr
-					(e-lookup-local
-						(p-assign (ident "tag"))))
 				(s-expr
 					(e-runtime-error (tag "expr_not_canonicalized")))
 				(s-let
@@ -2543,7 +2527,7 @@ expect {
 					(e-if
 						(if-branches
 							(if-branch
-								(e-dispatch-call (method "is_gt") (constraint-fn-var 5055)
+								(e-dispatch-call (method "is_gt") (constraint-fn-var 5047)
 									(receiver
 										(e-match
 											(match
@@ -2568,7 +2552,7 @@ expect {
 														(value
 															(e-num (value "12"))))))))
 									(args
-										(e-dispatch-call (method "times") (constraint-fn-var 5050)
+										(e-dispatch-call (method "times") (constraint-fn-var 5042)
 											(receiver
 												(e-num (value "5")))
 											(args
@@ -2583,18 +2567,18 @@ expect {
 										(e-if
 											(if-branches
 												(if-branch
-													(e-dispatch-call (method "is_lt") (constraint-fn-var 5172)
+													(e-dispatch-call (method "is_lt") (constraint-fn-var 5164)
 														(receiver
-															(e-dispatch-call (method "plus") (constraint-fn-var 5134)
+															(e-dispatch-call (method "plus") (constraint-fn-var 5126)
 																(receiver
 																	(e-num (value "13")))
 																(args
 																	(e-num (value "2")))))
 														(args
 															(e-num (value "5"))))
-													(e-dispatch-call (method "is_gte") (constraint-fn-var 5281)
+													(e-dispatch-call (method "is_gte") (constraint-fn-var 5273)
 														(receiver
-															(e-dispatch-call (method "minus") (constraint-fn-var 5243)
+															(e-dispatch-call (method "minus") (constraint-fn-var 5235)
 																(receiver
 																	(e-num (value "10")))
 																(args
@@ -2609,11 +2593,11 @@ expect {
 											(builtin)
 											(e-tag (name "True")))))
 								(if-else
-									(e-dispatch-call (method "is_lte") (constraint-fn-var 5400)
+									(e-dispatch-call (method "is_lte") (constraint-fn-var 5392)
 										(receiver
 											(e-num (value "12")))
 										(args
-											(e-dispatch-call (method "div_by") (constraint-fn-var 5395)
+											(e-dispatch-call (method "div_by") (constraint-fn-var 5387)
 												(receiver
 													(e-num (value "3")))
 												(args
@@ -2628,12 +2612,12 @@ expect {
 										(e-match
 											(match
 												(cond
-													(e-dispatch-call (method "next_static_dispatch_method") (constraint-fn-var 5466)
+													(e-dispatch-call (method "next_static_dispatch_method") (constraint-fn-var 5458)
 														(receiver
 															(e-match
 																(match
 																	(cond
-																		(e-dispatch-call (method "static_dispatch_method") (constraint-fn-var 5433)
+																		(e-dispatch-call (method "static_dispatch_method") (constraint-fn-var 5425)
 																			(receiver
 																				(e-match
 																					(match

@@ -64,8 +64,61 @@ const issue806LargeAggregateSource =
     \\}
 ;
 
+// https://github.com/roc-lang/roc/issues/9658
+// A scanner loop carrying several refcounted mutable Str states whose alias
+// groups merge and re-split across iterations. The distinct
+// (alias-partition x balance) entry summaries at the loop join grow like
+// the Bell number of the state count, which overflowed the ARC borrow
+// certifier's old per-summary enumeration budget and left the procedure
+// unverified; the lattice-join fixpoint must certify it outright (debug
+// builds run the certifier on every backend compile in this suite).
+const issue9658ScannerSource =
+    \\scan : Str -> Str
+    \\scan = |raw| {
+    \\    var $remaining = Str.trim_start(raw)
+    \\    var $keys = ""
+    \\    var $vals = ""
+    \\    var $last_key = ""
+    \\    var $pending = ""
+    \\    var $keep = True
+    \\    var $valid = True
+    \\
+    \\    while $keep {
+    \\        if Str.starts_with($remaining, ";") {
+    \\            $remaining = Str.drop_prefix($remaining, ";")
+    \\            $keep = False
+    \\        } else if Str.starts_with($remaining, "k") {
+    \\            $pending = Str.concat($last_key, "k")
+    \\            $last_key = $pending
+    \\            $keys = Str.concat($keys, "k")
+    \\            $remaining = Str.drop_prefix($remaining, "k")
+    \\        } else if Str.starts_with($remaining, "v") {
+    \\            $vals = Str.concat($vals, $last_key)
+    \\            $pending = $vals
+    \\            $remaining = Str.drop_prefix($remaining, "v")
+    \\        } else if Str.starts_with($remaining, ",") {
+    \\            $last_key = $pending
+    \\            $remaining = Str.drop_prefix($remaining, ",")
+    \\        } else {
+    \\            $valid = False
+    \\            $keep = False
+    \\        }
+    \\    }
+    \\
+    \\    if $valid Str.concat($keys, $vals) else "invalid"
+    \\}
+    \\
+    \\main = scan("kkv,kv;")
+;
+
 /// Public value `tests`.
 pub const tests = [_]TestCase{
+    .{
+        .name = "issue 9658: scanner loop with merging mutable Str alias groups certifies and evaluates",
+        .source_kind = .module,
+        .source = issue9658ScannerSource,
+        .expected = .{ .inspect_str = "\"kkkkkkkk\"" },
+    },
     .{
         .name = "issue 806: large aggregate evaluates across interpreter dev wasm and llvm",
         .source_kind = .module,

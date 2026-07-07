@@ -8,67 +8,85 @@ type=snippet
 import json.Json [foo, BAR]
 ~~~
 # EXPECTED
-PARSE ERROR - stmt_import.md:1:18:1:19
-PARSE ERROR - stmt_import.md:1:19:1:22
-PARSE ERROR - stmt_import.md:1:22:1:23
-PARSE ERROR - stmt_import.md:1:27:1:28
+UNEXPECTED STATEMENT - stmt_import.md:1:18:1:19
+UNEXPECTED STATEMENT - stmt_import.md:1:19:1:22
+UNEXPECTED STATEMENT - stmt_import.md:1:22:1:23
+TYPE APPLICATION NEEDS PARENTHESES - stmt_import.md:1:27:1:28
 DUPLICATE DEFINITION - stmt_import.md:1:1:1:17
 # PROBLEMS
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  import json.Json [foo, BAR]                                               │
  │                   ‾                                                        │
  └─────────────────────────────────────────────────────── stmt_import.md:1:18 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `[` here.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  import json.Json [foo, BAR]                                               │
  │                    ‾‾‾                                                     │
  └─────────────────────────────────────────────────────── stmt_import.md:1:19 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `foo` here.
+    Names that start with lowercase letters are value names or record field
+    names, depending on the surrounding syntax.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  import json.Json [foo, BAR]                                               │
  │                       ‾                                                    │
  └─────────────────────────────────────────────────────── stmt_import.md:1:22 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `,` here.
+    A comma separates items, but there must be a valid item on both sides of it.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ Type applications require parentheses around their type ─────┐
-└┬────────────┘  arguments.                                                   │
+┌────────────────────────────────────┐
+│ TYPE APPLICATION NEEDS PARENTHESES ├─ I was parsing a type annotation, ─────┐
+└┬───────────────────────────────────┘  and I found a type argument without   │
+ │                                      parentheses.                          │
  │                                                                            │
  │  import json.Json [foo, BAR]                                               │
  │                            ‾                                               │
  └─────────────────────────────────────────────────────── stmt_import.md:1:27 ┘
 
-    I found a type followed by what looks like a type argument, but they need
-    to be connected with parentheses.
+    Roc type applications use parentheses around their arguments. Write
+    `List(U8)`, not `List U8`.
 
-    Instead of:
-        List U8
-
-    Use:
+    For example:
         List(U8)
 
-    Other valid examples:
-        Dict(Str, Num)
-        Try(a, Str)
-        Maybe(List(U64))
+    I found `]` here.
+    This closes the current construct, so the parser was looking for the
+    missing item before it.
 
 
 ┌──────────────────────┐

@@ -9,9 +9,9 @@ type=file
 ~~~
 # EXPECTED
 ASCII CONTROL CHARACTER - :0:0:0:0
-PARSE ERROR - fuzz_crash_008.md:1:1:1:2
-PARSE ERROR - fuzz_crash_008.md:1:3:1:4
-PARSE ERROR - fuzz_crash_008.md:1:4:1:5
+UNEXPECTED STATEMENT - fuzz_crash_008.md:1:1:1:2
+UNEXPECTED STATEMENT - fuzz_crash_008.md:1:3:1:4
+UNEXPECTED STATEMENT - fuzz_crash_008.md:1:4:1:5
 # PROBLEMS
 
 ASCII CONTROL CHARACTER
@@ -20,37 +20,55 @@ ASCII control characters are not allowed in Roc source code.
 
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  ||1                                                                      │
  │  ‾                                                                         │
  └───────────────────────────────────────────────────── fuzz_crash_008.md:1:1 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `|` here.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  ||1                                                                      │
  │    ‾                                                                       │
  └───────────────────────────────────────────────────── fuzz_crash_008.md:1:3 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `|` here.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  ||1                                                                      │
  │     ‾                                                                      │
  └───────────────────────────────────────────────────── fuzz_crash_008.md:1:4 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `1` here.
 
 # TOKENS
 ~~~zig

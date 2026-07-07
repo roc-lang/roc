@@ -17,6 +17,8 @@ Taxonomy :: [].{
 								"${species.name} (${species.common_name})"
 
 							is_eq : Species, Species -> Bool
+							is_eq = |a, b|
+								a.name == b.name and a.common_name == b.common_name
 						}
 					}
 				}
@@ -40,4 +42,10 @@ expect {
 	a = { name: "Canis lupus", common_name: "Gray Wolf" }
 	b = { name: "Felis catus", common_name: "Domestic Cat" }
 	a != b
+}
+
+expect {
+	a = { name: "Canis lupus", common_name: "Gray Wolf" }
+	b = { name: "Canis lupus", common_name: "Gray Wolf" }
+	Taxonomy.Domain.Kingdom.Phylum.Class.Order.Species.is_eq(a, b)
 }

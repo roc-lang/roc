@@ -11,7 +11,10 @@ program = { init!, render! }
 
 init! : Host => Try(Model, [Exit(I64), NotFound, ..])
 init! = |host| {
-    value = host.read_env!("ROC_POSTCHECK_REGRESSION")?
+    value = match host.read_env!("ROC_POSTCHECK_REGRESSION") {
+        Ok(env_value) => env_value
+        Err(NotFound) => return Err(NotFound)
+    }
 
     Ok({
         mouse_x: host.mouse.x,

@@ -8,78 +8,122 @@ type=snippet
 module(a).h:s
 ~~~
 # EXPECTED
-PARSE ERROR - fuzz_crash_055.md:1:7:1:8
-PARSE ERROR - fuzz_crash_055.md:1:8:1:9
-PARSE ERROR - fuzz_crash_055.md:1:9:1:10
-PARSE ERROR - fuzz_crash_055.md:1:10:1:12
-PARSE ERROR - fuzz_crash_055.md:1:12:1:13
-PARSE ERROR - fuzz_crash_055.md:1:13:1:14
+EXPECTED EXPOSING LIST - fuzz_crash_055.md:1:7:1:8
+UNEXPECTED STATEMENT - fuzz_crash_055.md:1:8:1:9
+UNEXPECTED STATEMENT - fuzz_crash_055.md:1:9:1:10
+UNEXPECTED STATEMENT - fuzz_crash_055.md:1:10:1:12
+UNEXPECTED STATEMENT - fuzz_crash_055.md:1:12:1:13
+UNEXPECTED STATEMENT - fuzz_crash_055.md:1:13:1:14
 # PROBLEMS
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: header_expected_open_square ───────┐
-└┬────────────┘                                                               │
+┌────────────────────────┐
+│ EXPECTED EXPOSING LIST ├─ I was parsing a module or hosted header, and I ───┐
+└┬───────────────────────┘  expected an opening `[`.                          │
  │                                                                            │
  │  module(a).h:s                                                             │
  │        ‾                                                                   │
  └───────────────────────────────────────────────────── fuzz_crash_055.md:1:7 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    The names exposed by this module are written in square brackets after the
+    header keyword.
+
+    For example:
+        module [main, helper]
+
+    I found `(` here.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  module(a).h:s                                                             │
  │         ‾                                                                  │
  └───────────────────────────────────────────────────── fuzz_crash_055.md:1:8 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `a` here.
+    Names that start with lowercase letters are value names or record field
+    names, depending on the surrounding syntax.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  module(a).h:s                                                             │
  │          ‾                                                                 │
  └───────────────────────────────────────────────────── fuzz_crash_055.md:1:9 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `)` here.
+    This closes the current construct, so the parser was looking for the
+    missing item before it.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  module(a).h:s                                                             │
  │           ‾‾                                                               │
  └──────────────────────────────────────────────────── fuzz_crash_055.md:1:10 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `.h` here.
+    Names that start with lowercase letters are value names or record field
+    names, depending on the surrounding syntax.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  module(a).h:s                                                             │
  │             ‾                                                              │
  └──────────────────────────────────────────────────── fuzz_crash_055.md:1:12 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `:` here.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  module(a).h:s                                                             │
  │              ‾                                                             │
  └──────────────────────────────────────────────────── fuzz_crash_055.md:1:13 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `s` here.
+    Names that start with lowercase letters are value names or record field
+    names, depending on the surrounding syntax.
 
 # TOKENS
 ~~~zig

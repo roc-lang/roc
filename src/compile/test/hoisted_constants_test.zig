@@ -191,7 +191,7 @@ test "hoisted local constants are finalized and restored during runtime lowering
     try std.testing.expect(!coord.hasUserErrors());
 
     const root = coord.executableRootCheckedArtifact();
-    const app_artifact = coord.rootCheckedArtifact("app");
+    const app_artifact = coord.appRootCheckedArtifact();
     const app_view = check.CheckedArtifact.importedView(app_artifact);
     const imports = try coord.collectImportedArtifactViews(arena, root);
     const relations = try coord.collectRelationArtifactViews(arena, root);
@@ -357,7 +357,7 @@ test "imported checked bodies restore their module's hoisted constants" {
     try std.testing.expect(!coord.hasUserErrors());
 
     const root = coord.executableRootCheckedArtifact();
-    const app_artifact = coord.rootCheckedArtifact("app");
+    const app_artifact = coord.appRootCheckedArtifact();
     const app_view = check.CheckedArtifact.importedView(app_artifact);
     const imports = try coord.collectImportedArtifactViews(arena, root);
     const relations = try coord.collectRelationArtifactViews(arena, root);
@@ -385,6 +385,120 @@ test "imported checked bodies restore their module's hoisted constants" {
         .{ .target_usize = base.target.TargetUsize.native },
     );
     defer lowered.deinit();
+}
+
+test "callable binding with alias annotation is const-evaluated" {
+    // Regression test: a function-typed top-level def whose annotation
+    // mentions a type alias (here `MyErr`) must still be scheduled for
+    // compile-time evaluation when the alias expands to a fully concrete
+    // type. The internal type store conservatively marks any type that
+    // mentions an alias as needing instantiation; if the published checked
+    // type inherits that flag, the def is kept template-only and silently
+    // degrades to runtime construction (observed with Json.parser_camel()).
+    const gpa = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    try tmp_dir.dir.createDirPath(std.testing.io, ".roc_echo_platform");
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "main.roc",
+        .data =
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\
+        \\import pf.Echo
+        \\
+        \\MyErr : [Small(Str)]
+        \\
+        \\make_validator = |limit| {
+        \\    |n| if n > limit { Ok(n) } else { Err(Small("too small")) }
+        \\}
+        \\
+        \\validate : I64 -> Try(I64, MyErr)
+        \\validate = make_validator(0.I64)
+        \\
+        \\main! = |args| {
+        \\    validated = match validate(List.len(args).to_i64_wrap()) {
+        \\        Ok(n) => n
+        \\        Err(Small(_)) => 0.I64
+        \\    }
+        \\    _ = validated
+        \\    Echo.line!("done")
+        \\    Ok({})
+        \\}
+        ,
+    });
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = ".roc_echo_platform/main.roc",
+        .data =
+        \\platform ""
+        \\    requires {} { main! : List(Str) => Try({}, [Exit(I8), ..]) }
+        \\    exposes [Echo]
+        \\    packages {}
+        \\    provides { "roc_main": main_for_host! }
+        \\    hosted { "roc_echo_line": Echo.line! }
+        \\
+        \\import Echo
+        \\
+        \\main_for_host! : List(Str) => I8
+        \\main_for_host! = |args|
+        \\    match main!(args) {
+        \\        Ok({}) => 0
+        \\        Err(Exit(code)) => code
+        \\        Err(other) => {
+        \\            Echo.line!("Program exited with error: ${Str.inspect(other)}")
+        \\            1
+        \\        }
+        \\    }
+        ,
+    });
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = ".roc_echo_platform/Echo.roc",
+        .data =
+        \\Echo := [].{
+        \\    line! : Str => {}
+        \\}
+        ,
+    });
+    const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "main.roc", gpa);
+    defer gpa.free(app_path);
+
+    var arena_impl = collections.SingleThreadArena.init(gpa);
+    defer arena_impl.deinit();
+    const arena = arena_impl.allocator();
+
+    var builtin_modules = try eval.BuiltinModules.init(gpa);
+    defer builtin_modules.deinit();
+
+    var coord = try Coordinator.init(
+        gpa,
+        .single_threaded,
+        1,
+        roc_target.RocTarget.detectNative(),
+        &builtin_modules,
+        build_options.compiler_version,
+        null,
+        CoreCtx.default(gpa, arena, std.testing.io),
+    );
+    defer coord.deinit();
+    coord.enable_hosted_transform = true;
+
+    try coord.start();
+    try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
+    try coord.coordinatorLoop();
+    try std.testing.expect(!coord.hasUserErrors());
+
+    try coord.finalizeExecutableArtifacts();
+    try std.testing.expect(!coord.hasUserErrors());
+
+    const app_artifact = coord.appRootCheckedArtifact();
+    var saw_callable_binding = false;
+    for (app_artifact.compile_time_roots.roots) |root| {
+        if (root.kind != .callable_binding) continue;
+        saw_callable_binding = true;
+        if (root.payload != .fn_value) return error.CallableBindingConstFnNotStored;
+    }
+    try std.testing.expect(saw_callable_binding);
 }
 
 test "hoisted constant crash reports original source region" {
@@ -930,7 +1044,7 @@ test "hoisted match guard does not report unused branch warning" {
     }
     try std.testing.expect(!found_unused_branch);
 
-    const artifact = coord.rootCheckedArtifact("app");
+    const artifact = coord.appRootCheckedArtifact();
     var found_hoisted_root = false;
     for (artifact.compile_time_roots.roots) |root| {
         if (root.kind == .hoisted_constant) found_hoisted_root = true;
@@ -1630,7 +1744,7 @@ test "issue 9733: nested expect statements are collected as test roots" {
     try coord.finalizeExecutableArtifacts();
     try std.testing.expect(!coord.hasUserErrors());
 
-    const app_artifact = coord.rootCheckedArtifact("app");
+    const app_artifact = coord.appRootCheckedArtifact();
 
     try std.testing.expectEqual(
         @as(usize, 2),

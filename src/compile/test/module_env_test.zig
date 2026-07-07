@@ -63,6 +63,11 @@ test "ModuleEnv.Serialized roundtrip" {
     _ = try tmp_file.readPositionalAll(std.testing.io, buffer, 0);
 
     const deserialized_ptr: *ModuleEnv.Serialized = @ptrCast(@alignCast(buffer.ptr));
+    try deserialized_ptr.validate(buffer.len);
+    var corrupt_serialized = deserialized_ptr.*;
+    corrupt_serialized.common.idents.interner.bytes.len = std.math.maxInt(u64);
+    try std.testing.expectError(error.CorruptArtifact, corrupt_serialized.validate(buffer.len));
+
     const env = try deserialized_ptr.deserializeWithMutableTypes(@intFromPtr(buffer.ptr), gpa, source, "TestModule");
     defer {
         env.deinitCachedModule();
@@ -272,7 +277,7 @@ test "ModuleEnv pushExprTypesToSExprTree extracts and formats types" {
 
     const str_literal_idx = try env.insertString("hello");
     const str_ident = try env.insertIdent(Ident.for_text("Str"));
-    const builtin_ident = try env.insertIdent(Ident.for_text("Builtin"));
+    const builtin_ident = try env.internModuleIdentity(&([_]u8{0x66} ** 32), Ident.Idx.NONE);
 
     const segment_idx = try env.addExpr(.{ .e_str_segment = .{ .literal = str_literal_idx } }, base.Region.from_raw_offsets(0, 5));
     const expr_idx = try env.addExpr(.{ .e_str = .{ .span = Expr.Span{ .span = base.DataSpan{ .start = @intFromEnum(segment_idx), .len = 1 } } } }, base.Region.from_raw_offsets(0, 5));

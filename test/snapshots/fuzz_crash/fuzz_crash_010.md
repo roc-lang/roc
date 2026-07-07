@@ -14,10 +14,10 @@ foo =
 # EXPECTED
 ASCII CONTROL CHARACTER - :0:0:0:0
 UNCLOSED STRING - fuzz_crash_010.md:5:5:5:35
-PARSE ERROR - fuzz_crash_010.md:1:2:1:3
-PARSE ERROR - fuzz_crash_010.md:1:3:1:4
-PARSE ERROR - fuzz_crash_010.md:1:4:1:5
-PARSE ERROR - fuzz_crash_010.md:2:6:2:7
+TYPE APPLICATION NEEDS PARENTHESES - fuzz_crash_010.md:1:2:1:3
+UNEXPECTED STATEMENT - fuzz_crash_010.md:1:3:1:4
+UNEXPECTED STATEMENT - fuzz_crash_010.md:1:4:1:5
+UNEXPECTED STATEMENT - fuzz_crash_010.md:2:6:2:7
 # PROBLEMS
 
 ASCII CONTROL CHARACTER
@@ -36,60 +36,78 @@ ASCII control characters are not allowed in Roc source code.
 
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ Type applications require parentheses around their type ─────┐
-└┬────────────┘  arguments.                                                   │
+┌────────────────────────────────────┐
+│ TYPE APPLICATION NEEDS PARENTHESES ├─ I was parsing a type annotation, ─────┐
+└┬───────────────────────────────────┘  and I found a type argument without   │
+ │                                      parentheses.                          │
  │                                                                            │
  │  H{o,                                                                      │
  │   ‾                                                                        │
  └───────────────────────────────────────────────────── fuzz_crash_010.md:1:2 ┘
 
-    I found a type followed by what looks like a type argument, but they need
-    to be connected with parentheses.
+    Roc type applications use parentheses around their arguments. Write
+    `List(U8)`, not `List U8`.
 
-    Instead of:
-        List U8
-
-    Use:
+    For example:
         List(U8)
 
-    Other valid examples:
-        Dict(Str, Num)
-        Try(a, Str)
-        Maybe(List(U64))
+    I found `{` here.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  H{o,                                                                      │
  │    ‾                                                                       │
  └───────────────────────────────────────────────────── fuzz_crash_010.md:1:3 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `o` here.
+    Names that start with lowercase letters are value names or record field
+    names, depending on the surrounding syntax.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  H{o,                                                                      │
  │     ‾                                                                      │
  └───────────────────────────────────────────────────── fuzz_crash_010.md:1:4 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `,` here.
+    A comma separates items, but there must be a valid item on both sides of it.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │    ]                                                                      │
  │     ‾                                                                      │
  └───────────────────────────────────────────────────── fuzz_crash_010.md:2:6 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `]` here.
+    This closes the current construct, so the parser was looking for the
+    missing item before it.
 
 # TOKENS
 ~~~zig

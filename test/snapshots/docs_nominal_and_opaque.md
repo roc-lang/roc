@@ -57,15 +57,5 @@ main_for_host = main
       (doc "An opaque identifier.")
     )
   )
-  (module
-    (name "platform")
-    (package "pf")
-    (kind platform)
-    (entry
-      (name "main_for_host")
-      (kind value)
-      (type (type-ref (name "Str")))
-    )
-  )
 )
 ~~~

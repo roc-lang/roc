@@ -8,31 +8,43 @@ type=expr
 { person & age: 31 }
 ~~~
 # EXPECTED
-UNEXPECTED TOKEN IN EXPRESSION - record_field_update_error.md:1:10:1:11
-UNEXPECTED TOKEN IN TYPE ANNOTATION - record_field_update_error.md:1:17:1:19
+UNEXPECTED EXPRESSION SYNTAX - record_field_update_error.md:1:10:1:11
+UNEXPECTED TYPE SYNTAX - record_field_update_error.md:1:17:1:19
 DECLARATION HAS NO VALUE - record_field_update_error.md:1:12:1:19
 # PROBLEMS
 
-┌────────────────────────────────┐
-│ UNEXPECTED TOKEN IN EXPRESSION ├─ The token & is not expected in an ────────┐
-└┬───────────────────────────────┘  expression.                               │
+┌──────────────────────────────┐
+│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
+└┬─────────────────────────────┘  token cannot start an expression here.      │
  │                                                                            │
  │  { person & age: 31 }                                                      │
  │           ‾                                                                │
  └───────────────────────────────────────── record_field_update_error.md:1:10 ┘
 
-    Expressions can be identifiers, literals, function calls, or operators.
+    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+    blocks, conditionals, matches, or function calls.
+
+    For example:
+        add(1, 2)
+
+    I found `&` here.
 
 
-┌─────────────────────────────────────┐
-│ UNEXPECTED TOKEN IN TYPE ANNOTATION ├─ The token 31 is not expected in a ───┐
-└┬────────────────────────────────────┘  type annotation.                     │
+┌────────────────────────┐
+│ UNEXPECTED TYPE SYNTAX ├─ I was parsing a type annotation, and this token ──┐
+└┬───────────────────────┘  cannot start a type here.                         │
  │                                                                            │
  │  { person & age: 31 }                                                      │
  │                  ‾‾                                                        │
  └───────────────────────────────────────── record_field_update_error.md:1:17 ┘
 
-    Type annotations should contain types like Str, Num a, or List U64.
+    Types can be type variables, uppercase type names, function types, tuples,
+    records, or tag unions.
+
+    For example:
+        List(U64)
+
+    I found `31` here.
 
 
 ┌──────────────────────────┐

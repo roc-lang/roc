@@ -8,90 +8,134 @@ type=file
 ||(|(l888888888|
 ~~~
 # EXPECTED
-PARSE ERROR - fuzz_crash_012.md:1:1:1:2
-PARSE ERROR - fuzz_crash_012.md:1:2:1:3
-PARSE ERROR - fuzz_crash_012.md:1:3:1:4
-PARSE ERROR - fuzz_crash_012.md:1:4:1:5
-PARSE ERROR - fuzz_crash_012.md:1:5:1:6
-PARSE ERROR - fuzz_crash_012.md:1:6:1:16
-PARSE ERROR - fuzz_crash_012.md:1:16:1:17
+UNEXPECTED STATEMENT - fuzz_crash_012.md:1:1:1:2
+UNEXPECTED STATEMENT - fuzz_crash_012.md:1:2:1:3
+UNEXPECTED STATEMENT - fuzz_crash_012.md:1:3:1:4
+UNEXPECTED STATEMENT - fuzz_crash_012.md:1:4:1:5
+UNEXPECTED STATEMENT - fuzz_crash_012.md:1:5:1:6
+UNEXPECTED STATEMENT - fuzz_crash_012.md:1:6:1:16
+UNEXPECTED STATEMENT - fuzz_crash_012.md:1:16:1:17
 # PROBLEMS
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  ||(|(l888888888|                                                          │
  │  ‾                                                                         │
  └───────────────────────────────────────────────────── fuzz_crash_012.md:1:1 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `|` here.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  ||(|(l888888888|                                                          │
  │   ‾                                                                        │
  └───────────────────────────────────────────────────── fuzz_crash_012.md:1:2 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `|` here.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  ||(|(l888888888|                                                          │
  │    ‾                                                                       │
  └───────────────────────────────────────────────────── fuzz_crash_012.md:1:3 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `(` here.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  ||(|(l888888888|                                                          │
  │     ‾                                                                      │
  └───────────────────────────────────────────────────── fuzz_crash_012.md:1:4 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `|` here.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  ||(|(l888888888|                                                          │
  │      ‾                                                                     │
  └───────────────────────────────────────────────────── fuzz_crash_012.md:1:5 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `(` here.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  ||(|(l888888888|                                                          │
  │       ‾‾‾‾‾‾‾‾‾‾                                                           │
  └───────────────────────────────────────────────────── fuzz_crash_012.md:1:6 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `l888888888` here.
+    Names that start with lowercase letters are value names or record field
+    names, depending on the surrounding syntax.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  ||(|(l888888888|                                                          │
  │                 ‾                                                          │
  └──────────────────────────────────────────────────── fuzz_crash_012.md:1:16 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `|` here.
 
 # TOKENS
 ~~~zig

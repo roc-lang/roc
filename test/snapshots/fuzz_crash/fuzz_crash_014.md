@@ -10,54 +10,78 @@ type=file
 0u22
 ~~~
 # EXPECTED
-PARSE ERROR - fuzz_crash_014.md:1:1:1:3
-PARSE ERROR - fuzz_crash_014.md:1:3:1:5
-PARSE ERROR - fuzz_crash_014.md:2:1:2:6
-PARSE ERROR - fuzz_crash_014.md:3:1:3:5
+UNEXPECTED STATEMENT - fuzz_crash_014.md:1:1:1:3
+UNEXPECTED STATEMENT - fuzz_crash_014.md:1:3:1:5
+UNEXPECTED STATEMENT - fuzz_crash_014.md:2:1:2:6
+UNEXPECTED STATEMENT - fuzz_crash_014.md:3:1:3:5
 # PROBLEMS
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  0b.0                                                                      │
  │  ‾‾                                                                        │
  └───────────────────────────────────────────────────── fuzz_crash_014.md:1:1 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `0b` here.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  0b.0                                                                      │
  │    ‾‾                                                                      │
  └───────────────────────────────────────────────────── fuzz_crash_014.md:1:3 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `.0` here.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  0bu22                                                                     │
  │  ‾‾‾‾‾                                                                     │
  └───────────────────────────────────────────────────── fuzz_crash_014.md:2:1 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `0bu22` here.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  0u22                                                                      │
  │  ‾‾‾‾                                                                      │
  └───────────────────────────────────────────────────── fuzz_crash_014.md:3:1 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `0u22` here.
 
 # TOKENS
 ~~~zig

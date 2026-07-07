@@ -114,27 +114,43 @@ believed safe, but each site must be audited and annotated.
 
 ## Solution design
 
-1. Add one predicate method on `RocList`:
-   `canReuseAllocation(self, update_mode, roc_ops) = !isSeamlessSlice() and
-   (update_mode == .InPlace or isUnique(roc_ops))`, and the `RocStr`
-   equivalent (no `roc_ops`; also `false` for small strings, which have no
-   heap allocation to reuse — callers handle the inline form first). The
-   doc comment states the contract: *unique means sole owner of the WHOLE
+1. Add one layered predicate pair on `RocList`: `isExclusive(self,
+   update_mode, roc_ops) = update_mode == .InPlace or isUnique(roc_ops)`,
+   documented as "our reference is the only live one (statically proven or
+   runtime-checked); permits consuming the value and in-window edits, NOT
+   allocation resize/free"; and `canReuseAllocation(self, update_mode,
+   roc_ops) = !isSeamlessSlice() and isExclusive(...)`. Empty lists return
+   true vacuously: treating their nonexistent allocation as exclusively ours
+   is safe, and callers already guard on `bytes` before touching memory.
+   Add the equivalent `RocStr` pair (no `roc_ops`; `canReuseAllocation` is
+   also false for small strings, which have no heap allocation to reuse).
+   The doc comment states the contract: *unique means sole owner of the WHOLE
    allocation; that equals "safe to reuse" only when the window IS the
    allocation.*
 2. Convert every predicate copy from PR 9841 (`listSublist`, `listDropAt`,
-   `listConcat`, `RocList.reallocate`, `listMapCanReuse`) to call it.
+   `listConcat`, `RocList.reallocate`, `listMapCanReuse`) to call it. Give
+   `RocList.reallocate` an `update_mode` parameter; callers with no mode pass
+   `.Immutable`, which preserves today's runtime-check behavior.
 3. Audit every `isUnique` call site in `list.zig` and `str.zig` (the lists
    above enumerate them) and either convert it to the predicate or attach
    a `std.debug.assert` plus comment stating exactly why the site is safe
    without the slice guard. The accidental-safety sites (`listReserve`'s
    `getCapacity`-returns-length, `listReleaseExcessCapacity`'s tag-bit
-   inequality) must stop being accidents: use the predicate, or assert
-   the encoding fact they rely on next to the reliance.
+   inequality) must stop being accidents: keep `listReserve`'s zero-spare
+   seamless-slice no-op with an assertion that the branch only fires for
+   slices when no growth was requested; convert `listReleaseExcessCapacity`
+   to `canReuseAllocation(update_mode, roc_ops) and getCapacity() ==
+   old_length`. Convert string metadata-shrink operations (`substringUnsafe`,
+   `strTrim`, `strTrimStart`, `strTrimEnd`, and `fromSubListUnsafe`) to
+   `canReuseAllocation`; keep byte-edit operations such as ASCII case
+   conversion on `isExclusive` with comments explaining that they edit only
+   the visible window.
 4. Make `decrefAfterMovingSliceElements` the single
-   consume-a-unique-slice path: any site that takes ownership of a unique
-   slice's backing allocation goes through it (today `reallocateFresh` is
-   the only caller; the audit may find more).
+   partial-teardown consume-a-unique-slice path: any site that frees a unique
+   slice's backing allocation while keeping the window elements alive goes
+   through it (today `reallocateFresh` is the only caller; the audit may find
+   more). Full teardown paths such as `RocList.decref` and `strJoinWithC` dec
+   every element in the allocation and are not this case.
 5. Longer-term option, explicitly **not** this project: encode the
    window/allocation relationship in the list header so the predicate
    becomes a single flag test.
@@ -146,13 +162,13 @@ predicate calls.
 ## What success looks like
 
 - No direct `isUnique`-based reuse decision remains in `list.zig` or
-  `str.zig` outside `canReuseAllocation`; every remaining bare `isUnique`
+  `str.zig` outside `isExclusive`/`canReuseAllocation`; every remaining bare `isUnique`
   call site carries an assert/comment documenting why the slice guard is
   unnecessary there.
 - `listReserve` and `listReleaseExcessCapacity` either use the predicate
   or assert the encoding fact they depend on.
-- `decrefAfterMovingSliceElements` is the only code path that consumes a
-  unique slice's backing allocation.
+- `decrefAfterMovingSliceElements` is the only code path that frees a unique
+  slice's backing allocation while keeping the slice window elements alive.
 - The issue 9742 reproduction passes identically under `roc test` and
   `roc run` across all backends.
 
@@ -160,23 +176,29 @@ predicate calls.
 
 ### Correctness ideal
 
-For every list/str builtin with a fast path, a test triple:
+For every converted/audited list builtin with a fast path, a test triple:
 (a) a unique slice of a shared backing allocation,
 (b) a unique slice that is the sole owner of its backing allocation,
 (c) refcounted elements (e.g. strings) outside the slice window —
 asserting both value correctness and refcount balance: no leak, no
 double-free, using the existing `utils.TestEnv` shadow-refcount leak
 detection (`src/builtins/utils.zig` reports allocations whose refcount
-never reaches 0, with operation history).
+never reaches 0, with operation history). For strings, (c) collapses because
+string elements are bytes; use (a)/(b) pairs and assert representation where
+the slice/non-slice distinction matters. Case (b) does not mean allocation
+resize reuse for slices; it means legitimate cheap paths for unique slices
+still fire, such as no-copy rewindowing, move-slice-element teardown, and
+metadata/window-local string edits.
 
 ### Performance ideal
 
 The predicate inlines to the same instructions as today's open-coded
 checks — spot-check ReleaseFast codegen for `listSublist` and `listDropAt`
 before/after. In-place fast paths are still taken in every legitimate
-case: add a counter (test builds) or a test asserting reuse actually
-happens for case (b)-style inputs and for plain unique non-slice lists,
-so the fix never silently degrades to copy-always. Generated-code
+case: add a counter (test builds) or tests asserting no new allocation is
+performed for legitimate unique-slice cheap paths and allocation reuse still
+happens for plain unique non-slice lists, so the fix never silently degrades
+to copy-always. Generated-code
 performance and release compile time must not regress; this is a
 runtime-builtins change only, so compile time is unaffected by
 construction.
@@ -196,6 +218,3 @@ construction.
 
 ## Related projects
 
-- [ARC Certifier Lattice Join and Centralized Ownership-Transfer Keying](../big/arc-certifier-lattice-join.md)
-  — the compile-time twin of this cleanup: both replace per-site
-  open-coded ownership reasoning with one shared, documented definition.

@@ -8,30 +8,43 @@ type=file
 *import B as
 ~~~
 # EXPECTED
-PARSE ERROR - fuzz_crash_038.md:1:1:1:2
-PARSE ERROR - fuzz_crash_038.md:1:2:1:8
+UNEXPECTED STATEMENT - fuzz_crash_038.md:1:1:1:2
+EXPECTED IMPORT ALIAS - fuzz_crash_038.md:1:2:1:8
 # PROBLEMS
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  *import B as                                                              │
  │  ‾                                                                         │
  └───────────────────────────────────────────────────── fuzz_crash_038.md:1:1 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `*` here.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: ───────────────────────────────────┐
-└┬────────────┘  expected_upper_name_after_import_as                          │
+┌───────────────────────┐
+│ EXPECTED IMPORT ALIAS ├─ I was parsing an import alias, and I expected an ──┐
+└┬──────────────────────┘  uppercase module name after `as`.                  │
  │                                                                            │
  │  *import B as                                                              │
  │   ‾‾‾‾‾‾                                                                   │
  └───────────────────────────────────────────────────── fuzz_crash_038.md:1:2 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Import aliases rename modules, so they must start with an uppercase letter.
+
+    For example:
+        import Json.Decode as Decode
+
+    I found `import` here.
+    That word is reserved by Roc, so it cannot be used as a name in this
+    position.
 
 # TOKENS
 ~~~zig

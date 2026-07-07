@@ -21,6 +21,7 @@ pub const CacheManager = struct {
     roc_ctx: CoreCtx = undefined,
     allocator: Allocator,
     stats: CacheStats,
+    store_failure_warning_emitted: bool = false,
 
     const Self = @This();
 
@@ -29,6 +30,14 @@ pub const CacheManager = struct {
         var buf: [1024]u8 = undefined;
         const msg = std.fmt.bufPrint(&buf, fmt, args) catch return;
         self.roc_ctx.writeStderr(msg) catch {};
+    }
+
+    fn warnStoreFailureOnce(self: *Self) void {
+        if (self.store_failure_warning_emitted) return;
+        self.store_failure_warning_emitted = true;
+        self.roc_ctx.writeStderr(
+            "warning: Roc cache writes are failing; compilation will continue without updating the cache. Run with --verbose for details.\n",
+        ) catch {};
     }
 
     pub fn init(allocator: Allocator, config: CacheConfig, roc_ctx: CoreCtx) Self {
@@ -40,6 +49,11 @@ pub const CacheManager = struct {
             .allocator = allocator,
             .stats = CacheStats{},
         };
+    }
+
+    pub fn recordStoreFailure(self: *Self) void {
+        self.stats.recordStoreFailure();
+        self.warnStoreFailureOnce();
     }
 
     pub fn getCacheFilePath(self: *Self, cache_key: [32]u8) (Allocator.Error || error{NoHomeDirectory})![]u8 {
@@ -78,31 +92,31 @@ pub const CacheManager = struct {
 
         self.ensureCacheSubdirIn(cache_key, entries_dir) catch |err| {
             self.verboseLog("Failed to create cache subdirectory: {}\n", .{err});
-            self.stats.recordStoreFailure();
+            self.recordStoreFailure();
             return;
         };
 
         const cache_path = self.computeCacheFilePath(cache_key, entries_dir) catch {
-            self.stats.recordStoreFailure();
+            self.recordStoreFailure();
             return;
         };
         defer self.allocator.free(cache_path);
 
         const temp_path = std.fmt.allocPrint(self.allocator, "{s}.tmp", .{cache_path}) catch {
-            self.stats.recordStoreFailure();
+            self.recordStoreFailure();
             return;
         };
         defer self.allocator.free(temp_path);
 
         self.roc_ctx.writeFile(temp_path, data) catch |err| {
             self.verboseLog("Failed to write cache temp file {s}: {}\n", .{ temp_path, err });
-            self.stats.recordStoreFailure();
+            self.recordStoreFailure();
             return;
         };
 
         self.roc_ctx.rename(temp_path, cache_path) catch |err| {
             self.verboseLog("Failed to rename cache file {s} -> {s}: {}\n", .{ temp_path, cache_path, err });
-            self.stats.recordStoreFailure();
+            self.recordStoreFailure();
             return;
         };
 

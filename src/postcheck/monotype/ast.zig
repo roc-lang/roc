@@ -7,12 +7,24 @@ const base = @import("base");
 const check = @import("check");
 const can = @import("can");
 const builtins = @import("builtins");
+const collections = @import("collections");
 
 const Common = @import("../common.zig");
 const Type = @import("type.zig");
 
 const checked = check.CheckedModule;
 const names = check.CheckedNames;
+const GuardedList = collections.GuardedList;
+
+/// Guarded growable list for mutable Monotype program storage.
+pub fn ProgramList(comptime T: type, comptime field_name: []const u8) type {
+    return GuardedList.List(T, "monotype.Program." ++ field_name);
+}
+
+/// Guarded immutable span borrow for a named Monotype program list.
+pub fn ProgramSpanBorrow(comptime T: type, comptime field_name: []const u8) type {
+    return GuardedList.BorrowSpan(T, "monotype.Program." ++ field_name);
+}
 
 /// Monotype ids are local to the `ProgramView` or mapped shard that owns the
 /// corresponding side array. In particular, expression, pattern, statement,
@@ -82,7 +94,7 @@ pub const FnDef = union(enum(u8)) {
         owner: names.ProcTemplate,
         expr: checked.CheckedExprId,
     },
-    encode_to_runtime: struct {
+    encoder_for_runtime: struct {
         owner: names.ProcTemplate,
         expr: checked.CheckedExprId,
     },
@@ -150,12 +162,18 @@ pub const CallableIdentity = union(enum(u8)) {
     generated: GeneratedId,
 };
 
-/// Full specialization identity: callable plus source and closed function types.
+/// Full specialization identity: callable plus source function type and the
+/// closed monomorphic function type the reserving call site REQUESTED.
+///
+/// The identity is immutable: it is written once when the record is reserved
+/// and never rewritten. Body evidence that refines the requested type is data
+/// on the `SpecRecord` (`request_fn_ty`/`solved_fn_ty` views), reachable
+/// through additional lookup aliases — never a rekey of this identity.
 pub const SpecIdentity = struct {
     callable: CallableIdentity,
     source_fn_ty_digest: names.TypeDigest,
-    mono_fn_ty_digest: names.TypeDigest,
-    mono_fn_ty: Type.TypeId,
+    request_fn_ty_digest: names.TypeDigest,
+    request_fn_ty: Type.TypeId,
 };
 
 /// Lifecycle state for a specialization record.
@@ -166,8 +184,19 @@ pub const SpecStatus = enum(u8) {
 };
 
 /// Durable record describing one reserved, lowering, or ready specialization.
+///
+/// `identity` is the immutable creation-time key. The type views are data:
+/// `request_fn_ty` starts as the identity's requested type and may be refined
+/// while the record is still `.reserved` — once per deferring graph that
+/// seals its view of the request; `solved_fn_ty` mirrors the request view
+/// until `.ready` records the body's solved type. Both views only ever become
+/// more specific; a finished record is never widened (one-way snapshot rule).
 pub const SpecRecord = struct {
     identity: SpecIdentity,
+    request_fn_ty: Type.TypeId,
+    request_fn_ty_digest: names.TypeDigest,
+    solved_fn_ty: Type.TypeId,
+    solved_fn_ty_digest: names.TypeDigest,
     fn_id: FnId,
     status: SpecStatus,
 };
@@ -222,8 +251,8 @@ fn writeFnDef(hasher: *std.crypto.hash.sha2.Sha256, fn_def: FnDef) void {
             writeProcTemplate(hasher, runtime.owner);
             writeU32(hasher, @intFromEnum(runtime.expr));
         },
-        .encode_to_runtime => |runtime| {
-            writeBytes(hasher, "encode_to_runtime");
+        .encoder_for_runtime => |runtime| {
+            writeBytes(hasher, "encoder_for_runtime");
             writeProcTemplate(hasher, runtime.owner);
             writeU32(hasher, @intFromEnum(runtime.expr));
         },
@@ -722,6 +751,10 @@ pub const ProcDebugNameMap = struct {
         return procDebugNameInSlice(self.items.items, symbol);
     }
 
+    pub fn view(self: *const ProcDebugNameMap) []const ProcDebugName {
+        return self.items.items;
+    }
+
     pub fn put(self: *ProcDebugNameMap, symbol: Common.Symbol, name: names.ExportNameId) std.mem.Allocator.Error!void {
         for (self.items.items) |*entry| {
             if (entry.symbol == symbol) {
@@ -848,7 +881,9 @@ pub const ProgramView = struct {
         if (!self.types.frozen) return .type_store_not_frozen;
 
         for (self.specs) |spec| {
-            if (!self.typeRefInBounds(spec.identity.mono_fn_ty)) return .spec_type_out_of_bounds;
+            if (!self.typeRefInBounds(spec.identity.request_fn_ty)) return .spec_type_out_of_bounds;
+            if (!self.typeRefInBounds(spec.request_fn_ty)) return .spec_type_out_of_bounds;
+            if (!self.typeRefInBounds(spec.solved_fn_ty)) return .spec_type_out_of_bounds;
         }
         for (self.fns) |fn_| {
             if (!self.typeRefInBounds(fn_.source.mono_fn_ty)) return .fn_type_out_of_bounds;
@@ -954,48 +989,48 @@ pub const ProgramBuilder = struct {
     names: names.NameStore,
     next_symbol: u32,
     types: Type.Store,
-    specs: std.ArrayList(SpecRecord),
-    imported_fns: std.ArrayList(ImportedFn),
-    fns: std.ArrayList(Fn),
-    defs: std.ArrayList(Def),
-    nested_defs: std.ArrayList(NestedDef),
-    exprs: std.ArrayList(Expr),
-    pats: std.ArrayList(Pat),
-    stmts: std.ArrayList(Stmt),
-    locals: std.ArrayList(Local),
-    expr_ids: std.ArrayList(ExprId),
-    pat_ids: std.ArrayList(PatId),
-    typed_locals: std.ArrayList(TypedLocal),
-    stmt_ids: std.ArrayList(StmtId),
-    field_exprs: std.ArrayList(FieldExpr),
-    fn_def_captures: std.ArrayList(FnDefCapture),
+    specs: ProgramList(SpecRecord, "specs"),
+    imported_fns: ProgramList(ImportedFn, "imported_fns"),
+    fns: ProgramList(Fn, "fns"),
+    defs: ProgramList(Def, "defs"),
+    nested_defs: ProgramList(NestedDef, "nested_defs"),
+    exprs: ProgramList(Expr, "exprs"),
+    pats: ProgramList(Pat, "pats"),
+    stmts: ProgramList(Stmt, "stmts"),
+    locals: ProgramList(Local, "locals"),
+    expr_ids: ProgramList(ExprId, "expr_ids"),
+    pat_ids: ProgramList(PatId, "pat_ids"),
+    typed_locals: ProgramList(TypedLocal, "typed_locals"),
+    stmt_ids: ProgramList(StmtId, "stmt_ids"),
+    field_exprs: ProgramList(FieldExpr, "field_exprs"),
+    fn_def_captures: ProgramList(FnDefCapture, "fn_def_captures"),
     /// Backing pool for lifted `Span(CaptureOperand)` capture operand spans.
     /// Empty in the pre-lift Monotype program (populated by closure lifting).
-    capture_operands: std.ArrayList(CaptureOperand),
-    record_destructs: std.ArrayList(RecordDestruct),
-    str_pattern_steps: std.ArrayList(StrPatternStep),
-    branches: std.ArrayList(Branch),
-    if_branches: std.ArrayList(IfBranch),
-    string_literals: std.ArrayList(StringLiteral),
+    capture_operands: ProgramList(CaptureOperand, "capture_operands"),
+    record_destructs: ProgramList(RecordDestruct, "record_destructs"),
+    str_pattern_steps: ProgramList(StrPatternStep, "str_pattern_steps"),
+    branches: ProgramList(Branch, "branches"),
+    if_branches: ProgramList(IfBranch, "if_branches"),
+    string_literals: ProgramList(StringLiteral, "string_literals"),
     proc_debug_names: ProcDebugNameMap,
-    roots: std.ArrayList(Root),
-    layout_requests: std.ArrayList(LayoutRequest),
-    runtime_schema_requests: std.ArrayList(RuntimeSchemaRequest),
-    comptime_sites: std.ArrayList(ComptimeSite),
+    roots: ProgramList(Root, "roots"),
+    layout_requests: ProgramList(LayoutRequest, "layout_requests"),
+    runtime_schema_requests: ProgramList(RuntimeSchemaRequest, "runtime_schema_requests"),
+    comptime_sites: ProgramList(ComptimeSite, "comptime_sites"),
     /// Source file table for `SourceLoc.file` indices (module display names,
     /// owned by this program).
-    source_files: std.ArrayList([]const u8),
+    source_files: ProgramList([]const u8, "source_files"),
     /// Source location per expression, parallel to `exprs`.
-    expr_locs: std.ArrayList(base.SourceLoc),
+    expr_locs: ProgramList(base.SourceLoc, "expr_locs"),
     /// Checked source region per expression, parallel to `exprs`.
-    expr_regions: std.ArrayList(base.Region),
+    expr_regions: ProgramList(base.Region, "expr_regions"),
     /// Source location per statement, parallel to `stmts`.
-    stmt_locs: std.ArrayList(base.SourceLoc),
+    stmt_locs: ProgramList(base.SourceLoc, "stmt_locs"),
     /// Checked source region per statement, parallel to `stmts`.
-    stmt_regions: std.ArrayList(base.Region),
+    stmt_regions: ProgramList(base.Region, "stmt_regions"),
     /// Source-level name per local, parallel to `locals` (empty for
     /// compiler-generated temporaries; owned by this program).
-    local_names: std.ArrayList([]const u8),
+    local_names: ProgramList([]const u8, "local_names"),
     /// Ambient location recorded by `addExpr`/`addStmt`. Lowering sets this on
     /// entry to each source node, so synthetic glue nodes inherit the location
     /// of the source node they were derived from.
@@ -1047,7 +1082,7 @@ pub const ProgramBuilder = struct {
     }
 
     pub fn deinit(self: *ProgramBuilder) void {
-        for (self.local_names.items) |name| {
+        for (self.local_names.unsafeRawItemsForView()) |name| {
             if (name.len > 0) self.allocator.free(name);
         }
         self.local_names.deinit(self.allocator);
@@ -1055,9 +1090,9 @@ pub const ProgramBuilder = struct {
         self.stmt_locs.deinit(self.allocator);
         self.expr_regions.deinit(self.allocator);
         self.expr_locs.deinit(self.allocator);
-        for (self.source_files.items) |file| self.allocator.free(file);
+        for (self.source_files.unsafeRawItemsForView()) |file| self.allocator.free(file);
         self.source_files.deinit(self.allocator);
-        for (self.comptime_sites.items) |site| {
+        for (self.comptime_sites.unsafeRawItemsForView()) |site| {
             self.allocator.free(site.branch_regions);
         }
         self.comptime_sites.deinit(self.allocator);
@@ -1065,7 +1100,7 @@ pub const ProgramBuilder = struct {
         self.layout_requests.deinit(self.allocator);
         self.roots.deinit(self.allocator);
         self.proc_debug_names.deinit();
-        for (self.string_literals.items) |literal| self.allocator.free(literal.backing);
+        for (self.string_literals.unsafeRawItemsForView()) |literal| self.allocator.free(literal.backing);
         self.string_literals.deinit(self.allocator);
         self.if_branches.deinit(self.allocator);
         self.branches.deinit(self.allocator);
@@ -1092,21 +1127,101 @@ pub const ProgramBuilder = struct {
     }
 
     pub fn addFn(self: *ProgramBuilder, source: FnTemplate) std.mem.Allocator.Error!FnId {
-        const id: FnId = @enumFromInt(@as(u32, @intCast(self.fns.items.len)));
+        const id: FnId = @enumFromInt(@as(u32, @intCast(self.fns.len())));
         try self.fns.append(self.allocator, .{ .source = source });
         return id;
     }
 
+    pub fn fnCount(self: *const ProgramBuilder) usize {
+        return self.fns.len();
+    }
+
+    pub fn getFn(self: *const ProgramBuilder, id: FnId) Fn {
+        return self.fns.unsafeRawItemsForView()[@intFromEnum(id)];
+    }
+
+    pub fn setFn(self: *ProgramBuilder, id: FnId, fn_: Fn) void {
+        self.fns.set(@intFromEnum(id), fn_);
+    }
+
+    pub fn setFnSource(self: *ProgramBuilder, id: FnId, source: FnTemplate) void {
+        self.fns.getPtrImmediate(@intFromEnum(id)).source = source;
+    }
+
+    pub fn fnsView(self: *const ProgramBuilder) []const Fn {
+        return self.fns.unsafeRawItemsForView();
+    }
+
     pub fn addImportedFn(self: *ProgramBuilder, imported: ImportedFn) std.mem.Allocator.Error!ImportedFnId {
-        const id: ImportedFnId = @enumFromInt(@as(u32, @intCast(self.imported_fns.items.len)));
+        const id: ImportedFnId = @enumFromInt(@as(u32, @intCast(self.imported_fns.len())));
         try self.imported_fns.append(self.allocator, imported);
         return id;
     }
 
+    pub fn importedFnsView(self: *const ProgramBuilder) []const ImportedFn {
+        return self.imported_fns.unsafeRawItemsForView();
+    }
+
+    pub fn addDef(self: *ProgramBuilder, def: Def) std.mem.Allocator.Error!DefId {
+        const id: DefId = @enumFromInt(@as(u32, @intCast(self.defs.len())));
+        try self.defs.append(self.allocator, def);
+        return id;
+    }
+
+    pub fn defCount(self: *const ProgramBuilder) usize {
+        return self.defs.len();
+    }
+
+    pub fn getDef(self: *const ProgramBuilder, id: DefId) Def {
+        return self.defs.unsafeRawItemsForView()[@intFromEnum(id)];
+    }
+
+    pub fn setDef(self: *ProgramBuilder, id: DefId, def: Def) void {
+        self.defs.set(@intFromEnum(id), def);
+    }
+
+    pub fn setDefFn(self: *ProgramBuilder, id: DefId, fn_id: FnId) void {
+        self.defs.getPtrImmediate(@intFromEnum(id)).fn_id = fn_id;
+    }
+
+    pub fn defsView(self: *const ProgramBuilder) []const Def {
+        return self.defs.unsafeRawItemsForView();
+    }
+
+    pub fn addNestedDef(self: *ProgramBuilder, nested_def: NestedDef) std.mem.Allocator.Error!NestedDefId {
+        const id: NestedDefId = @enumFromInt(@as(u32, @intCast(self.nested_defs.len())));
+        try self.nested_defs.append(self.allocator, nested_def);
+        return id;
+    }
+
+    pub fn nestedDefCount(self: *const ProgramBuilder) usize {
+        return self.nested_defs.len();
+    }
+
+    pub fn getNestedDef(self: *const ProgramBuilder, id: NestedDefId) NestedDef {
+        return self.nested_defs.unsafeRawItemsForView()[@intFromEnum(id)];
+    }
+
+    pub fn nestedDefsView(self: *const ProgramBuilder) []const NestedDef {
+        return self.nested_defs.unsafeRawItemsForView();
+    }
+
     pub fn addSpec(self: *ProgramBuilder, record: SpecRecord) std.mem.Allocator.Error!SpecId {
-        const id: SpecId = @enumFromInt(@as(u32, @intCast(self.specs.items.len)));
+        const id: SpecId = @enumFromInt(@as(u32, @intCast(self.specs.len())));
         try self.specs.append(self.allocator, record);
         return id;
+    }
+
+    pub fn getSpec(self: *const ProgramBuilder, id: SpecId) SpecRecord {
+        return self.specs.unsafeRawItemsForView()[@intFromEnum(id)];
+    }
+
+    pub fn setSpecStatus(self: *ProgramBuilder, id: SpecId, status: SpecStatus) void {
+        self.specs.getPtrImmediate(@intFromEnum(id)).status = status;
+    }
+
+    pub fn specsView(self: *const ProgramBuilder) []const SpecRecord {
+        return self.specs.unsafeRawItemsForView();
     }
 
     pub fn fnSource(self: *const ProgramBuilder, id: FnId) FnTemplate {
@@ -1125,48 +1240,100 @@ pub const ProgramBuilder = struct {
         return .{
             .names = &self.names,
             .types = self.types.view(),
-            .specs = self.specs.items,
-            .imported_fns = self.imported_fns.items,
-            .fns = self.fns.items,
-            .defs = self.defs.items,
-            .nested_defs = self.nested_defs.items,
-            .exprs = self.exprs.items,
-            .pats = self.pats.items,
-            .stmts = self.stmts.items,
-            .locals = self.locals.items,
-            .expr_ids = self.expr_ids.items,
-            .pat_ids = self.pat_ids.items,
-            .typed_locals = self.typed_locals.items,
-            .stmt_ids = self.stmt_ids.items,
-            .field_exprs = self.field_exprs.items,
-            .fn_def_captures = self.fn_def_captures.items,
-            .capture_operands = self.capture_operands.items,
-            .record_destructs = self.record_destructs.items,
-            .str_pattern_steps = self.str_pattern_steps.items,
-            .branches = self.branches.items,
-            .if_branches = self.if_branches.items,
-            .string_literals = self.string_literals.items,
-            .proc_debug_names = self.proc_debug_names.items.items,
-            .roots = self.roots.items,
-            .layout_requests = self.layout_requests.items,
-            .runtime_schema_requests = self.runtime_schema_requests.items,
-            .comptime_sites = self.comptime_sites.items,
-            .source_files = self.source_files.items,
-            .expr_locs = self.expr_locs.items,
-            .expr_regions = self.expr_regions.items,
-            .stmt_locs = self.stmt_locs.items,
-            .stmt_regions = self.stmt_regions.items,
-            .local_names = self.local_names.items,
+            .specs = self.specs.unsafeRawItemsForView(),
+            .imported_fns = self.imported_fns.unsafeRawItemsForView(),
+            .fns = self.fns.unsafeRawItemsForView(),
+            .defs = self.defs.unsafeRawItemsForView(),
+            .nested_defs = self.nested_defs.unsafeRawItemsForView(),
+            .exprs = self.exprs.unsafeRawItemsForView(),
+            .pats = self.pats.unsafeRawItemsForView(),
+            .stmts = self.stmts.unsafeRawItemsForView(),
+            .locals = self.locals.unsafeRawItemsForView(),
+            .expr_ids = self.expr_ids.unsafeRawItemsForView(),
+            .pat_ids = self.pat_ids.unsafeRawItemsForView(),
+            .typed_locals = self.typed_locals.unsafeRawItemsForView(),
+            .stmt_ids = self.stmt_ids.unsafeRawItemsForView(),
+            .field_exprs = self.field_exprs.unsafeRawItemsForView(),
+            .fn_def_captures = self.fn_def_captures.unsafeRawItemsForView(),
+            .capture_operands = self.capture_operands.unsafeRawItemsForView(),
+            .record_destructs = self.record_destructs.unsafeRawItemsForView(),
+            .str_pattern_steps = self.str_pattern_steps.unsafeRawItemsForView(),
+            .branches = self.branches.unsafeRawItemsForView(),
+            .if_branches = self.if_branches.unsafeRawItemsForView(),
+            .string_literals = self.string_literals.unsafeRawItemsForView(),
+            .proc_debug_names = self.proc_debug_names.view(),
+            .roots = self.roots.unsafeRawItemsForView(),
+            .layout_requests = self.layout_requests.unsafeRawItemsForView(),
+            .runtime_schema_requests = self.runtime_schema_requests.unsafeRawItemsForView(),
+            .comptime_sites = self.comptime_sites.unsafeRawItemsForView(),
+            .source_files = self.source_files.unsafeRawItemsForView(),
+            .expr_locs = self.expr_locs.unsafeRawItemsForView(),
+            .expr_regions = self.expr_regions.unsafeRawItemsForView(),
+            .stmt_locs = self.stmt_locs.unsafeRawItemsForView(),
+            .stmt_regions = self.stmt_regions.unsafeRawItemsForView(),
+            .local_names = self.local_names.unsafeRawItemsForView(),
             .next_symbol = self.next_symbol,
         };
     }
 
     pub fn addExpr(self: *ProgramBuilder, expr: Expr) std.mem.Allocator.Error!ExprId {
-        const id: ExprId = @enumFromInt(@as(u32, @intCast(self.exprs.items.len)));
+        const id: ExprId = @enumFromInt(@as(u32, @intCast(self.exprs.len())));
         try self.exprs.append(self.allocator, expr);
         try self.expr_locs.append(self.allocator, self.current_loc);
         try self.expr_regions.append(self.allocator, self.current_region);
         return id;
+    }
+
+    pub fn exprsView(self: *const ProgramBuilder) []const Expr {
+        return self.exprs.unsafeRawItemsForView();
+    }
+
+    pub fn exprCount(self: *const ProgramBuilder) usize {
+        return self.exprs.len();
+    }
+
+    pub fn getExpr(self: *const ProgramBuilder, id: ExprId) Expr {
+        return self.exprs.unsafeRawItemsForView()[@intFromEnum(id)];
+    }
+
+    pub fn getExprAt(self: *const ProgramBuilder, index: usize) Expr {
+        return self.exprs.get(index);
+    }
+
+    pub fn setExpr(self: *ProgramBuilder, id: ExprId, expr: Expr) void {
+        self.exprs.set(@intFromEnum(id), expr);
+    }
+
+    pub fn patCount(self: *const ProgramBuilder) usize {
+        return self.pats.len();
+    }
+
+    pub fn patsView(self: *const ProgramBuilder) []const Pat {
+        return self.pats.unsafeRawItemsForView();
+    }
+
+    pub fn getPat(self: *const ProgramBuilder, id: PatId) Pat {
+        return self.pats.unsafeRawItemsForView()[@intFromEnum(id)];
+    }
+
+    pub fn getPatAt(self: *const ProgramBuilder, index: usize) Pat {
+        return self.pats.get(index);
+    }
+
+    pub fn stmtCount(self: *const ProgramBuilder) usize {
+        return self.stmts.len();
+    }
+
+    pub fn stmtsView(self: *const ProgramBuilder) []const Stmt {
+        return self.stmts.unsafeRawItemsForView();
+    }
+
+    pub fn getStmt(self: *const ProgramBuilder, id: StmtId) Stmt {
+        return self.stmts.unsafeRawItemsForView()[@intFromEnum(id)];
+    }
+
+    pub fn getStmtAt(self: *const ProgramBuilder, index: usize) Stmt {
+        return self.stmts.get(index);
     }
 
     pub fn setProcDebugName(self: *ProgramBuilder, symbol: Common.Symbol, name: names.ExportNameId) std.mem.Allocator.Error!void {
@@ -1180,7 +1347,7 @@ pub const ProgramBuilder = struct {
     /// Register a source file (module display name) and return its index for
     /// `SourceLoc.file`. Callers deduplicate; this always appends.
     pub fn addSourceFile(self: *ProgramBuilder, name: []const u8) std.mem.Allocator.Error!u32 {
-        const id: u32 = @intCast(self.source_files.items.len);
+        const id: u32 = @intCast(self.source_files.len());
         const owned = try self.allocator.dupe(u8, name);
         errdefer self.allocator.free(owned);
         try self.source_files.append(self.allocator, owned);
@@ -1189,32 +1356,32 @@ pub const ProgramBuilder = struct {
 
     /// Source location of an expression.
     pub fn exprLoc(self: *const ProgramBuilder, id: ExprId) base.SourceLoc {
-        return self.expr_locs.items[@intFromEnum(id)];
+        return self.expr_locs.unsafeRawItemsForView()[@intFromEnum(id)];
     }
 
     /// Checked source region of an expression.
     pub fn exprRegion(self: *const ProgramBuilder, id: ExprId) base.Region {
-        return self.expr_regions.items[@intFromEnum(id)];
+        return self.expr_regions.unsafeRawItemsForView()[@intFromEnum(id)];
     }
 
     /// Source location of a statement.
     pub fn stmtLoc(self: *const ProgramBuilder, id: StmtId) base.SourceLoc {
-        return self.stmt_locs.items[@intFromEnum(id)];
+        return self.stmt_locs.unsafeRawItemsForView()[@intFromEnum(id)];
     }
 
     /// Checked source region of a statement.
     pub fn stmtRegion(self: *const ProgramBuilder, id: StmtId) base.Region {
-        return self.stmt_regions.items[@intFromEnum(id)];
+        return self.stmt_regions.unsafeRawItemsForView()[@intFromEnum(id)];
     }
 
     pub fn addPat(self: *ProgramBuilder, pat: Pat) std.mem.Allocator.Error!PatId {
-        const id: PatId = @enumFromInt(@as(u32, @intCast(self.pats.items.len)));
+        const id: PatId = @enumFromInt(@as(u32, @intCast(self.pats.len())));
         try self.pats.append(self.allocator, pat);
         return id;
     }
 
     pub fn addStmt(self: *ProgramBuilder, stmt: Stmt) std.mem.Allocator.Error!StmtId {
-        const id: StmtId = @enumFromInt(@as(u32, @intCast(self.stmts.items.len)));
+        const id: StmtId = @enumFromInt(@as(u32, @intCast(self.stmts.len())));
         try self.stmts.append(self.allocator, stmt);
         try self.stmt_locs.append(self.allocator, self.current_loc);
         try self.stmt_regions.append(self.allocator, self.current_region);
@@ -1230,7 +1397,7 @@ pub const ProgramBuilder = struct {
     ) std.mem.Allocator.Error!ComptimeSiteId {
         const owned_branch_regions = try self.allocator.dupe(base.Region, branch_regions);
         errdefer self.allocator.free(owned_branch_regions);
-        const id: ComptimeSiteId = @enumFromInt(@as(u32, @intCast(self.comptime_sites.items.len)));
+        const id: ComptimeSiteId = @enumFromInt(@as(u32, @intCast(self.comptime_sites.len())));
         try self.comptime_sites.append(self.allocator, .{
             .kind = kind,
             .region = region,
@@ -1241,7 +1408,7 @@ pub const ProgramBuilder = struct {
     }
 
     pub fn comptimeSite(self: *const ProgramBuilder, id: ComptimeSiteId) ComptimeSite {
-        return self.comptime_sites.items[@intFromEnum(id)];
+        return self.comptime_sites.unsafeRawItemsForView()[@intFromEnum(id)];
     }
 
     pub fn addStringLiteral(self: *ProgramBuilder, text: []const u8) std.mem.Allocator.Error!StringLiteralId {
@@ -1255,7 +1422,7 @@ pub const ProgramBuilder = struct {
             Common.invariant("string literal view exceeded backing bytes");
         }
 
-        const id: StringLiteralId = @enumFromInt(@as(u32, @intCast(self.string_literals.items.len)));
+        const id: StringLiteralId = @enumFromInt(@as(u32, @intCast(self.string_literals.len())));
         const owned = try self.allocator.dupe(u8, backing);
         errdefer self.allocator.free(owned);
         try self.string_literals.append(self.allocator, .{
@@ -1267,7 +1434,7 @@ pub const ProgramBuilder = struct {
     }
 
     pub fn stringLiteral(self: *const ProgramBuilder, id: StringLiteralId) StringLiteral {
-        return self.string_literals.items[@intFromEnum(id)];
+        return self.string_literals.unsafeRawItemsForView()[@intFromEnum(id)];
     }
 
     pub fn stringLiteralText(self: *const ProgramBuilder, id: StringLiteralId) []const u8 {
@@ -1284,7 +1451,7 @@ pub const ProgramBuilder = struct {
         ty: Type.TypeId,
         binder: ?checked.PatternBinderId,
     ) std.mem.Allocator.Error!LocalId {
-        const id: LocalId = @enumFromInt(@as(u32, @intCast(self.locals.items.len)));
+        const id: LocalId = @enumFromInt(@as(u32, @intCast(self.locals.len())));
         try self.locals.append(self.allocator, .{
             .id = id,
             .symbol = symbol,
@@ -1302,150 +1469,266 @@ pub const ProgramBuilder = struct {
     /// `capture_id` is the per-owner generated index; it is stored in the
     /// generated range of `CaptureId`.
     pub fn setLocalCaptureId(self: *ProgramBuilder, id: LocalId, capture_id: u32) void {
-        self.locals.items[@intFromEnum(id)].capture_id = checked.CaptureId.generatedCheck(capture_id);
+        self.locals.getPtrImmediate(@intFromEnum(id)).capture_id = checked.CaptureId.generatedCheck(capture_id);
     }
 
     /// Record the source-level name of a local (dupes; empty means none).
     pub fn setLocalName(self: *ProgramBuilder, id: LocalId, name: []const u8) std.mem.Allocator.Error!void {
         if (name.len == 0) return;
-        const slot = &self.local_names.items[@intFromEnum(id)];
+        const slot = self.local_names.getPtrImmediate(@intFromEnum(id));
         if (slot.len > 0) self.allocator.free(slot.*);
         slot.* = try self.allocator.dupe(u8, name);
     }
 
     /// Source-level name of a local; empty for compiler-generated temporaries.
     pub fn localName(self: *const ProgramBuilder, id: LocalId) []const u8 {
-        return self.local_names.items[@intFromEnum(id)];
+        return self.local_names.unsafeRawItemsForView()[@intFromEnum(id)];
     }
 
     pub fn setLocalType(self: *ProgramBuilder, id: LocalId, ty: Type.TypeId) void {
-        self.locals.items[@intFromEnum(id)].ty = ty;
-        for (self.typed_locals.items) |*typed_local| {
+        self.locals.getPtrImmediate(@intFromEnum(id)).ty = ty;
+        for (self.typed_locals.unsafeRawItemsMutForStore()) |*typed_local| {
             if (typed_local.local == id) {
                 typed_local.ty = ty;
             }
         }
     }
 
+    pub fn localCount(self: *const ProgramBuilder) usize {
+        return self.locals.len();
+    }
+
+    pub fn localsView(self: *const ProgramBuilder) []const Local {
+        return self.locals.unsafeRawItemsForView();
+    }
+
+    pub fn getLocal(self: *const ProgramBuilder, id: LocalId) Local {
+        return self.locals.unsafeRawItemsForView()[@intFromEnum(id)];
+    }
+
+    pub fn typedLocalCount(self: *const ProgramBuilder) usize {
+        return self.typed_locals.len();
+    }
+
+    pub fn rootsView(self: *const ProgramBuilder) []const Root {
+        return self.roots.unsafeRawItemsForView();
+    }
+
+    pub fn addRoot(self: *ProgramBuilder, root: Root) std.mem.Allocator.Error!void {
+        try self.roots.append(self.allocator, root);
+    }
+
+    pub fn layoutRequestCount(self: *const ProgramBuilder) usize {
+        return self.layout_requests.len();
+    }
+
+    pub fn layoutRequestsView(self: *const ProgramBuilder) []const LayoutRequest {
+        return self.layout_requests.unsafeRawItemsForView();
+    }
+
+    pub fn addLayoutRequest(self: *ProgramBuilder, request: LayoutRequest) std.mem.Allocator.Error!void {
+        try self.layout_requests.append(self.allocator, request);
+    }
+
+    pub fn runtimeSchemaRequestCount(self: *const ProgramBuilder) usize {
+        return self.runtime_schema_requests.len();
+    }
+
+    pub fn runtimeSchemaRequestsView(self: *const ProgramBuilder) []const RuntimeSchemaRequest {
+        return self.runtime_schema_requests.unsafeRawItemsForView();
+    }
+
+    pub fn addRuntimeSchemaRequest(self: *ProgramBuilder, request: RuntimeSchemaRequest) std.mem.Allocator.Error!void {
+        try self.runtime_schema_requests.append(self.allocator, request);
+    }
+
+    pub fn comptimeSiteCount(self: *const ProgramBuilder) usize {
+        return self.comptime_sites.len();
+    }
+
+    pub fn sourceFileCount(self: *const ProgramBuilder) usize {
+        return self.source_files.len();
+    }
+
+    pub fn stringLiteralCount(self: *const ProgramBuilder) usize {
+        return self.string_literals.len();
+    }
+
+    pub fn fieldExprCount(self: *const ProgramBuilder) usize {
+        return self.field_exprs.len();
+    }
+
+    pub fn recordDestructCount(self: *const ProgramBuilder) usize {
+        return self.record_destructs.len();
+    }
+
+    pub fn strPatternStepCount(self: *const ProgramBuilder) usize {
+        return self.str_pattern_steps.len();
+    }
+
+    pub fn branchCount(self: *const ProgramBuilder) usize {
+        return self.branches.len();
+    }
+
+    pub fn ifBranchCount(self: *const ProgramBuilder) usize {
+        return self.if_branches.len();
+    }
+
+    pub fn exprIdCount(self: *const ProgramBuilder) usize {
+        return self.expr_ids.len();
+    }
+
+    pub fn patIdCount(self: *const ProgramBuilder) usize {
+        return self.pat_ids.len();
+    }
+
+    pub fn stmtIdCount(self: *const ProgramBuilder) usize {
+        return self.stmt_ids.len();
+    }
+
+    pub fn fnDefCaptureCount(self: *const ProgramBuilder) usize {
+        return self.fn_def_captures.len();
+    }
+
+    pub fn getFieldExprAt(self: *const ProgramBuilder, index: usize) FieldExpr {
+        return self.field_exprs.get(index);
+    }
+
+    pub fn getRecordDestructAt(self: *const ProgramBuilder, index: usize) RecordDestruct {
+        return self.record_destructs.get(index);
+    }
+
+    pub fn getStrPatternStepAt(self: *const ProgramBuilder, index: usize) StrPatternStep {
+        return self.str_pattern_steps.get(index);
+    }
+
+    pub fn getBranchAt(self: *const ProgramBuilder, index: usize) Branch {
+        return self.branches.get(index);
+    }
+
+    pub fn getIfBranchAt(self: *const ProgramBuilder, index: usize) IfBranch {
+        return self.if_branches.get(index);
+    }
+
     pub fn addExprSpan(self: *ProgramBuilder, ids: []const ExprId) std.mem.Allocator.Error!Span(ExprId) {
-        const start: u32 = @intCast(self.expr_ids.items.len);
+        const start: u32 = @intCast(self.expr_ids.len());
         try self.expr_ids.appendSlice(self.allocator, ids);
         return .{ .start = start, .len = @intCast(ids.len) };
     }
 
     pub fn addPatSpan(self: *ProgramBuilder, ids: []const PatId) std.mem.Allocator.Error!Span(PatId) {
-        const start: u32 = @intCast(self.pat_ids.items.len);
+        const start: u32 = @intCast(self.pat_ids.len());
         try self.pat_ids.appendSlice(self.allocator, ids);
         return .{ .start = start, .len = @intCast(ids.len) };
     }
 
     pub fn addTypedLocalSpan(self: *ProgramBuilder, values: []const TypedLocal) std.mem.Allocator.Error!Span(TypedLocal) {
-        const start: u32 = @intCast(self.typed_locals.items.len);
+        const start: u32 = @intCast(self.typed_locals.len());
         try self.typed_locals.ensureUnusedCapacity(self.allocator, values.len);
         for (values) |value| {
-            const local_ty = self.locals.items[@intFromEnum(value.local)].ty;
+            const local_ty = self.locals.unsafeRawItemsForView()[@intFromEnum(value.local)].ty;
             self.typed_locals.appendAssumeCapacity(.{ .local = value.local, .ty = local_ty });
         }
         return .{ .start = start, .len = @intCast(values.len) };
     }
 
     pub fn addFieldExprSpan(self: *ProgramBuilder, values: []const FieldExpr) std.mem.Allocator.Error!Span(FieldExpr) {
-        const start: u32 = @intCast(self.field_exprs.items.len);
+        const start: u32 = @intCast(self.field_exprs.len());
         try self.field_exprs.appendSlice(self.allocator, values);
         return .{ .start = start, .len = @intCast(values.len) };
     }
 
     pub fn addFnDefCaptureSpan(self: *ProgramBuilder, values: []const FnDefCapture) std.mem.Allocator.Error!Span(FnDefCapture) {
-        const start: u32 = @intCast(self.fn_def_captures.items.len);
+        const start: u32 = @intCast(self.fn_def_captures.len());
         try self.fn_def_captures.appendSlice(self.allocator, values);
         return .{ .start = start, .len = @intCast(values.len) };
     }
 
     pub fn addRecordDestructSpan(self: *ProgramBuilder, values: []const RecordDestruct) std.mem.Allocator.Error!Span(RecordDestruct) {
-        const start: u32 = @intCast(self.record_destructs.items.len);
+        const start: u32 = @intCast(self.record_destructs.len());
         try self.record_destructs.appendSlice(self.allocator, values);
         return .{ .start = start, .len = @intCast(values.len) };
     }
 
     pub fn addStrPatternStepSpan(self: *ProgramBuilder, values: []const StrPatternStep) std.mem.Allocator.Error!Span(StrPatternStep) {
-        const start: u32 = @intCast(self.str_pattern_steps.items.len);
+        const start: u32 = @intCast(self.str_pattern_steps.len());
         try self.str_pattern_steps.appendSlice(self.allocator, values);
         return .{ .start = start, .len = @intCast(values.len) };
     }
 
     pub fn addBranchSpan(self: *ProgramBuilder, values: []const Branch) std.mem.Allocator.Error!Span(Branch) {
-        const start: u32 = @intCast(self.branches.items.len);
+        const start: u32 = @intCast(self.branches.len());
         try self.branches.appendSlice(self.allocator, values);
         return .{ .start = start, .len = @intCast(values.len) };
     }
 
     pub fn addIfBranchSpan(self: *ProgramBuilder, values: []const IfBranch) std.mem.Allocator.Error!Span(IfBranch) {
-        const start: u32 = @intCast(self.if_branches.items.len);
+        const start: u32 = @intCast(self.if_branches.len());
         try self.if_branches.appendSlice(self.allocator, values);
         return .{ .start = start, .len = @intCast(values.len) };
     }
 
     pub fn addStmtSpan(self: *ProgramBuilder, ids: []const StmtId) std.mem.Allocator.Error!Span(StmtId) {
-        const start: u32 = @intCast(self.stmt_ids.items.len);
+        const start: u32 = @intCast(self.stmt_ids.len());
         try self.stmt_ids.appendSlice(self.allocator, ids);
         return .{ .start = start, .len = @intCast(ids.len) };
     }
 
-    pub fn exprSpan(self: *const ProgramBuilder, span_: Span(ExprId)) []const ExprId {
-        return self.expr_ids.items[span_.start..][0..span_.len];
+    pub fn exprSpan(self: *const ProgramBuilder, span_: Span(ExprId)) ProgramSpanBorrow(ExprId, "expr_ids") {
+        return self.expr_ids.borrowSpan(span_.start, span_.len);
     }
 
-    pub fn patSpan(self: *const ProgramBuilder, span_: Span(PatId)) []const PatId {
-        return self.pat_ids.items[span_.start..][0..span_.len];
+    pub fn patSpan(self: *const ProgramBuilder, span_: Span(PatId)) ProgramSpanBorrow(PatId, "pat_ids") {
+        return self.pat_ids.borrowSpan(span_.start, span_.len);
     }
 
-    pub fn typedLocalSpan(self: *const ProgramBuilder, span_: Span(TypedLocal)) []const TypedLocal {
-        return self.typed_locals.items[span_.start..][0..span_.len];
+    pub fn typedLocalSpan(self: *const ProgramBuilder, span_: Span(TypedLocal)) ProgramSpanBorrow(TypedLocal, "typed_locals") {
+        return self.typed_locals.borrowSpan(span_.start, span_.len);
     }
 
-    pub fn stmtSpan(self: *const ProgramBuilder, span_: Span(StmtId)) []const StmtId {
-        return self.stmt_ids.items[span_.start..][0..span_.len];
+    pub fn stmtSpan(self: *const ProgramBuilder, span_: Span(StmtId)) ProgramSpanBorrow(StmtId, "stmt_ids") {
+        return self.stmt_ids.borrowSpan(span_.start, span_.len);
     }
 
-    pub fn fieldExprSpan(self: *const ProgramBuilder, span_: Span(FieldExpr)) []const FieldExpr {
-        return self.field_exprs.items[span_.start..][0..span_.len];
+    pub fn fieldExprSpan(self: *const ProgramBuilder, span_: Span(FieldExpr)) ProgramSpanBorrow(FieldExpr, "field_exprs") {
+        return self.field_exprs.borrowSpan(span_.start, span_.len);
     }
 
-    pub fn fnDefCaptureSpan(self: *const ProgramBuilder, span_: Span(FnDefCapture)) []const FnDefCapture {
-        return self.fn_def_captures.items[span_.start..][0..span_.len];
+    pub fn fnDefCaptureSpan(self: *const ProgramBuilder, span_: Span(FnDefCapture)) ProgramSpanBorrow(FnDefCapture, "fn_def_captures") {
+        return self.fn_def_captures.borrowSpan(span_.start, span_.len);
     }
 
     pub fn addCaptureOperandSpan(self: *ProgramBuilder, values: []const CaptureOperand) std.mem.Allocator.Error!Span(CaptureOperand) {
-        const start: u32 = @intCast(self.capture_operands.items.len);
+        const start: u32 = @intCast(self.capture_operands.len());
         try self.capture_operands.appendSlice(self.allocator, values);
         return .{ .start = start, .len = @intCast(values.len) };
     }
 
-    pub fn captureOperandSpan(self: *const ProgramBuilder, span_: Span(CaptureOperand)) []const CaptureOperand {
-        return self.capture_operands.items[span_.start..][0..span_.len];
+    pub fn captureOperandSpan(self: *const ProgramBuilder, span_: Span(CaptureOperand)) ProgramSpanBorrow(CaptureOperand, "capture_operands") {
+        return self.capture_operands.borrowSpan(span_.start, span_.len);
     }
 
     /// The CaptureId of a local. Every local that participates in a capture set
     /// carries one; asserts it is present.
     pub fn captureIdOfLocal(self: *const ProgramBuilder, id: LocalId) checked.CaptureId {
-        return self.locals.items[@intFromEnum(id)].capture_id orelse
+        return self.locals.unsafeRawItemsForView()[@intFromEnum(id)].capture_id orelse
             Common.invariant("Monotype capture local had no CaptureId");
     }
 
-    pub fn recordDestructSpan(self: *const ProgramBuilder, span_: Span(RecordDestruct)) []const RecordDestruct {
-        return self.record_destructs.items[span_.start..][0..span_.len];
+    pub fn recordDestructSpan(self: *const ProgramBuilder, span_: Span(RecordDestruct)) ProgramSpanBorrow(RecordDestruct, "record_destructs") {
+        return self.record_destructs.borrowSpan(span_.start, span_.len);
     }
 
-    pub fn strPatternStepSpan(self: *const ProgramBuilder, span_: Span(StrPatternStep)) []const StrPatternStep {
-        return self.str_pattern_steps.items[span_.start..][0..span_.len];
+    pub fn strPatternStepSpan(self: *const ProgramBuilder, span_: Span(StrPatternStep)) ProgramSpanBorrow(StrPatternStep, "str_pattern_steps") {
+        return self.str_pattern_steps.borrowSpan(span_.start, span_.len);
     }
 
-    pub fn branchSpan(self: *const ProgramBuilder, span_: Span(Branch)) []const Branch {
-        return self.branches.items[span_.start..][0..span_.len];
+    pub fn branchSpan(self: *const ProgramBuilder, span_: Span(Branch)) ProgramSpanBorrow(Branch, "branches") {
+        return self.branches.borrowSpan(span_.start, span_.len);
     }
 
-    pub fn ifBranchSpan(self: *const ProgramBuilder, span_: Span(IfBranch)) []const IfBranch {
-        return self.if_branches.items[span_.start..][0..span_.len];
+    pub fn ifBranchSpan(self: *const ProgramBuilder, span_: Span(IfBranch)) ProgramSpanBorrow(IfBranch, "if_branches") {
+        return self.if_branches.borrowSpan(span_.start, span_.len);
     }
 };
 
@@ -1472,9 +1755,13 @@ test "monotype program view exposes read-only side arrays" {
         .identity = .{
             .callable = .{ .proc_template = .{ .module = .{}, .proc_base = 0, .template = 0 } },
             .source_fn_ty_digest = .{},
-            .mono_fn_ty_digest = .{},
-            .mono_fn_ty = unit_ty,
+            .request_fn_ty_digest = .{},
+            .request_fn_ty = unit_ty,
         },
+        .request_fn_ty = unit_ty,
+        .request_fn_ty_digest = .{},
+        .solved_fn_ty = unit_ty,
+        .solved_fn_ty_digest = .{},
         .fn_id = fn_id,
         .status = .reserved,
     });
@@ -1504,7 +1791,7 @@ test "completed monotype type id verifier requires frozen in-bounds type ids" {
     defer program.deinit();
 
     const unit_ty = try program.types.add(.zst);
-    _ = try program.addExpr(.{ .ty = unit_ty, .data = .unit });
+    const expr_id = try program.addExpr(.{ .ty = unit_ty, .data = .unit });
 
     try std.testing.expectEqual(
         CompletedTypeIdVerifyError.type_store_not_frozen,
@@ -1514,7 +1801,9 @@ test "completed monotype type id verifier requires frozen in-bounds type ids" {
     program.freeze();
     try std.testing.expectEqual(@as(?CompletedTypeIdVerifyError, null), program.view().verifyCompletedTypeIds());
 
-    program.exprs.items[0].ty = @enumFromInt(99);
+    var out_of_bounds_expr = program.getExpr(expr_id);
+    out_of_bounds_expr.ty = @enumFromInt(99);
+    program.setExpr(expr_id, out_of_bounds_expr);
     try std.testing.expectEqual(
         CompletedTypeIdVerifyError.expr_type_out_of_bounds,
         program.view().verifyCompletedTypeIds().?,
@@ -1653,7 +1942,7 @@ test "fresh single-shard view preserves builder local call graph" {
 
     var builder_targets = std.ArrayList(FnId).empty;
     defer builder_targets.deinit(std.testing.allocator);
-    try collectSingleShardLocalCallTargets(std.testing.allocator, program.exprs.items, &builder_targets);
+    try collectSingleShardLocalCallTargets(std.testing.allocator, program.exprsView(), &builder_targets);
 
     const view_ = program.view();
     var view_targets = std.ArrayList(FnId).empty;
@@ -1662,6 +1951,51 @@ test "fresh single-shard view preserves builder local call graph" {
 
     try std.testing.expectEqualSlices(FnId, builder_targets.items, view_targets.items);
 }
+
+test "setExpr resolves slot after RHS append" {
+    var move_allocator = MoveAllocatorForResultLocationTest{};
+    const allocator = move_allocator.allocator();
+    var program = Program.init(allocator);
+    defer program.deinit();
+
+    const unit_ty = try program.types.add(.zst);
+    try program.exprs.ensureTotalCapacityPrecise(allocator, 1);
+    const target = try program.addExpr(.{ .ty = unit_ty, .data = .unit });
+    const rhs = try program.addExpr(.{ .ty = unit_ty, .data = .uninitialized });
+
+    program.setExpr(target, .{ .ty = unit_ty, .data = .{ .nominal = rhs } });
+
+    try std.testing.expectEqual(ExprData{ .nominal = rhs }, program.getExpr(target).data);
+}
+
+const MoveAllocatorForResultLocationTest = struct {
+    const vtable = std.mem.Allocator.VTable{
+        .alloc = alloc,
+        .resize = resize,
+        .remap = remap,
+        .free = free,
+    };
+
+    fn allocator(self: *MoveAllocatorForResultLocationTest) std.mem.Allocator {
+        return .{ .ptr = self, .vtable = &vtable };
+    }
+
+    fn alloc(_: *anyopaque, len: usize, alignment: std.mem.Alignment, ret_addr: usize) ?[*]u8 {
+        return std.heap.page_allocator.rawAlloc(len, alignment, ret_addr);
+    }
+
+    fn resize(_: *anyopaque, _: []u8, _: std.mem.Alignment, _: usize, _: usize) bool {
+        return false;
+    }
+
+    fn remap(_: *anyopaque, _: []u8, _: std.mem.Alignment, _: usize, _: usize) ?[*]u8 {
+        return null;
+    }
+
+    fn free(_: *anyopaque, memory: []u8, alignment: std.mem.Alignment, ret_addr: usize) void {
+        std.heap.page_allocator.rawFree(memory, alignment, ret_addr);
+    }
+};
 
 fn collectSingleShardLocalCallTargets(
     allocator: std.mem.Allocator,

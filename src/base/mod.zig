@@ -13,6 +13,7 @@ pub const Scratch = @import("Scratch.zig").Scratch;
 pub const parallel = @import("parallel.zig");
 pub const SmallStringInterner = @import("SmallStringInterner.zig");
 pub const SerialStringInterner = @import("SerialStringInterner.zig");
+pub const ModuleIdentity = @import("module_identity.zig");
 
 /// Single-threaded arena allocator, re-exported from `collections` for callers
 /// that already depend on `base`.
@@ -133,6 +134,7 @@ test "base tests" {
     std.testing.refAllDecls(@import("DataSpan.zig"));
     std.testing.refAllDecls(@import("Ident.zig"));
     std.testing.refAllDecls(@import("InternedBytes.zig"));
+    std.testing.refAllDecls(@import("module_identity.zig"));
     std.testing.refAllDecls(@import("PackedDataSpan.zig"));
     std.testing.refAllDecls(@import("parallel.zig"));
     std.testing.refAllDecls(@import("Region.zig"));

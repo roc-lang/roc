@@ -5,11 +5,13 @@
 //! and readability, not completeness — it is not a serialization format.
 
 const std = @import("std");
+const collections = @import("collections");
 const core = @import("lir_core");
 const layout_mod = @import("layout");
 
 const LIR = core.LIR;
 const LirStore = core.LirStore;
+const GuardedList = collections.GuardedList;
 
 /// Errors produced while printing: allocation for the visited set, or the
 /// writer rejecting output.
@@ -27,7 +29,8 @@ pub fn writeProc(
 
     try writer.print("proc p{d} args=[", .{@intFromEnum(proc_id)});
     const args = store.getLocalSpan(proc.args);
-    for (args, 0..) |arg, i| {
+    for (0..args.len) |i| {
+        const arg = GuardedList.at(args, i);
         if (i > 0) try writer.writeAll(", ");
         try writeTypedLocal(store, layouts, arg, writer);
     }
@@ -207,7 +210,9 @@ const Printer = struct {
                         @intFromEnum(s.cond),
                         s.default_is_cold,
                     });
-                    for (self.store.getCFSwitchBranches(s.branches)) |branch| {
+                    const branches = self.store.getCFSwitchBranches(s.branches);
+                    for (0..branches.len) |branch_index| {
+                        const branch = GuardedList.at(branches, branch_index);
                         try writeIndent(indent + 1, writer);
                         try writer.print("case {d}:\n", .{branch.value});
                         try self.writeChainInner(gpa, branch.body, indent + 2, writer);
@@ -241,7 +246,9 @@ const Printer = struct {
                 .str_match => |s| {
                     try writeIndent(indent, writer);
                     try writer.print("str_match l{d} prefix_len={d} end={s}\n", .{ @intFromEnum(s.source), s.prefix.len, @tagName(s.end) });
-                    for (self.store.getStrMatchSteps(s.steps), 0..) |step, index| {
+                    const steps = self.store.getStrMatchSteps(s.steps);
+                    for (0..steps.len) |index| {
+                        const step = GuardedList.at(steps, index);
                         try writeIndent(indent + 1, writer);
                         try writer.print("step {d} capture=", .{index});
                         switch (step.capture) {
@@ -261,10 +268,14 @@ const Printer = struct {
                 .str_match_set => |s| {
                     try writeIndent(indent, writer);
                     try writer.print("str_match_set l{d} arms={d}\n", .{ @intFromEnum(s.source), s.arms.len });
-                    for (self.store.getStrMatchArms(s.arms), 0..) |arm, arm_index| {
+                    const arms = self.store.getStrMatchArms(s.arms);
+                    for (0..arms.len) |arm_index| {
+                        const arm = GuardedList.at(arms, arm_index);
                         try writeIndent(indent + 1, writer);
                         try writer.print("arm {d} prefix_len={d} end={s}\n", .{ arm_index, arm.prefix.len, @tagName(arm.end) });
-                        for (self.store.getStrMatchSteps(arm.steps), 0..) |step, step_index| {
+                        const steps = self.store.getStrMatchSteps(arm.steps);
+                        for (0..steps.len) |step_index| {
+                            const step = GuardedList.at(steps, step_index);
                             try writeIndent(indent + 2, writer);
                             try writer.print("step {d} capture=", .{step_index});
                             switch (step.capture) {
@@ -296,7 +307,8 @@ const Printer = struct {
                         try writer.writeAll("]");
                         try writer.writeAll(" masks=[");
                         const masks = self.store.getU64Span(s.maybe_uninitialized_condition_masks);
-                        for (masks, 0..) |mask, index| {
+                        for (0..masks.len) |index| {
+                            const mask = GuardedList.at(masks, index);
                             if (index > 0) try writer.writeAll(", ");
                             try writer.print("0x{x}", .{mask});
                         }
@@ -357,7 +369,9 @@ const Printer = struct {
     }
 
     fn writeLocals(self: *Printer, span: LIR.LocalSpan, writer: *std.Io.Writer) Error!void {
-        for (self.store.getLocalSpan(span), 0..) |local, i| {
+        const locals = self.store.getLocalSpan(span);
+        for (0..locals.len) |i| {
+            const local = GuardedList.at(locals, i);
             if (i > 0) try writer.writeAll(", ");
             try writer.print("l{d}", .{@intFromEnum(local)});
         }

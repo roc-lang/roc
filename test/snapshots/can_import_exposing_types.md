@@ -54,7 +54,7 @@ handleResponse = |response|
 combineTrys : Try(Value, Error), Status -> Try(Response, Error)
 combineTrys = |jsonTry, httpStatus|
     match jsonTry {
-        Ok(value) => Ok({ body: Json.encode(value), status: httpStatus })
+        Ok(value) => Ok({ body: Json.to_str(value), status: httpStatus })
         Err(error) => Err(error)
     }
 ~~~
@@ -395,10 +395,10 @@ NAME NOT IN SCOPE - can_import_exposing_types.md:50:33:50:44
 
 
 ┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `encode` in this scope. ──────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `to_str` in this scope. ──────────────┐
 └┬──────────────────┘                                                         │
  │                                                                            │
- │  Ok(value) => Ok({ body: Json.encode(value), status: httpStatus })         │
+ │  Ok(value) => Ok({ body: Json.to_str(value), status: httpStatus })         │
  │                          ‾‾‾‾‾‾‾‾‾‾‾                                       │
  └──────────────────────────────────────── can_import_exposing_types.md:50:33 ┘
 
@@ -616,7 +616,7 @@ EndOfFile,
 								(e-record
 									(field (field "body")
 										(e-apply
-											(e-ident (raw "Json.encode"))
+											(e-ident (raw "Json.to_str"))
 											(e-ident (raw "value"))))
 									(field (field "status")
 										(e-ident (raw "httpStatus"))))))
@@ -678,7 +678,7 @@ handleResponse = |response|
 combineTrys : Try(Value, Error), Status -> Try(Response, Error)
 combineTrys = |jsonTry, httpStatus|
 	match jsonTry {
-		Ok(value) => Ok({ body: Json.encode(value), status: httpStatus })
+		Ok(value) => Ok({ body: Json.to_str(value), status: httpStatus })
 		Err(error) => Err(error)
 	}
 ~~~

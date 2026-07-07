@@ -158,6 +158,15 @@ pub fn insert(self: *SerialStringInterner, gpa: Allocator, string: []const u8) A
     return index.insert(self, gpa, string);
 }
 
+/// Add the given offset to the memory addresses of all pointers in `self`.
+/// Used by serialized compiler artifacts whose internal pointers are stored
+/// relative to the artifact buffer.
+pub fn relocate(self: *SerialStringInterner, offset: isize) void {
+    self.bytes.relocate(offset);
+    self.ranges.relocate(offset);
+    self.index.relocate(offset);
+}
+
 /// Re-open a deserialized interner for insertion by copying its data into fresh,
 /// growable memory.
 pub fn enableRuntimeInserts(self: *SerialStringInterner, gpa: Allocator) Allocator.Error!void {

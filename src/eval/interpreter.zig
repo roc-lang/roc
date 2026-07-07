@@ -15,11 +15,15 @@ const layout_mod = @import("layout");
 const lir = @import("lir");
 const LIR = lir.LIR;
 const LirStore = lir.LirStore;
+const GuardedList = LirStore.GuardedList;
+const CheckedArithmetic = lir.CheckedArithmetic;
 const lir_value = @import("value.zig");
+const backend = @import("backend");
 const host_trampoline = @import("host_trampoline.zig");
 const builtins = @import("builtins");
 const sljmp = @import("sljmp");
 const build_options = @import("build_options");
+const RocTarget = @import("roc_target").RocTarget;
 const is_freestanding = builtin.target.os.tag == .freestanding;
 
 /// Comptime-gated tracing for the interpreter eval loop.
@@ -295,6 +299,7 @@ pub const Interpreter = struct {
     /// RocOps environment for builtin dispatch.
     roc_env: *InterpreterRocEnv,
     roc_ops: RocOps,
+    static_strings: backend.StaticStringData.Table,
     frame_plans: []FramePlan,
     rc_presence: []RcPresence,
     rc_plans: std.AutoHashMapUnmanaged(u64, layout_mod.RcHelperPlan) = .{},
@@ -375,8 +380,8 @@ pub const Interpreter = struct {
     };
 
     const FramePlan = struct {
-        locals: []const LocalId,
-        join_points: []const LIR.JoinPoint,
+        locals: LirStore.StoreSpanBorrow(LocalId, "local_ids"),
+        join_points: LirStore.StoreSpanBorrow(LIR.JoinPoint, "join_points"),
         free_slots: std.ArrayListUnmanaged([]LocalSlot) = .empty,
 
         fn deinit(self: *FramePlan, allocator: Allocator) void {
@@ -403,7 +408,7 @@ pub const Interpreter = struct {
             const target = @intFromEnum(local_id);
             while (low < high) {
                 const mid = low + (high - low) / 2;
-                const current = @intFromEnum(self.locals[mid]);
+                const current = @intFromEnum(GuardedList.at(self.locals, mid));
                 if (current == target) return mid;
                 if (current < target) {
                     low = mid + 1;
@@ -420,8 +425,9 @@ pub const Interpreter = struct {
             const target = @intFromEnum(join_point_id);
             while (low < high) {
                 const mid = low + (high - low) / 2;
-                const current = @intFromEnum(self.join_points[mid].id);
-                if (current == target) return self.join_points[mid];
+                const join_point = GuardedList.at(self.join_points, mid);
+                const current = @intFromEnum(join_point.id);
+                if (current == target) return join_point;
                 if (current < target) {
                     low = mid + 1;
                 } else {
@@ -507,6 +513,13 @@ pub const Interpreter = struct {
 
         const roc_env = try allocator.create(InterpreterRocEnv);
         roc_env.* = InterpreterRocEnv.init(allocator, caller_roc_ops);
+        errdefer {
+            roc_env.deinit();
+            allocator.destroy(roc_env);
+        }
+
+        var static_strings = try backend.StaticStringData.build(allocator, store, RocTarget.detectNative());
+        errdefer static_strings.deinit();
 
         return .{
             .allocator = allocator,
@@ -525,6 +538,7 @@ pub const Interpreter = struct {
                 .roc_crashed = &InterpreterRocEnv.rocCrashedFn,
                 .hosted_fns = caller_roc_ops.hosted_fns,
             },
+            .static_strings = static_strings,
             .frame_plans = frame_plans,
             .rc_presence = rc_presence,
             .rc_plans = rc_plans,
@@ -542,6 +556,7 @@ pub const Interpreter = struct {
         self.call_stack.deinit(self.evalAllocator());
         self.roc_env.deinit();
         self.allocator.destroy(self.roc_env);
+        self.static_strings.deinit();
         self.arena.deinit();
         self.tag_variant_plans.deinit(self.allocator);
         self.struct_field_plans.deinit(self.allocator);
@@ -736,30 +751,6 @@ pub const Interpreter = struct {
         return error.ComptimeExhaustiveness;
     }
 
-    fn divisionByZeroMessageForLayout(self: *const LirInterpreter, layout_idx: layout_mod.Idx) []const u8 {
-        return switch (layout_idx) {
-            .u8 => "U8 division by zero",
-            .i8 => "I8 division by zero",
-            .u16 => "U16 division by zero",
-            .i16 => "I16 division by zero",
-            .u32 => "U32 division by zero",
-            .i32 => "I32 division by zero",
-            .u64 => "U64 division by zero",
-            .i64 => "I64 division by zero",
-            .u128 => "U128 division by zero",
-            .i128 => "I128 division by zero",
-            .dec => "Dec division by zero",
-            else => self.invariantFailed(
-                "LIR/interpreter invariant violated: division by zero reported for non-crashing numeric layout {d}",
-                .{@intFromEnum(layout_idx)},
-            ),
-        };
-    }
-
-    fn divisionByZero(self: *LirInterpreter, layout_idx: layout_mod.Idx) Error {
-        return self.triggerCrash(self.divisionByZeroMessageForLayout(layout_idx));
-    }
-
     fn triggerCrash(self: *LirInterpreter, message: []const u8) Error {
         self.recordActiveFailureLocIfUnset();
         self.roc_env.reportCrash(message);
@@ -912,8 +903,9 @@ pub const Interpreter = struct {
         const arg_ids = view.store.getLocalSpan(proc.args);
         const arg_layouts = try self.allocator.alloc(layout_mod.Idx, arg_ids.len);
         defer self.allocator.free(arg_layouts);
-        for (arg_ids, 0..) |local_id, i| {
-            arg_layouts[i] = view.store.locals.items[@intFromEnum(local_id)].layout_idx;
+        for (0..arg_ids.len) |i| {
+            const local_id = GuardedList.at(arg_ids, i);
+            arg_layouts[i] = view.store.getLocal(local_id).layout_idx;
         }
 
         return self.eval(.{
@@ -1031,7 +1023,8 @@ pub const Interpreter = struct {
                 );
                 const params = self.store.getLocalSpan(proc.args);
                 debugPrint("  proc params:", .{});
-                for (params) |param| {
+                for (0..params.len) |i| {
+                    const param = GuardedList.at(params, i);
                     debugPrint(" {d}:layout={d}", .{
                         @intFromEnum(param),
                         @intFromEnum(self.store.getLocal(param).layout_idx),
@@ -1345,7 +1338,7 @@ pub const Interpreter = struct {
         } else {
             if (stmt_id) |id| {
                 const center = @as(usize, @intFromEnum(id));
-                const stmt_count = self.store.cf_stmts.items.len;
+                const stmt_count = self.store.cfStmtCount();
                 const start = center -| 20;
                 const end = @min(stmt_count, center + 21);
                 debugPrint("LIR/interpreter stmt window around failing stmt {d}:\n", .{@intFromEnum(id)});
@@ -1467,7 +1460,9 @@ pub const Interpreter = struct {
                             @intFromEnum(self.store.getLocal(assign.target).layout_idx),
                         },
                     );
-                    for (self.store.getLocalSpan(assign.args)) |arg_local| {
+                    const arg_locals = self.store.getLocalSpan(assign.args);
+                    for (0..arg_locals.len) |i| {
+                        const arg_local = GuardedList.at(arg_locals, i);
                         debugPrint("{d}:layout={d} ", .{
                             @intFromEnum(arg_local),
                             @intFromEnum(self.store.getLocal(arg_local).layout_idx),
@@ -1660,7 +1655,10 @@ pub const Interpreter = struct {
             );
         }
 
-        for (params, args, arg_layouts, 0..) |param, arg, arg_layout, i| {
+        for (0..params.len) |i| {
+            const param = GuardedList.at(params, i);
+            const arg = args[i];
+            const arg_layout = arg_layouts[i];
             const param_layout = self.store.getLocal(param).layout_idx;
             if (proc_spec.abi == .erased_callable and i + 1 == params.len) {
                 if (param_layout != .opaque_ptr or arg_layout != .opaque_ptr) {
@@ -1756,7 +1754,9 @@ pub const Interpreter = struct {
         const plan = &self.frame_plans[@intFromEnum(proc_id)];
         const slots = try plan.acquireSlots(self.allocator);
         @memset(slots, .{ .assigned = false, .val = Value.zst });
-        for (slots, plan.locals) |*slot, local_id| {
+        for (0..plan.locals.len) |i| {
+            const slot = &slots[i];
+            const local_id = GuardedList.at(plan.locals, i);
             const layout_idx = self.store.getLocal(local_id).layout_idx;
             if (self.layout_store.getLayout(layout_idx).tag == .zst) {
                 slot.assigned = true;
@@ -2063,12 +2063,14 @@ pub const Interpreter = struct {
                                 @intFromEnum(switch_stmt.default_branch),
                             },
                         );
-                        for (branches) |branch| {
+                        for (0..branches.len) |i| {
+                            const branch = GuardedList.at(branches, i);
                             trace.log("  branch value={d} body={d}", .{ branch.value, @intFromEnum(branch.body) });
                         }
                     }
                     var target = switch_stmt.default_branch;
-                    for (branches) |branch| {
+                    for (0..branches.len) |i| {
+                        const branch = GuardedList.at(branches, i);
                         if (branch.value == cond_value) {
                             target = branch.body;
                             break;
@@ -2152,16 +2154,18 @@ pub const Interpreter = struct {
         const args = self.store.getLocalSpan(proc_spec.args);
         if (args.len > 0) {
             debugPrint("  args:", .{});
-            for (args) |arg| {
+            for (0..args.len) |i| {
+                const arg = GuardedList.at(args, i);
                 const layout_idx = self.store.getLocal(arg).layout_idx;
                 debugPrint(" {d}:{d}", .{ @intFromEnum(arg), @intFromEnum(layout_idx) });
             }
             debugPrint("\n", .{});
         }
-        const local_count = self.store.locals.items.len;
+        const local_count = self.store.localCount();
         if (local_count > 0) {
             debugPrint("  locals:\n", .{});
-            for (self.store.locals.items, 0..) |local, idx| {
+            for (0..local_count) |idx| {
+                const local = self.store.getLocal(@enumFromInt(@as(u32, @intCast(idx))));
                 const layout_idx = local.layout_idx;
                 const layout_val = self.layout_store.getLayout(layout_idx);
                 debugPrint(
@@ -2222,7 +2226,9 @@ pub const Interpreter = struct {
                         @intFromEnum(assign.proc),
                         @intFromEnum(assign.target),
                     });
-                    for (self.store.getLocalSpan(assign.args)) |arg_local| {
+                    const arg_locals = self.store.getLocalSpan(assign.args);
+                    for (0..arg_locals.len) |i| {
+                        const arg_local = GuardedList.at(arg_locals, i);
                         debugPrint("{d} ", .{@intFromEnum(arg_local)});
                     }
                     debugPrint("next={d}\n", .{@intFromEnum(assign.next)});
@@ -2250,7 +2256,9 @@ pub const Interpreter = struct {
                         @intFromEnum(assign.target),
                         @tagName(assign.op),
                     });
-                    for (self.store.getLocalSpan(assign.args)) |arg_local| {
+                    const arg_locals = self.store.getLocalSpan(assign.args);
+                    for (0..arg_locals.len) |i| {
+                        const arg_local = GuardedList.at(arg_locals, i);
                         debugPrint("{d} ", .{@intFromEnum(arg_local)});
                     }
                     debugPrint("next={d}\n", .{@intFromEnum(assign.next)});
@@ -2269,7 +2277,9 @@ pub const Interpreter = struct {
                         @intFromEnum(stmt_id),
                         @intFromEnum(assign.target),
                     });
-                    for (self.store.getLocalSpan(assign.fields)) |field_local| {
+                    const field_locals = self.store.getLocalSpan(assign.fields);
+                    for (0..field_locals.len) |i| {
+                        const field_local = GuardedList.at(field_locals, i);
                         debugPrint("{d} ", .{@intFromEnum(field_local)});
                     }
                     debugPrint("next={d}\n", .{
@@ -2371,7 +2381,8 @@ pub const Interpreter = struct {
                     });
                     stack.append(self.evalAllocator(), switch_stmt.default_branch) catch return;
                     const branches = self.store.getCFSwitchBranches(switch_stmt.branches);
-                    for (branches) |branch| {
+                    for (0..branches.len) |i| {
+                        const branch = GuardedList.at(branches, i);
                         debugPrint("        branch {d} -> {d}\n", .{
                             branch.value,
                             @intFromEnum(branch.body),
@@ -2408,7 +2419,9 @@ pub const Interpreter = struct {
                         str_match_set.arms.len,
                         @intFromEnum(str_match_set.on_miss),
                     });
-                    for (self.store.getStrMatchArms(str_match_set.arms)) |arm| {
+                    const arms = self.store.getStrMatchArms(str_match_set.arms);
+                    for (0..arms.len) |i| {
+                        const arm = GuardedList.at(arms, i);
                         stack.append(self.evalAllocator(), arm.on_match) catch return;
                     }
                     stack.append(self.evalAllocator(), str_match_set.on_miss) catch return;
@@ -2424,7 +2437,9 @@ pub const Interpreter = struct {
                         @intFromEnum(stmt_id),
                         @intFromEnum(join.id),
                     });
-                    for (self.store.getLocalSpan(join.params)) |param_local| {
+                    const params = self.store.getLocalSpan(join.params);
+                    for (0..params.len) |i| {
+                        const param_local = GuardedList.at(params, i);
                         debugPrint("{d} ", .{@intFromEnum(param_local)});
                     }
                     debugPrint("body={d} remainder={d}\n", .{
@@ -2462,26 +2477,33 @@ pub const Interpreter = struct {
         }
     }
 
-    fn collectLocalValues(self: *LirInterpreter, frame: *const Frame, locals: []const LocalId) Error![]Value {
+    fn collectLocalValues(self: *LirInterpreter, frame: *const Frame, locals: anytype) Error![]Value {
         if (locals.len == 0) return &.{};
         const values = try self.arena.allocator().alloc(Value, locals.len);
-        for (locals, 0..) |local_id, i| {
+        for (0..locals.len) |i| {
+            const local_id = GuardedList.at(locals, i);
             values[i] = try self.getLocalChecked(frame, local_id);
         }
         return values;
     }
 
-    fn localLayouts(self: *LirInterpreter, locals: []const LocalId) Error![]layout_mod.Idx {
+    fn localLayouts(self: *LirInterpreter, locals: anytype) Error![]layout_mod.Idx {
         if (locals.len == 0) return &.{};
         const layouts = try self.arena.allocator().alloc(layout_mod.Idx, locals.len);
-        for (locals, 0..) |local_id, i| layouts[i] = self.store.getLocal(local_id).layout_idx;
+        for (0..locals.len) |i| {
+            const local_id = GuardedList.at(locals, i);
+            layouts[i] = self.store.getLocal(local_id).layout_idx;
+        }
         return layouts;
     }
 
     fn localLayoutsFromSpan(self: *LirInterpreter, locals: LocalSpan) Error![]const layout_mod.Idx {
         const local_ids = self.store.getLocalSpan(locals);
         const layouts = try self.arena.allocator().alloc(layout_mod.Idx, local_ids.len);
-        for (local_ids, 0..) |local_id, i| layouts[i] = self.store.getLocal(local_id).layout_idx;
+        for (0..local_ids.len) |i| {
+            const local_id = GuardedList.at(local_ids, i);
+            layouts[i] = self.store.getLocal(local_id).layout_idx;
+        }
         return layouts;
     }
 
@@ -2812,7 +2834,8 @@ pub const Interpreter = struct {
         var proc_args = try self.arena.allocator().alloc(Value, proc_arg_locals.len);
         var proc_arg_layouts = try self.arena.allocator().alloc(layout_mod.Idx, proc_arg_locals.len);
 
-        for (proc_arg_locals[0..explicit_arg_count], 0..) |local, i| {
+        for (0..explicit_arg_count) |i| {
+            const local = GuardedList.at(proc_arg_locals, i);
             const arg_layout = self.store.getLocal(local).layout_idx;
             proc_arg_layouts[i] = arg_layout;
             const size = self.helper.sizeOf(arg_layout);
@@ -3101,7 +3124,8 @@ pub const Interpreter = struct {
                 .{ @intFromEnum(struct_layout), field_locals.len, expected_field_count },
             );
         }
-        for (field_locals, 0..) |field_local, i| {
+        for (0..field_locals.len) |i| {
+            const field_local = GuardedList.at(field_locals, i);
             const field_size = self.layout_store.getStructFieldSizeByOriginalIndex(
                 base_layout_val.getStruct().idx,
                 @intCast(i),
@@ -3229,7 +3253,8 @@ pub const Interpreter = struct {
         const elems_rc = self.builtinInternalContainsRefcounted("interpreter.assign_list.elem_rc", elem_layout);
         const elem_data = try self.allocRocDataWithRc(total_elem_bytes, elem_alignment, elems_rc);
         const elem_layout_val = self.layout_store.getLayout(elem_layout);
-        for (elem_locals, 0..) |elem_local, i| {
+        for (0..elem_locals.len) |i| {
+            const elem_local = GuardedList.at(elem_locals, i);
             const offset = i * elem_size;
             const elem_value = try self.coerceExplicitRefValueToLayout(
                 try self.getLocalChecked(frame, elem_local),
@@ -3396,7 +3421,7 @@ pub const Interpreter = struct {
 
     fn evalStrLiteral(self: *LirInterpreter, literal: LIR.StrLiteral) Error!Value {
         return self.makeStaticRocStrLiteralView(
-            self.store.getStringLiteralBacking(literal),
+            self.staticStringBacking(literal.backing),
             literal.offset,
             literal.len,
         );
@@ -3404,7 +3429,7 @@ pub const Interpreter = struct {
 
     fn evalBytesLiteral(self: *LirInterpreter, literal: LIR.StrLiteral, target_layout: layout_mod.Idx) Error!Value {
         return self.makeStaticRocListLiteralView(
-            self.store.getStringLiteralBacking(literal),
+            self.staticStringBacking(literal.backing),
             literal.offset,
             literal.len,
             target_layout,
@@ -3412,6 +3437,14 @@ pub const Interpreter = struct {
     }
 
     // String helpers (RocStr construction)
+
+    fn staticStringBacking(self: *const LirInterpreter, backing: base.StringLiteral.Idx) []const u8 {
+        if (self.static_strings.find(backing)) |entry| return entry.bytes;
+        self.invariantFailed(
+            "LIR/interpreter invariant violated: string literal {d} has no runtime static backing",
+            .{@intFromEnum(backing)},
+        );
+    }
 
     fn makeStaticRocStrLiteralView(self: *LirInterpreter, backing: []const u8, offset: u32, len: u32) Error!Value {
         const offset_usize: usize = offset;
@@ -3539,7 +3572,9 @@ pub const Interpreter = struct {
         const source_value = try self.getLocalChecked(frame, str_match_set.source);
         const source_rs = valueToRocStr(source_value);
         const source_bytes = self.readRocStr(source_value);
-        for (self.store.getStrMatchArms(str_match_set.arms)) |arm| {
+        const arms = self.store.getStrMatchArms(str_match_set.arms);
+        for (0..arms.len) |i| {
+            const arm = GuardedList.at(arms, i);
             if (try self.execStrMatchArm(frame, stmt_id, source_rs, source_bytes, arm)) {
                 return arm.on_match;
             }
@@ -3560,7 +3595,8 @@ pub const Interpreter = struct {
 
         var cursor: usize = prefix.len;
         const steps = self.store.getStrMatchSteps(arm.steps);
-        for (steps, 0..) |step, step_i| {
+        for (0..steps.len) |step_i| {
+            const step = GuardedList.at(steps, step_i);
             const delimiter = self.store.getStringLiteral(step.delimiter);
             const is_final_tail_capture = arm.end == .tail and step_i + 1 == steps.len and delimiter.len == 0;
             const result = LIR.strMatchStep(source_bytes, cursor, delimiter, is_final_tail_capture) orelse return false;
@@ -5293,16 +5329,25 @@ pub const Interpreter = struct {
             .list_split_last => self.evalListSplitLast(args[0], arg_layout, ll.ret_layout, updateModeForArg0(ll.unique_args)),
 
             // ── Arithmetic ──
-            .num_plus => self.numBinOp(args[0], args[1], ll.ret_layout, arg_layout, .add),
-            .num_minus => self.numBinOp(args[0], args[1], ll.ret_layout, arg_layout, .sub),
-            .num_times => self.numBinOp(args[0], args[1], ll.ret_layout, arg_layout, .mul),
-            .num_div_by => self.numBinOp(args[0], args[1], ll.ret_layout, arg_layout, .div),
-            .num_div_trunc_by => self.numBinOp(args[0], args[1], ll.ret_layout, arg_layout, .div_trunc),
-            .num_rem_by => self.numBinOp(args[0], args[1], ll.ret_layout, arg_layout, .rem),
-            .num_mod_by => self.numBinOp(args[0], args[1], ll.ret_layout, arg_layout, .mod),
-            .num_negate => self.numUnaryOp(args[0], ll.ret_layout, arg_layout, .negate),
-            .num_abs => self.numUnaryOp(args[0], ll.ret_layout, arg_layout, .abs),
-            .num_abs_diff => self.numBinOp(args[0], args[1], ll.ret_layout, arg_layout, .abs_diff),
+            .num_plus => self.numBinOp(args[0], args[1], ll.ret_layout, arg_layout, .add, null),
+            .num_plus_checked => self.numBinOp(args[0], args[1], ll.ret_layout, arg_layout, .add, .num_plus_checked),
+            .num_minus => self.numBinOp(args[0], args[1], ll.ret_layout, arg_layout, .sub, null),
+            .num_minus_checked => self.numBinOp(args[0], args[1], ll.ret_layout, arg_layout, .sub, .num_minus_checked),
+            .num_times => self.numBinOp(args[0], args[1], ll.ret_layout, arg_layout, .mul, null),
+            .num_times_checked => self.numBinOp(args[0], args[1], ll.ret_layout, arg_layout, .mul, .num_times_checked),
+            .num_div_by => self.numBinOp(args[0], args[1], ll.ret_layout, arg_layout, .div, null),
+            .num_div_by_checked => self.numBinOp(args[0], args[1], ll.ret_layout, arg_layout, .div, .num_div_by_checked),
+            .num_div_trunc_by => self.numBinOp(args[0], args[1], ll.ret_layout, arg_layout, .div_trunc, null),
+            .num_div_trunc_by_checked => self.numBinOp(args[0], args[1], ll.ret_layout, arg_layout, .div_trunc, .num_div_trunc_by_checked),
+            .num_rem_by => self.numBinOp(args[0], args[1], ll.ret_layout, arg_layout, .rem, null),
+            .num_rem_by_checked => self.numBinOp(args[0], args[1], ll.ret_layout, arg_layout, .rem, .num_rem_by_checked),
+            .num_mod_by => self.numBinOp(args[0], args[1], ll.ret_layout, arg_layout, .mod, null),
+            .num_mod_by_checked => self.numBinOp(args[0], args[1], ll.ret_layout, arg_layout, .mod, .num_mod_by_checked),
+            .num_negate => self.numUnaryOp(args[0], ll.ret_layout, arg_layout, .negate, null),
+            .num_negate_checked => self.numUnaryOp(args[0], ll.ret_layout, arg_layout, .negate, .num_negate_checked),
+            .num_abs => self.numUnaryOp(args[0], ll.ret_layout, arg_layout, .abs, null),
+            .num_abs_checked => self.numUnaryOp(args[0], ll.ret_layout, arg_layout, .abs, .num_abs_checked),
+            .num_abs_diff => self.numBinOp(args[0], args[1], ll.ret_layout, arg_layout, .abs_diff, null),
             .num_pow => self.evalNumPow(args[0], args[1], ll.ret_layout, arg_layout),
             .num_sqrt => self.evalNumSqrt(args[0], ll.ret_layout, arg_layout),
             .num_sin => self.evalNumFloatUnaryMath(args[0], ll.ret_layout, arg_layout, .sin),
@@ -5943,7 +5988,7 @@ pub const Interpreter = struct {
         };
     }
 
-    fn numBinOp(self: *LirInterpreter, a: Value, b: Value, ret_layout: layout_mod.Idx, arg_layout: layout_mod.Idx, op: NumOp) Error!Value {
+    fn numBinOp(self: *LirInterpreter, a: Value, b: Value, ret_layout: layout_mod.Idx, arg_layout: layout_mod.Idx, op: NumOp, checked_op: ?LIR.LowLevel) Error!Value {
         const val = try self.alloc(ret_layout);
         const kind = try self.numericOperandKind(arg_layout);
         const is_division_like = op == .div or op == .div_trunc or op == .rem or op == .mod;
@@ -5954,44 +5999,46 @@ pub const Interpreter = struct {
             ret_layout,
         });
 
-        if (is_division_like) {
+        if (checked_op != null and is_division_like) {
             switch (kind) {
                 .unsigned_int => |bits| switch (bits) {
-                    8 => if (b.read(u8) == 0) return self.divisionByZero(arg_layout),
-                    16 => if (b.read(u16) == 0) return self.divisionByZero(arg_layout),
-                    32 => if (b.read(u32) == 0) return self.divisionByZero(arg_layout),
-                    64 => if (b.read(u64) == 0) return self.divisionByZero(arg_layout),
-                    128 => if (b.read(u128) == 0) return self.divisionByZero(arg_layout),
+                    8 => if (b.read(u8) == 0) return self.checkedZeroDenominator(checked_op.?, arg_layout),
+                    16 => if (b.read(u16) == 0) return self.checkedZeroDenominator(checked_op.?, arg_layout),
+                    32 => if (b.read(u32) == 0) return self.checkedZeroDenominator(checked_op.?, arg_layout),
+                    64 => if (b.read(u64) == 0) return self.checkedZeroDenominator(checked_op.?, arg_layout),
+                    128 => if (b.read(u128) == 0) return self.checkedZeroDenominator(checked_op.?, arg_layout),
                     else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported unsigned integer width {d}", .{bits}),
                 },
                 .signed_int => |bits| switch (bits) {
-                    8 => if (b.read(i8) == 0) return self.divisionByZero(arg_layout),
-                    16 => if (b.read(i16) == 0) return self.divisionByZero(arg_layout),
-                    32 => if (b.read(i32) == 0) return self.divisionByZero(arg_layout),
-                    64 => if (b.read(i64) == 0) return self.divisionByZero(arg_layout),
-                    128 => if (b.read(i128) == 0) return self.divisionByZero(arg_layout),
+                    8 => if (b.read(i8) == 0) return self.checkedZeroDenominator(checked_op.?, arg_layout),
+                    16 => if (b.read(i16) == 0) return self.checkedZeroDenominator(checked_op.?, arg_layout),
+                    32 => if (b.read(i32) == 0) return self.checkedZeroDenominator(checked_op.?, arg_layout),
+                    64 => if (b.read(i64) == 0) return self.checkedZeroDenominator(checked_op.?, arg_layout),
+                    128 => if (b.read(i128) == 0) return self.checkedZeroDenominator(checked_op.?, arg_layout),
                     else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported signed integer width {d}", .{bits}),
                 },
-                .dec => if (b.read(i128) == 0) return self.divisionByZero(arg_layout),
-                .float => {},
+                .dec, .float => return self.invariantFailedError(
+                    "LIR/interpreter invariant violated: checked integer op used non-integer layout {d}",
+                    .{@intFromEnum(arg_layout)},
+                ),
             }
         }
 
         switch (kind) {
             .unsigned_int => |bits| switch (bits) {
-                8 => val.write(u8, try self.intBinOp(u8, a.read(u8), b.read(u8), op)),
-                16 => val.write(u16, try self.intBinOp(u16, a.read(u16), b.read(u16), op)),
-                32 => val.write(u32, try self.intBinOp(u32, a.read(u32), b.read(u32), op)),
-                64 => val.write(u64, try self.intBinOp(u64, a.read(u64), b.read(u64), op)),
-                128 => val.write(u128, try self.intBinOp(u128, a.read(u128), b.read(u128), op)),
+                8 => val.write(u8, try self.intBinOp(u8, a.read(u8), b.read(u8), op, checked_op)),
+                16 => val.write(u16, try self.intBinOp(u16, a.read(u16), b.read(u16), op, checked_op)),
+                32 => val.write(u32, try self.intBinOp(u32, a.read(u32), b.read(u32), op, checked_op)),
+                64 => val.write(u64, try self.intBinOp(u64, a.read(u64), b.read(u64), op, checked_op)),
+                128 => val.write(u128, try self.intBinOp(u128, a.read(u128), b.read(u128), op, checked_op)),
                 else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported unsigned integer width {d}", .{bits}),
             },
             .signed_int => |bits| switch (bits) {
-                8 => val.write(i8, try self.intBinOp(i8, a.read(i8), b.read(i8), op)),
-                16 => val.write(i16, try self.intBinOp(i16, a.read(i16), b.read(i16), op)),
-                32 => val.write(i32, try self.intBinOp(i32, a.read(i32), b.read(i32), op)),
-                64 => val.write(i64, try self.intBinOp(i64, a.read(i64), b.read(i64), op)),
-                128 => val.write(i128, try self.intBinOp(i128, a.read(i128), b.read(i128), op)),
+                8 => val.write(i8, try self.intBinOp(i8, a.read(i8), b.read(i8), op, checked_op)),
+                16 => val.write(i16, try self.intBinOp(i16, a.read(i16), b.read(i16), op, checked_op)),
+                32 => val.write(i32, try self.intBinOp(i32, a.read(i32), b.read(i32), op, checked_op)),
+                64 => val.write(i64, try self.intBinOp(i64, a.read(i64), b.read(i64), op, checked_op)),
+                128 => val.write(i128, try self.intBinOp(i128, a.read(i128), b.read(i128), op, checked_op)),
                 else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported signed integer width {d}", .{bits}),
             },
             .float => |bits| switch (bits) {
@@ -6004,8 +6051,8 @@ pub const Interpreter = struct {
         return val;
     }
 
-    fn numUnaryOp(self: *LirInterpreter, a: Value, ret_layout: layout_mod.Idx, arg_layout: layout_mod.Idx, op: NumOp) Error!Value {
-        return self.numBinOp(a, a, ret_layout, arg_layout, op);
+    fn numUnaryOp(self: *LirInterpreter, a: Value, ret_layout: layout_mod.Idx, arg_layout: layout_mod.Idx, op: NumOp, checked_op: ?LIR.LowLevel) Error!Value {
+        return self.numBinOp(a, a, ret_layout, arg_layout, op, checked_op);
     }
 
     fn numCmpOp(self: *LirInterpreter, a: Value, b: Value, arg_layout: layout_mod.Idx, op: CmpOp) Error!Value {
@@ -7326,21 +7373,39 @@ pub const Interpreter = struct {
     }
 
     /// Generic integer binary operation.
-    fn intBinOp(self: *LirInterpreter, comptime T: type, av: T, bv: T, op: NumOp) Error!T {
+    fn intBinOp(self: *LirInterpreter, comptime T: type, av: T, bv: T, op: NumOp, checked_op: ?LIR.LowLevel) Error!T {
         return switch (op) {
-            .add => checkedIntAdd(T, av, bv) orelse return self.triggerCrash("Integer addition overflowed!"),
-            .sub => checkedIntSub(T, av, bv) orelse return self.triggerCrash("Integer subtraction overflowed!"),
-            .mul => av *% bv,
-            .negate => if (@typeInfo(T).int.signedness == .signed) -%av else -%av,
+            .add => if (checked_op) |op_tag|
+                checkedIntAdd(T, av, bv) orelse return self.checkedOverflow(op_tag)
+            else
+                av +% bv,
+            .sub => if (checked_op) |op_tag|
+                checkedIntSub(T, av, bv) orelse return self.checkedOverflow(op_tag)
+            else
+                av -% bv,
+            .mul => if (checked_op) |op_tag|
+                checkedIntMul(T, av, bv) orelse return self.checkedOverflow(op_tag)
+            else
+                av *% bv,
+            .negate => if (checked_op) |op_tag|
+                checkedIntNegate(T, av) orelse return self.checkedOverflow(op_tag)
+            else
+                -%av,
             .abs => if (@typeInfo(T).int.signedness == .signed)
-                (if (av < 0) -%av else av)
+                if (av < 0) (if (checked_op) |op_tag|
+                    checkedIntNegate(T, av) orelse return self.checkedOverflow(op_tag)
+                else
+                    -%av) else av
             else
                 av,
             .abs_diff => if (@typeInfo(T).int.signedness == .signed)
                 (if (av > bv) av -% bv else bv -% av)
             else
                 (if (av > bv) av - bv else bv - av),
-            .div, .div_trunc => if (bv != 0) (if (signedMinDivOverflow(T, av, bv)) av else @divTrunc(av, bv)) else 0,
+            .div, .div_trunc => if (bv != 0) (if (signedMinDivOverflow(T, av, bv)) blk: {
+                if (checked_op) |op_tag| return self.checkedOverflow(op_tag);
+                break :blk av;
+            } else @divTrunc(av, bv)) else 0,
             .rem => if (bv != 0) (if (signedMinDivOverflow(T, av, bv)) 0 else @rem(av, bv)) else 0,
             .mod => if (bv != 0) (if (signedMinDivOverflow(T, av, bv)) 0 else @mod(av, bv)) else 0,
         };
@@ -7358,9 +7423,33 @@ pub const Interpreter = struct {
         return result[0];
     }
 
+    fn checkedIntMul(comptime T: type, av: T, bv: T) ?T {
+        const result = @mulWithOverflow(av, bv);
+        if (result[1] != 0) return null;
+        return result[0];
+    }
+
+    fn checkedIntNegate(comptime T: type, av: T) ?T {
+        const result = @subWithOverflow(@as(T, 0), av);
+        if (result[1] != 0) return null;
+        return result[0];
+    }
+
     fn signedMinDivOverflow(comptime T: type, av: T, bv: T) bool {
         if (@typeInfo(T).int.signedness != .signed) return false;
         return av == std.math.minInt(T) and bv == -1;
+    }
+
+    fn checkedOverflow(self: *LirInterpreter, op: LIR.LowLevel) Error {
+        const message = CheckedArithmetic.overflowMessage(op) orelse
+            return self.invariantFailedError("LIR/interpreter invariant violated: checked op has no overflow message {s}", .{@tagName(op)});
+        return self.triggerCrash(message);
+    }
+
+    fn checkedZeroDenominator(self: *LirInterpreter, op: LIR.LowLevel, layout_idx: layout_mod.Idx) Error {
+        const message = CheckedArithmetic.zeroDenominatorMessage(op, layout_idx) orelse
+            return self.invariantFailedError("LIR/interpreter invariant violated: checked op has no zero denominator message {s}", .{@tagName(op)});
+        return self.triggerCrash(message);
     }
 
     /// Generic float binary operation.

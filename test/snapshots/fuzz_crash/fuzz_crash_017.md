@@ -9,19 +9,25 @@ me = "luc"
 foo = "hello ${namF
 ~~~
 # EXPECTED
-PARSE ERROR - fuzz_crash_017.md:2:7:2:8
+EXPECTED INTERPOLATION END - fuzz_crash_017.md:2:7:2:8
 UNRECOGNIZED SYNTAX - fuzz_crash_017.md:2:7:2:20
 # PROBLEMS
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: ───────────────────────────────────┐
-└┬────────────┘  string_expected_close_interpolation                          │
+┌────────────────────────────┐
+│ EXPECTED INTERPOLATION END ├─ I was parsing a string interpolation, and I ──┐
+└┬───────────────────────────┘  expected `}` before returning to the string.  │
  │                                                                            │
  │  foo = "hello ${namF                                                       │
  │        ‾                                                                   │
  └───────────────────────────────────────────────────── fuzz_crash_017.md:2:7 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    String interpolations start with `${` and must close with `}` after the
+    embedded expression.
+
+    For example:
+        "Hello, ${name}!"
+
+    I found `"` here.
 
 
 ┌─────────────────────┐

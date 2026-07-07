@@ -680,8 +680,8 @@ alias roots union-find representatives for concrete structures.
 
 The checked module cache is the only checked cache boundary in this design.
 Checked module cache entries are trusted compiler-produced cache entries, not
-adversarial inputs. Cache reads validate only the cache header, format version,
-payload hash, key, serialized layout, and ordinary binary decoding. They must
+adversarial inputs. Cache reads validate only the cache header,
+entry-version hash, key, serialized layout, and ordinary binary decoding. They must
 not rerun checked validation, reselect hoisted roots, reconstruct checked data,
 or walk checked expressions to prove that cached checked data is still complete.
 Correctness belongs to the producer path that writes the cache entry, and
@@ -691,8 +691,8 @@ versions.
 `ModuleEnv` contains `CommonEnv.strings`, a `base.StringLiteral.Store`. That
 store is part of the checked module cache data. A cache hit materializes it as a
 view of its byte buffer and stops. Cache reads must not scan the string entries,
-rebuild a string interning table, check every string length header, check every
-static refcount word, or check every entry alignment. This design adds no
+rebuild a string interning table, check every string length header, or check
+every entry boundary. This design adds no
 store-specific release-build validation; cache reads perform only the existing
 cache-entry admission and decode checks before trusting the blob. Once those
 pass, the internal string buffer structure is a producer invariant. Debug builds
@@ -700,8 +700,14 @@ may assert this invariant while constructing fresh stores and in focused store
 tests; optimized cache reads consume the store directly.
 
 String literal deduplication is a build-time concern. The durable
-`StringLiteral.Store` owns only the static-refcounted byte buffer plus `get` and
-iteration by `StringLiteral.Idx`. It has no insert API and no dedup index.
+`StringLiteral.Store` owns only portable checked string bytes plus `get` and
+iteration by `StringLiteral.Idx`. Each entry is encoded as:
+
+```text
+len: u32 little-endian | bytes
+```
+
+It has no insert API and no dedup index.
 Fresh construction uses `StringLiteral.Builder` state paired with a `Store`.
 That state may live in a wrapper or in the build owner that owns the store, but
 it is always transient. The builder index is never serialized, never stored in
@@ -713,18 +719,18 @@ normal cache path.
 The byte interning algorithm has one owner shared by identifier names, checked
 name stores, and string-literal builders. Storage policies own only id encoding,
 text lookup, and append layout. For string literals, appending a new entry writes
-exactly the current static-data layout:
-
-```text
-len: u32 | padding to isize | static refcount: isize(0) | bytes
-```
-
-and returns the content byte offset as `StringLiteral.Idx`. Duplicate input
+the portable checked entry layout above and returns the content byte offset as
+`StringLiteral.Idx`. Duplicate input
 bytes must return the existing content offset. The hash table is an accelerator
 only: hash matches must still compare exact byte length and contents before an
 existing id is reused. The shared interning algorithm is comptime-policy
 specialized, so string literals, identifier names, and checked name stores do
 not pay a runtime storage-kind branch.
+
+Runtime static string layout is generated later by the target-specific static
+data emitter. The checked cache must not store native pointer-width padding,
+static refcount words, allocation headers, or any other runtime `RocStr` layout
+bytes.
 
 The string-literal builder must reject impossible `u32` length or content-offset
 overflow as a compiler invariant: debug builds assert or panic with the
@@ -928,6 +934,19 @@ hoisted constants indirectly by calling pure checked functions whose bodies
 restore selected hoisted locals. Therefore same-module compile-time roots are
 emitted as one dependency-sorted request stream, not as permanently separated
 top-level and hoisted groups.
+
+Hoisted-root selection is positional as well as dependency-based. Selection may
+fire only in structurally unguarded positions of runtime bodies, and the checker
+must carry that position as explicit checking context while computing
+hoistability in the normal recursive traversal. Eager child expressions inherit
+their parent's position. Branch bodies, match guards, expect bodies, loop bodies,
+statements after a prior effect/divergence blocker, block finals after such a
+blocker, and conditions reached only after earlier conditional branches are
+suppressed: they may still prove top-level-equivalent for enclosing expressions
+or warnings, but they must not become independent roots. Ordinary top-level
+constant bodies use a stronger compile-time-root context that suppresses nested
+root selection and nested eligibility entirely, because the enclosing body is
+already evaluated at compile time.
 
 Canonicalization's top-level dependency order remains an input for ordinary
 top-level constants, and checking should prefer to emit selected hoisted roots
@@ -1168,7 +1187,7 @@ concrete monomorphic dispatcher type has already determined the owner.
 Some method registry targets are generated structural targets rather than
 procedure bodies. A nominal or opaque type can opt in to a compiler-derived
 structural codec with an annotation-only associated method such as
-`parser_for : _` or `encode_to : _`. Canonicalization may represent this marker
+`parser_for : _` or `encoder_for : _`. Canonicalization may represent this marker
 as `e_anno_only` or, for hosted/type-module processing, as a zero-argument
 `e_hosted_lambda`; `CheckedModule.method_registry` records it explicitly as a
 generated parser or generated encoder target. Post-check lowering must consume
@@ -1200,7 +1219,8 @@ thing = Json.parse(json_str)?
 thing = Json.parse_trailing_commas(json_str)?
 thing = Json.Utf8.parse(json_bytes)?
 
-json_str = Json.encode(thing)?
+json_str = Json.to_str(thing)
+json_str = Json.to_str_try(floaty_thing)?
 json_bytes = Json.Utf8.encode(thing)?
 
 headers = Encoding.HttpHeader.parse(raw_headers)?
@@ -1208,23 +1228,28 @@ headers = Encoding.HttpHeader.parse(raw_headers)?
 
 The convenience functions construct the internal format state directly, call the
 value or type's ordinary method, validate the remaining state if the format
-requires it, and return the final `Try`. They do not need a required `init`,
-`finish`, or `default` hook. The runtime cursor types are implementation
-details of the builtin format module, not public `Json.State` or
+requires it, and return the final public value. A fallible helper such as
+`Json.to_str_try` returns a `Try` and preserves the encoder's error type. This
+is for values that cannot always be represented as JSON, such as `F32` or `F64`
+values that are `NaN`, positive infinity, or negative infinity. An infallible
+helper such as `Json.to_str` requires an empty encoder error type and returns
+the string directly. They do not need a required `init`, `finish`, or `default`
+hook. The runtime cursor types are implementation details of the builtin format
+module, not public `Json.State` or
 `Encoding.HttpHeader.State` APIs.
 
 The underlying parse method is public and callable. It is deliberately curried:
 
 ```roc
 a.parser_for : encoding -> (state -> Try({ value : a, rest : state }, err))
-a.encode_to : a, encoding -> (state -> Try(state, err))
+a.encoder_for : encoding -> (a, state -> Try(state, err))
 ```
 
-`parser_for` is a method on the value type being produced. `encode_to` is a method
-on the value being serialized. Structural types get these methods from the
-compiler. Nominal types may define them explicitly, and structural derivation
-uses those explicit nominal methods when a field, payload, list element, nested
-value, or other sub-shape has that nominal type.
+`parser_for` is a method on the value type being produced. `encoder_for` is a
+method on the value type being serialized. Structural types get these methods
+from the compiler. Nominal types may define them explicitly, and structural
+derivation uses those explicit nominal methods when a field, payload, list
+element, nested value, or other sub-shape has that nominal type.
 
 The `encoding` argument is the pure format/configuration value used to construct
 the specialized parser. It may represent choices such as JSON object field
@@ -1233,7 +1258,9 @@ header matching mode. The `state`
 argument is the runtime cursor or output state. Keeping these separate matters:
 parser construction can transform the requested structural shape before the
 runtime scan starts, while the returned runtime function threads only the cursor
-state and parsed values.
+state and parsed values. Encoder construction can similarly precompute
+shape-specific metadata before the returned runtime function receives the value
+and output state.
 
 For example, the builtin HTTP header helper inside `Builtin.Encoding` has this
 shape:
@@ -1262,8 +1289,10 @@ zero-sized internal encoding value.
 
 The error type is inferred from the format methods. All `Try` errors in one
 parse or encode operation unify with the public function's returned error type.
-When a concrete operation cannot fail, its error type is empty, so an exhaustive
-`Ok(value) = Json.encode(thing)` binding is accepted.
+When a concrete encode operation cannot fail, its error type is empty, so
+`Json.to_str` can bind the underlying encoder result with an exhaustive
+`Ok(encoded_state) = ...` pattern and return `Str` directly. When a concrete
+encode operation can fail, `Json.to_str_try` returns `Try(Str, err)` instead.
 
 Checking derives structural methods by emitting ordinary static-dispatch
 constraints. For example, deriving `a.parser_for` for a concrete shape asks the
@@ -1704,7 +1733,7 @@ JsonEncoding :: [Default, CamelCase, TrailingCommas].{
 			TrailingCommas => True
 		}
 
-	parse_str : JsonEncoding, JsonState -> Try({ value : Str, rest : JsonState }, Json)
+	parse_str : JsonEncoding, JsonState -> Try({ value : Str, rest : JsonState }, Json.ParseErr)
 	parse_record_field : JsonEncoding, Encoding.FieldName.FieldNames(_shape), JsonState -> Try(
 		[
 			Field({ field : Encoding.FieldName(_shape), rest : JsonState }),
@@ -1713,18 +1742,20 @@ JsonEncoding :: [Default, CamelCase, TrailingCommas].{
 			Continue({ rest : JsonState }),
 			Done({ rest : JsonState }),
 		],
-		Json,
+		Json.ParseErr,
 	)
-	skip_record_field : JsonEncoding, JsonState -> Try(JsonState, Json)
-	missing_record_field : JsonEncoding, Str, JsonState -> Json
+	skip_record_field : JsonEncoding, JsonState -> Try(JsonState, Json.ParseErr)
+	missing_record_field : JsonEncoding, Str, JsonState -> Json.ParseErr
 	missing_optional_field : JsonEncoding, Str, JsonState -> [Missing]
-	parse_tag_union : JsonEncoding, Encoding.ParseTagUnionSpec(a), JsonState -> Try({ value : a, rest : JsonState }, Json)
+	parse_tag_union : JsonEncoding, Encoding.ParseTagUnionSpec(a), JsonState -> Try({ value : a, rest : JsonState }, Json.ParseErr)
 }
 
-Json := [MissingRequired, InvalidJson].{
-	parse : Str -> Try(a, Json)
+Json :: {}.{
+	ParseErr : [MissingRequiredField(Str), InvalidJson(Str)]
+
+	parse : Str -> Try(a, Json.ParseErr)
 		where [
-			a.parser_for : JsonEncoding -> (JsonState -> Try({ value : a, rest : JsonState }, Json)),
+			a.parser_for : JsonEncoding -> (JsonState -> Try({ value : a, rest : JsonState }, Json.ParseErr)),
 		]
 	parse = |json| {
 		Shape : a
@@ -1736,14 +1767,14 @@ Json := [MissingRequired, InvalidJson].{
 				if Str.is_empty(Str.trim_start(rest)) {
 					Ok(parsed.value)
 				} else {
-					Err(Json.InvalidJson)
+					Err(InvalidJson("Invalid JSON"))
 				}
 		}
 	}
 
-	parse_trailing_commas : Str -> Try(a, Json)
+	parse_trailing_commas : Str -> Try(a, Json.ParseErr)
 		where [
-			a.parser_for : JsonEncoding -> (JsonState -> Try({ value : a, rest : JsonState }, Json)),
+			a.parser_for : JsonEncoding -> (JsonState -> Try({ value : a, rest : JsonState }, Json.ParseErr)),
 		]
 	parse_trailing_commas = |json| {
 		Shape : a
@@ -1755,14 +1786,14 @@ Json := [MissingRequired, InvalidJson].{
 				if Str.is_empty(Str.trim_start(rest)) {
 					Ok(parsed.value)
 				} else {
-					Err(Json.InvalidJson)
+					Err(InvalidJson("Invalid JSON"))
 				}
 		}
 	}
 
-	parser_camel : () -> (Str -> Try(a, Json))
+	parser_camel : () -> (Str -> Try(a, Json.ParseErr))
 		where [
-			a.parser_for : JsonEncoding -> (JsonState -> Try({ value : a, rest : JsonState }, Json)),
+			a.parser_for : JsonEncoding -> (JsonState -> Try({ value : a, rest : JsonState }, Json.ParseErr)),
 		]
 	parser_camel = || {
 		Shape : a
@@ -1776,7 +1807,7 @@ Json := [MissingRequired, InvalidJson].{
 					if Str.is_empty(Str.trim_start(rest)) {
 						Ok(parsed.value)
 					} else {
-						Err(Json.InvalidJson)
+						Err(InvalidJson("Invalid JSON"))
 					}
 			}
 		}
@@ -1800,7 +1831,7 @@ The exact derived parser type for a JSON record is:
 		},
 		rest : JsonState,
 	},
-	Json,
+	Json.ParseErr,
 ))
 ```
 
@@ -1812,7 +1843,7 @@ The exact derived parser type for an externally tagged JSON union is:
 		value : [Admin({ name : Str }), Guest],
 		rest : JsonState,
 	},
-	Json,
+	Json.ParseErr,
 ))
 ```
 
@@ -1869,7 +1900,7 @@ parse_token = |input| {
 }
 ```
 
-Encoding is symmetric. Structural `encode_to` methods call the format's output
+Encoding is symmetric. Structural `encoder_for` methods call the format's output
 methods for strings, records, tag unions, lists, and other shapes. A format's
 output state owns whatever builder it needs. JSON encoding to `Str` allocates
 the final string in the ordinary way, and JSON UTF-8 encoding produces
@@ -1879,15 +1910,18 @@ inferred `Try` error type as parsing.
 The public structural encode method has this exact shape:
 
 ```roc
-value.encode_to : value, encoding -> (state -> Try(state, err))
+value.encoder_for : encoding -> (value, state -> Try(state, err))
 ```
 
 Generated encoders compose child error rows. JSON helpers that cannot fail use a
 named `_never_fails` row variable so they can sequence with encoders that can
-fail. JSON `F32` and `F64` encoders are the deliberate failing scalar case:
-finite values encode as JSON numbers, while `NaN`, positive infinity, and
-negative infinity return `Err(NaN)`, `Err(Infinity)`, or
-`Err(NegativeInfinity)`. They must not encode non-finite values as JSON `null`.
+fail. `Json.to_str` requires the final structural encoder's error type to be the
+empty row `[]`; `Json.to_str_try` preserves the final structural encoder's error
+type as `Try(Str, err)`. JSON `F32` and `F64` encoders are the deliberate failing
+scalar case: finite values encode as JSON numbers, while `NaN`, positive
+infinity, and negative infinity return `Err(NaN)`, `Err(Infinity)`, or
+`Err(NegativeInfinity)`. They must not encode non-finite values as JSON `null`,
+and they do not satisfy `Json.to_str`'s infallible encoder requirement.
 
 For a concrete record, the compiler can derive:
 
@@ -1895,7 +1929,7 @@ For a concrete record, the compiler can derive:
 {
 	count : U64,
 	foo_bar : Str,
-}.encode_to : { count : U64, foo_bar : Str }, MyEncoding -> (MyEncoding -> Try(MyEncoding, MyErr))
+}.encoder_for : MyEncoding -> ({ count : U64, foo_bar : Str }, MyState -> Try(MyState, MyErr))
 ```
 
 The encoding type owns the output methods required by that shape:
@@ -1903,12 +1937,47 @@ The encoding type owns the output methods required by that shape:
 ```roc
 MyEncoding :: [Out(Str)].{
 	rename_field : MyEncoding, Str -> Str
-	begin_record : MyEncoding -> Try(MyEncoding, MyErr)
-	encode_record_field : Str, MyEncoding -> Try(MyEncoding, MyErr)
-	end_record : MyEncoding -> Try(MyEncoding, MyErr)
-	encode_str : Str, MyEncoding -> Try(MyEncoding, MyErr)
-	encode_u64 : U64, MyEncoding -> Try(MyEncoding, MyErr)
+	encode_record :
+		MyState,
+		U64,
+		(MyState, (MyState, Str, (MyState -> Try(MyState, MyErr)) -> Try(MyState, MyErr)) -> Try(MyState, MyErr))
+			-> Try(MyState, MyErr)
+	encode_str : Str, MyState -> Try(MyState, MyErr)
+	encode_u64 : U64, MyState -> Try(MyState, MyErr)
 }
+```
+
+The `U64` argument is the statically-known number of record fields that will be
+encoded. The callback receives the current state and a field writer supplied by
+the format. Generated record encoders call the field writer once per present
+field:
+
+```roc
+MyEncoding.encode_record(
+	state,
+	2,
+	|state0, field| {
+		state1 = field(state0, "count", |s| encode_count(value.count, s))?
+		field(state1, "foo-bar", |s| encode_foo_bar(value.foo_bar, s))
+	},
+)
+```
+
+Tuples and lists use the same ownership pattern, except their writer has no
+field name:
+
+```roc
+encode_tuple :
+	MyState,
+	U64,
+	(MyState, (MyState, (MyState -> Try(MyState, MyErr)) -> Try(MyState, MyErr)) -> Try(MyState, MyErr))
+		-> Try(MyState, MyErr)
+
+encode_list :
+	MyState,
+	U64,
+	(MyState, (MyState, (MyState -> Try(MyState, MyErr)) -> Try(MyState, MyErr)) -> Try(MyState, MyErr))
+		-> Try(MyState, MyErr)
 ```
 
 ### Compile-Time Literal Conversions
@@ -2556,8 +2625,8 @@ lowering a body. A specialization request is identified by:
 const SpecIdentity = struct {
     callable: CallableIdentity,
     source_fn_ty_digest: TypeDigest,
-    mono_fn_ty_digest: TypeDigest,
-    mono_fn_ty: TypeId,
+    request_fn_ty_digest: TypeDigest,
+    request_fn_ty: TypeId,
 };
 
 const CallableIdentity = union(enum) {
@@ -2583,19 +2652,39 @@ const SpecStatus = enum {
 
 const SpecRecord = struct {
     identity: SpecIdentity,
+    request_fn_ty: TypeId,
+    request_fn_ty_digest: TypeDigest,
+    solved_fn_ty: TypeId,
+    solved_fn_ty_digest: TypeDigest,
     fn: FnId,
     status: SpecStatus,
 };
 ```
 
 `source_fn_ty_digest` records the checked source function type after
-instantiation into the requesting graph. `mono_fn_ty_digest` records the closed
-requested function type. The digests make lookup fast, but they are not the only
-correctness check. When a digest match is found, the store must also verify
-the checked callable identity and exact structural equality of the closed
-Monotype function type. Digest collisions are therefore harmless.
+instantiation into the requesting graph. `request_fn_ty_digest` records the
+closed function type REQUESTED by the call site that reserved the record. The
+digests make lookup fast, but they are not the only correctness check. When a
+digest match is found, the store must also verify the checked callable identity
+and exact structural equality of the closed Monotype function type. Digest
+collisions are therefore harmless.
 
-The in-memory builder owns a transient hash table from `SpecIdentity` to
+The identity is immutable: it is written once when the record is reserved and
+never rewritten, so no structure that indexes by identity ever needs a rekey or
+a second synchronized entry. Later refinements are data on the record. The
+request view may be refined while the record is still `reserved` — once per
+deferring graph that seals its view of the request; the solved view records the
+body's solved type when the record becomes `ready`. Each refinement registers
+an *alias* lookup entry (the new digest also reaches the same record), so a
+request shaped like the current request reuses the record even after the body
+solved a more specific type — the record is never widened (the one-way snapshot
+rule above). Status transitions (`reserved → lowering → ready`) and both
+refinements happen only through the specialization store's API. A record
+loaded from another shard's cache is a finished snapshot and matches only at
+its solved shape: a requester that matches it already has the solved type, so
+no evidence needs to flow back.
+
+The in-memory builder owns a transient hash table from lookup keys to
 `SpecId`, plus the append-only `SpecRecord` array. The output program owns the
 records and the function bodies, not the hash table. A loaded cache file may
 build a transient hash table over the mapped records, but the file itself stores
@@ -2841,46 +2930,75 @@ append it to a new cache file after the program is complete.
 
 ### Static Dispatch In Monotype
 
-Static dispatch is resolved while producing Monotype IR.
+Static dispatch is DECIDED during checking and CONSUMED during Monotype
+lowering. Every dispatch site leaves checking with an explicit resolution on
+its plan:
 
-For each checked dispatch plan in a body specialization:
+- `direct(evidence_node)` — checking proved the concrete target. The evidence
+  node names the target and carries evidence for the target's own
+  requirements
+  (its nested `where`-clause constraints), recursively.
+- `constraint(depth, k)` — the dispatcher is the k-th evidence param of the
+  d-th enclosing generalized callable. Each specialization edge supplies the
+  answer: dictionary passing resolved entirely at compile time.
+- `structural(kind)` — the checker chose the compiler-derived structural
+  implementation (equality, hashing, parsing, encoding) for an ownerless
+  shape.
+- `checked_error` — checking rejected the site; executing it anyway (running a
+  program with reported errors) lowers to an explicit crash.
+- `unreachable_dispatch` — the dispatcher is a constrained variable no
+  specialization edge can ever supply and no default applies: the dispatch is
+  statically unreachable and lowers to an explicit crash.
 
-1. Instantiate the checked dispatcher type into the current Monotype type
-   store.
-2. Instantiate the checked callable type into the current Monotype type store.
-3. Lower every checked operand into the current body specialization.
-4. Derive the concrete `MethodOwner` from the instantiated dispatcher type.
-5. Look up `(MethodOwner, MethodNameId)` in the checked method registry.
-6. Instantiate the target method callable type and verify it matches the plan's
-   callable type.
-7. Emit a direct `call_proc`, or emit structural equality when the checked plan
-   explicitly permits it.
+Nothing else exists. Monotype lowering never derives a method owner from type
+content, never searches a registry by method name, and never intersects
+constraints to guess a target.
 
-Any failure after checking is a compiler bug. Monotype lowering must not search
-for possible owners by intersecting method registries or constraints.
+**Evidence params.** Every type scheme with dispatch requirements has one
+deterministic ordered list of (dispatcher var, constraint) pairs —
+its evidence params — enumerated purely from the scheme's type structure
+(depth-first: function args then return, type arguments then backing, row
+fields and tags then extension, constraints emitted at each var's first
+occurrence, then constraint fn types walked the same way). Index `k` in this
+list is the shared identity between a plan's `constraint(k)` resolution and
+the k-th evidence entry a call edge supplies. The definition's module and any
+importing module enumerate identical lists from their structural copies of the
+scheme.
 
-Owner derivation is a type-content operation, not a registry operation.
-Monotype type lowering preserves owner-bearing type identity in builtin and
-named type nodes for every dispatcher type.
+**Edges supply evidence.** Checking persists, for every instantiation of a
+constrained scheme, the (pristine var, fresh var) pairs of its constrained
+vars. Checking resolves each instantiation edge's requirements — against the
+enclosing callable's own evidence params (producing `constraint(k)` again),
+against concrete types (producing `direct` targets through exact registry
+lookups), through the monomorphic default rule, or structurally — and stores
+the result as site evidence keyed by the use expression. Monotype lowering
+materializes a specialization's evidence vector at each call edge and passes
+it to the callee specialization; a plan resolved `constraint(k)` reads entry
+`k` of the innermost vector (walking lexical parents for nested local
+functions by `depth`).
 
-`type_def` covers named nominal, opaque, and alias definitions that can own
-methods. Transparent backing representation is separate from this owner head.
-Monotype lowering may later erase or reinterpret transparent wrappers for value
-representation, but static dispatch reads the owner head before the dispatch
-node is removed.
+**The default rule.** A constrained var no edge can pin follows exactly the
+rule Monotype uses to materialize unresolved variables: numeral literals and
+defaultable arithmetic operators default to `Dec`, quote and interpolation
+literals default to `Str`, and every requirement on such a var resolves against
+the default owner during checking. Structural-capable requirements on other
+unpinnable vars resolve structurally; the rest are statically unreachable.
 
-The owner algorithm is fixed:
+**Compiler-generated edges.** Structural derivations and builtin helpers call
+methods on component types with no checked instantiation record. For these,
+each checked evidence param also carries the label-addressed PATH from its scheme's
+callable to the dispatcher's first occurrence (argument positions, type
+arguments, row labels — labels rather than positions, because Monotype sorts
+rows). Monotype resolves such a target's requirements by walking those paths
+over the concrete monomorphic callable at the consumption site, recursively:
+component owners resolve through exact registry lookups, ownerless shapes take
+the structural implementations.
 
-1. Fully resolve the instantiated dispatcher type.
-2. Compute its `DispatchOwnerHead` from Monotype type content.
-3. If the head is `builtin`, use that builtin owner.
-4. If the head is `type_def`, use that exact `TypeDef`.
-5. If the head is `none` and the checked dispatch plan permits derived `is_eq`,
-   emit structural equality.
-6. Otherwise stop with a compiler invariant failure.
-
-The algorithm never asks the method registry "which owners could match this
-constraint?" The registry only answers exact lookups after the owner is known.
+Exact registry lookups — `(MethodOwner, MethodNameId)` — happen during
+checking, and during path synthesis for compiler-generated
+edges. The registry only ever answers exact lookups after the owner is known
+from checked type content; no stage asks "which owners could match this
+constraint?".
 
 ### Iterator `for`
 
@@ -3434,37 +3552,18 @@ root proc ids, platform entrypoints, and target usize.
 
 Structural record layout is order-insensitive: fields are sorted
 lexicographically by name and then stably by descending alignment, so source
-field order never affects memory. Nominal records instead lay out fields in
-*declared* order, so a nominal record can be given the exact memory layout of a
-chosen C struct and exchanged with a host with no per-field translation.
+field order never affects memory. Nominal records use the same structural
+layout by default. A nominal record opts into declared-order layout only by
+including an unnamed field in its declaration.
 
-The padding invariant is unchanged: a committed struct never contains internal
-alignment padding between fields. Because every layout's size is a multiple of
-its alignment, descending-alignment order always satisfies this, and it is the
-order structural records use. Declared order does not always satisfy it, so
-nominal layout commit verifies the declared order and only repairs it when it
-would introduce internal padding:
-
-- Verify: walk fields in declared order; if every field is naturally aligned at
-  its running offset, commit the declared order unchanged. This accepts
-  hand-tuned layouts — including ones, as in many C structs, where a
-  lower-alignment field validly precedes a higher-alignment one because earlier
-  fields already advanced the offset to the needed boundary — without reordering
-  them.
-- Repair: when declared order would require padding, commit the no-padding order
-  that is lexicographically closest to declared order. The longest valid
-  declared prefix is kept, and at each forced break the earliest-declared field
-  that still admits a no-padding completion is chosen. A completion always
-  exists (descending-alignment witnesses one from offset zero), so repair is
-  total and is never reported as an error: eliminating padding is the compiler's
-  responsibility, not the programmer's.
-
-Repair is a greedy walk with a memoized feasibility check. Feasibility depends
-only on the running offset modulo the maximum field alignment and on the
-multiset of remaining field shapes, of which there are few, so it is cheap and
-needs no backtracking. Reordering never changes a struct's size or alignment —
-every no-padding order shares both — so it only changes which field name lands
-at which offset.
+Declared-order nominal layout is for host-facing records that intentionally
+mirror a C struct. When a nominal declaration contains an unnamed field, layout
+commit sends the fields to the store in declaration order and commits that
+order verbatim. The store inserts normal C-style implicit padding between
+fields as alignment requires, and rounds the total size up to the maximum field
+alignment. It does not repair or reorder the declaration. Padding is represented
+in committed layout fields, so later stages consume committed offsets and sizes
+instead of reconstructing them.
 
 Nominal record declarations may contain unnamed fields, written `_` or
 `_`-prefixed (`_reserved`). An unnamed field reserves the size of its type but
@@ -3472,9 +3571,9 @@ stores nothing, is not accessible, and imposes no alignment requirement on
 itself (its bytes are uninitialized), which lets a declaration reproduce a C
 struct's explicit padding without a dummy value to initialize. Layout treats
 unnamed fields as alignment-one spacers, so they advance the offset by their
-size yet repair may place them at any offset. They contribute their size but not
-their alignment to the struct, so pure padding never inflates a struct's
-alignment. Using an unnamed field in a structural record type is rejected during
+size in the committed field order. They contribute their size but not their
+alignment to the struct, so pure padding never inflates a struct's alignment.
+Using an unnamed field in a structural record type is rejected during
 canonicalization.
 
 Declared field order is explicit data. Record rows are sorted lexicographically
@@ -3484,11 +3583,11 @@ fixed order, so the declared order is not recoverable from the lowered record
 itself. Canonicalization preserves it — a nominal declaration's record
 annotation keeps its fields in source order — and it is carried forward as a
 datum on the nominal type, distinct from the (lexicographic) backing row, so
-later stages consume it without rescanning declarations. The struct commit
-applies it as the declared order described above; field-name resolution
-continues to use the lexicographic row order, independent of the layout offset
-map. The same datum is consumed by the interpreter's layout store, so all
-backends agree.
+later stages consume it without rescanning declarations. The struct commit uses
+it only for the unnamed-field opt-in described above; otherwise nominal records
+use the structural order of their backing row. Field-name resolution continues
+to use the lexicographic row order, independent of the layout offset map. The
+same data is consumed by the interpreter's layout store, so all backends agree.
 
 ### Pattern Lowering
 
@@ -3916,16 +4015,29 @@ against the borrow typing rules:
   borrow's lifetime is contained in the lender's
 - every join body holds under the entry state of each jump that reaches it:
   jump states are summarized over the names the body relies on (liveness,
-  unit counts, alias partition, and borrow anchors), and the body is
-  certified once per distinct summary, exactly as shared switch suffixes are
-  re-walked per distinct inflowing state
+  unit counts, alias partition, and borrow anchors) and joined into a
+  forward dataflow fixpoint — summaries agreeing on every name's ownership
+  mode share one abstraction whose must-alias partition is the meet of
+  theirs (with per-fine-class balances re-attributed by constraint
+  propagation), and the body is re-certified only when a jump strictly
+  refines that abstraction. Mode disagreements split the abstraction along
+  exactly the entry-state modes real in-edges disagree about, so refinement never
+  manufactures entry states no jump produced; in the worst case it
+  degenerates to one walk per distinct summary, with no capacity cap and no
+  skip path. The join is monotone over a finite-height lattice (partition
+  refinement is bounded by the name count; balance divergence across
+  mode-identical entries is itself a finding — per-iteration accumulation),
+  so certification of every procedure runs to completion
 - every call site satisfies the callee variant's signature, and every pinned
   signature holds
 
 The certifier consumes only the emitted LIR and the stage-local signature
-table. A certifier failure is a compiler bug and stops compilation. Release
-builds compile the certifier away entirely, like every other debug-only
-boundary check.
+table, and leaves no unverified residue: every procedure is certified to a
+fixpoint. The guaranteed property is that every emitted schedule balances
+ownership on all paths — each unit released or transferred exactly once, no
+use after death, no release of a borrow. A certifier failure is a compiler
+bug and stops compilation. Release builds compile the certifier away
+entirely, like every other debug-only boundary check.
 
 ### Thread-Confined Reference Counts
 

@@ -116,15 +116,5 @@ main_for_host = main
       (type (type-ref (name "Str")))
     )
   )
-  (module
-    (name "platform")
-    (package "pf")
-    (kind platform)
-    (entry
-      (name "main_for_host")
-      (kind value)
-      (type (type-ref (name "Str")))
-    )
-  )
 )
 ~~~

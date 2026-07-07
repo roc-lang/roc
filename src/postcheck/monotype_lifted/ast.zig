@@ -7,11 +7,23 @@
 const std = @import("std");
 const base = @import("base");
 const check = @import("check");
+const collections = @import("collections");
 
 const Common = @import("../common.zig");
 const Mono = @import("../monotype/ast.zig");
 const Type = @import("../monotype/type.zig");
 const names = check.CheckedNames;
+const GuardedList = collections.GuardedList;
+
+/// Guarded growable list for mutable Monotype Lifted program storage.
+pub fn ProgramList(comptime T: type, comptime field_name: []const u8) type {
+    return GuardedList.List(T, "monotype_lifted.Program." ++ field_name);
+}
+
+/// Guarded immutable span borrow for a named Monotype Lifted program list.
+pub fn ProgramSpanBorrow(comptime T: type, comptime field_name: []const u8) type {
+    return GuardedList.BorrowSpan(T, "monotype_lifted.Program." ++ field_name);
+}
 
 /// Identifier for an expression in Monotype Lifted IR.
 pub const ExprId = Mono.ExprId;
@@ -139,6 +151,7 @@ pub const ProgramView = struct {
     typed_locals: []const TypedLocal,
     stmt_ids: []const StmtId,
     field_exprs: []const FieldExpr,
+    fn_def_captures: []const FnDefCapture,
     capture_operands: []const CaptureOperand,
     record_destructs: []const RecordDestruct,
     str_pattern_steps: []const Mono.StrPatternStep,
@@ -351,46 +364,46 @@ pub const Program = struct {
     names: names.NameStore,
     next_symbol: u32,
     types: Type.Store,
-    imported_fns: std.ArrayList(ImportedFn),
-    fns: std.ArrayList(Fn),
-    exprs: std.ArrayList(Expr),
-    pats: std.ArrayList(Pat),
-    stmts: std.ArrayList(Stmt),
-    locals: std.ArrayList(Local),
-    expr_ids: std.ArrayList(ExprId),
-    pat_ids: std.ArrayList(PatId),
-    typed_locals: std.ArrayList(TypedLocal),
-    stmt_ids: std.ArrayList(StmtId),
-    field_exprs: std.ArrayList(FieldExpr),
-    fn_def_captures: std.ArrayList(FnDefCapture),
+    imported_fns: ProgramList(ImportedFn, "imported_fns"),
+    fns: ProgramList(Fn, "fns"),
+    exprs: ProgramList(Expr, "exprs"),
+    pats: ProgramList(Pat, "pats"),
+    stmts: ProgramList(Stmt, "stmts"),
+    locals: ProgramList(Local, "locals"),
+    expr_ids: ProgramList(ExprId, "expr_ids"),
+    pat_ids: ProgramList(PatId, "pat_ids"),
+    typed_locals: ProgramList(TypedLocal, "typed_locals"),
+    stmt_ids: ProgramList(StmtId, "stmt_ids"),
+    field_exprs: ProgramList(FieldExpr, "field_exprs"),
+    fn_def_captures: ProgramList(FnDefCapture, "fn_def_captures"),
     /// Backing pool for `Span(CaptureOperand)` capture operand spans on lifted
     /// `fn_ref`/`call_proc` nodes.
-    capture_operands: std.ArrayList(CaptureOperand),
-    record_destructs: std.ArrayList(RecordDestruct),
-    str_pattern_steps: std.ArrayList(Mono.StrPatternStep),
-    branches: std.ArrayList(Branch),
-    if_branches: std.ArrayList(IfBranch),
-    string_literals: std.ArrayList(Mono.StringLiteral),
+    capture_operands: ProgramList(CaptureOperand, "capture_operands"),
+    record_destructs: ProgramList(RecordDestruct, "record_destructs"),
+    str_pattern_steps: ProgramList(Mono.StrPatternStep, "str_pattern_steps"),
+    branches: ProgramList(Branch, "branches"),
+    if_branches: ProgramList(IfBranch, "if_branches"),
+    string_literals: ProgramList(Mono.StringLiteral, "string_literals"),
     proc_debug_names: ProcDebugNameMap,
     /// Next generated `CaptureId` index for a lift-synthesized capturable local.
     next_lift_capture_id: u32,
-    roots: std.ArrayList(Root),
-    layout_requests: std.ArrayList(LayoutRequest),
-    runtime_schema_requests: std.ArrayList(RuntimeSchemaRequest),
-    comptime_sites: std.ArrayList(ComptimeSite),
+    roots: ProgramList(Root, "roots"),
+    layout_requests: ProgramList(LayoutRequest, "layout_requests"),
+    runtime_schema_requests: ProgramList(RuntimeSchemaRequest, "runtime_schema_requests"),
+    comptime_sites: ProgramList(ComptimeSite, "comptime_sites"),
     /// Source file table for `SourceLoc.file` indices (moved from Monotype).
-    source_files: std.ArrayList([]const u8),
+    source_files: ProgramList([]const u8, "source_files"),
     /// Source location per expression, parallel to `exprs`.
-    expr_locs: std.ArrayList(base.SourceLoc),
+    expr_locs: ProgramList(base.SourceLoc, "expr_locs"),
     /// Checked source region per expression, parallel to `exprs`.
-    expr_regions: std.ArrayList(base.Region),
+    expr_regions: ProgramList(base.Region, "expr_regions"),
     /// Source location per statement, parallel to `stmts`.
-    stmt_locs: std.ArrayList(base.SourceLoc),
+    stmt_locs: ProgramList(base.SourceLoc, "stmt_locs"),
     /// Checked source region per statement, parallel to `stmts`.
-    stmt_regions: std.ArrayList(base.Region),
+    stmt_regions: ProgramList(base.Region, "stmt_regions"),
     /// Source-level name per local, parallel to `locals` (empty for
     /// compiler-generated temporaries; moved from Monotype).
-    local_names: std.ArrayList([]const u8),
+    local_names: ProgramList([]const u8, "local_names"),
     /// Ambient location recorded by `addExpr`/`addStmt`. Passes that add
     /// nodes set this so synthetic nodes inherit a source location.
     current_loc: base.SourceLoc,
@@ -432,43 +445,43 @@ pub const Program = struct {
             .names = name_store,
             .next_symbol = next_symbol,
             .types = types,
-            .imported_fns = imported_fns,
+            .imported_fns = ProgramList(ImportedFn, "imported_fns").fromArrayList(imported_fns),
             .fns = .empty,
-            .exprs = exprs,
-            .pats = pats,
-            .stmts = stmts,
-            .locals = locals,
-            .expr_ids = expr_ids,
-            .pat_ids = pat_ids,
-            .typed_locals = typed_locals,
-            .stmt_ids = stmt_ids,
-            .field_exprs = field_exprs,
-            .fn_def_captures = fn_def_captures,
+            .exprs = ProgramList(Expr, "exprs").fromArrayList(exprs),
+            .pats = ProgramList(Pat, "pats").fromArrayList(pats),
+            .stmts = ProgramList(Stmt, "stmts").fromArrayList(stmts),
+            .locals = ProgramList(Local, "locals").fromArrayList(locals),
+            .expr_ids = ProgramList(ExprId, "expr_ids").fromArrayList(expr_ids),
+            .pat_ids = ProgramList(PatId, "pat_ids").fromArrayList(pat_ids),
+            .typed_locals = ProgramList(TypedLocal, "typed_locals").fromArrayList(typed_locals),
+            .stmt_ids = ProgramList(StmtId, "stmt_ids").fromArrayList(stmt_ids),
+            .field_exprs = ProgramList(FieldExpr, "field_exprs").fromArrayList(field_exprs),
+            .fn_def_captures = ProgramList(FnDefCapture, "fn_def_captures").fromArrayList(fn_def_captures),
             .capture_operands = .empty,
-            .record_destructs = record_destructs,
-            .str_pattern_steps = str_pattern_steps,
-            .branches = branches,
-            .if_branches = if_branches,
-            .string_literals = string_literals,
+            .record_destructs = ProgramList(RecordDestruct, "record_destructs").fromArrayList(record_destructs),
+            .str_pattern_steps = ProgramList(Mono.StrPatternStep, "str_pattern_steps").fromArrayList(str_pattern_steps),
+            .branches = ProgramList(Branch, "branches").fromArrayList(branches),
+            .if_branches = ProgramList(IfBranch, "if_branches").fromArrayList(if_branches),
+            .string_literals = ProgramList(Mono.StringLiteral, "string_literals").fromArrayList(string_literals),
             .proc_debug_names = proc_debug_names,
             .next_lift_capture_id = 0,
             .roots = .empty,
             .layout_requests = .empty,
             .runtime_schema_requests = .empty,
-            .comptime_sites = comptime_sites,
-            .source_files = source_files,
-            .expr_locs = expr_locs,
-            .expr_regions = expr_regions,
-            .stmt_locs = stmt_locs,
-            .stmt_regions = stmt_regions,
-            .local_names = local_names,
+            .comptime_sites = ProgramList(ComptimeSite, "comptime_sites").fromArrayList(comptime_sites),
+            .source_files = ProgramList([]const u8, "source_files").fromArrayList(source_files),
+            .expr_locs = ProgramList(base.SourceLoc, "expr_locs").fromArrayList(expr_locs),
+            .expr_regions = ProgramList(base.Region, "expr_regions").fromArrayList(expr_regions),
+            .stmt_locs = ProgramList(base.SourceLoc, "stmt_locs").fromArrayList(stmt_locs),
+            .stmt_regions = ProgramList(base.Region, "stmt_regions").fromArrayList(stmt_regions),
+            .local_names = ProgramList([]const u8, "local_names").fromArrayList(local_names),
             .current_loc = base.SourceLoc.none,
             .current_region = base.Region.zero(),
         };
     }
 
     pub fn deinit(self: *Program) void {
-        for (self.local_names.items) |name| {
+        for (self.local_names.unsafeRawItemsForView()) |name| {
             if (name.len > 0) self.allocator.free(name);
         }
         self.local_names.deinit(self.allocator);
@@ -476,9 +489,9 @@ pub const Program = struct {
         self.stmt_locs.deinit(self.allocator);
         self.expr_regions.deinit(self.allocator);
         self.expr_locs.deinit(self.allocator);
-        for (self.source_files.items) |file| self.allocator.free(file);
+        for (self.source_files.unsafeRawItemsForView()) |file| self.allocator.free(file);
         self.source_files.deinit(self.allocator);
-        for (self.comptime_sites.items) |site| {
+        for (self.comptime_sites.unsafeRawItemsForView()) |site| {
             self.allocator.free(site.branch_regions);
         }
         self.comptime_sites.deinit(self.allocator);
@@ -486,7 +499,7 @@ pub const Program = struct {
         self.layout_requests.deinit(self.allocator);
         self.roots.deinit(self.allocator);
         self.proc_debug_names.deinit();
-        for (self.string_literals.items) |literal| self.allocator.free(literal.backing);
+        for (self.string_literals.unsafeRawItemsForView()) |literal| self.allocator.free(literal.backing);
         self.string_literals.deinit(self.allocator);
         self.if_branches.deinit(self.allocator);
         self.branches.deinit(self.allocator);
@@ -514,41 +527,60 @@ pub const Program = struct {
             .names = &self.names,
             .next_symbol = self.next_symbol,
             .types = self.types.view(),
-            .imported_fns = self.imported_fns.items,
-            .fns = self.fns.items,
-            .exprs = self.exprs.items,
-            .pats = self.pats.items,
-            .stmts = self.stmts.items,
-            .locals = self.locals.items,
-            .expr_ids = self.expr_ids.items,
-            .pat_ids = self.pat_ids.items,
-            .typed_locals = self.typed_locals.items,
-            .stmt_ids = self.stmt_ids.items,
-            .field_exprs = self.field_exprs.items,
-            .capture_operands = self.capture_operands.items,
-            .record_destructs = self.record_destructs.items,
-            .str_pattern_steps = self.str_pattern_steps.items,
-            .branches = self.branches.items,
-            .if_branches = self.if_branches.items,
-            .string_literals = self.string_literals.items,
+            .imported_fns = self.imported_fns.unsafeRawItemsForView(),
+            .fns = self.fns.unsafeRawItemsForView(),
+            .exprs = self.exprs.unsafeRawItemsForView(),
+            .pats = self.pats.unsafeRawItemsForView(),
+            .stmts = self.stmts.unsafeRawItemsForView(),
+            .locals = self.locals.unsafeRawItemsForView(),
+            .expr_ids = self.expr_ids.unsafeRawItemsForView(),
+            .pat_ids = self.pat_ids.unsafeRawItemsForView(),
+            .typed_locals = self.typed_locals.unsafeRawItemsForView(),
+            .stmt_ids = self.stmt_ids.unsafeRawItemsForView(),
+            .field_exprs = self.field_exprs.unsafeRawItemsForView(),
+            .fn_def_captures = self.fn_def_captures.unsafeRawItemsForView(),
+            .capture_operands = self.capture_operands.unsafeRawItemsForView(),
+            .record_destructs = self.record_destructs.unsafeRawItemsForView(),
+            .str_pattern_steps = self.str_pattern_steps.unsafeRawItemsForView(),
+            .branches = self.branches.unsafeRawItemsForView(),
+            .if_branches = self.if_branches.unsafeRawItemsForView(),
+            .string_literals = self.string_literals.unsafeRawItemsForView(),
             .proc_debug_names = &self.proc_debug_names,
-            .roots = self.roots.items,
-            .layout_requests = self.layout_requests.items,
-            .runtime_schema_requests = self.runtime_schema_requests.items,
-            .comptime_sites = self.comptime_sites.items,
-            .source_files = self.source_files.items,
-            .expr_locs = self.expr_locs.items,
-            .expr_regions = self.expr_regions.items,
-            .stmt_locs = self.stmt_locs.items,
-            .stmt_regions = self.stmt_regions.items,
-            .local_names = self.local_names.items,
+            .roots = self.roots.unsafeRawItemsForView(),
+            .layout_requests = self.layout_requests.unsafeRawItemsForView(),
+            .runtime_schema_requests = self.runtime_schema_requests.unsafeRawItemsForView(),
+            .comptime_sites = self.comptime_sites.unsafeRawItemsForView(),
+            .source_files = self.source_files.unsafeRawItemsForView(),
+            .expr_locs = self.expr_locs.unsafeRawItemsForView(),
+            .expr_regions = self.expr_regions.unsafeRawItemsForView(),
+            .stmt_locs = self.stmt_locs.unsafeRawItemsForView(),
+            .stmt_regions = self.stmt_regions.unsafeRawItemsForView(),
+            .local_names = self.local_names.unsafeRawItemsForView(),
         };
     }
 
     pub fn addFn(self: *Program, fn_: Fn) std.mem.Allocator.Error!FnId {
-        const id: FnId = @enumFromInt(@as(u32, @intCast(self.fns.items.len)));
+        const id: FnId = @enumFromInt(@as(u32, @intCast(self.fns.len())));
         try self.fns.append(self.allocator, fn_);
         return id;
+    }
+
+    pub fn reserveFnSlot(self: *Program) std.mem.Allocator.Error!FnId {
+        const id: FnId = @enumFromInt(@as(u32, @intCast(self.fns.len())));
+        try self.fns.append(self.allocator, undefined);
+        return id;
+    }
+
+    pub fn setFn(self: *Program, id: FnId, fn_: Fn) void {
+        self.fns.set(@intFromEnum(id), fn_);
+    }
+
+    pub fn setFnAt(self: *Program, index: usize, fn_: Fn) void {
+        self.fns.set(index, fn_);
+    }
+
+    pub fn setFnCaptures(self: *Program, id: FnId, captures: Span(TypedLocal)) void {
+        self.fns.getPtrImmediate(@intFromEnum(id)).captures = captures;
     }
 
     pub fn setProcDebugName(self: *Program, symbol: Common.Symbol, name: names.ExportNameId) std.mem.Allocator.Error!void {
@@ -560,7 +592,7 @@ pub const Program = struct {
     }
 
     pub fn addExpr(self: *Program, expr: Expr) std.mem.Allocator.Error!ExprId {
-        const id: ExprId = @enumFromInt(@as(u32, @intCast(self.exprs.items.len)));
+        const id: ExprId = @enumFromInt(@as(u32, @intCast(self.exprs.len())));
         try self.exprs.append(self.allocator, expr);
         try self.expr_locs.append(self.allocator, self.current_loc);
         try self.expr_regions.append(self.allocator, self.current_region);
@@ -569,32 +601,32 @@ pub const Program = struct {
 
     /// Source location of an expression.
     pub fn exprLoc(self: *const Program, id: ExprId) base.SourceLoc {
-        return self.expr_locs.items[@intFromEnum(id)];
+        return self.expr_locs.unsafeRawItemsForView()[@intFromEnum(id)];
     }
 
     /// Checked source region of an expression.
     pub fn exprRegion(self: *const Program, id: ExprId) base.Region {
-        return self.expr_regions.items[@intFromEnum(id)];
+        return self.expr_regions.unsafeRawItemsForView()[@intFromEnum(id)];
     }
 
     /// Source location of a statement.
     pub fn stmtLoc(self: *const Program, id: StmtId) base.SourceLoc {
-        return self.stmt_locs.items[@intFromEnum(id)];
+        return self.stmt_locs.unsafeRawItemsForView()[@intFromEnum(id)];
     }
 
     /// Checked source region of a statement.
     pub fn stmtRegion(self: *const Program, id: StmtId) base.Region {
-        return self.stmt_regions.items[@intFromEnum(id)];
+        return self.stmt_regions.unsafeRawItemsForView()[@intFromEnum(id)];
     }
 
     pub fn addPat(self: *Program, pat_: Pat) std.mem.Allocator.Error!PatId {
-        const id: PatId = @enumFromInt(@as(u32, @intCast(self.pats.items.len)));
+        const id: PatId = @enumFromInt(@as(u32, @intCast(self.pats.len())));
         try self.pats.append(self.allocator, pat_);
         return id;
     }
 
     pub fn addStmt(self: *Program, stmt_: Stmt) std.mem.Allocator.Error!StmtId {
-        const id: StmtId = @enumFromInt(@as(u32, @intCast(self.stmts.items.len)));
+        const id: StmtId = @enumFromInt(@as(u32, @intCast(self.stmts.len())));
         try self.stmts.append(self.allocator, stmt_);
         try self.stmt_locs.append(self.allocator, self.current_loc);
         try self.stmt_regions.append(self.allocator, self.current_region);
@@ -602,7 +634,11 @@ pub const Program = struct {
     }
 
     pub fn comptimeSite(self: *const Program, id: ComptimeSiteId) ComptimeSite {
-        return self.comptime_sites.items[@intFromEnum(id)];
+        return self.comptime_sites.unsafeRawItemsForView()[@intFromEnum(id)];
+    }
+
+    pub fn comptimeSiteCount(self: *const Program) usize {
+        return self.comptime_sites.len();
     }
 
     pub fn addLocal(self: *Program, symbol: Common.Symbol, ty: Type.TypeId) std.mem.Allocator.Error!LocalId {
@@ -611,7 +647,123 @@ pub const Program = struct {
 
     /// Source-level name of a local; empty for compiler-generated temporaries.
     pub fn localName(self: *const Program, id: LocalId) []const u8 {
-        return self.local_names.items[@intFromEnum(id)];
+        return self.local_names.unsafeRawItemsForView()[@intFromEnum(id)];
+    }
+
+    pub fn sourceFileNames(self: *const Program) []const []const u8 {
+        return self.source_files.unsafeRawItemsForView();
+    }
+
+    pub fn takeStringLiterals(self: *Program) std.ArrayList(Mono.StringLiteral) {
+        return self.string_literals.takeArrayList();
+    }
+
+    pub fn takeSourceFiles(self: *Program) std.ArrayList([]const u8) {
+        return self.source_files.takeArrayList();
+    }
+
+    pub fn stringLiteralsView(self: *const Program) []const Mono.StringLiteral {
+        return self.string_literals.unsafeRawItemsForView();
+    }
+
+    pub fn rootCount(self: *const Program) usize {
+        return self.roots.len();
+    }
+
+    pub fn rootsView(self: *const Program) []const Root {
+        return self.roots.unsafeRawItemsForView();
+    }
+
+    pub fn fnCount(self: *const Program) usize {
+        return self.fns.len();
+    }
+
+    pub fn getFn(self: *const Program, id: FnId) Fn {
+        return self.fns.unsafeRawItemsForView()[@intFromEnum(id)];
+    }
+
+    pub fn getFnAt(self: *const Program, index: usize) Fn {
+        return self.fns.get(index);
+    }
+
+    pub fn fnsView(self: *const Program) []const Fn {
+        return self.fns.unsafeRawItemsForView();
+    }
+
+    pub fn getExpr(self: *const Program, id: ExprId) Expr {
+        return self.exprs.unsafeRawItemsForView()[@intFromEnum(id)];
+    }
+
+    pub fn exprsView(self: *const Program) []const Expr {
+        return self.exprs.unsafeRawItemsForView();
+    }
+
+    pub fn setExpr(self: *Program, id: ExprId, expr: Expr) void {
+        self.exprs.set(@intFromEnum(id), expr);
+    }
+
+    pub fn getExprAt(self: *const Program, index: usize) Expr {
+        return self.exprs.get(index);
+    }
+
+    pub fn setExprData(self: *Program, id: ExprId, data: ExprData) void {
+        self.exprs.getPtrImmediate(@intFromEnum(id)).data = data;
+    }
+
+    pub fn setExprDataAt(self: *Program, index: usize, data: ExprData) void {
+        self.exprs.getPtrImmediate(index).data = data;
+    }
+
+    pub fn getPat(self: *const Program, id: PatId) Pat {
+        return self.pats.unsafeRawItemsForView()[@intFromEnum(id)];
+    }
+
+    pub fn getPatAt(self: *const Program, index: usize) Pat {
+        return self.pats.get(index);
+    }
+
+    pub fn getStmt(self: *const Program, id: StmtId) Stmt {
+        return self.stmts.unsafeRawItemsForView()[@intFromEnum(id)];
+    }
+
+    pub fn getStmtAt(self: *const Program, index: usize) Stmt {
+        return self.stmts.get(index);
+    }
+
+    pub fn stmtsView(self: *const Program) []const Stmt {
+        return self.stmts.unsafeRawItemsForView();
+    }
+
+    pub fn getLocal(self: *const Program, id: LocalId) Local {
+        return self.locals.unsafeRawItemsForView()[@intFromEnum(id)];
+    }
+
+    pub fn getLocalAt(self: *const Program, index: usize) Local {
+        return self.locals.get(index);
+    }
+
+    pub fn localsView(self: *const Program) []const Local {
+        return self.locals.unsafeRawItemsForView();
+    }
+
+    pub fn getStringLiteral(self: *const Program, id: StringLiteralId) Mono.StringLiteral {
+        return self.string_literals.unsafeRawItemsForView()[@intFromEnum(id)];
+    }
+
+    pub fn importedFnCount(self: *const Program) usize {
+        return self.imported_fns.len();
+    }
+
+    pub fn addRoot(self: *Program, root: Root) std.mem.Allocator.Error!void {
+        try self.roots.append(self.allocator, root);
+    }
+
+    pub fn addLayoutRequest(self: *Program, request: LayoutRequest) std.mem.Allocator.Error!void {
+        try self.layout_requests.append(self.allocator, request);
+    }
+
+    pub fn addRuntimeSchemaRequest(self: *Program, request: RuntimeSchemaRequest) std.mem.Allocator.Error!void {
+        try self.runtime_schema_requests.append(self.allocator, request);
     }
 
     pub fn addLocalWithBinder(
@@ -620,7 +772,7 @@ pub const Program = struct {
         ty: Type.TypeId,
         binder: ?check.CheckedModule.PatternBinderId,
     ) std.mem.Allocator.Error!LocalId {
-        const id: LocalId = @enumFromInt(@as(u32, @intCast(self.locals.items.len)));
+        const id: LocalId = @enumFromInt(@as(u32, @intCast(self.locals.len())));
         try self.locals.append(self.allocator, .{
             .id = id,
             .symbol = symbol,
@@ -645,116 +797,129 @@ pub const Program = struct {
     }
 
     pub fn addTypedLocalSpan(self: *Program, values: []const TypedLocal) std.mem.Allocator.Error!Span(TypedLocal) {
-        const start: u32 = @intCast(self.typed_locals.items.len);
+        const start: u32 = @intCast(self.typed_locals.len());
         try self.typed_locals.appendSlice(self.allocator, values);
         return .{ .start = start, .len = @intCast(values.len) };
     }
 
     pub fn addExprSpan(self: *Program, ids: []const ExprId) std.mem.Allocator.Error!Span(ExprId) {
-        const start: u32 = @intCast(self.expr_ids.items.len);
+        const start: u32 = @intCast(self.expr_ids.len());
         try self.expr_ids.appendSlice(self.allocator, ids);
         return .{ .start = start, .len = @intCast(ids.len) };
     }
 
     pub fn addPatSpan(self: *Program, ids: []const PatId) std.mem.Allocator.Error!Span(PatId) {
-        const start: u32 = @intCast(self.pat_ids.items.len);
+        const start: u32 = @intCast(self.pat_ids.len());
         try self.pat_ids.appendSlice(self.allocator, ids);
         return .{ .start = start, .len = @intCast(ids.len) };
     }
 
     pub fn addStmtSpan(self: *Program, ids: []const StmtId) std.mem.Allocator.Error!Span(StmtId) {
-        const start: u32 = @intCast(self.stmt_ids.items.len);
+        const start: u32 = @intCast(self.stmt_ids.len());
         try self.stmt_ids.appendSlice(self.allocator, ids);
         return .{ .start = start, .len = @intCast(ids.len) };
     }
 
     pub fn addFieldExprSpan(self: *Program, values: []const FieldExpr) std.mem.Allocator.Error!Span(FieldExpr) {
-        const start: u32 = @intCast(self.field_exprs.items.len);
+        const start: u32 = @intCast(self.field_exprs.len());
         try self.field_exprs.appendSlice(self.allocator, values);
         return .{ .start = start, .len = @intCast(values.len) };
     }
 
     pub fn addFnDefCaptureSpan(self: *Program, values: []const FnDefCapture) std.mem.Allocator.Error!Span(FnDefCapture) {
-        const start: u32 = @intCast(self.fn_def_captures.items.len);
+        const start: u32 = @intCast(self.fn_def_captures.len());
         try self.fn_def_captures.appendSlice(self.allocator, values);
         return .{ .start = start, .len = @intCast(values.len) };
     }
 
     pub fn addCaptureOperandSpan(self: *Program, values: []const CaptureOperand) std.mem.Allocator.Error!Span(CaptureOperand) {
-        const start: u32 = @intCast(self.capture_operands.items.len);
+        const start: u32 = @intCast(self.capture_operands.len());
         try self.capture_operands.appendSlice(self.allocator, values);
         return .{ .start = start, .len = @intCast(values.len) };
     }
 
+    pub fn setCaptureOperandInSpan(self: *Program, span_: Span(CaptureOperand), index: usize, operand: CaptureOperand) void {
+        if (index >= span_.len) Common.invariant("capture operand index was outside span");
+        self.capture_operands.set(span_.start + index, operand);
+    }
+
     pub fn addRecordDestructSpan(self: *Program, values: []const RecordDestruct) std.mem.Allocator.Error!Span(RecordDestruct) {
-        const start: u32 = @intCast(self.record_destructs.items.len);
+        const start: u32 = @intCast(self.record_destructs.len());
         try self.record_destructs.appendSlice(self.allocator, values);
         return .{ .start = start, .len = @intCast(values.len) };
     }
 
     pub fn addStrPatternStepSpan(self: *Program, values: []const Mono.StrPatternStep) std.mem.Allocator.Error!Span(Mono.StrPatternStep) {
-        const start: u32 = @intCast(self.str_pattern_steps.items.len);
+        const start: u32 = @intCast(self.str_pattern_steps.len());
         try self.str_pattern_steps.appendSlice(self.allocator, values);
         return .{ .start = start, .len = @intCast(values.len) };
     }
 
     pub fn addBranchSpan(self: *Program, values: []const Branch) std.mem.Allocator.Error!Span(Branch) {
-        const start: u32 = @intCast(self.branches.items.len);
+        const start: u32 = @intCast(self.branches.len());
         try self.branches.appendSlice(self.allocator, values);
         return .{ .start = start, .len = @intCast(values.len) };
     }
 
     pub fn addIfBranchSpan(self: *Program, values: []const IfBranch) std.mem.Allocator.Error!Span(IfBranch) {
-        const start: u32 = @intCast(self.if_branches.items.len);
+        const start: u32 = @intCast(self.if_branches.len());
         try self.if_branches.appendSlice(self.allocator, values);
         return .{ .start = start, .len = @intCast(values.len) };
     }
 
-    pub fn exprSpan(self: *const Program, span_: Span(ExprId)) []const ExprId {
-        return self.expr_ids.items[span_.start..][0..span_.len];
+    pub fn exprSpan(self: *const Program, span_: Span(ExprId)) ProgramSpanBorrow(ExprId, "expr_ids") {
+        return self.expr_ids.borrowSpan(span_.start, span_.len);
     }
 
-    pub fn patSpan(self: *const Program, span_: Span(PatId)) []const PatId {
-        return self.pat_ids.items[span_.start..][0..span_.len];
+    pub fn patSpan(self: *const Program, span_: Span(PatId)) ProgramSpanBorrow(PatId, "pat_ids") {
+        return self.pat_ids.borrowSpan(span_.start, span_.len);
     }
 
-    pub fn typedLocalSpan(self: *const Program, span_: Span(TypedLocal)) []const TypedLocal {
-        return self.typed_locals.items[span_.start..][0..span_.len];
+    pub fn typedLocalSpan(self: *const Program, span_: Span(TypedLocal)) ProgramSpanBorrow(TypedLocal, "typed_locals") {
+        return self.typed_locals.borrowSpan(span_.start, span_.len);
     }
 
     /// The CaptureId of a local. Every local that participates in a capture set
     /// carries one; asserts it is present.
     pub fn captureIdOfLocal(self: *const Program, id: LocalId) check.CheckedModule.CaptureId {
-        return self.locals.items[@intFromEnum(id)].capture_id orelse
+        return self.locals.unsafeRawItemsForView()[@intFromEnum(id)].capture_id orelse
             Common.invariant("lifted capture local had no CaptureId");
     }
 
-    pub fn stmtSpan(self: *const Program, span_: Span(StmtId)) []const StmtId {
-        return self.stmt_ids.items[span_.start..][0..span_.len];
+    pub fn ensureLiftCaptureId(self: *Program, id: LocalId) check.CheckedModule.CaptureId {
+        const local = self.locals.getPtrImmediate(@intFromEnum(id));
+        if (local.capture_id == null) {
+            local.capture_id = self.nextLiftCaptureId();
+        }
+        return local.capture_id.?;
     }
 
-    pub fn fieldExprSpan(self: *const Program, span_: Span(FieldExpr)) []const FieldExpr {
-        return self.field_exprs.items[span_.start..][0..span_.len];
+    pub fn stmtSpan(self: *const Program, span_: Span(StmtId)) ProgramSpanBorrow(StmtId, "stmt_ids") {
+        return self.stmt_ids.borrowSpan(span_.start, span_.len);
     }
 
-    pub fn fnDefCaptureSpan(self: *const Program, span_: Span(FnDefCapture)) []const FnDefCapture {
-        return self.fn_def_captures.items[span_.start..][0..span_.len];
+    pub fn fieldExprSpan(self: *const Program, span_: Span(FieldExpr)) ProgramSpanBorrow(FieldExpr, "field_exprs") {
+        return self.field_exprs.borrowSpan(span_.start, span_.len);
     }
 
-    pub fn captureOperandSpan(self: *const Program, span_: Span(CaptureOperand)) []const CaptureOperand {
-        return self.capture_operands.items[span_.start..][0..span_.len];
+    pub fn fnDefCaptureSpan(self: *const Program, span_: Span(FnDefCapture)) ProgramSpanBorrow(FnDefCapture, "fn_def_captures") {
+        return self.fn_def_captures.borrowSpan(span_.start, span_.len);
     }
 
-    pub fn recordDestructSpan(self: *const Program, span_: Span(RecordDestruct)) []const RecordDestruct {
-        return self.record_destructs.items[span_.start..][0..span_.len];
+    pub fn captureOperandSpan(self: *const Program, span_: Span(CaptureOperand)) ProgramSpanBorrow(CaptureOperand, "capture_operands") {
+        return self.capture_operands.borrowSpan(span_.start, span_.len);
     }
 
-    pub fn strPatternStepSpan(self: *const Program, span_: Span(Mono.StrPatternStep)) []const Mono.StrPatternStep {
-        return self.str_pattern_steps.items[span_.start..][0..span_.len];
+    pub fn recordDestructSpan(self: *const Program, span_: Span(RecordDestruct)) ProgramSpanBorrow(RecordDestruct, "record_destructs") {
+        return self.record_destructs.borrowSpan(span_.start, span_.len);
     }
 
-    pub fn branchSpan(self: *const Program, span_: Span(Branch)) []const Branch {
-        return self.branches.items[span_.start..][0..span_.len];
+    pub fn strPatternStepSpan(self: *const Program, span_: Span(Mono.StrPatternStep)) ProgramSpanBorrow(Mono.StrPatternStep, "str_pattern_steps") {
+        return self.str_pattern_steps.borrowSpan(span_.start, span_.len);
+    }
+
+    pub fn branchSpan(self: *const Program, span_: Span(Branch)) ProgramSpanBorrow(Branch, "branches") {
+        return self.branches.borrowSpan(span_.start, span_.len);
     }
 
     /// The two pieces direct LIR lowering needs to consider folding away the
@@ -776,7 +941,7 @@ pub const Program = struct {
         scrutinee: ExprId,
         branches_span: Span(Branch),
     ) ?ListMapCanReuseMatch {
-        const call = switch (self.exprs.items[@intFromEnum(scrutinee)].data) {
+        const call = switch (self.exprs.unsafeRawItemsForView()[@intFromEnum(scrutinee)].data) {
             .call_proc => |call| call,
             else => return null,
         };
@@ -784,15 +949,17 @@ pub const Program = struct {
             .lifted => |fn_id| fn_id,
             .func => return null,
         };
-        const callee_body = switch (self.fns.items[@intFromEnum(callee)].body) {
+        const callee_body = switch (self.fns.unsafeRawItemsForView()[@intFromEnum(callee)].body) {
             .roc => |body| body,
             .hosted => return null,
         };
         if (!self.exprIsListMapCanReuseOp(callee_body)) return null;
 
-        for (self.branchSpan(branches_span)) |branch| {
+        const branches = self.branchSpan(branches_span);
+        for (0..branches.len) |index| {
+            const branch = GuardedList.at(branches, index);
             if (branch.guard != null) return null;
-            switch (self.pats.items[@intFromEnum(branch.pat)].data) {
+            switch (self.pats.unsafeRawItemsForView()[@intFromEnum(branch.pat)].data) {
                 .wildcard => return .{ .call_args = call.args, .zero_branch_body = branch.body },
                 .int_lit => |value| if (value.toI128() == 0) {
                     return .{ .call_args = call.args, .zero_branch_body = branch.body };
@@ -813,47 +980,47 @@ pub const Program = struct {
     };
 
     fn exprIsListMapCanReuseOp(self: *const Program, expr_id: ExprId) bool {
-        return switch (self.exprs.items[@intFromEnum(expr_id)].data) {
+        return switch (self.exprs.unsafeRawItemsForView()[@intFromEnum(expr_id)].data) {
             .low_level => |ll| ll.op == .list_map_can_reuse,
             .block => |block| block.statements.len == 0 and self.exprIsListMapCanReuseOp(block.final_expr),
             else => false,
         };
     }
 
-    pub fn ifBranchSpan(self: *const Program, span_: Span(IfBranch)) []const IfBranch {
-        return self.if_branches.items[span_.start..][0..span_.len];
+    pub fn ifBranchSpan(self: *const Program, span_: Span(IfBranch)) ProgramSpanBorrow(IfBranch, "if_branches") {
+        return self.if_branches.borrowSpan(span_.start, span_.len);
     }
 
     pub fn exprCount(self: *const Program) usize {
-        return self.exprs.items.len;
+        return self.exprs.len();
     }
 
     pub fn patCount(self: *const Program) usize {
-        return self.pats.items.len;
+        return self.pats.len();
     }
 
     pub fn stmtCount(self: *const Program) usize {
-        return self.stmts.items.len;
+        return self.stmts.len();
     }
 
     pub fn localCount(self: *const Program) usize {
-        return self.locals.items.len;
+        return self.locals.len();
     }
 
     pub fn exprTy(self: *const Program, id: ExprId) Type.TypeId {
-        return self.exprs.items[@intFromEnum(id)].ty;
+        return self.exprs.unsafeRawItemsForView()[@intFromEnum(id)].ty;
     }
 
     pub fn patTy(self: *const Program, id: PatId) Type.TypeId {
-        return self.pats.items[@intFromEnum(id)].ty;
+        return self.pats.unsafeRawItemsForView()[@intFromEnum(id)].ty;
     }
 
     pub fn pat(self: *const Program, id: PatId) Pat {
-        return self.pats.items[@intFromEnum(id)];
+        return self.pats.unsafeRawItemsForView()[@intFromEnum(id)];
     }
 
     pub fn stmt(self: *const Program, id: StmtId) Stmt {
-        return self.stmts.items[@intFromEnum(id)];
+        return self.stmts.unsafeRawItemsForView()[@intFromEnum(id)];
     }
 };
 

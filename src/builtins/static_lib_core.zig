@@ -110,6 +110,8 @@ comptime {
     @export(&dw.roc_builtins_free_data_ptr, .{ .name = "roc_builtins_free_data_ptr" });
     @export(&dw.roc_builtins_int_to_str, .{ .name = "roc_builtins_int_to_str" });
     @export(&dw.roc_builtins_int_from_str, .{ .name = "roc_builtins_int_from_str" });
+    @export(&dw.roc_builtins_num_mul_with_overflow_u128, .{ .name = "roc_builtins_num_mul_with_overflow_u128" });
+    @export(&dw.roc_builtins_num_mul_with_overflow_i128, .{ .name = "roc_builtins_num_mul_with_overflow_i128" });
 
     @export(&dw.roc_builtins_i8_mod_by, .{ .name = "roc_builtins_i8_mod_by" });
     @export(&dw.roc_builtins_u8_mod_by, .{ .name = "roc_builtins_u8_mod_by" });

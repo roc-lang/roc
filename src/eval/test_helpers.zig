@@ -33,6 +33,7 @@ const LayoutStore = @import("layout").Store;
 const LayoutIdx = @import("layout").Idx;
 const LirProcSpecId = lir.LirProcSpecId;
 const LirImage = lir.LirImage;
+const GuardedList = lir.LirStore.GuardedList;
 
 /// Errors surfaced by shared eval test helpers.
 pub const TestHelperError = Allocator.Error || std.DynLib.Error || std.Io.File.OpenError || std.Io.File.Reader.Error || std.Io.File.Writer.Error || std.Io.File.StatError || std.Io.File.ReadPositionalError || std.Io.Writer.Error || check.CheckedArtifact.CompileTimeFinalizer.Error || error{
@@ -993,7 +994,7 @@ const ComptimeProblemReporting = enum {
 
 fn problemBlocksCheckedArtifact(problem: check.problem.Problem) bool {
     return switch (problem) {
-        .redundant_pattern, .unmatchable_pattern, .comptime_unused_branch, .comptime_condition, .literal_defaulted => false,
+        .effectful_function_name, .redundant_pattern, .unmatchable_pattern, .comptime_unused_branch, .comptime_condition, .literal_defaulted => false,
         else => true,
     };
 }
@@ -1172,6 +1173,8 @@ fn parseAndCanonicalizeProgramWithRootModeReporting(
 
     const publish_imports = try publishImportKeysWithBuiltin(allocator, import_artifacts, pre_published_builtin);
     defer allocator.free(publish_imports);
+    const available_artifacts = try importedViewsFromPublishImports(allocator, publish_imports);
+    defer allocator.free(available_artifacts);
 
     var explicit_root_storage: [1]check.CheckedArtifact.ExplicitRootRequestInput = undefined;
     var explicit_roots: []const check.CheckedArtifact.ExplicitRootRequestInput = &.{};
@@ -1202,6 +1205,7 @@ fn parseAndCanonicalizeProgramWithRootModeReporting(
         .{
             .module_env_storage = .{ .checked_source = main_checked.module_env },
             .imports = publish_imports,
+            .available_artifacts = available_artifacts,
             .explicit_roots = explicit_roots,
             .compile_time_finalizer = CompileTimeFinalization.finalizer(),
             .problem_store = switch (problem_reporting) {
@@ -1271,7 +1275,6 @@ pub fn parseCheckModule(
 
     try module_env.initCIRFields(module_name);
     const builtin_ctx: Check.BuiltinContext = .{
-        .module_name = try module_env.insertIdent(base.Ident.for_text(module_name)),
         .bool_stmt = builtin_indices.bool_type,
         .try_stmt = builtin_indices.try_type,
         .str_stmt = builtin_indices.str_type,
@@ -1533,6 +1536,9 @@ fn publishImportArtifacts(
             const module_idx: u32 = @intCast(extra_i + 2);
             if (!directImportsArePublished(typed_cir_modules.module(module_idx), published_keys.items)) continue;
 
+            const available_artifacts = try importedViewsFromPublishImports(allocator, published_keys.items);
+            defer allocator.free(available_artifacts);
+
             var artifact = try check.CheckedArtifact.publishFromTypedModule(
                 allocator,
                 typed_cir_modules,
@@ -1540,6 +1546,7 @@ fn publishImportArtifacts(
                 .{
                     .module_env_storage = .{ .checked_source = extra_modules[extra_i].module_env },
                     .imports = published_keys.items,
+                    .available_artifacts = available_artifacts,
                     .compile_time_finalizer = CompileTimeFinalization.finalizer(),
                 },
             );
@@ -1574,6 +1581,17 @@ fn publishImportArtifacts(
     }
 
     return try artifacts.toOwnedSlice(allocator);
+}
+
+fn importedViewsFromPublishImports(
+    allocator: Allocator,
+    imports: []const check.CheckedArtifact.PublishImportArtifact,
+) TestHelperError![]check.CheckedArtifact.ImportedModuleView {
+    const views = try allocator.alloc(check.CheckedArtifact.ImportedModuleView, imports.len);
+    for (imports, 0..) |import, i| {
+        views[i] = import.view;
+    }
+    return views;
 }
 
 fn directImportsArePublished(
@@ -1794,7 +1812,8 @@ pub fn mainProcArgLayouts(allocator: Allocator, lowered: *const LoweredProgram) 
     const proc = lowered.view.store.getProcSpec(lowered.mainProc());
     const arg_locals = lowered.view.store.getLocalSpan(proc.args);
     const arg_layouts = try allocator.alloc(LayoutIdx, arg_locals.len);
-    for (arg_locals, 0..) |local_id, i| {
+    for (0..arg_locals.len) |i| {
+        const local_id = GuardedList.at(arg_locals, i);
         arg_layouts[i] = lowered.view.store.getLocal(local_id).layout_idx;
     }
     return arg_layouts;
@@ -1972,7 +1991,14 @@ pub fn devEvalBoolRoots(
     if (comptime !backend.host_lir_codegen_available) {
         return error.DevBackendUnavailable;
     } else {
-        var codegen = try HostLirCodeGen.init(allocator, store, layouts, &.{});
+        var static_strings = try backend.StaticStringData.build(
+            allocator,
+            store,
+            backend.dev.LirCodeGenMod.host_lir_codegen_target,
+        );
+        defer static_strings.deinit();
+
+        var codegen = try HostLirCodeGen.init(allocator, store, layouts, static_strings.entries);
         defer codegen.deinit();
         try codegen.compileAllProcSpecs(store.getProcSpecs());
 
@@ -2198,11 +2224,18 @@ pub fn devEvaluatorStrWithStats(allocator: Allocator, lowered: *const LoweredPro
     if (comptime !backend.host_lir_codegen_available) {
         return error.DevBackendUnavailable;
     } else {
+        var static_strings = try backend.StaticStringData.build(
+            allocator,
+            &lowered.view.store,
+            backend.dev.LirCodeGenMod.host_lir_codegen_target,
+        );
+        defer static_strings.deinit();
+
         var codegen = try HostLirCodeGen.init(
             allocator,
             &lowered.view.store,
             &lowered.view.layouts,
-            &.{},
+            static_strings.entries,
         );
         defer codegen.deinit();
         try codegen.compileAllProcSpecs(lowered.view.store.getProcSpecs());

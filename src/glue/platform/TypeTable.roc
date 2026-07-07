@@ -8,7 +8,15 @@ import TypeRepr exposing [TypeRepr]
 ## re-deriving them independently per target language.
 TypeTable := { entries : List(TypeRepr) }.{
 	RecordLookup := [
-		RecordFound({ fields : List(RecordField), size : U64, alignment : U64 }),
+		RecordFound({
+			alignment : U64,
+			alignment_32 : U64,
+			alignment_64 : U64,
+			fields : List(RecordField),
+			size : U64,
+			size_32 : U64,
+			size_64 : U64,
+		}),
 		NotRecord,
 	]
 
@@ -78,7 +86,15 @@ TypeTable := { entries : List(TypeRepr) }.{
 		match type_repr {
 			RocRecord(rec) =>
 				if List.len(rec.fields) > 0 {
-					RecordFound({ fields: rec.fields, size: rec.size, alignment: rec.alignment })
+					RecordFound({
+						alignment: rec.alignment,
+						alignment_32: rec.alignment_32,
+						alignment_64: rec.alignment_64,
+						fields: rec.fields,
+						size: rec.size,
+						size_32: rec.size_32,
+						size_64: rec.size_64,
+					})
 				} else {
 					NotRecord
 				}
@@ -141,15 +157,35 @@ TypeTable := { entries : List(TypeRepr) }.{
 }
 
 sample_table : TypeTable
-sample_table = TypeTable.from_list([
-	RocU8,
-	RocStr,
-	RocList(0),
-	RocRecord({ name: "Pair", anonymous: Bool.False, fields: [{ name: "left", type_id: 1, size: 24, alignment: 8, is_padding: Bool.False }], size: 24, alignment: 8 }),
-	RocTagUnion({ name: "Wrapped", tags: [{ name: "Wrapped", payload: [3], payload_size: 24, payload_alignment: 8 }], size: 24, alignment: 8 }),
-	RocTagUnion({ name: "Try", tags: [{ name: "Err", payload: [1], payload_size: 24, payload_alignment: 8 }, { name: "Ok", payload: [0], payload_size: 1, payload_alignment: 1 }], size: 32, alignment: 8 }),
-	RocTagUnion({ name: "Try", tags: [{ name: "Err", payload: [2], payload_size: 24, payload_alignment: 8 }, { name: "Ok", payload: [0], payload_size: 1, payload_alignment: 1 }], size: 32, alignment: 8 }),
-])
+sample_table = {
+	str_field = {
+		alignment: 8,
+		alignment_32: 4,
+		alignment_64: 8,
+		is_padding: Bool.False,
+		name: "left",
+		offset_32: 0,
+		offset_64: 0,
+		size: 24,
+		size_32: 12,
+		size_64: 24,
+		type_id: 1,
+	}
+	wrapped_tag = { name: "Wrapped", payload: [3], payload_size: 24, payload_alignment: 8, payload_size_32: 12, payload_alignment_32: 4, payload_size_64: 24, payload_alignment_64: 8 }
+	err_str = { name: "Err", payload: [1], payload_size: 24, payload_alignment: 8, payload_size_32: 12, payload_alignment_32: 4, payload_size_64: 24, payload_alignment_64: 8 }
+	err_list = { name: "Err", payload: [2], payload_size: 24, payload_alignment: 8, payload_size_32: 12, payload_alignment_32: 4, payload_size_64: 24, payload_alignment_64: 8 }
+	ok_u8 = { name: "Ok", payload: [0], payload_size: 1, payload_alignment: 1, payload_size_32: 1, payload_alignment_32: 1, payload_size_64: 1, payload_alignment_64: 1 }
+
+	TypeTable.from_list([
+		RocU8,
+		RocStr,
+		RocList(0),
+		RocRecord({ name: "Pair", anonymous: Bool.False, fields: [str_field], size: 24, alignment: 8, size_32: 12, alignment_32: 4, size_64: 24, alignment_64: 8 }),
+		RocTagUnion({ name: "Wrapped", tags: [wrapped_tag], size: 24, alignment: 8, size_32: 12, alignment_32: 4, size_64: 24, alignment_64: 8, discriminant_size: 0, discriminant_offset_32: 12, discriminant_offset_64: 24 }),
+		RocTagUnion({ name: "Try", tags: [err_str, ok_u8], size: 32, alignment: 8, size_32: 16, alignment_32: 4, size_64: 32, alignment_64: 8, discriminant_size: 1, discriminant_offset_32: 12, discriminant_offset_64: 24 }),
+		RocTagUnion({ name: "Try", tags: [err_list, ok_u8], size: 32, alignment: 8, size_32: 16, alignment_32: 4, size_64: 32, alignment_64: 8, discriminant_size: 1, discriminant_offset_32: 12, discriminant_offset_64: 24 }),
+	])
+}
 
 expect TypeTable.is_unit(sample_table, 0) == Bool.False
 expect TypeTable.is_refcounted(sample_table, 1)

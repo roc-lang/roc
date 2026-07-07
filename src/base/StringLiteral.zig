@@ -22,14 +22,13 @@ pub const Idx = enum(u32) {
 /// Durable storage for string literals.
 pub const Store = struct {
     /// An Idx points to the first byte of the string. The entry immediately
-    /// before it stores a static refcount word, and the entry header stores
-    /// the string length:
+    /// before it stores the string length in canonical little-endian form:
     ///
-    /// | len: u32 | padding | static refcount: isize | bytes... |
+    /// | len: u32 little-endian | bytes... |
     ///
-    /// The byte pointer at Idx can therefore be used directly as big `RocStr`
-    /// static data. Runtime refcount operations read the word immediately
-    /// before the bytes and see `0`, the static-data refcount sentinel.
+    /// This store is checked/cache data, not runtime static data. Target-specific
+    /// string emission is responsible for building any runtime `RocStr` headers
+    /// or static refcount words later.
     ///
     /// Note:
     /// Later we could change from fixed u32-s to variable lengthed
@@ -39,13 +38,7 @@ pub const Store = struct {
     buffer: Buffer = .{},
 
     const len_size = @sizeOf(u32);
-    const static_refcount_size = @sizeOf(isize);
-    pub const static_refcount_alignment = @alignOf(isize);
-    const static_refcount_alignment_value = std.mem.Alignment.fromByteUnits(static_refcount_alignment);
-    const refcount_offset_from_entry_start = std.mem.alignForward(usize, len_size, static_refcount_alignment);
-    const entry_header_size = refcount_offset_from_entry_start + static_refcount_size;
-    // Must match builtins.utils.REFCOUNT_STATIC_DATA without making base depend on builtins.
-    const static_refcount_value: isize = 0;
+    const entry_header_size = len_size;
 
     pub const Entry = struct {
         idx: Idx,
@@ -60,13 +53,12 @@ pub const Store = struct {
             const buffer_items = self.store.buffer.items.items;
 
             while (true) {
-                self.pos = std.mem.alignForward(usize, self.pos, static_refcount_alignment);
                 if (self.pos + entry_header_size > buffer_items.len) return null;
 
-                const str_len = std.mem.bytesAsValue(u32, buffer_items[self.pos .. self.pos + len_size]).*;
+                const str_len = std.mem.readInt(u32, buffer_items[self.pos..][0..len_size], .little);
                 const content_start = self.pos + entry_header_size;
+                if (str_len > buffer_items.len - content_start) return null;
                 const content_end = content_start + str_len;
-                if (content_end > buffer_items.len) return null;
 
                 self.pos = content_end;
                 return .{
@@ -78,7 +70,7 @@ pub const Store = struct {
     };
 
     pub const Buffer = struct {
-        items: std.array_list.Aligned(u8, static_refcount_alignment_value) = .empty,
+        items: std.ArrayList(u8) = .empty,
 
         const SerializedDataRef = struct {
             offset: usize,
@@ -109,7 +101,7 @@ pub const Store = struct {
                     return Buffer{};
                 }
 
-                const items_ptr: [*]align(static_refcount_alignment) u8 = @ptrFromInt(base +% @as(usize, @intCast(self.offset)));
+                const items_ptr: [*]u8 = @ptrFromInt(base +% @as(usize, @intCast(self.offset)));
 
                 return Buffer{
                     .items = .{
@@ -122,7 +114,7 @@ pub const Store = struct {
 
         pub fn initCapacity(gpa: std.mem.Allocator, bytes: usize) std.mem.Allocator.Error!Buffer {
             return .{
-                .items = try std.array_list.Aligned(u8, static_refcount_alignment_value).initCapacity(gpa, bytes),
+                .items = try std.ArrayList(u8).initCapacity(gpa, bytes),
             };
         }
 
@@ -170,7 +162,7 @@ pub const Store = struct {
             self.items.items.ptr = @ptrFromInt(new_addr);
         }
 
-        pub fn fromMappedSlice(items: []align(static_refcount_alignment) u8, capacity: usize) Buffer {
+        pub fn fromMappedSlice(items: []u8, capacity: usize) Buffer {
             return .{
                 .items = .{
                     .items = items,
@@ -190,7 +182,7 @@ pub const Store = struct {
                 return Buffer{};
             }
 
-            const items_ptr: [*]align(static_refcount_alignment) u8 = @ptrFromInt(data_ref.offset);
+            const items_ptr: [*]u8 = @ptrFromInt(data_ref.offset);
 
             return Buffer{
                 .items = .{
@@ -209,7 +201,6 @@ pub const Store = struct {
                 return .{ .offset = 0, .len = 0, .capacity = 0 };
             }
 
-            try writer.padToAlignment(allocator, static_refcount_alignment);
             const data_offset = writer.total_bytes;
             const bytes: []const u8 = self.items.items;
             _ = try writer.appendSlice(allocator, bytes);
@@ -249,24 +240,13 @@ pub const Store = struct {
 
     fn appendFresh(self: *Store, gpa: std.mem.Allocator, string: []const u8) std.mem.Allocator.Error!Idx {
         const str_len = checkedU32(string.len, "string literal length");
-        try self.alignBufferForEntry(gpa);
 
-        const str_len_bytes = std.mem.asBytes(&str_len);
+        var str_len_bytes: [len_size]u8 = undefined;
+        std.mem.writeInt(u32, &str_len_bytes, str_len, .little);
         {
             const expected_start = self.buffer.items.items.len;
-            const start = try self.buffer.appendSlice(gpa, str_len_bytes);
+            const start = try self.buffer.appendSlice(gpa, &str_len_bytes);
             assertAppendRange(expected_start, str_len_bytes.len, start, str_len_bytes.len);
-        }
-
-        while (self.buffer.items.items.len % static_refcount_alignment != 0) {
-            _ = try self.buffer.append(gpa, 0);
-        }
-
-        const static_refcount_bytes = std.mem.asBytes(&static_refcount_value);
-        {
-            const expected_start = self.buffer.items.items.len;
-            const start = try self.buffer.appendSlice(gpa, static_refcount_bytes);
-            assertAppendRange(expected_start, static_refcount_bytes.len, start, static_refcount_bytes.len);
         }
 
         const string_content_start = self.buffer.len();
@@ -283,16 +263,10 @@ pub const Store = struct {
 
     /// Get a string literal's text from this `Store`.
     pub fn get(self: *const Store, idx: Idx) []u8 {
-        const idx_u32: u32 = @intCast(@intFromEnum(idx));
-        const len_start = idx_u32 - entry_header_size;
-        const str_len = std.mem.bytesAsValue(u32, self.buffer.items.items[len_start .. len_start + len_size]).*;
-        return self.buffer.items.items[idx_u32 .. idx_u32 + str_len];
-    }
-
-    fn alignBufferForEntry(self: *Store, gpa: std.mem.Allocator) std.mem.Allocator.Error!void {
-        while (self.buffer.items.items.len % static_refcount_alignment != 0) {
-            _ = try self.buffer.append(gpa, 0);
-        }
+        const idx_usize: usize = @intFromEnum(idx);
+        const len_start = idx_usize - entry_header_size;
+        const str_len = std.mem.readInt(u32, self.buffer.items.items[len_start..][0..len_size], .little);
+        return self.buffer.items.items[idx_usize .. idx_usize + str_len];
     }
 
     /// Serialize this Store to the given CompactWriter. The resulting Store
@@ -420,16 +394,9 @@ fn assertAppendRange(expected_start: usize, expected_len: usize, actual_start: u
 }
 
 fn expectedNextStringContentStart(previous_end: *usize, string_len: usize) u32 {
-    const entry_start = std.mem.alignForward(usize, previous_end.*, Store.static_refcount_alignment);
-    const content_start = entry_start + Store.entry_header_size;
+    const content_start = previous_end.* + Store.entry_header_size;
     previous_end.* = content_start + string_len;
     return @intCast(content_start);
-}
-
-fn expectStaticRefcountBefore(bytes: []const u8) error{TestExpectedEqual}!void {
-    try testing.expectEqual(@as(usize, 0), @intFromPtr(bytes.ptr) % Store.static_refcount_alignment);
-    const refcount_ptr: *const isize = @ptrCast(@alignCast(bytes.ptr - @sizeOf(isize)));
-    try testing.expectEqual(Store.static_refcount_value, refcount_ptr.*);
 }
 
 test "insert" {
@@ -471,19 +438,33 @@ test "builder deduplicates exact string literal bytes" {
     try testing.expectEqualStrings("\x00\x01abd", store.get(binary3));
 }
 
-test "insert stores static refcount immediately before bytes" {
+test "store uses exact portable length-prefixed bytes" {
     const gpa = std.testing.allocator;
 
-    var interner = Store{};
-    defer interner.deinit(gpa);
+    var store = Store{};
+    defer store.deinit(gpa);
     var builder = BuilderState{};
     defer builder.deinit(gpa);
 
-    const idx = try builder.insert(&interner, gpa, "aaaaaaaaaaaaaaaaaaaaaaaa");
-    const bytes = interner.get(idx);
+    const empty = try builder.insert(&store, gpa, "");
+    const abc = try builder.insert(&store, gpa, "abc");
+    const binary = try builder.insert(&store, gpa, "\x00\x01abc");
 
-    try testing.expectEqualStrings("aaaaaaaaaaaaaaaaaaaaaaaa", bytes);
-    try expectStaticRefcountBefore(bytes);
+    try testing.expectEqual(@as(u32, 4), @intFromEnum(empty));
+    try testing.expectEqual(@as(u32, 8), @intFromEnum(abc));
+    try testing.expectEqual(@as(u32, 15), @intFromEnum(binary));
+    try testing.expectEqualStrings("", store.get(empty));
+    try testing.expectEqualStrings("abc", store.get(abc));
+    try testing.expectEqualStrings("\x00\x01abc", store.get(binary));
+
+    const expected = [_]u8{
+        0x00, 0x00, 0x00, 0x00,
+        0x03, 0x00, 0x00, 0x00,
+        'a',  'b',  'c',  0x05,
+        0x00, 0x00, 0x00, 0x00,
+        0x01, 'a',  'b',  'c',
+    };
+    try testing.expectEqualSlices(u8, &expected, store.buffer.items.items);
 }
 
 test "Store empty CompactWriter roundtrip" {

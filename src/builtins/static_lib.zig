@@ -142,6 +142,8 @@ comptime {
     @export(&dw.roc_builtins_dec_acos, .{ .name = "roc_builtins_dec_acos" });
     @export(&dw.roc_builtins_dec_atan, .{ .name = "roc_builtins_dec_atan" });
     // i128 div/rem wrappers
+    @export(&dw.roc_builtins_num_mul_with_overflow_u128, .{ .name = "roc_builtins_num_mul_with_overflow_u128" });
+    @export(&dw.roc_builtins_num_mul_with_overflow_i128, .{ .name = "roc_builtins_num_mul_with_overflow_i128" });
     @export(&dw.roc_builtins_num_div_trunc_u128, .{ .name = "roc_builtins_num_div_trunc_u128" });
     @export(&dw.roc_builtins_num_div_trunc_i128, .{ .name = "roc_builtins_num_div_trunc_i128" });
     @export(&dw.roc_builtins_num_rem_trunc_u128, .{ .name = "roc_builtins_num_rem_trunc_u128" });

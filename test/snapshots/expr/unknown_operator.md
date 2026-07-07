@@ -8,18 +8,24 @@ type=expr
 1 ++ 2
 ~~~
 # EXPECTED
-UNEXPECTED TOKEN IN EXPRESSION - unknown_operator.md:1:4:1:5
+UNEXPECTED EXPRESSION SYNTAX - unknown_operator.md:1:4:1:5
 # PROBLEMS
 
-┌────────────────────────────────┐
-│ UNEXPECTED TOKEN IN EXPRESSION ├─ The token + is not expected in an ────────┐
-└┬───────────────────────────────┘  expression.                               │
+┌──────────────────────────────┐
+│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
+└┬─────────────────────────────┘  token cannot start an expression here.      │
  │                                                                            │
  │  1 ++ 2                                                                    │
  │     ‾                                                                      │
  └─────────────────────────────────────────────────── unknown_operator.md:1:4 ┘
 
-    Expressions can be identifiers, literals, function calls, or operators.
+    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+    blocks, conditionals, matches, or function calls.
+
+    For example:
+        add(1, 2)
+
+    I found `+` here.
 
 # TOKENS
 ~~~zig

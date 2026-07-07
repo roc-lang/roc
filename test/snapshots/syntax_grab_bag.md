@@ -214,6 +214,7 @@ expect {
 }
 ~~~
 # EXPECTED
+EXPECTED RECORD ACCESSOR - syntax_grab_bag.md:154:2:154:5
 NOT IMPLEMENTED - syntax_grab_bag.md:6:1:12:4
 MODULE NOT FOUND - syntax_grab_bag.md:16:1:16:27
 MODULE NOT FOUND - syntax_grab_bag.md:17:1:20:20
@@ -244,6 +245,7 @@ UNUSED VARIABLE - syntax_grab_bag.md:82:2:82:3
 NAME NOT IN SCOPE - syntax_grab_bag.md:141:2:141:6
 UNDECLARED TYPE - syntax_grab_bag.md:143:14:143:20
 NAME NOT IN SCOPE - syntax_grab_bag.md:147:9:147:13
+UNRECOGNIZED SYNTAX - syntax_grab_bag.md:154:2:154:5
 NAME NOT IN SCOPE - syntax_grab_bag.md:158:2:158:11
 NAME NOT IN SCOPE - syntax_grab_bag.md:175:3:175:15
 NAME NOT IN SCOPE - syntax_grab_bag.md:178:63:178:69
@@ -267,13 +269,31 @@ TYPE MISMATCH - syntax_grab_bag.md:70:5:70:8
 MISSING METHOD - syntax_grab_bag.md:99:3:99:8
 MISSING METHOD - syntax_grab_bag.md:101:3:101:8
 TYPE MISMATCH - syntax_grab_bag.md:84:2:84:2
-TYPE MISMATCH - syntax_grab_bag.md:150:3:150:6
 TOO FEW ARGS - syntax_grab_bag.md:155:2:157:3
 TYPE MISMATCH - syntax_grab_bag.md:167:3:167:3
 DECLARATION HAS NO VALUE - syntax_grab_bag.md:201:1:201:25
 MISSING METHOD - syntax_grab_bag.md:189:26:189:40
 MISSING METHOD - syntax_grab_bag.md:189:26:189:66
 # PROBLEMS
+
+┌──────────────────────────┐
+│ EXPECTED RECORD ACCESSOR ├─ I was parsing access after `.`, and I ──────────┐
+└┬─────────────────────────┘  expected a field name or tuple index.           │
+ │                                                                            │
+ │  ...                                                                       │
+ │  ‾‾‾                                                                       │
+ └────────────────────────────────────────────────── syntax_grab_bag.md:154:2 ┘
+
+    Record access uses a lowercase field name like `.name`. Tuple access uses a
+    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
+    valid accessors.
+
+    For example:
+        person.name
+        pair.0
+
+    I found `...` here.
+
 
 ┌─────────────────┐
 │ NOT IMPLEMENTED ├─ This feature is not yet implemented: malformed import ───┐
@@ -615,6 +635,17 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
     Is it misspelled, or is there an import missing?
 
 
+┌─────────────────────┐
+│ UNRECOGNIZED SYNTAX ├─ I don't recognize this syntax. ──────────────────────┐
+└┬────────────────────┘                                                       │
+ │                                                                            │
+ │  ...                                                                       │
+ │  ‾‾‾                                                                       │
+ └────────────────────────────────────────────────── syntax_grab_bag.md:154:2 ┘
+
+    This might be a syntax error, an unsupported language feature, or a typo.
+
+
 ┌───────────────────┐
 │ NAME NOT IN SCOPE ├─ Nothing is named `some_func` in this scope. ───────────┐
 └┬──────────────────┘                                                         │
@@ -946,26 +977,6 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
         [Blue, Green, Red, ..]
 
     These can never match! Either the pattern or expression has a problem.
-
-
-┌───────────────┐
-│ TYPE MISMATCH ├─ This `return` does not match the function's return type. ──┐
-└┬──────────────┘                                                             │
- │                                                                            │
- │  tag # Comment after return statement                                      │
- │  ‾‾‾                                                                       │
- └────────────────────────────────────────────────── syntax_grab_bag.md:150:3 ┘
-
-    It has the type:
-
-        [Blue, ..]
-
-    But the function's return type is:
-
-        Try({}, _d)
-
-    Hint: All `return` statements and the final expression in a function must
-    have the same type.
 
 
 ┌──────────────┐
@@ -1591,8 +1602,7 @@ EndOfFile,
 							(p-ident (raw "tag"))
 							(e-tag (raw "Blue")))
 						(s-return
-							(e-ident (raw "tag")))
-						(e-ellipsis)
+							(e-malformed (reason "expr_dot_suffix_not_allowed")))
 						(e-apply
 							(e-ident (raw "match_time"))
 							(e-ellipsis))
@@ -1923,12 +1933,11 @@ main! = |_| { # Yeah I can leave a comment here
 	var number = 123
 	expect blah == 1
 	tag = Blue
-	return # Comment after return keyword
-		tag # Comment after return statement
+	return # Comment after return statement
 
 	# Just a random comment!
 
-	...
+		
 	match_time(
 		..., # Single args with comment
 	)
@@ -2263,12 +2272,9 @@ expect {
 					(p-assign (ident "tag"))
 					(e-tag (name "Blue")))
 				(s-return
-					(e-lookup-local
-						(p-assign (ident "tag"))))
+					(e-runtime-error (tag "expr_not_canonicalized")))
 				(s-expr
-					(e-not-implemented))
-				(s-expr
-					(e-call (constraint-fn-var 4267)
+					(e-call (constraint-fn-var 4268)
 						(e-lookup-local
 							(p-assign (ident "match_time")))
 						(e-not-implemented)))
@@ -2291,7 +2297,7 @@ expect {
 							(p-assign (ident "#interp_0"))
 							(e-lookup-local
 								(p-assign (ident "world"))))
-						(e-interpolation (constraint-fn-var 4358)
+						(e-interpolation (constraint-fn-var 4359)
 							(first
 								(e-literal (string "Hello, ")))
 							(parts
@@ -2339,7 +2345,7 @@ expect {
 											(e-literal (string "")))))))
 						(s-reassign
 							(p-assign (ident "number"))
-							(e-dispatch-call (method "plus") (constraint-fn-var 4616)
+							(e-dispatch-call (method "plus") (constraint-fn-var 4617)
 								(receiver
 									(e-lookup-local
 										(p-assign (ident "number"))))
@@ -2415,7 +2421,7 @@ expect {
 					(e-if
 						(if-branches
 							(if-branch
-								(e-dispatch-call (method "is_gt") (constraint-fn-var 5094)
+								(e-dispatch-call (method "is_gt") (constraint-fn-var 5093)
 									(receiver
 										(e-match
 											(match
@@ -2440,7 +2446,7 @@ expect {
 														(value
 															(e-num (value "12"))))))))
 									(args
-										(e-dispatch-call (method "times") (constraint-fn-var 5089)
+										(e-dispatch-call (method "times") (constraint-fn-var 5088)
 											(receiver
 												(e-num (value "5")))
 											(args
@@ -2455,18 +2461,18 @@ expect {
 										(e-if
 											(if-branches
 												(if-branch
-													(e-dispatch-call (method "is_lt") (constraint-fn-var 5211)
+													(e-dispatch-call (method "is_lt") (constraint-fn-var 5210)
 														(receiver
-															(e-dispatch-call (method "plus") (constraint-fn-var 5173)
+															(e-dispatch-call (method "plus") (constraint-fn-var 5172)
 																(receiver
 																	(e-num (value "13")))
 																(args
 																	(e-num (value "2")))))
 														(args
 															(e-num (value "5"))))
-													(e-dispatch-call (method "is_gte") (constraint-fn-var 5320)
+													(e-dispatch-call (method "is_gte") (constraint-fn-var 5319)
 														(receiver
-															(e-dispatch-call (method "minus") (constraint-fn-var 5282)
+															(e-dispatch-call (method "minus") (constraint-fn-var 5281)
 																(receiver
 																	(e-num (value "10")))
 																(args
@@ -2481,11 +2487,11 @@ expect {
 											(builtin)
 											(e-tag (name "True")))))
 								(if-else
-									(e-dispatch-call (method "is_lte") (constraint-fn-var 5439)
+									(e-dispatch-call (method "is_lte") (constraint-fn-var 5438)
 										(receiver
 											(e-num (value "12")))
 										(args
-											(e-dispatch-call (method "div_by") (constraint-fn-var 5434)
+											(e-dispatch-call (method "div_by") (constraint-fn-var 5433)
 												(receiver
 													(e-num (value "3")))
 												(args
@@ -2500,12 +2506,12 @@ expect {
 										(e-match
 											(match
 												(cond
-													(e-dispatch-call (method "next_static_dispatch_method") (constraint-fn-var 5505)
+													(e-dispatch-call (method "next_static_dispatch_method") (constraint-fn-var 5504)
 														(receiver
 															(e-match
 																(match
 																	(cond
-																		(e-dispatch-call (method "static_dispatch_method") (constraint-fn-var 5472)
+																		(e-dispatch-call (method "static_dispatch_method") (constraint-fn-var 5471)
 																			(receiver
 																				(e-match
 																					(match

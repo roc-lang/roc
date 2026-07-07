@@ -5,11 +5,11 @@ type=snippet
 ~~~
 # SOURCE
 ~~~roc
-import json.Json exposing [decode, encode]
+import json.Json exposing [decode, to_str]
 
 main = {
     data = { name: "Alice", age: 30 }
-    encoded = encode(data)
+    encoded = to_str(data)
     decoded = decode(encoded)
     decoded
 }
@@ -24,22 +24,22 @@ NAME NOT IN SCOPE - import_exposing_basic.md:6:15:6:21
 │ DUPLICATE DEFINITION ├─ The name `Json` is being redeclared here. ──────────┐
 └┬─────────────────────┘                                                      │
  │                                                                            │
- │  import json.Json exposing [decode, encode]                                │
+ │  import json.Json exposing [decode, to_str]                                │
  │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                │
  └────────────────────────────────────────────── import_exposing_basic.md:1:1 ┘
 
     In this scope, `Json` was already defined here:
       ┌───────────────────────────────────────────────────────────────────────┐
-    1 │  import json.Json exposing [decode, encode]                           │
+    1 │  import json.Json exposing [decode, to_str]                           │
       │  ‾                                                                    │
       └───────────────────────────────────────── import_exposing_basic.md:1:1 ┘
 
 
 ┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `encode` in this scope. ──────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `to_str` in this scope. ──────────────┐
 └┬──────────────────┘                                                         │
  │                                                                            │
- │  encoded = encode(data)                                                    │
+ │  encoded = to_str(data)                                                    │
  │            ‾‾‾‾‾‾                                                          │
  └───────────────────────────────────────────── import_exposing_basic.md:5:15 ┘
 
@@ -77,7 +77,7 @@ EndOfFile,
 				(exposed-lower-ident
 					(text "decode"))
 				(exposed-lower-ident
-					(text "encode"))))
+					(text "to_str"))))
 		(s-decl
 			(p-ident (raw "main"))
 			(e-block
@@ -93,7 +93,7 @@ EndOfFile,
 					(s-decl
 						(p-ident (raw "encoded"))
 						(e-apply
-							(e-ident (raw "encode"))
+							(e-ident (raw "to_str"))
 							(e-ident (raw "data"))))
 					(s-decl
 						(p-ident (raw "decoded"))
@@ -104,11 +104,11 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-import json.Json exposing [decode, encode]
+import json.Json exposing [decode, to_str]
 
 main = {
 	data = { name: "Alice", age: 30 }
-	encoded = encode(data)
+	encoded = to_str(data)
 	decoded = decode(encoded)
 	decoded
 }
@@ -145,7 +145,7 @@ main = {
 	(s-import (module "json.Json")
 		(exposes
 			(exposed (name "decode") (wildcard false))
-			(exposed (name "encode") (wildcard false)))))
+			(exposed (name "to_str") (wildcard false)))))
 ~~~
 # TYPES
 ~~~clojure

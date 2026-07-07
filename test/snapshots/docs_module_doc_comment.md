@@ -42,15 +42,5 @@ greet_for_host = greet
       (type (fn (type-ref (name "Str")) (type-ref (name "Str"))))
     )
   )
-  (module
-    (name "platform")
-    (package "pf")
-    (kind platform)
-    (entry
-      (name "greet_for_host")
-      (kind value)
-      (type (fn (type-ref (name "Str")) (type-ref (name "Str"))))
-    )
-  )
 )
 ~~~

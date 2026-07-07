@@ -22,6 +22,7 @@ const parse = @import("parse");
 const reporting = @import("reporting");
 const eval = @import("eval");
 const lir = @import("lir");
+const GuardedList = lir.LirStore.GuardedList;
 const types = @import("types");
 const can = @import("can");
 const CoreCtx = can.CoreCtx;
@@ -1351,7 +1352,6 @@ fn compileSource(source: []const u8, module_name: []const u8) PlaygroundCompileE
     const str_stmt_in_builtin_module = builtin_indices.str_type;
 
     const module_builtin_ctx: Check.BuiltinContext = .{
-        .module_name = try module_env.insertIdent(base.Ident.for_text("main")),
         .bool_stmt = bool_stmt_in_builtin_module,
         .try_stmt = try_stmt_in_builtin_module,
         .str_stmt = str_stmt_in_builtin_module,
@@ -1811,7 +1811,8 @@ fn argLayoutsForProc(
     const arg_layouts = try alloc.alloc(layout.Idx, arg_ids.len);
     errdefer alloc.free(arg_layouts);
 
-    for (arg_ids, 0..) |local_id, i| {
+    for (0..arg_ids.len) |i| {
+        const local_id = GuardedList.at(arg_ids, i);
         arg_layouts[i] = store.getLocal(local_id).layout_idx;
     }
 

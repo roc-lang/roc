@@ -43,6 +43,7 @@ pub const Problem = union(enum) {
     polymorphic_var_annotation: PolymorphicVarAnnotation,
     effectful_top_level: EffectfulTopLevel,
     effectful_expect: EffectfulExpect,
+    effectful_function_name: EffectfulFunctionName,
     annotation_only_value: AnnotationOnlyValue,
     hosted_unboxed_function: HostedUnboxedFunction,
     host_boundary_open_row: HostBoundaryOpenRow,
@@ -139,6 +140,11 @@ pub const EffectfulTopLevel = struct {
 
 /// An expect expression performs effects while evaluating its condition.
 pub const EffectfulExpect = struct {
+    region: base.Region,
+};
+
+/// Warning for an effectful function binding whose name does not end in `!`.
+pub const EffectfulFunctionName = struct {
     region: base.Region,
 };
 

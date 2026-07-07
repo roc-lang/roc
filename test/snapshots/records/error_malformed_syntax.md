@@ -8,30 +8,24 @@ type=expr
 { name: "Alice", : 30, , email: , active Bool.true, "invalid": value, 42: "number key", : }
 ~~~
 # EXPECTED
-PARSE ERROR - error_malformed_syntax.md:1:18:1:19
-PARSE ERROR - error_malformed_syntax.md:1:20:1:22
+EXPECTED RECORD FIELD - error_malformed_syntax.md:1:18:1:19
 # PROBLEMS
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: expected_expr_record_field_name ───┐
-└┬────────────┘                                                               │
+┌───────────────────────┐
+│ EXPECTED RECORD FIELD ├─ I was parsing a record expression, and I ──────────┐
+└┬──────────────────────┘  expected a lowercase field name.                   │
  │                                                                            │
  │  …Alice", : 30, , email: , active Bool.true, "invalid": value, 42: "number…│
  │           ‾                                                                │
  └──────────────────────────────────────────── error_malformed_syntax.md:1:18 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Record fields start with lowercase names. After the name, either write `:
+    value` or omit the value to use field punning.
 
+    For example:
+        { name: "Ada", age }
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: ───────────────────────────────────┐
-└┬────────────┘  expected_expr_close_curly_or_comma                           │
- │                                                                            │
- │  …ice", : 30, , email: , active Bool.true, "invalid": value, 42: "number k…│
- │           ‾‾                                                               │
- └──────────────────────────────────────────── error_malformed_syntax.md:1:20 ┘
-
-    This is an unexpected parsing error. Please check your syntax.
+    I found `:` here.
 
 # TOKENS
 ~~~zig
@@ -40,7 +34,7 @@ EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(e-malformed (reason "expected_expr_close_curly_or_comma"))
+(e-malformed (reason "expected_expr_record_field_name"))
 ~~~
 # FORMATTED
 ~~~roc

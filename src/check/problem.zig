@@ -70,6 +70,7 @@ pub const AnnotationOnlyValue = types.AnnotationOnlyValue;
 pub const PolymorphicVarAnnotation = types.PolymorphicVarAnnotation;
 pub const EffectfulTopLevel = types.EffectfulTopLevel;
 pub const EffectfulExpect = types.EffectfulExpect;
+pub const EffectfulFunctionName = types.EffectfulFunctionName;
 
 // Comptime errors
 pub const ComptimeCrash = types.ComptimeCrash;

@@ -94,22 +94,32 @@ type_id_to_zig = |type_table, duplicate_tag_names, type_id| {
 ## Render one `extern struct` field declaration for a record field. Unnamed
 ## nominal-record padding fields become fixed-size byte arrays (`[size]u8`);
 ## named fields use their resolved Zig type.
-zig_record_field_decl = |type_table, duplicate_tag_names, field| {
+zig_record_field_decl = |type_table, duplicate_tag_names, field, use_32| {
 	field_name = name_to_zig_quoted_ident(field.name)
 	zig_type = if field.is_padding {
-		"[${U64.to_str(field.size)}]u8"
+		size = if use_32 { field.size_32 } else { field.size_64 }
+		"[${U64.to_str(size)}]u8"
 	} else {
 		type_id_to_zig(type_table, duplicate_tag_names, field.type_id)
 	}
 	"    ${field_name}: ${zig_type},\n"
 }
 
-zig_record_fields_decl = |type_table, duplicate_tag_names, fields| {
+zig_record_fields_decl = |type_table, duplicate_tag_names, fields, use_32| {
 	var $field_strs = ""
 	for field in fields {
-		$field_strs = Str.concat($field_strs, zig_record_field_decl(type_table, duplicate_tag_names, field))
+		$field_strs = Str.concat($field_strs, zig_record_field_decl(type_table, duplicate_tag_names, field, use_32))
 	}
 	$field_strs
+}
+
+zig_record_offset_assertions = |struct_name, fields, use_32| {
+	var $assertions = ""
+	for field in fields {
+		offset = if use_32 { field.offset_32 } else { field.offset_64 }
+		$assertions = Str.concat($assertions, "        if (@offsetOf(${struct_name}, \"${field.name}\") != ${U64.to_str(offset)}) @compileError(\"${struct_name}.${field.name} offset mismatch\");\n")
+	}
+	$assertions
 }
 
 ## Convert a TypeRepr to its Zig type string
@@ -420,325 +430,6 @@ generate_roc_env =
 	\\};
 	\\
 
-align_forward_u64 : U64, U64 -> U64
-align_forward_u64 = |offset, alignment| {
-	if alignment == 0 {
-		offset
-	} else {
-		remainder = U64.rem_by(offset, alignment)
-		if remainder == 0 {
-			offset
-		} else {
-			offset + alignment - remainder
-		}
-	}
-}
-
-type_layout_64 : List(TypeRepr), U64 -> { size : U64, alignment : U64 }
-type_layout_64 = |type_table, type_id| {
-	type_repr = TypeTable.get(TypeTable.from_list(type_table), type_id)
-	repr_layout_64(type_table, type_repr)
-}
-
-repr_layout_64 : List(TypeRepr), TypeRepr -> { size : U64, alignment : U64 }
-repr_layout_64 = |type_table, type_repr| {
-	match type_repr {
-		RocBool => { size: 1, alignment: 1 }
-		RocBox(_) => { size: 8, alignment: 8 }
-		RocDec => { size: 8, alignment: 8 }
-		RocF32 => { size: 4, alignment: 4 }
-		RocF64 => { size: 8, alignment: 8 }
-		RocFunction(_) => { size: 8, alignment: 8 }
-		RocI128 => { size: 16, alignment: 16 }
-		RocI16 => { size: 2, alignment: 2 }
-		RocI32 => { size: 4, alignment: 4 }
-		RocI64 => { size: 8, alignment: 8 }
-		RocI8 => { size: 1, alignment: 1 }
-		RocList(_) => { size: 24, alignment: 8 }
-		RocRecord(rec) => record_layout_from_fields(type_table, rec.fields)
-		RocStr => { size: 24, alignment: 8 }
-		RocTagUnion(tu) =>
-			match TypeTable.single_variant_payload(tu) {
-				SinglePayload(payload_id) => type_layout_64(type_table, payload_id)
-				SingleNoPayload => { size: 0, alignment: 1 }
-				NotSingleVariant => { size: tu.size, alignment: tu.alignment }
-			}
-		RocU128 => { size: 16, alignment: 16 }
-		RocU16 => { size: 2, alignment: 2 }
-		RocU32 => { size: 4, alignment: 4 }
-		RocU64 => { size: 8, alignment: 8 }
-		RocU8 => { size: 1, alignment: 1 }
-		RocUnit => { size: 0, alignment: 1 }
-		RocUnknown(_) => { size: 8, alignment: 8 }
-	}
-}
-
-type_layout_32 : List(TypeRepr), U64 -> { size : U64, alignment : U64 }
-type_layout_32 = |type_table, type_id| {
-	type_repr = TypeTable.get(TypeTable.from_list(type_table), type_id)
-	repr_layout_32(type_table, type_repr)
-}
-
-repr_layout_32 : List(TypeRepr), TypeRepr -> { size : U64, alignment : U64 }
-repr_layout_32 = |type_table, type_repr| {
-	match type_repr {
-		RocBool => { size: 1, alignment: 1 }
-		RocBox(_) => { size: 4, alignment: 4 }
-		RocDec => { size: 8, alignment: 8 }
-		RocF32 => { size: 4, alignment: 4 }
-		RocF64 => { size: 8, alignment: 8 }
-		RocFunction(_) => { size: 4, alignment: 4 }
-		RocI128 => { size: 16, alignment: 16 }
-		RocI16 => { size: 2, alignment: 2 }
-		RocI32 => { size: 4, alignment: 4 }
-		RocI64 => { size: 8, alignment: 8 }
-		RocI8 => { size: 1, alignment: 1 }
-		RocList(_) => { size: 12, alignment: 4 }
-		RocRecord(rec) =>
-			record_layout_from_fields_32(
-				type_table,
-				if rec.anonymous {
-					record_fields_for_wasm32(type_table, rec.fields)
-				} else {
-					rec.fields
-				},
-			)
-		RocStr => { size: 12, alignment: 4 }
-		RocTagUnion(tu) => {
-			layout = tag_union_layout_32(type_table, tu)
-			{ size: layout.size, alignment: layout.alignment }
-		}
-		RocU128 => { size: 16, alignment: 16 }
-		RocU16 => { size: 2, alignment: 2 }
-		RocU32 => { size: 4, alignment: 4 }
-		RocU64 => { size: 8, alignment: 8 }
-		RocU8 => { size: 1, alignment: 1 }
-		RocUnit => { size: 0, alignment: 1 }
-		RocUnknown(_) => { size: 4, alignment: 4 }
-	}
-}
-
-record_layout_from_fields : List(TypeRepr), List(RecordField) -> { size : U64, alignment : U64 }
-record_layout_from_fields = |type_table, fields| {
-	var $offset = 0
-	var $alignment = 1
-
-	for field in fields {
-		field_layout = record_field_layout_64(type_table, field)
-		if field_layout.alignment > $alignment {
-			$alignment = field_layout.alignment
-		}
-		$offset = align_forward_u64($offset, field_layout.alignment)
-		$offset = $offset + field_layout.size
-	}
-
-	{ size: align_forward_u64($offset, $alignment), alignment: $alignment }
-}
-
-record_field_layout_64 : List(TypeRepr), RecordField -> { size : U64, alignment : U64 }
-record_field_layout_64 = |type_table, field| {
-	if field.is_padding {
-		{ size: field.size, alignment: 1 }
-	} else {
-		type_layout_64(type_table, field.type_id)
-	}
-}
-
-record_layout_from_fields_32 : List(TypeRepr), List(RecordField) -> { size : U64, alignment : U64 }
-record_layout_from_fields_32 = |type_table, fields| {
-	var $offset = 0
-	var $alignment = 1
-
-	for field in fields {
-		field_layout = record_field_layout_32(type_table, field)
-		if field_layout.alignment > $alignment {
-			$alignment = field_layout.alignment
-		}
-		$offset = align_forward_u64($offset, field_layout.alignment)
-		$offset = $offset + field_layout.size
-	}
-
-	{ size: align_forward_u64($offset, $alignment), alignment: $alignment }
-}
-
-record_field_layout_32 : List(TypeRepr), RecordField -> { size : U64, alignment : U64 }
-record_field_layout_32 = |type_table, field| {
-	if field.is_padding {
-		{ size: field.size, alignment: 1 }
-	} else {
-		type_layout_32(type_table, field.type_id)
-	}
-}
-
-tag_union_layout_32 : List(TypeRepr), TagUnionRepr -> { alignment : U64, discriminant_offset : U64, size : U64 }
-tag_union_layout_32 = |type_table, tu| {
-	match TypeTable.single_variant_payload(tu) {
-		SinglePayload(payload_id) => {
-			payload_layout = type_layout_32(type_table, payload_id)
-			{ size: payload_layout.size, alignment: payload_layout.alignment, discriminant_offset: payload_layout.size }
-		}
-		SingleNoPayload => { size: 0, alignment: 1, discriminant_offset: 0 }
-		NotSingleVariant => {
-			var $max_payload_size = 0
-			var $max_payload_alignment = 1
-
-			for tag in tu.tags {
-				payload_layout = if tag.payload_size == 0 {
-					{ size: 0, alignment: 1 }
-				} else {
-					tag_payload_layout_32(type_table, tag.payload)
-				}
-				if payload_layout.size > $max_payload_size {
-					$max_payload_size = payload_layout.size
-				}
-				if payload_layout.alignment > $max_payload_alignment {
-					$max_payload_alignment = payload_layout.alignment
-				}
-			}
-
-			disc = disc_layout_for_count(List.len(tu.tags))
-			disc_offset = align_forward_u64($max_payload_size, disc.alignment)
-			total_alignment = if $max_payload_alignment > disc.alignment {
-				$max_payload_alignment
-			} else {
-				disc.alignment
-			}
-			total_size = align_forward_u64(disc_offset + disc.size, total_alignment)
-			{ size: total_size, alignment: total_alignment, discriminant_offset: disc_offset }
-		}
-	}
-}
-
-tag_union_layout_64 : List(TypeRepr), TagUnionRepr -> { alignment : U64, discriminant_offset : U64, size : U64 }
-tag_union_layout_64 = |type_table, tu| {
-	match TypeTable.single_variant_payload(tu) {
-		SinglePayload(payload_id) => {
-			payload_layout = type_layout_64(type_table, payload_id)
-			{ size: payload_layout.size, alignment: payload_layout.alignment, discriminant_offset: payload_layout.size }
-		}
-		SingleNoPayload => { size: 0, alignment: 1, discriminant_offset: 0 }
-		NotSingleVariant => {
-			var $max_payload_size = 0
-			var $max_payload_alignment = 1
-
-			for tag in tu.tags {
-				payload_layout = if tag.payload_size == 0 {
-					{ size: 0, alignment: 1 }
-				} else {
-					{ size: tag.payload_size, alignment: tag.payload_alignment }
-				}
-				if payload_layout.size > $max_payload_size {
-					$max_payload_size = payload_layout.size
-				}
-				if payload_layout.alignment > $max_payload_alignment {
-					$max_payload_alignment = payload_layout.alignment
-				}
-			}
-
-			disc = disc_layout_for_count(List.len(tu.tags))
-			disc_offset = align_forward_u64($max_payload_size, disc.alignment)
-			total_alignment = if $max_payload_alignment > disc.alignment {
-				$max_payload_alignment
-			} else {
-				disc.alignment
-			}
-			total_size = align_forward_u64(disc_offset + disc.size, total_alignment)
-			{ size: total_size, alignment: total_alignment, discriminant_offset: disc_offset }
-		}
-	}
-}
-
-tag_payload_layout_64 : List(TypeRepr), List(U64) -> { size : U64, alignment : U64 }
-tag_payload_layout_64 = |type_table, payload| {
-	var $offset = 0
-	var $alignment = 1
-
-	for payload_id in payload {
-		payload_layout = type_layout_64(type_table, payload_id)
-		if payload_layout.alignment > $alignment {
-			$alignment = payload_layout.alignment
-		}
-		$offset = align_forward_u64($offset, payload_layout.alignment)
-		$offset = $offset + payload_layout.size
-	}
-
-	{ size: align_forward_u64($offset, $alignment), alignment: $alignment }
-}
-
-tag_payload_layout_32 : List(TypeRepr), List(U64) -> { size : U64, alignment : U64 }
-tag_payload_layout_32 = |type_table, payload| {
-	var $offset = 0
-	var $alignment = 1
-
-	for payload_id in payload {
-		payload_layout = type_layout_32(type_table, payload_id)
-		if payload_layout.alignment > $alignment {
-			$alignment = payload_layout.alignment
-		}
-		$offset = align_forward_u64($offset, payload_layout.alignment)
-		$offset = $offset + payload_layout.size
-	}
-
-	{ size: align_forward_u64($offset, $alignment), alignment: $alignment }
-}
-
-disc_layout_for_count = |count| {
-	if count <= 1 {
-		{ size: 0, alignment: 1 }
-	} else if count <= 256 {
-		{ size: 1, alignment: 1 }
-	} else if count <= 65536 {
-		{ size: 2, alignment: 2 }
-	} else {
-		{ size: 4, alignment: 4 }
-	}
-}
-
-compare_utf8_lists : List(U8), List(U8) -> [LT, EQ, GT]
-compare_utf8_lists = |left, right| {
-	match List.first(left) {
-		Ok(left_byte) =>
-			match List.first(right) {
-				Ok(right_byte) =>
-					if left_byte < right_byte {
-						LT
-					} else if left_byte > right_byte {
-						GT
-					} else {
-						compare_utf8_lists(List.drop_first(left, 1), List.drop_first(right, 1))
-					}
-				Err(_) => GT
-			}
-		Err(_) =>
-			if List.is_empty(right) {
-				EQ
-			} else {
-				LT
-			}
-	}
-}
-
-compare_str_bytes : Str, Str -> [LT, EQ, GT]
-compare_str_bytes = |left, right| compare_utf8_lists(Str.to_utf8(left), Str.to_utf8(right))
-
-record_fields_for_wasm32 : List(TypeRepr), List(RecordField) -> List(RecordField)
-record_fields_for_wasm32 = |type_table, fields| {
-	List.sort_with(
-		fields,
-		|left, right| {
-			left_layout = record_field_layout_32(type_table, left)
-			right_layout = record_field_layout_32(type_table, right)
-			if left_layout.alignment > right_layout.alignment {
-				LT
-			} else if left_layout.alignment < right_layout.alignment {
-				GT
-			} else {
-				compare_str_bytes(left.name, right.name)
-			}
-		},
-	)
-}
-
 ## Generate extern structs for element types found in the type table.
 ## Scans for Record types and generates Zig extern structs for them.
 generate_element_type_structs = |type_table, duplicate_tag_names| {
@@ -753,28 +444,19 @@ generate_element_type_structs = |type_table, duplicate_tag_names| {
 					if !(List.contains($seen_names, struct_name)) {
 						$seen_names = $seen_names.append(struct_name)
 
-						native_field_strs = zig_record_fields_decl(type_table, duplicate_tag_names, rec.fields)
-						wasm32_fields = if rec.anonymous {
-							record_fields_for_wasm32(type_table, rec.fields)
-						} else {
-							rec.fields
-						}
-						wasm32_field_strs = zig_record_fields_decl(type_table, duplicate_tag_names, wasm32_fields)
+						native_field_strs = zig_record_fields_decl(type_table, duplicate_tag_names, rec.fields, Bool.False)
+						wasm32_fields = rec.fields
+						wasm32_field_strs = zig_record_fields_decl(type_table, duplicate_tag_names, wasm32_fields, Bool.True)
 
-						# Comptime size/alignment assertions (guarded by pointer width)
-						layout = record_layout_from_fields(type_table, rec.fields)
-						wasm32_layout = record_layout_from_fields_32(type_table, wasm32_fields)
-						assertions = if layout.size > 0 or wasm32_layout.size > 0 {
-							"comptime {\n    if (@sizeOf(usize) == 8) {\n        if (@sizeOf(${struct_name}) != ${U64.to_str(layout.size)}) @compileError(\"${struct_name} size mismatch\");\n        if (@alignOf(${struct_name}) != ${U64.to_str(layout.alignment)}) @compileError(\"${struct_name} alignment mismatch\");\n    }\n    if (@sizeOf(usize) == 4) {\n        if (@sizeOf(${struct_name}) != ${U64.to_str(wasm32_layout.size)}) @compileError(\"${struct_name} size mismatch\");\n        if (@alignOf(${struct_name}) != ${U64.to_str(wasm32_layout.alignment)}) @compileError(\"${struct_name} alignment mismatch\");\n    }\n}\n\n"
+						offset_assertions_64 = zig_record_offset_assertions(struct_name, rec.fields, Bool.False)
+						offset_assertions_32 = zig_record_offset_assertions(struct_name, wasm32_fields, Bool.True)
+						assertions = if rec.size_64 > 0 or rec.size_32 > 0 {
+							"comptime {\n    if (@sizeOf(usize) == 8) {\n        if (@sizeOf(${struct_name}) != ${U64.to_str(rec.size_64)}) @compileError(\"${struct_name} size mismatch\");\n        if (@alignOf(${struct_name}) != ${U64.to_str(rec.alignment_64)}) @compileError(\"${struct_name} alignment mismatch\");\n${offset_assertions_64}    }\n    if (@sizeOf(usize) == 4) {\n        if (@sizeOf(${struct_name}) != ${U64.to_str(rec.size_32)}) @compileError(\"${struct_name} size mismatch\");\n        if (@alignOf(${struct_name}) != ${U64.to_str(rec.alignment_32)}) @compileError(\"${struct_name} alignment mismatch\");\n${offset_assertions_32}    }\n}\n\n"
 						} else {
 							""
 						}
 
-						struct_decl = if rec.anonymous {
-							"/// Element type for ${rec.name}\npub const ${struct_name} = if (@sizeOf(usize) == 4) extern struct {\n${wasm32_field_strs}} else extern struct {\n${native_field_strs}};\n\n"
-						} else {
-							"/// Element type for ${rec.name}\npub const ${struct_name} = extern struct {\n${native_field_strs}};\n\n"
-						}
+						struct_decl = "/// Element type for ${rec.name}\npub const ${struct_name} = if (@sizeOf(usize) == 4) extern struct {\n${wasm32_field_strs}} else extern struct {\n${native_field_strs}};\n\n"
 
 						$structs = Str.concat(
 							$structs,
@@ -861,7 +543,7 @@ generate_tag_union_structs = |type_table, duplicate_tag_names| {
 generate_single_tag_union = |type_table, duplicate_tag_names, type_id, tu| {
 	struct_name = tag_union_struct_name(duplicate_tag_names, type_id, tu)
 	tag_count = List.len(tu.tags)
-	disc_type = disc_type_for_count(tag_count)
+	disc_type = disc_type_for_size(tu.discriminant_size)
 
 	# Check if this is a pure enum (all variants have no payload)
 	is_pure_enum = List.all(tu.tags, |tag| tag.payload_size == 0)
@@ -876,7 +558,8 @@ generate_single_tag_union = |type_table, duplicate_tag_names, type_id, tu| {
 			$idx = $idx + 1
 		}
 
-		"/// Tag union: ${tu.name}\npub const ${struct_name} = enum(${disc_type}) {\n${$variants}};\n\n"
+		assertions = "comptime {\n    if (@sizeOf(usize) == 8) {\n        if (@sizeOf(${struct_name}) != ${U64.to_str(tu.size_64)}) @compileError(\"${struct_name} size mismatch\");\n        if (@alignOf(${struct_name}) != ${U64.to_str(tu.alignment_64)}) @compileError(\"${struct_name} alignment mismatch\");\n    }\n    if (@sizeOf(usize) == 4) {\n        if (@sizeOf(${struct_name}) != ${U64.to_str(tu.size_32)}) @compileError(\"${struct_name} size mismatch\");\n        if (@alignOf(${struct_name}) != ${U64.to_str(tu.alignment_32)}) @compileError(\"${struct_name} alignment mismatch\");\n    }\n}\n\n"
+		"/// Tag union: ${tu.name}\npub const ${struct_name} = enum(${disc_type}) {\n${$variants}};\n\n${assertions}"
 	} else {
 		# Generate tuple structs for any variant with >1 payload
 		var $tuple_structs = ""
@@ -930,26 +613,25 @@ generate_single_tag_union = |type_table, duplicate_tag_names, type_id, tu| {
 		}
 
 		# Comptime assertions
-		native_layout = tag_union_layout_64(type_table, tu)
-		wasm32_layout = tag_union_layout_32(type_table, tu)
-		assertions = if tu.size > 0 or wasm32_layout.size > 0 {
-			"comptime {\n    if (@sizeOf(usize) == 8) {\n        if (@sizeOf(${struct_name}) != ${U64.to_str(tu.size)}) @compileError(\"${struct_name} size mismatch\");\n        if (@alignOf(${struct_name}) != ${U64.to_str(tu.alignment)}) @compileError(\"${struct_name} alignment mismatch\");\n        if (@offsetOf(${struct_name}, \"tag\") != ${U64.to_str(native_layout.discriminant_offset)}) @compileError(\"${struct_name} tag offset mismatch\");\n    }\n    if (@sizeOf(usize) == 4) {\n        if (@sizeOf(${struct_name}) != ${U64.to_str(wasm32_layout.size)}) @compileError(\"${struct_name} size mismatch\");\n        if (@alignOf(${struct_name}) != ${U64.to_str(wasm32_layout.alignment)}) @compileError(\"${struct_name} alignment mismatch\");\n        if (@offsetOf(${struct_name}, \"tag\") != ${U64.to_str(wasm32_layout.discriminant_offset)}) @compileError(\"${struct_name} tag offset mismatch\");\n    }\n}\n\n"
+		assertions = if tu.size_64 > 0 or tu.size_32 > 0 {
+			"comptime {\n    if (@sizeOf(usize) == 8) {\n        if (@sizeOf(${struct_name}) != ${U64.to_str(tu.size_64)}) @compileError(\"${struct_name} size mismatch\");\n        if (@alignOf(${struct_name}) != ${U64.to_str(tu.alignment_64)}) @compileError(\"${struct_name} alignment mismatch\");\n        if (@offsetOf(${struct_name}, \"tag\") != ${U64.to_str(tu.discriminant_offset_64)}) @compileError(\"${struct_name} tag offset mismatch\");\n    }\n    if (@sizeOf(usize) == 4) {\n        if (@sizeOf(${struct_name}) != ${U64.to_str(tu.size_32)}) @compileError(\"${struct_name} size mismatch\");\n        if (@alignOf(${struct_name}) != ${U64.to_str(tu.alignment_32)}) @compileError(\"${struct_name} alignment mismatch\");\n        if (@offsetOf(${struct_name}, \"tag\") != ${U64.to_str(tu.discriminant_offset_32)}) @compileError(\"${struct_name} tag offset mismatch\");\n    }\n}\n\n"
 		} else {
 			""
 		}
 
-		"${$tuple_structs}/// Tag discriminant for ${tu.name}.\npub const ${struct_name}Tag = enum(${disc_type}) {\n${$enum_variants}};\n\n/// Payload union for ${tu.name}.\npub const ${payload_union_name} = extern union {\n${$union_fields}};\n\n/// Tag union: ${tu.name}\npub const ${struct_name} = if (@sizeOf(usize) == 4) extern struct {\n    payload: [${U64.to_str(wasm32_layout.discriminant_offset)}]u8 align(${U64.to_str(wasm32_layout.alignment)}),\n    tag: ${struct_name}Tag,\n${$wasm32_accessors}} else extern struct {\n    payload: ${payload_union_name},\n    tag: ${struct_name}Tag,\n${$native_accessors}};\n\n${assertions}"
+		"${$tuple_structs}/// Tag discriminant for ${tu.name}.\npub const ${struct_name}Tag = enum(${disc_type}) {\n${$enum_variants}};\n\n/// Payload union for ${tu.name}.\npub const ${payload_union_name} = extern union {\n${$union_fields}};\n\n/// Tag union: ${tu.name}\npub const ${struct_name} = if (@sizeOf(usize) == 4) extern struct {\n    payload: [${U64.to_str(tu.discriminant_offset_32)}]u8 align(${U64.to_str(tu.alignment_32)}),\n    tag: ${struct_name}Tag,\n${$wasm32_accessors}} else extern struct {\n    payload: ${payload_union_name},\n    tag: ${struct_name}Tag,\n${$native_accessors}};\n\n${assertions}"
 	}
 }
 
-## Return the Zig discriminant type for a given tag count.
-disc_type_for_count = |count| {
-	if count <= 256 {
+disc_type_for_size = |size| {
+	if size <= 1 {
 		"u8"
-	} else if count <= 65536 {
+	} else if size == 2 {
 		"u16"
-	} else {
+	} else if size == 4 {
 		"u32"
+	} else {
+		"u64"
 	}
 }
 
@@ -1366,21 +1048,21 @@ expect lowercase_first("") == ""
 ## Look up a type_id in the type table and return record fields if it's a record.
 ## Follows single-variant tag unions (unwrapping to their payload).
 ## Type annotation ensures the interpreter uses the full TypeRepr layout.
-lookup_record_in_type_table : List(TypeRepr), U64 -> { found: Bool, fields: List(RecordField), size: U64, alignment: U64 }
+lookup_record_in_type_table : List(TypeRepr), U64 -> { found: Bool, fields: List(RecordField), size: U64, alignment: U64, size_32: U64, alignment_32: U64, size_64: U64, alignment_64: U64 }
 lookup_record_in_type_table = |type_table, type_id| {
 	match TypeTable.record_layout(TypeTable.from_list(type_table), type_id) {
-		RecordFound(layout) => { found: Bool.True, fields: layout.fields, size: layout.size, alignment: layout.alignment }
-		NotRecord => { found: Bool.False, fields: [], size: 0, alignment: 0 }
+		RecordFound(layout) => { found: Bool.True, fields: layout.fields, size: layout.size, alignment: layout.alignment, size_32: layout.size_32, alignment_32: layout.alignment_32, size_64: layout.size_64, alignment_64: layout.alignment_64 }
+		NotRecord => { found: Bool.False, fields: [], size: 0, alignment: 0, size_32: 0, alignment_32: 0, size_64: 0, alignment_64: 0 }
 	}
 }
 
 ## Match a TypeRepr and return record fields if it's a record.
 ## Type annotation ensures the interpreter uses the full 21-variant TypeRepr layout.
-lookup_record_from_repr : List(TypeRepr), TypeRepr -> { found: Bool, fields: List(RecordField), size: U64, alignment: U64 }
+lookup_record_from_repr : List(TypeRepr), TypeRepr -> { found: Bool, fields: List(RecordField), size: U64, alignment: U64, size_32: U64, alignment_32: U64, size_64: U64, alignment_64: U64 }
 lookup_record_from_repr = |type_table, type_repr| {
 	match TypeTable.record_layout_from_repr(TypeTable.from_list(type_table), type_repr) {
-		RecordFound(layout) => { found: Bool.True, fields: layout.fields, size: layout.size, alignment: layout.alignment }
-		NotRecord => { found: Bool.False, fields: [], size: 0, alignment: 0 }
+		RecordFound(layout) => { found: Bool.True, fields: layout.fields, size: layout.size, alignment: layout.alignment, size_32: layout.size_32, alignment_32: layout.alignment_32, size_64: layout.size_64, alignment_64: layout.alignment_64 }
+		NotRecord => { found: Bool.False, fields: [], size: 0, alignment: 0, size_32: 0, alignment_32: 0, size_64: 0, alignment_64: 0 }
 	}
 }
 
@@ -1783,21 +1465,25 @@ generate_all_record_structs = |hosted_functions, type_table, duplicate_tag_names
 		if type_table_result.found {
 			struct_name = name_to_struct_name(func.name)
 
-			var $fields = ""
+			var $fields_64 = ""
+			var $fields_32 = ""
 			for field in type_table_result.fields {
-				$fields = Str.concat($fields, zig_record_field_decl(type_table, duplicate_tag_names, field))
+				$fields_64 = Str.concat($fields_64, zig_record_field_decl(type_table, duplicate_tag_names, field, Bool.False))
+				$fields_32 = Str.concat($fields_32, zig_record_field_decl(type_table, duplicate_tag_names, field, Bool.True))
 			}
 
-			assertions = if type_table_result.size > 0 {
-				"comptime {\n    if (@sizeOf(usize) == 8) {\n        if (@sizeOf(${struct_name}RetRecord) != ${U64.to_str(type_table_result.size)}) @compileError(\"${struct_name}RetRecord size mismatch\");\n        if (@alignOf(${struct_name}RetRecord) != ${U64.to_str(type_table_result.alignment)}) @compileError(\"${struct_name}RetRecord alignment mismatch\");\n    }\n}\n\n"
+			offset_assertions_64 = zig_record_offset_assertions("${struct_name}RetRecord", type_table_result.fields, Bool.False)
+			offset_assertions_32 = zig_record_offset_assertions("${struct_name}RetRecord", type_table_result.fields, Bool.True)
+			assertions = if type_table_result.size_64 > 0 or type_table_result.size_32 > 0 {
+				"comptime {\n    if (@sizeOf(usize) == 8) {\n        if (@sizeOf(${struct_name}RetRecord) != ${U64.to_str(type_table_result.size_64)}) @compileError(\"${struct_name}RetRecord size mismatch\");\n        if (@alignOf(${struct_name}RetRecord) != ${U64.to_str(type_table_result.alignment_64)}) @compileError(\"${struct_name}RetRecord alignment mismatch\");\n${offset_assertions_64}    }\n    if (@sizeOf(usize) == 4) {\n        if (@sizeOf(${struct_name}RetRecord) != ${U64.to_str(type_table_result.size_32)}) @compileError(\"${struct_name}RetRecord size mismatch\");\n        if (@alignOf(${struct_name}RetRecord) != ${U64.to_str(type_table_result.alignment_32)}) @compileError(\"${struct_name}RetRecord alignment mismatch\");\n${offset_assertions_32}    }\n}\n\n"
 			} else {
 				""
 			}
 
-			doc = "/// Return type record for ${func.name}\n/// Fields ordered by alignment descending (Roc ABI)\n"
+			doc = "/// Return type record for ${func.name}\n/// Fields use committed Roc ABI order.\n"
 			$structs = Str.concat(
 				$structs,
-				"${doc}pub const ${struct_name}RetRecord = extern struct {\n${$fields}};\n\n${assertions}",
+				"${doc}pub const ${struct_name}RetRecord = if (@sizeOf(usize) == 4) extern struct {\n${$fields_32}} else extern struct {\n${$fields_64}};\n\n${assertions}",
 			)
 		}
 		# else: return type is not a record (tag union, primitive, etc.) — skip RetRecord generation
@@ -1824,30 +1510,34 @@ generate_args_struct = |func, type_table, duplicate_tag_names| {
 	struct_name = name_to_struct_name(func.name)
 
 	# Try type table lookup for single-record arg
-	type_table_result = if List.len(func.arg_type_ids) == 1 {
-		match List.first(func.arg_type_ids) {
-			Ok(arg_id) => lookup_record_in_type_table(type_table, arg_id)
-			Err(_) => { found: Bool.False, fields: [], size: 0, alignment: 0 }
-		}
-	} else {
-		{ found: Bool.False, fields: [], size: 0, alignment: 0 }
-	}
-
-	if type_table_result.found {
-		var $fields = ""
-		for field in type_table_result.fields {
-			$fields = Str.concat($fields, zig_record_field_decl(type_table, duplicate_tag_names, field))
-		}
-
-		assertions = if type_table_result.size > 0 {
-			"comptime {\n    if (@sizeOf(usize) == 8) {\n        if (@sizeOf(${struct_name}Args) != ${U64.to_str(type_table_result.size)}) @compileError(\"${struct_name}Args size mismatch\");\n        if (@alignOf(${struct_name}Args) != ${U64.to_str(type_table_result.alignment)}) @compileError(\"${struct_name}Args alignment mismatch\");\n    }\n}\n\n"
+		type_table_result = if List.len(func.arg_type_ids) == 1 {
+			match List.first(func.arg_type_ids) {
+				Ok(arg_id) => lookup_record_in_type_table(type_table, arg_id)
+				Err(_) => { found: Bool.False, fields: [], size: 0, alignment: 0, size_32: 0, alignment_32: 0, size_64: 0, alignment_64: 0 }
+			}
 		} else {
-			""
+			{ found: Bool.False, fields: [], size: 0, alignment: 0, size_32: 0, alignment_32: 0, size_64: 0, alignment_64: 0 }
 		}
 
-		doc = "/// Arguments for ${func.name}\n/// Roc signature: ${func.type_str}\n/// Refcounted fields are owned by the hosted function.\n"
-		return "${doc}pub const ${struct_name}Args = extern struct {\n${$fields}};\n\n${assertions}"
-	}
+		if type_table_result.found {
+			var $fields_64 = ""
+			var $fields_32 = ""
+			for field in type_table_result.fields {
+				$fields_64 = Str.concat($fields_64, zig_record_field_decl(type_table, duplicate_tag_names, field, Bool.False))
+				$fields_32 = Str.concat($fields_32, zig_record_field_decl(type_table, duplicate_tag_names, field, Bool.True))
+			}
+
+			offset_assertions_64 = zig_record_offset_assertions("${struct_name}Args", type_table_result.fields, Bool.False)
+			offset_assertions_32 = zig_record_offset_assertions("${struct_name}Args", type_table_result.fields, Bool.True)
+			assertions = if type_table_result.size_64 > 0 or type_table_result.size_32 > 0 {
+				"comptime {\n    if (@sizeOf(usize) == 8) {\n        if (@sizeOf(${struct_name}Args) != ${U64.to_str(type_table_result.size_64)}) @compileError(\"${struct_name}Args size mismatch\");\n        if (@alignOf(${struct_name}Args) != ${U64.to_str(type_table_result.alignment_64)}) @compileError(\"${struct_name}Args alignment mismatch\");\n${offset_assertions_64}    }\n    if (@sizeOf(usize) == 4) {\n        if (@sizeOf(${struct_name}Args) != ${U64.to_str(type_table_result.size_32)}) @compileError(\"${struct_name}Args size mismatch\");\n        if (@alignOf(${struct_name}Args) != ${U64.to_str(type_table_result.alignment_32)}) @compileError(\"${struct_name}Args alignment mismatch\");\n${offset_assertions_32}    }\n}\n\n"
+			} else {
+				""
+			}
+
+			doc = "/// Arguments for ${func.name}\n/// Roc signature: ${func.type_str}\n/// Refcounted fields are owned by the hosted function.\n"
+			return "${doc}pub const ${struct_name}Args = if (@sizeOf(usize) == 4) extern struct {\n${$fields_32}} else extern struct {\n${$fields_64}};\n\n${assertions}"
+		}
 
 	# Multi-arg or primitive args: use positional fields from type table
 	var $positional_fields = ""

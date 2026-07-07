@@ -14,6 +14,7 @@ const Allocator = std.mem.Allocator;
 pub const Entry = struct {
     id: base.StringLiteral.Idx,
     symbol_name: []const u8,
+    bytes: []const u8,
 };
 
 /// Readonly data exports and lookup entries for literal backing.
@@ -25,7 +26,11 @@ pub const Table = struct {
     pub fn deinit(self: *Table) void {
         for (self.exports) |static_export| {
             self.allocator.free(static_export.symbol_name);
-            self.allocator.free(static_export.bytes);
+            self.allocator.rawFree(
+                @constCast(static_export.bytes),
+                std.mem.Alignment.fromByteUnits(static_export.alignment),
+                @returnAddress(),
+            );
             for (static_export.relocations) |relocation| {
                 if (relocation.owns_target_symbol_name) self.allocator.free(relocation.target_symbol_name);
             }
@@ -60,7 +65,11 @@ pub fn build(allocator: Allocator, store: *const lir.LirStore, target: RocTarget
         if (exports_live) {
             for (exports.items) |static_export| {
                 allocator.free(static_export.symbol_name);
-                allocator.free(static_export.bytes);
+                allocator.rawFree(
+                    @constCast(static_export.bytes),
+                    std.mem.Alignment.fromByteUnits(static_export.alignment),
+                    @returnAddress(),
+                );
                 allocator.free(static_export.relocations);
             }
             exports.deinit(allocator);
@@ -75,7 +84,11 @@ pub fn build(allocator: Allocator, store: *const lir.LirStore, target: RocTarget
         errdefer if (symbol_owned) allocator.free(symbol_name);
 
         const data_offset = staticDataPtrOffset(word_size, word_size, false);
-        const bytes = try allocator.alloc(u8, data_offset + entry.bytes.len);
+        const bytes = switch (word_size) {
+            4 => try allocator.alignedAlloc(u8, .@"4", data_offset + entry.bytes.len),
+            8 => try allocator.alignedAlloc(u8, .@"8", data_offset + entry.bytes.len),
+            else => unreachable,
+        };
         var bytes_owned = true;
         errdefer if (bytes_owned) allocator.free(bytes);
         @memset(bytes, 0);
@@ -100,6 +113,7 @@ pub fn build(allocator: Allocator, store: *const lir.LirStore, target: RocTarget
         try entries.append(allocator, .{
             .id = entry.idx,
             .symbol_name = symbol_name,
+            .bytes = bytes[data_offset..],
         });
     }
 
@@ -108,7 +122,11 @@ pub fn build(allocator: Allocator, store: *const lir.LirStore, target: RocTarget
     errdefer {
         for (owned_exports) |static_export| {
             allocator.free(static_export.symbol_name);
-            allocator.free(static_export.bytes);
+            allocator.rawFree(
+                @constCast(static_export.bytes),
+                std.mem.Alignment.fromByteUnits(static_export.alignment),
+                @returnAddress(),
+            );
             allocator.free(static_export.relocations);
         }
         allocator.free(owned_exports);

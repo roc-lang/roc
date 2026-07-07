@@ -110,7 +110,7 @@ NO CHANGE
 					(ty-rigid-var-lookup (ty-rigid-var (name "a")))))))
 	(d-let
 		(p-assign (ident "main"))
-		(e-call (constraint-fn-var 108)
+		(e-call (constraint-fn-var 111)
 			(e-lookup-local
 				(p-assign (ident "swap")))
 			(e-num (value "1"))

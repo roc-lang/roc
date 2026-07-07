@@ -8,42 +8,38 @@ type=snippet
 x = 0.()
 ~~~
 # EXPECTED
-PARSE ERROR - fuzz_crash_081.md:1:6:1:7
-PARSE ERROR - fuzz_crash_081.md:1:7:1:8
-PARSE ERROR - fuzz_crash_081.md:1:8:1:9
+EXPECTED RECORD ACCESSOR - fuzz_crash_081.md:1:6:1:7
+UNRECOGNIZED SYNTAX - fuzz_crash_081.md:1:5:1:9
 # PROBLEMS
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────────┐
+│ EXPECTED RECORD ACCESSOR ├─ I was parsing access after `.`, and I ──────────┐
+└┬─────────────────────────┘  expected a field name or tuple index.           │
  │                                                                            │
  │  x = 0.()                                                                  │
  │       ‾                                                                    │
  └───────────────────────────────────────────────────── fuzz_crash_081.md:1:6 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Record access uses a lowercase field name like `.name`. Tuple access uses a
+    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
+    valid accessors.
+
+    For example:
+        person.name
+        pair.0
+
+    I found `.` here.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌─────────────────────┐
+│ UNRECOGNIZED SYNTAX ├─ I don't recognize this syntax. ──────────────────────┐
+└┬────────────────────┘                                                       │
  │                                                                            │
  │  x = 0.()                                                                  │
- │        ‾                                                                   │
- └───────────────────────────────────────────────────── fuzz_crash_081.md:1:7 ┘
+ │      ‾‾‾‾                                                                  │
+ └───────────────────────────────────────────────────── fuzz_crash_081.md:1:5 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
-
-
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
- │                                                                            │
- │  x = 0.()                                                                  │
- │         ‾                                                                  │
- └───────────────────────────────────────────────────── fuzz_crash_081.md:1:8 ┘
-
-    This is an unexpected parsing error. Please check your syntax.
+    This might be a syntax error, an unsupported language feature, or a typo.
 
 # TOKENS
 ~~~zig
@@ -57,27 +53,25 @@ EndOfFile,
 	(statements
 		(s-decl
 			(p-ident (raw "x"))
-			(e-int (raw "0")))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))))
+			(e-apply
+				(e-malformed (reason "expr_dot_suffix_not_allowed"))))))
 ~~~
 # FORMATTED
 ~~~roc
-x = 0
+x = ()
 ~~~
 # CANONICALIZE
 ~~~clojure
 (can-ir
 	(d-let
 		(p-assign (ident "x"))
-		(e-num (value "0"))))
+		(e-runtime-error (tag "expr_not_canonicalized"))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Dec")))
+		(patt (type "Error")))
 	(expressions
-		(expr (type "Dec"))))
+		(expr (type "Error"))))
 ~~~

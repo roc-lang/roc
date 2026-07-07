@@ -457,7 +457,7 @@ pub fn addHeader(store: *NodeStore, header: AST.Header) std.mem.Allocator.Error!
             node.tag = .platform_header;
             node.main_token = platform.name;
 
-            const ed_start = try store.reserveExtraDataStart(9);
+            const ed_start = try store.reserveExtraDataStart(13);
             // Store requires_entries span (start and len)
             store.extra_data.appendAssumeCapacity(platform.requires_entries.span.start);
             store.extra_data.appendAssumeCapacity(platform.requires_entries.span.len);
@@ -465,12 +465,16 @@ pub fn addHeader(store: *NodeStore, header: AST.Header) std.mem.Allocator.Error!
             store.extra_data.appendAssumeCapacity(@intFromEnum(platform.packages));
             store.extra_data.appendAssumeCapacity(platform.provides.span.start);
             store.extra_data.appendAssumeCapacity(platform.provides.span.len);
+            store.extra_data.appendAssumeCapacity(platform.provides.region.start);
+            store.extra_data.appendAssumeCapacity(platform.provides.region.end);
             store.extra_data.appendAssumeCapacity(platform.hosted.span.start);
             store.extra_data.appendAssumeCapacity(platform.hosted.span.len);
+            store.extra_data.appendAssumeCapacity(platform.hosted.region.start);
+            store.extra_data.appendAssumeCapacity(platform.hosted.region.end);
             store.extra_data.appendAssumeCapacity(try packOptionalIndex(platform.targets));
 
             node.data.lhs = ed_start;
-            node.data.rhs = 9;
+            node.data.rhs = 13;
 
             node.region = platform.region;
         },
@@ -1453,9 +1457,9 @@ pub fn getHeader(store: *const NodeStore, header_idx: AST.Header.Idx) AST.Header
         },
         .platform_header => {
             const ed_start = node.data.lhs;
-            std.debug.assert(node.data.rhs == 9);
+            std.debug.assert(node.data.rhs == 13);
 
-            const targets_val = store.extra_data.items[ed_start + 8];
+            const targets_val = store.extra_data.items[ed_start + 12];
             const targets = unpackOptionalIndex(AST.TargetsSection.Idx, targets_val);
 
             return .{ .platform = .{
@@ -1469,10 +1473,16 @@ pub fn getHeader(store: *const NodeStore, header_idx: AST.Header.Idx) AST.Header
                 .provides = .{ .span = .{
                     .start = store.extra_data.items[ed_start + 4],
                     .len = store.extra_data.items[ed_start + 5],
+                }, .region = .{
+                    .start = store.extra_data.items[ed_start + 6],
+                    .end = store.extra_data.items[ed_start + 7],
                 } },
                 .hosted = .{ .span = .{
-                    .start = store.extra_data.items[ed_start + 6],
-                    .len = store.extra_data.items[ed_start + 7],
+                    .start = store.extra_data.items[ed_start + 8],
+                    .len = store.extra_data.items[ed_start + 9],
+                }, .region = .{
+                    .start = store.extra_data.items[ed_start + 10],
+                    .end = store.extra_data.items[ed_start + 11],
                 } },
                 .targets = targets,
                 .region = node.region,
@@ -3232,7 +3242,7 @@ pub fn clearScratchSymbolMapEntriesFrom(store: *NodeStore, start: u32) void {
 }
 
 /// Creates a SymbolMapEntry span from scratch entries added since start.
-pub fn symbolMapEntrySpanFrom(store: *NodeStore, start: u32) std.mem.Allocator.Error!AST.SymbolMapEntry.Span {
+pub fn symbolMapEntrySpanFrom(store: *NodeStore, start: u32, region: AST.TokenizedRegion) std.mem.Allocator.Error!AST.SymbolMapEntry.Span {
     const end = store.scratch_symbol_map_entries.top();
     defer store.scratch_symbol_map_entries.clearFrom(start);
     var i = @as(usize, @intCast(start));
@@ -3241,7 +3251,7 @@ pub fn symbolMapEntrySpanFrom(store: *NodeStore, start: u32) std.mem.Allocator.E
         try store.extra_data.append(store.gpa, @intFromEnum(store.scratch_symbol_map_entries.items.items[i]));
         i += 1;
     }
-    return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start } };
+    return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start }, .region = region };
 }
 
 /// Returns a SymbolMapEntry slice for iteration over a span.

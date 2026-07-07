@@ -180,6 +180,8 @@ pub fn runWasmStrWithStats(
         env_imports.addHostFunction("roc_i128_mod_s", &[_]bytebox.ValType{ .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostI128ModS, null) catch return error.WasmExecFailed;
         env_imports.addHostFunction("roc_u128_div", &[_]bytebox.ValType{ .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostU128Div, null) catch return error.WasmExecFailed;
         env_imports.addHostFunction("roc_u128_mod", &[_]bytebox.ValType{ .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostU128Mod, null) catch return error.WasmExecFailed;
+        env_imports.addHostFunction("roc_builtins_num_mul_with_overflow_i128", &[_]bytebox.ValType{ .I32, .I32, .I64, .I64, .I64, .I64 }, &[_]bytebox.ValType{.I32}, hostI128MulWithOverflow, null) catch return error.WasmExecFailed;
+        env_imports.addHostFunction("roc_builtins_num_mul_with_overflow_u128", &[_]bytebox.ValType{ .I32, .I32, .I64, .I64, .I64, .I64 }, &[_]bytebox.ValType{.I32}, hostU128MulWithOverflow, null) catch return error.WasmExecFailed;
         env_imports.addHostFunction("roc_dec_div", &[_]bytebox.ValType{ .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostDecDiv, null) catch return error.WasmExecFailed;
         env_imports.addHostFunction("roc_dec_div_trunc", &[_]bytebox.ValType{ .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostDecDivTrunc, null) catch return error.WasmExecFailed;
         env_imports.addHostFunction("roc_dec_pow", &[_]bytebox.ValType{ .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostDecPow, null) catch return error.WasmExecFailed;
@@ -661,6 +663,39 @@ fn hostU128Div(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const
 fn hostU128Mod(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
     const buffer = module.store.getMemory(0).buffer();
     writeU128ToMem(buffer, @intCast(params[2].I32), readU128FromMem(buffer, @intCast(params[0].I32)) % readU128FromMem(buffer, @intCast(params[1].I32)));
+}
+
+fn hostI128MulWithOverflow(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, results: [*]bytebox.Val) error{}!void {
+    const buffer = module.store.getMemory(0).buffer();
+    const out_low: usize = @intCast(params[0].I32);
+    const out_high: usize = @intCast(params[1].I32);
+    const a_low: u64 = @bitCast(params[2].I64);
+    const a_high: u64 = @bitCast(params[3].I64);
+    const b_low: u64 = @bitCast(params[4].I64);
+    const b_high: u64 = @bitCast(params[5].I64);
+    const a: i128 = @bitCast(@as(u128, a_high) << 64 | @as(u128, a_low));
+    const b: i128 = @bitCast(@as(u128, b_high) << 64 | @as(u128, b_low));
+    const result = builtins.num.mulWithOverflow(i128, a, b);
+    const value: u128 = @bitCast(result.value);
+    writeIntLittle(u64, buffer, out_low, @truncate(value));
+    writeIntLittle(u64, buffer, out_high, @truncate(value >> 64));
+    results[0] = .{ .I32 = @intFromBool(result.has_overflowed) };
+}
+
+fn hostU128MulWithOverflow(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, results: [*]bytebox.Val) error{}!void {
+    const buffer = module.store.getMemory(0).buffer();
+    const out_low: usize = @intCast(params[0].I32);
+    const out_high: usize = @intCast(params[1].I32);
+    const a_low: u64 = @bitCast(params[2].I64);
+    const a_high: u64 = @bitCast(params[3].I64);
+    const b_low: u64 = @bitCast(params[4].I64);
+    const b_high: u64 = @bitCast(params[5].I64);
+    const a: u128 = @as(u128, a_high) << 64 | @as(u128, a_low);
+    const b: u128 = @as(u128, b_high) << 64 | @as(u128, b_low);
+    const result = builtins.num.mulWithOverflow(u128, a, b);
+    writeIntLittle(u64, buffer, out_low, @truncate(result.value));
+    writeIntLittle(u64, buffer, out_high, @truncate(result.value >> 64));
+    results[0] = .{ .I32 = @intFromBool(result.has_overflowed) };
 }
 
 fn hostI8ModBy(_: ?*anyopaque, _: *bytebox.ModuleInstance, params: [*]const bytebox.Val, results: [*]bytebox.Val) error{}!void {

@@ -383,22 +383,110 @@ fn problemBlocksCheckedArtifact(problem: check.problem.Problem) bool {
             .recursive_dispatch,
             => true,
         },
-        .redundant_pattern, .unmatchable_pattern, .comptime_unused_branch, .comptime_condition, .literal_defaulted => false,
+        .effectful_function_name, .redundant_pattern, .unmatchable_pattern, .comptime_unused_branch, .comptime_condition, .literal_defaulted => false,
         else => true,
     };
 }
 
 fn problemAllowsLoweringWithUserErrors(problem: check.problem.Problem) bool {
     return switch (problem) {
-        .static_dispatch => |static_dispatch| switch (static_dispatch) {
-            .unresolved_dispatcher => |unresolved| unresolved.runtime_error_inserted,
-            .dispatcher_not_nominal,
-            .dispatcher_does_not_impl_method,
-            .type_does_not_support_equality,
-            .recursive_dispatch,
-            => false,
-        },
-        else => false,
+        .static_dispatch => |static_dispatch| staticDispatchAllowsLoweringWithUserErrors(static_dispatch),
+        .effectful_function_name => true,
+        .type_mismatch,
+        .type_apply_mismatch_arities,
+        .cannot_access_opaque_nominal,
+        .nominal_type_resolution_failed,
+        .recursive_alias,
+        .unsupported_alias_where_clause,
+        .infinite_recursion,
+        .anonymous_recursion,
+        .polymorphic_value,
+        .polymorphic_var_annotation,
+        .effectful_top_level,
+        .effectful_expect,
+        .annotation_only_value,
+        .hosted_unboxed_function,
+        .host_boundary_open_row,
+        .platform_def_not_found,
+        .platform_hosted_section,
+        .platform_alias_not_found,
+        .comptime_crash,
+        .comptime_invalid_numeral,
+        .comptime_invalid_quote,
+        .comptime_expect_failed,
+        .comptime_eval_error,
+        .invalid_numeric_literal,
+        .tuple_access_needs_annotation,
+        .literal_defaulted,
+        .non_exhaustive_match,
+        .non_exhaustive_destructure,
+        .redundant_pattern,
+        .unmatchable_pattern,
+        .unreachable_code,
+        .comptime_unused_branch,
+        .comptime_condition,
+        => false,
+    };
+}
+
+fn staticDispatchAllowsLoweringWithUserErrors(static_dispatch: check.problem.StaticDispatch) bool {
+    return switch (static_dispatch) {
+        .unresolved_dispatcher => |unresolved| unresolved.runtime_error_inserted,
+        .dispatcher_not_nominal,
+        .dispatcher_does_not_impl_method,
+        .type_does_not_support_equality,
+        .recursive_dispatch,
+        => false,
+    };
+}
+
+fn problemLoweringWithUserErrorsRationale(kind: check.problem.Problem.Tag) []const u8 {
+    return switch (kind) {
+        .static_dispatch => "Static dispatch lowering can continue only when the inner dispatch problem owns an inserted runtime-error expression.",
+        .type_mismatch => "Type mismatch leaves checked values without reliable monotype inputs.",
+        .type_apply_mismatch_arities => "Type application arity mismatch leaves type structure invalid for lowering.",
+        .cannot_access_opaque_nominal => "Opaque nominal access failure means lowering cannot rely on the requested representation.",
+        .nominal_type_resolution_failed => "Nominal resolution failure leaves the referenced type unavailable to lowering.",
+        .recursive_alias => "Recursive aliases must not reach lowering as concrete type structure.",
+        .unsupported_alias_where_clause => "Unsupported alias where clauses have no lowered representation contract.",
+        .infinite_recursion => "Infinite type recursion prevents a finite lowered type.",
+        .anonymous_recursion => "Anonymous recursion prevents a finite lowered type.",
+        .polymorphic_value => "Polymorphic values in monomorphic positions have no single lowered type.",
+        .polymorphic_var_annotation => "Polymorphic var annotations cannot produce a concrete mutable storage type.",
+        .effectful_top_level => "Effectful top-level initialization cannot be represented as a checked constant.",
+        .effectful_expect => "Effectful expect evaluation cannot be treated as ordinary lowered user code.",
+        .effectful_function_name => "Effectful function-name reports are warnings and do not block lowering.",
+        .annotation_only_value => "Annotation-only values have no runtime expression to lower.",
+        .hosted_unboxed_function => "Hosted unboxed functions violate the host boundary representation contract.",
+        .host_boundary_open_row => "Open rows at host boundaries have no concrete ABI shape.",
+        .platform_def_not_found => "Missing platform definitions leave required runtime entry points unavailable.",
+        .platform_hosted_section => "Invalid hosted sections leave external symbols unresolved or ambiguous.",
+        .platform_alias_not_found => "Missing platform aliases leave required types unavailable.",
+        .comptime_crash => "Compile-time crashes are reported diagnostics, not recoverable runtime expressions.",
+        .comptime_invalid_numeral => "Rejected compile-time numerals are reported diagnostics, not lowered literal values.",
+        .comptime_invalid_quote => "Rejected compile-time quotes are reported diagnostics, not lowered literal values.",
+        .comptime_expect_failed => "Failed compile-time expects are reported diagnostics, not lowered runtime assertions.",
+        .comptime_eval_error => "Compile-time evaluation errors leave the requested constant unavailable.",
+        .invalid_numeric_literal => "Invalid numeric literals cannot produce a trusted lowered numeric value.",
+        .tuple_access_needs_annotation => "Tuple access without arity evidence cannot select a lowered element.",
+        .literal_defaulted => "Literal defaulting is only a warning and does not block lowering.",
+        .non_exhaustive_match => "Non-exhaustive matches may jump to a generated miss path but still indicate user-error lowering is unsafe.",
+        .non_exhaustive_destructure => "Non-exhaustive destructures may jump to a generated miss path but still indicate user-error lowering is unsafe.",
+        .redundant_pattern => "Redundant patterns are warnings and do not block lowering.",
+        .unmatchable_pattern => "Unmatchable patterns are warnings and do not block lowering.",
+        .unreachable_code => "Unreachable code is a warning and does not block lowering.",
+        .comptime_unused_branch => "Compile-time unused branches are warnings and do not block lowering.",
+        .comptime_condition => "Compile-time condition reports are warnings and do not block lowering.",
+    };
+}
+
+fn staticDispatchLoweringWithUserErrorsRationale(kind: std.meta.Tag(check.problem.StaticDispatch)) []const u8 {
+    return switch (kind) {
+        .unresolved_dispatcher => "Lowering can continue only when checking inserted an explicit runtime-error expression at the unresolved dispatch site.",
+        .dispatcher_not_nominal => "A non-nominal dispatcher has no method table target for lowering.",
+        .dispatcher_does_not_impl_method => "A missing method leaves no resolved callable target for lowering.",
+        .type_does_not_support_equality => "Unsupported equality has no resolved equality implementation for lowering.",
+        .recursive_dispatch => "Recursive dispatch has no finite resolved callable target for lowering.",
     };
 }
 
@@ -414,6 +502,21 @@ fn checkerProblemsAllowLoweringWithUserErrors(checker: *const Check) bool {
         if (!problemAllowsLoweringWithUserErrors(problem)) return false;
     }
     return true;
+}
+
+test "problem lowerability rationale covers every problem kind" {
+    inline for (@typeInfo(check.problem.Problem.Tag).@"enum".fields) |field| {
+        const tag: check.problem.Problem.Tag = @enumFromInt(field.value);
+        try std.testing.expect(problemLoweringWithUserErrorsRationale(tag).len != 0);
+    }
+}
+
+test "static dispatch lowerability rationale covers every static dispatch kind" {
+    const StaticDispatchTag = std.meta.Tag(check.problem.StaticDispatch);
+    inline for (@typeInfo(StaticDispatchTag).@"enum".fields) |field| {
+        const tag: StaticDispatchTag = @enumFromInt(field.value);
+        try std.testing.expect(staticDispatchLoweringWithUserErrorsRationale(tag).len != 0);
+    }
 }
 
 fn moduleHasArtifactBlockingCanonicalizeDiagnostics(env: *const ModuleEnv) bool {
@@ -537,23 +640,19 @@ fn appendCheckOwnerEnvIfMissing(
     module_env: *const ModuleEnv,
 ) Allocator.Error!void {
     for (owner_envs.items) |existing| {
-        if (moduleEnvNamesMatch(existing, module_env)) return;
+        if (moduleEnvIdentitiesMatch(existing, module_env)) return;
     }
     try owner_envs.append(allocator, module_env);
 }
 
-fn moduleEnvNamesMatch(a: *const ModuleEnv, b: *const ModuleEnv) bool {
+/// Two owner envs are duplicates exactly when their deep content identities
+/// match: byte-identical transitive module content is interchangeable as a
+/// type owner. No name text participates.
+fn moduleEnvIdentitiesMatch(a: *const ModuleEnv, b: *const ModuleEnv) bool {
     if (@intFromPtr(a) == @intFromPtr(b)) return true;
-    if (!a.qualified_module_ident.isNone() and !b.qualified_module_ident.isNone()) {
-        return std.mem.eql(u8, a.getIdent(a.qualified_module_ident), b.getIdent(b.qualified_module_ident));
-    }
-    if (!a.display_module_name_idx.isNone() and !b.display_module_name_idx.isNone()) {
-        return std.mem.eql(u8, a.getIdent(a.display_module_name_idx), b.getIdent(b.display_module_name_idx));
-    }
-    if (a.qualified_module_ident.isNone() or b.qualified_module_ident.isNone()) {
-        if (std.mem.eql(u8, a.module_name, b.module_name)) return true;
-    }
-    return false;
+    const a_hash = a.contentIdentityHash() orelse return false;
+    const b_hash = b.contentIdentityHash() orelse return false;
+    return base.ModuleIdentity.eql(a_hash, b_hash);
 }
 
 fn availableArtifactByKey(
@@ -1340,6 +1439,7 @@ pub const PackageEnv = struct {
             self.resolver,
             self.additional_known_modules.items,
             &.{},
+            false,
         );
 
         self.total_canonicalize_ns += readStageTimer(self.roc_ctx.std_io, &canonicalize_timer);
@@ -1561,7 +1661,6 @@ pub const PackageEnv = struct {
 
         // Type check using the SAME module_envs_map
         const module_builtin_ctx: Check.BuiltinContext = .{
-            .module_name = env.qualified_module_ident,
             .bool_stmt = builtin_indices.bool_type,
             .try_stmt = builtin_indices.try_type,
             .str_stmt = builtin_indices.str_type,
@@ -1619,6 +1718,7 @@ pub const PackageEnv = struct {
         resolver: ?ImportResolver,
         additional_known_modules: []const KnownModule,
         pre_resolved_imports: []const messages.CanonicalizeImport,
+        validate_as_explicit_roots: bool,
     ) Allocator.Error!void {
         const gpa = roc_ctx.gpa;
 
@@ -1755,7 +1855,11 @@ pub const PackageEnv = struct {
         });
         czer.source_dir = root_dir;
         try czer.canonicalizeFile();
-        try czer.validateForChecking();
+        if (validate_as_explicit_roots) {
+            try czer.validateForExplicitRoots();
+        } else {
+            try czer.validateForChecking();
+        }
         czer.deinit();
     }
 
@@ -1780,7 +1884,6 @@ pub const PackageEnv = struct {
         const builtin_indices = compiled_builtins.builtinIndices(can.CIR);
 
         const module_builtin_ctx: Check.BuiltinContext = .{
-            .module_name = env.qualified_module_ident,
             .bool_stmt = builtin_indices.bool_type,
             .try_stmt = builtin_indices.try_type,
             .str_stmt = builtin_indices.str_type,
@@ -2087,6 +2190,16 @@ pub const PackageEnv = struct {
             entry.value_ptr.* = {};
 
             try views.append(self.gpa, view);
+
+            for (view.direct_import_artifact_keys) |dependency_key| {
+                const dependency = self.availableArtifactViewByKey(imported_artifacts, dependency_key) orelse {
+                    if (builtin.mode == .Debug) {
+                        std.debug.panic("compile.PackageEnv missing direct dependency checked artifact", .{});
+                    }
+                    unreachable;
+                };
+                try pending.append(self.gpa, dependency);
+            }
 
             for (view.public_api_dependencies.type_owner_artifacts) |dependency_key| {
                 const dependency = self.availableArtifactViewByKey(imported_artifacts, dependency_key) orelse {

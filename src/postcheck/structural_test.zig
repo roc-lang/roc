@@ -98,7 +98,9 @@ test "Monotype record expression lowering does not keep mutable field-store slic
 
     try expectContains(lower_record_expr, "const target_fields");
     try expectContains(lower_record_expr, "const target_field_count");
-    try expectContains(lower_record_expr, "self.builder.program.types.fieldSpan(target_fields)[i]");
+    try expectContains(lower_record_expr, "const target_field_list = try GuardedList.dupe(self.allocator, Type.Field, self.builder.program.types.fieldSpan(target_fields));");
+    try expectContains(lower_record_expr, "const field = target_field_list[i];");
+    try std.testing.expect(std.mem.find(u8, lower_record_expr, "target_field_borrow") == null);
     try std.testing.expect(std.mem.find(u8, lower_record_expr, "for (target_fields") == null);
 }
 
@@ -116,8 +118,8 @@ test "Monotype lookup lowering uses explicit resolved use types" {
 
     try expectContains(lower_expr_type, ".lookup_required => |resolved| try self.activeNodeFromType(try self.lookupExprMonoType(expr.ty, resolved))");
     try expectContains(lower_expr_at_type, ".lookup_required => |resolved| return try self.lowerLookupExprAtType(expr.ty, resolved, ty)");
-    try expectContains(lower_lookup_at_type, ".platform_required_const => |required| return try self.restoreConstUseAtType(required.const_use, ty)");
-    try expectContains(lower_lookup_at_type, ".platform_required_proc => |proc| return try self.lowerProcedureUseValue(proc.procedure, ty)");
+    try expectContains(lower_lookup_at_type, ".platform_required_const => |required| return try self.restoreConstUseAtType(required.const_use, ty, try self.evidenceForUseSite(record.expr)),");
+    try expectContains(lower_lookup_at_type, ".platform_required_proc => |proc| return try self.lowerProcedureUseValue(proc.procedure, ty, try self.evidenceForUseSite(record.expr))");
 }
 
 test "Monotype specialization has no target backend or LIR imports" {
@@ -291,11 +293,11 @@ test "Monotype lifting mutates only callable expression nodes in place" {
     try std.testing.expect(std.mem.find(u8, lifted_source, "self.source.locals.items") == null);
 
     const rewrite_expr = sourceSliceBetween(lifted_source, "fn rewriteExpr", "fn liftLambda");
-    try expectContains(rewrite_expr, "self.output.exprs.items[index].data = .{ .fn_ref");
-    try expectContains(rewrite_expr, "self.output.exprs.items[index].data = .{ .call_proc");
+    try expectContains(rewrite_expr, "self.output.setExprData(expr_id, .{ .fn_ref");
+    try expectContains(rewrite_expr, "self.output.setExprData(expr_id, .{ .call_proc");
 
     const lift_lambda = sourceSliceBetween(lifted_source, "fn liftLambda", "fn reserveFn");
-    try expectContains(lift_lambda, "self.output.exprs.items[@intFromEnum(expr_id)].data = .{ .fn_ref = .{");
+    try expectContains(lift_lambda, "self.output.setExprData(expr_id, .{ .fn_ref = .{");
 
     const lambda_mono_source = @embedFile("lambda_mono/lower.zig");
     const lower_fn = sourceSliceBetween(lambda_mono_source, "fn lowerFnSpec", "fn ensureOwnFnSpec");

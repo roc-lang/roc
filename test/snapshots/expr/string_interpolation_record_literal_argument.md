@@ -36,14 +36,14 @@ NO CHANGE
 (e-block
 	(s-let
 		(p-assign (ident "#interp_0"))
-		(e-call (constraint-fn-var 62)
+		(e-call (constraint-fn-var 65)
 			(e-lookup-external
 				(builtin))
 			(e-record
 				(fields
 					(field (name "two")
 						(e-num (value "2")))))))
-	(e-interpolation (constraint-fn-var 117)
+	(e-interpolation (constraint-fn-var 120)
 		(first
 			(e-literal (string "")))
 		(parts

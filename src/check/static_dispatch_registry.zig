@@ -13,6 +13,7 @@ const canonical = @import("canonical_names.zig");
 const checked_ids = @import("checked_ids.zig");
 const collections = @import("collections");
 const artifact_serialize = @import("artifact_serialize.zig");
+const dispatch_evidence = @import("dispatch_evidence.zig");
 const SerializedSlice = artifact_serialize.SerializedSlice;
 const CompactWriter = collections.CompactWriter;
 
@@ -60,12 +61,14 @@ pub const ProcedureTemplateLookupEntry = struct {
 };
 
 /// Public `MethodOwner` declaration.
+///
+/// A method owner is identified by CONTENT: the declaring module's deep
+/// content identity plus the declared type name (see `base.module_identity`
+/// and `canonical.NominalTypeKey`). Statement indices and module name text
+/// never participate. Compiler-builtin owners keep their dedicated enum so
+/// builtin dispatch stays exact across differently-spelled builtin idents.
 pub const MethodOwner = union(enum) {
     nominal: canonical.NominalTypeKey,
-    source_decl: struct {
-        module_name: canonical.ModuleNameId,
-        statement: u32,
-    },
     builtin: BuiltinOwner,
 };
 
@@ -154,7 +157,13 @@ pub const MethodRegistry = struct {
     };
 
     pub fn lookup(self: *const MethodRegistry, key: MethodKey) ?MethodTarget {
-        const found = artifact_serialize.binarySearchByKey(MethodRegistryEntry, MethodKey, self.entries, key, methodEntryOrder) orelse return null;
+        // Stack-built keys carry undefined bytes in the owner union's padding
+        // and inactive-variant region; ReleaseFast fuses the comparator's
+        // field reads into wide loads that touch them. Zero those bytes so
+        // every load is defined (entries are zeroed at build/serialization).
+        var normalized = key;
+        collections.CompactWriter.zeroValuePadding(MethodKey, @ptrCast(&normalized));
+        const found = artifact_serialize.binarySearchByKey(MethodRegistryEntry, MethodKey, self.entries, normalized, methodEntryOrder) orelse return null;
         return found.target;
     }
 
@@ -171,6 +180,7 @@ pub const MethodRegistry = struct {
         module: TypedCIR.Module,
         names: *canonical.CanonicalNameStore,
         local_templates: *const ProcedureTemplateLookup,
+        available_artifacts: anytype,
         checked_types: anytype,
         checked_bodies: anytype,
     ) Allocator.Error!MethodRegistry {
@@ -193,7 +203,7 @@ pub const MethodRegistry = struct {
         const module_name = try names.internModuleIdent(idents, module.qualifiedModuleIdent());
 
         for (module.methodDefEntries()) |entry| {
-            const method_ident = module_env.lookupMethodIdentForOwnerConst(entry.key.owner, entry.key.methodIdent()) orelse {
+            const method_ident = module_env.lookupMethodIdentForMethodOwnerConst(entry.key.ownerIdent(), entry.key.methodIdent()) orelse {
                 if (@import("builtin").mode == .Debug) {
                     std.debug.panic(
                         "checked static dispatch registry invariant violated: method def for owner {d} method {d} has no method ident",
@@ -203,6 +213,7 @@ pub const MethodRegistry = struct {
                 unreachable;
             };
             const def_idx = entry.value.def_idx;
+            var referenced_callable_var: ?Var = null;
             const target_kind: MethodTargetKind = if (generatedStructuralTargetForMethodBinding(module, entry.value, entry.key.methodIdent())) |generated|
                 generated
             else if (local_templates.templateForDef(def_idx)) |template| blk: {
@@ -220,17 +231,21 @@ pub const MethodRegistry = struct {
                 } };
             } else if (localProcedureTargetForMethodBinding(module, checked_bodies, entry.value)) |local|
                 .{ .local_proc = local }
-            else
-                // Associated values without arguments are checked field access,
-                // not static-dispatch call targets. The method registry is a
-                // procedure-target table for Monotype static dispatch lowering,
-                // so only procedure-backed entries belong here.
+            else if (referencedProcedureTargetForMethodBinding(module, local_templates, checked_bodies, entry.value)) |referenced| blk: {
+                referenced_callable_var = referenced.callable_var;
+                break :blk referenced.kind;
+            } else
+                // Associated values that do not resolve to a procedure are
+                // checked field access, not static-dispatch call targets. The
+                // method registry is a procedure-target table for Monotype
+                // static dispatch lowering, so only procedure-backed entries
+                // belong here.
                 continue;
-            const callable_var = methodTargetCallableVar(module, def_idx, entry.value, target_kind);
+            const callable_var = referenced_callable_var orelse methodTargetCallableVar(module, def_idx, entry.value, target_kind);
 
             try entries.append(allocator, .{
                 .key = .{
-                    .owner = try methodOwnerForRegistryEntry(module, module_name, entry.key.owner),
+                    .owner = try methodOwnerForRegistryEntry(module, names, available_artifacts, entry.key.ownerIdent()),
                     .method = try names.internMethodIdent(idents, entry.key.methodIdent()),
                 },
                 .target = .{
@@ -288,7 +303,7 @@ fn generatedStructuralTargetForMethodBinding(
 
     const common = module.commonIdents();
     if (method_ident.eql(common.parser_for)) return .generated_structural_parser;
-    if (method_ident.eql(common.encode_to)) return .generated_structural_encoder;
+    if (method_ident.eql(common.encoder_for)) return .generated_structural_encoder;
     return null;
 }
 
@@ -396,25 +411,187 @@ fn localProcedureExpr(module: TypedCIR.Module, expr_idx: CIR.Expr.Idx) bool {
     };
 }
 
+const ReferencedProcedureTarget = struct {
+    kind: MethodTargetKind,
+    callable_var: Var,
+};
+
+/// Resolve a function-typed associated value bound by reference
+/// (`method = top_level_fn`) to the referenced procedure. The reference chain
+/// is followed through top-level defs and associated declarations until it
+/// reaches a procedure-backed binding; a chain that never reaches one is an
+/// associated value, not a call target, and resolves to null.
+fn referencedProcedureTargetForMethodBinding(
+    module: TypedCIR.Module,
+    local_templates: *const ProcedureTemplateLookup,
+    checked_bodies: anytype,
+    binding: ModuleEnv.MethodBinding,
+) ?ReferencedProcedureTarget {
+    const module_env = module.moduleEnvConst();
+    var expr_idx = methodBindingExpr(module, binding) orelse return null;
+    // Each hop follows one value binding, and a chain can visit each binding
+    // at most once before repeating, so the node count bounds the walk.
+    var remaining: usize = module.nodeCount();
+    while (remaining > 0) : (remaining -= 1) {
+        const pattern_idx = switch (module.expr(expr_idx).data) {
+            .e_lookup_local => |lookup| lookup.pattern_idx,
+            else => return null,
+        };
+        if (defForBoundPattern(module_env, pattern_idx)) |target_def_idx| {
+            if (local_templates.templateForDef(target_def_idx)) |template| {
+                return .{
+                    .kind = .{ .procedure = .{
+                        .proc = .{ .artifact = template.artifact, .proc_base = template.proc_base },
+                        .template = template,
+                    } },
+                    .callable_var = module.defType(target_def_idx),
+                };
+            }
+            expr_idx = module_env.store.getDef(target_def_idx).expr;
+            continue;
+        }
+        if (statementDeclForBoundPattern(module, pattern_idx)) |decl| {
+            if (localProcedureExpr(module, decl.expr)) {
+                const expr = checked_bodies.exprIdForSource(decl.expr) orelse return null;
+                const binder = checked_bodies.patternBinderForSource(decl.pattern) orelse return null;
+                return .{
+                    .kind = .{ .local_proc = .{ .binder = binder, .expr = expr } },
+                    .callable_var = module.exprType(decl.expr),
+                };
+            }
+            expr_idx = decl.expr;
+            continue;
+        }
+        return null;
+    }
+    return null;
+}
+
+fn defForBoundPattern(module_env: *const ModuleEnv, pattern_idx: CIR.Pattern.Idx) ?CIR.Def.Idx {
+    for (module_env.store.sliceDefs(module_env.global_value_defs)) |def_idx| {
+        if (module_env.store.getDef(def_idx).pattern == pattern_idx) return def_idx;
+    }
+    return null;
+}
+
+const BoundDecl = struct { pattern: CIR.Pattern.Idx, expr: CIR.Expr.Idx };
+
+fn statementDeclForBoundPattern(module: TypedCIR.Module, pattern_idx: CIR.Pattern.Idx) ?BoundDecl {
+    var raw_node: u32 = 0;
+    while (raw_node < module.nodeCount()) : (raw_node += 1) {
+        if (module.nodeTag(@enumFromInt(raw_node)) != .statement_decl) continue;
+        const decl = switch (module.getStatement(@enumFromInt(raw_node))) {
+            .s_decl => |decl| decl,
+            else => continue,
+        };
+        if (decl.pattern == pattern_idx) return .{ .pattern = decl.pattern, .expr = decl.expr };
+    }
+    return null;
+}
+
 fn methodOwnerForRegistryEntry(
     module: TypedCIR.Module,
-    module_name: canonical.ModuleNameId,
-    owner_stmt: CIR.Statement.Idx,
+    names: *canonical.CanonicalNameStore,
+    available_artifacts: anytype,
+    owner: ModuleEnv.MethodOwner,
 ) Allocator.Error!MethodOwner {
-    if (builtinOwnerForRegistryEntry(module, owner_stmt)) |owner| {
-        return .{ .builtin = owner };
+    const owner_env = methodOwnerEnvForRegistryEntry(module, available_artifacts, owner);
+    if (builtinOwnerForRegistryEntry(owner_env, owner.owner)) |builtin_owner| {
+        return .{ .builtin = builtin_owner };
     }
-    return .{ .source_decl = .{
-        .module_name = module_name,
-        .statement = @intFromEnum(owner_stmt),
+
+    const identity_hash = owner_env.contentIdentityHash() orelse {
+        if (@import("builtin").mode == .Debug) {
+            std.debug.panic(
+                "checked static dispatch registry invariant violated: module '{s}' has no content identity",
+                .{owner_env.module_name},
+            );
+        }
+        unreachable;
+    };
+    const stmt = owner_env.store.getStatement(owner.owner);
+    const header_idx = switch (stmt) {
+        .s_nominal_decl => |nominal| nominal.header,
+        .s_alias_decl => |alias| alias.header,
+        else => {
+            if (@import("builtin").mode == .Debug) {
+                std.debug.panic(
+                    "checked static dispatch registry invariant violated: method owner statement {d} is not a type declaration",
+                    .{@intFromEnum(owner.owner)},
+                );
+            }
+            unreachable;
+        },
+    };
+    const header = owner_env.store.getTypeHeader(header_idx);
+    return .{ .nominal = .{
+        .module = try names.internModuleIdentity(identity_hash),
+        .type_name = try names.internTypeIdent(owner_env.getIdentStoreConst(), header.relative_name),
+        .source_decl = @intFromEnum(owner.owner),
     } };
 }
 
-fn builtinOwnerForRegistryEntry(
+fn methodOwnerEnvForRegistryEntry(
     module: TypedCIR.Module,
+    available_artifacts: anytype,
+    owner: ModuleEnv.MethodOwner,
+) *const ModuleEnv {
+    const module_env = module.moduleEnvConst();
+    const owner_hash = methodOwnerIdentityHashForRegistryEntry(module_env, owner);
+
+    if (ownerEnvIdentityMatches(module_env, owner_hash)) return module_env;
+
+    for (available_artifacts) |artifact| {
+        const candidate = artifact.module_env;
+        if (ownerEnvIdentityMatches(candidate, owner_hash)) return candidate;
+    }
+
+    if (@import("builtin").mode == .Debug) {
+        std.debug.panic(
+            "checked static dispatch registry invariant violated: could not find owner module '{s}' for receiver method",
+            .{module.getIdent(owner.moduleIdent())},
+        );
+    }
+    unreachable;
+}
+
+fn methodOwnerIdentityHashForRegistryEntry(
+    module_env: *const ModuleEnv,
+    owner: ModuleEnv.MethodOwner,
+) *const base.ModuleIdentity.Hash {
+    if (owner.moduleIdent().eql(module_env.qualified_module_ident)) {
+        return module_env.contentIdentityHash() orelse {
+            if (@import("builtin").mode == .Debug) {
+                std.debug.panic(
+                    "checked static dispatch registry invariant violated: local module '{s}' has no content identity",
+                    .{module_env.module_name},
+                );
+            }
+            unreachable;
+        };
+    }
+
+    const owner_identity = module_env.moduleIdentityForDisplayIdent(owner.moduleIdent()) orelse {
+        if (@import("builtin").mode == .Debug) {
+            std.debug.panic(
+                "checked static dispatch registry invariant violated: receiver owner module '{s}' has no content identity in module '{s}'",
+                .{ module_env.getIdent(owner.moduleIdent()), module_env.module_name },
+            );
+        }
+        unreachable;
+    };
+    return module_env.moduleIdentityHash(owner_identity);
+}
+
+fn ownerEnvIdentityMatches(candidate: *const ModuleEnv, owner_hash: *const base.ModuleIdentity.Hash) bool {
+    const candidate_hash = candidate.contentIdentityHash() orelse return false;
+    return base.ModuleIdentity.eql(candidate_hash, owner_hash);
+}
+
+fn builtinOwnerForRegistryEntry(
+    module_env: *const ModuleEnv,
     owner_stmt: CIR.Statement.Idx,
 ) ?BuiltinOwner {
-    const module_env = module.moduleEnvConst();
     const common = module_env.idents;
     if (module_env.module_role != .builtin) return null;
 
@@ -460,6 +637,13 @@ fn methodRegistryEntryLessThan(_: void, a: MethodRegistryEntry, b: MethodRegistr
 }
 
 fn finalizeMethodRegistryEntries(entries: []MethodRegistryEntry) void {
+    // Zero padding and inactive-union bytes first: at ReleaseFast the sorted
+    // entries are compared with fused wide loads that touch those bytes, and
+    // runtime-built entries would otherwise carry undefined memory there
+    // (serialized registries are already zeroed by appendSlicePodZeroed).
+    for (entries) |*entry| {
+        collections.CompactWriter.zeroValuePadding(MethodRegistryEntry, @ptrCast(entry));
+    }
     std.mem.sort(MethodRegistryEntry, entries, {}, methodRegistryEntryLessThan);
     assertMethodRegistryKeysUnique(entries);
 }
@@ -487,49 +671,46 @@ fn methodEntryOrder(e: MethodRegistryEntry, key: MethodKey) std.math.Order {
 }
 
 fn methodOwnerOrder(a: MethodOwner, b: MethodOwner) std.math.Order {
-    const a_tag = methodOwnerTagRank(a);
-    const b_tag = methodOwnerTagRank(b);
-    if (a_tag != b_tag) return orderU32(a_tag, b_tag);
-
-    return switch (a) {
-        .nominal => |a_nominal| switch (b) {
-            .nominal => |b_nominal| blk: {
-                const module_order = orderEnum(canonical.ModuleNameId, a_nominal.module_name, b_nominal.module_name);
-                if (module_order != .eq) break :blk module_order;
-                const type_order = orderEnum(canonical.TypeNameId, a_nominal.type_name, b_nominal.type_name);
-                if (type_order != .eq) break :blk type_order;
-                break :blk orderOptionalU32(a_nominal.source_decl, b_nominal.source_decl);
-            },
-            else => unreachable,
-        },
-        .source_decl => |a_decl| switch (b) {
-            .source_decl => |b_decl| blk: {
-                const module_order = orderEnum(canonical.ModuleNameId, a_decl.module_name, b_decl.module_name);
-                if (module_order != .eq) break :blk module_order;
-                break :blk orderU32(a_decl.statement, b_decl.statement);
-            },
-            else => unreachable,
-        },
-        .builtin => |a_builtin| switch (b) {
-            .builtin => |b_builtin| orderEnum(BuiltinOwner, a_builtin, b_builtin),
-            else => unreachable,
-        },
-    };
+    return methodOwnerSortKey(a).order(methodOwnerSortKey(b));
 }
 
-fn methodOwnerTagRank(owner: MethodOwner) u32 {
-    return switch (owner) {
-        .nominal => 0,
-        .source_decl => 1,
-        .builtin => 2,
-    };
-}
+/// A fully-defined scalar projection of a `MethodOwner` for ordering.
+/// Comparing the union directly reads memory whose inactive-variant bytes are
+/// undefined for runtime-built registries and stack keys; projecting first
+/// writes every compared scalar explicitly. The order matches the previous
+/// per-variant comparison (nominal < builtin; module identity then type name;
+/// `source_decl == null` sorts before any value), so registries sorted by
+/// earlier builds search identically.
+const MethodOwnerSortKey = struct {
+    tag: u32,
+    first: u32,
+    second: u32,
+    third: u32,
 
-fn orderOptionalU32(a: ?u32, b: ?u32) std.math.Order {
-    if (a) |a_value| {
-        return if (b) |b_value| orderU32(a_value, b_value) else .gt;
+    fn order(a: @This(), b: @This()) std.math.Order {
+        if (a.tag != b.tag) return orderU32(a.tag, b.tag);
+        if (a.first != b.first) return orderU32(a.first, b.first);
+        if (a.second != b.second) return orderU32(a.second, b.second);
+        return orderU32(a.third, b.third);
     }
-    return if (b == null) .eq else .lt;
+};
+
+fn methodOwnerSortKey(owner: MethodOwner) MethodOwnerSortKey {
+    return switch (owner) {
+        .nominal => |nominal| .{
+            .tag = 0,
+            .first = @intFromEnum(nominal.module),
+            .second = @intFromEnum(nominal.type_name),
+            // null sorts before any statement value.
+            .third = if (nominal.source_decl) |source_decl| source_decl +| 1 else 0,
+        },
+        .builtin => |builtin_owner| .{
+            .tag = 1,
+            .first = @intFromEnum(builtin_owner),
+            .second = 0,
+            .third = 0,
+        },
+    };
 }
 
 fn orderEnum(comptime T: type, a: T, b: T) std.math.Order {
@@ -557,7 +738,7 @@ pub const StaticDispatchResultMode = union(enum) {
     parser_for: struct {
         structural_allowed: bool,
     },
-    encode_to: struct {
+    encoder_for: struct {
         structural_allowed: bool,
     },
 };
@@ -579,14 +760,112 @@ pub const StaticDispatchOperand = union(enum) {
     generated_quote: CheckedStringLiteralId,
 };
 
+/// Public `StructuralKind` declaration.
+///
+/// The compiler-derived structural implementations the checker can choose for
+/// a dispatch instead of a method target.
+pub const StructuralKind = enum(u8) {
+    equality,
+    hash,
+    parser,
+    encoder,
+};
+
+/// Public `EvidenceNodeId` declaration. Index into
+/// `StaticDispatchPlanTable.evidence_nodes`.
+pub const EvidenceNodeId = enum(u32) { _ };
+
+/// Public `EvidenceChainIndex` declaration.
+///
+/// A dispatch obligation forwarded to the enclosing callable's evidence
+/// params: `index` is the canonical evidence-param index (see
+/// `dispatch_evidence.zig`), and `depth` counts enclosing generalized
+/// callables outward from the reference (0 = the innermost generalized
+/// callable the reference appears in).
+pub const EvidenceChainIndex = struct {
+    depth: u16,
+    index: u16,
+};
+
+/// Public `CheckedEvidence` declaration.
+///
+/// How one dispatch obligation was satisfied: with a concrete target (plus
+/// nested evidence for the target's own obligations), by forwarding to the
+/// enclosing callable's evidence params, or with a compiler-derived structural
+/// implementation. `checked_error` marks an obligation at a site checking
+/// already rejected; consuming it after checking is a compiler bug.
+pub const CheckedEvidence = union(enum) {
+    direct: EvidenceNodeId,
+    constraint: EvidenceChainIndex,
+    structural: StructuralKind,
+    checked_error,
+    /// The edge left this obligation's dispatcher unsolved: no value of that
+    /// type can ever reach the dispatch (e.g. the `Ok` payload of a `Try` that
+    /// is always `Err` at this edge). The obligation is vacuous; consuming it
+    /// lowers to an unreachable crash, never to a resolved call.
+    unreachable_value,
+};
+
+/// Public `EvidenceNode` declaration.
+///
+/// A concrete method target together with evidence for the target's own
+/// evidence params (in the target scheme's canonical order); `nested` is a
+/// range into `StaticDispatchPlanTable.evidence_refs`.
+pub const EvidenceNode = struct {
+    target: MethodTarget,
+    nested: artifact_serialize.Span = .{},
+};
+
+/// Public `SiteEvidenceEntry` declaration.
+///
+/// Evidence for one instantiation site (keyed by the checked expression of the
+/// use), covering the instantiated scheme's evidence params in canonical
+/// order: a range into `StaticDispatchPlanTable.evidence_refs`. Sorted by key
+/// for binary search (transform D).
+pub const SiteEvidenceEntry = extern struct {
+    /// `@intFromEnum` of the site's `CheckedExprId`.
+    key: u32,
+    start: u32,
+    len: u32,
+};
+
+/// Public `EvidencePathStep` declaration: one semantic step from a type to a
+/// component, in the artifact's canonical names (`data` is a positional index,
+/// a `canonical.RecordFieldLabelId`, or a `canonical.TagNameId` per kind).
+pub const EvidencePathStep = dispatch_evidence.PathStep;
+
+/// Public `EvidenceParamRecord` declaration.
+///
+/// One published evidence param of a procedure template's scheme, in canonical
+/// order (see `dispatch_evidence.zig`). Consumers index these by position; the
+/// method name identifies the obligation, and `path` locates the dispatcher
+/// within the scheme's callable so compiler-generated call edges (which have
+/// no checked instantiation records) can resolve the obligation from the
+/// concrete monomorphic callable. An empty path means the dispatcher is only
+/// reachable through a constraint's fn type.
+pub const EvidenceParamRecord = struct {
+    method: canonical.MethodNameId,
+    path: artifact_serialize.Span = .{},
+};
+
 /// Public `StaticDispatchResolution` declaration.
 pub const StaticDispatchResolution = union(enum) {
-    /// The dispatch target was not published as a concrete procedure target in
-    /// this checked module's static-dispatch inputs.
-    unresolved_checked_plan,
-    /// Checking proved the concrete target. Later stages must call this target
-    /// directly instead of rediscovering it from source or type names.
-    resolved_target: MethodTarget,
+    /// Checking proved the concrete target (with nested evidence for the
+    /// target's own obligations). Later stages must call this target directly
+    /// instead of rediscovering it from source or type names.
+    direct: EvidenceNodeId,
+    /// The dispatcher is one of the enclosing callable's constrained scheme
+    /// vars; each specialization edge supplies the target as evidence.
+    constraint: EvidenceChainIndex,
+    /// The checker chose a compiler-derived structural implementation.
+    structural: StructuralKind,
+    /// Checking rejected this site; lowering must never consume the plan.
+    checked_error,
+    /// The dispatcher is a constrained var no specialization edge can ever
+    /// supply (not an evidence param of any enclosing callable and not a
+    /// defaulting literal): the dispatch is statically unreachable and lowers
+    /// to an explicit crash.
+    unreachable_dispatch,
 };
 
 /// Public `StaticDispatchCallPlan` declaration.
@@ -599,7 +878,9 @@ pub const StaticDispatchCallPlan = struct {
     /// Range into `StaticDispatchPlanTable.operand_pool` (transform B).
     args: artifact_serialize.Span = .{},
     result_mode: StaticDispatchResultMode,
-    resolution: StaticDispatchResolution,
+    /// Assigned by `resolveTotalDispatchPlans` at publication; the default is
+    /// a construction placeholder the pass overwrites for every plan.
+    resolution: StaticDispatchResolution = .checked_error,
 
     /// The plan's operands within its table's pool.
     pub fn argsSlice(self: StaticDispatchCallPlan, table: *const StaticDispatchPlanTable) []const StaticDispatchOperand {
@@ -627,6 +908,9 @@ pub const IteratorDispatchCall = struct {
     dispatcher_arg_index: u32,
     /// Range into `StaticDispatchPlanTable.iter_operand_pool` (transform B).
     args: artifact_serialize.Span = .{},
+    /// Assigned by `resolveTotalDispatchPlans` at publication; the default is
+    /// a construction placeholder the pass overwrites for every plan.
+    resolution: StaticDispatchResolution = .checked_error,
 
     pub fn argsSlice(self: IteratorDispatchCall, table: *const StaticDispatchPlanTable) []const IteratorDispatchOperand {
         return table.iter_operand_pool[self.args.start .. self.args.start + self.args.len];
@@ -701,6 +985,12 @@ pub const StaticDispatchPlanTable = struct {
     operand_pool: []const StaticDispatchOperand = &.{},
     /// Shared flat pool of iterator-plan operands.
     iter_operand_pool: []const IteratorDispatchOperand = &.{},
+    /// Concrete dispatch targets with nested evidence (`EvidenceNodeId`s).
+    evidence_nodes: []EvidenceNode = &.{},
+    /// Flat pool of evidence: node `nested` ranges and site-evidence ranges.
+    evidence_refs: []CheckedEvidence = &.{},
+    /// Checked-expr-keyed evidence for instantiation sites, sorted by key.
+    site_evidence: []SiteEvidenceEntry = &.{},
 
     pub const Serialized = extern struct {
         plans: SerializedSlice(StaticDispatchCallPlan) = .{},
@@ -712,11 +1002,14 @@ pub const StaticDispatchPlanTable = struct {
         template_refs: SerializedSlice(StaticDispatchPlanId) = .{},
         operand_pool: SerializedSlice(StaticDispatchOperand) = .{},
         iter_operand_pool: SerializedSlice(IteratorDispatchOperand) = .{},
+        evidence_nodes: SerializedSlice(EvidenceNode) = .{},
+        evidence_refs: SerializedSlice(CheckedEvidence) = .{},
+        site_evidence: SerializedSlice(SiteEvidenceEntry) = .{},
 
         comptime {
-            // 9 side lists → 9 base-pointer fixups on deserialize, never a
+            // 12 side lists → 12 base-pointer fixups on deserialize, never a
             // function of how many plans/operands the table holds.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 9);
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 12);
         }
 
         const Serde = artifact_serialize.SliceStoreSerde(StaticDispatchPlanTable, @This());
@@ -730,11 +1023,14 @@ pub const StaticDispatchPlanTable = struct {
         names: *canonical.CanonicalNameStore,
         checked_types: anytype,
         checked_bodies: anytype,
-        local_method_registry: *const MethodRegistry,
-        imported_views: anytype,
+        build_data: *PlanTableBuildData,
     ) Allocator.Error!StaticDispatchPlanTable {
         var plans = std.ArrayList(StaticDispatchCallPlan).empty;
         errdefer plans.deinit(allocator);
+        var plan_sources = std.ArrayList(PlanSource).empty;
+        errdefer plan_sources.deinit(allocator);
+        var iterator_plan_sources = std.ArrayList(IteratorPlanSource).empty;
+        errdefer iterator_plan_sources.deinit(allocator);
         // Operand side-pools; per-plan operand slices are flattened into these.
         var operand_pool = std.ArrayList(StaticDispatchOperand).empty;
         errdefer operand_pool.deinit(allocator);
@@ -783,7 +1079,7 @@ pub const StaticDispatchPlanTable = struct {
                     }
                     const ar = try pushOperands(StaticDispatchOperand, &operand_pool, allocator, args);
 
-                    const plan = StaticDispatchCallPlan{
+                    try plans.append(allocator, .{
                         .expr = checked_expr,
                         .method = try names.internMethodIdent(idents, dispatch_call.method_name),
                         .dispatcher = .{ .arg = 0 },
@@ -791,9 +1087,11 @@ pub const StaticDispatchPlanTable = struct {
                         .callable_ty = try checkedTypeIdForVar(allocator, module, checked_types, dispatch_call.constraint_fn_var),
                         .args = ar,
                         .result_mode = try staticDispatchResultModeForCheckedValueCall(allocator, module, checked_types, &constraint_index, dispatch_call.method_name, dispatch_call.constraint_fn_var),
-                        .resolution = .unresolved_checked_plan,
-                    };
-                    try plans.append(allocator, resolveStaticDispatchPlan(names, checked_types, local_method_registry, imported_views, plan));
+                    });
+                    try plan_sources.append(allocator, .{
+                        .dispatcher_var = module.exprType(dispatch_call.receiver),
+                        .constraint_fn_var = dispatch_call.constraint_fn_var,
+                    });
                 },
                 .e_interpolation => |interpolation| {
                     const checked_interpolation = switch (checked_expr_data) {
@@ -808,7 +1106,7 @@ pub const StaticDispatchPlanTable = struct {
                     const constraint_fn_var = interpolation.constraint_fn_var orelse unreachable;
                     const ar = try pushOperands(StaticDispatchOperand, &operand_pool, allocator, args);
 
-                    const plan = StaticDispatchCallPlan{
+                    try plans.append(allocator, .{
                         .expr = checked_expr,
                         .method = from_interpolation,
                         .dispatcher = .type_only,
@@ -816,16 +1114,18 @@ pub const StaticDispatchPlanTable = struct {
                         .callable_ty = try checkedTypeIdForVar(allocator, module, checked_types, constraint_fn_var),
                         .args = ar,
                         .result_mode = .value,
-                        .resolution = .unresolved_checked_plan,
-                    };
-                    try plans.append(allocator, resolveStaticDispatchPlan(names, checked_types, local_method_registry, imported_views, plan));
+                    });
+                    try plan_sources.append(allocator, .{
+                        .dispatcher_var = interpolationDispatcherVar(module, expr_idx),
+                        .constraint_fn_var = constraint_fn_var,
+                    });
                 },
                 .e_type_dispatch_call => |dispatch_call| {
                     const args = try staticDispatchOperandsForSlice(allocator, checked_bodies, module.sliceExpr(dispatch_call.args));
                     defer allocator.free(args);
                     const ar = try pushOperands(StaticDispatchOperand, &operand_pool, allocator, args);
 
-                    const plan = StaticDispatchCallPlan{
+                    try plans.append(allocator, .{
                         .expr = checked_expr,
                         .method = try names.internMethodIdent(idents, dispatch_call.method_name),
                         .dispatcher = .type_only,
@@ -833,16 +1133,18 @@ pub const StaticDispatchPlanTable = struct {
                         .callable_ty = try checkedTypeIdForVar(allocator, module, checked_types, dispatch_call.constraint_fn_var),
                         .args = ar,
                         .result_mode = try staticDispatchResultModeForCheckedValueCall(allocator, module, checked_types, &constraint_index, dispatch_call.method_name, dispatch_call.constraint_fn_var),
-                        .resolution = .unresolved_checked_plan,
-                    };
-                    try plans.append(allocator, resolveStaticDispatchPlan(names, checked_types, local_method_registry, imported_views, plan));
+                    });
+                    try plan_sources.append(allocator, .{
+                        .dispatcher_var = typeDispatchOwnerVar(module, dispatch_call.type_dispatch_stmt),
+                        .constraint_fn_var = dispatch_call.constraint_fn_var,
+                    });
                 },
                 .e_method_eq => |eq| {
                     const args = try staticDispatchOperandsForSlice(allocator, checked_bodies, &.{ eq.lhs, eq.rhs });
                     defer allocator.free(args);
                     const ar = try pushOperands(StaticDispatchOperand, &operand_pool, allocator, args);
 
-                    const plan = StaticDispatchCallPlan{
+                    try plans.append(allocator, .{
                         .expr = checked_expr,
                         .method = try names.internMethodIdent(idents, module.commonIdents().is_eq),
                         .dispatcher = .{ .arg = 0 },
@@ -853,9 +1155,11 @@ pub const StaticDispatchPlanTable = struct {
                             .structural_allowed = true,
                             .negated = eq.negated,
                         } },
-                        .resolution = .unresolved_checked_plan,
-                    };
-                    try plans.append(allocator, resolveStaticDispatchPlan(names, checked_types, local_method_registry, imported_views, plan));
+                    });
+                    try plan_sources.append(allocator, .{
+                        .dispatcher_var = module.exprType(eq.lhs),
+                        .constraint_fn_var = eq.constraint_fn_var,
+                    });
                 },
                 else => unreachable,
             }
@@ -904,7 +1208,7 @@ pub const StaticDispatchPlanTable = struct {
             const ar = try pushOperands(StaticDispatchOperand, &operand_pool, allocator, &args);
 
             const plan_id: StaticDispatchPlanId = @enumFromInt(@as(u32, @intCast(plans.items.len)));
-            const plan = StaticDispatchCallPlan{
+            try plans.append(allocator, .{
                 .expr = checked_expr,
                 .method = try names.internMethodName("from_numeral"),
                 .dispatcher = .type_only,
@@ -912,9 +1216,11 @@ pub const StaticDispatchPlanTable = struct {
                 .callable_ty = try checkedTypeIdForVar(allocator, module, checked_types, @enumFromInt(numeral_plan.fn_var)),
                 .args = ar,
                 .result_mode = .value,
-                .resolution = .unresolved_checked_plan,
-            };
-            try plans.append(allocator, resolveStaticDispatchPlan(names, checked_types, local_method_registry, imported_views, plan));
+            });
+            try plan_sources.append(allocator, .{
+                .dispatcher_var = @enumFromInt(numeral_plan.target_var),
+                .constraint_fn_var = @enumFromInt(numeral_plan.fn_var),
+            });
             try numeral_by_node.put(allocator, node, plan_id);
         }
 
@@ -942,7 +1248,7 @@ pub const StaticDispatchPlanTable = struct {
             const ar = try pushOperands(StaticDispatchOperand, &operand_pool, allocator, &args);
 
             const plan_id: StaticDispatchPlanId = @enumFromInt(@as(u32, @intCast(plans.items.len)));
-            const plan = StaticDispatchCallPlan{
+            try plans.append(allocator, .{
                 .expr = checked_expr,
                 .method = try names.internMethodName("from_quote"),
                 .dispatcher = .type_only,
@@ -950,9 +1256,11 @@ pub const StaticDispatchPlanTable = struct {
                 .callable_ty = try checkedTypeIdForVar(allocator, module, checked_types, @enumFromInt(quote_plan.fn_var)),
                 .args = ar,
                 .result_mode = .value,
-                .resolution = .unresolved_checked_plan,
-            };
-            try plans.append(allocator, resolveStaticDispatchPlan(names, checked_types, local_method_registry, imported_views, plan));
+            });
+            try plan_sources.append(allocator, .{
+                .dispatcher_var = @enumFromInt(quote_plan.target_var),
+                .constraint_fn_var = @enumFromInt(quote_plan.fn_var),
+            });
             try quote_by_node.put(allocator, node, plan_id);
         }
 
@@ -1004,6 +1312,11 @@ pub const StaticDispatchPlanTable = struct {
                     .iterator_ty = iterator_ty,
                     .step_ty = step_ty,
                 });
+                try iterator_plan_sources.append(allocator, .{
+                    .iter_dispatcher_var = module.exprType(iterable_idx),
+                    .iter_fn_var = @enumFromInt(for_plan.iter_fn_var),
+                    .next_fn_var = @enumFromInt(for_plan.next_fn_var),
+                });
             }
             try iterator_for_by_node.put(allocator, for_node_idx, iterator_for_id);
         }
@@ -1022,6 +1335,11 @@ pub const StaticDispatchPlanTable = struct {
         numeral_by_node.deinit(allocator);
         quote_by_node.deinit(allocator);
         iterator_for_by_node.deinit(allocator);
+
+        build_data.* = .{
+            .plan_sources = try plan_sources.toOwnedSlice(allocator),
+            .iterator_plan_sources = try iterator_plan_sources.toOwnedSlice(allocator),
+        };
 
         return .{
             .plans = try plans.toOwnedSlice(allocator),
@@ -1051,6 +1369,24 @@ pub const StaticDispatchPlanTable = struct {
         return if (lookupPlanKV(self.iterator_for_by_node, @intFromEnum(node))) |v| @enumFromInt(v) else null;
     }
 
+    pub fn evidenceNode(self: *const StaticDispatchPlanTable, id: EvidenceNodeId) EvidenceNode {
+        return self.evidence_nodes[@intFromEnum(id)];
+    }
+
+    /// The evidence node's nested evidence, in the target scheme's canonical
+    /// evidence-param order.
+    pub fn nestedEvidence(self: *const StaticDispatchPlanTable, node: EvidenceNode) []const CheckedEvidence {
+        return self.evidence_refs[node.nested.start .. node.nested.start + node.nested.len];
+    }
+
+    /// Evidence for the scheme instantiated at `expr` (a value use of a
+    /// constrained definition), in the callee scheme's canonical
+    /// evidence-param order; null when the use needed no evidence.
+    pub fn siteEvidence(self: *const StaticDispatchPlanTable, expr: CheckedExprId) ?[]const CheckedEvidence {
+        const found = artifact_serialize.binarySearchByKey(SiteEvidenceEntry, u32, self.site_evidence, @intFromEnum(expr), siteEvidenceOrder) orelse return null;
+        return self.evidence_refs[found.start .. found.start + found.len];
+    }
+
     /// Build-time-only teardown: frees the heap-owned slices. A frozen
     /// (deserialized) table's slices alias the artifact's single backing buffer and are
     /// NEVER freed here — the artifact's `deinitInternal` frees the buffer wholesale and
@@ -1067,6 +1403,44 @@ pub const StaticDispatchPlanTable = struct {
         allocator.free(self.iterator_for_plans);
         allocator.free(@constCast(self.operand_pool));
         allocator.free(@constCast(self.iter_operand_pool));
+        allocator.free(self.evidence_nodes);
+        allocator.free(self.evidence_refs);
+        allocator.free(self.site_evidence);
+        self.* = .{};
+    }
+};
+
+fn siteEvidenceOrder(e: SiteEvidenceEntry, key: u32) std.math.Order {
+    return std.math.order(e.key, key);
+}
+
+/// Build-time-only side data recorded by `StaticDispatchPlanTable.fromModule`
+/// so the total-resolution pass (`dispatch_evidence.zig`) can resolve each
+/// plan from the checker type store: the source dispatcher var and the source
+/// constraint fn var (the discharge-record key). Parallel to `plans`; never
+/// serialized.
+pub const PlanSource = struct {
+    dispatcher_var: Var,
+    constraint_fn_var: ?Var,
+};
+
+/// Build-time-only side data for iterator plans, parallel to
+/// `iterator_for_plans`.
+pub const IteratorPlanSource = struct {
+    iter_dispatcher_var: Var,
+    iter_fn_var: Var,
+    next_fn_var: Var,
+};
+
+/// Build-time-only outputs of `StaticDispatchPlanTable.fromModule` consumed by
+/// the total-resolution pass.
+pub const PlanTableBuildData = struct {
+    plan_sources: []PlanSource = &.{},
+    iterator_plan_sources: []IteratorPlanSource = &.{},
+
+    pub fn deinit(self: *PlanTableBuildData, allocator: Allocator) void {
+        allocator.free(self.plan_sources);
+        allocator.free(self.iterator_plan_sources);
         self.* = .{};
     }
 };
@@ -1173,8 +1547,8 @@ fn staticDispatchResultModeForCheckedValueCall(
             .structural_allowed = true,
         } };
     }
-    if (method_name.eql(common.encode_to)) {
-        return .{ .encode_to = .{
+    if (method_name.eql(common.encoder_for)) {
+        return .{ .encoder_for = .{
             .structural_allowed = true,
         } };
     }
@@ -1251,25 +1625,9 @@ fn checkedTypeIsBuiltinBool(checked_types: anytype, ty: CheckedTypeId) bool {
     };
 }
 
-fn resolveStaticDispatchPlan(
-    names: *canonical.CanonicalNameStore,
-    checked_types: anytype,
-    local_method_registry: *const MethodRegistry,
-    imported_views: anytype,
-    plan: StaticDispatchCallPlan,
-) StaticDispatchCallPlan {
-    const owner = methodOwnerForCheckedType(checked_types, plan.dispatcher_ty) orelse return plan;
-    const target = lookupCheckedMethodTarget(names, local_method_registry, imported_views, owner, plan.method) orelse {
-        if (plan.result_mode == .equality and plan.result_mode.equality.structural_allowed) return plan;
-        return plan;
-    };
-
-    var resolved = plan;
-    resolved.resolution = .{ .resolved_target = target };
-    return resolved;
-}
-
-fn methodOwnerForCheckedType(checked_types: anytype, ty: CheckedTypeId) ?MethodOwner {
+/// Public `methodOwnerForCheckedType` declaration: the method owner of a
+/// published checked type, walking alias chains transparently.
+pub fn methodOwnerForCheckedType(checked_types: anytype, ty: CheckedTypeId) ?MethodOwner {
     var current = ty;
     // Aliases are transparent for static dispatch: an alias's method owner is its
     // backing's owner. Walk the (finite) alias chain so an alias-over-nominal,
@@ -1305,22 +1663,19 @@ fn methodOwnerForCheckedPayload(payload: anytype) ?MethodOwner {
     return switch (payload) {
         .nominal => |nominal| if (nominal.builtin) |builtin|
             .{ .builtin = builtinOwnerForCheckedBuiltin(builtin) }
-        else if (nominal.source_decl) |source_decl|
-            .{ .source_decl = .{
-                .module_name = nominal.origin_module,
-                .statement = source_decl,
-            } }
         else
             .{ .nominal = .{
-                .module_name = nominal.origin_module,
+                .module = nominal.origin_module,
                 .type_name = nominal.name,
-                .source_decl = null,
+                .source_decl = nominal.source_decl,
             } },
         else => null,
     };
 }
 
-fn builtinOwnerForCheckedBuiltin(builtin: anytype) BuiltinOwner {
+/// Public `builtinOwnerForCheckedBuiltin` declaration: the registry owner key
+/// for a checked builtin nominal.
+pub fn builtinOwnerForCheckedBuiltin(builtin: anytype) BuiltinOwner {
     return switch (builtin) {
         .bool => .bool,
         .str => .str,
@@ -1351,7 +1706,9 @@ fn builtinOwnerForCheckedBuiltin(builtin: anytype) BuiltinOwner {
     };
 }
 
-fn lookupCheckedMethodTarget(
+/// Public `lookupCheckedMethodTarget` declaration: exact registry lookup in
+/// the local registry, then the imported views.
+pub fn lookupCheckedMethodTarget(
     names: *canonical.CanonicalNameStore,
     local_method_registry: *const MethodRegistry,
     imported_views: anytype,
@@ -1362,7 +1719,7 @@ fn lookupCheckedMethodTarget(
 
     const method_name = names.methodNameText(method);
     for (imported_views) |imported| {
-        const imported_owner = methodOwnerInImportedNames(names, imported.canonical_names, owner) orelse continue;
+        const imported_owner = methodOwnerInImportedStore(names, imported.canonical_names, owner) orelse continue;
         const imported_method = imported.canonical_names.lookupMethodName(method_name) orelse continue;
         if (imported.method_registry.lookup(.{ .owner = imported_owner, .method = imported_method })) |target| {
             switch (target.kind) {
@@ -1377,19 +1734,19 @@ fn lookupCheckedMethodTarget(
     return null;
 }
 
-fn methodOwnerInImportedNames(
+/// Rebase a method owner into an imported artifact's store: the module
+/// component crosses by 32-byte content identity (one map probe, full-value
+/// comparison), the type-name component by declared-name interning. This is
+/// the single cross-artifact owner resolution point — no module name text.
+fn methodOwnerInImportedStore(
     source_names: *const canonical.CanonicalNameStore,
     imported_names: *const canonical.CanonicalNameStore,
     owner: MethodOwner,
 ) ?MethodOwner {
     return switch (owner) {
         .builtin => |builtin| .{ .builtin = builtin },
-        .source_decl => |decl| .{ .source_decl = .{
-            .module_name = imported_names.lookupModuleName(source_names.moduleNameText(decl.module_name)) orelse return null,
-            .statement = decl.statement,
-        } },
         .nominal => |nominal| .{ .nominal = .{
-            .module_name = imported_names.lookupModuleName(source_names.moduleNameText(nominal.module_name)) orelse return null,
+            .module = imported_names.lookupModuleIdentity(source_names.moduleIdentityBytes(nominal.module)) orelse return null,
             .type_name = imported_names.lookupTypeName(source_names.typeNameText(nominal.type_name)) orelse return null,
             .source_decl = nominal.source_decl,
         } },
@@ -1422,6 +1779,21 @@ fn interpolationDispatcherTypeId(
     return switch (suffix_target.target()) {
         .local => |stmt_idx| checkedTypeIdForVar(allocator, module, checked_types, ModuleEnv.varFrom(stmt_idx)),
         .invalid => checkedTypeIdForVar(allocator, module, checked_types, module.exprType(expr_idx)),
+        .builtin, .external => if (@import("builtin").mode == .Debug) {
+            std.debug.panic("checked static dispatch invariant violated: interpolation suffix target was not published as a local type", .{});
+        } else unreachable,
+    };
+}
+
+/// Source-var mirror of `interpolationDispatcherTypeId`, for the plan-source
+/// side data the total-resolution pass consumes.
+fn interpolationDispatcherVar(module: TypedCIR.Module, expr_idx: CIR.Expr.Idx) Var {
+    const suffix_target = module.moduleEnvConst().numericSuffixTargetForNode(ModuleEnv.nodeIdxFrom(expr_idx)) orelse
+        return module.exprType(expr_idx);
+
+    return switch (suffix_target.target()) {
+        .local => |stmt_idx| ModuleEnv.varFrom(stmt_idx),
+        .invalid => module.exprType(expr_idx),
         .builtin, .external => if (@import("builtin").mode == .Debug) {
             std.debug.panic("checked static dispatch invariant violated: interpolation suffix target was not published as a local type", .{});
         } else unreachable,
@@ -1514,7 +1886,6 @@ fn testPlan(expr_raw: u32, args_start: u32, args_len: u32) StaticDispatchCallPla
         .callable_ty = @enumFromInt(3),
         .args = .{ .start = args_start, .len = args_len },
         .result_mode = .value,
-        .resolution = .unresolved_checked_plan,
     };
 }
 
@@ -1524,7 +1895,7 @@ test "StaticDispatchPlanTable: relocates with a constant number of fixups, opera
     // The fixup count is fixed by the number of serialized base pointers, never
     // by how much data each pool holds. The two tables below differ in operand
     // count by three orders of magnitude yet relocate identically.
-    comptime std.debug.assert(@typeInfo(StaticDispatchPlanTable.Serialized).@"struct".fields.len == 9);
+    comptime std.debug.assert(@typeInfo(StaticDispatchPlanTable.Serialized).@"struct".fields.len == 12);
 
     inline for (.{ @as(u32, 4), @as(u32, 4000) }) |operand_count| {
         const operands = try gpa.alloc(StaticDispatchOperand, operand_count);

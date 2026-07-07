@@ -1050,6 +1050,12 @@ test "Repl - list literals" {
     try expectAllNative("List.len([\"hello\", \"world\", \"test\"])", "3");
 }
 
+test "Repl - Json.to_str derives structural encoder_for for literals" {
+    try expectAllNative("Json.to_str([1, 2, 3])", "\"[1.0,2.0,3.0]\"");
+    try expectAllNative("Json.to_str({name: \"Bob\", age: 20})", "\"{\\\"age\\\":20.0,\\\"name\\\":\\\"Bob\\\"}\"");
+    try expectAllNative("Json.to_str(None)", "\"\\\"None\\\"\"");
+}
+
 test "Repl - list operations concat" {
     try expectAllNative("List.len(List.concat([1, 2], [3, 4]))", "4");
     try expectAllNative("List.len(List.concat([], [1, 2, 3]))", "3");
@@ -1164,7 +1170,7 @@ test "Repl - invalid syntax preserves definitions" {
 
     const diagnostic = try repl.step("x +");
     defer testing.allocator.free(diagnostic);
-    try testing.expect(std.mem.find(u8, diagnostic, "UNEXPECTED TOKEN") != null);
+    try testing.expect(std.mem.find(u8, diagnostic, "UNEXPECTED EXPRESSION SYNTAX") != null);
 
     const result = try repl.step("x");
     defer testing.allocator.free(result);
@@ -1344,7 +1350,7 @@ test "Repl - 4-arg lambda call (dev)" {
     try expectStateful(.wasm, steps);
 }
 
-fn expectSplit(input: []const u8, expected: []const []const u8) Allocator.Error!void {
+fn expectSplit(input: []const u8, expected: []const []const u8) ReplTestError!void {
     var repl = try testRepl(.interpreter);
     defer repl.deinit();
 

@@ -38,40 +38,40 @@ main! = |json| {
 	null_string_result : Try(Str, _)
 	null_string_result = Json.parse("null")
 
-	strict_trailing_comma_result : Try({ foo : Str }, Json)
+	strict_trailing_comma_result : Try({ foo : Str }, Json.ParseErr)
 	strict_trailing_comma_result = Json.parse("{\"foo\":\"comma\",}")
 
-	lenient_trailing_comma_result : Try({ foo : Str }, Json)
+	lenient_trailing_comma_result : Try({ foo : Str }, Json.ParseErr)
 	lenient_trailing_comma_result = Json.parse_trailing_commas("{\"foo\":\"comma\",}")
 
-	strict_tag_trailing_comma_result : Try([Active, Paused], Json)
+	strict_tag_trailing_comma_result : Try([Active, Paused], Json.ParseErr)
 	strict_tag_trailing_comma_result = Json.parse("{\"Active\":{},}")
 
-	lenient_tag_trailing_comma_result : Try([Active, Paused], Json)
+	lenient_tag_trailing_comma_result : Try([Active, Paused], Json.ParseErr)
 	lenient_tag_trailing_comma_result = Json.parse_trailing_commas("{\"Active\":{},}")
 
-	unknown_array_result : Try({ foo : Str }, Json)
+	unknown_array_result : Try({ foo : Str }, Json.ParseErr)
 	unknown_array_result = Json.parse("{\"foo\":\"array\",\"skip\":[1,2]}")
 
-	strict_unknown_array_trailing_comma_result : Try({ foo : Str }, Json)
+	strict_unknown_array_trailing_comma_result : Try({ foo : Str }, Json.ParseErr)
 	strict_unknown_array_trailing_comma_result = Json.parse("{\"foo\":\"array\",\"skip\":[1,2,]}")
 
-	lenient_unknown_array_trailing_comma_result : Try({ foo : Str }, Json)
+	lenient_unknown_array_trailing_comma_result : Try({ foo : Str }, Json.ParseErr)
 	lenient_unknown_array_trailing_comma_result = Json.parse_trailing_commas("{\"foo\":\"array\",\"skip\":[1,2,]}")
 
-	invalid_unknown_scalar_result : Try({ foo : Str }, Json)
+	invalid_unknown_scalar_result : Try({ foo : Str }, Json.ParseErr)
 	invalid_unknown_scalar_result = Json.parse("{\"foo\":\"ok\",\"skip\":not-json}")
 
-	invalid_unknown_array_scalar_result : Try({ foo : Str }, Json)
+	invalid_unknown_array_scalar_result : Try({ foo : Str }, Json.ParseErr)
 	invalid_unknown_array_scalar_result = Json.parse("{\"foo\":\"ok\",\"skip\":[not-json]}")
 
-	invalid_u64_plus_result : Try({ n : U64 }, Json)
+	invalid_u64_plus_result : Try({ n : U64 }, Json.ParseErr)
 	invalid_u64_plus_result = Json.parse("{\"n\":+1}")
 
-	invalid_u64_leading_zero_result : Try({ n : U64 }, Json)
+	invalid_u64_leading_zero_result : Try({ n : U64 }, Json.ParseErr)
 	invalid_u64_leading_zero_result = Json.parse("{\"n\":01}")
 
-	invalid_missing_tag_payload_result : Try([Active, Paused], Json)
+	invalid_missing_tag_payload_result : Try([Active, Paused], Json.ParseErr)
 	invalid_missing_tag_payload_result = Json.parse("{\"Active\":}")
 
 	match decoded_result {
@@ -169,19 +169,19 @@ empty_record_score = |empty_result|
 		Err(_) => 999999
 	}
 
-invalid_empty_record_score : Try({}, Json) -> U64
+invalid_empty_record_score : Try({}, Json.ParseErr) -> U64
 invalid_empty_record_score = |invalid_empty_result|
 	match invalid_empty_result {
 		Ok(_) => 999999
-		Err(Json.InvalidJson) => 37
+		Err(InvalidJson(_)) => 37
 		Err(_) => 999999
 	}
 
-trailing_empty_record_score : Try({}, Json) -> U64
+trailing_empty_record_score : Try({}, Json.ParseErr) -> U64
 trailing_empty_record_score = |trailing_empty_result|
 	match trailing_empty_result {
 		Ok(_) => 999999
-		Err(Json.InvalidJson) => 41
+		Err(InvalidJson(_)) => 41
 		Err(_) => 999999
 	}
 
@@ -192,31 +192,31 @@ top_level_string_score = |string_result|
 		Err(_) => 999999
 	}
 
-invalid_string_score : Try(Str, Json) -> U64
+invalid_string_score : Try(Str, Json.ParseErr) -> U64
 invalid_string_score = |string_result|
 	match string_result {
 		Ok(_) => 999999
-		Err(Json.InvalidJson) => 43
+		Err(InvalidJson(_)) => 43
 		Err(_) => 999999
 	}
 
-null_string_score : Try(Str, Json) -> U64
+null_string_score : Try(Str, Json.ParseErr) -> U64
 null_string_score = |string_result|
 	match string_result {
 		Ok(_) => 999999
-		Err(Json.InvalidJson) => 47
+		Err(InvalidJson(_)) => 47
 		Err(_) => 999999
 	}
 
-strict_trailing_comma_score : Try({ foo : Str }, Json) -> U64
+strict_trailing_comma_score : Try({ foo : Str }, Json.ParseErr) -> U64
 strict_trailing_comma_score = |record_result|
 	match record_result {
 		Ok(_) => 999999
-		Err(Json.InvalidJson) => 53
+		Err(InvalidJson(_)) => 53
 		Err(_) => 999999
 	}
 
-lenient_trailing_comma_score : Try({ foo : Str }, Json) -> U64
+lenient_trailing_comma_score : Try({ foo : Str }, Json.ParseErr) -> U64
 lenient_trailing_comma_score = |record_result|
 	match record_result {
 		Ok(record) =>
@@ -228,15 +228,15 @@ lenient_trailing_comma_score = |record_result|
 		Err(_) => 999999
 	}
 
-strict_tag_trailing_comma_score : Try([Active, Paused], Json) -> U64
+strict_tag_trailing_comma_score : Try([Active, Paused], Json.ParseErr) -> U64
 strict_tag_trailing_comma_score = |tag_result|
 	match tag_result {
 		Ok(_) => 999999
-		Err(Json.InvalidJson) => 67
+		Err(InvalidJson(_)) => 67
 		Err(_) => 999999
 	}
 
-lenient_tag_trailing_comma_score : Try([Active, Paused], Json) -> U64
+lenient_tag_trailing_comma_score : Try([Active, Paused], Json.ParseErr) -> U64
 lenient_tag_trailing_comma_score = |tag_result|
 	match tag_result {
 		Ok(Active) => 71
@@ -244,7 +244,7 @@ lenient_tag_trailing_comma_score = |tag_result|
 		Err(_) => 999999
 	}
 
-unknown_array_score : Try({ foo : Str }, Json) -> U64
+unknown_array_score : Try({ foo : Str }, Json.ParseErr) -> U64
 unknown_array_score = |record_result|
 	match record_result {
 		Ok(record) =>
@@ -256,15 +256,15 @@ unknown_array_score = |record_result|
 		Err(_) => 999999
 	}
 
-strict_unknown_array_trailing_comma_score : Try({ foo : Str }, Json) -> U64
+strict_unknown_array_trailing_comma_score : Try({ foo : Str }, Json.ParseErr) -> U64
 strict_unknown_array_trailing_comma_score = |record_result|
 	match record_result {
 		Ok(_) => 999999
-		Err(Json.InvalidJson) => 73
+		Err(InvalidJson(_)) => 73
 		Err(_) => 999999
 	}
 
-lenient_unknown_array_trailing_comma_score : Try({ foo : Str }, Json) -> U64
+lenient_unknown_array_trailing_comma_score : Try({ foo : Str }, Json.ParseErr) -> U64
 lenient_unknown_array_trailing_comma_score = |record_result|
 	match record_result {
 		Ok(record) =>
@@ -276,42 +276,42 @@ lenient_unknown_array_trailing_comma_score = |record_result|
 		Err(_) => 999999
 	}
 
-invalid_unknown_scalar_score : Try({ foo : Str }, Json) -> U64
+invalid_unknown_scalar_score : Try({ foo : Str }, Json.ParseErr) -> U64
 invalid_unknown_scalar_score = |record_result|
 	match record_result {
 		Ok(_) => 999999
-		Err(Json.InvalidJson) => 83
+		Err(InvalidJson(_)) => 83
 		Err(_) => 999999
 	}
 
-invalid_unknown_array_scalar_score : Try({ foo : Str }, Json) -> U64
+invalid_unknown_array_scalar_score : Try({ foo : Str }, Json.ParseErr) -> U64
 invalid_unknown_array_scalar_score = |record_result|
 	match record_result {
 		Ok(_) => 999999
-		Err(Json.InvalidJson) => 89
+		Err(InvalidJson(_)) => 89
 		Err(_) => 999999
 	}
 
-invalid_u64_plus_score : Try({ n : U64 }, Json) -> U64
+invalid_u64_plus_score : Try({ n : U64 }, Json.ParseErr) -> U64
 invalid_u64_plus_score = |record_result|
 	match record_result {
 		Ok(_) => 999999
-		Err(Json.InvalidJson) => 97
+		Err(InvalidJson(_)) => 97
 		Err(_) => 999999
 	}
 
-invalid_u64_leading_zero_score : Try({ n : U64 }, Json) -> U64
+invalid_u64_leading_zero_score : Try({ n : U64 }, Json.ParseErr) -> U64
 invalid_u64_leading_zero_score = |record_result|
 	match record_result {
 		Ok(_) => 999999
-		Err(Json.InvalidJson) => 101
+		Err(InvalidJson(_)) => 101
 		Err(_) => 999999
 	}
 
-invalid_missing_tag_payload_score : Try([Active, Paused], Json) -> U64
+invalid_missing_tag_payload_score : Try([Active, Paused], Json.ParseErr) -> U64
 invalid_missing_tag_payload_score = |tag_result|
 	match tag_result {
 		Ok(_) => 999999
-		Err(Json.InvalidJson) => 103
+		Err(InvalidJson(_)) => 103
 		Err(_) => 999999
 	}

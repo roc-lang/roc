@@ -97,6 +97,17 @@ Bool.true : Bool
 
 Double quotes (`"`), on the other hand, are not type-compatible with integers—not only because strings can be empty (`""` is valid, but `''` is not) but also because there may be more than one code point involved in any given string!
 
+## String literal conversion and interpolation
+
+Double-quoted literals default to `Str`. When a quoted literal has a nominal
+target type, that type can opt in by defining
+[`from_quote`](static-dispatch.md#literal-conversion).
+
+Interpolated string literals use
+[`from_interpolation`](static-dispatch.md#literal-conversion) on the result
+type. The literal segments are `Str` values, and each interpolated value is
+paired with the literal segment that follows it.
+
 ## String equality and normalization
 
 Besides emoji like 👩‍👩‍👦‍👦, another classic example of code points combining to render as one grapheme has to do with accent marks. Try putting these two different strings into `roc repl`:

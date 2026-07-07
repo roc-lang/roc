@@ -36,35 +36,42 @@ transform : _a -> _b -> _b
 transform = |_, b| b
 ~~~
 # EXPECTED
-PARSE ERROR - underscore_in_regular_annotations.md:28:22:28:24
-PARSE ERROR - underscore_in_regular_annotations.md:28:25:28:27
+AMBIGUOUS FUNCTION TYPE - underscore_in_regular_annotations.md:28:22:28:24
+UNEXPECTED STATEMENT - underscore_in_regular_annotations.md:28:25:28:27
 UNUSED VARIABLE - underscore_in_regular_annotations.md:9:12:9:16
 # PROBLEMS
 
-┌─────────────┐
-│ PARSE ERROR ├─ Function types with multiple arrows need parentheses. ───────┐
-└┬────────────┘                                                               │
+┌─────────────────────────┐
+│ AMBIGUOUS FUNCTION TYPE ├─ I was parsing a function type, and multiple ─────┐
+└┬────────────────────────┘  arrows need parentheses.                         │
  │                                                                            │
  │  transform : _a -> _b -> _b                                                │
  │                       ‾‾                                                   │
  └──────────────────────────────── underscore_in_regular_annotations.md:28:22 ┘
 
-    Instead of writing a -> b -> c, use parentheses to clarify which you mean:
-            a -> (b -> c) for a curried function (a function that returns
-            another function)
-            (a -> b) -> c for a higher-order function (a function that takes
-            another function)
+    Use parentheses to say whether the function returns another function or
+    takes a function as an argument.
+
+    For example:
+        a -> (b -> c)
+        (a -> b) -> c
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  transform : _a -> _b -> _b                                                │
  │                          ‾‾                                                │
  └──────────────────────────────── underscore_in_regular_annotations.md:28:25 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `_b` here.
 
 
 ┌─────────────────┐

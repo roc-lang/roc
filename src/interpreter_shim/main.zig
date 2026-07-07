@@ -12,6 +12,7 @@ const eval = @import("eval");
 const ipc = @import("ipc");
 const layout = @import("layout");
 const lir = @import("lir");
+const GuardedList = lir.LirStore.GuardedList;
 const TargetUsize = @import("base").target.TargetUsize;
 const shim_host_abi = @import("shim_host_abi");
 const shim_io = @import("shim_io");
@@ -114,8 +115,9 @@ fn argLayoutsForProc(
     const arg_layouts = try gpa.alloc(layout.Idx, arg_ids.len);
     errdefer gpa.free(arg_layouts);
 
-    for (arg_ids, 0..) |local_id, i| {
-        arg_layouts[i] = store.locals.items[@intFromEnum(local_id)].layout_idx;
+    for (0..arg_ids.len) |i| {
+        const local_id = GuardedList.at(arg_ids, i);
+        arg_layouts[i] = store.getLocal(local_id).layout_idx;
     }
 
     return arg_layouts;

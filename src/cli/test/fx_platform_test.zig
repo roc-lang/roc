@@ -1060,7 +1060,7 @@ test "run aborts on parse errors by default" {
     try util.checkFailure(run_result);
 
     // Should show the errors
-    try testing.expect(std.mem.find(u8, run_result.stderr, "PARSE ERROR") != null);
+    try testing.expect(std.mem.find(u8, run_result.stderr, "UNEXPECTED STATEMENT") != null);
 }
 
 test "run with --allow-errors attempts execution despite type errors" {

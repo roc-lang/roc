@@ -41,17 +41,17 @@ UNCLOSED SINGLE QUOTE - unicode_single_quotes.md:16:5:16:9
 UNCLOSED SINGLE QUOTE - unicode_single_quotes.md:19:5:19:7
 INVALID ESCAPE SEQUENCE - unicode_single_quotes.md:22:2:23:1
 UNCLOSED SINGLE QUOTE - unicode_single_quotes.md:22:1:22:3
-UNEXPECTED TOKEN IN EXPRESSION - unicode_single_quotes.md:5:5:5:9
-UNEXPECTED TOKEN IN EXPRESSION - unicode_single_quotes.md:6:5:6:10
-UNEXPECTED TOKEN IN EXPRESSION - unicode_single_quotes.md:7:5:7:10
-UNEXPECTED TOKEN IN EXPRESSION - unicode_single_quotes.md:8:5:8:11
-UNEXPECTED TOKEN IN EXPRESSION - unicode_single_quotes.md:10:5:10:17
-UNEXPECTED TOKEN IN EXPRESSION - unicode_single_quotes.md:11:5:11:12
-UNEXPECTED TOKEN IN EXPRESSION - unicode_single_quotes.md:14:5:14:7
-UNEXPECTED TOKEN IN EXPRESSION - unicode_single_quotes.md:15:5:15:11
-UNEXPECTED TOKEN IN EXPRESSION - unicode_single_quotes.md:16:5:16:9
-UNEXPECTED TOKEN IN EXPRESSION - unicode_single_quotes.md:19:5:19:7
-PARSE ERROR - unicode_single_quotes.md:22:1:22:3
+UNEXPECTED EXPRESSION SYNTAX - unicode_single_quotes.md:5:5:5:9
+UNEXPECTED EXPRESSION SYNTAX - unicode_single_quotes.md:6:5:6:10
+UNEXPECTED EXPRESSION SYNTAX - unicode_single_quotes.md:7:5:7:10
+UNEXPECTED EXPRESSION SYNTAX - unicode_single_quotes.md:8:5:8:11
+UNEXPECTED EXPRESSION SYNTAX - unicode_single_quotes.md:10:5:10:17
+UNEXPECTED EXPRESSION SYNTAX - unicode_single_quotes.md:11:5:11:12
+UNEXPECTED EXPRESSION SYNTAX - unicode_single_quotes.md:14:5:14:7
+UNEXPECTED EXPRESSION SYNTAX - unicode_single_quotes.md:15:5:15:11
+UNEXPECTED EXPRESSION SYNTAX - unicode_single_quotes.md:16:5:16:9
+UNEXPECTED EXPRESSION SYNTAX - unicode_single_quotes.md:19:5:19:7
+UNEXPECTED STATEMENT - unicode_single_quotes.md:22:1:22:3
 INVALID TUPLE ELEMENT - :0:0:0:0
 INVALID TUPLE ELEMENT - :0:0:0:0
 INVALID TUPLE ELEMENT - :0:0:0:0
@@ -185,125 +185,191 @@ UNRECOGNIZED SYNTAX - unicode_single_quotes.md:19:5:19:7
 
 
 
-┌────────────────────────────────┐
-│ UNEXPECTED TOKEN IN EXPRESSION ├─ The token '\u' is not expected in an ─────┐
-└┬───────────────────────────────┘  expression.                               │
+┌──────────────────────────────┐
+│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
+└┬─────────────────────────────┘  token cannot start an expression here.      │
  │                                                                            │
  │  '\u',                                                                     │
  │  ‾‾‾‾                                                                      │
  └────────────────────────────────────────────── unicode_single_quotes.md:5:5 ┘
 
-    Expressions can be identifiers, literals, function calls, or operators.
+    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+    blocks, conditionals, matches, or function calls.
+
+    For example:
+        add(1, 2)
+
+    I found `'\u'` here.
 
 
-┌────────────────────────────────┐
-│ UNEXPECTED TOKEN IN EXPRESSION ├─ The token '\u)' is not expected in an ────┐
-└┬───────────────────────────────┘  expression.                               │
+┌──────────────────────────────┐
+│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
+└┬─────────────────────────────┘  token cannot start an expression here.      │
  │                                                                            │
  │  '\u)',                                                                    │
  │  ‾‾‾‾‾                                                                     │
  └────────────────────────────────────────────── unicode_single_quotes.md:6:5 ┘
 
-    Expressions can be identifiers, literals, function calls, or operators.
+    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+    blocks, conditionals, matches, or function calls.
+
+    For example:
+        add(1, 2)
+
+    I found `'\u)'` here.
 
 
-┌────────────────────────────────┐
-│ UNEXPECTED TOKEN IN EXPRESSION ├─ The token '\u(' is not expected in an ────┐
-└┬───────────────────────────────┘  expression.                               │
+┌──────────────────────────────┐
+│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
+└┬─────────────────────────────┘  token cannot start an expression here.      │
  │                                                                            │
  │  '\u(',                                                                    │
  │  ‾‾‾‾‾                                                                     │
  └────────────────────────────────────────────── unicode_single_quotes.md:7:5 ┘
 
-    Expressions can be identifiers, literals, function calls, or operators.
+    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+    blocks, conditionals, matches, or function calls.
+
+    For example:
+        add(1, 2)
+
+    I found `'\u('` here.
 
 
-┌────────────────────────────────┐
-│ UNEXPECTED TOKEN IN EXPRESSION ├─ The token '\u()' is not expected in an ───┐
-└┬───────────────────────────────┘  expression.                               │
+┌──────────────────────────────┐
+│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
+└┬─────────────────────────────┘  token cannot start an expression here.      │
  │                                                                            │
  │  '\u()',                                                                   │
  │  ‾‾‾‾‾‾                                                                    │
  └────────────────────────────────────────────── unicode_single_quotes.md:8:5 ┘
 
-    Expressions can be identifiers, literals, function calls, or operators.
+    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+    blocks, conditionals, matches, or function calls.
+
+    For example:
+        add(1, 2)
+
+    I found `'\u()'` here.
 
 
-┌────────────────────────────────┐
-│ UNEXPECTED TOKEN IN EXPRESSION ├─ The token '\u(EDA0B5)' is not expected ───┐
-└┬───────────────────────────────┘  in an expression.                         │
+┌──────────────────────────────┐
+│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
+└┬─────────────────────────────┘  token cannot start an expression here.      │
  │                                                                            │
  │  '\u(EDA0B5)'                                                              │
  │  ‾‾‾‾‾‾‾‾‾‾‾‾                                                              │
  └───────────────────────────────────────────── unicode_single_quotes.md:10:5 ┘
 
-    Expressions can be identifiers, literals, function calls, or operators.
+    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+    blocks, conditionals, matches, or function calls.
+
+    For example:
+        add(1, 2)
+
+    I found `'\u(EDA0B5)'` here.
 
 
-┌────────────────────────────────┐
-│ UNEXPECTED TOKEN IN EXPRESSION ├─ The token '\u(K)' is not expected in an ──┐
-└┬───────────────────────────────┘  expression.                               │
+┌──────────────────────────────┐
+│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
+└┬─────────────────────────────┘  token cannot start an expression here.      │
  │                                                                            │
  │  '\u(K)',                                                                  │
  │  ‾‾‾‾‾‾‾                                                                   │
  └───────────────────────────────────────────── unicode_single_quotes.md:11:5 ┘
 
-    Expressions can be identifiers, literals, function calls, or operators.
+    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+    blocks, conditionals, matches, or function calls.
+
+    For example:
+        add(1, 2)
+
+    I found `'\u(K)'` here.
 
 
-┌────────────────────────────────┐
-│ UNEXPECTED TOKEN IN EXPRESSION ├─ The token '' is not expected in an ───────┐
-└┬───────────────────────────────┘  expression.                               │
+┌──────────────────────────────┐
+│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
+└┬─────────────────────────────┘  token cannot start an expression here.      │
  │                                                                            │
  │  '',                                                                       │
  │  ‾‾                                                                        │
  └───────────────────────────────────────────── unicode_single_quotes.md:14:5 ┘
 
-    Expressions can be identifiers, literals, function calls, or operators.
+    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+    blocks, conditionals, matches, or function calls.
+
+    For example:
+        add(1, 2)
+
+    I found `''` here.
 
 
-┌────────────────────────────────┐
-│ UNEXPECTED TOKEN IN EXPRESSION ├─ The token 'long' is not expected in an ───┐
-└┬───────────────────────────────┘  expression.                               │
+┌──────────────────────────────┐
+│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
+└┬─────────────────────────────┘  token cannot start an expression here.      │
  │                                                                            │
  │  'long',                                                                   │
  │  ‾‾‾‾‾‾                                                                    │
  └───────────────────────────────────────────── unicode_single_quotes.md:15:5 ┘
 
-    Expressions can be identifiers, literals, function calls, or operators.
+    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+    blocks, conditionals, matches, or function calls.
+
+    For example:
+        add(1, 2)
+
+    I found `'long'` here.
 
 
-┌────────────────────────────────┐
-│ UNEXPECTED TOKEN IN EXPRESSION ├─ The token '\', is not expected in an ─────┐
-└┬───────────────────────────────┘  expression.                               │
+┌──────────────────────────────┐
+│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
+└┬─────────────────────────────┘  token cannot start an expression here.      │
  │                                                                            │
  │  '\',                                                                      │
  │  ‾‾‾‾                                                                      │
  └───────────────────────────────────────────── unicode_single_quotes.md:16:5 ┘
 
-    Expressions can be identifiers, literals, function calls, or operators.
+    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+    blocks, conditionals, matches, or function calls.
+
+    For example:
+        add(1, 2)
+
+    I found `'\',` here.
 
 
-┌────────────────────────────────┐
-│ UNEXPECTED TOKEN IN EXPRESSION ├─ The token 'u is not expected in an ───────┐
-└┬───────────────────────────────┘  expression.                               │
+┌──────────────────────────────┐
+│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
+└┬─────────────────────────────┘  token cannot start an expression here.      │
  │                                                                            │
  │  y = 'u                                                                    │
  │      ‾‾                                                                    │
  └───────────────────────────────────────────── unicode_single_quotes.md:19:5 ┘
 
-    Expressions can be identifiers, literals, function calls, or operators.
+    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+    blocks, conditionals, matches, or function calls.
+
+    For example:
+        add(1, 2)
+
+    I found `'u` here.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  '\                                                                        │
  │  ‾‾                                                                        │
  └───────────────────────────────────────────── unicode_single_quotes.md:22:1 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `'\` here.
 
 
 INVALID TUPLE ELEMENT

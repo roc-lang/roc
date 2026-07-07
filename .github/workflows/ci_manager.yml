@@ -21,6 +21,19 @@ jobs:
       other_than_zig: ${{ steps.other_filter.outputs.other_than_zig }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+
+      - name: Check no tracked plan.md files
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          matches="$(git ls-files -- ':(glob)**/plan.md')"
+          if [ -n "$matches" ]; then
+            echo "Tracked plan.md files are not allowed:"
+            echo "$matches"
+            exit 1
+          fi
+
       - uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d # 4.0.1
         id: filter
         with:
@@ -30,6 +43,8 @@ jobs:
               - 'test/**'
               - 'build.zig'
               - 'build.zig.zon'
+              - '.github/workflows/ci_manager.yml'
+              - '.github/workflows/nightly_gate.yml'
               - '.github/workflows/ci_zig.yml'
               - '.github/workflows/ci_zig_nix.yml'
               - '.github/workflows/ci_cross_compile.yml'
@@ -55,6 +70,8 @@ jobs:
               - '!test/**'
               - '!build.zig'
               - '!build.zig.zon'
+              - '!.github/workflows/ci_manager.yml'
+              - '!.github/workflows/nightly_gate.yml'
               - '!.github/workflows/ci_zig.yml'
               - '!.github/workflows/ci_zig_nix.yml'
               - '!.github/workflows/ci_cross_compile.yml'
@@ -80,21 +97,85 @@ jobs:
               - '!examples/**'
               - '!docs/langref/**'
 
-  call-zig-workflow:
+  # PRs run only `zig build minici` per OS; the full suite (LLVM eval,
+  # valgrind, cross-compile, nix, the 6-OS matrix, ...) runs daily on main via
+  # nightly_gate.yml, which gates the `nightly` branch.
+  zig-minici:
     needs: check-changes
     if: needs.check-changes.outputs.zig == 'true'
-    uses: ./.github/workflows/ci_zig.yml
-    
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15, windows-2025]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # ratchet:actions/checkout@v6.0.2
+
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # 2.2.1
+        with:
+          version: 0.16.0
+          use-cache: true
+
+      - name: Cache Zig dependency packages
+        uses: actions/cache@v4 # ratchet:actions/cache@v4
+        with:
+          # Zig stores fetched packages in the `p/` subdir of the global cache.
+          # Caching just that under a stable build.zig.zon-hash key keeps deps
+          # present across runs: it is read every run, so it stays warm and is
+          # not evicted by mlugg's churnier per-run cache. A cold runner then no
+          # longer re-downloads deps from GitHub and hits HttpConnectionClosing,
+          # while mlugg's own cache still handles build artifacts for speed.
+          path: ${{ env.ZIG_GLOBAL_CACHE_DIR }}/p
+          key: zig-deps-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('build.zig.zon') }}
+          restore-keys: |
+            zig-deps-${{ runner.os }}-${{ runner.arch }}-
+
+      # The embedded lld-link resolves /defaultlib via the LIB env and roc's
+      # linker locates the Windows SDK/MSVC libpaths at runtime (needed by
+      # run-test-cli / run-test-dylib / run-test-archive inside minici).
+      - name: Setup MSVC (Windows)
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # ratchet:ilammy/msvc-dev-cmd@v1.13.0
+        with:
+          arch: x64
+
+      # Dep fetching and compilation happen here, where network flakes surface
+      # on stdout for flaky-retry to match. The minici run below then hits a
+      # warm cache and goes straight to the run steps, so its failures are
+      # genuine and never retried.
+      - name: Build MiniCI binaries
+        uses: ./.github/actions/flaky-retry
+        with:
+          command: zig build build-ci
+          error_string_contains: "HttpConnectionClosing|build.zig.zon|TemporaryNameServerFailure|error: cannot download|EndOfStream|WriteFailed|503|Timeout|bad HTTP response code"
+          retry_count: 3
+
+      - name: Run MiniCI
+        run: zig build minici
+
+      - name: Upload MiniCI report and logs
+        if: failure()
+        uses: actions/upload-artifact@v4 # ratchet:actions/upload-artifact@v4
+        with:
+          name: minici-${{ matrix.os }}
+          path: zig-out/minici/
+
   finish:
-    needs: [check-changes, call-zig-workflow]
+    needs: [check-changes, zig-minici]
     runs-on: ubuntu-latest
     if: always()
     steps:
       - name: Check workflow results
         run: |
+          if [[ "${{ needs.check-changes.result }}" != "success" ]]; then
+            echo "check-changes failed."
+            exit 1
+          fi
           if [[ "${{ needs.check-changes.outputs.zig }}" == "true" ]]; then
-            if [[ "${{ needs.call-zig-workflow.result }}" != "success" ]]; then
-              echo "ci_zig.yml failed."
+            if [[ "${{ needs.zig-minici.result }}" != "success" ]]; then
+              echo "zig-minici failed."
               exit 1
             fi
           fi

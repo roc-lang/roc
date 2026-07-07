@@ -12,42 +12,54 @@ match items {
 }
 ~~~
 # EXPECTED
-BAD LIST REST PATTERN SYNTAX - list_rest_scoping.md:2:13:2:19
-BAD LIST REST PATTERN SYNTAX - list_rest_scoping.md:3:6:3:12
-BAD LIST REST PATTERN SYNTAX - list_rest_scoping.md:4:9:4:15
+OLD LIST REST PATTERN - list_rest_scoping.md:2:13:2:19
+OLD LIST REST PATTERN - list_rest_scoping.md:3:6:3:12
+OLD LIST REST PATTERN - list_rest_scoping.md:4:9:4:15
 # PROBLEMS
 
-┌──────────────────────────────┐
-│ BAD LIST REST PATTERN SYNTAX ├─ List rest patterns should use the `.. as ───┐
-└┬─────────────────────────────┘  name` syntax, not `..name`.                 │
+┌───────────────────────┐
+│ OLD LIST REST PATTERN ├─ I was parsing a list pattern, and this uses the ───┐
+└┬──────────────────────┘  old rest syntax.                                   │
  │                                                                            │
  │  [first, ..rest] => first + 1                                              │
  │          ‾‾‾‾‾‾                                                            │
  └───────────────────────────────────────────────── list_rest_scoping.md:2:13 ┘
 
-    For example, use `[first, .. as rest]` instead of `[first, ..rest]`.
+    List rest patterns now use `.. as name`. The name is optional, but if it is
+    present it must come after `as`.
+
+    For example:
+        [first, .. as rest]
 
 
-┌──────────────────────────────┐
-│ BAD LIST REST PATTERN SYNTAX ├─ List rest patterns should use the `.. as ───┐
-└┬─────────────────────────────┘  name` syntax, not `..name`.                 │
+┌───────────────────────┐
+│ OLD LIST REST PATTERN ├─ I was parsing a list pattern, and this uses the ───┐
+└┬──────────────────────┘  old rest syntax.                                   │
  │                                                                            │
  │  [..rest, last] => last + 2                                                │
  │   ‾‾‾‾‾‾                                                                   │
  └────────────────────────────────────────────────── list_rest_scoping.md:3:6 ┘
 
-    For example, use `[first, .. as rest]` instead of `[first, ..rest]`.
+    List rest patterns now use `.. as name`. The name is optional, but if it is
+    present it must come after `as`.
+
+    For example:
+        [first, .. as rest]
 
 
-┌──────────────────────────────┐
-│ BAD LIST REST PATTERN SYNTAX ├─ List rest patterns should use the `.. as ───┐
-└┬─────────────────────────────┘  name` syntax, not `..name`.                 │
+┌───────────────────────┐
+│ OLD LIST REST PATTERN ├─ I was parsing a list pattern, and this uses the ───┐
+└┬──────────────────────┘  old rest syntax.                                   │
  │                                                                            │
  │  [x, ..rest, y] => x + y                                                   │
  │      ‾‾‾‾‾‾                                                                │
  └────────────────────────────────────────────────── list_rest_scoping.md:4:9 ┘
 
-    For example, use `[first, .. as rest]` instead of `[first, ..rest]`.
+    List rest patterns now use `.. as name`. The name is optional, but if it is
+    present it must come after `as`.
+
+    For example:
+        [first, .. as rest]
 
 # TOKENS
 ~~~zig
@@ -110,7 +122,7 @@ match items {
 							(rest-at (index 1)
 								(p-assign (ident "rest"))))))
 				(value
-					(e-dispatch-call (method "plus") (constraint-fn-var 72)
+					(e-dispatch-call (method "plus") (constraint-fn-var 75)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "first"))))
@@ -125,7 +137,7 @@ match items {
 							(rest-at (index 0)
 								(p-assign (ident "rest"))))))
 				(value
-					(e-dispatch-call (method "plus") (constraint-fn-var 109)
+					(e-dispatch-call (method "plus") (constraint-fn-var 112)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "last"))))
@@ -141,7 +153,7 @@ match items {
 							(rest-at (index 1)
 								(p-assign (ident "rest"))))))
 				(value
-					(e-dispatch-call (method "plus") (constraint-fn-var 113)
+					(e-dispatch-call (method "plus") (constraint-fn-var 116)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "x"))))

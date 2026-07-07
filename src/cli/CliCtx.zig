@@ -117,6 +117,7 @@ pub const Command = enum {
     bundle,
     unbundle,
     docs,
+    bump,
     repl,
     unknown,
 
@@ -131,6 +132,7 @@ pub const Command = enum {
             .bundle => "bundle",
             .unbundle => "unbundle",
             .docs => "docs",
+            .bump => "bump",
             .repl => "repl",
             .unknown => "unknown",
         };

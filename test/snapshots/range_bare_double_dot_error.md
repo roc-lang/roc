@@ -13,13 +13,18 @@ UNRECOGNIZED SYNTAX - range_bare_double_dot_error.md:1:8:1:9
 # PROBLEMS
 
 ┌──────────────────────┐
-│ NOT A RANGE OPERATOR ├─ .. is not an operator. For an exclusive range use ──┐
-└┬─────────────────────┘  ..<; for an inclusive range use ..=.                │
+│ NOT A RANGE OPERATOR ├─ I was parsing an expression, and `..` is not a ─────┐
+└┬─────────────────────┘  range operator.                                     │
  │                                                                            │
  │  r = 1..5                                                                  │
  │         ‾                                                                  │
  └──────────────────────────────────────── range_bare_double_dot_error.md:1:8 ┘
 
+    Use `..<` for an exclusive range or `..=` for an inclusive range.
+
+    For example:
+        1..<10
+        1..=10
 
 
 ┌─────────────────────┐

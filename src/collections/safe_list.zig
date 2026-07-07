@@ -798,7 +798,7 @@ pub fn SafeMultiList(comptime T: type) type {
             /// L-10: reject an `(offset, capacity)` whose `capacityInBytes` extent (the
             /// region `serialize` writes) reaches outside the `backing_len`-byte buffer.
             pub fn validateRelocations(self: *const Serialized, backing_len: u64) error{CorruptArtifact}!void {
-                if (self.capacity == 0) return;
+                if (self.len == 0) return;
                 const span_bytes = std.MultiArrayList(T).capacityInBytes(@intCast(self.capacity));
                 try validateRelocatedSpan(@alignOf(T), self.offset, span_bytes, backing_len);
             }

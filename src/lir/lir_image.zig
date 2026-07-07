@@ -15,6 +15,7 @@ const layout_mod = @import("layout");
 const LIR = core.LIR;
 const LirStore = core.LirStore;
 const Program = core.Program;
+const GuardedList = collections.GuardedList;
 
 /// Public `MAGIC` declaration.
 pub const MAGIC: u32 = 0x52494c52; // "RLIR" in little-endian bytes.
@@ -27,7 +28,8 @@ pub const MAGIC: u32 = 0x52494c52; // "RLIR" in little-endian bytes.
 /// v9: image is pointer-width independent; the target is supplied at view time
 ///     rather than recorded in the header.
 /// v10: LIR proc specs carry explicit native stack-probe requirements.
-pub const FORMAT_VERSION: u32 = 10;
+/// v11: LocalSpan lengths are u32 for large proc frame-local spans.
+pub const FORMAT_VERSION: u32 = 11;
 
 /// Public `ImageError` declaration.
 pub const ImageError = error{
@@ -103,52 +105,52 @@ pub const LirStoreImage = extern struct {
 
     fn fromStore(base_ptr: [*]align(1) const u8, image_size: usize, store: *const LirStore) ImageError!LirStoreImage {
         return .{
-            .cf_stmts = try arrayRef(base_ptr, image_size, store.cf_stmts.items),
-            .cf_switch_branches = try arrayRef(base_ptr, image_size, store.cf_switch_branches.items),
-            .str_match_steps = try arrayRef(base_ptr, image_size, store.str_match_steps.items),
-            .str_match_arms = try arrayRef(base_ptr, image_size, store.str_match_arms.items),
-            .join_points = try arrayRef(base_ptr, image_size, store.join_points.items),
-            .locals = try arrayRef(base_ptr, image_size, store.locals.items),
-            .local_ids = try arrayRef(base_ptr, image_size, store.local_ids.items),
-            .u64s = try arrayRef(base_ptr, image_size, store.u64s.items),
-            .proc_specs = try arrayRef(base_ptr, image_size, store.proc_specs.items),
+            .cf_stmts = try arrayRef(base_ptr, image_size, store.cf_stmts.unsafeRawItemsForView()),
+            .cf_switch_branches = try arrayRef(base_ptr, image_size, store.cf_switch_branches.unsafeRawItemsForView()),
+            .str_match_steps = try arrayRef(base_ptr, image_size, store.str_match_steps.unsafeRawItemsForView()),
+            .str_match_arms = try arrayRef(base_ptr, image_size, store.str_match_arms.unsafeRawItemsForView()),
+            .join_points = try arrayRef(base_ptr, image_size, store.join_points.unsafeRawItemsForView()),
+            .locals = try arrayRef(base_ptr, image_size, store.locals.unsafeRawItemsForView()),
+            .local_ids = try arrayRef(base_ptr, image_size, store.local_ids.unsafeRawItemsForView()),
+            .u64s = try arrayRef(base_ptr, image_size, store.u64s.unsafeRawItemsForView()),
+            .proc_specs = try arrayRef(base_ptr, image_size, store.proc_specs.unsafeRawItemsForView()),
             .strings = try StringLiteralStoreImage.fromStore(base_ptr, image_size, &store.strings),
             .next_synthetic_symbol = store.next_synthetic_symbol,
-            .source_file_bytes = try arrayRef(base_ptr, image_size, store.source_file_bytes.items),
-            .source_file_ends = try arrayRef(base_ptr, image_size, store.source_file_ends.items),
-            .cf_stmt_locs = try arrayRef(base_ptr, image_size, store.cf_stmt_locs.items),
-            .cf_stmt_regions = try arrayRef(base_ptr, image_size, store.cf_stmt_regions.items),
-            .proc_locs = try arrayRef(base_ptr, image_size, store.proc_locs.items),
-            .proc_debug_names = try arrayRef(base_ptr, image_size, store.proc_debug_names.items),
-            .local_names = try arrayRef(base_ptr, image_size, store.local_names.items),
+            .source_file_bytes = try arrayRef(base_ptr, image_size, store.source_file_bytes.unsafeRawItemsForView()),
+            .source_file_ends = try arrayRef(base_ptr, image_size, store.source_file_ends.unsafeRawItemsForView()),
+            .cf_stmt_locs = try arrayRef(base_ptr, image_size, store.cf_stmt_locs.unsafeRawItemsForView()),
+            .cf_stmt_regions = try arrayRef(base_ptr, image_size, store.cf_stmt_regions.unsafeRawItemsForView()),
+            .proc_locs = try arrayRef(base_ptr, image_size, store.proc_locs.unsafeRawItemsForView()),
+            .proc_debug_names = try arrayRef(base_ptr, image_size, store.proc_debug_names.unsafeRawItemsForView()),
+            .local_names = try arrayRef(base_ptr, image_size, store.local_names.unsafeRawItemsForView()),
         };
     }
 
     fn view(self: LirStoreImage, base_ptr: [*]align(1) u8, image_size: usize, allocator: std.mem.Allocator) ImageError!LirStore {
         return .{
-            .cf_stmts = try arrayListFromRef(LIR.CFStmt, base_ptr, image_size, self.cf_stmts),
-            .cf_switch_branches = try arrayListFromRef(LIR.CFSwitchBranch, base_ptr, image_size, self.cf_switch_branches),
-            .str_match_steps = try arrayListFromRef(LIR.StrMatchStep, base_ptr, image_size, self.str_match_steps),
-            .str_match_arms = try arrayListFromRef(LIR.StrMatchArm, base_ptr, image_size, self.str_match_arms),
-            .join_points = try arrayListFromRef(LIR.JoinPoint, base_ptr, image_size, self.join_points),
-            .locals = try arrayListFromRef(LIR.Local, base_ptr, image_size, self.locals),
-            .local_ids = try arrayListFromRef(LIR.LocalId, base_ptr, image_size, self.local_ids),
-            .u64s = try arrayListFromRef(u64, base_ptr, image_size, self.u64s),
-            .proc_specs = try arrayListFromRef(LIR.LirProcSpec, base_ptr, image_size, self.proc_specs),
+            .cf_stmts = try guardedListFromRef(LIR.CFStmt, "LirStore.cf_stmts", base_ptr, image_size, self.cf_stmts),
+            .cf_switch_branches = try guardedListFromRef(LIR.CFSwitchBranch, "LirStore.cf_switch_branches", base_ptr, image_size, self.cf_switch_branches),
+            .str_match_steps = try guardedListFromRef(LIR.StrMatchStep, "LirStore.str_match_steps", base_ptr, image_size, self.str_match_steps),
+            .str_match_arms = try guardedListFromRef(LIR.StrMatchArm, "LirStore.str_match_arms", base_ptr, image_size, self.str_match_arms),
+            .join_points = try guardedListFromRef(LIR.JoinPoint, "LirStore.join_points", base_ptr, image_size, self.join_points),
+            .locals = try guardedListFromRef(LIR.Local, "LirStore.locals", base_ptr, image_size, self.locals),
+            .local_ids = try guardedListFromRef(LIR.LocalId, "LirStore.local_ids", base_ptr, image_size, self.local_ids),
+            .u64s = try guardedListFromRef(u64, "LirStore.u64s", base_ptr, image_size, self.u64s),
+            .proc_specs = try guardedListFromRef(LIR.LirProcSpec, "LirStore.proc_specs", base_ptr, image_size, self.proc_specs),
             .strings = try self.strings.view(base_ptr, image_size),
             .string_builder = .{},
             .strings_insertable = false,
             .allocator = allocator,
             .next_synthetic_symbol = self.next_synthetic_symbol,
-            .patterns = std.ArrayList(LIR.LirPattern).empty,
-            .pattern_ids = std.ArrayList(LIR.LirPatternId).empty,
-            .source_file_bytes = try arrayListFromRef(u8, base_ptr, image_size, self.source_file_bytes),
-            .source_file_ends = try arrayListFromRef(u32, base_ptr, image_size, self.source_file_ends),
-            .cf_stmt_locs = try arrayListFromRef(base.SourceLoc, base_ptr, image_size, self.cf_stmt_locs),
-            .cf_stmt_regions = try arrayListFromRef(base.Region, base_ptr, image_size, self.cf_stmt_regions),
-            .proc_locs = try arrayListFromRef(base.SourceLoc, base_ptr, image_size, self.proc_locs),
-            .proc_debug_names = try arrayListFromRef(LirStore.ProcDebugName, base_ptr, image_size, self.proc_debug_names),
-            .local_names = try arrayListFromRef(u32, base_ptr, image_size, self.local_names),
+            .patterns = .empty,
+            .pattern_ids = .empty,
+            .source_file_bytes = try guardedListFromRef(u8, "LirStore.source_file_bytes", base_ptr, image_size, self.source_file_bytes),
+            .source_file_ends = try guardedListFromRef(u32, "LirStore.source_file_ends", base_ptr, image_size, self.source_file_ends),
+            .cf_stmt_locs = try guardedListFromRef(base.SourceLoc, "LirStore.cf_stmt_locs", base_ptr, image_size, self.cf_stmt_locs),
+            .cf_stmt_regions = try guardedListFromRef(base.Region, "LirStore.cf_stmt_regions", base_ptr, image_size, self.cf_stmt_regions),
+            .proc_locs = try guardedListFromRef(base.SourceLoc, "LirStore.proc_locs", base_ptr, image_size, self.proc_locs),
+            .proc_debug_names = try guardedListFromRef(LirStore.ProcDebugName, "LirStore.proc_debug_names", base_ptr, image_size, self.proc_debug_names),
+            .local_names = try guardedListFromRef(u32, "LirStore.local_names", base_ptr, image_size, self.local_names),
             .current_loc = base.SourceLoc.none,
             .current_region = base.Region.zero(),
         };
@@ -364,6 +366,16 @@ fn arrayListFromRef(comptime T: type, base_ptr: [*]align(1) u8, image_size: usiz
     };
 }
 
+fn guardedListFromRef(
+    comptime T: type,
+    comptime name: []const u8,
+    base_ptr: [*]align(1) u8,
+    image_size: usize,
+    ref: ArrayRef,
+) ImageError!GuardedList.List(T, name) {
+    return GuardedList.List(T, name).fromArrayList(try arrayListFromRef(T, base_ptr, image_size, ref));
+}
+
 fn safeListFromRef(comptime T: type, base_ptr: [*]align(1) u8, image_size: usize, ref: ArrayRef) ImageError!collections.SafeList(T) {
     const list = try arrayListFromRef(T, base_ptr, image_size, ref);
     return .{
@@ -378,7 +390,7 @@ fn stringLiteralBufferFromRef(base_ptr: [*]align(1) u8, image_size: usize, ref: 
     const len, const capacity = try checkByteListRef(image_size, ref);
     if (capacity == 0) return .{};
 
-    const ptr: [*]align(base.StringLiteral.Store.static_refcount_alignment) u8 = @ptrCast(@alignCast(base_ptr + try checkedOffset(ref)));
+    const ptr: [*]u8 = @ptrCast(base_ptr + try checkedOffset(ref));
     return base.StringLiteral.Store.Buffer.fromMappedSlice(ptr[0..len], capacity);
 }
 

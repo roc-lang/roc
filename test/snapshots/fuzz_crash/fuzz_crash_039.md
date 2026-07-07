@@ -10,8 +10,8 @@ module[}('
 ~~~
 # EXPECTED
 UNCLOSED SINGLE QUOTE - fuzz_crash_039.md:1:10:1:11
-PARSE ERROR - fuzz_crash_039.md:1:8:1:9
-PARSE ERROR - fuzz_crash_039.md:1:9:1:10
+EXPECTED EXPOSED NAME - fuzz_crash_039.md:1:8:1:9
+EXPECTED CLOSING BRACKET - fuzz_crash_039.md:1:9:1:10
 # PROBLEMS
 
 ┌───────────────────────┐
@@ -24,26 +24,39 @@ PARSE ERROR - fuzz_crash_039.md:1:9:1:10
 
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: exposed_item_unexpected_token ─────┐
-└┬────────────┘                                                               │
+┌───────────────────────┐
+│ EXPECTED EXPOSED NAME ├─ I was parsing an exposing list, and I expected ────┐
+└┬──────────────────────┘  an exposed name.                                   │
  │                                                                            │
  │  module[}('                                                                │
  │         ‾                                                                  │
  └───────────────────────────────────────────────────── fuzz_crash_039.md:1:8 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Exposing lists contain lowercase values, uppercase types or tags, and
+    `Type.*` entries.
+
+    For example:
+        module [main, Result, Result.*]
+
+    I found `}` here.
+    This closes the current construct, so the parser was looking for the
+    missing item before it.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: header_expected_close_square ──────┐
-└┬────────────┘                                                               │
+┌──────────────────────────┐
+│ EXPECTED CLOSING BRACKET ├─ I was parsing a header exposing list, and I ────┐
+└┬─────────────────────────┘  expected a closing `]`.                         │
  │                                                                            │
  │  module[}('                                                                │
  │          ‾                                                                 │
  └───────────────────────────────────────────────────── fuzz_crash_039.md:1:9 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Close the list after the final exposed name.
+
+    For example:
+        module [main, helper]
+
+    I found `(` here.
 
 # TOKENS
 ~~~zig

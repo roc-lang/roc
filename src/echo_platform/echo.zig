@@ -18,7 +18,8 @@ const WasmFilesystem = @import("WasmFilesystem.zig");
 const Allocator = std.mem.Allocator;
 const Diagnostics = runner.Diagnostics;
 const ExtraFile = runner.ExtraFile;
-const ReportingConfig = reporting.ReportingConfig;
+
+const REPORT_WIDTH: u32 = 64;
 
 /// Public API.
 pub const std_options: std.Options = .{
@@ -48,16 +49,18 @@ const js = struct {
     extern "env" fn js_stderr(ptr: [*]const u8, len: usize) void;
 };
 
-// --- Diagnostics implementation: emits HTML reports + step labels via js_stderr ---
+// --- Diagnostics implementation: emits terminal reports + step labels via js_stderr ---
 
 fn jsWrite(_: ?*anyopaque, msg: []const u8) void {
     js.js_stderr(msg.ptr, msg.len);
 }
 
 fn jsEmitReport(_: ?*anyopaque, gpa: Allocator, report: *reporting.Report) void {
-    const config = ReportingConfig.initHtml();
     var diag_writer: std.Io.Writer.Allocating = .init(gpa);
-    reporting.renderReportToHtml(report, &diag_writer.writer, config) catch return;
+    defer diag_writer.deinit();
+    var config = reporting.ReportingConfig.initColorTerminal();
+    config.max_line_width = REPORT_WIDTH;
+    reporting.renderReportToTerminal(report, &diag_writer.writer, reporting.ColorPalette.ANSI, config) catch return;
     const output = diag_writer.written();
     if (output.len > 0) {
         js.js_stderr(output.ptr, output.len);

@@ -14,6 +14,7 @@ const RuntimeHostEnv = eval.RuntimeHostEnv;
 const Allocator = std.mem.Allocator;
 const LIR = lir.LIR;
 const LirStore = lir.LirStore;
+const GuardedList = LirStore.GuardedList;
 const LocalId = LIR.LocalId;
 const CFStmtId = LIR.CFStmtId;
 const LowLevel = lir.LowLevel;
@@ -393,7 +394,11 @@ fn hasSelfCall(allocator: Allocator, store: *const LirStore, proc_id: LIR.LirPro
                 try work.append(allocator, s.remainder);
             },
             .switch_stmt => |s| {
-                for (store.getCFSwitchBranches(s.branches)) |branch| try work.append(allocator, branch.body);
+                const branches = store.getCFSwitchBranches(s.branches);
+                for (0..branches.len) |i| {
+                    const branch = GuardedList.at(branches, i);
+                    try work.append(allocator, branch.body);
+                }
                 try work.append(allocator, s.default_branch);
                 if (s.continuation) |continuation| try work.append(allocator, continuation);
             },
@@ -406,7 +411,11 @@ fn hasSelfCall(allocator: Allocator, store: *const LirStore, proc_id: LIR.LirPro
                 try work.append(allocator, s.on_miss);
             },
             .str_match_set => |s| {
-                for (store.getStrMatchArms(s.arms)) |arm| try work.append(allocator, arm.on_match);
+                const arms = store.getStrMatchArms(s.arms);
+                for (0..arms.len) |i| {
+                    const arm = GuardedList.at(arms, i);
+                    try work.append(allocator, arm.on_match);
+                }
                 try work.append(allocator, s.on_miss);
             },
             .jump, .ret, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},

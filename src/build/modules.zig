@@ -322,6 +322,7 @@ pub const ModuleType = enum {
     sljmp,
     echo_platform,
     docs,
+    bump,
     glue,
 
     /// Returns the dependencies for this module type
@@ -356,13 +357,14 @@ pub const ModuleType = enum {
             .lsp_unit, .lsp_integration => &.{ .lsp, .compile, .reporting, .build_options, .ctx, .base, .parse, .can, .types, .fmt, .eval, .roc_target },
             .backend => &.{ .base, .layout, .builtins, .can, .lir, .roc_target, .ctx },
             .lir_core => &.{ .base, .collections, .layout, .types, .can, .check },
-            .postcheck => &.{ .base, .builtins, .can, .check, .layout, .lir_core },
+            .postcheck => &.{ .base, .builtins, .can, .check, .collections, .layout, .lir_core },
             .lir => &.{ .base, .collections, .layout, .types, .can, .check, .build_options, .lir_core, .postcheck },
             .symbol => &.{.base},
             .roc_target => &.{.base},
             .sljmp => &.{},
             .echo_platform => &.{.builtins},
             .docs => &.{ .tracy, .builtins, .collections, .base, .parse, .types, .can, .check, .reporting },
+            .bump => &.{ .tracy, .builtins, .collections, .base, .parse, .types, .can, .check, .reporting },
             .glue => &.{ .base, .parse, .compile, .can, .check, .reporting, .echo_platform, .builtins, .roc_target, .types, .layout, .backend, .eval, .lir },
         };
     }
@@ -406,6 +408,7 @@ pub const RocModules = struct {
     sljmp: *Module,
     echo_platform: *Module,
     docs: *Module,
+    bump: *Module,
     glue: *Module,
     embedded_lld: *Module,
 
@@ -464,6 +467,7 @@ pub const RocModules = struct {
             .sljmp = b.addModule("sljmp", .{ .root_source_file = b.path("src/sljmp/mod.zig") }),
             .echo_platform = b.addModule("echo_platform", .{ .root_source_file = b.path("src/echo_platform/mod.zig") }),
             .docs = b.addModule("docs", .{ .root_source_file = b.path("src/docs/mod.zig") }),
+            .bump = b.addModule("bump", .{ .root_source_file = b.path("src/bump/mod.zig") }),
             .glue = b.addModule("glue", .{ .root_source_file = b.path("src/glue/mod.zig") }),
             .embedded_lld = b.addModule("embedded_lld", .{ .root_source_file = b.path("src/build/embedded_lld.zig") }),
 
@@ -545,6 +549,7 @@ pub const RocModules = struct {
             .sljmp,
             .echo_platform,
             .docs,
+            .bump,
             .glue,
         };
 
@@ -608,6 +613,7 @@ pub const RocModules = struct {
         step.root_module.addImport("sljmp", self.sljmp);
         step.root_module.addImport("echo_platform", self.echo_platform);
         step.root_module.addImport("docs", self.docs);
+        step.root_module.addImport("bump", self.bump);
         step.root_module.addImport("glue", self.glue);
         step.root_module.addImport("compile", self.compile);
         step.root_module.addImport("embedded_lld", self.embedded_lld);
@@ -669,6 +675,7 @@ pub const RocModules = struct {
             .sljmp => self.sljmp,
             .echo_platform => self.echo_platform,
             .docs => self.docs,
+            .bump => self.bump,
             .glue => self.glue,
         };
     }
@@ -720,6 +727,7 @@ pub const RocModules = struct {
             .sljmp,
             .echo_platform,
             .docs,
+            .bump,
         };
 
         const tests = b.allocator.alloc(ModuleTest, test_configs.len) catch

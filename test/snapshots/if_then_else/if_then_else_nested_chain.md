@@ -93,7 +93,7 @@ NO CHANGE
 				(e-if
 					(if-branches
 						(if-branch
-							(e-dispatch-call (method "is_lt") (constraint-fn-var 72)
+							(e-dispatch-call (method "is_lt") (constraint-fn-var 75)
 								(receiver
 									(e-lookup-local
 										(p-assign (ident "num"))))
@@ -113,7 +113,7 @@ NO CHANGE
 								(e-string
 									(e-literal (string "zero")))))
 						(if-branch
-							(e-dispatch-call (method "is_gt") (constraint-fn-var 186)
+							(e-dispatch-call (method "is_gt") (constraint-fn-var 189)
 								(receiver
 									(e-lookup-local
 										(p-assign (ident "num"))))

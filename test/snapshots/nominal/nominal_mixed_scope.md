@@ -29,15 +29,24 @@ UNDECLARED TYPE - nominal_mixed_scope.md:12:9:12:12
 # PROBLEMS
 
 ┌──────────────────────────┐
-│ IMPORT MUST BE TOP LEVEL ├─ Import statements must appear at the top ───────┐
-└┬─────────────────────────┘  level of a module.                              │
+│ IMPORT MUST BE TOP LEVEL ├─ I was parsing an import, but imports are only ──┐
+└┬─────────────────────────┘  allowed at the top level.                       │
  │                                                                            │
  │  import Color.RGB                                                          │
  │  ‾‾‾‾‾‾                                                                    │
  └──────────────────────────────────────────────── nominal_mixed_scope.md:7:5 ┘
 
-    Move this import to the top of the file, after the module header but before
-    any definitions.
+    Move this import after the module header and before declarations or
+    executable statements.
+
+    For example:
+        import Json
+
+        main = 1
+
+    I found `import` here.
+    That word is reserved by Roc, so it cannot be used as a name in this
+    position.
 
 
 ┌─────────────────┐

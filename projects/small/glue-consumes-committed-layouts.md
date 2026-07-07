@@ -205,12 +205,3 @@ comptime assertions already exist).
   produce a glue-time error naming the type, not a zero-sized field.
 - Issue 9865 repro stays green: nominal record declared in one platform
   module, re-exported and used from another, glued and byte-checked.
-
-## Related projects
-
-- [Content-based nominal identity](../big/content-based-nominal-identity.md)
-  — fully fixes the declaring-module resolution class PR 9894 patched;
-  this project consumes its artifact-keyed resolution model.
-- [Cache hardening](../small/cache-hardening.md) — committed layouts read
-  from cached artifacts are only as trustworthy as the cache's
-  enforcement edges.

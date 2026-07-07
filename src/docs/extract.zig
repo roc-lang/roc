@@ -677,7 +677,7 @@ fn extractDefEntry(
                 break :blk try extractDocType(
                     gpa,
                     &module_env.types,
-                    module_env.getIdentStoreConst(),
+                    module_env,
                     def_var,
                 );
             };
@@ -1484,17 +1484,19 @@ const ExtractError = std.mem.Allocator.Error;
 const ExtractContext = struct {
     gpa: Allocator,
     types: *const TypeStore,
+    env: *const ModuleEnv,
     idents: *const Ident.Store,
     seen: std.ArrayList(Var),
     constraints_list: std.ArrayList(ConstraintInfo),
     flex_names: std.AutoHashMap(Var, []const u8),
     next_name_idx: u32,
 
-    fn init(gpa: Allocator, types: *const TypeStore, idents_store: *const Ident.Store) ExtractContext {
+    fn init(gpa: Allocator, types: *const TypeStore, env: *const ModuleEnv) ExtractContext {
         return .{
             .gpa = gpa,
             .types = types,
-            .idents = idents_store,
+            .env = env,
+            .idents = env.getIdentStoreConst(),
             .seen = std.ArrayList(Var).empty,
             .constraints_list = std.ArrayList(ConstraintInfo).empty,
             .flex_names = std.AutoHashMap(Var, []const u8).init(gpa),
@@ -1549,10 +1551,10 @@ const ExtractContext = struct {
 fn extractDocType(
     gpa: Allocator,
     types: *const TypeStore,
-    idents: *const Ident.Store,
+    env: *const ModuleEnv,
     var_: Var,
 ) ExtractError!?*const DocType {
-    var ctx = ExtractContext.init(gpa, types, idents);
+    var ctx = ExtractContext.init(gpa, types, env);
     defer ctx.deinit();
 
     const base_type = try extractDocTypeInner(&ctx, var_);
@@ -1587,7 +1589,7 @@ fn extractDocType(
 
             // Extract the constraint function's type using a fresh context
             // to avoid cycles with the main type's seen list.
-            var fn_ctx = ExtractContext.init(gpa, types, idents);
+            var fn_ctx = ExtractContext.init(gpa, types, env);
             defer fn_ctx.deinit();
 
             const fn_type = try extractDocTypeInner(&fn_ctx, info.fn_var) orelse
@@ -1725,7 +1727,7 @@ fn extractDocTypeInner(
             return try allocDocType(gpa, .{ .type_var = try gpa.dupe(u8, var_name) });
         },
         .alias => |alias| {
-            const origin_text = idents.getText(alias.origin_module);
+            const origin_text = ctx.env.moduleIdentityDisplayText(alias.origin_module);
             const ident_text = idents.getText(alias.ident.ident_idx);
             const display_name = getDisplayName(origin_text, ident_text);
 
@@ -1854,7 +1856,7 @@ fn extractNominalType(
 ) ExtractError!*const DocType {
     const gpa = ctx.gpa;
     const idents = ctx.idents;
-    const origin_text = idents.getText(nominal.origin_module);
+    const origin_text = ctx.env.moduleIdentityDisplayText(nominal.origin_module);
     const ident_text = idents.getText(nominal.ident.ident_idx);
     const display_name = getDisplayName(origin_text, ident_text);
     const module_path = getModulePath(origin_text);

@@ -27,9 +27,9 @@ INVALID UNICODE ESCAPE SEQUENCE - string.md:7:3:7:7
 INVALID UNICODE ESCAPE SEQUENCE - string.md:8:3:8:8
 INVALID ESCAPE SEQUENCE - string.md:13:2:14:1
 UNCLOSED STRING - string.md:13:1:13:3
-PARSE ERROR - string.md:13:1:13:2
-PARSE ERROR - string.md:13:2:13:3
-PARSE ERROR - string.md:13:3:13:3
+UNEXPECTED STATEMENT - string.md:13:1:13:2
+UNEXPECTED STATEMENT - string.md:13:2:13:3
+UNEXPECTED STATEMENT - string.md:13:3:13:3
 # PROBLEMS
 
 ┌─────────────────────────────────┐
@@ -103,37 +103,59 @@ PARSE ERROR - string.md:13:3:13:3
 
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  "\                                                                        │
  │  ‾                                                                         │
  └──────────────────────────────────────────────────────────── string.md:13:1 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `"` here.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  "\                                                                        │
  │   ‾                                                                        │
  └──────────────────────────────────────────────────────────── string.md:13:2 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `\` here.
+
+    Tip: Roc syntax does not use single backslashes. Roc lambda syntax is
+    `|arg1, arg2| body`, and double backslash (`\\`) begins a line in a
+    multiline string.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  "\                                                                        │
  │    ‾                                                                       │
  └──────────────────────────────────────────────────────────── string.md:13:3 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I reached the end of the file before this construct was complete.
 
 # TOKENS
 ~~~zig

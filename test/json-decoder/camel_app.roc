@@ -7,7 +7,7 @@ parse_camel_record : Str -> Try(
 		pair : [Pair({ first_value : Str, second_value : Str })],
 		user_id : Str,
 	},
-	Json,
+	Json.ParseErr,
 )
 parse_camel_record = Json.parser_camel()
 
@@ -21,7 +21,7 @@ main! = |json| {
 				Pair(payload) =>
 					Str.count_utf8_bytes(payload.first_value)
 						+ Str.count_utf8_bytes(payload.second_value)
-			}
+				}
 
 			Str.count_utf8_bytes(decoded.cache_control)
 				+ Str.count_utf8_bytes(decoded.nested_record.inner_value)

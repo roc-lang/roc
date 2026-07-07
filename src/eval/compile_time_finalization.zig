@@ -806,11 +806,15 @@ const DevProgressReporter = struct {
             const progress: DevRootProgressState = @enumFromInt(job.progress.load(.acquire));
             if (progress != .running) continue;
             const started_at = job.start_ms.load(.acquire);
-            if (started_at == 0 or now -% started_at < threshold) continue;
+            const elapsed_since_start = elapsedMs(now, started_at) orelse continue;
+            if (elapsed_since_start < threshold) continue;
             const last = job.last_progress_ms.load(.acquire);
-            if (last != 0 and now -% last < period) continue;
+            if (last != 0) {
+                const elapsed_since_last = elapsedMs(now, last) orelse continue;
+                if (elapsed_since_last < period) continue;
+            }
             if (job.last_progress_ms.cmpxchgStrong(last, now, .acq_rel, .acquire) != null) continue;
-            const elapsed_s = (now -% started_at) / std.time.ms_per_s;
+            const elapsed_s = elapsed_since_start / std.time.ms_per_s;
             var line_buf: [4096]u8 = undefined;
             const line = progressLine(&line_buf, spinner, job.label, @intCast(elapsed_s)) catch return;
             stderr.writeAll(line);
@@ -828,12 +832,11 @@ const DevProgressReporter = struct {
             const started_at = job.start_ms.load(.acquire);
             if (started_at == 0) continue;
             const wait = blk: {
-                const elapsed = now -% started_at;
-                if (elapsed < threshold) break :blk threshold - elapsed;
+                const threshold_wait = msUntilElapsed(now, started_at, threshold);
+                if (threshold_wait != 0) break :blk threshold_wait;
                 const last = job.last_progress_ms.load(.acquire);
                 if (last == 0) break :blk 0;
-                const since_last = now -% last;
-                break :blk if (since_last < period) period - since_last else 0;
+                break :blk msUntilElapsed(now, last, period);
             };
             if (next == null or wait < next.?) next = wait;
         }
@@ -891,11 +894,14 @@ fn lowerDevEvalAndFinishRoots(
     if (lowered.lir_result.const_roots.items.len != requests.len) {
         finalizationInvariant("LIR lowering returned a different number of compile-time roots than requested");
     }
+    var static_strings = try backend.StaticStringData.build(allocator, &lowered.lir_result.store, backend.dev.LirCodeGenMod.host_lir_codegen_target);
+    defer static_strings.deinit();
+
     var codegen = try backend.HostLirCodeGen.init(
         allocator,
         &lowered.lir_result.store,
         &lowered.lir_result.layouts,
-        &.{},
+        static_strings.entries,
     );
     defer codegen.deinit();
     codegen.setComptimeHooks(.{
@@ -1121,6 +1127,22 @@ fn nowNs(io: std.Io) i64 {
 fn nowMs(io: std.Io) ProgressMillis {
     const ns: u64 = @intCast(nowNs(io));
     return @truncate(ns / std.time.ns_per_ms);
+}
+
+fn elapsedMs(now: ProgressMillis, since: ProgressMillis) ?ProgressMillis {
+    if (since == 0 or now < since) return null;
+    return now - since;
+}
+
+fn msUntilElapsed(now: ProgressMillis, since: ProgressMillis, target: ProgressMillis) ProgressMillis {
+    if (since == 0) return target;
+    if (now < since) return saturatingAddMs(since - now, target);
+    const elapsed = now - since;
+    return if (elapsed < target) target - elapsed else 0;
+}
+
+fn saturatingAddMs(a: ProgressMillis, b: ProgressMillis) ProgressMillis {
+    return std.math.add(ProgressMillis, a, b) catch std.math.maxInt(ProgressMillis);
 }
 
 fn progressDurationMs(ns: u64) ProgressMillis {
@@ -1712,6 +1734,20 @@ fn finalizationInvariant(comptime message: []const u8) noreturn {
         std.debug.panic("compile-time finalization invariant violated: {s}", .{message});
     }
     unreachable;
+}
+
+test "compile-time progress elapsed rejects unset and future timestamps" {
+    try std.testing.expectEqual(@as(?ProgressMillis, null), elapsedMs(10, 0));
+    try std.testing.expectEqual(@as(?ProgressMillis, null), elapsedMs(10, 11));
+    try std.testing.expectEqual(@as(?ProgressMillis, 7), elapsedMs(18, 11));
+}
+
+test "compile-time progress wait avoids timestamp wraparound" {
+    try std.testing.expectEqual(@as(ProgressMillis, 3007), msUntilElapsed(10, 17, 3000));
+    try std.testing.expectEqual(@as(ProgressMillis, 2500), msUntilElapsed(500, 0, 2500));
+    try std.testing.expectEqual(@as(ProgressMillis, 4), msUntilElapsed(16, 10, 10));
+    try std.testing.expectEqual(@as(ProgressMillis, 0), msUntilElapsed(20, 10, 10));
+    try std.testing.expectEqual(std.math.maxInt(ProgressMillis), msUntilElapsed(0, std.math.maxInt(ProgressMillis), 1));
 }
 
 test "compile-time finalization declarations are referenced" {

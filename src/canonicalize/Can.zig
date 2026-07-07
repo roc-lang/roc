@@ -94,6 +94,15 @@ const ActiveDeclTypeEntry = struct {
     previous: ?usize,
 };
 
+/// Identifies the associated-block type alias declaration whose annotation is
+/// currently being canonicalized, in both lookup representations: canonical
+/// scope bindings carry the CIR statement, parser declaration inventory
+/// carries the parser declaration index.
+const DefiningAssocAlias = struct {
+    parser_decl_idx: AST.DeclIndex.DeclIdx,
+    stmt_idx: Statement.Idx,
+};
+
 const TypePathNames = struct {
     without_module_prefix: ?Ident.Idx = null,
     with_module_prefix: ?Ident.Idx = null,
@@ -134,6 +143,7 @@ const AssociatedDeclBodyWork = struct {
     pattern_idx: Pattern.Idx,
     pattern_region: Region,
     annotation: ?Annotation.Idx,
+    type_anno_idx: ?TypeAnno.Idx,
     type_var_scope: ?TypeVarScopeIdx,
 };
 
@@ -335,6 +345,14 @@ loop_depth: u32 = 0,
 /// This is null when we're inside a lambda or other context where inner definitions
 /// are independent of outer ones.
 defining_bound_vars: ?DataSpan = null,
+/// The associated-block type alias declaration whose annotation is currently
+/// being canonicalized. A type lookup made by that annotation must not resolve
+/// to this declaration itself: the name means whatever it means outside the
+/// declaration (e.g. an imported type module re-exported under the same name),
+/// so resolution skips this declaration and proceeds outward. Saved and
+/// restored strictly LIFO around the annotation canonicalization, mirroring
+/// `defining_bound_vars`.
+defining_assoc_alias: ?DefiningAssocAlias = null,
 /// The identifier of the block-local definition whose body is currently being
 /// canonicalized, if any. Saved/restored around each local decl body so that
 /// references can be attributed to the def that made them (for sequential
@@ -895,9 +913,114 @@ fn registerAssociatedMethodIdent(
     method_ident: Ident.Idx,
     qualified_ident: Ident.Idx,
     binding: ModuleEnv.MethodBinding,
+    type_anno_idx: ?TypeAnno.Idx,
 ) std.mem.Allocator.Error!void {
-    try self.env.registerMethodIdentForOwner(owner_stmt_idx, method_ident, qualified_ident);
-    try self.env.registerMethodDefForOwner(owner_stmt_idx, method_ident, binding);
+    const associated_owner = ModuleEnv.MethodOwner.init(self.env.qualified_module_ident, owner_stmt_idx);
+    try self.env.registerMethodIdentForMethodOwner(associated_owner, method_ident, qualified_ident);
+    try self.env.registerMethodDefForMethodOwner(associated_owner, method_ident, binding);
+
+    if (!self.associatedOwnerAllowsReceiverMethods(owner_stmt_idx)) return;
+    const receiver_owner = try self.receiverMethodOwnerFromFunctionAnno(type_anno_idx) orelse return;
+    if (receiver_owner.eql(associated_owner)) return;
+
+    try self.env.registerMethodIdentForMethodOwner(receiver_owner, method_ident, qualified_ident);
+    try self.env.registerMethodDefForMethodOwner(receiver_owner, method_ident, binding);
+}
+
+fn associatedOwnerAllowsReceiverMethods(self: *const Self, owner_stmt_idx: Statement.Idx) bool {
+    if (self.env.module_role == .builtin) return false;
+
+    const owner_stmt = self.env.store.getStatement(owner_stmt_idx);
+    const nominal = switch (owner_stmt) {
+        .s_nominal_decl => |nominal| nominal,
+        else => return false,
+    };
+    const owner_anno = self.unwrapTypeAnnoParens(nominal.anno);
+    const tag_union = switch (self.env.store.getTypeAnno(owner_anno)) {
+        .tag_union => |tag_union| tag_union,
+        else => return false,
+    };
+    return tag_union.ext == null and self.env.store.sliceTypeAnnos(tag_union.tags).len == 0;
+}
+
+fn receiverMethodOwnerFromFunctionAnno(
+    self: *Self,
+    maybe_type_anno_idx: ?TypeAnno.Idx,
+) std.mem.Allocator.Error!?ModuleEnv.MethodOwner {
+    const type_anno_idx = maybe_type_anno_idx orelse return null;
+    const root_idx = self.unwrapTypeAnnoParens(type_anno_idx);
+    const func = switch (self.env.store.getTypeAnno(root_idx)) {
+        .@"fn" => |func| func,
+        else => return null,
+    };
+    const args = self.env.store.sliceTypeAnnos(func.args);
+    if (args.len == 0) return null;
+    return try self.receiverMethodOwnerFromTypeAnno(args[0]);
+}
+
+fn receiverMethodOwnerFromTypeAnno(
+    self: *Self,
+    type_anno_idx: TypeAnno.Idx,
+) std.mem.Allocator.Error!?ModuleEnv.MethodOwner {
+    const root_idx = self.unwrapTypeAnnoParens(type_anno_idx);
+    return switch (self.env.store.getTypeAnno(root_idx)) {
+        .lookup => |lookup| try self.receiverMethodOwnerFromTypeBase(lookup.base),
+        .apply => |apply| try self.receiverMethodOwnerFromTypeBase(apply.base),
+        else => null,
+    };
+}
+
+fn unwrapTypeAnnoParens(self: *const Self, type_anno_idx: TypeAnno.Idx) TypeAnno.Idx {
+    var current = type_anno_idx;
+    while (true) {
+        switch (self.env.store.getTypeAnno(current)) {
+            .parens => |parens| current = parens.anno,
+            else => return current,
+        }
+    }
+}
+
+fn receiverMethodOwnerFromTypeBase(
+    self: *Self,
+    type_base: TypeAnno.LocalOrExternal,
+) std.mem.Allocator.Error!?ModuleEnv.MethodOwner {
+    return switch (type_base) {
+        .local => |local| ModuleEnv.MethodOwner.init(self.env.qualified_module_ident, local.decl_idx),
+        .external => |external| try self.receiverMethodOwnerFromExternalType(external),
+        .builtin => null,
+        .pending => null,
+    };
+}
+
+fn receiverMethodOwnerFromExternalType(
+    self: *Self,
+    external: @TypeOf(@as(TypeAnno.LocalOrExternal, undefined).external),
+) std.mem.Allocator.Error!?ModuleEnv.MethodOwner {
+    const import_idx: usize = @intFromEnum(external.module_idx);
+    if (import_idx < self.env.imports.imports.items.items.len) {
+        const import_name = self.env.common.strings.get(self.env.imports.imports.items.items[import_idx]);
+        if (std.mem.eql(u8, import_name, "Builtin") or CIR.Import.isCompilerBuiltinImportName(import_name)) return null;
+    }
+
+    const import_ident = self.env.imports.getIdentIdx(external.module_idx) orelse return null;
+    const owner_module_ident = if (self.lookupAvailableModuleEnv(import_ident)) |info| blk: {
+        if (info.env.module_role == .builtin) return null;
+        const owner_module_text = info.env.getIdent(info.env.qualified_module_ident);
+        const local_owner_module_ident = try self.env.insertIdent(Ident.for_text(owner_module_text));
+        const owner_hash = info.env.contentIdentityHash() orelse {
+            if (builtin.mode == .Debug) {
+                std.debug.panic(
+                    "canonicalization invariant violated: receiver method owner module '{s}' has no content identity",
+                    .{info.env.module_name},
+                );
+            }
+            unreachable;
+        };
+        _ = try self.env.internModuleIdentity(owner_hash, local_owner_module_ident);
+        break :blk local_owner_module_ident;
+    } else import_ident;
+
+    return ModuleEnv.MethodOwner.init(owner_module_ident, @enumFromInt(external.target_node_idx));
 }
 
 fn hasAvailableModuleEnv(self: *const Self, ident: Ident.Idx) bool {
@@ -936,13 +1059,8 @@ fn populateBuiltinAutoImportedTypes(
         });
     }
 
-    const encoding_ident = try calling_module_env.insertIdent(base.Ident.for_text("Encoding"));
-    const encoding_qualified_ident = try calling_module_env.insertIdent(base.Ident.for_text("Builtin.Encoding"));
-    try self.builtin_auto_imported_types.put(gpa, encoding_ident, .{
-        .env = builtin_module_env,
-        .statement_idx = null,
-        .qualified_type_ident = encoding_qualified_ident,
-    });
+    try putBuiltinAutoImportedContainerUnmanaged(gpa, &self.builtin_auto_imported_types, calling_module_env, builtin_module_env, "Encoding", "Builtin.Encoding");
+    try putBuiltinAutoImportedContainerUnmanaged(gpa, &self.builtin_auto_imported_types, calling_module_env, builtin_module_env, "Json", "Builtin.Encoding.Json");
 }
 
 /// Legacy helper for caller-owned import maps.
@@ -970,12 +1088,40 @@ pub fn populateModuleEnvs(
         });
     }
 
-    const encoding_ident = try calling_module_env.insertIdent(base.Ident.for_text("Encoding"));
-    const encoding_qualified_ident = try calling_module_env.insertIdent(base.Ident.for_text("Builtin.Encoding"));
-    try module_envs_map.put(encoding_ident, .{
+    try putBuiltinAutoImportedContainerManaged(module_envs_map, calling_module_env, builtin_module_env, "Encoding", "Builtin.Encoding");
+    try putBuiltinAutoImportedContainerManaged(module_envs_map, calling_module_env, builtin_module_env, "Json", "Builtin.Encoding.Json");
+}
+
+fn putBuiltinAutoImportedContainerUnmanaged(
+    gpa: std.mem.Allocator,
+    map: *std.AutoHashMapUnmanaged(Ident.Idx, AutoImportedType),
+    calling_module_env: *ModuleEnv,
+    builtin_module_env: *const ModuleEnv,
+    display_name: []const u8,
+    qualified_name: []const u8,
+) Allocator.Error!void {
+    const display_ident = try calling_module_env.insertIdent(base.Ident.for_text(display_name));
+    const qualified_ident = try calling_module_env.insertIdent(base.Ident.for_text(qualified_name));
+    try map.put(gpa, display_ident, .{
         .env = builtin_module_env,
         .statement_idx = null,
-        .qualified_type_ident = encoding_qualified_ident,
+        .qualified_type_ident = qualified_ident,
+    });
+}
+
+fn putBuiltinAutoImportedContainerManaged(
+    map: *std.AutoHashMap(Ident.Idx, AutoImportedType),
+    calling_module_env: *ModuleEnv,
+    builtin_module_env: *const ModuleEnv,
+    display_name: []const u8,
+    qualified_name: []const u8,
+) Allocator.Error!void {
+    const display_ident = try calling_module_env.insertIdent(base.Ident.for_text(display_name));
+    const qualified_ident = try calling_module_env.insertIdent(base.Ident.for_text(qualified_name));
+    try map.put(display_ident, .{
+        .env = builtin_module_env,
+        .statement_idx = null,
+        .qualified_type_ident = qualified_ident,
     });
 }
 
@@ -1136,9 +1282,17 @@ fn declScopeExit(self: *Self) void {
     }
 }
 
-fn activeDeclScopeDeclaresValue(self: *Self, ident: Ident.Idx) ?ActiveDeclBinding {
-    const entry_idx = self.active_decl_values.get(ident) orelse return null;
-    return self.active_decl_value_entries.items[entry_idx].binding;
+/// Whether an active-declaration-scope entry for `ident` names the associated
+/// value item whose body is currently being canonicalized. Such an entry must
+/// not satisfy a lookup made by that body: the item being defined is not a
+/// valid target for its own (non-lambda) right-hand side.
+fn activeDeclEntryIsDefiningItem(self: *Self, binding: ActiveDeclBinding, ident: Ident.Idx) bool {
+    if (self.defining_bound_vars == null) return false;
+    const parser_decl_scope = self.parse_ir.decl_index.scopes.items[@intFromEnum(binding.parser_scope)];
+    if (parser_decl_scope.kind != .associated) return false;
+    const owner_path = parser_decl_scope.owner_type_path orelse return false;
+    const pattern_idx = self.assoc_value_patterns.get(.{ .owner = owner_path, .item = ident }) orelse return false;
+    return self.isDefiningBoundVar(pattern_idx);
 }
 
 fn annoOnlyDeclsResolveAsValues(self: *const Self) bool {
@@ -1179,8 +1333,21 @@ fn valueBucketIsForwardVisible(
 }
 
 fn activeDeclScopeDeclaresType(self: *Self, ident: Ident.Idx) ?ActiveDeclTypeEntry {
-    const entry_idx = self.active_decl_types.get(ident) orelse return null;
-    return self.active_decl_type_entries.items[entry_idx];
+    var maybe_entry_idx = self.active_decl_types.get(ident);
+    while (maybe_entry_idx) |entry_idx| {
+        const entry = self.active_decl_type_entries.items[entry_idx];
+        // The alias whose annotation is being canonicalized never satisfies
+        // that annotation's own lookups; fall through to any shadowed
+        // declaration of the same name.
+        if (self.defining_assoc_alias) |defining| {
+            if (entry.decl_idx == defining.parser_decl_idx) {
+                maybe_entry_idx = entry.previous;
+                continue;
+            }
+        }
+        return entry;
+    }
+    return null;
 }
 
 fn parserTypeDeclCanPrepare(self: *const Self, decl: AST.DeclIndex.Decl) bool {
@@ -1416,6 +1583,123 @@ fn parserTypePathForDependencySegments(
 fn typePathForBinding(self: *const Self, binding: Scope.TypeBinding) ?AST.DeclIndex.TypePathIdx {
     const stmt_idx = typeBindingStatement(binding) orelse return null;
     return self.type_decl_paths.get(stmt_idx);
+}
+
+/// The type name a top-level alias declaration refers to, when its annotation
+/// is a plain (possibly applied) type reference — `ThingAlias : Thing` or
+/// `Wrapped(a) : Wrapper(a)`. Null for every other binding or annotation
+/// shape.
+fn aliasBindingTargetName(self: *const Self, binding: Scope.TypeBinding) ?Ident.Idx {
+    const stmt_idx = switch (binding) {
+        .local_alias => |stmt_idx| stmt_idx,
+        .local_nominal, .associated_nominal, .external_nominal => return null,
+    };
+    const alias = switch (self.env.store.getStatement(stmt_idx)) {
+        .s_alias_decl => |alias| alias,
+        else => return null,
+    };
+    if (alias.anno == .placeholder) return null;
+    return switch (self.env.store.getTypeAnno(alias.anno)) {
+        .lookup => |lookup| lookup.name,
+        .apply => |apply| apply.name,
+        else => null,
+    };
+}
+
+/// The type path an alias type path points at, when the alias declaration's
+/// annotation is a plain (possibly applied) type reference — the path-level
+/// counterpart of `aliasBindingTargetName`, covering associated aliases such
+/// as `Api.ThingAlias : Thing`. Null for every other declaration or
+/// annotation shape.
+fn aliasTypePathTarget(
+    self: *Self,
+    path: AST.DeclIndex.TypePathIdx,
+) std.mem.Allocator.Error!?AST.DeclIndex.TypePathIdx {
+    const decl_index = &self.parse_ir.decl_index;
+    const decl_idx = self.firstUsableParserTypeDecl(decl_index.typeDeclsForPath(path)) orelse return null;
+    const decl = decl_index.decls.items[@intFromEnum(decl_idx)];
+    if (decl.kind != .type_alias) return null;
+    const anno_raw = decl.anno orelse return null;
+
+    // Unwrap parens and type application down to the base type reference.
+    const ty = ty_blk: {
+        var current: AST.TypeAnno.Idx = @enumFromInt(anno_raw);
+        while (true) {
+            switch (self.parse_ir.store.getTypeAnno(current)) {
+                .parens => |parens| current = parens.anno,
+                .apply => |apply| {
+                    const args = self.parse_ir.store.typeAnnoSlice(apply.args);
+                    if (args.len == 0) return null;
+                    current = args[0];
+                },
+                .ty => |ty| break :ty_blk ty,
+                else => return null,
+            }
+        }
+    };
+
+    const top = self.scratch_idents.top();
+    defer self.scratch_idents.clearFrom(top);
+    for (self.parse_ir.store.tokenSlice(ty.qualifiers)) |raw_tok| {
+        const segment = self.parse_ir.tokens.resolveIdentifier(@intCast(raw_tok)) orelse return null;
+        try self.scratch_idents.append(segment);
+    }
+    const name_ident = self.parse_ir.tokens.resolveIdentifier(ty.token) orelse return null;
+    try self.scratch_idents.append(name_ident);
+
+    const target = self.parserTypePathForDependencySegments(decl, self.scratch_idents.sliceFromStart(top)) orelse return null;
+    if (target == path) return null;
+    return target;
+}
+
+/// The dotted source path of a parser type path plus a trailing item, e.g.
+/// the path `Api.ThingAlias` and item `from_u64` produce the ident
+/// `Api.ThingAlias.from_u64`.
+fn qualifiedIdentForTypePathItem(
+    self: *Self,
+    path: AST.DeclIndex.TypePathIdx,
+    item: Ident.Idx,
+) std.mem.Allocator.Error!Ident.Idx {
+    const decl_index = &self.parse_ir.decl_index;
+    const top = self.scratch_idents.top();
+    defer self.scratch_idents.clearFrom(top);
+    var current: ?AST.DeclIndex.TypePathIdx = path;
+    while (current) |idx| {
+        const segment = decl_index.type_paths.items[@intFromEnum(idx)];
+        try self.scratch_idents.append(segment.name);
+        current = segment.parent;
+    }
+
+    const bytes_top = self.scratchBytesTop();
+    defer self.clearScratchBytesFrom(bytes_top);
+    const segments = self.scratch_idents.sliceFromStart(top);
+    var i = segments.len;
+    while (i > 0) {
+        i -= 1;
+        try self.scratchAppendSlice(self.env.getIdent(segments[i]));
+        try self.scratchAppendByte('.');
+    }
+    try self.scratchAppendSlice(self.env.getIdent(item));
+    return self.env.insertIdent(base.Ident.for_text(self.scratchBytesFrom(bytes_top)));
+}
+
+/// The qualifier chain joined with dots, e.g. tokens for `Api` and
+/// `ThingAlias` produce the ident `Api.ThingAlias`. Null when a qualifier
+/// token is not an identifier.
+fn joinedQualifierIdent(
+    self: *Self,
+    qualifier_tokens: []const u32,
+) std.mem.Allocator.Error!?Ident.Idx {
+    const bytes_top = self.scratchBytesTop();
+    defer self.clearScratchBytesFrom(bytes_top);
+    var first = true;
+    for (qualifier_tokens) |raw_tok| {
+        const segment = self.parse_ir.tokens.resolveIdentifier(@intCast(raw_tok)) orelse return null;
+        if (!first) try self.scratchAppendByte('.');
+        try self.scratchAppendSlice(self.env.getIdent(segment));
+        first = false;
+    }
+    return try self.env.insertIdent(base.Ident.for_text(self.scratchBytesFrom(bytes_top)));
 }
 
 fn qualifierTypePath(
@@ -1956,6 +2240,26 @@ fn registerTypeDecl(
             if (ast_stmt_idx) |idx| self.parserTypePathForAstStatement(idx) else null,
         );
         defer self.restoreTypeAnnoOwnerPathStack(owner_path_stack_top);
+
+        // While an associated-block alias's annotation is being canonicalized,
+        // the alias itself must not satisfy the annotation's lookups: an alias
+        // cannot be recursive, so a name that would resolve to this declaration
+        // means whatever it means outside it (e.g. `Thing : Thing` re-exporting
+        // an imported `Thing` type module). Nominal backing annotations keep
+        // seeing their own declaration: recursive nominal types are legal.
+        const saved_defining_assoc_alias = self.defining_assoc_alias;
+        defer self.defining_assoc_alias = saved_defining_assoc_alias;
+        if (type_decl.kind == .alias and parent_name != null) {
+            if (ast_stmt_idx) |idx| {
+                if (self.parse_ir.decl_index.declForStatement(@intFromEnum(idx))) |decl_idx| {
+                    self.defining_assoc_alias = .{
+                        .parser_decl_idx = decl_idx,
+                        .stmt_idx = type_decl_stmt_idx,
+                    };
+                }
+            }
+        }
+
         break :blk switch (type_decl.kind) {
             .alias => try self.canonicalizeTypeAnno(type_decl.anno, .type_decl_anno),
             .nominal, .@"opaque" => try self.canonicalizeNominalBackingAnno(type_decl.anno),
@@ -2997,6 +3301,7 @@ fn prepareAssociatedDeclBody(
         .pattern_idx = pattern_idx,
         .pattern_region = pattern_region,
         .annotation = annotation_idx,
+        .type_anno_idx = type_anno_idx,
         .type_var_scope = type_var_scope,
     };
 }
@@ -3023,7 +3328,7 @@ fn finishAssociatedDeclBody(
     if (state.owner_is_module_visible) {
         try self.env.setExposedValueNodeIndexById(work.qualified_ident, def_idx_u32);
     }
-    try self.registerAssociatedMethodIdent(state.work.owner_stmt_idx, work.decl_ident, work.qualified_ident, method_binding);
+    try self.registerAssociatedMethodIdent(state.work.owner_stmt_idx, work.decl_ident, work.qualified_ident, method_binding, work.type_anno_idx);
 
     const def_cir = self.env.store.getDef(associated_def.def_idx);
     const pattern_idx = def_cir.pattern;
@@ -3041,6 +3346,14 @@ fn finishAssociatedDeclBody(
     try self.publishAssociatedAliasSinks(state.work.alias_sinks, work.decl_ident, pattern_idx);
 }
 
+/// Whether an associated value item's body is a lambda, mirroring the parser
+/// declaration inventory's `value_form == .lambda` classification. Lambda
+/// items may reference themselves (recursion), so they skip the
+/// defining-bound-vars self-reference guard just like ordinary declarations.
+fn associatedBodyIsLambda(self: *const Self, ast_body: AST.Expr.Idx) bool {
+    return self.parse_ir.store.getExpr(ast_body) == .lambda;
+}
+
 fn canonicalizeAssociatedDeclBodyNow(
     self: *Self,
     work: AssociatedDeclBodyWork,
@@ -3051,7 +3364,17 @@ fn canonicalizeAssociatedDeclBodyNow(
     self.in_statement_position = false;
     defer self.in_statement_position = saved_stmt_pos;
 
+    // Track the item's pattern so a reference to it from its own body is
+    // reported as a self-referential definition, matching ordinary
+    // declarations.
+    const saved_defining_bound_vars = self.defining_bound_vars;
+    if (!self.associatedBodyIsLambda(work.ast_body)) {
+        self.defining_bound_vars = try self.beginDefiningBoundVars(work.pattern_idx, self.scratch_reassign_targets.top());
+    }
+
     const can_expr = try self.canonicalizeExprOrMalformed(work.ast_body);
+
+    self.endDefiningBoundVars(saved_defining_bound_vars);
     try self.finishAssociatedDeclBody(work, can_expr);
 }
 
@@ -3509,7 +3832,7 @@ fn canonicalizeAssociatedItems(
                         owner_is_module_visible,
                         block_context,
                     );
-                    try self.registerAssociatedMethodIdent(owner_stmt_idx, name_ident, qualified_idx, method_binding);
+                    try self.registerAssociatedMethodIdent(owner_stmt_idx, name_ident, qualified_idx, method_binding, type_anno_idx);
 
                     const def_cir_anno = self.env.store.getDef(def_idx);
                     const anno_pattern_idx = def_cir_anno.pattern;
@@ -3564,7 +3887,8 @@ fn canonicalizeAssociatedItems(
                             qualified_idx
                         else blk_tqd: {
                             const type_text = self.env.getIdent(type_name);
-                            break :blk_tqd try self.insertQualifiedIdent(type_text, decl_text);
+                            const fresh_decl_text = self.env.getIdent(decl_ident);
+                            break :blk_tqd try self.insertQualifiedIdent(type_text, fresh_decl_text);
                         };
                         const assoc_key: ?AST.DeclIndex.AssocValue = if (owner_type_path) |owner|
                             .{ .owner = owner, .item = decl_ident }
@@ -6729,9 +7053,16 @@ fn canonicalizedLocalLookup(
 fn canonicalizedAssociatedLookup(
     self: *Self,
     owner_path: AST.DeclIndex.TypePathIdx,
+    ident: Ident.Idx,
     pattern_idx: Pattern.Idx,
     region: Region,
 ) std.mem.Allocator.Error!CanonicalizedExpr {
+    if (self.isDefiningBoundVar(pattern_idx)) {
+        return try self.canonicalizedMalformedExpr(Diagnostic{ .self_referential_definition = .{
+            .ident = ident,
+            .region = region,
+        } });
+    }
     try self.used_patterns.put(self.env.gpa, pattern_idx, {});
     return self.canonicalizedAssociatedForwardLookup(owner_path, pattern_idx, region);
 }
@@ -6814,14 +7145,32 @@ fn canonicalizeQualifiedIdentExpr(
 
     switch (self.scopeLookup(.ident, qualified_ident)) {
         .found => |found_pattern_idx| {
+            if (self.isDefiningBoundVar(found_pattern_idx)) {
+                return try self.canonicalizedMalformedExpr(Diagnostic{ .self_referential_definition = .{
+                    .ident = qualified_ident,
+                    .region = region,
+                } });
+            }
             return try self.canonicalizedLocalLookup(found_pattern_idx, region);
         },
         .not_found => {},
     }
 
     if (try self.qualifierTypePath(qualifier_tokens)) |owner_path| {
-        if (try self.lookupOrCreateAssocValuePattern(owner_path, ident, qualified_ident, region)) |pattern_idx| {
-            return try self.canonicalizedAssociatedLookup(owner_path, pattern_idx, region);
+        // Type aliases are transparent for associated-item lookup through
+        // declared type paths too: `Api.ThingAlias : Thing` resolves
+        // `Api.ThingAlias.from_u64` against `Thing`'s associated items
+        // (#9875). Follow the (finite, cycle-guarded) alias chain of type
+        // paths until an associated item matches.
+        var path = owner_path;
+        var pattern_ident = qualified_ident;
+        var alias_hops: u32 = 32;
+        while (alias_hops > 0) : (alias_hops -= 1) {
+            if (try self.lookupOrCreateAssocValuePattern(path, ident, pattern_ident, region)) |pattern_idx| {
+                return try self.canonicalizedAssociatedLookup(path, pattern_ident, pattern_idx, region);
+            }
+            path = (try self.aliasTypePathTarget(path)) orelse break;
+            pattern_ident = try self.qualifiedIdentForTypePathItem(path, ident);
         }
     }
 
@@ -6845,8 +7194,21 @@ fn canonicalizeQualifiedIdentExpr(
     };
 
     const module_name = if (module_info) |info| info.module_name else {
-        if (try self.canonicalizeTypeAssociatedLookup(module_alias, ident, region)) |expr| {
-            return expr;
+        if (qualifier_tokens.len == 1) {
+            if (try self.canonicalizeTypeAssociatedLookup(module_alias, ident, region)) |expr| {
+                return expr;
+            }
+        } else if ((try self.scopeLookupOrPrepareTypeBinding(module_alias)) != null) {
+            // A multi-segment chain rooted at a type resolved no associated
+            // item; the report names the full path rather than collapsing it
+            // to its first segment.
+            if (try self.joinedQualifierIdent(qualifier_tokens)) |parent_ident| {
+                return try self.canonicalizedMalformedExpr(Diagnostic{ .nested_value_not_found = .{
+                    .parent_name = parent_ident,
+                    .nested_name = ident,
+                    .region = region,
+                } });
+            }
         }
 
         return try self.canonicalizedMalformedExpr(Diagnostic{ .qualified_ident_does_not_exist = .{
@@ -6943,10 +7305,23 @@ fn canonicalizeTypeDispatchFieldAccess(
 
 fn canonicalizeTypeAssociatedLookup(
     self: *Self,
-    module_alias: Ident.Idx,
+    unresolved_module_alias: Ident.Idx,
     ident: Ident.Idx,
     region: Region,
 ) std.mem.Allocator.Error!?CanonicalizedExpr {
+    // Type aliases are transparent for associated-item lookup: given
+    // `ThingAlias : Thing`, `ThingAlias.from_u64` resolves against `Thing`'s
+    // associated items (#9875). Follow the (finite, cycle-guarded) alias
+    // chain to the terminal type name before looking anything up.
+    var module_alias = unresolved_module_alias;
+    var alias_hops: u32 = 32;
+    while (alias_hops > 0) : (alias_hops -= 1) {
+        const binding_location = (try self.scopeLookupOrPrepareTypeBinding(module_alias)) orelse break;
+        const target = self.aliasBindingTargetName(binding_location.binding.*) orelse break;
+        if (target.eql(module_alias)) break;
+        module_alias = target;
+    }
+
     const local_type_binding = try self.scopeLookupOrPrepareTypeBinding(module_alias);
     const is_type_in_scope = local_type_binding != null;
     const is_auto_imported_type = self.hasAvailableModuleEnv(module_alias);
@@ -6959,7 +7334,7 @@ fn canonicalizeTypeAssociatedLookup(
     if (local_type_binding) |binding_location| {
         if (self.typePathForBinding(binding_location.binding.*)) |owner_path| {
             if (try self.lookupOrCreateAssocValuePattern(owner_path, ident, type_qualified_idx, region)) |pattern_idx| {
-                return try self.canonicalizedAssociatedLookup(owner_path, pattern_idx, region);
+                return try self.canonicalizedAssociatedLookup(owner_path, type_qualified_idx, pattern_idx, region);
             }
         }
 
@@ -7080,7 +7455,7 @@ fn canonicalizeModuleQualifiedIdent(
             const fully_qualified_idx = try self.insertQualifiedIdent(qualified_text, nested_path);
             break :name_blk self.env.getIdent(fully_qualified_idx);
         } else name_blk: {
-            if (qualifier_tokens.len == 1) {
+            if (qualifier_tokens.len == 1 and !compiler_builtin_auto_import) {
                 break :name_blk field_text;
             }
             const qualified_text = if (compiler_builtin_auto_import)
@@ -7188,7 +7563,32 @@ fn canonicalizeUnqualifiedIdentExpr(
                 }
             }
 
-            const active_decl_scope = self.activeDeclScopeDeclaresValue(ident) orelse {
+            // Walk the active declaration scopes for this name, skipping the
+            // associated item whose body is currently being canonicalized: the
+            // item being defined never satisfies its own lookup, so the name
+            // resolves outward (e.g. to a shadowed top-level function). When
+            // the name resolves ONLY to the item being defined, that is a
+            // self-referential definition.
+            var skipped_defining_item = false;
+            const active_decl_scope = blk: {
+                var maybe_entry_idx = self.active_decl_values.get(ident);
+                while (maybe_entry_idx) |entry_idx| {
+                    const entry = self.active_decl_value_entries.items[entry_idx];
+                    if (self.activeDeclEntryIsDefiningItem(entry.binding, ident)) {
+                        skipped_defining_item = true;
+                        maybe_entry_idx = entry.previous;
+                        continue;
+                    }
+                    break :blk entry.binding;
+                }
+                break :blk null;
+            } orelse {
+                if (skipped_defining_item) {
+                    return try self.canonicalizedMalformedExpr(Diagnostic{ .self_referential_definition = .{
+                        .ident = ident,
+                        .region = region,
+                    } });
+                }
                 return try self.canonicalizedMalformedExpr(Diagnostic{ .ident_not_in_scope = .{
                     .ident = ident,
                     .region = region,
@@ -10478,9 +10878,19 @@ fn runExprKernel(
                     self.in_statement_position = false;
                     errdefer self.in_statement_position = saved_stmt_pos;
 
+                    // Track the item's pattern so a reference to it from its
+                    // own body is reported as a self-referential definition,
+                    // matching ordinary declarations.
+                    const saved_defining_bound_vars = self.defining_bound_vars;
+                    if (!self.associatedBodyIsLambda(decl_work.ast_body)) {
+                        self.defining_bound_vars = try self.beginDefiningBoundVars(decl_work.pattern_idx, self.scratch_reassign_targets.top());
+                    }
+                    errdefer self.endDefiningBoundVars(saved_defining_bound_vars);
+
                     try stacks.pushFinishAssociatedDeclBody(frame_allocator, .{
                         .work = decl_work,
                         .saved_stmt_pos = saved_stmt_pos,
+                        .saved_defining_bound_vars = saved_defining_bound_vars,
                     });
                     try stacks.pushParse(frame_allocator, .{ .idx = decl_work.ast_body, .target = .scratch });
                 },
@@ -10497,6 +10907,7 @@ fn runExprKernel(
             const state = stacks.takeFinishAssociatedDeclBody();
             defer if (state.work.type_var_scope) |scope_idx| self.scopeExitTypeVar(scope_idx);
             defer self.in_statement_position = state.saved_stmt_pos;
+            self.endDefiningBoundVars(state.saved_defining_bound_vars);
 
             const result_start = child_slots.items.len - 1;
             const can_expr = try self.exprOrMalformedFromResult(child_slots.items[result_start].expr, state.work.ast_body);
@@ -15021,6 +15432,7 @@ fn storeExprKernelOutput(
 const ExprFinishAssociatedDeclBodyWork = struct {
     work: AssociatedDeclBodyWork,
     saved_stmt_pos: bool,
+    saved_defining_bound_vars: ?DataSpan,
 };
 
 const ExprBlockNextWork = struct {
@@ -19538,10 +19950,23 @@ fn scopeLookupTypeBindingInCanonicalScopes(self: *Self, ident_idx: Ident.Idx) ?T
     var i = self.scopes.items.len;
     while (i > 0) {
         i -= 1;
-        if (self.typeBindingLocationInScope(i, ident_idx)) |location| return location;
+        if (self.typeBindingLocationInScope(i, ident_idx)) |location| {
+            // The alias whose annotation is being canonicalized never
+            // satisfies that annotation's own lookups; keep searching
+            // outward (e.g. toward an imported type module of the same
+            // name).
+            if (self.typeBindingIsDefiningAssocAlias(location.binding.*)) continue;
+            return location;
+        }
     }
 
     return null;
+}
+
+fn typeBindingIsDefiningAssocAlias(self: *const Self, binding: Scope.TypeBinding) bool {
+    const defining = self.defining_assoc_alias orelse return false;
+    const stmt_idx = typeBindingStatement(binding) orelse return false;
+    return stmt_idx == defining.stmt_idx;
 }
 
 fn typeBindingLocationInScope(

@@ -78,6 +78,7 @@ const AnnotationOnlyValue = problem_mod.AnnotationOnlyValue;
 const PolymorphicVarAnnotation = problem_mod.PolymorphicVarAnnotation;
 const EffectfulTopLevel = problem_mod.EffectfulTopLevel;
 const EffectfulExpect = problem_mod.EffectfulExpect;
+const EffectfulFunctionName = problem_mod.EffectfulFunctionName;
 
 // Comptime errors
 const ComptimeCrash = problem_mod.ComptimeCrash;
@@ -213,6 +214,18 @@ pub const ReportBuilder = struct {
         try report.document.addSourceRegion(
             region_info,
             .error_highlight,
+            self.filename,
+            self.source,
+            self.module_env.getLineStarts(),
+        );
+    }
+
+    /// Add source code warning highlighting for a region.
+    fn addSourceWarningRegion(self: *Self, report: *Report, region: Region) Allocator.Error!void {
+        const region_info = self.module_env.calcRegionInfo(region);
+        try report.document.addSourceRegion(
+            region_info,
+            .warning_highlight,
             self.filename,
             self.source,
             self.module_env.getLineStarts(),
@@ -884,6 +897,9 @@ pub const ReportBuilder = struct {
             },
             .effectful_expect => |data| {
                 return self.buildEffectfulExpectReport(data);
+            },
+            .effectful_function_name => |data| {
+                return self.buildEffectfulFunctionNameReport(data);
             },
             .annotation_only_value => |data| {
                 return self.buildAnnotationOnlyValueReport(data);
@@ -3636,6 +3652,22 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
         try D.renderSlice(&.{
             D.bytes("Keep expect conditions pure, and test effectful behavior from a function body instead."),
+        }, self, &report);
+        return report;
+    }
+
+    fn buildEffectfulFunctionNameReport(self: *Self, data: EffectfulFunctionName) Allocator.Error!Report {
+        var report = try Report.init(self.gpa, "Effectful Function Name", "This function performs an effect, so its name must end in `!`.", .warning);
+        errdefer report.deinit();
+
+        try self.addSourceWarningRegion(&report, data.region);
+
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try D.renderSlice(&.{
+            D.bytes("Add a trailing"),
+            D.bytes("!").withAnnotation(.inline_code),
+            D.bytes("to this function name."),
         }, self, &report);
         return report;
     }

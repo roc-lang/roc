@@ -85,14 +85,35 @@ type_id_to_rust = |type_table, duplicate_names, type_id| {
 ## Render one struct field declaration for a record field. Unnamed
 ## nominal-record padding fields become fixed-size byte arrays (`[u8; size]`);
 ## named fields use their resolved Rust type.
-rust_record_field_decl = |type_table, duplicate_names, field| {
+rust_record_field_decl = |type_table, duplicate_names, field, use_32| {
 	field_name = name_to_rust_field_ident(field.name)
 	rust_type = if field.is_padding {
-		"[u8; ${U64.to_str(field.size)}]"
+		size = if use_32 { field.size_32 } else { field.size_64 }
+		"[u8; ${U64.to_str(size)}]"
 	} else {
 		type_id_to_rust(type_table, duplicate_names, field.type_id)
 	}
 	"    pub ${field_name}: ${rust_type},\n"
+}
+
+rust_record_fields_decl = |type_table, duplicate_names, fields, use_32| {
+	var $field_strs = ""
+	for field in fields {
+		$field_strs = Str.concat($field_strs, rust_record_field_decl(type_table, duplicate_names, field, use_32))
+	}
+	$field_strs
+}
+
+rust_size_align_assertions = |type_name, size_32, alignment_32, size_64, alignment_64| {
+	if size_32 > 0 or size_64 > 0 {
+		"#[cfg(target_pointer_width = \"32\")]\nconst _: () = assert!(core::mem::size_of::<${type_name}>() == ${U64.to_str(size_32)}, \"${type_name} size mismatch\");\n#[cfg(target_pointer_width = \"32\")]\nconst _: () = assert!(core::mem::align_of::<${type_name}>() == ${U64.to_str(alignment_32)}, \"${type_name} alignment mismatch\");\n#[cfg(target_pointer_width = \"64\")]\nconst _: () = assert!(core::mem::size_of::<${type_name}>() == ${U64.to_str(size_64)}, \"${type_name} size mismatch\");\n#[cfg(target_pointer_width = \"64\")]\nconst _: () = assert!(core::mem::align_of::<${type_name}>() == ${U64.to_str(alignment_64)}, \"${type_name} alignment mismatch\");\n\n"
+	} else {
+		""
+	}
+}
+
+rust_record_struct_decl = |type_name, doc, fields_32, fields_64| {
+	"${doc}#[cfg(target_pointer_width = \"32\")]\n#[repr(C)]\n#[derive(Clone, Copy)]\npub struct ${type_name} {\n${fields_32}}\n\n#[cfg(target_pointer_width = \"64\")]\n#[repr(C)]\n#[derive(Clone, Copy)]\npub struct ${type_name} {\n${fields_64}}\n\n"
 }
 
 ## Convert a TypeRepr to its Rust type string
@@ -535,14 +556,16 @@ expect name_to_rust_field_ident("render!") == "render_bang"
 expect name_to_rust_field_ident("type") == "r#type"
 expect name_to_rust_field_ident("_") == "_field"
 
-## Return the Rust discriminant type for a given tag count.
-disc_type_for_count = |count| {
-	if count <= 256 {
+## Return the Rust discriminant type for a committed discriminant size.
+disc_type_for_size = |size| {
+	if size <= 1 {
 		"u8"
-	} else if count <= 65536 {
+	} else if size == 2 {
 		"u16"
-	} else {
+	} else if size == 4 {
 		"u32"
+	} else {
+		"u64"
 	}
 }
 
@@ -554,8 +577,8 @@ disc_type_for_count = |count| {
 ## Follows single-variant tag unions (unwrapping to their payload).
 lookup_record_in_type_table = |type_table, type_id| {
 	match TypeTable.record_layout(TypeTable.from_list(type_table), type_id) {
-		RecordFound(layout) => { found: Bool.True, fields: layout.fields, size: layout.size, alignment: layout.alignment }
-		NotRecord => { found: Bool.False, fields: [], size: 0, alignment: 0 }
+		RecordFound(layout) => { found: Bool.True, fields: layout.fields, size: layout.size, alignment: layout.alignment, size_32: layout.size_32, alignment_32: layout.alignment_32, size_64: layout.size_64, alignment_64: layout.alignment_64 }
+		NotRecord => { found: Bool.False, fields: [], size: 0, alignment: 0, size_32: 0, alignment_32: 0, size_64: 0, alignment_64: 0 }
 	}
 }
 
@@ -1363,21 +1386,14 @@ generate_element_type_structs_rust = |type_table, duplicate_names| {
 					if !(List.contains($seen_names, struct_name)) {
 						$seen_names = $seen_names.append(struct_name)
 
-						var $field_strs = ""
-						for field in rec.fields {
-							$field_strs = Str.concat($field_strs, rust_record_field_decl(type_table, duplicate_names, field))
-						}
-
-						# Size/alignment assertions (guarded by pointer width)
-						assertions = if rec.size > 0 {
-							"const _: () = assert!(core::mem::size_of::<${struct_name}>() == ${U64.to_str(rec.size)}, \"${struct_name} size mismatch\");\nconst _: () = assert!(core::mem::align_of::<${struct_name}>() == ${U64.to_str(rec.alignment)}, \"${struct_name} alignment mismatch\");\n\n"
-						} else {
-							""
-						}
+						fields_32 = rust_record_fields_decl(type_table, duplicate_names, rec.fields, Bool.True)
+						fields_64 = rust_record_fields_decl(type_table, duplicate_names, rec.fields, Bool.False)
+						assertions = rust_size_align_assertions(struct_name, rec.size_32, rec.alignment_32, rec.size_64, rec.alignment_64)
+						doc = "/// Element type for ${rec.name}\n"
 
 						$structs = Str.concat(
 							$structs,
-							"/// Element type for ${rec.name}\n#[repr(C)]\n#[derive(Clone, Copy)]\npub struct ${struct_name} {\n${$field_strs}}\n\n${assertions}",
+							"${rust_record_struct_decl(struct_name, doc, fields_32, fields_64)}${assertions}",
 						)
 					}
 				}
@@ -1416,8 +1432,7 @@ generate_tag_union_structs_rust = |type_table, duplicate_names| {
 ## Generate Rust code for a single multi-variant tag union.
 generate_single_tag_union_rust = |type_table, duplicate_names, type_id, tu| {
 	struct_name = tag_union_struct_name(duplicate_names, type_id, tu)
-	tag_count = List.len(tu.tags)
-	disc_type = disc_type_for_count(tag_count)
+	disc_type = disc_type_for_size(tu.discriminant_size)
 
 	# Check if this is a pure enum (all variants have no payload)
 	is_pure_enum = List.all(tu.tags, |tag| List.is_empty(tag.payload))
@@ -1431,7 +1446,8 @@ generate_single_tag_union_rust = |type_table, duplicate_names, type_id, tu| {
 			$idx = $idx + 1
 		}
 
-		"/// Tag union: ${tu.name}\n#[repr(${disc_type})]\n#[derive(Debug, Clone, Copy, PartialEq, Eq)]\npub enum ${struct_name} {\n${$variants}}\n\n"
+		assertions = rust_size_align_assertions(struct_name, tu.size_32, tu.alignment_32, tu.size_64, tu.alignment_64)
+		"/// Tag union: ${tu.name}\n#[repr(${disc_type})]\n#[derive(Debug, Clone, Copy, PartialEq, Eq)]\npub enum ${struct_name} {\n${$variants}}\n\n${assertions}"
 	} else {
 		# Generate tuple structs for any variant with >1 payload
 		var $tuple_structs = ""
@@ -1445,7 +1461,8 @@ generate_single_tag_union_rust = |type_table, duplicate_names, type_id, tu| {
 					$tuple_fields = Str.concat($tuple_fields, "    pub _${U64.to_str($ti)}: ${rust_type},\n")
 					$ti = $ti + 1
 				}
-				$tuple_structs = Str.concat($tuple_structs, "/// Payload struct for ${tag.name} variant.\n#[repr(C)]\n#[derive(Clone, Copy)]\npub struct ${tuple_name} {\n${$tuple_fields}}\n\n")
+				tuple_assertions = rust_size_align_assertions(tuple_name, tag.payload_size_32, tag.payload_alignment_32, tag.payload_size_64, tag.payload_alignment_64)
+				$tuple_structs = Str.concat($tuple_structs, "/// Payload struct for ${tag.name} variant.\n#[repr(C)]\n#[derive(Clone, Copy)]\npub struct ${tuple_name} {\n${$tuple_fields}}\n\n${tuple_assertions}")
 			}
 		}
 
@@ -1477,12 +1494,7 @@ generate_single_tag_union_rust = |type_table, duplicate_names, type_id, tu| {
 			}
 		}
 
-		# Size/alignment assertions
-		assertions = if tu.size > 0 {
-			"const _: () = assert!(core::mem::size_of::<${struct_name}>() == ${U64.to_str(tu.size)}, \"${struct_name} size mismatch\");\nconst _: () = assert!(core::mem::align_of::<${struct_name}>() == ${U64.to_str(tu.alignment)}, \"${struct_name} alignment mismatch\");\n\n"
-		} else {
-			""
-		}
+		assertions = rust_size_align_assertions(struct_name, tu.size_32, tu.alignment_32, tu.size_64, tu.alignment_64)
 
 		"${$tuple_structs}/// Tag discriminant for ${tu.name}.\n#[repr(${disc_type})]\n#[derive(Debug, Clone, Copy, PartialEq, Eq)]\npub enum ${struct_name}Tag {\n${$enum_variants}}\n\n/// Tag union: ${tu.name}\n#[repr(C)]\n#[derive(Clone, Copy)]\npub struct ${struct_name} {\n    pub payload: ${struct_name}Payload,\n    pub tag: ${struct_name}Tag,\n}\n\n#[repr(C)]\n#[derive(Clone, Copy)]\npub union ${struct_name}Payload {\n${$union_fields}}\n\n${assertions}"
 	}
@@ -1497,21 +1509,15 @@ generate_all_record_structs_rust = |hosted_functions, type_table, duplicate_name
 		if type_table_result.found {
 			struct_name = name_to_struct_name(func.name)
 
-			var $fields = ""
-			for field in type_table_result.fields {
-				$fields = Str.concat($fields, rust_record_field_decl(type_table, duplicate_names, field))
-			}
+			fields_32 = rust_record_fields_decl(type_table, duplicate_names, type_table_result.fields, Bool.True)
+			fields_64 = rust_record_fields_decl(type_table, duplicate_names, type_table_result.fields, Bool.False)
+			ret_name = "${struct_name}RetRecord"
+			assertions = rust_size_align_assertions(ret_name, type_table_result.size_32, type_table_result.alignment_32, type_table_result.size_64, type_table_result.alignment_64)
 
-			assertions = if type_table_result.size > 0 {
-				"const _: () = assert!(core::mem::size_of::<${struct_name}RetRecord>() == ${U64.to_str(type_table_result.size)}, \"${struct_name}RetRecord size mismatch\");\nconst _: () = assert!(core::mem::align_of::<${struct_name}RetRecord>() == ${U64.to_str(type_table_result.alignment)}, \"${struct_name}RetRecord alignment mismatch\");\n\n"
-			} else {
-				""
-			}
-
-			doc = "/// Return type record for ${func.name}\n/// Fields ordered by alignment descending (Roc ABI)\n"
+			doc = "/// Return type record for ${func.name}\n/// Fields use committed Roc ABI order.\n"
 			$structs = Str.concat(
 				$structs,
-				"${doc}#[repr(C)]\n#[derive(Clone, Copy)]\npub struct ${struct_name}RetRecord {\n${$fields}}\n\n${assertions}",
+				"${rust_record_struct_decl(ret_name, doc, fields_32, fields_64)}${assertions}",
 			)
 		}
 	}
@@ -1536,30 +1542,24 @@ generate_args_struct_rust = |func, type_table, duplicate_names| {
 	struct_name = name_to_struct_name(func.name)
 
 	# Try type table lookup for single-record arg
-	type_table_result = if List.len(func.arg_type_ids) == 1 {
-		match List.first(func.arg_type_ids) {
-			Ok(arg_id) => lookup_record_in_type_table(type_table, arg_id)
-			Err(_) => { found: Bool.False, fields: [], size: 0, alignment: 0 }
-		}
-	} else {
-		{ found: Bool.False, fields: [], size: 0, alignment: 0 }
-	}
-
-	if type_table_result.found {
-		var $fields = ""
-		for field in type_table_result.fields {
-			$fields = Str.concat($fields, rust_record_field_decl(type_table, duplicate_names, field))
-		}
-
-		assertions = if type_table_result.size > 0 {
-			"const _: () = assert!(core::mem::size_of::<${struct_name}Args>() == ${U64.to_str(type_table_result.size)}, \"${struct_name}Args size mismatch\");\nconst _: () = assert!(core::mem::align_of::<${struct_name}Args>() == ${U64.to_str(type_table_result.alignment)}, \"${struct_name}Args alignment mismatch\");\n\n"
+		type_table_result = if List.len(func.arg_type_ids) == 1 {
+			match List.first(func.arg_type_ids) {
+				Ok(arg_id) => lookup_record_in_type_table(type_table, arg_id)
+				Err(_) => { found: Bool.False, fields: [], size: 0, alignment: 0, size_32: 0, alignment_32: 0, size_64: 0, alignment_64: 0 }
+			}
 		} else {
-			""
+			{ found: Bool.False, fields: [], size: 0, alignment: 0, size_32: 0, alignment_32: 0, size_64: 0, alignment_64: 0 }
 		}
 
-		doc = "/// Arguments for ${func.name}\n/// Roc signature: ${func.type_str}\n/// Refcounted fields are owned by the hosted function.\n"
-		return "${doc}#[repr(C)]\n#[derive(Clone, Copy)]\npub struct ${struct_name}Args {\n${$fields}}\n\n${assertions}"
-	}
+		if type_table_result.found {
+			fields_32 = rust_record_fields_decl(type_table, duplicate_names, type_table_result.fields, Bool.True)
+			fields_64 = rust_record_fields_decl(type_table, duplicate_names, type_table_result.fields, Bool.False)
+			args_name = "${struct_name}Args"
+			assertions = rust_size_align_assertions(args_name, type_table_result.size_32, type_table_result.alignment_32, type_table_result.size_64, type_table_result.alignment_64)
+
+			doc = "/// Arguments for ${func.name}\n/// Roc signature: ${func.type_str}\n/// Refcounted fields are owned by the hosted function.\n"
+			return "${rust_record_struct_decl(args_name, doc, fields_32, fields_64)}${assertions}"
+		}
 
 	# Multi-arg or primitive args: use positional fields from type table
 	var $positional_fields = ""

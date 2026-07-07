@@ -167,11 +167,10 @@ constraint.
    regression corpus (all five Evidence issues); (d) flip to the rule alone
    and delete the sweep in one PR.
 
-Interaction with total dispatch plans: that project's `constraint(k)`
-representation (see Related projects) gives each where-clause constraint a
-stable index and site — natural provenance. Either project can land first,
-but they share the constraint-provenance foundation; build it once so both
-consume the same record.
+Interaction with the landed total static-dispatch plan work: its
+`constraint(k)` representation gives each where-clause constraint a stable
+index and site — natural provenance. This project should consume that shared
+constraint-provenance foundation rather than inventing another one.
 
 ## What success looks like
 
@@ -203,8 +202,8 @@ traversal. Invariants and enforcement points:
   instantiation copy that every dispatch constraint has an introducing
   expression/region.
 - *Downstream corollary*: monotype lowering never sees an unpinned dispatch
-  receiver — the crash fallback for it can be deleted (coordinated with the
-  total-dispatch-plans project).
+  receiver — the crash fallback for it was deleted by the landed total
+  static-dispatch plan work.
 - Maintain a false-positive/false-negative regression corpus built from all
   five issues (#9485, #9632, #9657, #9815, #9819's case) plus the existing
   snapshot suite; the rule must match the corpus exactly, with no
@@ -244,13 +243,3 @@ check memory.
   them first).
 - Differential harness (temporary, during migration step b): run sweep and
   rule together over the snapshot corpus and fail on any disagreement.
-
-## Related projects
-
-- [../big/total-dispatch-plans.md](../big/total-dispatch-plans.md) — shares
-  the constraint-provenance foundation; its `constraint(k)` indices are
-  natural provenance carriers. Either order works; build provenance once.
-- [../small/check-app-against-platform-requires.md](../small/check-app-against-platform-requires.md)
-  — upstream of both dispatch projects: platform-typed receivers must be
-  concrete at check time for pinnability judgments to be meaningful in app
-  modules.

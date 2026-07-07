@@ -2288,6 +2288,7 @@ pub fn build(b: *std.Build) void {
     const run_snapshot_tool_step = b.step("run-snapshot-tool", "Run the snapshot tool to update snapshot files");
     const echo_wasm_step = b.step("build-echo-wasm", "Build the echo platform to zig-out/lib/echo.wasm");
     const echo_wasm_archive_step = b.step("build-echo-wasm-archive", "Build echo.wasm and zstd-compress it to zig-out/lib/echo.wasm.zst");
+    const build_glue_release_step = b.step("build-glue-release", "Build release-ready glue package and specs");
 
     const build_test_hosts_step = b.step("build-test-hosts", "Build test platform host libraries");
     const build_release_step = b.step("build-release", "Build optimized release binary for distribution");
@@ -2317,8 +2318,6 @@ pub fn build(b: *std.Build) void {
     const cli_test_llvm = b.option(bool, "cli-test-llvm", "Include LLVM size/speed backend jobs in CLI platform tests") orelse false;
     const trace_build = b.option(bool, "trace-build", "Enable detailed build pipeline tracing") orelse false;
     const debug_gpa = b.option(bool, "debug-gpa", "Use the leak-checking DebugAllocator for the roc binary even when libc is linked (default: off, so libc's malloc and its ASan/Valgrind/LD_PRELOAD tooling are used)") orelse false;
-    const ci_env_set = if (b.graph.environ_map.get("CI")) |ci| ci.len != 0 else false;
-    const forbid_arc_certifier_skips = b.option(bool, "forbid-arc-certifier-skips", "Panic in debug builds if the ARC certifier skips any procedure (defaults to on when the CI environment variable is set)") orelse ci_env_set;
     const shared_memory_size = b.option(u64, "shared-memory-size", "Explicitly set shared-memory arena sizes in bytes");
     const print_trmc = b.option(bool, "print-trmc", "Print one line for each transformed TRMC/TCE proc") orelse false;
     const print_ir_after_trmc = b.option(bool, "print-ir-after-trmc", "Print full LIR for each proc transformed by TRMC/TCE") orelse false;
@@ -2329,6 +2328,7 @@ pub fn build(b: *std.Build) void {
     const test_progress_interval_ms = b.option(u64, "test-progress-interval-ms", "Print non-TTY parallel test progress every N milliseconds; 0 disables it") orelse 0;
     const eval_no_fork = b.option(bool, "eval-no-fork", "Run eval tests in-process instead of through fork isolation") orelse false;
     const eval_time_worker = b.option(bool, "eval-time-worker", "Print eval worker startup timing instrumentation") orelse false;
+    const glue_release_tag = b.option([]const u8, "glue-release-tag", "Nightly release tag used in generated glue package URLs");
     if (shared_memory_size) |size| {
         if (size == 0) {
             std.log.err("-Dshared-memory-size must be greater than 0", .{});
@@ -2371,7 +2371,6 @@ pub fn build(b: *std.Build) void {
     build_options.addOption(bool, "trace_modules", trace_modules);
     build_options.addOption(bool, "trace_build", trace_build);
     build_options.addOption(bool, "debug_gpa", debug_gpa);
-    build_options.addOption(bool, "forbid_arc_certifier_skips", forbid_arc_certifier_skips);
     build_options.addOption(bool, "has_shared_memory_size", shared_memory_size != null);
     build_options.addOption(u64, "shared_memory_size", shared_memory_size orelse 0);
     build_options.addOption(bool, "print_trmc", print_trmc);
@@ -3445,6 +3444,38 @@ pub fn build(b: *std.Build) void {
         run_test_echo_wasm_step.dependOn(&run_echo_wasm_test.step);
     }
 
+    {
+        const glue_release_exe = b.addExecutable(.{
+            .name = "glue_release",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/build/glue_release.zig"),
+                .target = target,
+                .optimize = optimize,
+            }),
+        });
+        configureBackend(glue_release_exe, target);
+
+        const glue_package_cmd = b.addRunArtifact(roc_exe);
+        glue_package_cmd.setCwd(b.path("src/glue/platform"));
+        glue_package_cmd.addArgs(&.{ "bundle", "--output-dir" });
+        const glue_package_dir = glue_package_cmd.addOutputDirectoryArg("glue-package");
+        glue_package_cmd.addArg("main.roc");
+
+        const glue_release_cmd = b.addRunArtifact(glue_release_exe);
+        glue_release_cmd.addArg(glue_release_tag orelse "nightly-local");
+        glue_release_cmd.addDirectoryArg(glue_package_dir);
+        const glue_release_dir = glue_release_cmd.addOutputDirectoryArg("glue-release");
+
+        const glue_release_install = b.addInstallDirectory(.{
+            .source_dir = glue_release_dir,
+            .install_dir = .prefix,
+            .install_subdir = "glue-release",
+        });
+        const clean_glue_release_install = RemoveDirTreeStep.create(b, b.getInstallPath(.prefix, "glue-release"));
+        glue_release_install.step.dependOn(&clean_glue_release_install.step);
+        build_glue_release_step.dependOn(&glue_release_install.step);
+    }
+
     // Build playground integration tests - now enabled for all optimization modes.
     const playground_test_install = blk: {
         const playground_test_optimize: std.builtin.OptimizeMode = if (optimize == .Debug) .ReleaseSafe else optimize;
@@ -3902,6 +3933,56 @@ pub fn build(b: *std.Build) void {
         tests_summary.setRunSerialization();
     }
 
+    const guarded_list_violation_exe = b.addExecutable(.{
+        .name = "guarded_list_violation_test",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/collections/guarded_list_violation_test.zig"),
+            .target = target,
+            .optimize = .Debug,
+            .link_libc = true,
+        }),
+    });
+    guarded_list_violation_exe.root_module.addImport("collections", roc_modules.collections);
+    guarded_list_violation_exe.root_module.addImport("check", roc_modules.check);
+    guarded_list_violation_exe.root_module.addImport("layout", roc_modules.layout);
+    guarded_list_violation_exe.root_module.addImport("lir", roc_modules.lir);
+    guarded_list_violation_exe.root_module.addImport("postcheck", roc_modules.postcheck);
+
+    const run_guarded_list_violations_step = b.step(
+        "run-test-guarded-list-violations",
+        "Run guarded-list expected-failure checks",
+    );
+    const guarded_list_violation_cases = [_]struct {
+        name: []const u8,
+        list_name: []const u8,
+    }{
+        .{ .name = "span_append_move", .list_name = "guarded_list_violation_test.values" },
+        .{ .name = "ptr_append_move", .list_name = "guarded_list_violation_test.values" },
+        .{ .name = "span_ensure_move", .list_name = "guarded_list_violation_test.values" },
+        .{ .name = "span_append_slice_move", .list_name = "guarded_list_violation_test.values" },
+        .{ .name = "span_restore_below_range", .list_name = "guarded_list_violation_test.values" },
+        .{ .name = "ptr_restore_below_index", .list_name = "guarded_list_violation_test.values" },
+        .{ .name = "span_clear", .list_name = "guarded_list_violation_test.values" },
+        .{ .name = "span_ownership_transfer", .list_name = "guarded_list_violation_test.values" },
+        .{ .name = "lir_proc_specs", .list_name = "LirStore.proc_specs" },
+        .{ .name = "lir_local_span", .list_name = "LirStore.local_ids" },
+        .{ .name = "lifted_fns", .list_name = "monotype_lifted.Program.fns" },
+        .{ .name = "lifted_expr_ids", .list_name = "monotype_lifted.Program.expr_ids" },
+        .{ .name = "mono_exprs", .list_name = "monotype.Program.exprs" },
+        .{ .name = "mono_type_spans", .list_name = "monotype.Type.Store.spans" },
+        .{ .name = "mono_type_fields", .list_name = "monotype.Type.Store.fields" },
+        .{ .name = "lambda_mono_expr_ids", .list_name = "lambda_mono.Program.expr_ids" },
+        .{ .name = "lambda_mono_type_spans", .list_name = "lambda_mono.Type.Store.spans" },
+    };
+    for (guarded_list_violation_cases) |case| {
+        const run_violation = b.addRunArtifact(guarded_list_violation_exe);
+        run_violation.addArg(case.name);
+        run_violation.expectStdErrMatch(b.fmt("guarded list invalidated: {s}", .{case.list_name}));
+        run_guarded_list_violations_step.dependOn(&run_violation.step);
+    }
+    build_test_zig_step.dependOn(&guarded_list_violation_exe.step);
+    run_test_zig_step.dependOn(run_guarded_list_violations_step);
+
     for (module_tests_result.tests) |module_test| {
         // Add compiled builtins to tests that canonicalize ordinary modules.
         if (std.mem.eql(u8, module_test.test_step.name, "can") or std.mem.eql(u8, module_test.test_step.name, "check") or std.mem.eql(u8, module_test.test_step.name, "eval") or std.mem.eql(u8, module_test.test_step.name, "compile") or std.mem.eql(u8, module_test.test_step.name, "lsp_unit") or std.mem.eql(u8, module_test.test_step.name, "lsp_integration")) {
@@ -4320,6 +4401,33 @@ pub fn build(b: *std.Build) void {
             "Run watch command Zig tests",
         );
         run_watch_cli_test_step.dependOn(&run_watch_test.step);
+    }
+
+    // MiniCI output-filter tests. MiniCI is a standalone host build tool that
+    // only imports `std`, so it needs no module wiring.
+    {
+        const minici_test = b.addTest(.{
+            .name = "minici_test",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/build/minici.zig"),
+                .target = b.graph.host,
+                .optimize = .Debug,
+            }),
+            .filters = test_filters,
+        });
+        build_test_zig_step.dependOn(&minici_test.step);
+
+        const run_minici_test = b.addRunArtifact(minici_test);
+        if (run_args.len != 0) {
+            run_minici_test.addArgs(run_args);
+        }
+        tests_summary.addRun(&run_minici_test.step);
+
+        const run_minici_test_step = b.step(
+            "run-test-zig-minici",
+            "Run MiniCI output-filter Zig tests",
+        );
+        run_minici_test_step.dependOn(&run_minici_test.step);
     }
 
     // Add check for forbidden patterns in type checker code

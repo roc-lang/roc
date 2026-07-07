@@ -32,11 +32,13 @@
 //! or a shared initializer keep their shape.
 
 const std = @import("std");
+const collections = @import("collections");
 const core = @import("lir_core");
 const layout_mod = @import("layout");
 
 const LIR = core.LIR;
 const LirStore = core.LirStore;
+const GuardedList = collections.GuardedList;
 const Allocator = std.mem.Allocator;
 
 pub const ScalarizeError = std.mem.Allocator.Error;
@@ -69,7 +71,8 @@ pub fn run(store: *LirStore, layouts: *const layout_mod.Store) ScalarizeError!vo
     var rounds: usize = 0;
     while (rounds < max_rounds) : (rounds += 1) {
         var changed = false;
-        for (store.proc_specs.items, 0..) |proc, proc_index| {
+        for (0..store.procSpecCount()) |proc_index| {
+            const proc = store.getProcSpec(@enumFromInt(@as(u32, @intCast(proc_index))));
             const body = proc.body orelse continue;
             if (try pass.scalarizeProc(@enumFromInt(@as(u32, @intCast(proc_index))), body)) {
                 changed = true;
@@ -187,7 +190,8 @@ const Pass = struct {
         // a view into the store's local-id buffer, which `tryScalarize`
         // reallocates when it scalarizes, so it must not be read across that
         // call.
-        const proc_args = self.store.getLocalSpan(self.store.getProcSpec(proc_id).args);
+        const proc_args = try GuardedList.dupe(self.allocator, LIR.LocalId, self.store.getLocalSpan(self.store.getProcSpec(proc_id).args));
+        defer self.allocator.free(proc_args);
 
         // Find one scalarizable parameter; the fixpoint loop picks up the
         // rest on later rounds.
@@ -201,7 +205,9 @@ const Pass = struct {
             try self.visited.put(current, {});
             switch (self.store.getCFStmt(current)) {
                 .join => |join_stmt| {
-                    for (self.store.getLocalSpan(join_stmt.params), 0..) |param, position| {
+                    const params = self.store.getLocalSpan(join_stmt.params);
+                    for (0..params.len) |position| {
+                        const param = GuardedList.at(params, position);
                         const param_is_proc_arg = std.mem.findScalar(LIR.LocalId, proc_args, param) != null;
                         if (try self.tryScalarize(param_is_proc_arg, current, join_stmt, param, position)) {
                             changed = true;
@@ -212,9 +218,8 @@ const Pass = struct {
                     try self.stack.append(self.allocator, join_stmt.remainder);
                 },
                 .switch_stmt => |s| {
-                    for (self.store.getCFSwitchBranches(s.branches)) |branch| {
-                        try self.stack.append(self.allocator, branch.body);
-                    }
+                    const branches = self.store.getCFSwitchBranches(s.branches);
+                    for (0..branches.len) |index| try self.stack.append(self.allocator, GuardedList.at(branches, index).body);
                     try self.stack.append(self.allocator, s.default_branch);
                     if (s.continuation) |continuation| {
                         try self.stack.append(self.allocator, continuation);
@@ -229,9 +234,8 @@ const Pass = struct {
                     try self.stack.append(self.allocator, s.on_miss);
                 },
                 .str_match_set => |s| {
-                    for (self.store.getStrMatchArms(s.arms)) |arm| {
-                        try self.stack.append(self.allocator, arm.on_match);
-                    }
+                    const arms = self.store.getStrMatchArms(s.arms);
+                    for (0..arms.len) |index| try self.stack.append(self.allocator, GuardedList.at(arms, index).on_match);
                     try self.stack.append(self.allocator, s.on_miss);
                 },
                 inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |s| {
@@ -255,7 +259,8 @@ const Pass = struct {
         const proc = self.store.getProcSpecPtr(proc_id);
         var combined = std.ArrayList(LIR.LocalId).empty;
         defer combined.deinit(self.allocator);
-        try combined.appendSlice(self.allocator, self.store.getLocalSpan(proc.frame_locals));
+        const frame_locals = self.store.getLocalSpan(proc.frame_locals);
+        for (0..frame_locals.len) |index| try combined.append(self.allocator, GuardedList.at(frame_locals, index));
         try combined.appendSlice(self.allocator, self.new_locals.items);
         proc.frame_locals = try self.store.addLocalSpan(combined.items);
         if (self.store.procNeedsStackProbe(self.layouts, proc.*)) {
@@ -343,7 +348,8 @@ const Pass = struct {
         const old_params = self.store.getLocalSpan(join_stmt.params);
         var new_params = std.ArrayList(LIR.LocalId).empty;
         defer new_params.deinit(self.allocator);
-        for (old_params, 0..) |old_param, old_position| {
+        for (0..GuardedList.borrowLen(old_params)) |old_position| {
+            const old_param = GuardedList.at(old_params, old_position);
             if (old_position == position) {
                 try new_params.appendSlice(self.allocator, field_locals);
             } else {
@@ -432,7 +438,7 @@ const Pass = struct {
         stmt: LIR.CFStmtId,
         next_after: LIR.CFStmtId,
         field_locals: []const LIR.LocalId,
-        operands: []const LIR.LocalId,
+        operands: anytype,
     ) ScalarizeError!void {
         var next = next_after;
         var k: usize = field_locals.len;
@@ -440,14 +446,14 @@ const Pass = struct {
             k -= 1;
             next = try self.store.addCFStmt(.{ .set_local = .{
                 .target = field_locals[k],
-                .value = operands[k],
+                .value = GuardedList.at(operands, k),
                 .mode = .initialize_join_param,
                 .next = next,
             } });
         }
         self.store.getCFStmtPtr(stmt).* = .{ .set_local = .{
             .target = field_locals[0],
-            .value = operands[0],
+            .value = GuardedList.at(operands, 0),
             .mode = .initialize_join_param,
             .next = next,
         } };
@@ -471,7 +477,9 @@ const Pass = struct {
             const stmt = self.store.getCFStmtPtr(current);
             switch (stmt.*) {
                 .switch_stmt => |*s| {
-                    for (self.store.getCFSwitchBranchesMut(s.branches)) |*branch| {
+                    const branches = self.store.getCFSwitchBranchesMut(s.branches);
+                    for (0..branches.len) |index| {
+                        const branch = GuardedList.atPtr(branches, index);
                         branch.body = self.resolveRemoved(branch.body);
                         try self.stack.append(self.allocator, branch.body);
                     }
@@ -498,7 +506,9 @@ const Pass = struct {
                     const arms = self.store.getStrMatchArms(s.arms);
                     const rewritten_arms = try self.allocator.alloc(LIR.StrMatchArm, arms.len);
                     defer self.allocator.free(rewritten_arms);
-                    for (arms, rewritten_arms) |arm, *rewritten| {
+                    for (0..arms.len) |index| {
+                        const arm = GuardedList.at(arms, index);
+                        const rewritten = &rewritten_arms[index];
                         rewritten.* = arm;
                         rewritten.on_match = self.resolveRemoved(arm.on_match);
                         try self.stack.append(self.allocator, rewritten.on_match);
@@ -548,9 +558,8 @@ const Pass = struct {
                     try self.stack.append(self.allocator, assign.next);
                 },
                 .switch_stmt => |s| {
-                    for (self.store.getCFSwitchBranches(s.branches)) |branch| {
-                        try self.stack.append(self.allocator, branch.body);
-                    }
+                    const branches = self.store.getCFSwitchBranches(s.branches);
+                    for (0..branches.len) |index| try self.stack.append(self.allocator, GuardedList.at(branches, index).body);
                     try self.stack.append(self.allocator, s.default_branch);
                     if (s.continuation) |continuation| {
                         try self.stack.append(self.allocator, continuation);
@@ -565,9 +574,8 @@ const Pass = struct {
                     try self.stack.append(self.allocator, s.on_miss);
                 },
                 .str_match_set => |s| {
-                    for (self.store.getStrMatchArms(s.arms)) |arm| {
-                        try self.stack.append(self.allocator, arm.on_match);
-                    }
+                    const arms = self.store.getStrMatchArms(s.arms);
+                    for (0..arms.len) |index| try self.stack.append(self.allocator, GuardedList.at(arms, index).on_match);
                     try self.stack.append(self.allocator, s.on_miss);
                 },
                 .join => |join_stmt| {
@@ -610,13 +618,15 @@ const Pass = struct {
                     try self.stack.append(self.allocator, init.next);
                 },
                 .assign_call => |assign| {
-                    for (self.store.getLocalSpan(assign.args)) |arg| try self.noteUse(arg);
+                    const args = self.store.getLocalSpan(assign.args);
+                    for (0..args.len) |index| try self.noteUse(GuardedList.at(args, index));
                     try self.noteWrite(assign.target);
                     try self.stack.append(self.allocator, assign.next);
                 },
                 .assign_call_erased => |assign| {
                     try self.noteUse(assign.closure);
-                    for (self.store.getLocalSpan(assign.args)) |arg| try self.noteUse(arg);
+                    const args = self.store.getLocalSpan(assign.args);
+                    for (0..args.len) |index| try self.noteUse(GuardedList.at(args, index));
                     try self.noteWrite(assign.target);
                     try self.stack.append(self.allocator, assign.next);
                 },
@@ -626,17 +636,20 @@ const Pass = struct {
                     try self.stack.append(self.allocator, assign.next);
                 },
                 .assign_low_level => |assign| {
-                    for (self.store.getLocalSpan(assign.args)) |arg| try self.noteUse(arg);
+                    const args = self.store.getLocalSpan(assign.args);
+                    for (0..args.len) |index| try self.noteUse(GuardedList.at(args, index));
                     try self.noteWrite(assign.target);
                     try self.stack.append(self.allocator, assign.next);
                 },
                 .assign_list => |assign| {
-                    for (self.store.getLocalSpan(assign.elems)) |elem| try self.noteUse(elem);
+                    const elems = self.store.getLocalSpan(assign.elems);
+                    for (0..elems.len) |index| try self.noteUse(GuardedList.at(elems, index));
                     try self.noteWrite(assign.target);
                     try self.stack.append(self.allocator, assign.next);
                 },
                 .assign_struct => |assign| {
-                    for (self.store.getLocalSpan(assign.fields)) |field| try self.noteUse(field);
+                    const fields = self.store.getLocalSpan(assign.fields);
+                    for (0..fields.len) |index| try self.noteUse(GuardedList.at(fields, index));
                     try self.stack.append(self.allocator, assign.next);
                 },
                 .assign_tag => |assign| {
@@ -674,9 +687,8 @@ const Pass = struct {
                 .comptime_branch_taken => |s| try self.stack.append(self.allocator, s.next),
                 .switch_stmt => |s| {
                     try self.noteUse(s.cond);
-                    for (self.store.getCFSwitchBranches(s.branches)) |branch| {
-                        try self.stack.append(self.allocator, branch.body);
-                    }
+                    const branches = self.store.getCFSwitchBranches(s.branches);
+                    for (0..branches.len) |index| try self.stack.append(self.allocator, GuardedList.at(branches, index).body);
                     try self.stack.append(self.allocator, s.default_branch);
                     if (s.continuation) |continuation| {
                         try self.stack.append(self.allocator, continuation);
@@ -689,7 +701,9 @@ const Pass = struct {
                 },
                 .str_match => |s| {
                     try self.noteUse(s.source);
-                    for (self.store.getStrMatchSteps(s.steps)) |step| {
+                    const steps = self.store.getStrMatchSteps(s.steps);
+                    for (0..steps.len) |index| {
+                        const step = GuardedList.at(steps, index);
                         switch (step.capture) {
                             .discard => {},
                             .view => |local| try self.noteWrite(local),
@@ -700,8 +714,12 @@ const Pass = struct {
                 },
                 .str_match_set => |s| {
                     try self.noteUse(s.source);
-                    for (self.store.getStrMatchArms(s.arms)) |arm| {
-                        for (self.store.getStrMatchSteps(arm.steps)) |step| {
+                    const arms = self.store.getStrMatchArms(s.arms);
+                    for (0..arms.len) |arm_index| {
+                        const arm = GuardedList.at(arms, arm_index);
+                        const steps = self.store.getStrMatchSteps(arm.steps);
+                        for (0..steps.len) |step_index| {
+                            const step = GuardedList.at(steps, step_index);
                             switch (step.capture) {
                                 .discard => {},
                                 .view => |local| try self.noteWrite(local),
@@ -851,15 +869,15 @@ test "scalarize splits a literal-initialized struct join parameter" {
     try testing.expectEqual(@as(usize, 2), params.len);
 
     const new_read_n = store.getCFStmt(read_n).assign_ref;
-    try testing.expectEqual(params[0], new_read_n.op.local);
+    try testing.expectEqual(GuardedList.at(params, 0), new_read_n.op.local);
     const new_read_s = store.getCFStmt(read_s).assign_ref;
-    try testing.expectEqual(params[1], new_read_s.op.local);
+    try testing.expectEqual(GuardedList.at(params, 1), new_read_s.op.local);
 
     const new_set = store.getCFStmt(set_state).set_local;
-    try testing.expectEqual(params[0], new_set.target);
+    try testing.expectEqual(GuardedList.at(params, 0), new_set.target);
     try testing.expectEqual(num, new_set.value);
     const second_set = store.getCFStmt(new_set.next).set_local;
-    try testing.expectEqual(params[1], second_set.target);
+    try testing.expectEqual(GuardedList.at(params, 1), second_set.target);
     try testing.expectEqual(text, second_set.value);
     try testing.expectEqual(jump, second_set.next);
 
@@ -1003,16 +1021,16 @@ test "scalarize splits a parameter built directly by a struct literal" {
     try testing.expectEqual(@as(usize, 2), params.len);
 
     const new_read_n = store.getCFStmt(read_n).assign_ref;
-    try testing.expectEqual(params[0], new_read_n.op.local);
+    try testing.expectEqual(GuardedList.at(params, 0), new_read_n.op.local);
     const new_read_s = store.getCFStmt(read_s).assign_ref;
-    try testing.expectEqual(params[1], new_read_s.op.local);
+    try testing.expectEqual(GuardedList.at(params, 1), new_read_s.op.local);
 
     const first_set = store.getCFStmt(build).set_local;
-    try testing.expectEqual(params[0], first_set.target);
+    try testing.expectEqual(GuardedList.at(params, 0), first_set.target);
     try testing.expectEqual(num, first_set.value);
     try testing.expectEqual(LIR.SetLocalWriteMode.initialize_join_param, first_set.mode);
     const second_set = store.getCFStmt(first_set.next).set_local;
-    try testing.expectEqual(params[1], second_set.target);
+    try testing.expectEqual(GuardedList.at(params, 1), second_set.target);
     try testing.expectEqual(text, second_set.value);
     try testing.expectEqual(jump, second_set.next);
 }

@@ -9,18 +9,26 @@ type=snippet
  
 ~~~
 # EXPECTED
-PARSE ERROR - fuzz_crash_050.md:1:1:1:2
+UNEXPECTED STATEMENT - fuzz_crash_050.md:1:1:1:2
 # PROBLEMS
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  )                                                                         │
  │  ‾                                                                         │
  └───────────────────────────────────────────────────── fuzz_crash_050.md:1:1 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `)` here.
+    This closes the current construct, so the parser was looking for the
+    missing item before it.
 
 # TOKENS
 ~~~zig

@@ -102,6 +102,14 @@ counter state that call sites must remember to bump.
    code as the definition of eligibility, and confirm it against the
    suppressed-site list (anything neither eligible nor suppressed today is
    a bug to triage before the refactor).
+
+   Triage outcome before encoding the whitelist: preserve candidate bubbling
+   through eager child expressions, first if conditions, match scrutinees, loop
+   conditions, for iterables, return operands, dbg operands, and inherited
+   lambda bodies in eligible contexts. Deliberately narrow the currently
+   de-facto eligible guarded positions: non-first if-chain conditions, for/while
+   loop bodies, breakable-loop bodies, infinite-loop bodies, and statements
+   after `break` must be suppressed.
 2. Add a hoist-position field to the checking context that flows down
    `checkExpr` — the `Expected` struct already flows to every recursive
    call and already models per-position facts (e.g.

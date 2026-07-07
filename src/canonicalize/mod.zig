@@ -23,6 +23,8 @@ pub const BuiltinLowLevel = @import("BuiltinLowLevel.zig");
 pub const BuiltinStatic = @import("BuiltinStatic.zig");
 /// Roc code emitter - converts CIR to valid Roc source code
 pub const RocEmitter = @import("RocEmitter.zig");
+/// Shared syntactic refutability rules for Roc patterns.
+pub const PatternRefutability = @import("pattern_refutability.zig");
 /// Node storage for CIR nodes (used internally by ModuleEnv)
 pub const NodeStore = @import("NodeStore.zig");
 

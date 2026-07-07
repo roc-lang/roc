@@ -42,15 +42,5 @@ greet_for_host = greet
       (doc "Greets someone by name.")
     )
   )
-  (module
-    (name "platform")
-    (package "pf")
-    (kind platform)
-    (entry
-      (name "greet_for_host")
-      (kind value)
-      (type (fn (type-ref (name "Str")) (type-ref (name "Str"))))
-    )
-  )
 )
 ~~~

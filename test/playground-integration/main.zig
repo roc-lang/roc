@@ -1282,7 +1282,7 @@ pub fn main(init: std.process.Init) anyerror!void {
 
     // Diagnostics over the playground protocol.
     const syntax_error_code_val = try TestData.syntaxErrorRocCode(allocator);
-    try test_cases.append(allocator, try createSimpleTest(allocator, "Syntax Error - Mismatched Braces", syntax_error_code_val, .{ .min_errors = 1, .error_messages = &.{"LIST NOT CLOSED"} }, true));
+    try test_cases.append(allocator, try createSimpleTest(allocator, "Syntax Error - Mismatched Braces", syntax_error_code_val, .{ .min_errors = 1, .error_messages = &.{"EXPECTED LIST SEPARATOR"} }, true));
 
     const type_error_code_val = try TestData.typeErrorRocCode(allocator);
     try test_cases.append(allocator, try createSimpleTest(allocator, "Type Error - Adding String and Number", type_error_code_val, .{ .min_errors = 1, .error_messages = &.{"MISSING METHOD"} }, true));
@@ -1307,7 +1307,7 @@ pub fn main(init: std.process.Init) anyerror!void {
     reset_test_steps[1] = .{
         .message = .{ .type = "LOAD_SOURCE", .source = code_for_reset_test },
         .expected_status = "SUCCESS",
-        .expected_diagnostics = .{ .min_errors = 1, .error_messages = &.{"LIST NOT CLOSED"} },
+        .expected_diagnostics = .{ .min_errors = 1, .error_messages = &.{"EXPECTED LIST SEPARATOR"} },
         .owned_source = code_for_reset_test,
     };
     reset_test_steps[2] = .{ .message = .{ .type = "RESET" }, .expected_status = "SUCCESS" };

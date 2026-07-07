@@ -122,15 +122,28 @@ resolve_tag_union_type_c = |type_table, duplicate_record_names, duplicate_tag_na
 	}
 }
 
-c_record_field_decl : List(TypeRepr), List(Str), List(Str), RecordField -> Str
-c_record_field_decl = |type_table, duplicate_record_names, duplicate_tag_names, field| {
+c_record_field_decl : List(TypeRepr), List(Str), List(Str), RecordField, Bool -> Str
+c_record_field_decl = |type_table, duplicate_record_names, duplicate_tag_names, field, use_32| {
 	field_name = name_to_c_field_ident(field.name)
 	if field.is_padding {
-		"    uint8_t ${field_name}[${U64.to_str(field.size)}];\n"
+		size = if use_32 { field.size_32 } else { field.size_64 }
+		if size == 0 {
+			""
+		} else {
+			"    uint8_t ${field_name}[${U64.to_str(size)}];\n"
+		}
 	} else {
 		c_type = type_id_to_c(type_table, duplicate_record_names, duplicate_tag_names, field.type_id)
 		"    ${c_type} ${field_name};\n"
 	}
+}
+
+c_record_fields_decl = |type_table, duplicate_record_names, duplicate_tag_names, fields, use_32| {
+	var $field_strs = ""
+	for field in fields {
+		$field_strs = Str.concat($field_strs, c_record_field_decl(type_table, duplicate_record_names, duplicate_tag_names, field, use_32))
+	}
+	$field_strs
 }
 
 duplicate_record_names : List(TypeRepr) -> List(Str)
@@ -176,16 +189,6 @@ tag_union_struct_name = |duplicate_names, type_id, tu| {
 		"${base}Type${U64.to_str(type_id)}"
 	} else {
 		base
-	}
-}
-
-disc_type_for_count = |count| {
-	if count <= 256 {
-		"uint8_t"
-	} else if count <= 65536 {
-		"uint16_t"
-	} else {
-		"uint32_t"
 	}
 }
 
@@ -386,19 +389,19 @@ generate_opaque_type_decls = |type_table, duplicate_records, duplicate_tags| {
 			RocRecord(rec) =>
 				if rec.name != "" {
 					type_name = record_struct_name(duplicate_records, $type_id, rec)
-					if !(List.contains($seen_names, type_name)) {
-						$seen_names = $seen_names.append(type_name)
-						$decls = Str.concat($decls, generate_opaque_type_decl(type_name, rec.size, rec.alignment))
+						if !(List.contains($seen_names, type_name)) {
+							$seen_names = $seen_names.append(type_name)
+							$decls = Str.concat($decls, generate_opaque_type_decl(type_name, rec.size_32, rec.alignment_32, rec.size_64, rec.alignment_64))
+						}
 					}
-				}
-			RocTagUnion(tu) =>
-				if List.len(tu.tags) >= 2 and tu.name != "" {
-					type_name = tag_union_struct_name(duplicate_tags, $type_id, tu)
-					if !(List.contains($seen_names, type_name)) {
-						$seen_names = $seen_names.append(type_name)
-						$decls = Str.concat($decls, generate_opaque_type_decl(type_name, tu.size, tu.alignment))
+				RocTagUnion(tu) =>
+					if List.len(tu.tags) >= 2 and tu.name != "" {
+						type_name = tag_union_struct_name(duplicate_tags, $type_id, tu)
+						if !(List.contains($seen_names, type_name)) {
+							$seen_names = $seen_names.append(type_name)
+							$decls = Str.concat($decls, generate_opaque_type_decl(type_name, tu.size_32, tu.alignment_32, tu.size_64, tu.alignment_64))
+						}
 					}
-				}
 			_ => {}
 		}
 		$type_id = $type_id + 1
@@ -407,28 +410,41 @@ generate_opaque_type_decls = |type_table, duplicate_records, duplicate_tags| {
 	$decls
 }
 
-generate_opaque_type_decl = |type_name, size, alignment| {
-	byte_count = if size == 0 {
+generate_opaque_type_decl = |type_name, size_32, alignment_32, size_64, alignment_64| {
+	byte_count_32 = if size_32 == 0 {
 		1
 	} else {
-		size
+		size_32
 	}
-
-	type_alignment = if alignment == 0 {
+	byte_count_64 = if size_64 == 0 {
 		1
 	} else {
-		alignment
+		size_64
+	}
+	type_alignment_32 = if alignment_32 == 0 {
+		1
+	} else {
+		alignment_32
+	}
+	type_alignment_64 = if alignment_64 == 0 {
+		1
+	} else {
+		alignment_64
 	}
 
-	"typedef struct {\n    ROC_ALIGNAS(${U64.to_str(type_alignment)}) uint8_t bytes[${U64.to_str(byte_count)}];\n} ${type_name};\n${native_64_static_asserts(type_name, size, alignment)}"
+	"#if UINTPTR_MAX == UINT32_MAX\ntypedef struct {\n    ROC_ALIGNAS(${U64.to_str(type_alignment_32)}) uint8_t bytes[${U64.to_str(byte_count_32)}];\n} ${type_name};\n#elif UINTPTR_MAX == UINT64_MAX\ntypedef struct {\n    ROC_ALIGNAS(${U64.to_str(type_alignment_64)}) uint8_t bytes[${U64.to_str(byte_count_64)}];\n} ${type_name};\n#else\n#error \"unsupported pointer width\"\n#endif\n${pointer_width_static_asserts(type_name, size_32, alignment_32, size_64, alignment_64)}"
 }
 
-native_64_static_asserts = |type_name, size, alignment| {
-	if size > 0 {
-		"#if UINTPTR_MAX == UINT64_MAX\nROC_STATIC_ASSERT(sizeof(${type_name}) == ${U64.to_str(size)}, \"${type_name} size mismatch\");\nROC_STATIC_ASSERT(ROC_ALIGNOF(${type_name}) == ${U64.to_str(alignment)}, \"${type_name} alignment mismatch\");\n#endif\n\n"
+pointer_width_static_asserts = |type_name, size_32, alignment_32, size_64, alignment_64| {
+	if size_32 > 0 or size_64 > 0 {
+		"#if UINTPTR_MAX == UINT32_MAX\nROC_STATIC_ASSERT(sizeof(${type_name}) == ${U64.to_str(size_32)}, \"${type_name} size mismatch\");\nROC_STATIC_ASSERT(ROC_ALIGNOF(${type_name}) == ${U64.to_str(alignment_32)}, \"${type_name} alignment mismatch\");\n#elif UINTPTR_MAX == UINT64_MAX\nROC_STATIC_ASSERT(sizeof(${type_name}) == ${U64.to_str(size_64)}, \"${type_name} size mismatch\");\nROC_STATIC_ASSERT(ROC_ALIGNOF(${type_name}) == ${U64.to_str(alignment_64)}, \"${type_name} alignment mismatch\");\n#endif\n\n"
 	} else {
 		""
 	}
+}
+
+pointer_width_record_typedef = |type_name, doc, fields_32, fields_64| {
+	"${doc}#if UINTPTR_MAX == UINT32_MAX\ntypedef struct {\n${fields_32}} ${type_name};\n#elif UINTPTR_MAX == UINT64_MAX\ntypedef struct {\n${fields_64}} ${type_name};\n#else\n#error \"unsupported pointer width\"\n#endif\n"
 }
 
 generate_all_args_structs = |hosted_functions, type_table, duplicate_records, duplicate_tags| {
@@ -446,31 +462,29 @@ generate_args_struct = |func, type_table, duplicate_records, duplicate_tags| {
 
 	struct_name = name_to_struct_name(func.name)
 
-	type_table_result = if List.len(func.arg_type_ids) == 1 {
-		match List.first(func.arg_type_ids) {
-			Ok(arg_id) => lookup_record_in_type_table(type_table, arg_id)
-			Err(_) => { found: Bool.False, fields: [], size: 0, alignment: 0 }
-		}
-	} else {
-		{ found: Bool.False, fields: [], size: 0, alignment: 0 }
-	}
-
-	if type_table_result.found {
-		var $fields = ""
-		for field in type_table_result.fields {
-			$fields = Str.concat($fields, c_record_field_decl(type_table, duplicate_records, duplicate_tags, field))
+		type_table_result = if List.len(func.arg_type_ids) == 1 {
+			match List.first(func.arg_type_ids) {
+				Ok(arg_id) => lookup_record_in_type_table(type_table, arg_id)
+				Err(_) => { found: Bool.False, fields: [], size: 0, alignment: 0, size_32: 0, alignment_32: 0, size_64: 0, alignment_64: 0 }
+			}
+		} else {
+			{ found: Bool.False, fields: [], size: 0, alignment: 0, size_32: 0, alignment_32: 0, size_64: 0, alignment_64: 0 }
 		}
 
-		doc = doc_comment([
-			"Arguments for ${func.name}",
+		if type_table_result.found {
+			fields_32 = c_record_fields_decl(type_table, duplicate_records, duplicate_tags, type_table_result.fields, Bool.True)
+			fields_64 = c_record_fields_decl(type_table, duplicate_records, duplicate_tags, type_table_result.fields, Bool.False)
+
+			doc = doc_comment([
+				"Arguments for ${func.name}",
 			"Roc signature: ${func.type_str}",
 			"Refcounted fields are owned by the hosted function.",
 		])
 
-		args_name = "${struct_name}Args"
-		args_assertions = native_64_static_asserts(args_name, type_table_result.size, type_table_result.alignment)
-		return "${doc}typedef struct {\n${$fields}} ${args_name};\n${args_assertions}"
-	}
+			args_name = "${struct_name}Args"
+			args_assertions = pointer_width_static_asserts(args_name, type_table_result.size_32, type_table_result.alignment_32, type_table_result.size_64, type_table_result.alignment_64)
+			return "${pointer_width_record_typedef(args_name, doc, fields_32, fields_64)}${args_assertions}"
+		}
 
 	var $positional_fields = ""
 	var $idx = 0
@@ -493,8 +507,8 @@ generate_args_struct = |func, type_table, duplicate_records, duplicate_tags| {
 
 lookup_record_in_type_table = |type_table, type_id| {
 	match TypeTable.record_layout(TypeTable.from_list(type_table), type_id) {
-		RecordFound(layout) => { found: Bool.True, fields: layout.fields, size: layout.size, alignment: layout.alignment }
-		NotRecord => { found: Bool.False, fields: [], size: 0, alignment: 0 }
+		RecordFound(layout) => { found: Bool.True, fields: layout.fields, size: layout.size, alignment: layout.alignment, size_32: layout.size_32, alignment_32: layout.alignment_32, size_64: layout.size_64, alignment_64: layout.alignment_64 }
+		NotRecord => { found: Bool.False, fields: [], size: 0, alignment: 0, size_32: 0, alignment_32: 0, size_64: 0, alignment_64: 0 }
 	}
 }
 

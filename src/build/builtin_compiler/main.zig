@@ -248,13 +248,9 @@ fn compileModule(
     module_env.module_name = module_name;
     try module_env.common.calcLineStarts(gpa);
 
-    // 2. Create common idents (needed for type checking)
-    const module_ident = try module_env.insertIdent(base.Ident.for_text(module_name));
-
     // Use provided bool_stmt, try_stmt, and str_stmt if available, otherwise use undefined
     // For Builtin module, these will be found after canonicalization and updated before type checking
     var builtin_ctx: Check.BuiltinContext = .{
-        .module_name = module_ident,
         .bool_stmt = bool_stmt_opt orelse undefined,
         .try_stmt = try_stmt_opt orelse undefined,
         .str_stmt = str_stmt_opt orelse undefined,

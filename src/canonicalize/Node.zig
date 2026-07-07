@@ -276,12 +276,17 @@ pub const Tag = enum {
 };
 
 /// Typed payload union for accessing node data in a type-safe manner.
-/// This is an extern union of exactly 12 bytes (3 × u32).
+/// This is an extern union of exactly 16 bytes (4 × u32).
 /// Each variant corresponds to a Node.Tag and provides semantic field names.
 ///
 /// IMPORTANT: This must be an extern union to ensure consistent size across debug/release builds.
-/// All variants must be exactly 12 bytes (3 × u32).
+/// All variants must fit in exactly 16 bytes (4 × u32).
 pub const Payload = extern union {
+    /// Explicit opt-in for checked-cache raw-byte serialization. `Node.tag`
+    /// stores the active variant outside this union; the native+wasm
+    /// serialization-size check asserts the fixed physical size.
+    pub const serialized_portable_extern_union = true;
+
     // === Statement payloads ===
     statement_decl: StatementDecl,
     statement_var: StatementVar,

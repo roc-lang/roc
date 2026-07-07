@@ -51,7 +51,9 @@ const compile_package = @import("compile_package.zig");
 const compile_build = @import("compile_build.zig");
 const module_discovery = @import("module_discovery.zig");
 const cache_manager_mod = @import("cache_manager.zig");
+const cache_module = @import("cache_module.zig");
 const package_source = @import("package_source.zig");
+const package_identity = @import("package_identity.zig");
 const watch_inputs = @import("watch_inputs.zig");
 const CacheManager = cache_manager_mod.CacheManager;
 const CacheConfig = @import("cache_config.zig").CacheConfig;
@@ -91,6 +93,7 @@ const CheckedModuleCacheRunError = eval.BuiltinModules.InitError || Allocator.Er
     TestUnexpectedResult,
 };
 const OverwriteFilesUnderDirError = Allocator.Error || std.Io.Dir.OpenError || std.Io.Dir.SelectiveWalker.Error || std.Io.Dir.WriteFileError;
+const CorruptCheckedModuleCacheError = Allocator.Error || std.Io.Dir.OpenError || std.Io.Dir.SelectiveWalker.Error || std.Io.Dir.ReadFileAllocError || std.Io.Dir.WriteFileError || error{FileNotFound};
 const TypeCheckedResult = messages.TypeCheckedResult;
 const CompileFailure = messages.CompileFailure;
 const DiscoveredLocalImport = messages.DiscoveredLocalImport;
@@ -175,14 +178,15 @@ fn readStageTimer(io: std.Io, timer: *?StageTimer) u64 {
     return 0;
 }
 
-const checked_module_cache_magic = "roc-mod-cache-v4";
-const checked_module_cache_format_version: u64 = 4;
-// Header: magic, format version (u64), artifact-layout version hash (32), artifact
-// key (32), env-blob length (u64), artifact-blob length (u64). The two length-prefixed
-// bodies (env blob then artifact blob) follow the header. The layout hash guards
-// against relocating a cached artifact whose `Serialized` layout differs from the
-// running compiler's — important in development, where `compiler_version` is a fixed
-// release string that does not move between rebuilds.
+const checked_module_cache_magic = "roc-mod-cache-v5";
+const checked_module_entry_version: u32 = 5;
+const checked_module_entry_version_hash: [32]u8 = computeCheckedModuleEntryVersionHash();
+// Header: magic, composite entry-version hash (32), artifact key (32), env-blob
+// length (u64), artifact-blob length (u64). The two length-prefixed bodies (env
+// blob then artifact blob) follow the header. The entry-version hash folds the
+// manual entry-envelope version, the artifact `Serialized` layout hash, and the
+// ModuleEnv `Serialized` layout hash, so a stale env or artifact body is rejected
+// by the same single admission check.
 //
 // There is no body checksum: cache entries are written to a temp file and atomically
 // renamed into place (so a torn write never replaces a valid entry), the length fields
@@ -190,7 +194,44 @@ const checked_module_cache_format_version: u64 = 4;
 // stale or wrong entries, and relocation bounds-checks every marker against the blob.
 // A corrupt-but-right-length body is the only residue, which for a recomputable local
 // cache does not justify hashing the whole blob on every read and write.
-const checked_module_cache_header_len: usize = checked_module_cache_magic.len + 8 + 32 + 32 + 8 + 8;
+const checked_module_cache_header_len: usize = checked_module_cache_magic.len + 32 + 32 + 8 + 8;
+
+fn checkedModuleEntryHashUpdate(state: *u64, bytes: []const u8) void {
+    for (bytes) |byte| {
+        state.* = (state.* ^ byte) *% 0x100000001b3;
+    }
+}
+
+fn checkedModuleEntryHashUpdateU32(state: *u64, value: u32) void {
+    inline for (0..4) |i| {
+        state.* = (state.* ^ @as(u8, @truncate(value >> (i * 8)))) *% 0x100000001b3;
+    }
+}
+
+fn checkedModuleEntrySplitmix64(x: u64) u64 {
+    var z = x +% 0x9E3779B97F4A7C15;
+    z = (z ^ (z >> 30)) *% 0xBF58476D1CE4E5B9;
+    z = (z ^ (z >> 27)) *% 0x94D049BB133111EB;
+    return z ^ (z >> 31);
+}
+
+fn computeCheckedModuleEntryVersionHash() [32]u8 {
+    var state: u64 = 0xcbf29ce484222325;
+    checkedModuleEntryHashUpdate(&state, "roc-checked-module-entry-v1");
+    checkedModuleEntryHashUpdateU32(&state, checked_module_entry_version);
+    checkedModuleEntryHashUpdate(&state, &check.CheckedArtifact.CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
+    checkedModuleEntryHashUpdate(&state, &cache_module.MODULE_ENV_VERSION_HASH);
+
+    var result: [32]u8 = undefined;
+    var split_state = state;
+    inline for (0..4) |lane| {
+        split_state = checkedModuleEntrySplitmix64(split_state);
+        inline for (0..8) |byte_i| {
+            result[lane * 8 + byte_i] = @truncate(split_state >> (byte_i * 8));
+        }
+    }
+    return result;
+}
 
 /// Two length-prefixed cache bodies decoded from a checked-module cache entry:
 /// the relocatable `ModuleEnv` blob and the relocatable
@@ -212,9 +253,7 @@ fn writeCheckedModuleCacheHeader(
     var offset: usize = 0;
     @memcpy(dest[offset..][0..checked_module_cache_magic.len], checked_module_cache_magic);
     offset += checked_module_cache_magic.len;
-    std.mem.writeInt(u64, dest[offset..][0..8], checked_module_cache_format_version, .little);
-    offset += 8;
-    @memcpy(dest[offset..][0..32], &check.CheckedArtifact.CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
+    @memcpy(dest[offset..][0..32], &checked_module_entry_version_hash);
     offset += 32;
     @memcpy(dest[offset..][0..32], &key.bytes);
     offset += 32;
@@ -231,11 +270,9 @@ fn decodeCheckedModuleCacheEntry(
     var offset: usize = 0;
     if (!std.mem.eql(u8, bytes[offset..][0..checked_module_cache_magic.len], checked_module_cache_magic)) return null;
     offset += checked_module_cache_magic.len;
-    if (std.mem.readInt(u64, bytes[offset..][0..8], .little) != checked_module_cache_format_version) return null;
-    offset += 8;
-    // Reject (as a cache miss) an entry whose artifact `Serialized` layout differs
-    // from this compiler's, so we never relocate into a mismatched struct.
-    if (!check.CheckedArtifact.CheckedModuleArtifact.expectSerializedVersion(bytes[offset..][0..32])) return null;
+    // Reject (as a cache miss) an entry whose envelope, ModuleEnv `Serialized`,
+    // or artifact `Serialized` layout differs from this compiler's.
+    if (!std.mem.eql(u8, bytes[offset..][0..32], &checked_module_entry_version_hash)) return null;
     offset += 32;
     if (!std.mem.eql(u8, bytes[offset..][0..32], &key.bytes)) return null;
     offset += 32;
@@ -260,6 +297,57 @@ fn decodeCheckedModuleCacheEntry(
     if (env_body.len < @sizeOf(ModuleEnv.Serialized)) return null;
     if (artifact_body.len < @sizeOf(check.CheckedArtifact.CheckedModuleArtifact.Serialized)) return null;
     return .{ .env_body = env_body, .artifact_body = artifact_body };
+}
+
+fn checkedModuleCacheTestKey(byte: u8) check.CheckedArtifact.CheckedModuleArtifactKey {
+    var key = check.CheckedArtifact.CheckedModuleArtifactKey{};
+    @memset(&key.bytes, byte);
+    return key;
+}
+
+test "checked module cache header decodes bodies and rejects corrupt envelope" {
+    const key = checkedModuleCacheTestKey(0xAB);
+    const env_len = @sizeOf(ModuleEnv.Serialized);
+    const artifact_len = @sizeOf(check.CheckedArtifact.CheckedModuleArtifact.Serialized);
+    const total_len = checked_module_cache_header_len + env_len + artifact_len;
+    const env_len_offset = checked_module_cache_magic.len + 32 + 32;
+    const artifact_len_offset = env_len_offset + 8;
+
+    var entry: [total_len]u8 = undefined;
+    @memset(&entry, 0);
+    writeCheckedModuleCacheHeader(entry[0..checked_module_cache_header_len], key, env_len, artifact_len);
+
+    const bodies = decodeCheckedModuleCacheEntry(key, &entry) orelse return error.TestExpectedEqual;
+    try std.testing.expectEqual(@as(usize, env_len), bodies.env_body.len);
+    try std.testing.expectEqual(@as(usize, artifact_len), bodies.artifact_body.len);
+
+    var bad_magic = entry;
+    bad_magic[0] ^= 0xFF;
+    try std.testing.expect(decodeCheckedModuleCacheEntry(key, &bad_magic) == null);
+
+    var bad_entry_version = entry;
+    bad_entry_version[checked_module_cache_magic.len] ^= 0xFF;
+    try std.testing.expect(decodeCheckedModuleCacheEntry(key, &bad_entry_version) == null);
+
+    var bad_key = entry;
+    bad_key[checked_module_cache_magic.len + 32] ^= 0xFF;
+    try std.testing.expect(decodeCheckedModuleCacheEntry(key, &bad_key) == null);
+
+    try std.testing.expect(decodeCheckedModuleCacheEntry(key, entry[0 .. checked_module_cache_header_len - 1]) == null);
+    try std.testing.expect(decodeCheckedModuleCacheEntry(key, entry[0 .. total_len - 1]) == null);
+
+    var oversize_env = entry;
+    std.mem.writeInt(u64, oversize_env[env_len_offset..][0..8], env_len + artifact_len + 1, .little);
+    try std.testing.expect(decodeCheckedModuleCacheEntry(key, &oversize_env) == null);
+
+    var oversize_artifact = entry;
+    std.mem.writeInt(u64, oversize_artifact[artifact_len_offset..][0..8], artifact_len + 1, .little);
+    try std.testing.expect(decodeCheckedModuleCacheEntry(key, &oversize_artifact) == null);
+
+    var extra_byte: [total_len + 1]u8 = undefined;
+    @memcpy(extra_byte[0..total_len], &entry);
+    extra_byte[total_len] = 0;
+    try std.testing.expect(decodeCheckedModuleCacheEntry(key, &extra_byte) == null);
 }
 
 /// Maximum scratch arena capacity retained by a worker after each task.
@@ -341,6 +429,7 @@ pub const ModuleState = struct {
     module_role: ModuleEnv.ModuleRole = .user,
     /// Top-level names that package metadata requires as compile-time roots.
     explicit_root_ident_names: []const []const u8 = &.{},
+    validate_as_explicit_roots: bool = false,
     /// Owned semantic module payload. Earlier phases populate only `module_env`;
     /// type checking later fills in the checked artifact.
     semantic: ?OwnedSemanticModuleData = null,
@@ -625,13 +714,6 @@ pub const PackageState = struct {
         self.root_file_state = state;
     }
 
-    pub fn urlId(self: *const PackageState) ?[]const u8 {
-        if (self.url) |url| {
-            return url.urlId();
-        }
-        return null;
-    }
-
     /// Ensure a module exists, creating it if necessary
     pub fn ensureModule(self: *PackageState, gpa: Allocator, name: []const u8, path: []const u8) Allocator.Error!ModuleId {
         if (self.module_names.get(name)) |id| {
@@ -813,6 +895,11 @@ pub const Coordinator = struct {
     /// Total modules remaining across all packages
     total_remaining: usize,
 
+    /// The package identity for the current app root, when this coordinator is
+    /// compiling an app. This is role metadata; package identity itself still
+    /// comes from package_identity.zig.
+    app_package_name: ?[]const u8,
+
     /// Shared read-only builtin modules
     builtin_modules: *const BuiltinModules,
 
@@ -918,6 +1005,7 @@ pub const Coordinator = struct {
             .shutting_down = std.atomic.Value(bool).init(false),
             .worker_oom = std.atomic.Value(bool).init(false),
             .total_remaining = 0,
+            .app_package_name = null,
             .builtin_modules = builtin_modules,
             .roc_ctx = roc_ctx,
             .compiler_version = compiler_version,
@@ -1022,6 +1110,10 @@ pub const Coordinator = struct {
         self.platform_root_package_name = package_name;
     }
 
+    pub fn markAppPackage(self: *Coordinator, package_name: []const u8) void {
+        self.app_package_name = package_name;
+    }
+
     /// Set the I/O / core context implementation. Callers must supply a fully
     /// initialised `CoreCtx` — it must not create a replacement
     /// `CoreCtx.default(...)` here because the existing context may have been
@@ -1111,6 +1203,10 @@ pub const Coordinator = struct {
         entry_path: []const u8,
         /// Optional override for the app module's `source_dir_override`.
         source_dir_override: ?[]const u8 = null,
+        /// Use the synthetic app identity for compiler-generated default-app roots.
+        synthetic_root_identity: bool = false,
+        /// Use the synthetic platform identity for compiler-generated default platforms.
+        synthetic_platform_identity: bool = false,
     };
 
     pub const AppDiscoveryError = error{
@@ -1118,7 +1214,7 @@ pub const Coordinator = struct {
         AbsolutePlatformPath,
         UnsupportedPlatformSpec,
         UnsupportedPackageSpec,
-    } || app_header_mod.Error || Allocator.Error;
+    } || app_header_mod.Error || package_identity.PackageIdentityError;
 
     /// Read an app `.roc` file's header, register the app + platform +
     /// non-platform packages, and enqueue the app's parse task. After this
@@ -1144,7 +1240,15 @@ pub const Coordinator = struct {
 
         const app_dir = std.fs.path.dirname(opts.entry_path) orelse ".";
 
-        const app_pkg = try self.ensurePackage("app", app_dir);
+        const app_identity = try package_identity.packageIdentityFor(
+            self.gpa,
+            self.roc_ctx,
+            if (opts.synthetic_root_identity) .synthetic_app else .{ .local_path = opts.entry_path },
+        );
+        defer self.gpa.free(@constCast(app_identity));
+
+        const app_pkg = try self.ensurePackage(app_identity, app_dir);
+        self.markAppPackage(app_pkg.name);
         const app_module_name = base.module_path.getModuleName(opts.entry_path);
         const app_module_id = try app_pkg.ensureModule(self.gpa, app_module_name, opts.entry_path);
         if (opts.source_dir_override) |source_dir| {
@@ -1165,7 +1269,9 @@ pub const Coordinator = struct {
             const platform_main_path = try std.fs.path.join(arena, &.{ app_dir, header_info.platform_spec });
             const platform_dir = std.fs.path.dirname(platform_main_path) orelse return error.InvalidPlatformPath;
 
-            try self.registerPlatformPackage(app_pkg, platform_dir, platform_main_path, header_info.platform_qualifier);
+            try self.registerPlatformPackageWithOptions(app_pkg, platform_dir, platform_main_path, header_info.platform_qualifier, null, .{
+                .synthetic_identity = opts.synthetic_platform_identity,
+            });
         }
 
         for (header_info.non_platform_packages) |entry| {
@@ -1174,22 +1280,26 @@ pub const Coordinator = struct {
             }
             const pkg_main_path = try std.fs.path.join(arena, &.{ app_dir, entry.spec });
             const pkg_dir = std.fs.path.dirname(pkg_main_path) orelse ".";
-            _ = try self.registerInlinePackage(entry.shorthand, pkg_dir, app_pkg, entry.shorthand);
+            _ = try self.registerInlinePackageWithRootFile(pkg_main_path, pkg_dir, app_pkg, entry.shorthand);
         }
 
-        try self.enqueueParseTask("app", app_module_id);
+        try self.enqueueParseTask(app_pkg.name, app_module_id);
     }
 
-    /// Register the platform package (named "pf"), wire the app's shorthand
-    /// for it, ensure the platform's main module, and enqueue its parse task.
+    const PlatformIdentityOptions = struct {
+        synthetic_identity: bool = false,
+    };
+
+    /// Register the platform package, wire the app's shorthand for it, ensure
+    /// the platform's main module, and enqueue its parse task.
     pub fn registerPlatformPackage(
         self: *Coordinator,
         app_pkg: *PackageState,
         platform_dir: []const u8,
         platform_main_path: []const u8,
         qualifier: ?[]const u8,
-    ) Allocator.Error!void {
-        return self.registerPlatformPackageWithUrl(app_pkg, platform_dir, platform_main_path, qualifier, null);
+    ) package_identity.PackageIdentityError!void {
+        return self.registerPlatformPackageWithOptions(app_pkg, platform_dir, platform_main_path, qualifier, null, .{});
     }
 
     pub fn registerPlatformPackageWithUrl(
@@ -1199,14 +1309,38 @@ pub const Coordinator = struct {
         platform_main_path: []const u8,
         qualifier: ?[]const u8,
         url: ?package_source.UrlSourceView,
-    ) Allocator.Error!void {
-        const pf_pkg = try self.ensurePackageWithUrl("pf", platform_dir, url);
+    ) package_identity.PackageIdentityError!void {
+        return self.registerPlatformPackageWithOptions(app_pkg, platform_dir, platform_main_path, qualifier, url, .{});
+    }
+
+    fn registerPlatformPackageWithOptions(
+        self: *Coordinator,
+        app_pkg: *PackageState,
+        platform_dir: []const u8,
+        platform_main_path: []const u8,
+        qualifier: ?[]const u8,
+        url: ?package_source.UrlSourceView,
+        options: PlatformIdentityOptions,
+    ) package_identity.PackageIdentityError!void {
+        const platform_identity = try package_identity.packageIdentityFor(
+            self.gpa,
+            self.roc_ctx,
+            if (options.synthetic_identity)
+                .synthetic_platform
+            else if (url) |url_view|
+                .{ .url = url_view.url }
+            else
+                .{ .local_path = platform_main_path },
+        );
+        defer self.gpa.free(@constCast(platform_identity));
+
+        const pf_pkg = try self.ensurePackageWithUrl(platform_identity, platform_dir, url);
         self.markPlatformPackage(pf_pkg.name);
 
         if (qualifier) |qual| {
             try app_pkg.shorthands.put(
                 try self.gpa.dupe(u8, qual),
-                try self.gpa.dupe(u8, "pf"),
+                try self.gpa.dupe(u8, pf_pkg.name),
             );
         }
 
@@ -1215,7 +1349,7 @@ pub const Coordinator = struct {
         pf_pkg.modules.items[pf_module_id].depth = 1;
         pf_pkg.remaining_modules += 1;
         self.total_remaining += 1;
-        try self.enqueueParseTask("pf", pf_module_id);
+        try self.enqueueParseTask(pf_pkg.name, pf_module_id);
     }
 
     /// Register a non-platform package and (optionally) wire a shorthand on
@@ -1225,32 +1359,50 @@ pub const Coordinator = struct {
     /// Returns the new (or existing) package state.
     pub fn registerInlinePackage(
         self: *Coordinator,
-        package_name: []const u8,
+        package_identity_value: []const u8,
         package_root_dir: []const u8,
         app_pkg: ?*PackageState,
         shorthand_on_app: ?[]const u8,
-    ) Allocator.Error!*PackageState {
-        return self.registerInlinePackageWithUrl(package_name, package_root_dir, app_pkg, shorthand_on_app, null);
+    ) package_identity.PackageIdentityError!*PackageState {
+        return self.registerInlinePackageWithUrl(package_identity_value, package_root_dir, app_pkg, shorthand_on_app, null);
     }
 
     pub fn registerInlinePackageWithUrl(
         self: *Coordinator,
-        package_name: []const u8,
+        package_identity_value: []const u8,
         package_root_dir: []const u8,
         app_pkg: ?*PackageState,
         shorthand_on_app: ?[]const u8,
         url: ?package_source.UrlSourceView,
-    ) Allocator.Error!*PackageState {
-        const pkg = try self.ensurePackageWithUrl(package_name, package_root_dir, url);
+    ) package_identity.PackageIdentityError!*PackageState {
+        const identity = if (url) |url_view|
+            try package_identity.packageIdentityFor(self.gpa, self.roc_ctx, .{ .url = url_view.url })
+        else
+            try self.gpa.dupe(u8, package_identity_value);
+        defer self.gpa.free(@constCast(identity));
+
+        const pkg = try self.ensurePackageWithUrl(identity, package_root_dir, url);
         if (app_pkg) |a| {
             if (shorthand_on_app) |sh| {
                 try a.shorthands.put(
                     try self.gpa.dupe(u8, sh),
-                    try self.gpa.dupe(u8, package_name),
+                    try self.gpa.dupe(u8, pkg.name),
                 );
             }
         }
         return pkg;
+    }
+
+    pub fn registerInlinePackageWithRootFile(
+        self: *Coordinator,
+        package_root_file: []const u8,
+        package_root_dir: []const u8,
+        app_pkg: ?*PackageState,
+        shorthand_on_app: ?[]const u8,
+    ) package_identity.PackageIdentityError!*PackageState {
+        const identity = try package_identity.packageIdentityFor(self.gpa, self.roc_ctx, .{ .local_path = package_root_file });
+        defer self.gpa.free(@constCast(identity));
+        return self.registerInlinePackage(identity, package_root_dir, app_pkg, shorthand_on_app);
     }
 
     fn isRelativeSpec(spec: []const u8) bool {
@@ -1487,6 +1639,15 @@ pub const Coordinator = struct {
         allocator: Allocator,
         imported_artifacts: []const check.CheckedArtifact.PublishImportArtifact,
     ) Allocator.Error![]check.CheckedArtifact.ImportedModuleView {
+        return self.collectTypecheckAvailableArtifactViewsSeeded(allocator, imported_artifacts, &.{});
+    }
+
+    fn collectTypecheckAvailableArtifactViewsSeeded(
+        self: *Coordinator,
+        allocator: Allocator,
+        imported_artifacts: []const check.CheckedArtifact.PublishImportArtifact,
+        extra_seed_views: []const check.CheckedArtifact.ImportedModuleView,
+    ) Allocator.Error![]check.CheckedArtifact.ImportedModuleView {
         var views = std.ArrayList(check.CheckedArtifact.ImportedModuleView).empty;
         errdefer views.deinit(allocator);
 
@@ -1500,12 +1661,26 @@ pub const Coordinator = struct {
             try pending.append(allocator, imported.view);
         }
 
+        for (extra_seed_views) |seed_view| {
+            try pending.append(allocator, seed_view);
+        }
+
         while (pending.pop()) |view| {
             const entry = try seen.getOrPut(view.key);
             if (entry.found_existing) continue;
             entry.value_ptr.* = {};
 
             try views.append(allocator, view);
+
+            for (view.direct_import_artifact_keys) |dependency_key| {
+                const artifact = self.checkedArtifactByKey(dependency_key) orelse {
+                    if (builtin.mode == .Debug) {
+                        std.debug.panic("compile.coordinator missing direct dependency checked artifact", .{});
+                    }
+                    unreachable;
+                };
+                try pending.append(allocator, check.CheckedArtifact.importedView(artifact));
+            }
 
             for (view.public_api_dependencies.type_owner_artifacts) |dependency_key| {
                 const artifact = self.checkedArtifactByKey(dependency_key) orelse {
@@ -2051,6 +2226,36 @@ pub const Coordinator = struct {
         return false;
     }
 
+    fn appendTypeOwnerAvailableArtifactClosure(
+        self: *Coordinator,
+        views: *std.ArrayList(check.CheckedArtifact.ImportedModuleView),
+        allocator: Allocator,
+        seed: *const check.CheckedArtifact.CheckedModuleArtifact,
+    ) Allocator.Error!void {
+        var pending = std.ArrayList(*const check.CheckedArtifact.CheckedModuleArtifact).empty;
+        defer pending.deinit(allocator);
+        var seen = std.AutoHashMap(check.CheckedArtifact.CheckedModuleArtifactKey, void).init(allocator);
+        defer seen.deinit();
+
+        try pending.append(allocator, seed);
+        while (pending.pop()) |artifact| {
+            const entry = try seen.getOrPut(artifact.key);
+            if (entry.found_existing) continue;
+            entry.value_ptr.* = {};
+
+            if (!importedArtifactViewExists(views.items, artifact.key)) {
+                try views.append(allocator, check.CheckedArtifact.importedView(artifact));
+            }
+
+            for (artifact.public_api_dependencies.type_owner_artifacts) |dependency_key| {
+                const dependency = self.checkedArtifactByKey(dependency_key) orelse {
+                    coordinatorInvariant("compile.coordinator missing type-owner dependency checked artifact", .{});
+                };
+                try pending.append(allocator, dependency);
+            }
+        }
+    }
+
     /// Finalize the build's executable artifacts (link app + platform, build
     /// the platform-app relation, republish the root artifact).
     ///
@@ -2258,7 +2463,12 @@ pub const Coordinator = struct {
                 }
             }
         }
-        return self.rootCheckedArtifact("app");
+        return self.appRootCheckedArtifact();
+    }
+
+    pub fn appRootCheckedArtifact(self: *Coordinator) *const check.CheckedArtifact.CheckedModuleArtifact {
+        const app_package_name = self.app_package_name orelse package_identity.synthetic_app_identity;
+        return self.rootCheckedArtifact(app_package_name);
     }
 
     pub fn collectRelationArtifactViews(
@@ -2352,8 +2562,10 @@ pub const Coordinator = struct {
             const root_key = if (mod.checkedArtifact()) |current| current.key else CheckedArtifact.CheckedModuleArtifactKey{};
             for (publication.relation_artifacts) |relation_artifact| {
                 if (checkedArtifactKeyEql(relation_artifact.key, root_key)) continue;
-                if (importedArtifactViewExists(extended_available.items, relation_artifact.key)) continue;
-                try extended_available.append(self.gpa, relation_artifact);
+                const relation_checked_artifact = self.checkedArtifactByKey(relation_artifact.key) orelse {
+                    coordinatorInvariant("platform/app relation publication references unavailable checked module", .{});
+                };
+                try self.appendTypeOwnerAvailableArtifactClosure(&extended_available, self.gpa, relation_checked_artifact);
             }
 
             var dependency_collector = RelationLoweringDependencyCollector.init(
@@ -2966,7 +3178,7 @@ pub const Coordinator = struct {
         if (!manager.config.enabled) return;
 
         const entries_dir = manager.config.getCheckedArtifactCacheDir(manager.allocator) catch {
-            manager.stats.recordStoreFailure();
+            manager.recordStoreFailure();
             return;
         };
         defer manager.allocator.free(entries_dir);
@@ -2984,13 +3196,13 @@ pub const Coordinator = struct {
 
         var env_writer = CompactWriter.init();
         serializeForCache(ModuleEnv, artifact.moduleEnvConst(), &env_writer, arena_alloc) catch {
-            manager.stats.recordStoreFailure();
+            manager.recordStoreFailure();
             return;
         };
 
         var artifact_writer = CompactWriter.init();
         serializeForCache(check.CheckedArtifact.CheckedModuleArtifact, artifact, &artifact_writer, arena_alloc) catch {
-            manager.stats.recordStoreFailure();
+            manager.recordStoreFailure();
             return;
         };
 
@@ -2998,7 +3210,7 @@ pub const Coordinator = struct {
         const artifact_len = artifact_writer.total_bytes;
 
         const entry = manager.allocator.alloc(u8, checked_module_cache_header_len + env_len + artifact_len) catch {
-            manager.stats.recordStoreFailure();
+            manager.recordStoreFailure();
             return;
         };
         defer manager.allocator.free(entry);
@@ -3024,7 +3236,10 @@ pub const Coordinator = struct {
 
         const current_env = mod.moduleEnv() orelse return false;
         if (!resolvedDirectImportsHaveCheckedOutput(current_env, imported_artifacts)) return false;
-        const cache_key = self.checkedModuleCacheKey(current_env, imported_envs, imported_artifacts, platform_requirement_context, explicit_roots) catch return false;
+        const cache_key = self.checkedModuleCacheKey(current_env, imported_envs, imported_artifacts, platform_requirement_context, explicit_roots) catch {
+            manager.stats.recordMiss();
+            return false;
+        };
 
         return self.installCachedCheckedArtifact(pkg, mod, cache_key, current_env);
     }
@@ -3078,6 +3293,10 @@ pub const Coordinator = struct {
         defer if (source_owned) module_alloc.free(source);
 
         const serialized_ptr: *ModuleEnv.Serialized = @ptrCast(@alignCast(buffer.ptr));
+        serialized_ptr.validate(buffer.len) catch {
+            manager.stats.recordInvalidation();
+            return false;
+        };
         const cached_env = serialized_ptr.deserializeWithMutableTypes(
             @intFromPtr(buffer.ptr),
             module_alloc,
@@ -3434,9 +3653,15 @@ pub const Coordinator = struct {
             if (can.BuiltinLowLevel.isBuiltinModule(env)) {
                 try can.BuiltinLowLevel.apply(env);
             } else if (self.enable_hosted_transform) {
-                // Only run for platform modules (packages other than "app")
-                // The app package doesn't need hosted lambdas
-                if (!std.mem.eql(u8, result.package_name, "app")) {
+                // Only the platform package provides hosted functions, so only
+                // its modules' annotation-only declarations become hosted
+                // lambdas. Regular package/module dependencies may legitimately
+                // contain annotation-only (unimplemented) declarations; turning
+                // those into hosted lambdas would incorrectly make the
+                // effectful-function-name check flag them as effects.
+                const is_platform_pkg = self.platform_root_package_name != null and
+                    std.mem.eql(u8, result.package_name, self.platform_root_package_name.?);
+                if (is_platform_pkg) {
                     if (can.HostedCompiler.replaceAnnoOnlyWithHosted(env)) |modified_defs| {
                         var defs = modified_defs;
                         defs.deinit(env.gpa);
@@ -3541,25 +3766,33 @@ pub const Coordinator = struct {
         const task_payload_alloc = self.getWorkerAllocator();
         const imported_envs = try self.buildTypecheckImportedEnvs(pkg, mod, task_payload_alloc);
         errdefer task_payload_alloc.free(imported_envs);
+
+        // All direct imports are Done, so their deep content identities are
+        // final; compute this module's identity before the cache-key probe and
+        // before type-checking (the unifier consumes precomputed identities).
+        try mod.moduleEnv().?.ensureContentIdentity(imported_envs);
         const imported_artifacts = try self.buildTypecheckImportedArtifacts(pkg, mod, task_payload_alloc);
         errdefer task_payload_alloc.free(imported_artifacts);
-        var available_artifacts = try self.collectTypecheckAvailableArtifactViews(task_payload_alloc, imported_artifacts);
-        errdefer task_payload_alloc.free(available_artifacts);
+        // Requirement unification copies platform-owned types into the app's
+        // store, so the app's published API can reference the platform's nominal
+        // types — including types that only appear in the platform's `requires`
+        // signatures (like `Host`), whose declaring modules are not part of the
+        // platform root's public-API type owners. Seed the availability walk with
+        // every checked module of the platform package so each such declaration
+        // is resolvable when the app publishes checked types.
+        var platform_seed_list = std.ArrayList(check.CheckedArtifact.ImportedModuleView).empty;
+        defer platform_seed_list.deinit(task_payload_alloc);
         if (platform_surface != null) {
-            // Requirement unification copies platform-owned types into the
-            // app's store, so the app's published API can depend on the
-            // platform root's artifact; make it available to publication's
-            // public-API dependency scan.
             if (self.platformRootCandidate()) |platform_root| {
-                if (platform_root.mod.checkedArtifact()) |platform_artifact| {
-                    const with_platform = try task_payload_alloc.alloc(check.CheckedArtifact.ImportedModuleView, available_artifacts.len + 1);
-                    @memcpy(with_platform[0..available_artifacts.len], available_artifacts);
-                    with_platform[available_artifacts.len] = check.CheckedArtifact.importedView(platform_artifact);
-                    task_payload_alloc.free(available_artifacts);
-                    available_artifacts = with_platform;
+                for (platform_root.pkg.modules.items) |*platform_mod| {
+                    if (platform_mod.checkedArtifact()) |platform_artifact| {
+                        try platform_seed_list.append(task_payload_alloc, check.CheckedArtifact.importedView(platform_artifact));
+                    }
                 }
             }
         }
+        const available_artifacts = try self.collectTypecheckAvailableArtifactViewsSeeded(task_payload_alloc, imported_artifacts, platform_seed_list.items);
+        errdefer task_payload_alloc.free(available_artifacts);
         const explicit_roots = try buildExplicitRootRequests(mod, task_payload_alloc);
         errdefer task_payload_alloc.free(explicit_roots);
 
@@ -4082,6 +4315,7 @@ pub const Coordinator = struct {
                     std.debug.panic("compile.coordinator.tryUnblock missing cached AST for {s}", .{mod.name}),
                 .depth = mod.depth,
                 .imported_modules = imported_modules,
+                .validate_as_explicit_roots = mod.validate_as_explicit_roots,
             },
         });
     }
@@ -4462,6 +4696,7 @@ pub const Coordinator = struct {
             null, // Coordinator handles import resolution separately
             known_modules.items,
             task.imported_modules,
+            task.validate_as_explicit_roots,
         );
 
         const canonicalize_ns = readStageTimer(self.roc_ctx.std_io, &canonicalize_timer);
@@ -4681,9 +4916,15 @@ const CheckedModuleCacheRunStats = struct {
     cache: CacheStats,
     hoisted_constants: usize,
     pattern_extraction_regions: PatternExtractionRegionStats,
+    exhaustiveness_sites: ExhaustivenessSiteStats,
 };
 
 const PatternExtractionRegionStats = struct {
+    count: usize,
+    digest: [32]u8,
+};
+
+const ExhaustivenessSiteStats = struct {
     count: usize,
     digest: [32]u8,
 };
@@ -4756,13 +4997,308 @@ fn compileAppWithCheckedModuleCache(
     const relations = try coord.collectRelationArtifactViews(arena, root);
     const hoisted_constants = countHoistedConstants(root, imports, relations);
     const pattern_extraction_regions = try collectPatternExtractionRegionStats(root, imports, relations);
+    const exhaustiveness_sites = collectExhaustivenessSiteStats(root, imports, relations);
 
     return .{
         .build = coord.getBuildStats(),
         .cache = cache_manager.stats,
         .hoisted_constants = hoisted_constants,
         .pattern_extraction_regions = pattern_extraction_regions,
+        .exhaustiveness_sites = exhaustiveness_sites,
     };
+}
+
+const AppRootIdentity = struct {
+    artifact_key: [32]u8,
+    module_identity_hash: [32]u8,
+    cache_hits: u32,
+};
+
+/// Compile an app workspace and return the executable root artifact's
+/// content-addressed key and module identity hash, plus checked-cache hits.
+fn compileAppRootIdentity(
+    allocator: Allocator,
+    cache_dir: []const u8,
+    app_path: []const u8,
+) CheckedModuleCacheRunError!AppRootIdentity {
+    const roc_ctx = CoreCtx.os(allocator, allocator, std.testing.io);
+    var cache_manager = CacheManager.init(allocator, .{
+        .enabled = true,
+        .cache_dir = cache_dir,
+    }, roc_ctx);
+
+    var builtin_modules = try eval.BuiltinModules.init(allocator);
+    defer builtin_modules.deinit();
+
+    var coord = try Coordinator.init(
+        allocator,
+        .single_threaded,
+        1,
+        roc_target.RocTarget.detectNative(),
+        &builtin_modules,
+        build_options.compiler_version,
+        &cache_manager,
+        roc_ctx,
+    );
+    defer coord.deinit();
+    coord.enable_hosted_transform = true;
+
+    var arena_impl = base.SingleThreadArena.init(allocator);
+    defer arena_impl.deinit();
+    const arena = arena_impl.allocator();
+
+    try coord.start();
+    try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
+    try coord.coordinatorLoop();
+    try std.testing.expect(!coord.hasUserErrors());
+    try coord.finalizeExecutableArtifacts();
+    try std.testing.expect(!coord.hasUserErrors());
+
+    const root = coord.executableRootCheckedArtifact();
+    return .{
+        .artifact_key = root.key.bytes,
+        .module_identity_hash = root.module_identity.stable_hash,
+        .cache_hits = coord.getBuildStats().cache_hits,
+    };
+}
+
+fn writeCacheKeyPurityFixture(tmp_dir: *std.testing.TmpDir, sub_dir: []const u8) (std.Io.Dir.CreateDirPathError || std.Io.Dir.WriteFileError || std.Io.Writer.Error)!void {
+    var path_buf: [256]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&path_buf);
+    try writer.print("{s}/app/.roc_echo_platform", .{sub_dir});
+    try tmp_dir.dir.createDirPath(std.testing.io, writer.buffered());
+
+    const files = [_]struct { rel: []const u8, data: []const u8 }{
+        .{ .rel = "app/main.roc", .data =
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\
+        \\import pf.Echo
+        \\
+        \\main! = |_args| {
+        \\    Echo.line!("done")
+        \\    Ok({})
+        \\}
+        },
+        .{ .rel = "app/.roc_echo_platform/main.roc", .data =
+        \\platform ""
+        \\    requires {} { main! : List(Str) => Try({}, [Exit(I8), ..]) }
+        \\    exposes [Echo]
+        \\    packages {}
+        \\    provides { "roc_main": main_for_host! }
+        \\    hosted { "roc_echo_line": Echo.line! }
+        \\
+        \\import Echo
+        \\
+        \\main_for_host! : List(Str) => I8
+        \\main_for_host! = |args|
+        \\    match main!(args) {
+        \\        Ok({}) => 0
+        \\        Err(Exit(code)) => code
+        \\        Err(other) => {
+        \\            Echo.line!("Program exited with error: ${Str.inspect(other)}")
+        \\            1
+        \\        }
+        \\    }
+        },
+        .{ .rel = "app/.roc_echo_platform/Echo.roc", .data =
+        \\Echo := [].{
+        \\    line! : Str => {}
+        \\}
+        },
+    };
+    for (files) |file| {
+        var rel_buf: [256]u8 = undefined;
+        var rel_writer = std.Io.Writer.fixed(&rel_buf);
+        try rel_writer.print("{s}/{s}", .{ sub_dir, file.rel });
+        try tmp_dir.dir.writeFile(std.testing.io, .{ .sub_path = rel_writer.buffered(), .data = file.data });
+    }
+}
+
+test "cache-key purity: identical workspaces in different directories produce bit-identical identities, keys, and cache hits" {
+    const allocator = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    try tmp_dir.dir.createDirPath(std.testing.io, "cache");
+    const cache_dir = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "cache", allocator);
+    defer allocator.free(cache_dir);
+
+    // The same workspace content in two different temp directories.
+    try writeCacheKeyPurityFixture(&tmp_dir, "first");
+    try writeCacheKeyPurityFixture(&tmp_dir, "second");
+
+    const first_app = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "first/app/main.roc", allocator);
+    defer allocator.free(first_app);
+    const second_app = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "second/app/main.roc", allocator);
+    defer allocator.free(second_app);
+
+    const first = try compileAppRootIdentity(allocator, cache_dir, first_app);
+    const second = try compileAppRootIdentity(allocator, cache_dir, second_app);
+
+    // Identity bytes and content-addressed cache keys are pure functions of
+    // module content: no coordinator-assigned display strings and no paths
+    // participate, so both builds agree bit-for-bit.
+    try std.testing.expectEqualSlices(u8, &first.module_identity_hash, &second.module_identity_hash);
+    try std.testing.expectEqualSlices(u8, &first.artifact_key, &second.artifact_key);
+    // ...and the second build gets checked-cache hits from the first build's
+    // entries even though it ran in a different directory.
+    try std.testing.expect(second.cache_hits > 0);
+}
+
+fn writeHostedDistinctnessFixture(tmp_dir: *std.testing.TmpDir) (std.Io.Dir.CreateDirPathError || std.Io.Dir.WriteFileError)!void {
+    try tmp_dir.dir.createDirPath(std.testing.io, "app/.roc_hosted_platform");
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "app/main.roc",
+        .data =
+        \\app [main!] { pf: platform "./.roc_hosted_platform/main.roc" }
+        \\
+        \\import pf.EchoA
+        \\import pf.EchoB
+        \\
+        \\main! = |_args| {
+        \\    EchoA.line!("a")
+        \\    EchoB.line!("b")
+        \\    Ok({})
+        \\}
+        ,
+    });
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "app/.roc_hosted_platform/main.roc",
+        .data =
+        \\platform ""
+        \\    requires {} { main! : List(Str) => Try({}, [Exit(I8), ..]) }
+        \\    exposes [EchoA, EchoB]
+        \\    packages {}
+        \\    provides { "roc_main": main_for_host! }
+        \\    hosted { "roc_echo_a_line": EchoA.line!, "roc_echo_b_line": EchoB.line! }
+        \\
+        \\import EchoA
+        \\import EchoB
+        \\
+        \\main_for_host! : List(Str) => I8
+        \\main_for_host! = |args|
+        \\    match main!(args) {
+        \\        Ok({}) => 0
+        \\        Err(Exit(code)) => code
+        \\        Err(_) => 1
+        \\    }
+        ,
+    });
+    // Two hosted modules whose declarations are identical up to the mandated
+    // module/type name, bound to different platform-header symbols.
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "app/.roc_hosted_platform/EchoA.roc",
+        .data =
+        \\EchoA := [].{
+        \\    line! : Str => {}
+        \\}
+        ,
+    });
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "app/.roc_hosted_platform/EchoB.roc",
+        .data =
+        \\EchoB := [].{
+        \\    line! : Str => {}
+        \\}
+        ,
+    });
+}
+
+test "hosted distinctness: identical hosted declarations bound to different platform symbols stay distinct" {
+    const allocator = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    try tmp_dir.dir.createDirPath(std.testing.io, "cache");
+    const cache_dir = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "cache", allocator);
+    defer allocator.free(cache_dir);
+    try writeHostedDistinctnessFixture(&tmp_dir);
+    const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "app/main.roc", allocator);
+    defer allocator.free(app_path);
+
+    const roc_ctx = CoreCtx.os(allocator, allocator, std.testing.io);
+    var cache_manager = CacheManager.init(allocator, .{
+        .enabled = true,
+        .cache_dir = cache_dir,
+    }, roc_ctx);
+
+    var builtin_modules = try eval.BuiltinModules.init(allocator);
+    defer builtin_modules.deinit();
+
+    var coord = try Coordinator.init(
+        allocator,
+        .single_threaded,
+        1,
+        roc_target.RocTarget.detectNative(),
+        &builtin_modules,
+        build_options.compiler_version,
+        &cache_manager,
+        roc_ctx,
+    );
+    defer coord.deinit();
+    coord.enable_hosted_transform = true;
+
+    var arena_impl = base.SingleThreadArena.init(allocator);
+    defer arena_impl.deinit();
+    const arena = arena_impl.allocator();
+
+    try coord.start();
+    try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
+    try coord.coordinatorLoop();
+    try std.testing.expect(!coord.hasUserErrors());
+    try coord.finalizeExecutableArtifacts();
+    try std.testing.expect(!coord.hasUserErrors());
+
+    // Per design.md, hosted identities are the platform-header symbol strings
+    // and declaration slots — never content hashes — so no deduplication or
+    // merging step may collapse the two entries even though their declaring
+    // modules are as content-identical as the language allows.
+    const root = coord.executableRootCheckedArtifact();
+    const imports = try coord.collectImportedArtifactViews(arena, root);
+    const relations = try coord.collectRelationArtifactViews(arena, root);
+
+    var symbols = std.ArrayList([]const u8).empty;
+    defer symbols.deinit(allocator);
+    var proc_refs = std.ArrayList(canonical.ProcedureValueRef).empty;
+    defer proc_refs.deinit(allocator);
+
+    var seen_keys = std.ArrayList([32]u8).empty;
+    defer seen_keys.deinit(allocator);
+
+    const root_view = check.CheckedArtifact.importedView(root);
+    const view_groups = [_][]const check.CheckedArtifact.ImportedModuleView{ &.{root_view}, imports, relations };
+    for (view_groups) |views| {
+        views: for (views) |view| {
+            for (seen_keys.items) |seen| {
+                if (std.mem.eql(u8, &seen, &view.key.bytes)) continue :views;
+            }
+            try seen_keys.append(allocator, view.key.bytes);
+            for (view.hosted_procs.procs) |proc| {
+                try symbols.append(allocator, view.canonical_names.externalSymbolNameText(proc.external_symbol_name));
+                try proc_refs.append(allocator, proc.proc);
+            }
+        }
+    }
+
+    // Both hosted procedures survive every merging pass as distinct
+    // identities even though their declaring modules' member declarations
+    // are identical.
+    try std.testing.expectEqual(@as(usize, 2), symbols.items.len);
+    try std.testing.expect(!canonical.procedureValueRefEql(proc_refs.items[0], proc_refs.items[1]));
+
+    // And the platform header binds them to two distinct linker symbols.
+    var linker_symbols = std.ArrayList([]const u8).empty;
+    defer linker_symbols.deinit(allocator);
+    for (view_groups) |views| {
+        for (views) |view| {
+            const env = view.module_env;
+            for (env.hosted_entries.items.items) |entry| {
+                try linker_symbols.append(allocator, env.getString(entry.symbol));
+            }
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 2), linker_symbols.items.len);
+    try std.testing.expect(!std.mem.eql(u8, linker_symbols.items[0], linker_symbols.items[1]));
 }
 
 fn collectPatternExtractionRegionStats(
@@ -4885,6 +5421,88 @@ fn hashU32IntoSha256(hasher: *std.crypto.hash.sha2.Sha256, value: u32) void {
     hasher.update(&bytes);
 }
 
+fn collectExhaustivenessSiteStats(
+    root: *const check.CheckedArtifact.CheckedModuleArtifact,
+    imports: []const check.CheckedArtifact.ImportedModuleView,
+    relations: []const check.CheckedArtifact.ImportedModuleView,
+) ExhaustivenessSiteStats {
+    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    var count: usize = 0;
+
+    hashExhaustivenessSitesForView(&hasher, &count, check.CheckedArtifact.importedView(root));
+    for (imports) |view| hashExhaustivenessSitesForView(&hasher, &count, view);
+    for (relations) |view| hashExhaustivenessSitesForView(&hasher, &count, view);
+
+    var digest: [32]u8 = undefined;
+    hasher.final(&digest);
+    return .{ .count = count, .digest = digest };
+}
+
+fn hashExhaustivenessSitesForView(
+    hasher: *std.crypto.hash.sha2.Sha256,
+    count: *usize,
+    view: check.CheckedArtifact.ImportedModuleView,
+) void {
+    for (view.exhaustiveness_sites.sites) |site| {
+        count.* += 1;
+        hasher.update(&view.key.bytes);
+        hashU32IntoSha256(hasher, @intFromEnum(site.id));
+        hashU32IntoSha256(hasher, switch (site.kind) {
+            .match => 0,
+            .destructure => 1,
+        });
+        hashRegionIntoSha256(hasher, site.region);
+        hashOptionalU32IntoSha256(hasher, if (site.checked_expr) |expr| @intFromEnum(expr) else null);
+        hashOptionalU32IntoSha256(hasher, if (site.checked_pattern) |pattern| @intFromEnum(pattern) else null);
+        hashExhaustivenessOwnerIntoSha256(hasher, site.owner);
+        hashExhaustivenessPolicyIntoSha256(hasher, site.policy);
+    }
+}
+
+fn hashOptionalU32IntoSha256(hasher: *std.crypto.hash.sha2.Sha256, value: ?u32) void {
+    if (value) |payload| {
+        hashU32IntoSha256(hasher, 1);
+        hashU32IntoSha256(hasher, payload);
+    } else {
+        hashU32IntoSha256(hasher, 0);
+    }
+}
+
+fn hashExhaustivenessOwnerIntoSha256(
+    hasher: *std.crypto.hash.sha2.Sha256,
+    owner: ?check.CheckedArtifact.CheckedExhaustivenessSiteOwner,
+) void {
+    if (owner) |payload| switch (payload) {
+        .procedure_template => |template| {
+            hashU32IntoSha256(hasher, 1);
+            hasher.update(&template.artifact.bytes);
+            hashU32IntoSha256(hasher, @intFromEnum(template.proc_base));
+            hashU32IntoSha256(hasher, @intFromEnum(template.template));
+        },
+        .root => |root| {
+            hashU32IntoSha256(hasher, 2);
+            hashU32IntoSha256(hasher, @intFromEnum(root));
+        },
+    } else {
+        hashU32IntoSha256(hasher, 0);
+    }
+}
+
+fn hashExhaustivenessPolicyIntoSha256(
+    hasher: *std.crypto.hash.sha2.Sha256,
+    policy: check.CheckedArtifact.ExhaustivenessResolutionPolicy,
+) void {
+    switch (policy) {
+        .compile_time_replaced_by_root => |root| {
+            hashU32IntoSha256(hasher, 0);
+            hashU32IntoSha256(hasher, @intFromEnum(root));
+        },
+        .compile_time_only => hashU32IntoSha256(hasher, 1),
+        .runtime_reachable => hashU32IntoSha256(hasher, 2),
+        .not_pending => hashU32IntoSha256(hasher, 3),
+    }
+}
+
 fn countHoistedConstants(
     root: *const check.CheckedArtifact.CheckedModuleArtifact,
     imports: []const check.CheckedArtifact.ImportedModuleView,
@@ -4911,6 +5529,39 @@ fn overwriteFilesUnderDir(allocator: Allocator, absolute_dir: []const u8, conten
         overwritten += 1;
     }
     return overwritten;
+}
+
+fn corruptCheckedModuleEnvIdentBytesLens(allocator: Allocator, checked_module_cache_dir: []const u8) CorruptCheckedModuleCacheError!usize {
+    const env_ident_bytes_len_offset =
+        checked_module_cache_header_len +
+        @offsetOf(ModuleEnv.Serialized, "common") +
+        @offsetOf(base.CommonEnv.Serialized, "idents") +
+        @offsetOf(base.Ident.Store.Serialized, "interner") +
+        @offsetOf(base.SmallStringInterner.Serialized, "bytes") +
+        @offsetOf(collections.SafeList(u8).Serialized, "len");
+
+    const io = std.testing.io;
+    var dir = try std.Io.Dir.openDirAbsolute(io, checked_module_cache_dir, .{ .iterate = true });
+    defer dir.close(io);
+
+    var walker = try dir.walk(allocator);
+    defer walker.deinit();
+
+    var corrupted: usize = 0;
+    while (try walker.next(io)) |entry| {
+        if (entry.kind != .file) continue;
+
+        const bytes = try dir.readFileAlloc(io, entry.path, allocator, .limited(@import("cache_config.zig").Constants.MAX_CACHE_SIZE));
+        defer allocator.free(bytes);
+        if (bytes.len < env_ident_bytes_len_offset + @sizeOf(u64)) continue;
+
+        std.mem.writeInt(u64, bytes[env_ident_bytes_len_offset..][0..8], std.math.maxInt(u64), .little);
+        try dir.writeFile(io, .{ .sub_path = entry.path, .data = bytes });
+        corrupted += 1;
+    }
+
+    if (corrupted == 0) return error.FileNotFound;
+    return corrupted;
 }
 
 test "Coordinator checked cache key requires checked direct imports" {
@@ -4975,12 +5626,19 @@ test "Coordinator checked module cache preserves hoisted roots on hit" {
         \\
         \\top = 40.I64
         \\
+        \\message_result : Try(Str, Str)
+        \\message_result = Ok("done")
+        \\
+        \\message = match message_result {
+        \\    Ok(value) => value
+        \\}
+        \\
         \\main! = |args| {
         \\    pair = (top, 2.I64)
         \\    (left, right) = pair
         \\    Ok(tag_value) = Ok(45.I64)
         \\    _ = left + right + tag_value + List.len(args).to_i64_wrap()
-        \\    Echo.line!("done")
+        \\    Echo.line!(message)
         \\    Ok({})
         \\}
         ,
@@ -5023,6 +5681,7 @@ test "Coordinator checked module cache preserves hoisted roots on hit" {
     const first = try compileAppWithCheckedModuleCache(allocator, cache_dir, app_path);
     try std.testing.expect(first.hoisted_constants >= 2);
     try std.testing.expect(first.pattern_extraction_regions.count >= 3);
+    try std.testing.expect(first.exhaustiveness_sites.count > 0);
 
     const second = try compileAppWithCheckedModuleCache(allocator, cache_dir, app_path);
     try std.testing.expect(second.cache.hits > 0);
@@ -5032,6 +5691,12 @@ test "Coordinator checked module cache preserves hoisted roots on hit" {
         u8,
         &first.pattern_extraction_regions.digest,
         &second.pattern_extraction_regions.digest,
+    );
+    try std.testing.expectEqual(first.exhaustiveness_sites.count, second.exhaustiveness_sites.count);
+    try std.testing.expectEqualSlices(
+        u8,
+        &first.exhaustiveness_sites.digest,
+        &second.exhaustiveness_sites.digest,
     );
 }
 
@@ -5054,6 +5719,28 @@ test "Coordinator corrupt checked module cache entries compile from source" {
 
     const second = try compileAppWithCheckedModuleCache(allocator, cache_dir, "test/str/app_message.roc");
     try std.testing.expectEqual(@as(u32, 0), second.build.cache_hits);
+    try std.testing.expect(second.build.modules_compiled > 0);
+    try std.testing.expect(second.cache.invalidations > 0);
+}
+
+test "Coordinator corrupt checked module cache env relocations compile from source" {
+    const allocator = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    const cache_dir = try tmp_dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
+    defer allocator.free(cache_dir);
+
+    const first = try compileAppWithCheckedModuleCache(allocator, cache_dir, "test/str/app_message.roc");
+    try std.testing.expect(first.cache.stores > 0);
+
+    const config = CacheConfig{ .cache_dir = cache_dir };
+    const checked_module_cache_dir = try config.getCheckedArtifactCacheDir(allocator);
+    defer allocator.free(checked_module_cache_dir);
+    const corrupted = try corruptCheckedModuleEnvIdentBytesLens(allocator, checked_module_cache_dir);
+    try std.testing.expect(corrupted > 0);
+
+    const second = try compileAppWithCheckedModuleCache(allocator, cache_dir, "test/str/app_message.roc");
     try std.testing.expect(second.build.modules_compiled > 0);
     try std.testing.expect(second.cache.invalidations > 0);
 }
@@ -5081,6 +5768,7 @@ test "Coordinator basic initialization" {
 
 test "Coordinator package creation" {
     const allocator = std.testing.allocator;
+    const app_identity = package_identity.synthetic_app_identity;
 
     var coord = try Coordinator.init(
         allocator,
@@ -5095,14 +5783,14 @@ test "Coordinator package creation" {
     defer coord.deinit();
 
     // Create a package
-    const pkg = try coord.ensurePackage("app", "/test/app");
-    try std.testing.expectEqualStrings("app", pkg.name);
+    const pkg = try coord.ensurePackage(app_identity, "/test/app");
+    try std.testing.expectEqualStrings(app_identity, pkg.name);
     try std.testing.expectEqualStrings("/test/app", pkg.root_dir);
 
     // Verify package is stored
-    const retrieved = coord.packages.get("app");
+    const retrieved = coord.packages.get(app_identity);
     try std.testing.expect(retrieved != null);
-    try std.testing.expectEqualStrings("app", retrieved.?.name);
+    try std.testing.expectEqualStrings(app_identity, retrieved.?.name);
 }
 
 test "Coordinator collectWatchInputStates includes package root state" {
@@ -5219,6 +5907,7 @@ test "Coordinator collectWatchInputStates includes module source file state" {
 
 test "Coordinator module creation" {
     const allocator = std.testing.allocator;
+    const app_identity = package_identity.synthetic_app_identity;
 
     var coord = try Coordinator.init(
         allocator,
@@ -5233,7 +5922,7 @@ test "Coordinator module creation" {
     defer coord.deinit();
 
     // Create package and module
-    const pkg = try coord.ensurePackage("app", "/test/app");
+    const pkg = try coord.ensurePackage(app_identity, "/test/app");
     const module_id = try pkg.ensureModule(allocator, "Main", "/test/app/Main.roc");
 
     try std.testing.expectEqual(@as(ModuleId, 0), module_id);
@@ -5247,6 +5936,7 @@ test "Coordinator module creation" {
 
 test "Coordinator task queue" {
     const allocator = std.testing.allocator;
+    const app_identity = package_identity.synthetic_app_identity;
 
     var coord = try Coordinator.init(
         allocator,
@@ -5261,13 +5951,13 @@ test "Coordinator task queue" {
     defer coord.deinit();
 
     // Create package and module
-    const pkg = try coord.ensurePackage("app", "/test/app");
+    const pkg = try coord.ensurePackage(app_identity, "/test/app");
     _ = try pkg.ensureModule(allocator, "Main", "/test/app/Main.roc");
 
     // Enqueue a task directly
     try coord.enqueueTask(.{
         .parse = .{
-            .package_name = "app",
+            .package_name = app_identity,
             .module_id = 0,
             .module_name = "Main",
             .path = "/test/app/Main.roc",
@@ -5283,7 +5973,7 @@ test "Coordinator task queue" {
     const task = coord.task_channel.tryRecv();
     try std.testing.expect(task != null);
     try std.testing.expect(task.? == .parse);
-    try std.testing.expectEqualStrings("app", task.?.parse.package_name);
+    try std.testing.expectEqualStrings(app_identity, task.?.parse.package_name);
 }
 
 test "Coordinator isComplete logic" {
@@ -5514,6 +6204,7 @@ test "Channel in coordinator context" {
 
 test "Coordinator enqueueParseTask flow" {
     const allocator = std.testing.allocator;
+    const app_identity = package_identity.synthetic_app_identity;
 
     var coord = try Coordinator.init(
         allocator,
@@ -5528,7 +6219,7 @@ test "Coordinator enqueueParseTask flow" {
     defer coord.deinit();
 
     // Create package
-    const pkg = try coord.ensurePackage("app", "/test/app");
+    const pkg = try coord.ensurePackage(app_identity, "/test/app");
 
     // Create module
     const module_id = try pkg.ensureModule(allocator, "Main", "/test/app/Main.roc");
@@ -5538,7 +6229,7 @@ test "Coordinator enqueueParseTask flow" {
     coord.total_remaining = 1;
 
     // Enqueue parse task
-    try coord.enqueueParseTask("app", module_id);
+    try coord.enqueueParseTask(app_identity, module_id);
 
     // Verify task was queued
     try std.testing.expectEqual(@as(usize, 1), coord.task_channel.len());
@@ -5546,7 +6237,7 @@ test "Coordinator enqueueParseTask flow" {
     // Verify it's a parse task for the right module
     const task = coord.task_channel.tryRecv().?;
     try std.testing.expect(task == .parse);
-    try std.testing.expectEqualStrings("app", task.parse.package_name);
+    try std.testing.expectEqualStrings(app_identity, task.parse.package_name);
     try std.testing.expectEqual(@as(ModuleId, 0), task.parse.module_id);
     try std.testing.expectEqualStrings("Main", task.parse.module_name);
 }
@@ -5584,6 +6275,7 @@ test "platform root candidate comes from registration, not name probing" {
 
 test "Coordinator single-threaded loop with mock result" {
     const allocator = std.testing.allocator;
+    const app_identity = package_identity.synthetic_app_identity;
 
     var coord = try Coordinator.init(
         allocator,
@@ -5598,7 +6290,7 @@ test "Coordinator single-threaded loop with mock result" {
     defer coord.deinit();
 
     // Create package and module
-    const pkg = try coord.ensurePackage("app", "/test/app");
+    const pkg = try coord.ensurePackage(app_identity, "/test/app");
     const module_id = try pkg.ensureModule(allocator, "Main", "/test/app/Main.roc");
 
     // Set up remaining count
@@ -5630,6 +6322,8 @@ test "Coordinator CI failure scenario - app with platform cross-package imports"
     // for this exact structure.
 
     const allocator = std.testing.allocator;
+    const app_identity = package_identity.synthetic_app_identity;
+    const platform_identity = package_identity.synthetic_platform_identity;
 
     var coord = try Coordinator.init(
         allocator,
@@ -5643,20 +6337,20 @@ test "Coordinator CI failure scenario - app with platform cross-package imports"
     );
     defer coord.deinit();
 
-    // Set up "app" package
-    const app_pkg = try coord.ensurePackage("app", "/test/app");
+    // Set up synthetic app package
+    const app_pkg = try coord.ensurePackage(app_identity, "/test/app");
 
-    // Set up shorthand: app's "pf" -> package "pf"
+    // Set up shorthand: app's "pf" alias -> synthetic platform package
     const sh_key = try allocator.dupe(u8, "pf");
-    const sh_val = try allocator.dupe(u8, "pf");
+    const sh_val = try allocator.dupe(u8, platform_identity);
     try app_pkg.shorthands.put(sh_key, sh_val);
 
     const app_mod_id = try app_pkg.ensureModule(allocator, "expect_with_main", "/test/app/expect_with_main.roc");
     app_pkg.remaining_modules = 1;
     coord.total_remaining = 1;
 
-    // Set up "pf" package
-    const pf_pkg = try coord.ensurePackage("pf", "/test/pf");
+    // Set up synthetic platform package
+    const pf_pkg = try coord.ensurePackage(platform_identity, "/test/pf");
     const pf_main_id = try pf_pkg.ensureModule(allocator, "main", "/test/pf/main.roc");
     const pf_stdout_id = try pf_pkg.ensureModule(allocator, "Stdout", "/test/pf/Stdout.roc");
     const pf_stderr_id = try pf_pkg.ensureModule(allocator, "Stderr", "/test/pf/Stderr.roc");
@@ -5713,8 +6407,8 @@ test "Coordinator CI failure scenario - app with platform cross-package imports"
 
     // Verify external import readiness via the public isExternalReady API
     // pf.Stdout and pf.Stderr should be ready (they're Done)
-    try std.testing.expect(coord.isExternalReady("app", "pf.Stdout"));
-    try std.testing.expect(coord.isExternalReady("app", "pf.Stderr"));
+    try std.testing.expect(coord.isExternalReady(app_identity, "pf.Stdout"));
+    try std.testing.expect(coord.isExternalReady(app_identity, "pf.Stderr"));
 
     // Now simulate completing pf.main
     pf_pkg.getModule(pf_main_id).?.phase = .Done;
@@ -5751,6 +6445,7 @@ test "Coordinator handleParseFailed advances module to Done" {
     // If the package/module lookup silently returned, the module would
     // stay in Parsing forever — exactly the bug from CI.
     const allocator = std.testing.allocator;
+    const app_identity = package_identity.synthetic_app_identity;
 
     var coord = try Coordinator.init(
         allocator,
@@ -5765,7 +6460,7 @@ test "Coordinator handleParseFailed advances module to Done" {
     defer coord.deinit();
 
     // Create package and module
-    const pkg = try coord.ensurePackage("app", "/test/app");
+    const pkg = try coord.ensurePackage(app_identity, "/test/app");
     const module_id = try pkg.ensureModule(allocator, "Builder", "/test/app/Builder.roc");
     pkg.remaining_modules = 1;
     coord.total_remaining = 1;
@@ -5778,7 +6473,7 @@ test "Coordinator handleParseFailed advances module to Done" {
     // This exercises the package/module lookup that previously used orelse return.
     const result: WorkerResult = .{
         .parse_failed = .{
-            .package_name = "app",
+            .package_name = app_identity,
             .module_id = module_id,
             .module_name = "Builder",
             .path = "/test/app/Builder.roc",

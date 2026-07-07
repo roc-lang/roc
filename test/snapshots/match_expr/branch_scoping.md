@@ -100,7 +100,7 @@ match result {
 					(pattern (degenerate false)
 						(p-applied-tag)))
 				(value
-					(e-dispatch-call (method "plus") (constraint-fn-var 71)
+					(e-dispatch-call (method "plus") (constraint-fn-var 74)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "value"))))
@@ -111,7 +111,7 @@ match result {
 					(pattern (degenerate false)
 						(p-applied-tag)))
 				(value
-					(e-dispatch-call (method "minus") (constraint-fn-var 107)
+					(e-dispatch-call (method "minus") (constraint-fn-var 110)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "value"))))
@@ -122,7 +122,7 @@ match result {
 					(pattern (degenerate false)
 						(p-applied-tag)))
 				(value
-					(e-dispatch-call (method "times") (constraint-fn-var 143)
+					(e-dispatch-call (method "times") (constraint-fn-var 146)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "different"))))
@@ -133,7 +133,7 @@ match result {
 					(pattern (degenerate false)
 						(p-applied-tag)))
 				(value
-					(e-dispatch-call (method "div_by") (constraint-fn-var 179)
+					(e-dispatch-call (method "div_by") (constraint-fn-var 182)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "different"))))

@@ -19,108 +19,56 @@ data : json.Core.Utf8.EncodedData
 data = json.Core.Utf8.encode("hello")
 ~~~
 # EXPECTED
-PARSE ERROR - multi_qualified_import.md:12:12:12:17
-PARSE ERROR - multi_qualified_import.md:12:17:12:22
-PARSE ERROR - multi_qualified_import.md:12:22:12:29
-PARSE ERROR - multi_qualified_import.md:12:29:12:30
-PARSE ERROR - multi_qualified_import.md:12:30:12:31
-PARSE ERROR - multi_qualified_import.md:12:31:12:36
-PARSE ERROR - multi_qualified_import.md:12:36:12:37
-PARSE ERROR - multi_qualified_import.md:12:37:12:38
+EXPECTED RECORD ACCESSOR - multi_qualified_import.md:12:12:12:17
+EXPECTED RECORD ACCESSOR - multi_qualified_import.md:12:17:12:22
 UNDECLARED TYPE - multi_qualified_import.md:3:16:3:23
 DOES NOT EXIST - multi_qualified_import.md:4:16:4:45
 MODULE NOT IMPORTED - multi_qualified_import.md:7:11:7:33
 UNUSED VARIABLE - multi_qualified_import.md:8:12:8:19
 MODULE NOT IMPORTED - multi_qualified_import.md:11:8:11:34
-NAME NOT IN SCOPE - multi_qualified_import.md:12:8:12:12
+UNRECOGNIZED SYNTAX - multi_qualified_import.md:12:8:12:38
 # PROBLEMS
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────────┐
+│ EXPECTED RECORD ACCESSOR ├─ I was parsing access after `.`, and I ──────────┐
+└┬─────────────────────────┘  expected a field name or tuple index.           │
  │                                                                            │
  │  data = json.Core.Utf8.encode("hello")                                     │
  │             ‾‾‾‾‾                                                          │
  └─────────────────────────────────────────── multi_qualified_import.md:12:12 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Record access uses a lowercase field name like `.name`. Tuple access uses a
+    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
+    valid accessors.
+
+    For example:
+        person.name
+        pair.0
+
+    I found `.Core` here.
+    Names that start with uppercase letters are used for tags, type names, and
+    module names in Roc.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────────┐
+│ EXPECTED RECORD ACCESSOR ├─ I was parsing access after `.`, and I ──────────┐
+└┬─────────────────────────┘  expected a field name or tuple index.           │
  │                                                                            │
  │  data = json.Core.Utf8.encode("hello")                                     │
  │                  ‾‾‾‾‾                                                     │
  └─────────────────────────────────────────── multi_qualified_import.md:12:17 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Record access uses a lowercase field name like `.name`. Tuple access uses a
+    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
+    valid accessors.
 
+    For example:
+        person.name
+        pair.0
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
- │                                                                            │
- │  data = json.Core.Utf8.encode("hello")                                     │
- │                       ‾‾‾‾‾‾‾                                              │
- └─────────────────────────────────────────── multi_qualified_import.md:12:22 ┘
-
-    This is an unexpected parsing error. Please check your syntax.
-
-
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
- │                                                                            │
- │  data = json.Core.Utf8.encode("hello")                                     │
- │                              ‾                                             │
- └─────────────────────────────────────────── multi_qualified_import.md:12:29 ┘
-
-    This is an unexpected parsing error. Please check your syntax.
-
-
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
- │                                                                            │
- │  data = json.Core.Utf8.encode("hello")                                     │
- │                               ‾                                            │
- └─────────────────────────────────────────── multi_qualified_import.md:12:30 ┘
-
-    This is an unexpected parsing error. Please check your syntax.
-
-
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
- │                                                                            │
- │  data = json.Core.Utf8.encode("hello")                                     │
- │                                ‾‾‾‾‾                                       │
- └─────────────────────────────────────────── multi_qualified_import.md:12:31 ┘
-
-    This is an unexpected parsing error. Please check your syntax.
-
-
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
- │                                                                            │
- │  data = json.Core.Utf8.encode("hello")                                     │
- │                                     ‾                                      │
- └─────────────────────────────────────────── multi_qualified_import.md:12:36 ┘
-
-    This is an unexpected parsing error. Please check your syntax.
-
-
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
- │                                                                            │
- │  data = json.Core.Utf8.encode("hello")                                     │
- │                                      ‾                                     │
- └─────────────────────────────────────────── multi_qualified_import.md:12:37 ┘
-
-    This is an unexpected parsing error. Please check your syntax.
+    I found `.Utf8` here.
+    Names that start with uppercase letters are used for tags, type names, and
+    module names in Roc.
 
 
 ┌─────────────────┐
@@ -176,15 +124,15 @@ NAME NOT IN SCOPE - multi_qualified_import.md:12:8:12:12
 
 
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `json` in this scope. ────────────────┐
-└┬──────────────────┘                                                         │
+┌─────────────────────┐
+│ UNRECOGNIZED SYNTAX ├─ I don't recognize this syntax. ──────────────────────┐
+└┬────────────────────┘                                                       │
  │                                                                            │
  │  data = json.Core.Utf8.encode("hello")                                     │
- │         ‾‾‾‾                                                               │
+ │         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                     │
  └──────────────────────────────────────────── multi_qualified_import.md:12:8 ┘
 
-    Is it misspelled, or is there an import missing?
+    This might be a syntax error, an unsupported language feature, or a typo.
 
 # TOKENS
 ~~~zig
@@ -225,15 +173,12 @@ EndOfFile,
 			(ty (name "json.Core.Utf8.EncodedData")))
 		(s-decl
 			(p-ident (raw "data"))
-			(e-ident (raw "json")))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))))
+			(e-method-call (method ".encode")
+				(receiver
+					(e-malformed (reason "expr_dot_suffix_not_allowed")))
+				(args
+					(e-string
+						(e-string-part (raw "hello"))))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -248,7 +193,7 @@ process = |encoder| "processing"
 
 # Test with multiple qualifiers
 data : json.Core.Utf8.EncodedData
-data = json
+data = .encode("hello")
 ~~~
 # CANONICALIZE
 ~~~clojure
@@ -271,7 +216,7 @@ data = json
 				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "data"))
-		(e-runtime-error (tag "ident_not_in_scope"))
+		(e-runtime-error (tag "expr_not_canonicalized"))
 		(annotation
 			(ty-malformed)))
 	(s-import (module "json.Core")

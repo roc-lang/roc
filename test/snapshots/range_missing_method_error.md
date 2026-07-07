@@ -104,7 +104,7 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign (ident "r"))
-		(e-call (constraint-fn-var 170)
+		(e-call (constraint-fn-var 173)
 			(e-lookup-external
 				(builtin))
 			(e-string

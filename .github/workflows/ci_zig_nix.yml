@@ -1,8 +1,6 @@
 on:
   workflow_call:
   workflow_dispatch:
-  schedule:
-    - cron: '0 0 * * *'  # Daily at midnight UTC
 
 name: CI Zig Nix Build
 
@@ -39,9 +37,9 @@ jobs:
         id: zig-deps-cache
         uses: actions/cache/restore@v4 # ratchet:actions/cache/restore@v4
         with:
-          # Keep this key and path in sync with ci_zig.yml. Scheduled runs of
-          # this workflow execute on main, so new PRs can restore these package
-          # downloads instead of refetching them from GitHub.
+          # Keep this key and path in sync with ci_zig.yml. The daily Nightly
+          # Gate run executes this workflow on main, so new PRs can restore
+          # these package downloads instead of refetching them from GitHub.
           path: ${{ env.ZIG_GLOBAL_CACHE_DIR }}/p
           key: zig-deps-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('build.zig.zon') }}
           restore-keys: |

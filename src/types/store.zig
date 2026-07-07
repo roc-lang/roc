@@ -567,7 +567,7 @@ pub const Store = struct {
         ident: TypeIdent,
         backing_var: Var,
         args: []const Var,
-        origin_module: base.Ident.Idx,
+        origin_module: base.ModuleIdentity.Idx,
     ) std.mem.Allocator.Error!Content {
         return self.mkAliasWithSourceDecl(ident, backing_var, args, origin_module, null);
     }
@@ -577,7 +577,7 @@ pub const Store = struct {
         ident: TypeIdent,
         backing_var: Var,
         args: []const Var,
-        origin_module: base.Ident.Idx,
+        origin_module: base.ModuleIdentity.Idx,
         source_decl: ?u32,
     ) std.mem.Allocator.Error!Content {
         return self.mkAliasWithSourceDeclAndBuiltinOrigin(
@@ -595,7 +595,7 @@ pub const Store = struct {
         ident: TypeIdent,
         backing_var: Var,
         args: []const Var,
-        origin_module: base.Ident.Idx,
+        origin_module: base.ModuleIdentity.Idx,
         source_decl: ?u32,
         builtin_origin: bool,
     ) std.mem.Allocator.Error!Content {
@@ -624,7 +624,7 @@ pub const Store = struct {
         ident: TypeIdent,
         backing_var: Var,
         args: []const Var,
-        origin_module: base.Ident.Idx,
+        origin_module: base.ModuleIdentity.Idx,
         is_opaque: bool,
     ) std.mem.Allocator.Error!Content {
         return self.mkNominalWithSourceDecl(ident, backing_var, args, origin_module, null, is_opaque);
@@ -635,7 +635,7 @@ pub const Store = struct {
         ident: TypeIdent,
         backing_var: Var,
         args: []const Var,
-        origin_module: base.Ident.Idx,
+        origin_module: base.ModuleIdentity.Idx,
         source_decl: ?u32,
         is_opaque: bool,
     ) std.mem.Allocator.Error!Content {
@@ -655,7 +655,7 @@ pub const Store = struct {
         ident: TypeIdent,
         backing_var: Var,
         args: []const Var,
-        origin_module: base.Ident.Idx,
+        origin_module: base.ModuleIdentity.Idx,
         source_decl: ?u32,
         is_opaque: bool,
         builtin_origin: bool,
@@ -776,7 +776,12 @@ pub const Store = struct {
         return switch (content) {
             .flex => true, // Flexible variables need instantiation
             .rigid => true, // Rigid variables need instantiation when used outside their defining scope
-            .alias => true, // Aliases may contain type variables, so assume they need instantiation
+            // An alias is transparent: it needs instantiation exactly when its
+            // backing type does. Aliases cannot be recursive, so this walk
+            // terminates. Treating every alias as needing instantiation would
+            // (among other things) exclude concrete alias-annotated top-level
+            // values from compile-time evaluation.
+            .alias => |alias| self.needsInstantiation(self.getAliasBackingVar(alias)),
             .structure => |flat_type| self.needsInstantiationFlatType(flat_type),
             .err => false,
         };
@@ -1802,7 +1807,7 @@ test "Store comprehensive CompactWriter roundtrip" {
     const str_var = try original.freshFromContent(Content{ .structure = .empty_record });
     const list_elem = try original.fresh();
     const list_ident_idx = base.Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 999 };
-    const builtin_module_idx = base.Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 998 };
+    const builtin_module_idx = base.ModuleIdentity.Idx.NONE;
     const list_content = try original.mkNominal(
         .{ .ident_idx = list_ident_idx },
         list_elem,
@@ -2299,7 +2304,7 @@ test "source declaration overflow is rejected before mutating type store" {
             .{ .ident_idx = base.Ident.Idx.NONE },
             unread_backing_var,
             &.{},
-            base.Ident.Idx.NONE,
+            base.ModuleIdentity.Idx.NONE,
             SourceDecl.max_statement + 1,
         ),
     );
@@ -2313,7 +2318,7 @@ test "source declaration overflow is rejected before mutating type store" {
             .{ .ident_idx = base.Ident.Idx.NONE },
             unread_backing_var,
             &.{},
-            base.Ident.Idx.NONE,
+            base.ModuleIdentity.Idx.NONE,
             NominalType.Source.max_statement + 1,
             false,
         ),

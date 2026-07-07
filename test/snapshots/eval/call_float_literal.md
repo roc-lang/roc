@@ -47,7 +47,7 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign (ident "x"))
-		(e-call (constraint-fn-var 45)
+		(e-call (constraint-fn-var 48)
 			(e-dec-small (numerator "1234") (denominator-power-of-ten "2") (value "12.34")))))
 ~~~
 # TYPES

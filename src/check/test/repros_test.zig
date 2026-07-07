@@ -370,6 +370,67 @@ test "check - repro - issue 8848" {
     // regression we're guarding against
 }
 
+test "check - repro - issue 9827 - nested effectful decoder lambda with try" {
+    const sqlite_src =
+        \\Stmt := [Stmt]
+        \\
+        \\Sqlite := [Sqlite].{
+        \\    str : Str -> (List(Str) -> (Stmt => Try(Str, [DbErr, ..err])))
+        \\    str = |_name| |_cols| |_stmt| Ok("todo")
+        \\
+        \\    nullable_i64 : Str -> (List(Str) -> (Stmt => Try([NotNull(I64), Null], [DbErr, ..err])))
+        \\    nullable_i64 = |_name| |_cols| |_stmt| Ok(NotNull(1))
+        \\
+        \\    query_many! : { path : Str, query : Str, bindings : List({}), rows : List(Str) -> (Stmt => Try(row, [DbErr, ..err])) } => Try(List(row), [DbErr, ..err])
+        \\    query_many! = |_config| Ok([])
+        \\}
+    ;
+
+    var sqlite_module = try TestEnv.init("Sqlite", sqlite_src);
+    defer sqlite_module.deinit();
+
+    const src =
+        \\import Sqlite
+        \\
+        \\main! : List(Str) => Try({}, _)
+        \\main! = |_args| {
+        \\    _rows = Sqlite.query_many!({
+        \\        path: "x.db",
+        \\        query: "SELECT * FROM todos;",
+        \\        bindings: [],
+        \\        rows: decode,
+        \\    })?
+        \\    Ok({})
+        \\}
+        \\
+        \\decode = |cols|
+        \\    |stmt| {
+        \\        status_str = Sqlite.str("status")(cols)(stmt)?
+        \\        status = decode_status(status_str)?
+        \\        edited_raw = Sqlite.nullable_i64("edited")(cols)(stmt)?
+        \\        edited = decode_edited(edited_raw)
+        \\        Ok({ status, edited })
+        \\    }
+        \\
+        \\decode_status = |s|
+        \\    match s {
+        \\        "todo" => Ok(Todo)
+        \\        _ => Err(ParseError("x"))
+        \\    }
+        \\
+        \\decode_edited = |e|
+        \\    match e {
+        \\        NotNull(1) => Edited
+        \\        _ => Unknown
+        \\    }
+    ;
+
+    var test_env = try TestEnv.initWithImport("Test", src, "Sqlite", &sqlite_module);
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+}
+
 test "check - repro - bad return branch mismatch after utf8 empty guard" {
     const src =
         \\main! = |_| {}
@@ -670,11 +731,10 @@ test "check - repro - issue 9491 - nested self-recursive local fns generalize" {
 
 test "check - repro - self-recursive local fn after early return in enclosing body" {
     // An early `return` in the enclosing function body records an early-return
-    // constraint that `processReturnConstraints` later compacts out of the
-    // shared constraint list while checking the local def's lambda. The local
-    // def's recursive reference is tracked in a dedicated stack (NOT that shared
-    // list), so the compaction cannot affect its validation. Well-typed: no
-    // spurious errors.
+    // constraint owned by that lambda's return frame. The local def's recursive
+    // reference is tracked in its own dedicated stack, so processing return flow
+    // cannot affect recursive-reference validation. Well-typed: no spurious
+    // errors.
     const src =
         \\main! = |_args| {
         \\    f : U64 -> U64
@@ -701,7 +761,7 @@ test "check - repro - self-recursive local fn after early return in enclosing bo
 test "check - repro - self-recursive local fn recursive use still type-checked after early return" {
     // Companion to the well-typed case above: the self-recursive local def's
     // recursive reference must STILL be validated after the early-return
-    // compaction, so an ill-typed recursive use is caught. Here the recursive
+    // processing, so an ill-typed recursive use is caught. Here the recursive
     // call result is forced to `Str`, contradicting the rigid `a` in
     // `loop : a -> a`. If the reference were dropped, no error would be reported.
     const src =

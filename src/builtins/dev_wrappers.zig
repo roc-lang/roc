@@ -1581,6 +1581,27 @@ pub fn roc_builtins_dec_atan(out_low: *u64, out_high: *u64, a_low: u64, a_high: 
 
 // ── i128 div/rem wrappers (decomposed) ──
 
+/// u128 checked multiply (decomposed). Returns 1 when the multiplication overflowed.
+pub fn roc_builtins_num_mul_with_overflow_u128(out_low: *u64, out_high: *u64, a_low: u64, a_high: u64, b_low: u64, b_high: u64) callconv(.c) c_int {
+    const a: u128 = i128h.from_u64_pair(a_low, a_high);
+    const b: u128 = i128h.from_u64_pair(b_low, b_high);
+    const result = num.mulWithOverflow(u128, a, b);
+    out_low.* = @truncate(result.value);
+    out_high.* = i128h.hi64(result.value);
+    return @intFromBool(result.has_overflowed);
+}
+
+/// i128 checked multiply (decomposed). Returns 1 when the multiplication overflowed.
+pub fn roc_builtins_num_mul_with_overflow_i128(out_low: *u64, out_high: *u64, a_low: u64, a_high: u64, b_low: u64, b_high: u64) callconv(.c) c_int {
+    const a: i128 = @bitCast(i128h.from_u64_pair(a_low, a_high));
+    const b: i128 = @bitCast(i128h.from_u64_pair(b_low, b_high));
+    const result = num.mulWithOverflow(i128, a, b);
+    const bits: u128 = @bitCast(result.value);
+    out_low.* = @truncate(bits);
+    out_high.* = i128h.hi64(bits);
+    return @intFromBool(result.has_overflowed);
+}
+
 /// u128 div trunc (decomposed)
 pub fn roc_builtins_num_div_trunc_u128(out_low: *u64, out_high: *u64, a_low: u64, a_high: u64, b_low: u64, b_high: u64, roc_ops: *RocOps) callconv(.c) void {
     const a: u128 = i128h.from_u64_pair(a_low, a_high);

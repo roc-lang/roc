@@ -239,378 +239,349 @@ pub fn tokenizedRegionToRegion(self: *AST, tokenized_region: TokenizedRegion) ba
     };
 }
 
-/// Convert a parse diagnostic to a Report for rendering
-pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Diagnostic, allocator: std.mem.Allocator, filename: []const u8) Allocator.Error!reporting.Report {
-    const raw_region = self.tokenizedRegionToRegion(diagnostic.region);
+const ParseReportContext = struct {
+    ast: *AST,
+    env: *const CommonEnv,
+    diagnostic: Diagnostic,
+    allocator: Allocator,
+    filename: []const u8,
+    region: base.Region,
 
-    // Ensure region bounds are valid for source slicing
-    const region = base.Region{
-        .start = .{ .offset = @min(raw_region.start.offset, self.env.source.len) },
-        .end = .{ .offset = @min(@max(raw_region.end.offset, raw_region.start.offset), self.env.source.len) },
-    };
-
-    const title = switch (diagnostic.tag) {
-        .multiple_platforms => "Multiple Platforms",
-        .no_platform => "No Platform",
-        .missing_arrow => "Missing Arrow",
-        .expected_exposes => "Expected Exposes",
-        .expected_exposes_close_square => "Expected Closing Bracket",
-        .expected_exposes_open_square => "Expected Opening Bracket",
-        .expected_packages => "Expected Packages",
-        .expected_packages_close_curly => "Expected Closing Brace",
-        .expected_packages_open_curly => "Expected Opening Brace",
-        .pattern_unexpected_token => "Unexpected Token In Pattern",
-        .pattern_list_rest_old_syntax => "Bad List Rest Pattern Syntax",
-        .pattern_unexpected_eof => "Unexpected End Of File In Pattern",
-        .ty_anno_unexpected_token => "Unexpected Token In Type Annotation",
-        .string_unexpected_token => "Unexpected Token In String",
-        .expr_unexpected_token => "Unexpected Token In Expression",
-        .crash_statement_in_expr_position => "Crash In Expression",
-        .return_outside_function => "Return Outside Function",
-        .import_must_be_top_level => "Import Must Be Top Level",
-        .expected_expr_close_square_or_comma => "List Not Closed",
-        .where_expected_open_bracket => "Where Clause Error",
-        .where_expected_close_bracket => "Where Clause Error",
-        .where_expected_var => "Where Clause Error",
-        .where_expected_method_or_alias_name => "Where Clause Error",
-        .where_expected_colon => "Where Clause Error",
-        .where_expected_constraints => "Where Clause Error",
-        .type_alias_cannot_have_associated => "Type Alias With Associated Items",
-        .nominal_associated_cannot_have_final_expression => "Expression In Associated Items",
-        .deprecated_number_suffix => "Deprecated Number Suffix",
-        .expr_double_dot_is_not_range => "Not A Range Operator",
-        else => "Parse Error",
-    };
-
-    // Lead sentence for the report's headline. Dynamic branches (whose lead
-    // interpolates token or tag text) keep their lead in the document below and
-    // use an empty headline, letting the renderer derive the summary from the
-    // document lead.
-    const headline: []const u8 = switch (diagnostic.tag) {
-        .multiple_platforms => "Only one platform declaration is allowed per file.",
-        .no_platform => "App files must specify a platform.",
-        .missing_arrow => "Expected an arrow -> here.",
-        .expected_exposes, .expected_exposes_close_square, .expected_exposes_open_square => "Module headers must have an exposing section that lists what the module exposes.",
-        .expected_packages, .expected_packages_close_curly, .expected_packages_open_curly => "Platform headers must have a packages section that lists package dependencies.",
-        .pattern_list_rest_old_syntax => "List rest patterns should use the `.. as name` syntax, not `..name`.",
-        .pattern_unexpected_eof => "This pattern is incomplete - the file ended unexpectedly.",
-        .return_outside_function => "The return keyword can only be used inside a function body.",
-        .import_must_be_top_level => "Import statements must appear at the top level of a module.",
-        .expected_expr_close_square_or_comma => "This list is missing a closing bracket or has a syntax error.",
-        .expected_colon_after_type_annotation => "Type applications require parentheses around their type arguments.",
-        .where_expected_open_bracket => "Expected an opening bracket [ after where.",
-        .where_expected_close_bracket => "Expected a closing bracket ] after the where clause constraints.",
-        .where_expected_var => "Expected a type variable name here.",
-        .where_expected_method_or_alias_name => "Expected a method name or type alias after the dot.",
-        .where_expected_colon => "Expected a colon : after the method name in this where clause constraint.",
-        .where_expected_constraints => "A where clause cannot be empty.",
-        .match_branch_wrong_arrow => "Match branches use `=>` instead of `->`.",
-        .match_has_no_branches => "A match expression must have at least one branch.",
-        .multi_arrow_needs_parens => "Function types with multiple arrows need parentheses.",
-        .type_alias_cannot_have_associated => "Type aliases cannot have associated items (such as types or methods).",
-        .nominal_associated_cannot_have_final_expression => "Associated items (such as types or methods) can only have associated types and values, not plain expressions.",
-        .deprecated_number_suffix => "This number literal uses a deprecated suffix syntax.",
-        .expr_double_dot_is_not_range => ".. is not an operator. For an exclusive range use ..<; for an inclusive range use ..=.",
-        else => "",
-    };
-
-    var report = try reporting.Report.init(allocator, title, headline, .runtime_error);
-
-    // Add detailed error message based on the diagnostic type
-    switch (diagnostic.tag) {
-        .multiple_platforms => {
-            try report.document.addReflowingText("Remove the duplicate platform declaration.");
-        },
-        .no_platform => {
-            try report.document.addText("Add a platform specification like:");
-            try report.document.addLineBreak();
-            try report.document.addIndent(1);
-            try report.document.addCodeBlock("{ pf: platform \"../basic-cli/platform.roc\" }");
-        },
-        .missing_arrow => {
-            try report.document.addReflowingText("Function type annotations require arrows between parameter and return types.");
-        },
-        .expected_exposes, .expected_exposes_close_square, .expected_exposes_open_square => {
-            try report.document.addText("For example: ");
-            try report.document.addCodeBlock("module [main, add, subtract]");
-        },
-        .expected_packages, .expected_packages_close_curly, .expected_packages_open_curly => {
-            try report.document.addText("For example: ");
-            try report.document.addCodeBlock("packages { base: \"../base/main.roc\" }");
-        },
-        .pattern_unexpected_token => {
-            const token_text = if (diagnostic.region.start != diagnostic.region.end)
-                self.env.source[region.start.offset..region.end.offset]
-            else
-                "<unknown>";
-            const owned_token = try report.addOwnedString(token_text);
-            try report.document.addText("The token ");
-            try report.document.addAnnotated(owned_token, .error_highlight);
-            try report.document.addText(" is not expected in a pattern.");
-            try report.document.addLineBreak();
-            try report.document.addReflowingText("Patterns can contain identifiers, literals, lists, records, or tags.");
-
-            // Check for common misspellings and add a tip if found
-            if (reporting.CommonMisspellings.getTokenTip(token_text)) |tip| {
-                try report.document.addLineBreak();
-                try report.document.addLineBreak();
-                try report.document.addText("Tip: ");
-                try report.document.addReflowingTextWithBackticks(tip);
-            }
-        },
-        .pattern_list_rest_old_syntax => {
-            try report.document.addReflowingText("For example, use `[first, .. as rest]` instead of `[first, ..rest]`.");
-        },
-        .pattern_unexpected_eof => {
-            try report.document.addReflowingText("Complete the pattern or remove the incomplete pattern.");
-        },
-        .ty_anno_unexpected_token => {
-            const token_text = if (diagnostic.region.start != diagnostic.region.end)
-                self.env.source[region.start.offset..region.end.offset]
-            else
-                "<unknown>";
-            const owned_token = try report.addOwnedString(token_text);
-            try report.document.addText("The token ");
-            try report.document.addAnnotated(owned_token, .error_highlight);
-            try report.document.addText(" is not expected in a type annotation.");
-            try report.document.addLineBreak();
-            try report.document.addReflowingText("Type annotations should contain types like ");
-            try report.document.addType("Str");
-            try report.document.addText(", ");
-            try report.document.addType("Num a");
-            try report.document.addText(", or ");
-            try report.document.addType("List U64");
-            try report.document.addText(".");
-
-            // Check for common misspellings and add a tip if found
-            if (reporting.CommonMisspellings.getTokenTip(token_text)) |tip| {
-                try report.document.addLineBreak();
-                try report.document.addLineBreak();
-                try report.document.addText("Tip: ");
-                try report.document.addReflowingTextWithBackticks(tip);
-            }
-        },
-        .string_unexpected_token => {
-            const token_text = if (diagnostic.region.start != diagnostic.region.end)
-                self.env.source[region.start.offset..region.end.offset]
-            else
-                "<unknown>";
-            const owned_token = try report.addOwnedString(token_text);
-            try report.document.addText("The token ");
-            try report.document.addAnnotated(owned_token, .error_highlight);
-            try report.document.addText(" is not expected in a string literal.");
-            try report.document.addLineBreak();
-            try report.document.addReflowingText("String literals should be enclosed in double quotes.");
-        },
-        .expr_unexpected_token => {
-            const token_text = if (diagnostic.region.start != diagnostic.region.end)
-                self.env.source[region.start.offset..region.end.offset]
-            else
-                "<unknown>";
-            const owned_token = try report.addOwnedString(token_text);
-            try report.document.addText("The token ");
-            try report.document.addAnnotated(owned_token, .error_highlight);
-            try report.document.addText(" is not expected in an expression.");
-            try report.document.addLineBreak();
-            try report.document.addReflowingText("Expressions can be identifiers, literals, function calls, or operators.");
-
-            // Check for common misspellings and add a tip if found
-            if (reporting.CommonMisspellings.getTokenTip(token_text)) |tip| {
-                try report.document.addLineBreak();
-                try report.document.addLineBreak();
-                try report.document.addText("Tip: ");
-                try report.document.addReflowingTextWithBackticks(tip);
-            }
-        },
-        .crash_statement_in_expr_position => {
-            try report.document.addReflowingText("The `crash` keyword starts a statement, but this position needs an expression.");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
-            try report.document.addReflowingText("Wrap it in a block expression:");
-            try report.document.addLineBreak();
-            try report.document.addCodeBlock(
-                \\{
-                \\    crash "unreachable"
-                \\}
-            );
-        },
-        .return_outside_function => {
-            try report.document.addLineBreak();
-            try report.document.addReflowingText("Use `return` to exit early from a function and provide a value. For example:");
-            try report.document.addLineBreak();
-            try report.document.addCodeBlock("foo = |x| { if x < 0 { return Err(NegativeInput) }; Ok(x) }");
-        },
-        .import_must_be_top_level => {
-            try report.document.addReflowingText("Move this import to the top of the file, after the module header but before any definitions.");
-        },
-        .expected_expr_close_square_or_comma => {
-            try report.document.addText("Lists must be closed with ");
-            try report.document.addAnnotated("]", .emphasized);
-            try report.document.addText(" and list items must be separated by commas.");
-            try report.document.addLineBreak();
-            try report.document.addText("For example: ");
-            try report.document.addCodeBlock("[1, 2, 3]");
-        },
-        .expected_colon_after_type_annotation => {
-            try report.document.addLineBreak();
-            try report.document.addReflowingText("I found a type followed by what looks like a type argument, but they need to be connected with parentheses.");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
-            try report.document.addText("Instead of:");
-            try report.document.addLineBreak();
-            try report.document.addIndent(1);
-            try report.document.addAnnotated("List U8", .error_highlight);
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
-            try report.document.addText("Use:");
-            try report.document.addLineBreak();
-            try report.document.addIndent(1);
-            try report.document.addAnnotated("List(U8)", .emphasized);
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
-            try report.document.addText("Other valid examples:");
-            try report.document.addLineBreak();
-            try report.document.addIndent(1);
-            try report.document.addAnnotated("Dict(Str, Num)", .dimmed);
-            try report.document.addLineBreak();
-            try report.document.addIndent(1);
-            try report.document.addAnnotated("Try(a, Str)", .dimmed);
-            try report.document.addLineBreak();
-            try report.document.addIndent(1);
-            try report.document.addAnnotated("Maybe(List(U64))", .dimmed);
-        },
-        .where_expected_open_bracket => {
-            try report.document.addText("Where clauses should look like: ");
-            try report.document.addCodeBlock("where [a.method : Type]");
-        },
-        .where_expected_close_bracket => {
-            try report.document.addText("Where clauses should look like: ");
-            try report.document.addCodeBlock("where [a.method : Type]");
-        },
-        .where_expected_var => {
-            try report.document.addReflowingText("Type variables are lowercase identifiers that represent types.");
-        },
-        .where_expected_method_or_alias_name => {
-            try report.document.addText("Where clauses can contain:");
-            try report.document.addLineBreak();
-            try report.document.addIndent(1);
-            try report.document.addText("• Method constraints: ");
-            try report.document.addCodeBlock("a.method : args -> ret");
-            try report.document.addLineBreak();
-            try report.document.addIndent(1);
-            try report.document.addText("• Type aliases: ");
-            try report.document.addCodeBlock("a.SomeTypeAlias");
-        },
-        .where_expected_colon => {
-            try report.document.addReflowingText("Method constraints require a colon to separate the method name from its type.");
-            try report.document.addLineBreak();
-            try report.document.addText("For example: ");
-            try report.document.addCodeBlock("a.method : a -> b");
-        },
-        .where_expected_constraints => {
-            try report.document.addReflowingText("Where clauses must contain at least one constraint.");
-            try report.document.addLineBreak();
-            try report.document.addText("For example:");
-            try report.document.addLineBreak();
-            try report.document.addIndent(1);
-            try report.document.addCodeBlock("where [a.method : a -> b]");
-        },
-        .match_branch_wrong_arrow => {},
-        .match_has_no_branches => {},
-        .multi_arrow_needs_parens => {
-            try report.document.addLineBreak();
-            try report.document.addText("Instead of writing ");
-            try report.document.addAnnotated("a -> b -> c", .error_highlight);
-            try report.document.addText(", use parentheses to clarify which you mean:");
-            try report.document.addLineBreak();
-            try report.document.addIndent(1);
-            try report.document.addCodeBlock("a -> (b -> c)");
-            try report.document.addText(" for a ");
-            try report.document.addAnnotated("curried", .emphasized);
-            try report.document.addText(" function (a function that ");
-            try report.document.addAnnotated("returns", .emphasized);
-            try report.document.addText(" another function)");
-            try report.document.addLineBreak();
-            try report.document.addIndent(1);
-            try report.document.addCodeBlock("(a -> b) -> c");
-            try report.document.addText(" for a ");
-            try report.document.addAnnotated("higher-order", .emphasized);
-            try report.document.addText(" function (a function that ");
-            try report.document.addAnnotated("takes", .emphasized);
-            try report.document.addText(" another function)");
-        },
-        .type_alias_cannot_have_associated => {
-            try report.document.addLineBreak();
-            try report.document.addReflowingText("Only nominal types (defined with ");
-            try report.document.addAnnotated(":=", .emphasized);
-            try report.document.addReflowingText(") can have associated items. Type aliases (defined with ");
-            try report.document.addAnnotated(":", .emphasized);
-            try report.document.addReflowingText(") only define names for other types.");
-        },
-        .nominal_associated_cannot_have_final_expression => {
-            try report.document.addLineBreak();
-            try report.document.addText("To fix this, remove the expression at the very end.");
-        },
-        .deprecated_number_suffix => {
-            const token_text = if (diagnostic.region.start != diagnostic.region.end)
-                self.env.source[region.start.offset..region.end.offset]
-            else
-                "<unknown>";
-            const split = NumericLiteral.deprecatedSuffixFromSource(token_text);
-            const type_name = split.deprecated_suffix.newTypeName() orelse "";
-            const suggested = try std.fmt.allocPrint(allocator, "{s}.{s}", .{ split.number_text, type_name });
-            defer allocator.free(suggested);
-
-            const owned_suffix = try report.addOwnedString(split.deprecated_suffix_text);
-            const owned_suggested = try report.addOwnedString(suggested);
-
-            try report.document.addLineBreak();
-
-            try report.document.addSourceRegion(
-                base.RegionInfo.position(self.env.source, env.line_starts.items.items, region.start.offset, region.end.offset) catch {
-                    return report;
-                },
-                .error_highlight,
-                try report.addOwnedString(filename),
-                self.env.source,
-                env.line_starts.items.items,
-            );
-
-            try report.document.addLineBreak();
-            try report.document.addReflowingText("The ");
-            try report.document.addInlineCode(owned_suffix);
-            try report.document.addReflowingText(" suffix is deprecated. Use ");
-            try report.document.addInlineCode(owned_suggested);
-            try report.document.addReflowingText(" instead.");
-            return report;
-        },
-        .expr_double_dot_is_not_range => {},
-        else => {
-            const tag_name = @tagName(diagnostic.tag);
-            const owned_tag = try report.addOwnedString(tag_name);
-            try report.document.addText("A parsing error occurred: ");
-            try report.document.addAnnotated(owned_tag, .dimmed);
-            try report.document.addLineBreak();
-            try report.document.addReflowingText("This is an unexpected parsing error. Please check your syntax.");
-        },
+    fn init(ast: *AST, env: *const CommonEnv, diagnostic: Diagnostic, allocator: Allocator, filename: []const u8) ParseReportContext {
+        const raw_region = ast.tokenizedRegionToRegion(diagnostic.region);
+        return .{
+            .ast = ast,
+            .env = env,
+            .diagnostic = diagnostic,
+            .allocator = allocator,
+            .filename = filename,
+            .region = .{
+                .start = .{ .offset = @min(raw_region.start.offset, ast.env.source.len) },
+                .end = .{ .offset = @min(@max(raw_region.end.offset, raw_region.start.offset), ast.env.source.len) },
+            },
+        };
     }
 
-    // Add source context if we have a valid region
-    if (region.start.offset <= region.end.offset and region.end.offset <= self.env.source.len) {
-        // Use proper region info calculation with converted region
-        const region_info = base.RegionInfo.position(self.env.source, env.line_starts.items.items, region.start.offset, region.end.offset) catch {
-            return report; // Return report without source context if region calculation fails
+    fn tokenText(self: ParseReportContext) []const u8 {
+        if (self.region.start.offset < self.region.end.offset and self.region.end.offset <= self.ast.env.source.len) {
+            return self.ast.env.source[self.region.start.offset..self.region.end.offset];
+        }
+        return "";
+    }
+
+    fn tokenTag(self: ParseReportContext) Token.Tag {
+        if (self.diagnostic.region.start < self.ast.tokens.tokens.len) {
+            const tags = self.ast.tokens.tokens.items(.tag);
+            return tags[@intCast(self.diagnostic.region.start)];
+        }
+        return .EndOfFile;
+    }
+};
+
+const ParseReportOptions = struct {
+    example: ?[]const u8 = null,
+    show_found: bool = true,
+};
+
+fn finishParseReport(ctx: ParseReportContext, report: *reporting.Report) Allocator.Error!reporting.Report {
+    if (ctx.region.start.offset <= ctx.region.end.offset and ctx.region.end.offset <= ctx.ast.env.source.len) {
+        const region_info = base.RegionInfo.position(ctx.ast.env.source, ctx.env.line_starts.items.items, ctx.region.start.offset, ctx.region.end.offset) catch {
+            return report.*;
         };
 
         try report.document.addLineBreak();
         try report.document.addLineBreak();
 
-        // Use the proper addSourceContext method with owned filename
-        const owned_filename = try report.addOwnedString(filename);
-        try report.addSourceContext(region_info, owned_filename, self.env.source, env.line_starts.items.items);
+        const owned_filename = try report.addOwnedString(ctx.filename);
+        try report.addSourceContext(region_info, owned_filename, ctx.ast.env.source, ctx.env.line_starts.items.items);
     }
 
-    return report;
+    return report.*;
+}
+
+fn addFoundSyntaxNote(ctx: ParseReportContext, report: *reporting.Report) Allocator.Error!void {
+    const token_text = ctx.tokenText();
+
+    try report.document.addLineBreak();
+    try report.document.addLineBreak();
+
+    if (token_text.len == 0 or ctx.tokenTag() == .EndOfFile) {
+        try report.document.addReflowingText("I reached the end of the file before this construct was complete.");
+        return;
+    }
+
+    const owned_token = try report.addOwnedString(token_text);
+    try report.document.addText("I found ");
+    try report.document.addInlineCode(owned_token);
+    try report.document.addText(" here.");
+
+    if (token_text[0] == '$') {
+        try report.document.addLineBreak();
+        try report.document.addReflowingText("Dollar-prefixed names are mutable variables in Roc. Record fields are labels, so they cannot start with `$`.");
+        return;
+    }
+
+    switch (ctx.tokenTag()) {
+        .UpperIdent,
+        .DotUpperIdent,
+        .NoSpaceDotUpperIdent,
+        => {
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Names that start with uppercase letters are used for tags, type names, and module names in Roc.");
+        },
+        .LowerIdent,
+        .DotLowerIdent,
+        .NoSpaceDotLowerIdent,
+        => {
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Names that start with lowercase letters are value names or record field names, depending on the surrounding syntax.");
+        },
+        .KwApp,
+        .KwAs,
+        .KwCrash,
+        .KwDbg,
+        .KwElse,
+        .KwExpect,
+        .KwExposes,
+        .KwExposing,
+        .KwFor,
+        .KwGenerates,
+        .KwHas,
+        .KwHosted,
+        .KwIf,
+        .KwImplements,
+        .KwImport,
+        .KwImports,
+        .KwIn,
+        .KwInterface,
+        .KwMatch,
+        .KwModule,
+        .KwPackage,
+        .KwPackages,
+        .KwPlatform,
+        .KwProvides,
+        .KwRequires,
+        .KwReturn,
+        .KwTargets,
+        .KwVar,
+        .KwWhere,
+        .KwWhile,
+        .KwWith,
+        .KwBreak,
+        => {
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("That word is reserved by Roc, so it cannot be used as a name in this position.");
+        },
+        .Comma => {
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("A comma separates items, but there must be a valid item on both sides of it.");
+        },
+        .CloseCurly,
+        .CloseRound,
+        .CloseSquare,
+        => {
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("This closes the current construct, so the parser was looking for the missing item before it.");
+        },
+        .MalformedUnicodeIdent,
+        .MalformedDotUnicodeIdent,
+        .MalformedNoSpaceDotUnicodeIdent,
+        .MalformedNamedUnderscoreUnicode,
+        .MalformedOpaqueNameUnicode,
+        .MalformedOpaqueNameWithoutName,
+        .MalformedUnknownToken,
+        => {
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("This token is malformed, so it cannot be used as ordinary Roc syntax.");
+        },
+        else => {},
+    }
+
+    if (reporting.CommonMisspellings.getTokenTip(token_text)) |tip| {
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try report.document.addText("Tip: ");
+        try report.document.addReflowingTextWithBackticks(tip);
+    }
+}
+
+fn reportParseProblem(
+    ctx: ParseReportContext,
+    title: []const u8,
+    headline: []const u8,
+    body: []const u8,
+    options: ParseReportOptions,
+) Allocator.Error!reporting.Report {
+    var report = try reporting.Report.init(ctx.allocator, title, headline, .runtime_error);
+    try report.document.addReflowingTextWithBackticks(body);
+
+    if (options.example) |example| {
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try report.document.addText("For example:");
+        try report.document.addLineBreak();
+        try report.document.addCodeBlock(example);
+    }
+
+    if (options.show_found) {
+        try addFoundSyntaxNote(ctx, &report);
+    }
+
+    return try finishParseReport(ctx, &report);
+}
+
+fn reportDeprecatedNumberSuffix(ctx: ParseReportContext) Allocator.Error!reporting.Report {
+    const token_text = ctx.tokenText();
+    const split = NumericLiteral.deprecatedSuffixFromSource(token_text);
+    const type_name = split.deprecated_suffix.newTypeName() orelse "";
+    const suggested = try std.fmt.allocPrint(ctx.allocator, "{s}.{s}", .{ split.number_text, type_name });
+    defer ctx.allocator.free(suggested);
+
+    var report = try reporting.Report.init(
+        ctx.allocator,
+        "Deprecated Number Suffix",
+        "This number literal uses an old suffix syntax.",
+        .runtime_error,
+    );
+
+    const owned_suffix = try report.addOwnedString(split.deprecated_suffix_text);
+    const owned_suggested = try report.addOwnedString(suggested);
+    try report.document.addText("The suffix ");
+    try report.document.addInlineCode(owned_suffix);
+    try report.document.addText(" is deprecated. Write ");
+    try report.document.addInlineCode(owned_suggested);
+    try report.document.addText(" instead.");
+
+    return try finishParseReport(ctx, &report);
+}
+
+/// Convert a parse diagnostic to a Report for rendering.
+pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Diagnostic, allocator: std.mem.Allocator, filename: []const u8) Allocator.Error!reporting.Report {
+    const ctx = ParseReportContext.init(self, env, diagnostic, allocator, filename);
+
+    return switch (diagnostic.tag) {
+        .multiple_platforms => reportParseProblem(ctx, "Multiple Platforms", "I was parsing an app header, and it names more than one platform.", "An app can use exactly one `platform` entry. Keep the platform entry you want to run with, and make every other dependency a normal package string.", .{ .example = "app [main] { pf: platform \"../platform/main.roc\", json: \"../json/main.roc\" }" }),
+        .no_platform => reportParseProblem(ctx, "Missing Platform", "I was parsing an app header, and I could not find a platform entry.", "App headers must include one field whose value starts with `platform`. That platform tells Roc how to run the app.", .{ .example = "app [main] { pf: platform \"../basic-cli/platform.roc\" }" }),
+        .missing_arrow => reportParseProblem(ctx, "Missing Arrow", "I was parsing a function type, and I expected an arrow here.", "Function types use `->` between arguments and return values. Add the missing arrow or wrap the surrounding type in parentheses if a different grouping was intended.", .{ .example = "Str -> U64" }),
+        .expected_exposes => reportParseProblem(ctx, "Expected Exposes", "I was parsing a platform header, and I expected the `exposes` section.", "A platform header must list the values it exposes before the package and provides sections.", .{ .example = "exposes [main]" }),
+        .expected_exposes_close_square => reportParseProblem(ctx, "Expected Closing Bracket", "I was parsing an `exposes` list, and I expected a closing `]`.", "Every exposes list starts with `[` and ends with `]`. Add the closing bracket after the last exposed name.", .{ .example = "exposes [main, helper]" }),
+        .expected_exposes_open_square => reportParseProblem(ctx, "Expected Opening Bracket", "I was parsing an `exposes` section, and I expected an opening `[`.", "The exposed names must be written inside square brackets.", .{ .example = "exposes [main]" }),
+        .expected_package_or_platform_name => reportParseProblem(ctx, "Expected Dependency Name", "I was parsing an app dependency record, and I expected a lowercase field name.", "Each package or platform entry starts with a lowercase field name, followed by `:` and a string path or `platform` path.", .{ .example = "pf: platform \"../platform/main.roc\"" }),
+        .expected_package_or_platform_colon => reportParseProblem(ctx, "Expected Dependency Colon", "I was parsing an app dependency entry, and I expected `:` after the field name.", "A dependency entry uses a colon between the local package name and the package path.", .{ .example = "json: \"../json/main.roc\"" }),
+        .expected_package_or_platform_string => reportParseProblem(ctx, "Expected Package Path", "I was parsing an app dependency entry, and I expected a string path.", "Normal package dependencies use a string path after the colon. Use `platform \"...\"` only for the single platform entry.", .{ .example = "json: \"../json/main.roc\"" }),
+        .expected_package_platform_close_curly => reportParseProblem(ctx, "Expected Closing Brace", "I was parsing an app or package dependency record, and I expected a closing `}`.", "Dependency records must be closed with `}` after the final entry.", .{ .example = "{ pf: platform \"../platform/main.roc\" }" }),
+        .expected_package_platform_open_curly => reportParseProblem(ctx, "Expected Opening Brace", "I was parsing an app or package header, and I expected an opening `{` for dependencies.", "App and package headers write dependencies in a record after the exposes list.", .{ .example = "app [main] { pf: platform \"../platform/main.roc\" }" }),
+        .expected_packages => reportParseProblem(ctx, "Expected Packages", "I was parsing a platform header, and I expected the `packages` section.", "A platform header must include a packages record that names package dependencies.", .{ .example = "packages { base: \"../base/main.roc\" }" }),
+        .expected_packages_close_curly => reportParseProblem(ctx, "Expected Closing Brace", "I was parsing a `packages` record, and I expected a closing `}`.", "Close the packages record after the last package entry.", .{ .example = "packages { base: \"../base/main.roc\" }" }),
+        .expected_packages_open_curly => reportParseProblem(ctx, "Expected Opening Brace", "I was parsing a `packages` section, and I expected an opening `{`.", "Package dependencies are written as record fields inside braces.", .{ .example = "packages { base: \"../base/main.roc\" }" }),
+        .expected_platform_name_end => reportParseProblem(ctx, "Expected Closing Quote", "I was parsing a platform name, and I expected the closing quote.", "Platform headers start with a quoted platform name. Finish the string before writing the `requires` section.", .{ .example = "platform \"basic-cli\"" }),
+        .expected_platform_name_start => reportParseProblem(ctx, "Expected Platform Name", "I was parsing a platform header, and I expected a quoted platform name.", "Put the platform name in double quotes immediately after the `platform` keyword.", .{ .example = "platform \"basic-cli\"" }),
+        .expected_platform_name_string => reportParseProblem(ctx, "Expected Platform Name Text", "I was parsing a platform name, and I expected text inside the quotes.", "A platform name cannot be empty. Put the platform name between the opening and closing quotes.", .{ .example = "platform \"basic-cli\"" }),
+        .expected_platform_string => reportParseProblem(ctx, "Expected Platform Path", "I was parsing a platform dependency, and I expected a string path after `platform`.", "A platform entry uses the `platform` keyword followed by a string path to the platform file.", .{ .example = "pf: platform \"../platform/main.roc\"" }),
+        .expected_provides => reportParseProblem(ctx, "Expected Provides", "I was parsing a platform header, and I expected the `provides` section.", "A platform header must map host symbols to Roc functions in a `provides` record.", .{ .example = "provides { \"roc_main\": main }" }),
+        .expected_provides_open_square => reportParseProblem(ctx, "Expected Provides List", "I was parsing a package or app header, and I expected an opening `[` for the provided names.", "The names provided by this module go in square brackets after the header keyword.", .{ .example = "package [Parser, parse]" }),
+        .expected_provides_close_curly => reportParseProblem(ctx, "Expected Closing Brace", "I was parsing a `provides` symbol map, and I expected a closing `}`.", "Close the provides record after the final host-symbol mapping.", .{ .example = "provides { \"roc_main\": main }" }),
+        .expected_provides_open_curly => reportParseProblem(ctx, "Expected Opening Brace", "I was parsing a `provides` section, and I expected an opening `{`.", "Host symbol mappings are written as record-like entries inside braces.", .{ .example = "provides { \"roc_main\": main }" }),
+        .expected_symbol_string => reportParseProblem(ctx, "Expected Host Symbol", "I was parsing a host symbol map, and I expected a string symbol name.", "Each host symbol entry starts with the exported symbol name in quotes.", .{ .example = "\"roc_main\": main" }),
+        .expected_symbol_map_colon => reportParseProblem(ctx, "Expected Symbol Colon", "I was parsing a host symbol map entry, and I expected `:` after the symbol string.", "Use a colon between the host symbol string and the Roc function that implements it.", .{ .example = "\"roc_main\": main" }),
+        .expected_symbol_map_function => reportParseProblem(ctx, "Expected Roc Function", "I was parsing a host symbol map entry, and I expected a Roc function name.", "The right side of a host symbol entry must be a lowercase function name, optionally qualified by a module path.", .{ .example = "\"roc_main\": Platform.main!" }),
+        .expected_hosted_open_curly => reportParseProblem(ctx, "Expected Hosted Map", "I was parsing a `hosted` section, and I expected an opening `{`.", "Hosted symbol mappings are written inside braces.", .{ .example = "hosted { \"roc_alloc\": alloc }" }),
+        .expected_hosted_close_curly => reportParseProblem(ctx, "Expected Closing Brace", "I was parsing a `hosted` section, and I expected a closing `}`.", "Close the hosted symbol map after the final host function mapping.", .{ .example = "hosted { \"roc_alloc\": alloc }" }),
+        .expected_requires => reportParseProblem(ctx, "Expected Requires", "I was parsing a platform header, and I expected the `requires` section.", "A platform header must state which entrypoints the app must provide.", .{ .example = "requires { main : {} => I32 }" }),
+        .expected_requires_rigids_open_curly => reportParseProblem(ctx, "Expected Requires Entries", "I was parsing a `requires` section, and I expected an opening `{`.", "Required entrypoints are written inside braces after `requires`.", .{ .example = "requires { main : {} => I32 }" }),
+        .expected_requires_signatures_close_curly => reportParseProblem(ctx, "Expected Closing Brace", "I was parsing a `requires` section, and I expected a closing `}`.", "Close the requires record after the final entrypoint signature.", .{ .example = "requires { main : {} => I32 }" }),
+        .expected_for_clause_close_square => reportParseProblem(ctx, "Expected Closing Bracket", "I was parsing a `for` clause in `requires`, and I expected a closing `]`.", "Type aliases in a `for` clause are written inside square brackets before `for`.", .{ .example = "[Arg : a] for main : a -> I32" }),
+        .expected_for_clause_alias_name => reportParseProblem(ctx, "Expected Alias Name", "I was parsing a `for` clause in `requires`, and I expected an uppercase alias name.", "Alias names in a `for` clause start with uppercase letters.", .{ .example = "[Arg : a] for main : a -> I32" }),
+        .expected_for_clause_colon => reportParseProblem(ctx, "Expected Alias Colon", "I was parsing a `for` clause alias, and I expected `:` after the alias name.", "Use a colon between the uppercase alias name and the lowercase type variable it stands for.", .{ .example = "[Arg : a] for main : a -> I32" }),
+        .expected_for_clause_rigid_name => reportParseProblem(ctx, "Expected Type Variable", "I was parsing a `for` clause alias, and I expected a lowercase type variable.", "The right side of a `for` alias must be a lowercase type variable.", .{ .example = "[Arg : a] for main : a -> I32" }),
+        .expected_for_keyword => reportParseProblem(ctx, "Expected For", "I was parsing type aliases in a `requires` entry, and I expected the `for` keyword.", "After the alias list, write `for` before the required entrypoint name.", .{ .example = "[Arg : a] for main : a -> I32" }),
+        .expected_for_clause_entrypoint_name => reportParseProblem(ctx, "Expected Entrypoint Name", "I was parsing a `requires` entry, and I expected a lowercase entrypoint name.", "Required entrypoint names are lowercase value names.", .{ .example = "main : {} => I32" }),
+        .expected_for_clause_type_colon => reportParseProblem(ctx, "Expected Entrypoint Type", "I was parsing a `requires` entry, and I expected `:` before the type.", "Use a colon between the required entrypoint name and its type annotation.", .{ .example = "main : {} => I32" }),
+        .header_expected_open_square => reportParseProblem(ctx, "Expected Exposing List", "I was parsing a module or hosted header, and I expected an opening `[`.", "The names exposed by this module are written in square brackets after the header keyword.", .{ .example = "module [main, helper]" }),
+        .header_expected_close_square => reportParseProblem(ctx, "Expected Closing Bracket", "I was parsing a header exposing list, and I expected a closing `]`.", "Close the list after the final exposed name.", .{ .example = "module [main, helper]" }),
+        .pattern_unexpected_token => reportParseProblem(ctx, "Unexpected Pattern Syntax", "I was parsing a pattern, and this token cannot start a pattern here.", "Patterns can be lowercase names, tags, literals, lists, records, tuples, underscores, or nested patterns.", .{ .example = "{ name, age }" }),
+        .pattern_list_rest_old_syntax => reportParseProblem(ctx, "Old List Rest Pattern", "I was parsing a list pattern, and this uses the old rest syntax.", "List rest patterns now use `.. as name`. The name is optional, but if it is present it must come after `as`.", .{ .example = "[first, .. as rest]", .show_found = false }),
+        .pattern_unexpected_eof => reportParseProblem(ctx, "Unfinished Pattern", "I was parsing a pattern, and the file ended before it was complete.", "Complete the pattern or remove the incomplete syntax.", .{ .example = "[first, second]" }),
+        .bad_as_pattern_name => reportParseProblem(ctx, "Expected Pattern Name", "I was parsing an `as` pattern, and I expected a lowercase name after `as`.", "The name after `as` binds the whole matched value, so it must be a lowercase value name.", .{ .example = "Some(value) as whole" }),
+        .ty_anno_unexpected_token => reportParseProblem(ctx, "Unexpected Type Syntax", "I was parsing a type annotation, and this token cannot start a type here.", "Types can be type variables, uppercase type names, function types, tuples, records, or tag unions.", .{ .example = "List(U64)" }),
+        .statement_unexpected_token => reportParseProblem(ctx, "Unexpected Statement", "I was parsing a statement, and this token cannot start a statement here.", "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.", .{ .example = "answer = 42" }),
+        .string_unexpected_token => reportParseProblem(ctx, "Unexpected String Syntax", "I was parsing a string literal, and this token is not valid inside the string.", "Strings contain text, escapes, and interpolations. Close the string or fix the interpolation before continuing.", .{ .example = "\"Hello, ${name}!\"" }),
+        .string_expected_close_interpolation => reportParseProblem(ctx, "Expected Interpolation End", "I was parsing a string interpolation, and I expected `}` before returning to the string.", "String interpolations start with `${` and must close with `}` after the embedded expression.", .{ .example = "\"Hello, ${name}!\"" }),
+        .string_unclosed => reportParseProblem(ctx, "Unclosed String", "I was parsing a string literal, and the file ended before the closing quote.", "Add the closing quote, or use a multiline string if the text should span multiple lines.", .{ .example = "\"hello\"" }),
+        .expr_no_space_dot_int => reportParseProblem(ctx, "Invalid Tuple Access", "I was parsing tuple access, and I expected a tuple field number after `.`.", "Tuple access must use a dot immediately followed by a number, such as `.0` or `.1`.", .{ .example = "pair.0" }),
+        .import_exposing_no_open => reportParseProblem(ctx, "Expected Exposing List", "I was parsing an import exposing clause, and I expected `[` after `exposing`.", "The imported names go in square brackets after `exposing`.", .{ .example = "import Json exposing [decode, encode]" }),
+        .import_exposing_no_close => reportParseProblem(ctx, "Expected Closing Bracket", "I was parsing an import exposing clause, and I expected a closing `]`.", "Close the exposing list after the final imported name.", .{ .example = "import Json exposing [decode, encode]" }),
+        .expected_type_field_name => reportParseProblem(ctx, "Expected Type Field", "I was parsing a record type, and I expected a field name.", "Record type fields start with lowercase names, `_`, or named underscores, followed by `:` and the field type.", .{ .example = "{ name : Str, age : U64 }" }),
+        .expected_colon_after_type_field_name => reportParseProblem(ctx, "Expected Field Type", "I was parsing a record type field, and I expected `:` after the field name.", "Record type fields use a colon between the field name and its type.", .{ .example = "{ name : Str }" }),
+        .expected_arrow => reportParseProblem(ctx, "Expected Function Arrow", "I was parsing a function type, and I expected `->` or `=>` before the return type.", "Function types list argument types first, then an arrow, then the return type.", .{ .example = "Str, U64 -> Bool" }),
+        .multi_arrow_needs_parens => reportParseProblem(ctx, "Ambiguous Function Type", "I was parsing a function type, and multiple arrows need parentheses.", "Use parentheses to say whether the function returns another function or takes a function as an argument.", .{ .example = "a -> (b -> c)\n(a -> b) -> c", .show_found = false }),
+        .expected_ty_close_curly_or_comma => reportParseProblem(ctx, "Expected Record Type Separator", "I was parsing a record type, and I expected `,` or `}`.", "Separate record type fields with commas and close the record type with `}`.", .{ .example = "{ name : Str, age : U64 }" }),
+        .expected_ty_close_square_or_comma => reportParseProblem(ctx, "Expected Tag Union Separator", "I was parsing a tag union type, and I expected `,` or `]`.", "Separate tag union alternatives with commas and close the tag union with `]`.", .{ .example = "[Ok(a), Err(Str)]" }),
+        .expected_lower_name_after_exposed_item_as => reportParseProblem(ctx, "Expected Lowercase Alias", "I was parsing an exposed value alias, and I expected a lowercase name after `as`.", "Aliases for exposed lowercase values must also be lowercase value names.", .{ .example = "module [oldName as newName]" }),
+        .expected_upper_name_after_exposed_item_as => reportParseProblem(ctx, "Expected Uppercase Alias", "I was parsing an exposed type or tag alias, and I expected an uppercase name after `as`.", "Aliases for exposed uppercase names must also start with an uppercase letter.", .{ .example = "module [Result as Outcome]" }),
+        .exposed_item_unexpected_token => reportParseProblem(ctx, "Expected Exposed Name", "I was parsing an exposing list, and I expected an exposed name.", "Exposing lists contain lowercase values, uppercase types or tags, and `Type.*` entries.", .{ .example = "module [main, Result, Result.*]" }),
+        .expected_upper_name_after_import_as => reportParseProblem(ctx, "Expected Import Alias", "I was parsing an import alias, and I expected an uppercase module name after `as`.", "Import aliases rename modules, so they must start with an uppercase letter.", .{ .example = "import Json.Decode as Decode" }),
+        .expected_colon_after_type_annotation => reportParseProblem(ctx, "Type Application Needs Parentheses", "I was parsing a type annotation, and I found a type argument without parentheses.", "Roc type applications use parentheses around their arguments. Write `List(U8)`, not `List U8`.", .{ .example = "List(U8)" }),
+        .expected_lower_ident_pat_field_name => reportParseProblem(ctx, "Expected Pattern Field", "I was parsing a record pattern, and I expected a lowercase field name.", "Record pattern fields start with lowercase names. You can bind the field directly or write `name: pattern`.", .{ .example = "{ name, age: years }" }),
+        .expected_colon_after_pat_field_name => reportParseProblem(ctx, "Expected Pattern Field Colon", "I was parsing a record pattern field, and I expected `:` after the field name.", "Use a colon when a record pattern field has a nested pattern instead of just punning the field name.", .{ .example = "{ point: { x, y } }" }),
+        .expected_expr_bar => reportParseProblem(ctx, "Expected Lambda Bar", "I was parsing a lambda expression, and I expected the closing `|` after its arguments.", "Lambda arguments go between two `|` characters before the body expression.", .{ .example = "|x, y| x + y" }),
+        .expected_expr_close_curly_or_comma => reportParseProblem(ctx, "Expected Record Separator", "I was parsing a record expression, and I expected `,` or `}`.", "Separate record fields with commas and close the record with `}`.", .{ .example = "{ name: \"Ada\", age: 36 }" }),
+        .expected_expr_close_round_or_comma => reportParseProblem(ctx, "Expected Tuple Separator", "I was parsing a parenthesized expression or tuple, and I expected `,` or `)`.", "Separate tuple elements with commas and close the tuple or parenthesized expression with `)`.", .{ .example = "(x, y)" }),
+        .expected_expr_close_square_or_comma => reportParseProblem(ctx, "Expected List Separator", "I was parsing a list expression, and I expected `,` or `]`.", "Separate list elements with commas and close the list with `]`.", .{ .example = "[1, 2, 3]" }),
+        .expected_close_curly_at_end_of_match => reportParseProblem(ctx, "Unclosed Match", "I was parsing a match expression, and the file ended before the closing `}`.", "Add a closing brace after the final match branch.", .{ .example = "match value {\n    Ok(x) => x\n}" }),
+        .expected_open_curly_after_match => reportParseProblem(ctx, "Expected Match Body", "I was parsing a match expression, and I expected `{` after the matched value.", "Match branches are written inside braces after the expression being matched.", .{ .example = "match result {\n    Ok(x) => x\n    Err(_) => 0\n}" }),
+        .expr_unexpected_token => reportParseProblem(ctx, "Unexpected Expression Syntax", "I was parsing an expression, and this token cannot start an expression here.", "Expressions can be names, literals, tags, records, lists, tuples, lambdas, blocks, conditionals, matches, or function calls.", .{ .example = "add(1, 2)" }),
+        .crash_statement_in_expr_position => reportParseProblem(ctx, "Crash Statement In Expression", "I was parsing an expression, but `crash` starts a statement.", "If you need to crash in expression position, wrap the crash statement in a block expression.", .{ .example = "{\n    crash \"unreachable\"\n}" }),
+        .return_outside_function => reportParseProblem(ctx, "Return Outside Function", "I was parsing a statement, and `return` appeared outside a function body.", "`return` exits from the current function. Move it inside a function body, or remove it if this code is already the final expression.", .{ .example = "foo = |x| {\n    if x < 0 { return Err(Negative) }\n    Ok(x)\n}" }),
+        .expected_expr_record_field_name => reportParseProblem(ctx, "Expected Record Field", "I was parsing a record expression, and I expected a lowercase field name.", "Record fields start with lowercase names. After the name, either write `: value` or omit the value to use field punning.", .{ .example = "{ name: \"Ada\", age }" }),
+        .record_field_name_cannot_be_var => reportParseProblem(ctx, "Invalid Record Field Name", "Record field names cannot start with a dollar sign.", "Names that start with `$` are reassignable variables declared with the `var` keyword, so they cannot be used as record field names.", .{ .show_found = false }),
+        .expected_ty_apply_close_round => reportParseProblem(ctx, "Expected Type Argument End", "I was parsing type arguments, and I expected `)`.", "Type applications put their arguments inside parentheses.", .{ .example = "Dict(Str, U64)" }),
+        .expected_expr_apply_close_round => reportParseProblem(ctx, "Expected Call Argument End", "I was parsing function or method call arguments, and I expected `)`.", "Function call arguments go inside parentheses and are separated with commas.", .{ .example = "add(1, 2)" }),
+        .where_expected_open_bracket => reportParseProblem(ctx, "Expected Where Clause List", "I was parsing a `where` clause, and I expected `[`.", "Where constraints are written in a square-bracketed list after `where`.", .{ .example = "where [a.hash : a -> U64]" }),
+        .where_expected_close_bracket => reportParseProblem(ctx, "Expected Where Clause End", "I was parsing a `where` clause, and I expected `]`.", "Close the where constraint list after the final constraint.", .{ .example = "where [a.hash : a -> U64]" }),
+        .where_expected_var => reportParseProblem(ctx, "Expected Type Variable", "I was parsing a `where` constraint, and I expected a lowercase type variable.", "A where constraint starts with the type variable being constrained.", .{ .example = "where [a.hash : a -> U64]" }),
+        .where_expected_method_or_alias_name => reportParseProblem(ctx, "Expected Method Or Alias", "I was parsing a `where` constraint, and I expected a method or alias name after `.`.", "Use a lowercase method name for method constraints, or an uppercase alias name for alias constraints.", .{ .example = "where [a.hash : a -> U64]" }),
+        .where_expected_colon => reportParseProblem(ctx, "Expected Constraint Type", "I was parsing a `where` method constraint, and I expected `:` before the method type.", "Method constraints use a colon between the method name and its type.", .{ .example = "where [a.hash : a -> U64]" }),
+        .where_expected_constraints => reportParseProblem(ctx, "Expected Where Constraint", "I was parsing a `where` clause, and I expected at least one constraint.", "Remove the empty `where` clause or add a constraint inside the brackets.", .{ .example = "where [a.hash : a -> U64]" }),
+        .import_must_be_top_level => reportParseProblem(ctx, "Import Must Be Top Level", "I was parsing an import, but imports are only allowed at the top level.", "Move this import after the module header and before declarations or executable statements.", .{ .example = "import Json\n\nmain = 1" }),
+        .invalid_type_arg => reportParseProblem(ctx, "Expected Type Argument", "I was parsing type parameters, and I expected a lowercase type variable or `_`.", "Type declaration parameters are lowercase names, named underscores, or `_`.", .{ .example = "Result(ok, err)" }),
+        .expr_arrow_expects_ident => reportParseProblem(ctx, "Expected Arrow Target", "I was parsing an arrow expression, and I expected a name or parenthesized expression after the arrow.", "The right side of this arrow form must start with a value name, tag name, or parenthesized expression.", .{ .example = "value -> next" }),
+        .expr_double_dot_is_not_range => reportParseProblem(ctx, "Not A Range Operator", "I was parsing an expression, and `..` is not a range operator.", "Use `..<` for an exclusive range or `..=` for an inclusive range.", .{ .example = "1..<10\n1..=10", .show_found = false }),
+        .var_only_allowed_in_a_body => reportParseProblem(ctx, "Var Outside Body", "I was parsing a statement, and `var` appeared outside a function or block body.", "Mutable variables are local body statements. Move this `var` into a body, or use an ordinary top-level declaration.", .{ .example = "main = {\n    var count = 0\n    count\n}" }),
+        .var_must_have_ident => reportParseProblem(ctx, "Expected Var Name", "I was parsing a `var` statement, and I expected a lowercase name.", "A mutable variable declaration starts with `var`, followed by the variable name.", .{ .example = "var count = 0" }),
+        .var_expected_equals => reportParseProblem(ctx, "Expected Var Initializer", "I was parsing a `var` statement, and I expected `=` before the initial value.", "Mutable variables must be initialized when they are declared.", .{ .example = "var count = 0" }),
+        .var_type_anno_needs_var_keyword => reportParseProblem(ctx, "Var Annotation Needs Keyword", "I was parsing a type annotation for a mutable variable, and I expected the `var` keyword.", "Dollar-prefixed mutable names must be introduced with `var` when they have a type annotation.", .{ .example = "var $count : U64" }),
+        .for_expected_in => reportParseProblem(ctx, "Expected In", "I was parsing a `for` expression or statement, and I expected `in` after the pattern.", "A `for` loop writes the pattern first, then `in`, then the collection being iterated.", .{ .example = "for item in items {\n    item\n}" }),
+        .match_branch_wrong_arrow => reportParseProblem(ctx, "Wrong Match Arrow", "I was parsing a match branch, and I found `->` where Roc uses `=>`.", "Match branches use a fat arrow between the pattern and the branch body.", .{ .example = "Ok(value) => value", .show_found = false }),
+        .match_branch_missing_arrow => reportParseProblem(ctx, "Missing Match Arrow", "I was parsing a match branch, and I expected `=>` before the branch body.", "Add `=>` after the pattern or guard.", .{ .example = "Err(msg) => crash msg" }),
+        .match_has_no_branches => reportParseProblem(ctx, "Empty Match", "I was parsing a match expression, but it has no branches.", "A match expression needs at least one branch inside the braces.", .{ .example = "match result {\n    Ok(value) => value\n}" }),
+        .expected_ty_anno_close_round => reportParseProblem(ctx, "Expected Closing Parenthesis", "I was parsing a parenthesized type, and I expected `)`.", "Close the parenthesized type after the final type expression.", .{ .example = "(Str -> U64)" }),
+        .expected_ty_anno_close_round_or_comma => reportParseProblem(ctx, "Expected Type Separator", "I was parsing type parameters, and I expected `,` or `)`.", "Separate type parameters with commas and close the parameter list with `)`.", .{ .example = "Result(ok, err)" }),
+        .expected_expr_comma => reportParseProblem(ctx, "Expected Comma", "I was parsing a record update, and I expected `,` before the fields.", "A record update writes the base record after `..`, then a comma, then the updated fields.", .{ .example = "{ ..person, name: \"Ada\" }" }),
+        .expected_expr_close_curly => reportParseProblem(ctx, "Expected Closing Brace", "I was parsing a block expression, and I expected `}` before the file ended.", "Close the block after its final statement or expression.", .{ .example = "{\n    answer = 42\n    answer\n}" }),
+        .expr_dot_suffix_not_allowed => reportParseProblem(ctx, "Expected Record Accessor", "I was parsing access after `.`, and I expected a field name or tuple index.", "Record access uses a lowercase field name like `.name`. Tuple access uses a number like `.0`. Uppercase names, malformed names, and a bare `.` are not valid accessors.", .{ .example = "person.name\npair.0" }),
+        .incomplete_import => reportParseProblem(ctx, "Incomplete Import", "I was parsing an import, and the module path is incomplete.", "Imports must name a module, optionally with a qualifier and exposing list.", .{ .example = "import Json.Decode exposing [decode]" }),
+        .file_import_expected_as => reportParseProblem(ctx, "Expected File Import Name", "I was parsing a file import, and I expected `as` after the path.", "File imports give the file contents a local name using `as`.", .{ .example = "import \"data.txt\" as data : Str" }),
+        .file_import_expected_name => reportParseProblem(ctx, "Expected File Import Binding", "I was parsing a file import, and I expected a lowercase binding name.", "The name after `as` is the local value that will contain the imported file contents.", .{ .example = "import \"data.txt\" as data : Str" }),
+        .file_import_expected_type => reportParseProblem(ctx, "Expected File Import Type", "I was parsing a file import, and I expected a type annotation.", "File imports must say whether the imported contents are `Str` or `List(U8)`.", .{ .example = "import \"data.bin\" as bytes : List(U8)" }),
+        .file_import_invalid_type => reportParseProblem(ctx, "Invalid File Import Type", "I was parsing a file import type, and only `Str` or `List(U8)` is allowed.", "Use `Str` for text files and `List(U8)` for raw bytes.", .{ .example = "import \"data.txt\" as data : Str" }),
+        .nominal_associated_cannot_have_final_expression => reportParseProblem(ctx, "Unexpected Associated Expression", "I was parsing associated items for a nominal type, and I found a plain final expression.", "Associated item blocks can contain associated types and values. Remove the trailing expression or turn it into a named associated value.", .{ .example = "Id := U64 implements [\n    zero = @Id 0\n]" }),
+        .type_alias_cannot_have_associated => reportParseProblem(ctx, "Type Alias With Associated Items", "I was parsing a type alias, but only nominal types can have associated items.", "Use `:=` to define a nominal type with associated items, or remove the associated item block from this alias.", .{ .example = "Id := U64 implements [\n    zero = @Id 0\n]" }),
+        .deprecated_number_suffix => reportDeprecatedNumberSuffix(ctx),
+        .expected_targets_colon => reportParseProblem(ctx, "Expected Targets Colon", "I was parsing a `targets` section, and I expected `:` after `targets`.", "The targets section starts with `targets:` followed by a configuration record.", .{ .example = "targets: { linux: { inputs: [app] } }" }),
+        .expected_targets_open_curly => reportParseProblem(ctx, "Expected Targets Record", "I was parsing a `targets` section, and I expected `{`.", "Targets are configured with fields inside a record.", .{ .example = "targets: { linux: { inputs: [app] } }" }),
+        .expected_targets_close_curly => reportParseProblem(ctx, "Expected Targets End", "I was parsing a `targets` section, and I expected `}`.", "Close the targets record after the final target entry.", .{ .example = "targets: { linux: { inputs: [app] } }" }),
+        .expected_targets_field_name => reportParseProblem(ctx, "Expected Targets Field", "I was parsing a target configuration, and I expected a lowercase field name.", "Target entries and target options start with lowercase field names.", .{ .example = "linux: { inputs: [app] }" }),
+        .expected_targets_field_colon => reportParseProblem(ctx, "Expected Targets Field Value", "I was parsing a target field, and I expected `:` before the value.", "Use a colon between a target field name and its value.", .{ .example = "inputs: [app]" }),
+        .expected_target_link_open_curly => reportParseProblem(ctx, "Expected Link Config", "I was parsing a target link configuration, and I expected `{`.", "Link configuration values are written as records.", .{ .example = "link: { kind: static }" }),
+        .expected_target_link_close_curly => reportParseProblem(ctx, "Expected Link Config End", "I was parsing a target link configuration, and I expected `}`.", "Close the link configuration record after the final option.", .{ .example = "link: { kind: static }" }),
+        .expected_target_name => reportParseProblem(ctx, "Expected Target Name", "I was parsing a target entry, and I expected a lowercase target name.", "Target names are lowercase field names inside the targets record.", .{ .example = "linux: { inputs: [app] }" }),
+        .expected_target_colon => reportParseProblem(ctx, "Expected Target Config", "I was parsing a target entry, and I expected `:` before the target configuration.", "Use a colon between the target name and its configuration record.", .{ .example = "linux: { inputs: [app] }" }),
+        .expected_target_files_open_square => reportParseProblem(ctx, "Expected Input List", "I was parsing target inputs, and I expected `[`.", "The `inputs` field must contain a list of input files or special input names.", .{ .example = "inputs: [app, \"src/main.c\"]" }),
+        .expected_target_files_close_square => reportParseProblem(ctx, "Expected Input List End", "I was parsing target inputs, and I expected `]`.", "Close the input list after the final file or input name.", .{ .example = "inputs: [app, \"src/main.c\"]" }),
+        .expected_target_file => reportParseProblem(ctx, "Expected Target File", "I was parsing a target input list, and I expected a file string or special input name.", "Target inputs can be string file paths, lowercase special names, or `app`.", .{ .example = "inputs: [app, \"src/main.c\"]" }),
+        .expected_target_file_string_end => reportParseProblem(ctx, "Unclosed Target File", "I was parsing a target file string, and I expected the closing quote.", "Finish the file path string before continuing the target configuration.", .{ .example = "\"src/main.c\"" }),
+    };
 }
 
 /// Diagnostics related to parsing
@@ -694,6 +665,8 @@ pub const Diagnostic = struct {
         crash_statement_in_expr_position,
         return_outside_function,
         expected_expr_record_field_name,
+        /// `$name` idents are reassignable variables and cannot name record fields
+        record_field_name_cannot_be_var,
         expected_ty_apply_close_round,
         expected_expr_apply_close_round,
         where_expected_open_bracket,
@@ -2246,7 +2219,10 @@ pub const SymbolMapEntry = struct {
     region: TokenizedRegion,
 
     pub const Idx = enum(u32) { _ };
-    pub const Span = struct { span: base.DataSpan };
+    pub const Span = struct {
+        span: base.DataSpan,
+        region: TokenizedRegion = TokenizedRegion.empty(),
+    };
 };
 
 /// Single target entry: x64musl: { inputs: ["crt1.o", "host.o", app], output: Exe }

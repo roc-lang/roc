@@ -36,81 +36,123 @@ main = |_| {
 }
 ~~~
 # EXPECTED
-UNEXPECTED TOKEN IN EXPRESSION - let_polymorphism_lists.md:12:26:12:27
-PARSE ERROR - let_polymorphism_lists.md:12:28:12:41
-UNEXPECTED TOKEN IN EXPRESSION - let_polymorphism_lists.md:13:26:13:27
-PARSE ERROR - let_polymorphism_lists.md:13:28:13:41
-UNEXPECTED TOKEN IN EXPRESSION - let_polymorphism_lists.md:14:30:14:31
-PARSE ERROR - let_polymorphism_lists.md:14:32:14:45
+UNEXPECTED EXPRESSION SYNTAX - let_polymorphism_lists.md:12:26:12:27
+UNEXPECTED STATEMENT - let_polymorphism_lists.md:12:28:12:41
+UNEXPECTED EXPRESSION SYNTAX - let_polymorphism_lists.md:13:26:13:27
+UNEXPECTED STATEMENT - let_polymorphism_lists.md:13:28:13:41
+UNEXPECTED EXPRESSION SYNTAX - let_polymorphism_lists.md:14:30:14:31
+UNEXPECTED STATEMENT - let_polymorphism_lists.md:14:32:14:45
 UNRECOGNIZED SYNTAX - let_polymorphism_lists.md:12:16:12:27
 UNRECOGNIZED SYNTAX - let_polymorphism_lists.md:13:16:13:27
 UNRECOGNIZED SYNTAX - let_polymorphism_lists.md:14:18:14:31
 # PROBLEMS
 
-┌────────────────────────────────┐
-│ UNEXPECTED TOKEN IN EXPRESSION ├─ The token + is not expected in an ────────┐
-└┬───────────────────────────────┘  expression.                               │
+┌──────────────────────────────┐
+│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
+└┬─────────────────────────────┘  token cannot start an expression here.      │
  │                                                                            │
  │  all_int_list = int_list ++ my_empty_list                                  │
  │                           ‾                                                │
  └─────────────────────────────────────────── let_polymorphism_lists.md:12:26 ┘
 
-    Expressions can be identifiers, literals, function calls, or operators.
+    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+    blocks, conditionals, matches, or function calls.
+
+    For example:
+        add(1, 2)
+
+    I found `+` here.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  all_int_list = int_list ++ my_empty_list                                  │
  │                             ‾‾‾‾‾‾‾‾‾‾‾‾‾                                  │
  └─────────────────────────────────────────── let_polymorphism_lists.md:12:28 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `my_empty_list` here.
+    Names that start with lowercase letters are value names or record field
+    names, depending on the surrounding syntax.
 
 
-┌────────────────────────────────┐
-│ UNEXPECTED TOKEN IN EXPRESSION ├─ The token + is not expected in an ────────┐
-└┬───────────────────────────────┘  expression.                               │
+┌──────────────────────────────┐
+│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
+└┬─────────────────────────────┘  token cannot start an expression here.      │
  │                                                                            │
  │  all_str_list = str_list ++ my_empty_list                                  │
  │                           ‾                                                │
  └─────────────────────────────────────────── let_polymorphism_lists.md:13:26 ┘
 
-    Expressions can be identifiers, literals, function calls, or operators.
+    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+    blocks, conditionals, matches, or function calls.
+
+    For example:
+        add(1, 2)
+
+    I found `+` here.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  all_str_list = str_list ++ my_empty_list                                  │
  │                             ‾‾‾‾‾‾‾‾‾‾‾‾‾                                  │
  └─────────────────────────────────────────── let_polymorphism_lists.md:13:28 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `my_empty_list` here.
+    Names that start with lowercase letters are value names or record field
+    names, depending on the surrounding syntax.
 
 
-┌────────────────────────────────┐
-│ UNEXPECTED TOKEN IN EXPRESSION ├─ The token + is not expected in an ────────┐
-└┬───────────────────────────────┘  expression.                               │
+┌──────────────────────────────┐
+│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
+└┬─────────────────────────────┘  token cannot start an expression here.      │
  │                                                                            │
  │  all_float_list = float_list ++ my_empty_list                              │
  │                               ‾                                            │
  └─────────────────────────────────────────── let_polymorphism_lists.md:14:30 ┘
 
-    Expressions can be identifiers, literals, function calls, or operators.
+    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+    blocks, conditionals, matches, or function calls.
+
+    For example:
+        add(1, 2)
+
+    I found `+` here.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  all_float_list = float_list ++ my_empty_list                              │
  │                                 ‾‾‾‾‾‾‾‾‾‾‾‾‾                              │
  └─────────────────────────────────────────── let_polymorphism_lists.md:14:32 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `my_empty_list` here.
+    Names that start with lowercase letters are value names or record field
+    names, depending on the surrounding syntax.
 
 
 ┌─────────────────────┐
@@ -349,13 +391,13 @@ main = |_| {
 			(e-empty_list)))
 	(d-let
 		(p-assign (ident "empty_int_list"))
-		(e-call (constraint-fn-var 363)
+		(e-call (constraint-fn-var 366)
 			(e-lookup-local
 				(p-assign (ident "get_empty")))
 			(e-num (value "42"))))
 	(d-let
 		(p-assign (ident "empty_str_list"))
-		(e-call (constraint-fn-var 384)
+		(e-call (constraint-fn-var 387)
 			(e-lookup-local
 				(p-assign (ident "get_empty")))
 			(e-string
@@ -387,9 +429,9 @@ main = |_| {
 							(builtin))
 						(e-lookup-local
 							(p-assign (ident "all_float_list")))))
-				(e-dispatch-call (method "plus") (constraint-fn-var 419)
+				(e-dispatch-call (method "plus") (constraint-fn-var 422)
 					(receiver
-						(e-dispatch-call (method "plus") (constraint-fn-var 417)
+						(e-dispatch-call (method "plus") (constraint-fn-var 420)
 							(receiver
 								(e-lookup-local
 									(p-assign (ident "len1"))))

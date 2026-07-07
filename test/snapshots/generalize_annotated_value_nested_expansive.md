@@ -130,7 +130,7 @@ NO CHANGE
 		(p-assign (ident "made"))
 		(e-tag (name "Wrap")
 			(args
-				(e-call (constraint-fn-var 68)
+				(e-call (constraint-fn-var 71)
 					(e-lookup-local
 						(p-assign (ident "identity")))
 					(e-empty_list))))

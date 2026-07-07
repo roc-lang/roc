@@ -106,7 +106,7 @@ NO CHANGE
 		(e-lambda
 			(args
 				(p-assign (ident "x")))
-			(e-dispatch-call (method "times") (constraint-fn-var 199)
+			(e-dispatch-call (method "times") (constraint-fn-var 202)
 				(receiver
 					(e-runtime-error (tag "erroneous_value_use")))
 				(args

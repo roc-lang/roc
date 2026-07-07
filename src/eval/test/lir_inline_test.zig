@@ -10,6 +10,7 @@ const helpers = eval.test_helpers;
 
 const Allocator = std.mem.Allocator;
 const LIR = lir.LIR;
+const GuardedList = lir.LirStore.GuardedList;
 const layout_mod = @import("layout");
 const LayoutIdx = layout_mod.Idx;
 const MonoAst = postcheck.Monotype.Ast;
@@ -317,14 +318,15 @@ fn specRecordMatches(
 ) Allocator.Error!bool {
     if (!std.meta.eql(candidate.identity.callable, expected.identity.callable)) return false;
     if (!digestBytesEqual(candidate.identity.source_fn_ty_digest, expected.identity.source_fn_ty_digest)) return false;
-    if (!digestBytesEqual(candidate.identity.mono_fn_ty_digest, expected.identity.mono_fn_ty_digest)) return false;
+    if (!digestBytesEqual(candidate.identity.request_fn_ty_digest, expected.identity.request_fn_ty_digest)) return false;
+    if (!digestBytesEqual(candidate.solved_fn_ty_digest, expected.solved_fn_ty_digest)) return false;
     return try MonoType.typeEqlAcrossStores(
         allocator,
         name_store,
         candidate_types,
-        candidate.identity.mono_fn_ty,
+        candidate.solved_fn_ty,
         expected_types,
-        expected.identity.mono_fn_ty,
+        expected.solved_fn_ty,
     );
 }
 
@@ -360,7 +362,7 @@ fn expectSpecsCoveredByCachedOrLoaded(
 }
 
 fn isUnaryPrimitiveFnSpec(view: MonoAst.ProgramView, record: MonoAst.SpecRecord, primitive: MonoType.Primitive) bool {
-    const func = switch (view.types.get(record.identity.mono_fn_ty)) {
+    const func = switch (view.types.get(record.solved_fn_ty)) {
         .func => |func| func,
         else => return false,
     };
@@ -404,7 +406,8 @@ fn mainProcArgLayouts(
     const arg_layouts = try allocator.alloc(LayoutIdx, arg_locals.len);
     errdefer allocator.free(arg_layouts);
 
-    for (arg_locals, 0..) |local_id, index| {
+    for (0..arg_locals.len) |index| {
+        const local_id = GuardedList.at(arg_locals, index);
         arg_layouts[index] = lowered.lir_result.store.getLocal(local_id).layout_idx;
     }
 
@@ -469,7 +472,7 @@ const DebugEffectCounts = struct {
 
 fn countDebugEffectStmts(lowered: *const lir.CheckedPipeline.LoweredProgram) DebugEffectCounts {
     var counts = DebugEffectCounts{};
-    for (lowered.lir_result.store.cf_stmts.items) |stmt| {
+    for (lowered.lir_result.store.getCFStmts()) |stmt| {
         switch (stmt) {
             .debug => counts.debug += 1,
             .expect => counts.expect += 1,
@@ -749,7 +752,7 @@ fn expectInlinePlanDecision(
     const plan = inline_plan.view();
 
     var found = false;
-    for (solved.lifted.fns.items, 0..) |fn_, index| {
+    for (solved.lifted.fnsView(), 0..) |fn_, index| {
         const name_id = solved.lifted.procDebugName(fn_.symbol) orelse continue;
         const actual_name = solved.lifted.names.exportNameText(name_id);
         if (!std.mem.eql(u8, actual_name, fn_name)) continue;
@@ -814,7 +817,9 @@ fn collectAssignCallProcs(
             .switch_stmt => |stmt| {
                 if (stmt.continuation) |continuation| try work.append(allocator, continuation);
                 try work.append(allocator, stmt.default_branch);
-                for (lowered.lir_result.store.getCFSwitchBranches(stmt.branches)) |branch| {
+                const branches = lowered.lir_result.store.getCFSwitchBranches(stmt.branches);
+                for (0..branches.len) |i| {
+                    const branch = GuardedList.at(branches, i);
                     try work.append(allocator, branch.body);
                 }
             },
@@ -827,7 +832,9 @@ fn collectAssignCallProcs(
                 try work.append(allocator, stmt.on_miss);
             },
             .str_match_set => |stmt| {
-                for (lowered.lir_result.store.getStrMatchArms(stmt.arms)) |arm| {
+                const arms = lowered.lir_result.store.getStrMatchArms(stmt.arms);
+                for (0..arms.len) |i| {
+                    const arm = GuardedList.at(arms, i);
                     try work.append(allocator, arm.on_match);
                 }
                 try work.append(allocator, stmt.on_miss);
@@ -930,7 +937,9 @@ fn collectProcShape(
                 shape.switch_count += 1;
                 if (stmt.continuation) |continuation| try work.append(allocator, continuation);
                 try work.append(allocator, stmt.default_branch);
-                for (lowered.lir_result.store.getCFSwitchBranches(stmt.branches)) |branch| {
+                const branches = lowered.lir_result.store.getCFSwitchBranches(stmt.branches);
+                for (0..branches.len) |i| {
+                    const branch = GuardedList.at(branches, i);
                     try work.append(allocator, branch.body);
                 }
             },
@@ -945,7 +954,9 @@ fn collectProcShape(
             },
             .str_match_set => |stmt| {
                 shape.str_match_set_count += 1;
-                for (lowered.lir_result.store.getStrMatchArms(stmt.arms)) |arm| {
+                const arms = lowered.lir_result.store.getStrMatchArms(stmt.arms);
+                for (0..arms.len) |i| {
+                    const arm = GuardedList.at(arms, i);
                     try work.append(allocator, arm.on_match);
                 }
                 try work.append(allocator, stmt.on_miss);
@@ -1076,7 +1087,7 @@ fn markReachableLiftedExpr(
     if (reachable[index]) return;
     reachable[index] = true;
 
-    switch (program.exprs.items[index].data) {
+    switch (program.getExprAt(index).data) {
         .local,
         .unit,
         .int_lit,
@@ -1091,15 +1102,29 @@ fn markReachableLiftedExpr(
         .uninitialized_payload,
         => {},
         .fn_ref => |fn_ref| {
-            for (program.captureOperandSpan(fn_ref.captures)) |operand| {
+            const operands = program.captureOperandSpan(fn_ref.captures);
+            for (0..operands.len) |i| {
+                const operand = GuardedList.at(operands, i);
                 markReachableLiftedExpr(program, operand.value, reachable);
             }
         },
         .list,
         .tuple,
-        => |items| for (program.exprSpan(items)) |child| markReachableLiftedExpr(program, child, reachable),
-        .record => |fields| for (program.fieldExprSpan(fields)) |field| markReachableLiftedExpr(program, field.value, reachable),
-        .tag => |tag| for (program.exprSpan(tag.payloads)) |payload| markReachableLiftedExpr(program, payload, reachable),
+        => |items| {
+            const children = program.exprSpan(items);
+            for (0..children.len) |i| markReachableLiftedExpr(program, GuardedList.at(children, i), reachable);
+        },
+        .record => |fields| {
+            const field_exprs = program.fieldExprSpan(fields);
+            for (0..field_exprs.len) |i| {
+                const field = GuardedList.at(field_exprs, i);
+                markReachableLiftedExpr(program, field.value, reachable);
+            }
+        },
+        .tag => |tag| {
+            const payloads = program.exprSpan(tag.payloads);
+            for (0..payloads.len) |i| markReachableLiftedExpr(program, GuardedList.at(payloads, i), reachable);
+        },
         .nominal,
         .dbg,
         .expect,
@@ -1130,13 +1155,22 @@ fn markReachableLiftedExpr(
         => {},
         .call_value => |call| {
             markReachableLiftedExpr(program, call.callee, reachable);
-            for (program.exprSpan(call.args)) |arg| markReachableLiftedExpr(program, arg, reachable);
+            const args = program.exprSpan(call.args);
+            for (0..args.len) |i| markReachableLiftedExpr(program, GuardedList.at(args, i), reachable);
         },
         .call_proc => |call| {
-            for (program.exprSpan(call.args)) |arg| markReachableLiftedExpr(program, arg, reachable);
-            for (program.captureOperandSpan(call.captures)) |operand| markReachableLiftedExpr(program, operand.value, reachable);
+            const args = program.exprSpan(call.args);
+            for (0..args.len) |i| markReachableLiftedExpr(program, GuardedList.at(args, i), reachable);
+            const operands = program.captureOperandSpan(call.captures);
+            for (0..operands.len) |i| {
+                const operand = GuardedList.at(operands, i);
+                markReachableLiftedExpr(program, operand.value, reachable);
+            }
         },
-        .low_level => |call| for (program.exprSpan(call.args)) |arg| markReachableLiftedExpr(program, arg, reachable),
+        .low_level => |call| {
+            const args = program.exprSpan(call.args);
+            for (0..args.len) |i| markReachableLiftedExpr(program, GuardedList.at(args, i), reachable);
+        },
         .field_access => |field| markReachableLiftedExpr(program, field.receiver, reachable),
         .tuple_access => |access| markReachableLiftedExpr(program, access.tuple, reachable),
         .structural_eq => |eq| {
@@ -1149,28 +1183,37 @@ fn markReachableLiftedExpr(
         },
         .match_ => |match| {
             markReachableLiftedExpr(program, match.scrutinee, reachable);
-            for (program.branchSpan(match.branches)) |branch| {
+            const branches = program.branchSpan(match.branches);
+            for (0..branches.len) |i| {
+                const branch = GuardedList.at(branches, i);
                 if (branch.guard) |guard| markReachableLiftedExpr(program, guard, reachable);
                 markReachableLiftedExpr(program, branch.body, reachable);
             }
         },
         .if_ => |if_| {
-            for (program.ifBranchSpan(if_.branches)) |branch| {
+            const branches = program.ifBranchSpan(if_.branches);
+            for (0..branches.len) |i| {
+                const branch = GuardedList.at(branches, i);
                 markReachableLiftedExpr(program, branch.cond, reachable);
                 markReachableLiftedExpr(program, branch.body, reachable);
             }
             markReachableLiftedExpr(program, if_.final_else, reachable);
         },
         .block => |block| {
-            for (program.stmtSpan(block.statements)) |stmt| markReachableLiftedStmt(program, stmt, reachable);
+            const statements = program.stmtSpan(block.statements);
+            for (0..statements.len) |i| markReachableLiftedStmt(program, GuardedList.at(statements, i), reachable);
             markReachableLiftedExpr(program, block.final_expr, reachable);
         },
         .loop_ => |loop| {
-            for (program.exprSpan(loop.initial_values)) |initial| markReachableLiftedExpr(program, initial, reachable);
+            const initial_values = program.exprSpan(loop.initial_values);
+            for (0..initial_values.len) |i| markReachableLiftedExpr(program, GuardedList.at(initial_values, i), reachable);
             markReachableLiftedExpr(program, loop.body, reachable);
         },
         .break_ => |maybe| if (maybe) |value| markReachableLiftedExpr(program, value, reachable),
-        .continue_ => |continue_| for (program.exprSpan(continue_.values)) |value| markReachableLiftedExpr(program, value, reachable),
+        .continue_ => |continue_| {
+            const values = program.exprSpan(continue_.values);
+            for (0..values.len) |i| markReachableLiftedExpr(program, GuardedList.at(values, i), reachable);
+        },
     }
 }
 
@@ -1179,7 +1222,7 @@ fn markReachableLiftedStmt(
     stmt_id: postcheck.MonotypeLifted.Ast.StmtId,
     reachable: []bool,
 ) void {
-    switch (program.stmts.items[@intFromEnum(stmt_id)]) {
+    switch (program.getStmt(stmt_id)) {
         .let_ => |let_| markReachableLiftedExpr(program, let_.value, reachable),
         .expr,
         .expect,
@@ -1195,11 +1238,11 @@ fn countUnreachableLiftedDirectCalls(
     allocator: Allocator,
     program: *const postcheck.MonotypeLifted.Ast.Program,
 ) TestError!usize {
-    const reachable = try allocator.alloc(bool, program.exprs.items.len);
+    const reachable = try allocator.alloc(bool, program.exprCount());
     defer allocator.free(reachable);
     @memset(reachable, false);
 
-    for (program.fns.items) |fn_| {
+    for (program.fnsView()) |fn_| {
         switch (fn_.body) {
             .roc => |body| markReachableLiftedExpr(program, body, reachable),
             .hosted => {},
@@ -1207,7 +1250,7 @@ fn countUnreachableLiftedDirectCalls(
     }
 
     var count: usize = 0;
-    for (program.exprs.items, reachable) |expr, is_reachable| {
+    for (program.exprsView(), reachable) |expr, is_reachable| {
         if (!is_reachable and expr.data == .call_proc) count += 1;
     }
     return count;
@@ -1433,8 +1476,8 @@ test "issue 9802 same-type map2 specialization counters are bounded" {
         .nested_misses = 8,
         .template_lookup_candidates = 22,
         .nested_lookup_candidates = 0,
-        .specialization_type_digest_requests = 75,
-        .specialization_type_digest_cache_hits = 140,
+        .specialization_type_digest_requests = 74,
+        .specialization_type_digest_cache_hits = 139,
         .specialization_type_digest_cache_misses = 128,
         .specialization_type_digest_nodes_visited = 128,
         .exact_type_checks = 22,
@@ -1481,8 +1524,8 @@ test "issue 9802 growing-structural map2 specialization counters are bounded" {
         .nested_misses = 6,
         .template_lookup_candidates = 5,
         .nested_lookup_candidates = 0,
-        .specialization_type_digest_requests = 52,
-        .specialization_type_digest_cache_hits = 245,
+        .specialization_type_digest_requests = 51,
+        .specialization_type_digest_cache_hits = 244,
         .specialization_type_digest_cache_misses = 290,
         .specialization_type_digest_nodes_visited = 290,
         .exact_type_checks = 5,
@@ -1630,9 +1673,10 @@ test "nested function specializations keep equal types at different sites distin
     defer lowered.deinit(allocator);
 
     var found_distinct_sites = false;
-    for (lowered.mono.nested_defs.items, 0..) |lhs, lhs_index| {
+    const nested_defs = lowered.mono.nestedDefsView();
+    for (nested_defs, 0..) |lhs, lhs_index| {
         const lhs_site = nestedSite(lhs) orelse continue;
-        for (lowered.mono.nested_defs.items[lhs_index + 1 ..]) |rhs| {
+        for (nested_defs[lhs_index + 1 ..]) |rhs| {
             const rhs_site = nestedSite(rhs) orelse continue;
             if (!sameNestedSourceSite(lhs_site, rhs_site) and
                 try lowered.mono.types.typeEql(&lowered.mono.names, lhs.fn_def.mono_fn_ty, rhs.fn_def.mono_fn_ty))
@@ -1664,9 +1708,10 @@ test "one nested function site specializes at multiple closed function types" {
     defer lowered.deinit(allocator);
 
     var found_same_site_distinct_types = false;
-    for (lowered.mono.nested_defs.items, 0..) |lhs, lhs_index| {
+    const nested_defs = lowered.mono.nestedDefsView();
+    for (nested_defs, 0..) |lhs, lhs_index| {
         const lhs_site = nestedSite(lhs) orelse continue;
-        for (lowered.mono.nested_defs.items[lhs_index + 1 ..]) |rhs| {
+        for (nested_defs[lhs_index + 1 ..]) |rhs| {
             const rhs_site = nestedSite(rhs) orelse continue;
             if (!sameNestedSourceSite(lhs_site, rhs_site)) continue;
             if (lhs.fn_def.mono_fn_ty != rhs.fn_def.mono_fn_ty) {
@@ -1718,20 +1763,22 @@ test "differently ordered source record rows produce normalized monotype rows" {
     );
     defer mono.deinit();
 
-    try std.testing.expect(mono.specs.items.len > 0);
-    for (mono.specs.items) |spec| {
+    const specs = mono.specsView();
+    try std.testing.expect(specs.len > 0);
+    for (specs) |spec| {
         try std.testing.expectEqual(postcheck.Monotype.Ast.SpecStatus.ready, spec.status);
     }
 
     const a_name = try mono.names.internRecordFieldLabel("a");
     const b_name = try mono.names.internRecordFieldLabel("b");
     var normalized_rows: usize = 0;
-    for (mono.types.types.items) |content| {
+    const type_view = mono.types.view();
+    for (type_view.types) |content| {
         const span = switch (content) {
             .record => |fields| fields,
             else => continue,
         };
-        const fields = mono.types.fieldSpan(span);
+        const fields = type_view.fieldSpan(span);
         if (fields.len != 2) continue;
         if (fields[0].name == a_name and fields[1].name == b_name) {
             normalized_rows += 1;
@@ -2453,17 +2500,17 @@ test "LIR statements and procs carry resolved source locations" {
     defer lowered_source.deinit(allocator);
 
     const store = &lowered_source.lowered.lir_result.store;
-    try std.testing.expectEqual(store.cf_stmts.items.len, store.cf_stmt_locs.items.len);
-    try std.testing.expectEqual(store.cf_stmts.items.len, store.cf_stmt_regions.items.len);
-    try std.testing.expectEqual(store.proc_specs.items.len, store.proc_locs.items.len);
-    try std.testing.expect(store.proc_debug_names.items.len > 0);
-    for (store.proc_debug_names.items) |entry| {
-        try std.testing.expect(entry.proc < store.proc_specs.items.len);
+    try std.testing.expectEqual(store.getCFStmts().len, store.getCFStmtLocs().len);
+    try std.testing.expectEqual(store.getCFStmts().len, store.getCFStmtRegions().len);
+    try std.testing.expectEqual(store.getProcSpecs().len, store.getProcLocs().len);
+    try std.testing.expect(store.getProcDebugNames().len > 0);
+    for (store.getProcDebugNames()) |entry| {
+        try std.testing.expect(entry.proc < store.getProcSpecs().len);
     }
     try std.testing.expect(store.sourceFileCount() >= 1);
 
     var located: usize = 0;
-    for (store.cf_stmt_locs.items, store.cf_stmt_regions.items, store.cf_stmts.items) |loc, region, stmt| {
+    for (store.getCFStmtLocs(), store.getCFStmtRegions(), store.getCFStmts()) |loc, region, stmt| {
         const has_source = switch (stmt) {
             .incref,
             .decref,
@@ -2515,7 +2562,7 @@ test "LIR statements and procs carry resolved source locations" {
     try std.testing.expect(located > 0);
 
     var located_procs: usize = 0;
-    for (store.proc_locs.items) |loc| {
+    for (store.getProcLocs()) |loc| {
         if (loc.hasLocation()) {
             located_procs += 1;
             try std.testing.expect(loc.file < store.sourceFileCount());
@@ -2525,7 +2572,7 @@ test "LIR statements and procs carry resolved source locations" {
 
     var found_add2 = false;
     var found_mul3 = false;
-    for (0..store.proc_specs.items.len) |i| {
+    for (0..store.getProcSpecs().len) |i| {
         const name = store.procDebugName(@enumFromInt(i)) orelse continue;
         if (std.mem.eql(u8, name, "add2")) found_add2 = true;
         if (std.mem.eql(u8, name, "mul3")) found_mul3 = true;
@@ -2553,7 +2600,7 @@ test "referenced but uncalled function does not materialize a proc" {
 
     const store = &lowered_source.lowered.lir_result.store;
     var found_unused = false;
-    for (0..store.proc_specs.items.len) |i| {
+    for (0..store.getProcSpecs().len) |i| {
         const name = store.procDebugName(@enumFromInt(i)) orelse continue;
         if (std.mem.eql(u8, name, "unused")) found_unused = true;
     }
@@ -2579,7 +2626,7 @@ test "LIR statements carry source locations under optimizing inline mode" {
 
     const store = &lowered_source.lowered.lir_result.store;
     var located: usize = 0;
-    for (store.cf_stmt_locs.items, store.cf_stmt_regions.items) |loc, region| {
+    for (store.getCFStmtLocs(), store.getCFStmtRegions()) |loc, region| {
         if (loc.hasLocation()) located += 1;
         if (loc.hasLocation()) try std.testing.expect(!region.isEmpty());
     }
@@ -2627,11 +2674,11 @@ test "LIR locals carry source-level names" {
     defer lowered_source.deinit(allocator);
 
     const store = &lowered_source.lowered.lir_result.store;
-    try std.testing.expectEqual(store.locals.items.len, store.local_names.items.len);
+    try std.testing.expectEqual(store.getLocals().len, store.getLocalNamesRaw().len);
 
     var found_first = false;
     var found_second = false;
-    for (0..store.locals.items.len) |i| {
+    for (0..store.getLocals().len) |i| {
         const name = store.localName(@enumFromInt(i)) orelse continue;
         if (std.mem.eql(u8, name, "first_part")) found_first = true;
         if (std.mem.eql(u8, name, "second_part")) found_second = true;
@@ -2671,8 +2718,9 @@ test "shared callees are lifted once and never gain spurious captures" {
 
     // The whole chain survives lifting as distinct closed functions: the diamond
     // is not collapsed, and no function gains spurious closure captures.
-    try std.testing.expect(lifted.lifted.fns.items.len >= depth);
-    for (lifted.lifted.fns.items) |func| {
+    const lifted_fns = lifted.lifted.fnsView();
+    try std.testing.expect(lifted_fns.len >= depth);
+    for (lifted_fns) |func| {
         try std.testing.expectEqual(@as(u32, 0), func.captures.len);
     }
 }
