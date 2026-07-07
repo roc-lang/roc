@@ -2260,7 +2260,29 @@ pub const BoxyRuntime = struct {
 
             const target_allocation_desc = target_payload_desc orelse {
                 switch (expected_layout_val.tag) {
-                    .box_of_zst => return try self.allocBoxOfZstValue(hooks, expected_layout),
+                    .box_of_zst => {
+                        // The erased target box carries no payload descriptor. A
+                        // source value that already holds an allocation pointer (a
+                        // box or opaque pointer) only needs relabelling, so preserve
+                        // it. A concrete non-box source still has to be stored in a
+                        // fresh allocation the box points at, so downstream readers
+                        // can recover it through their own descriptor; the source
+                        // payload descriptor tells us its shape and refcounting.
+                        // Only a payload-free (ZST) source has nothing to carry,
+                        // where a canonical null box_of_zst is correct.
+                        if (actual_layout_val.tag == .box or actual_layout_val.tag == .box_of_zst or
+                            (actual_layout_val.tag == .scalar and actual_layout_val.getScalar().tag == .opaque_ptr))
+                        {
+                            return try self.materializeLocalValue(hooks, value, expected_layout);
+                        }
+                        if (self.helper.sizeOf(actual_layout) == 0) {
+                            return try self.allocBoxOfZstValue(hooks, expected_layout);
+                        }
+                        if (source_payload_desc) |sdesc| {
+                            return try self.allocBoxyDynamicPayload(hooks, value, actual_layout, sdesc, expected_layout);
+                        }
+                        return try self.allocBoxOfZstValue(hooks, expected_layout);
+                    },
                     .box => {
                         const target_payload_layout = expected_layout_val.getIdx();
                         const materialized_payload = try self.materializeBoxyPayloadToLayout(
