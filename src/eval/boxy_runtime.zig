@@ -25,6 +25,7 @@ const RocStr = builtins.str.RocStr;
 const RocList = builtins.list.RocList;
 const RcOp = layout_mod.RcOp;
 const RcAtomicity = builtins.utils.RcAtomicity;
+const Layout = layout_mod.Layout;
 
 const is_freestanding = builtin.target.os.tag == .freestanding;
 
@@ -36,6 +37,18 @@ pub const Error = error{
     DivisionByZero,
     Crash,
     ExpectErr,
+};
+
+/// Comptime-gated tracing for the boxy runtime's RC plan execution.
+/// Enabled via `-Dtrace-eval=true`. Zero cost when disabled.
+const trace = struct {
+    const enabled = if (@hasDecl(build_options, "trace_eval")) build_options.trace_eval else false;
+
+    fn log(comptime fmt: []const u8, args: anytype) void {
+        if (comptime enabled) {
+            debugPrint("[interp] " ++ fmt ++ "\n", args);
+        }
+    }
 };
 
 /// Comptime-gated tracing for refcount operations.
@@ -83,6 +96,59 @@ pub fn isUnsigned(layout_idx: layout_mod.Idx) bool {
         else => false,
     };
 }
+
+/// The nested op an aggregate's children receive when the parent is released:
+/// releasing the parent releases exactly one reference to each child.
+pub fn nestedDropOp(op: RcOp) RcOp {
+    return switch (op) {
+        .incref => .incref,
+        .decref, .free => .decref,
+    };
+}
+
+pub const AllocatedTag = struct {
+    outer: Value,
+    base: Value,
+    base_layout: layout_mod.Idx,
+};
+
+pub const BoxAllocInfo = struct {
+    elem_layout: layout_mod.Idx,
+    elem_size: u32,
+    elem_alignment: u32,
+    contains_rc: bool,
+};
+
+/// A produced boxy value together with the descriptor the producing statement
+/// binds to its target local.
+pub const BoxyAssignedValue = struct {
+    value: Value,
+    desc: ?*const LirProgram.BoxyTypeDesc,
+};
+
+/// One explicit argument to a dictionary method call: its value bytes, its
+/// layout, and the resolved descriptor attached to the argument's local (null
+/// when the local carries none).
+pub const DictCallArg = struct {
+    value: Value,
+    layout: layout_mod.Idx,
+    source_desc: ?*const LirProgram.BoxyTypeDesc = null,
+};
+
+/// The execution plan for one dictionary method call.
+pub const PreparedDictCall = union(enum) {
+    /// The slot dispatches to descriptor-guided structural equality of the
+    /// two explicit arguments; no worker runs.
+    structural_eq: *const LirProgram.BoxyTypeDesc,
+    /// The slot dispatches to a worker proc with the fully adapted argument
+    /// list (explicit args first, then hidden descriptors, then nested
+    /// dictionaries).
+    call: struct {
+        proc: LIR.LirProcSpecId,
+        arg_values: []Value,
+        arg_layouts: []layout_mod.Idx,
+    },
+};
 
 pub fn valueToRocStr(val: Value) RocStr {
     var rs: RocStr = undefined;
@@ -669,7 +735,7 @@ pub const BoxyRuntime = struct {
 
         const ext_desc = try self.resolveBoxyTagExtDesc(hooks, source_desc);
         const ext_payload_layout = self.requireBoxyTagPayloadLayout(source_desc.payload_layout, ext_discriminant);
-        const ext_value = try hooks.materializeValue(tag_base.value, ext_payload_layout);
+        const ext_value = try self.materializeLocalValue(hooks, tag_base.value, ext_payload_layout);
         return try self.boxyTagMatches(hooks, ext_value, ext_payload_layout, ext_desc, tag_name);
     }
 
@@ -1167,12 +1233,12 @@ pub const BoxyRuntime = struct {
     ) Error!void {
         const layout_val = self.layout_store.getLayout(layout_idx);
         if (op == .incref) {
-            hooks.performRcHelper(.incref, layout_idx, val, count, atomicity);
+            self.performConcreteRc(hooks, .incref, layout_idx, val, count, atomicity);
             return;
         }
 
         if (desc == null) {
-            hooks.performRcHelper(op, layout_idx, val, count, atomicity);
+            self.performConcreteRc(hooks, op, layout_idx, val, count, atomicity);
             return;
         }
 
@@ -1183,7 +1249,7 @@ pub const BoxyRuntime = struct {
             .tag_union => try self.performBoxyTagUnionDrop(hooks, val, layout_idx, resolved_desc, op, count, atomicity),
             .box, .box_of_zst => try self.performBoxyBoxDrop(hooks, val, layout_idx, resolved_desc, op, count, atomicity),
             .scalar, .closure, .erased_callable => {
-                hooks.performRcHelper(op, layout_idx, val, count, atomicity);
+                self.performConcreteRc(hooks, op, layout_idx, val, count, atomicity);
             },
             .zst, .ptr => {},
         }
@@ -1209,7 +1275,7 @@ pub const BoxyRuntime = struct {
 
         const payload_desc = try self.boxyBoxAllocationPayloadDesc(hooks, layout_idx, desc) orelse {
             if (layout_val.tag == .box_of_zst) return;
-            hooks.performRcHelper(op, layout_idx, val, count, atomicity);
+            self.performConcreteRc(hooks, op, layout_idx, val, count, atomicity);
             return;
         };
         const data_ptr = self.readBoxedDataPointer(val) orelse return;
@@ -1270,7 +1336,7 @@ pub const BoxyRuntime = struct {
         atomicity: RcAtomicity,
     ) Error!void {
         const elem_desc = try self.firstNestedBoxyDesc(hooks, desc) orelse {
-            hooks.performRcHelper(op, list_layout, val, count, atomicity);
+            self.performConcreteRc(hooks, op, list_layout, val, count, atomicity);
             return;
         };
 
@@ -1385,7 +1451,7 @@ pub const BoxyRuntime = struct {
                 unreachable;
             }
             const ext_desc = try self.resolveBoxyTagExtDesc(hooks, desc);
-            const ext_value = try hooks.materializeValue(tag_base.value, actual_payload_layout);
+            const ext_value = try self.materializeLocalValue(hooks, tag_base.value, actual_payload_layout);
             try self.performBoxyLayoutDrop(hooks, ext_value, actual_payload_layout, ext_desc, op, count, atomicity);
             return;
         };
@@ -1490,7 +1556,7 @@ pub const BoxyRuntime = struct {
             @intCast(payload_sa.alignment.toByteUnits()),
             self.boxyDynamicPayloadAllocationContainsRc(desc, target_layout),
         );
-        const coerced = try hooks.coerceToLayout(payload, payload_layout, desc.payload_layout);
+        const coerced = try self.coerceExplicitRefValueToLayout(hooks, payload, payload_layout, desc.payload_layout);
         @memcpy(data_ptr[0..payload_size], coerced.readBytes(payload_size));
         self.writeBoxedDataPointer(boxed, data_ptr);
         return boxed;
@@ -1523,7 +1589,7 @@ pub const BoxyRuntime = struct {
         target_layout: layout_mod.Idx,
     ) Error!Value {
         if (self.findLocalBoxyTagVariant(desc, tag_name)) |variant| {
-            const allocated = try hooks.allocTagValue(desc.payload_layout);
+            const allocated = try self.allocTagValue(hooks, desc.payload_layout);
             if (self.helper.sizeOf(allocated.base_layout) > 0) {
                 self.helper.writeTagDiscriminant(allocated.base, allocated.base_layout, variant.discriminant);
             }
@@ -1568,11 +1634,11 @@ pub const BoxyRuntime = struct {
         const ext_desc = try self.resolveBoxyTagExtDesc(hooks, desc);
         const ext_payload_layout = self.requireBoxyTagPayloadLayout(desc.payload_layout, ext_discriminant);
         const ext_value = try self.constructBoxyTagValue(hooks, ext_desc, tag_name, payload, payload_layout, payload_desc, ext_payload_layout);
-        const allocated = try hooks.allocTagValue(desc.payload_layout);
+        const allocated = try self.allocTagValue(hooks, desc.payload_layout);
         if (self.helper.sizeOf(allocated.base_layout) > 0) {
             self.helper.writeTagDiscriminant(allocated.base, allocated.base_layout, ext_discriminant);
         }
-        try hooks.writeVariantPayloadValue(allocated.base, ext_payload_layout, ext_value, ext_payload_layout);
+        try self.writeVariantPayloadValue(hooks, allocated.base, ext_payload_layout, ext_value, ext_payload_layout);
         return try self.allocBoxyDynamicPayload(hooks, allocated.outer, desc.payload_layout, desc, target_layout);
     }
 
@@ -1592,7 +1658,7 @@ pub const BoxyRuntime = struct {
         const expected_layout = variant.payload_layout;
         if (self.helper.sizeOf(expected_layout) == 0) return;
         if (expected_layout == payload_layout or variant.payload_descs.len == 0) {
-            return try hooks.writeVariantPayloadValue(destination, expected_layout, payload_value, payload_layout);
+            return try self.writeVariantPayloadValue(hooks, destination, expected_layout, payload_value, payload_layout);
         }
 
         const expected_layout_val = self.layout_store.getLayout(expected_layout);
@@ -1636,7 +1702,7 @@ pub const BoxyRuntime = struct {
                         field_desc,
                         expected_field_layout,
                     );
-                } else try hooks.materializeValue(
+                } else try self.materializeLocalValue(hooks, 
                     self.normalizeValueToLayout(field_value, actual_field_layout, expected_field_layout),
                     expected_field_layout,
                 );
@@ -1659,7 +1725,7 @@ pub const BoxyRuntime = struct {
             return;
         }
 
-        try hooks.writeVariantPayloadValue(destination, expected_layout, payload_value, payload_layout);
+        try self.writeVariantPayloadValue(hooks, destination, expected_layout, payload_value, payload_layout);
     }
 
     pub fn readBoxyTagPayloadByName(
@@ -1690,7 +1756,7 @@ pub const BoxyRuntime = struct {
                 // describes the whole payload area, not a field of it.
                 const raw_payload = if (payload_index == 0 and payload_desc.payload_layout == actual_payload_layout)
                     RawBoxyTagPayloadRead{
-                        .value = try hooks.materializeValue(tag_base.value, actual_payload_layout),
+                        .value = try self.materializeLocalValue(hooks, tag_base.value, actual_payload_layout),
                         .layout = actual_payload_layout,
                     }
                 else
@@ -1745,7 +1811,7 @@ pub const BoxyRuntime = struct {
 
         const ext_desc = try self.resolveBoxyTagExtDesc(hooks, source_desc);
         const ext_payload_layout = self.requireBoxyTagPayloadLayout(source_desc.payload_layout, ext_discriminant);
-        const ext_value = try hooks.materializeValue(tag_base.value, ext_payload_layout);
+        const ext_value = try self.materializeLocalValue(hooks, tag_base.value, ext_payload_layout);
         return try self.readBoxyTagPayloadByName(hooks, ext_value, ext_payload_layout, ext_desc, tag_name, payload_index, target_layout);
     }
 
@@ -1758,8 +1824,8 @@ pub const BoxyRuntime = struct {
         target_layout: layout_mod.Idx,
     ) Error!Value {
         const raw_payload = try self.readRawBoxyTagPayloadValue(hooks, tag_base, actual_payload_layout, payload_index);
-        const payload_value = try hooks.coerceToLayout(raw_payload.value, raw_payload.layout, target_layout);
-        return try hooks.materializeValue(payload_value, target_layout);
+        const payload_value = try self.coerceExplicitRefValueToLayout(hooks, raw_payload.value, raw_payload.layout, target_layout);
+        return try self.materializeLocalValue(hooks, payload_value, target_layout);
     }
 
     fn readActiveTagPayloadValue(
@@ -1795,7 +1861,7 @@ pub const BoxyRuntime = struct {
                     payload_index,
                 );
                 return .{
-                    .value = try hooks.materializeValue(tag_base.offset(field_offset), actual_field_layout),
+                    .value = try self.materializeLocalValue(hooks, tag_base.offset(field_offset), actual_field_layout),
                     .layout = actual_field_layout,
                 };
             },
@@ -1807,7 +1873,7 @@ pub const BoxyRuntime = struct {
                     );
                 }
                 return .{
-                    .value = try hooks.materializeValue(tag_base, actual_payload_layout),
+                    .value = try self.materializeLocalValue(hooks, tag_base, actual_payload_layout),
                     .layout = actual_payload_layout,
                 };
             },
@@ -1823,7 +1889,7 @@ pub const BoxyRuntime = struct {
         expected_layout: layout_mod.Idx,
     ) Error!Value {
         if (actual_layout == expected_layout) {
-            return try hooks.materializeValue(value, expected_layout);
+            return try self.materializeLocalValue(hooks, value, expected_layout);
         }
 
         const actual_layout_val = self.layout_store.getLayout(actual_layout);
@@ -1846,7 +1912,7 @@ pub const BoxyRuntime = struct {
                 const payload_size = self.helper.sizeOf(payload_layout);
                 const data_ptr = self.readBoxedDataPointer(value);
                 if (data_ptr == null) {
-                    if (payload_size == 0) return try hooks.materializeValue(Value.zst, expected_layout);
+                    if (payload_size == 0) return try self.materializeLocalValue(hooks, Value.zst, expected_layout);
                     return self.invariantFailedError(
                         "LIR/interpreter invariant violated: descriptor-backed box layout {d} had null payload pointer for nonzero payload layout {d}",
                         .{ @intFromEnum(actual_layout), @intFromEnum(payload_layout) },
@@ -1907,7 +1973,7 @@ pub const BoxyRuntime = struct {
                     .{self.store.getString(variant.name)},
                 );
             }
-            const target = try hooks.allocTagValue(expected_layout);
+            const target = try self.allocTagValue(hooks, expected_layout);
             const expected_payload_layout = self.requireBoxyTagPayloadLayout(target.base_layout, variant.discriminant);
             if (self.helper.sizeOf(expected_payload_layout) != 0) {
                 return self.invariantFailedError(
@@ -1965,8 +2031,8 @@ pub const BoxyRuntime = struct {
             }
         }
 
-        const coerced = try hooks.coerceToLayout(value, actual_layout, expected_layout);
-        return try hooks.materializeValue(coerced, expected_layout);
+        const coerced = try self.coerceExplicitRefValueToLayout(hooks, value, actual_layout, expected_layout);
+        return try self.materializeLocalValue(hooks, coerced, expected_layout);
     }
 
     fn materializeBoxyTagPayloadToNonTagLayout(
@@ -1992,7 +2058,7 @@ pub const BoxyRuntime = struct {
         const expected_layout_val = self.layout_store.getLayout(expected_layout);
         const payload = if (actual_payload_layout_val.tag == .struct_ and expected_layout_val.tag == .struct_)
             RawBoxyTagPayloadRead{
-                .value = try hooks.materializeValue(actual_base.value, actual_payload_layout),
+                .value = try self.materializeLocalValue(hooks, actual_base.value, actual_payload_layout),
                 .layout = actual_payload_layout,
             }
         else
@@ -2061,7 +2127,7 @@ pub const BoxyRuntime = struct {
     ) Error!Value {
         const source_list = self.valueToRocListForLayout(value, actual_layout);
         if (source_list.len() == 0) {
-            return try hooks.rocListToValue(canonicalZstList(0), expected_layout);
+            return try self.rocListToValue(hooks, canonicalZstList(0), expected_layout);
         }
 
         const source_elem_desc = if (source_desc) |resolved_source_desc|
@@ -2079,7 +2145,7 @@ pub const BoxyRuntime = struct {
         const target_elem_size = self.helper.sizeOf(target_elem_layout);
 
         if (target_elem_size == 0) {
-            return try hooks.rocListToValue(canonicalZstList(source_list.len()), expected_layout);
+            return try self.rocListToValue(hooks, canonicalZstList(source_list.len()), expected_layout);
         }
         const source_bytes = source_list.bytes orelse {
             return self.invariantFailedError(
@@ -2133,7 +2199,7 @@ pub const BoxyRuntime = struct {
             @memcpy(target_bytes[index * target_elem_size ..][0..target_elem_size], materialized.readBytes(target_elem_size));
         }
 
-        return try hooks.rocListToValue(.{
+        return try self.rocListToValue(hooks, .{
             .bytes = target_bytes,
             .length = source_list.len(),
             .capacity_or_alloc_ptr = builtins.list.RocList.encodeCapacity(source_list.len()),
@@ -2182,19 +2248,19 @@ pub const BoxyRuntime = struct {
                 source_desc;
             const target_payload_desc = try self.boxyBoxAllocationPayloadDesc(hooks, expected_layout, target_desc);
             if (actual_layout == expected_layout and source_payload_desc == null and target_payload_desc == null) {
-                return try hooks.materializeValue(value, expected_layout);
+                return try self.materializeLocalValue(hooks, value, expected_layout);
             }
             if (actual_layout == expected_layout and
                 source_payload_desc != null and
                 target_payload_desc != null and
                 source_payload_desc.?.payload_layout == target_payload_desc.?.payload_layout)
             {
-                return try hooks.materializeValue(value, expected_layout);
+                return try self.materializeLocalValue(hooks, value, expected_layout);
             }
 
             const target_allocation_desc = target_payload_desc orelse {
                 switch (expected_layout_val.tag) {
-                    .box_of_zst => return try hooks.allocBoxOfZstValue(expected_layout),
+                    .box_of_zst => return try self.allocBoxOfZstValue(hooks, expected_layout),
                     .box => {
                         const target_payload_layout = expected_layout_val.getIdx();
                         const materialized_payload = try self.materializeBoxyPayloadToLayout(
@@ -2204,7 +2270,7 @@ pub const BoxyRuntime = struct {
                             source_desc,
                             target_payload_layout,
                         );
-                        return try hooks.boxBox(materialized_payload, expected_layout);
+                        return try self.boxBox(hooks, materialized_payload, expected_layout);
                     },
                     else => unreachable,
                 }
@@ -2335,7 +2401,7 @@ pub const BoxyRuntime = struct {
         const expected_layout_val = self.layout_store.getLayout(expected_layout);
         const payload = if (actual_payload_layout_val.tag == .struct_ and expected_layout_val.tag == .struct_)
             RawBoxyTagPayloadRead{
-                .value = try hooks.materializeValue(actual_base.value, actual_payload_layout),
+                .value = try self.materializeLocalValue(hooks, actual_base.value, actual_payload_layout),
                 .layout = actual_payload_layout,
             }
         else
@@ -2672,7 +2738,7 @@ pub const BoxyRuntime = struct {
         expected_layout: layout_mod.Idx,
     ) Error!Value {
         const actual_base = self.resolveTagUnionBaseValue(value, actual_layout);
-        const target = try hooks.allocTagValue(expected_layout);
+        const target = try self.allocTagValue(hooks, expected_layout);
         const discriminant = if (self.helper.sizeOf(actual_base.layout) == 0)
             @as(u16, 0)
         else
@@ -2730,7 +2796,7 @@ pub const BoxyRuntime = struct {
             // Identical convention on both sides: the bytes are already in the
             // target's shape, and the surrounding RC statements account for the
             // references they share with the source.
-            return try hooks.materializeValue(value, expected_layout);
+            return try self.materializeLocalValue(hooks, value, expected_layout);
         }
         const actual_base = self.resolveBoxyTagBaseValue(value, actual_layout, source_desc);
         const source_discriminant = if (self.helper.sizeOf(actual_base.layout) == 0)
@@ -2767,7 +2833,7 @@ pub const BoxyRuntime = struct {
                 );
             };
             const target_ext_desc = try self.resolveBoxyTagExtDesc(hooks, target_desc);
-            const target = try hooks.allocTagValue(expected_layout);
+            const target = try self.allocTagValue(hooks, expected_layout);
             if (self.helper.sizeOf(target.base_layout) > 0) {
                 self.helper.writeTagDiscriminant(target.base, target.base_layout, target_ext_discriminant);
             } else if (target_ext_discriminant != 0) {
@@ -2785,11 +2851,11 @@ pub const BoxyRuntime = struct {
                 target_ext_desc,
                 ext_slot_layout,
             );
-            try hooks.writeVariantPayloadValue(target.base, ext_slot_layout, ext_value, ext_slot_layout);
+            try self.writeVariantPayloadValue(hooks, target.base, ext_slot_layout, ext_value, ext_slot_layout);
             return target.outer;
         };
 
-        const target = try hooks.allocTagValue(expected_layout);
+        const target = try self.allocTagValue(hooks, expected_layout);
         if (self.helper.sizeOf(target.base_layout) > 0) {
             self.helper.writeTagDiscriminant(target.base, target.base_layout, target_variant.discriminant);
         } else if (target_variant.discriminant != 0) {
@@ -3327,7 +3393,7 @@ pub const BoxyRuntime = struct {
             if (discriminant == ext_discriminant) {
                 const ext_desc = try self.resolveBoxyTagExtDesc(hooks, desc);
                 const ext_payload_layout = self.requireBoxyTagPayloadLayout(desc.payload_layout, ext_discriminant);
-                const ext_value = try hooks.materializeValue(tag_base.value, ext_payload_layout);
+                const ext_value = try self.materializeLocalValue(hooks, tag_base.value, ext_payload_layout);
                 return try self.appendBoxyInspect(hooks, out, ext_value, ext_payload_layout, ext_desc);
             }
         }
@@ -3390,5 +3456,1116 @@ pub const BoxyRuntime = struct {
             },
         }
         try out.append(self.eval_arena, ')');
+    }
+
+    pub fn requireBoxyDict(self: *const BoxyRuntime, dict_id: LIR.BoxyDictId) *const LirProgram.BoxyDict {
+        const index = @intFromEnum(dict_id);
+        if (index >= self.boxy_tables.dicts.len) {
+            self.invariantFailed(
+                "LIR/interpreter invariant violated: boxy dictionary id {d} exceeded dictionary table length {d}",
+                .{ index, self.boxy_tables.dicts.len },
+            );
+        }
+        return &self.boxy_tables.dicts[index];
+    }
+
+    pub fn requireBoxyMethodSlots(self: *const BoxyRuntime, span: LIR.BoxySpan) []const LirProgram.BoxyMethodSlot {
+        if (runtimeBoxySpanStart(span)) |_| {
+            self.invariantFailed(
+                "LIR/interpreter invariant violated: runtime boxy method slot spans are not supported",
+                .{},
+            );
+        }
+        const start: usize = span.start;
+        const end = start + span.len;
+        if (end > self.boxy_tables.method_slots.len) {
+            self.invariantFailed(
+                "LIR/interpreter invariant violated: boxy method slot span [{d}, {d}) exceeded method slot table length {d}",
+                .{ start, end, self.boxy_tables.method_slots.len },
+            );
+        }
+        return self.boxy_tables.method_slots[start..end];
+    }
+
+    pub fn requireBoxyDictRefs(self: *const BoxyRuntime, span: LIR.BoxySpan) []const LIR.BoxyDictRef {
+        if (runtimeBoxySpanStart(span) != null) {
+            self.invariantFailed(
+                "LIR/interpreter invariant violated: runtime boxy dictionary-ref spans are not supported",
+                .{},
+            );
+        }
+
+        const start: usize = span.start;
+        const end = start + span.len;
+        if (end > self.boxy_tables.dict_refs.len) {
+            self.invariantFailed(
+                "LIR/interpreter invariant violated: boxy dictionary-ref span [{d}, {d}) exceeded dictionary-ref table length {d}",
+                .{ start, end, self.boxy_tables.dict_refs.len },
+            );
+        }
+        return self.boxy_tables.dict_refs[start..end];
+    }
+
+    pub fn requireBoxyMethodArgLayouts(self: *const BoxyRuntime, span: LIR.BoxySpan) []const layout_mod.Idx {
+        if (runtimeBoxySpanStart(span) != null) {
+            self.invariantFailed(
+                "LIR/interpreter invariant violated: runtime boxy method-argument layout spans are not supported",
+                .{},
+            );
+        }
+
+        const start: usize = span.start;
+        const end = start + span.len;
+        if (end > self.boxy_tables.method_arg_layouts.len) {
+            self.invariantFailed(
+                "LIR/interpreter invariant violated: boxy method-argument layout span [{d}, {d}) exceeded method-argument layout table length {d}",
+                .{ start, end, self.boxy_tables.method_arg_layouts.len },
+            );
+        }
+        return self.boxy_tables.method_arg_layouts[start..end];
+    }
+
+    pub fn requireBoxyMethodHiddenDescSources(
+        self: *const BoxyRuntime,
+        span: LIR.BoxySpan,
+    ) []const LirProgram.BoxyMethodHiddenDescSource {
+        if (runtimeBoxySpanStart(span) != null) {
+            self.invariantFailed(
+                "LIR/interpreter invariant violated: runtime boxy method hidden-descriptor source spans are not supported",
+                .{},
+            );
+        }
+
+        const start: usize = span.start;
+        const end = start + span.len;
+        if (end > self.boxy_tables.method_hidden_desc_sources.len) {
+            self.invariantFailed(
+                "LIR/interpreter invariant violated: boxy method hidden-descriptor source span [{d}, {d}) exceeded source table length {d}",
+                .{ start, end, self.boxy_tables.method_hidden_desc_sources.len },
+            );
+        }
+        return self.boxy_tables.method_hidden_desc_sources[start..end];
+    }
+
+    pub fn rcHelperForLayout(self: *const BoxyRuntime, op: RcOp, layout_idx: layout_mod.Idx) layout_mod.RcHelper {
+        const layout_val = self.layout_store.getLayout(layout_idx);
+        return switch (layout_val.tag) {
+            .closure => self.rcHelperForLayout(nestedDropOp(op), layout_val.getClosure().captures_layout_idx),
+            else => .{ .op = op, .layout_idx = layout_idx },
+        };
+    }
+
+    /// Perform a concrete (descriptor-free) refcount operation on a value of
+    /// the given layout, walking aggregates per the layout store's RC plans.
+    pub fn performConcreteRc(self: *const BoxyRuntime, hooks: anytype, op: RcOp, layout_idx: layout_mod.Idx, val: Value, count: u16, atomicity: RcAtomicity) void {
+        const helper = self.rcHelperForLayout(op, layout_idx);
+        self.performRcHelperIfNeeded(hooks, helper, val, count, atomicity);
+    }
+
+    pub fn performRcHelperIfNeeded(self: *const BoxyRuntime, hooks: anytype, helper: layout_mod.RcHelper, val: Value, count: u16, atomicity: RcAtomicity) void {
+        const plan = hooks.rcPlanFor(helper);
+        if (plan == .noop) return;
+        self.performRcPlan(hooks, plan, val, count, atomicity);
+    }
+
+    pub fn performRcPlan(self: *const BoxyRuntime, hooks: anytype, rc_plan: layout_mod.RcHelperPlan, val: Value, count: u16, atomicity: RcAtomicity) void {
+        trace.log("performRawRcPlan: plan={s} val.ptr={*}", .{ @tagName(rc_plan), val.ptr });
+        const utils = builtins.utils;
+        switch (rc_plan) {
+            .noop => {},
+            .str_incref => {
+                const rs = valueToRocStr(val);
+                trace_rc.log("str_incref: bytes=0x{x} len={d} cap={d} count={d}", .{ @intFromPtr(rs.bytes), rs.length, rs.capacity_or_alloc_ptr, count });
+                rs.increfWithAtomicity(count, atomicity, self.roc_ops);
+            },
+            .str_decref => {
+                const rs = valueToRocStr(val);
+                trace_rc.log("str_decref: bytes=0x{x} len={d} cap={d}", .{ @intFromPtr(rs.bytes), rs.length, rs.capacity_or_alloc_ptr });
+                rs.decrefWithAtomicity(atomicity, self.roc_ops);
+            },
+            .str_free => {
+                const rs = valueToRocStr(val);
+                trace_rc.log("str_free: bytes=0x{x} len={d} cap={d}", .{ @intFromPtr(rs.bytes), rs.length, rs.capacity_or_alloc_ptr });
+                rs.decrefWithAtomicity(atomicity, self.roc_ops);
+            },
+            .list_incref => |list_plan| {
+                const rl = valueToRocList(val);
+                const has_child = list_plan.child != null;
+                trace_rc.log("list_incref: bytes=0x{x} len={d} cap={d} count={d} has_child={any}", .{
+                    @intFromPtr(rl.bytes),
+                    rl.len(),
+                    rl.capacity_or_alloc_ptr,
+                    count,
+                    has_child,
+                });
+                rl.increfWithAtomicity(@intCast(count), has_child, atomicity, self.roc_ops);
+            },
+            .list_decref => |list_plan| {
+                const rl = valueToRocList(val);
+                const has_child = list_plan.child != null;
+                const alloc_ptr = rl.getAllocationDataPtr(self.roc_ops);
+                trace_rc.log("list_decref: bytes=0x{x} len={d} cap={d} alloc_ptr=0x{x} has_child={any} elem_align={d}", .{
+                    @intFromPtr(rl.bytes),  rl.len(),  rl.capacity_or_alloc_ptr,
+                    @intFromPtr(alloc_ptr), has_child, list_plan.elem_alignment,
+                });
+                // Before freeing the list, decref all child elements (mirrors RocList.decref logic)
+                if (list_plan.child) |child_key| {
+                    if (rl.isUnique(self.roc_ops)) {
+                        self.decrefListElements(hooks, rl, list_plan, child_key, count, atomicity);
+                    }
+                }
+                builtins.utils.decref(
+                    alloc_ptr,
+                    rl.capacity_or_alloc_ptr,
+                    @intCast(list_plan.elem_alignment),
+                    has_child,
+                    atomicity,
+                    self.roc_ops,
+                );
+            },
+            .list_free => |list_plan| {
+                const rl = valueToRocList(val);
+                const has_child = list_plan.child != null;
+                const alloc_ptr = rl.getAllocationDataPtr(self.roc_ops);
+                trace_rc.log("list_free: bytes=0x{x} len={d} cap={d} alloc_ptr=0x{x} has_child={any}", .{
+                    @intFromPtr(rl.bytes),  rl.len(),  rl.capacity_or_alloc_ptr,
+                    @intFromPtr(alloc_ptr), has_child,
+                });
+                // Before freeing the list, decref all child elements (mirrors RocList.decref logic)
+                if (list_plan.child) |child_key| {
+                    if (rl.isUnique(self.roc_ops)) {
+                        self.decrefListElements(hooks, rl, list_plan, child_key, count, atomicity);
+                    }
+                }
+                builtins.utils.decref(
+                    alloc_ptr,
+                    rl.capacity_or_alloc_ptr,
+                    @intCast(list_plan.elem_alignment),
+                    has_child,
+                    atomicity,
+                    self.roc_ops,
+                );
+            },
+            .box_incref => {
+                const alloc_ptr = val.read(?[*]u8);
+                utils.increfDataPtr(alloc_ptr, @intCast(count), atomicity, self.roc_ops);
+            },
+            .box_decref => |box_plan| {
+                const alloc_ptr = val.read(?[*]u8);
+                const has_child = box_plan.child != null;
+                if (box_plan.child) |child_key| {
+                    if (alloc_ptr != null and builtins.utils.isUnique(alloc_ptr, self.roc_ops)) {
+                        const data_ptr = self.readBoxedDataPointer(val) orelse {
+                            utils.decrefDataPtr(alloc_ptr, @intCast(box_plan.elem_alignment), has_child, atomicity, self.roc_ops);
+                            return;
+                        };
+                        const child_val = Value{ .ptr = data_ptr };
+                        self.performRcPlan(hooks, hooks.rcPlanFor(child_key), child_val, count, atomicity);
+                    }
+                }
+                utils.decrefDataPtr(alloc_ptr, @intCast(box_plan.elem_alignment), has_child, atomicity, self.roc_ops);
+            },
+            .box_free => |box_plan| {
+                const alloc_ptr = val.read(?[*]u8);
+                const has_child = box_plan.child != null;
+                if (box_plan.child) |child_key| {
+                    if (alloc_ptr != null and builtins.utils.isUnique(alloc_ptr, self.roc_ops)) {
+                        const data_ptr = self.readBoxedDataPointer(val) orelse {
+                            utils.freeDataPtrC(alloc_ptr, @intCast(box_plan.elem_alignment), has_child, self.roc_ops);
+                            return;
+                        };
+                        const child_val = Value{ .ptr = data_ptr };
+                        self.performRcPlan(hooks, hooks.rcPlanFor(child_key), child_val, count, atomicity);
+                    }
+                }
+                utils.freeDataPtrC(alloc_ptr, @intCast(box_plan.elem_alignment), has_child, self.roc_ops);
+            },
+            .erased_callable_incref => {
+                const alloc_ptr = val.read(?[*]u8);
+                builtins.utils.increfDataPtr(alloc_ptr, @intCast(count), atomicity, self.roc_ops);
+            },
+            .erased_callable_decref => {
+                const alloc_ptr = val.read(?[*]u8);
+                self.performErasedCallableFinalDropIfUnique(alloc_ptr, .decref, count);
+                builtins.utils.decrefDataPtr(
+                    alloc_ptr,
+                    builtins.erased_callable.payload_alignment,
+                    builtins.erased_callable.allocation_has_refcounted_children,
+                    atomicity,
+                    self.roc_ops,
+                );
+            },
+            .erased_callable_free => {
+                const alloc_ptr = val.read(?[*]u8);
+                self.performErasedCallableFinalDrop(alloc_ptr, .free, count);
+                builtins.utils.freeDataPtrC(
+                    alloc_ptr,
+                    builtins.erased_callable.payload_alignment,
+                    builtins.erased_callable.allocation_has_refcounted_children,
+                    self.roc_ops,
+                );
+            },
+            .struct_ => |struct_plan| {
+                const field_count = self.layout_store.rcHelperStructFieldCount(struct_plan);
+                var i: u32 = 0;
+                while (i < field_count) : (i += 1) {
+                    const field_plan = hooks.rcStructFieldPlan(struct_plan, i) orelse continue;
+                    const field_val = Value{ .ptr = val.ptr + field_plan.offset };
+                    self.performRcPlan(hooks, hooks.rcPlanFor(field_plan.child), field_val, count, atomicity);
+                }
+            },
+            .tag_union => |tag_plan| {
+                const variant_count = self.layout_store.rcHelperTagUnionVariantCount(tag_plan);
+                if (variant_count == 0) return;
+
+                const disc: u32 = blk: {
+                    const tu_data = self.layout_store.getTagUnionData(tag_plan.tag_union_idx);
+                    const disc_offset = tu_data.discriminant_offset.get(self.layout_store.targetUsize());
+                    break :blk switch (tu_data.discriminant_size) {
+                        0 => 0,
+                        1 => val.offset(disc_offset).read(u8),
+                        2 => val.offset(disc_offset).read(u16),
+                        else => return,
+                    };
+                };
+                trace_rc.log("tag_union rc: disc={d} variant_count={d}", .{ disc, variant_count });
+
+                if (disc < variant_count) {
+                    if (hooks.rcTagVariantPlan(tag_plan, disc)) |child_key| {
+                        // Payload is always at offset 0 in the tag union.
+                        self.performRcPlan(hooks, hooks.rcPlanFor(child_key), val, count, atomicity);
+                    }
+                }
+            },
+            .closure => |child_key| {
+                self.performRcPlan(hooks, hooks.rcPlanFor(child_key), val, count, atomicity);
+            },
+        }
+    }
+
+    /// Iterate through list elements and recursively decref each child.
+    /// This mirrors the element cleanup logic in RocList.decref.
+    pub fn decrefListElements(
+        self: *const BoxyRuntime,
+        hooks: anytype,
+        rl: builtins.list.RocList,
+        list_plan: layout_mod.RcListPlan,
+        child_key: layout_mod.RcHelperKey,
+        count: u16,
+        atomicity: RcAtomicity,
+    ) void {
+        if (rl.getAllocationDataPtr(self.roc_ops)) |source| {
+            const elem_count = rl.getAllocationElementCount(true, self.roc_ops);
+            const child_plan = hooks.rcPlanFor(child_key);
+            var i: usize = 0;
+            while (i < elem_count) : (i += 1) {
+                const element_ptr = source + i * list_plan.elem_width;
+                const element_val = Value{ .ptr = element_ptr };
+                self.performRcPlan(hooks, child_plan, element_val, count, atomicity);
+            }
+        }
+    }
+
+    pub fn performErasedCallableFinalDropIfUnique(
+        self: *const BoxyRuntime,
+        data_ptr: ?[*]u8,
+        op: layout_mod.RcOp,
+        count: u16,
+    ) void {
+        if (data_ptr == null) return;
+        if (!builtins.utils.isUnique(data_ptr, self.roc_ops)) return;
+        self.performErasedCallableFinalDrop(data_ptr, op, count);
+    }
+
+    /// Runs the erased callable's capture cleanup. The `on_drop` slot is
+    /// filled at closure creation, which is not an RC statement and makes no
+    /// thread-confinement claim, so capture refcount updates behind it always
+    /// run atomically, even when the callable's own RC statement is
+    /// single-thread (atomic is always sound).
+    pub fn performErasedCallableFinalDrop(
+        self: *const BoxyRuntime,
+        data_ptr: ?[*]u8,
+        _: layout_mod.RcOp,
+        _: u16,
+    ) void {
+        const ptr = data_ptr orelse return;
+        const payload = builtins.erased_callable.payloadPtr(ptr);
+        if (payload.on_drop) |on_drop| {
+            on_drop(builtins.erased_callable.capturePtr(ptr), self.roc_ops);
+        }
+    }
+
+    pub fn materializeLocalValue(
+        self: *const BoxyRuntime,
+        hooks: anytype,
+        value: Value,
+        target_layout: layout_mod.Idx,
+    ) Error!Value {
+        const size = self.helper.sizeOf(target_layout);
+        if (size == 0) return Value.zst;
+
+        const storage = try hooks.allocValue(target_layout);
+        if (!value.isZst()) {
+            storage.copyFrom(value, size);
+        }
+        return storage;
+    }
+
+    pub fn boxAllocInfo(self: *const BoxyRuntime, hooks: anytype, box_layout: Layout) BoxAllocInfo {
+        return switch (box_layout.tag) {
+            .box => blk: {
+                const elem_layout = box_layout.getIdx();
+                const elem_layout_val = self.layout_store.getLayout(elem_layout);
+                break :blk .{
+                    .elem_layout = elem_layout,
+                    .elem_size = self.layout_store.layoutSize(elem_layout_val),
+                    .elem_alignment = @intCast(elem_layout_val.alignment(self.layout_store.targetUsize()).toByteUnits()),
+                    .contains_rc = hooks.layoutContainsRc(elem_layout),
+                };
+            },
+            .box_of_zst => .{
+                .elem_layout = .zst,
+                .elem_size = 0,
+                .elem_alignment = 1,
+                .contains_rc = false,
+            },
+            else => self.invariantFailed(
+                "LIR/interpreter invariant violated: expected box layout, got {s}",
+                .{@tagName(box_layout.tag)},
+            ),
+        };
+    }
+
+    pub fn allocTagValue(self: *const BoxyRuntime, hooks: anytype, union_layout: layout_mod.Idx) Error!AllocatedTag {
+        const union_layout_val = self.layout_store.getLayout(union_layout);
+        if (union_layout_val.tag == .box) {
+            const box_info = self.boxAllocInfo(hooks, union_layout_val);
+            const data_ptr = try hooks.allocRocDataWithRc(
+                box_info.elem_size,
+                box_info.elem_alignment,
+                box_info.contains_rc,
+            );
+            @memset(data_ptr[0..box_info.elem_size], 0);
+            const boxed = try hooks.allocValue(union_layout);
+            if (self.layout_store.targetUsize().size() == 8) {
+                boxed.write(usize, @intFromPtr(data_ptr));
+            } else {
+                boxed.write(u32, @intCast(@intFromPtr(data_ptr)));
+            }
+            return .{
+                .outer = boxed,
+                .base = .{ .ptr = data_ptr },
+                .base_layout = union_layout_val.getIdx(),
+            };
+        }
+
+        const outer = try hooks.allocValue(union_layout);
+        return .{
+            .outer = outer,
+            .base = outer,
+            .base_layout = union_layout,
+        };
+    }
+
+    pub fn allocBoxOfZstValue(self: *const BoxyRuntime, hooks: anytype, layout_idx: layout_mod.Idx) Error!Value {
+        const boxed = try hooks.allocValue(layout_idx);
+        const target_usize = self.layout_store.targetUsize();
+        if (target_usize.size() == 8) {
+            boxed.write(usize, 0);
+        } else {
+            boxed.write(u32, 0);
+        }
+        return boxed;
+    }
+
+    pub fn allocPointerIntValue(self: *const BoxyRuntime, hooks: anytype, raw_ptr: usize) Error!Value {
+        const value = try hooks.allocValue(.opaque_ptr);
+        self.writePointerInt(value, raw_ptr);
+        return value;
+    }
+
+    pub fn rocListToValue(self: *const BoxyRuntime, hooks: anytype, rl: RocList, ret_layout: layout_mod.Idx) Error!Value {
+        const ret_layout_val = self.layout_store.getLayout(ret_layout);
+        switch (ret_layout_val.tag) {
+            .box => {
+                const box_info = self.boxAllocInfo(hooks, ret_layout_val);
+                const data_ptr = try hooks.allocRocDataWithRc(
+                    box_info.elem_size,
+                    box_info.elem_alignment,
+                    box_info.contains_rc,
+                );
+                @memcpy(data_ptr[0..@sizeOf(RocList)], std.mem.asBytes(&rl));
+
+                const boxed = try hooks.allocValue(ret_layout);
+                const target_usize = self.layout_store.targetUsize();
+                if (target_usize.size() == 8) {
+                    boxed.write(usize, @intFromPtr(data_ptr));
+                } else {
+                    boxed.write(u32, @intCast(@intFromPtr(data_ptr)));
+                }
+                return boxed;
+            },
+            .box_of_zst => return try self.allocBoxOfZstValue(hooks, ret_layout),
+            else => {
+                const val = try hooks.allocValue(ret_layout);
+                @memcpy(val.ptr[0..@sizeOf(RocList)], std.mem.asBytes(&rl));
+                return val;
+            },
+        }
+    }
+
+    pub fn boxBox(self: *const BoxyRuntime, hooks: anytype, arg: Value, ret_layout: layout_mod.Idx) Error!Value {
+        const ret_layout_val = self.layout_store.getLayout(ret_layout);
+        switch (ret_layout_val.tag) {
+            .box_of_zst => return try self.allocBoxOfZstValue(hooks, ret_layout),
+            .box => {
+                const box_info = self.boxAllocInfo(hooks, ret_layout_val);
+                const elem_size = box_info.elem_size;
+                const elem_align = box_info.elem_alignment;
+                const data_ptr = try hooks.allocRocDataWithRc(elem_size, elem_align, box_info.contains_rc);
+                if (elem_size > 0) {
+                    @memcpy(data_ptr[0..elem_size], arg.ptr[0..elem_size]);
+                }
+                const boxed = try hooks.allocValue(ret_layout);
+                const target_usize = self.layout_store.targetUsize();
+                if (target_usize.size() == 8) {
+                    boxed.write(usize, @intFromPtr(data_ptr));
+                } else {
+                    boxed.write(u32, @intCast(@intFromPtr(data_ptr)));
+                }
+                return boxed;
+            },
+            else => return error.RuntimeError,
+        }
+    }
+
+    pub fn coerceExplicitRefValueToLayout(
+        self: *const BoxyRuntime,
+        hooks: anytype,
+        value: Value,
+        actual_layout: layout_mod.Idx,
+        expected_layout: layout_mod.Idx,
+    ) Error!Value {
+        if (actual_layout == expected_layout) return value;
+
+        const actual_layout_val = self.layout_store.getLayout(actual_layout);
+        const expected_layout_val = self.layout_store.getLayout(expected_layout);
+        const actual_is_list = actual_layout_val.tag == .list or actual_layout_val.tag == .list_of_zst;
+        const expected_is_list = expected_layout_val.tag == .list or expected_layout_val.tag == .list_of_zst;
+        if (actual_is_list or expected_is_list) {
+            return try self.coerceExplicitListValueToLayout(value, actual_layout, expected_layout);
+        }
+
+        const actual_is_box = actual_layout_val.tag == .box or actual_layout_val.tag == .box_of_zst;
+        const expected_is_box = expected_layout_val.tag == .box or expected_layout_val.tag == .box_of_zst;
+        if (actual_is_box or expected_is_box) {
+            return try self.coerceExplicitNominalValueToLayout(hooks, value, actual_layout, expected_layout);
+        }
+
+        if (builtin.mode == .Debug and
+            (actual_layout_val.tag == .struct_ or expected_layout_val.tag == .struct_ or
+                actual_layout_val.tag == .tag_union or expected_layout_val.tag == .tag_union))
+        {
+            self.invariantFailed(
+                "LIR/interpreter invariant violated: explicit ref reinterpret reached aggregate coercion path actual={d} ({s}) expected={d} ({s})",
+                .{
+                    @intFromEnum(actual_layout),
+                    @tagName(actual_layout_val.tag),
+                    @intFromEnum(expected_layout),
+                    @tagName(expected_layout_val.tag),
+                },
+            );
+        }
+
+        return self.normalizeValueToLayout(value, actual_layout, expected_layout);
+    }
+
+    pub fn coerceExplicitListValueToLayout(
+        self: *const BoxyRuntime,
+        value: Value,
+        actual_layout: layout_mod.Idx,
+        expected_layout: layout_mod.Idx,
+    ) Error!Value {
+        if (builtin.mode == .Debug) {
+            const actual_layout_val = self.layout_store.getLayout(actual_layout);
+            const expected_layout_val = self.layout_store.getLayout(expected_layout);
+            const actual_is_list = actual_layout_val.tag == .list or actual_layout_val.tag == .list_of_zst;
+            const expected_is_list = expected_layout_val.tag == .list or expected_layout_val.tag == .list_of_zst;
+            if (!actual_is_list or !expected_is_list) {
+                self.invariantFailed(
+                    "LIR/interpreter invariant violated: explicit list reinterpret expected list layouts, got actual={d} expected={d}",
+                    .{ @intFromEnum(actual_layout), @intFromEnum(expected_layout) },
+                );
+            }
+        }
+
+        return value;
+    }
+
+    pub fn coerceExplicitNominalValueToLayout(
+        self: *const BoxyRuntime,
+        hooks: anytype,
+        value: Value,
+        actual_layout: layout_mod.Idx,
+        expected_layout: layout_mod.Idx,
+    ) Error!Value {
+        {
+            // Concrete values cross the erased ABI boundary boxed: a non-box
+            // value expected as a box is wrapped into a fresh allocation, and
+            // a boxed value expected concretely is read back out of it.
+            const actual_val = self.layout_store.getLayout(actual_layout);
+            const expected_val = self.layout_store.getLayout(expected_layout);
+            const actual_is_box = actual_val.tag == .box or actual_val.tag == .box_of_zst;
+            const expected_is_box = expected_val.tag == .box or expected_val.tag == .box_of_zst;
+            const actual_is_listish = actual_val.tag == .list or actual_val.tag == .list_of_zst;
+            const expected_is_listish = expected_val.tag == .list or expected_val.tag == .list_of_zst;
+            const actual_is_erased_ptr = actual_val.tag == .scalar and actual_val.getScalar().tag == .opaque_ptr;
+            const expected_is_erased_ptr = expected_val.tag == .scalar and expected_val.getScalar().tag == .opaque_ptr;
+            if (expected_is_box and !actual_is_box and !actual_is_listish and !actual_is_erased_ptr) {
+                const sa = self.helper.sizeAlignOf(actual_layout);
+                const boxed = try hooks.allocValue(expected_layout);
+                if (sa.size == 0) {
+                    self.writeBoxedDataPointer(boxed, null);
+                    return boxed;
+                }
+                const data_ptr = try hooks.allocRocDataWithRc(
+                    sa.size,
+                    @intCast(sa.alignment.toByteUnits()),
+                    hooks.layoutContainsRc(actual_layout),
+                );
+                @memcpy(data_ptr[0..sa.size], value.ptr[0..sa.size]);
+                self.writeBoxedDataPointer(boxed, data_ptr);
+                return boxed;
+            }
+            if (actual_is_box and !expected_is_box and !expected_is_listish and !expected_is_erased_ptr) {
+                const size = self.helper.sizeOf(expected_layout);
+                if (size == 0) return Value.zst;
+                const data_ptr = self.readBoxedDataPointer(value) orelse self.invariantFailed(
+                    "LIR/interpreter invariant violated: erased boundary unbox found a null box for layout {d}",
+                    .{@intFromEnum(expected_layout)},
+                );
+                const result = try hooks.allocValue(expected_layout);
+                result.copyFrom(.{ .ptr = data_ptr }, size);
+                return result;
+            }
+        }
+        if (builtin.mode == .Debug) {
+            const actual_layout_val = self.layout_store.getLayout(actual_layout);
+            const expected_layout_val = self.layout_store.getLayout(expected_layout);
+            const actual_is_box = actual_layout_val.tag == .box or actual_layout_val.tag == .box_of_zst;
+            const expected_is_box = expected_layout_val.tag == .box or expected_layout_val.tag == .box_of_zst;
+            const actual_is_erased_ptr = actual_layout_val.tag == .scalar and actual_layout_val.getScalar().tag == .opaque_ptr;
+            const expected_is_erased_ptr = expected_layout_val.tag == .scalar and expected_layout_val.getScalar().tag == .opaque_ptr;
+            if (actual_layout_val.tag == .zst and expected_layout_val.tag == .box_of_zst) {
+                return try self.allocBoxOfZstValue(hooks, expected_layout);
+            }
+            if (actual_layout_val.tag == .box_of_zst and expected_layout_val.tag == .zst) {
+                return Value.zst;
+            }
+            const actual_is_list = actual_layout_val.tag == .list or actual_layout_val.tag == .list_of_zst;
+            const expected_is_list = expected_layout_val.tag == .list or expected_layout_val.tag == .list_of_zst;
+            if (actual_is_list or expected_is_list) {
+                if (actual_is_list and expected_is_list) return try self.coerceExplicitListValueToLayout(value, actual_layout, expected_layout);
+                self.invariantFailed(
+                    "LIR/interpreter invariant violated: explicit nominal reinterpret expected both layouts to be lists when either side is a list, got actual={d} ({s}) expected={d} ({s})",
+                    .{
+                        @intFromEnum(actual_layout),
+                        @tagName(actual_layout_val.tag),
+                        @intFromEnum(expected_layout),
+                        @tagName(expected_layout_val.tag),
+                    },
+                );
+            }
+            const boxing_compatible =
+                (actual_is_box == expected_is_box) or
+                (actual_is_box and expected_is_erased_ptr) or
+                (expected_is_box and actual_is_erased_ptr);
+            if (!boxing_compatible) {
+                self.invariantFailed(
+                    "LIR/interpreter invariant violated: explicit nominal reinterpret expected non-list layouts on the same side of layout boxing, got actual={d} ({s}) expected={d} ({s})",
+                    .{
+                        @intFromEnum(actual_layout),
+                        @tagName(actual_layout_val.tag),
+                        @intFromEnum(expected_layout),
+                        @tagName(expected_layout_val.tag),
+                    },
+                );
+            }
+        }
+        const expected_layout_val = self.layout_store.getLayout(expected_layout);
+        if (expected_layout_val.tag == .box_of_zst) {
+            return try self.allocBoxOfZstValue(hooks, expected_layout);
+        }
+        return value;
+    }
+
+    pub fn writeStructFieldValue(
+        self: *const BoxyRuntime,
+        hooks: anytype,
+        struct_base: Value,
+        field_offset: usize,
+        expected_layout: layout_mod.Idx,
+        actual_value: Value,
+        actual_layout: layout_mod.Idx,
+    ) Error!void {
+        const field_size = self.helper.sizeOf(expected_layout);
+        if (field_size == 0) return;
+        const coerced = try self.coerceExplicitRefValueToLayout(hooks, actual_value, actual_layout, expected_layout);
+        struct_base.offset(field_offset).copyFrom(coerced, field_size);
+    }
+
+    pub fn writeVariantPayloadValue(
+        self: *const BoxyRuntime,
+        hooks: anytype,
+        destination: Value,
+        variant_payload_layout: layout_mod.Idx,
+        payload: Value,
+        payload_layout: layout_mod.Idx,
+    ) Error!void {
+        if (self.helper.sizeOf(variant_payload_layout) == 0) return;
+        if (variant_payload_layout == payload_layout) {
+            destination.copyFrom(payload, self.helper.sizeOf(variant_payload_layout));
+            return;
+        }
+        if (self.unwrapSingleFieldPayloadLayout(variant_payload_layout)) |field_layout| {
+            const variant_layout_val = self.layout_store.getLayout(variant_payload_layout);
+            const field_offset = self.layout_store.getStructFieldOffsetByOriginalIndex(variant_layout_val.getStruct().idx, 0);
+            return self.writeStructFieldValue(hooks, destination, field_offset, field_layout, payload, payload_layout);
+        }
+        const coerced = try self.coerceExplicitRefValueToLayout(hooks, payload, payload_layout, variant_payload_layout);
+        destination.copyFrom(coerced, self.helper.sizeOf(variant_payload_layout));
+    }
+
+    pub fn i128LiteralValue(self: *const BoxyRuntime, hooks: anytype, value: i128, layout_idx: layout_mod.Idx) Error!Value {
+        const val = try hooks.allocValue(layout_idx);
+        const size = self.helper.sizeOf(layout_idx);
+        const bits: u128 = @bitCast(value);
+        switch (size) {
+            1 => val.write(u8, @truncate(bits)),
+            2 => val.write(u16, @truncate(bits)),
+            4 => val.write(u32, @truncate(bits)),
+            8 => val.write(u64, @truncate(bits)),
+            16 => val.write(i128, value),
+            else => return error.RuntimeError,
+        }
+        return val;
+    }
+
+    /// Encode a numeric literal per the descriptor's payload layout and box it
+    /// into dynamic storage. Literal patterns against erased scrutinees only
+    /// learn their numeric representation from the scrutinee's descriptor.
+    pub fn boxyDynamicNumLiteral(
+        self: *const BoxyRuntime,
+        hooks: anytype,
+        value: i128,
+        desc: *const LirProgram.BoxyTypeDesc,
+        target_layout: layout_mod.Idx,
+    ) Error!Value {
+        const payload_layout = desc.payload_layout;
+        const payload = switch (payload_layout) {
+            .f32 => blk: {
+                const val = try hooks.allocValue(.f32);
+                val.write(f32, @floatFromInt(value));
+                break :blk val;
+            },
+            .f64 => blk: {
+                const val = try hooks.allocValue(.f64);
+                val.write(f64, @floatFromInt(value));
+                break :blk val;
+            },
+            .dec => blk: {
+                const val = try hooks.allocValue(.dec);
+                val.write(i128, value * builtins.dec.RocDec.one_point_zero_i128);
+                break :blk val;
+            },
+            else => try self.i128LiteralValue(hooks, value, payload_layout),
+        };
+        return try self.allocBoxyDynamicPayload(hooks, payload, payload_layout, desc, target_layout);
+    }
+
+    /// Produce the value and target-local descriptor for boxing a payload into
+    /// dynamic storage, honoring relabels of already-dynamic payloads.
+    pub fn boxyBoxValue(
+        self: *const BoxyRuntime,
+        hooks: anytype,
+        payload_value: Value,
+        payload_layout: layout_mod.Idx,
+        source_desc: *const LirProgram.BoxyTypeDesc,
+        payload_desc: *const LirProgram.BoxyTypeDesc,
+        payload_mode: LIR.BoxyTransferMode,
+        target_layout: layout_mod.Idx,
+    ) Error!BoxyAssignedValue {
+        const target_layout_tag = self.layout_store.getLayout(target_layout).tag;
+        try self.increfBoxyTransferSourceIfCopied(
+            hooks,
+            payload_value,
+            payload_layout,
+            source_desc,
+            payload_mode,
+        );
+        var target_local_desc: *const LirProgram.BoxyTypeDesc = payload_desc;
+        const result = switch (target_layout_tag) {
+            .box, .box_of_zst => blk: {
+                // The descriptor attached to a box value may describe the box
+                // itself (payload_layout == the box layout, payload described by
+                // nested descriptors) or describe the payload directly. Boxing
+                // stores the payload, so resolve to the payload descriptor the
+                // same way box readers do. When the target-side descriptor has
+                // no payload information (a fully erased box descriptor), the
+                // source descriptor still describes the exact payload being
+                // stored, so it becomes both the allocation descriptor and the
+                // target local's descriptor.
+                const alloc_desc = try self.boxyBoxAllocationPayloadDesc(hooks, target_layout, payload_desc) orelse alloc: {
+                    if (source_desc != payload_desc) {
+                        target_local_desc = source_desc;
+                        break :alloc source_desc;
+                    }
+                    break :blk try self.allocBoxOfZstValue(hooks, target_layout);
+                };
+                const payload_layout_tag = self.layout_store.getLayout(payload_layout).tag;
+                const payload_is_box_value = payload_layout_tag == .box or payload_layout_tag == .box_of_zst;
+                const alloc_payload_tag = self.layout_store.getLayout(alloc_desc.payload_layout).tag;
+                const alloc_payload_is_box = alloc_payload_tag == .box or alloc_payload_tag == .box_of_zst;
+                // The relabel is only sound when the target box's
+                // own label carries no conflicting element
+                // expectation: an erased box (or a box of erased
+                // boxes) has none, and a concrete box must expect
+                // exactly the payload layout the descriptor
+                // describes.
+                const target_accepts_relabel = switch (target_layout_tag) {
+                    .box_of_zst => true,
+                    .box => elem_check: {
+                        const elem = self.layout_store.getLayout(target_layout).getIdx();
+                        break :elem_check elem == alloc_desc.payload_layout or
+                            self.layout_store.getLayout(elem).tag == .box_of_zst;
+                    },
+                    else => false,
+                };
+                if (payload_is_box_value and !alloc_payload_is_box and target_accepts_relabel) {
+                    // The payload is already a dynamic box whose
+                    // interior this allocation descriptor
+                    // describes; boxing it is a relabel of the
+                    // same allocation, not a new wrap.
+                    break :blk try self.materializeLocalValue(hooks, payload_value, target_layout);
+                }
+                if (source_desc == alloc_desc) {
+                    break :blk try self.allocBoxyDynamicPayload(
+                        hooks,
+                        payload_value,
+                        payload_layout,
+                        alloc_desc,
+                        target_layout,
+                    );
+                }
+                const materialized_payload = try self.materializeBoxyPayloadToLayoutWithTargetDesc(
+                    hooks,
+                    payload_value,
+                    payload_layout,
+                    source_desc,
+                    alloc_desc,
+                    alloc_desc.payload_layout,
+                );
+                break :blk try self.allocBoxyDynamicPayload(
+                    hooks,
+                    materialized_payload,
+                    alloc_desc.payload_layout,
+                    alloc_desc,
+                    target_layout,
+                );
+            },
+            else => try self.materializeBoxyPayloadToLayout(
+                hooks,
+                payload_value,
+                payload_layout,
+                source_desc,
+                target_layout,
+            ),
+        };
+        return .{ .value = result, .desc = target_local_desc };
+    }
+
+    /// Produce the value and target-local descriptor for reading a dynamic
+    /// box's payload back out, honoring pure relabels of the source
+    /// allocation.
+    pub fn boxyUnboxValue(
+        self: *const BoxyRuntime,
+        hooks: anytype,
+        source_value: Value,
+        source_layout: layout_mod.Idx,
+        source_desc: *const LirProgram.BoxyTypeDesc,
+        target_desc: ?*const LirProgram.BoxyTypeDesc,
+        target_layout: layout_mod.Idx,
+        source_mode: LIR.BoxyTransferMode,
+    ) Error!BoxyAssignedValue {
+        const payload_desc = try self.boxyBoxAllocationPayloadDesc(hooks, source_layout, source_desc);
+        const payload_layout = if (payload_desc) |resolved|
+            resolved.payload_layout
+        else
+            target_layout;
+        const source_layout_tag = self.layout_store.getLayout(source_layout).tag;
+        const target_layout_value = self.layout_store.getLayout(target_layout);
+        const source_is_box = source_layout_tag == .box or source_layout_tag == .box_of_zst;
+        const payload_is_box = if (payload_desc) |resolved| blk: {
+            const payload_tag = self.layout_store.getLayout(resolved.payload_layout).tag;
+            break :blk payload_tag == .box or payload_tag == .box_of_zst;
+        } else false;
+        // The relabel is only sound when the target box's own label
+        // carries no conflicting element expectation: an erased box
+        // (or a box of erased boxes) has none, and a concrete box
+        // must expect exactly the payload layout the descriptor
+        // describes.
+        const target_accepts_relabel = switch (target_layout_value.tag) {
+            .box_of_zst => true,
+            .box => target_layout_value.getIdx() == payload_desc.?.payload_layout or
+                self.layout_store.getLayout(target_layout_value.getIdx()).tag == .box_of_zst,
+            else => false,
+        };
+        if (source_is_box and target_accepts_relabel and payload_desc != null and !payload_is_box) {
+            // Unboxing a box-family value into another box-family
+            // label with a non-box payload is a pure relabel: the
+            // result IS the source allocation. Rewrapping would
+            // duplicate interior references the surrounding RC
+            // statements never account for.
+            const relabeled = try self.materializeLocalValue(hooks, source_value, target_layout);
+            return .{ .value = relabeled, .desc = target_desc orelse payload_desc };
+        }
+        const data_ptr = self.readBoxedDataPointer(source_value);
+        const result = if (data_ptr) |ptr| blk: {
+            if (target_desc) |target_payload_desc| {
+                if (payload_desc) |source_payload_desc| {
+                    break :blk try self.materializeBoxyPayloadToLayoutWithTargetDesc(
+                        hooks,
+                        .{ .ptr = ptr },
+                        payload_layout,
+                        source_payload_desc,
+                        target_payload_desc,
+                        target_layout,
+                    );
+                }
+            }
+            break :blk try self.materializeBoxyPayloadToLayout(
+                hooks,
+                .{ .ptr = ptr },
+                payload_layout,
+                payload_desc,
+                target_layout,
+            );
+        } else try self.materializeLocalValue(hooks, Value.zst, target_layout);
+        if (source_mode == .move) {
+            self.freeMovedBoxyDynamicPayload(source_value, source_layout, source_desc);
+        }
+        return .{ .value = result, .desc = target_desc orelse payload_desc };
+    }
+
+    /// Materialize a worker call's result into the caller's expected layout,
+    /// guided by the callee's returned descriptor and the call site's declared
+    /// result descriptor.
+    pub fn materializeCallResult(
+        self: *const BoxyRuntime,
+        hooks: anytype,
+        value: Value,
+        actual_layout: layout_mod.Idx,
+        actual_desc: ?*const LirProgram.BoxyTypeDesc,
+        result_desc: ?*const LirProgram.BoxyTypeDesc,
+        expected_layout: layout_mod.Idx,
+    ) Error!Value {
+        if (actual_desc) |returned_desc| {
+            if (result_desc) |target_desc| {
+                if (actual_layout == expected_layout and returned_desc == target_desc) return value;
+                return try self.materializeBoxyPayloadToLayoutWithTargetDesc(
+                    hooks,
+                    value,
+                    actual_layout,
+                    returned_desc,
+                    target_desc,
+                    expected_layout,
+                );
+            }
+            return try self.materializeBoxyPayloadToLayout(
+                hooks,
+                value,
+                actual_layout,
+                returned_desc,
+                expected_layout,
+            );
+        }
+
+        if (actual_layout == expected_layout) return value;
+
+        if (result_desc) |target_desc| {
+            return try self.materializeBoxyPayloadToLayout(
+                hooks,
+                value,
+                actual_layout,
+                target_desc,
+                expected_layout,
+            );
+        }
+
+        return try self.coerceExplicitRefValueToLayout(hooks, value, actual_layout, expected_layout);
+    }
+
+    /// Resolve one dictionary method call into either the structural-equality
+    /// plan or a worker call with fully adapted arguments: explicit args
+    /// (materialized per the slot's adapter), then hidden descriptors, then
+    /// nested dictionaries. `alloc` backs the produced argument arrays.
+    pub fn prepareDictCall(
+        self: *const BoxyRuntime,
+        hooks: anytype,
+        alloc: Allocator,
+        dict: *const LirProgram.BoxyDict,
+        method_slot_index: u32,
+        args: []const DictCallArg,
+        hidden_args: []const Value,
+    ) Error!PreparedDictCall {
+        const method_slots = self.requireBoxyMethodSlots(dict.method_slots);
+        if (method_slot_index >= method_slots.len) {
+            return self.invariantFailedError(
+                "LIR/interpreter invariant violated: dictionary method slot {d} exceeded dictionary slot count {d}",
+                .{ method_slot_index, method_slots.len },
+            );
+        }
+        const method_slot = method_slots[method_slot_index];
+        if (method_slot.structural_eq) {
+            if (args.len != 2) {
+                return self.invariantFailedError(
+                    "LIR/interpreter invariant violated: structural equality dictionary slot received {d} args",
+                    .{args.len},
+                );
+            }
+            const eq_slot_descs = self.requireBoxyDescRefs(method_slot.hidden_descs);
+            if (eq_slot_descs.len != 1) {
+                return self.invariantFailedError(
+                    "LIR/interpreter invariant violated: structural equality dictionary slot carried {d} descriptors",
+                    .{eq_slot_descs.len},
+                );
+            }
+            const operand_desc = try hooks.resolveDescRef(eq_slot_descs[0]);
+            return .{ .structural_eq = operand_desc };
+        }
+        if (method_slot.adapter.ret_layout != null or
+            method_slot.adapter.ret_desc != null or
+            method_slot.adapter.nested_dicts.len != 0)
+        {
+            return self.invariantFailedError(
+                "LIR/interpreter invariant violated: dictionary method adapters are not executable in the interpreter yet",
+                .{},
+            );
+        }
+
+        const adapter_arg_layouts = self.requireBoxyMethodArgLayouts(method_slot.adapter.arg_layouts);
+        const adapter_arg_descs = self.requireBoxyDescRefs(method_slot.adapter.arg_descs);
+        if (adapter_arg_layouts.len != 0 and adapter_arg_layouts.len != args.len) {
+            return self.invariantFailedError(
+                "LIR/interpreter invariant violated: dictionary method adapter had {d} arg layouts for {d} explicit args",
+                .{ adapter_arg_layouts.len, args.len },
+            );
+        }
+        if (adapter_arg_descs.len != 0 and adapter_arg_descs.len != adapter_arg_layouts.len) {
+            return self.invariantFailedError(
+                "LIR/interpreter invariant violated: dictionary method adapter had {d} arg descriptors for {d} arg layouts",
+                .{ adapter_arg_descs.len, adapter_arg_layouts.len },
+            );
+        }
+        const slot_hidden_descs = self.requireBoxyDescRefs(method_slot.hidden_descs);
+        const slot_nested_dicts = self.requireBoxyDictRefs(method_slot.nested_dicts);
+        const adapter_hidden_desc_sources = self.requireBoxyMethodHiddenDescSources(method_slot.adapter.hidden_desc_sources);
+        if (adapter_hidden_desc_sources.len != 0 and adapter_hidden_desc_sources.len != slot_hidden_descs.len) {
+            return self.invariantFailedError(
+                "LIR/interpreter invariant violated: dictionary method adapter had {d} hidden descriptor sources for {d} slot descriptors",
+                .{ adapter_hidden_desc_sources.len, slot_hidden_descs.len },
+            );
+        }
+        if (adapter_hidden_desc_sources.len == 0 and slot_hidden_descs.len != 0) {
+            return self.invariantFailedError(
+                "LIR/interpreter invariant violated: dictionary method slot had {d} hidden descriptors but no adapter hidden descriptor sources",
+                .{slot_hidden_descs.len},
+            );
+        }
+        const hidden_desc_arg_count = adapter_hidden_desc_sources.len;
+        const call_arg_count = args.len + hidden_desc_arg_count + slot_nested_dicts.len;
+        const arg_values = try alloc.alloc(Value, call_arg_count);
+        const arg_layouts = try alloc.alloc(layout_mod.Idx, call_arg_count);
+        var call_arg_index: usize = 0;
+        for (args, 0..) |arg, explicit_index| {
+            if (adapter_arg_layouts.len != 0) {
+                const target_layout = adapter_arg_layouts[explicit_index];
+                const target_desc = if (adapter_arg_descs.len != 0)
+                    try hooks.resolveDescRef(adapter_arg_descs[explicit_index])
+                else
+                    null;
+                if (target_desc) |resolved_target_desc| {
+                    arg_values[call_arg_index] = try self.materializeBoxyPayloadToLayoutWithOptionalSourceDesc(
+                        hooks,
+                        arg.value,
+                        arg.layout,
+                        arg.source_desc,
+                        resolved_target_desc,
+                        target_layout,
+                    );
+                    arg_layouts[call_arg_index] = target_layout;
+                } else if (arg.layout == target_layout) {
+                    arg_values[call_arg_index] = arg.value;
+                    arg_layouts[call_arg_index] = arg.layout;
+                } else {
+                    arg_values[call_arg_index] = try self.materializeBoxyPayloadToLayout(
+                        hooks,
+                        arg.value,
+                        arg.layout,
+                        arg.source_desc,
+                        target_layout,
+                    );
+                    arg_layouts[call_arg_index] = target_layout;
+                }
+            } else {
+                arg_values[call_arg_index] = arg.value;
+                arg_layouts[call_arg_index] = arg.layout;
+            }
+            call_arg_index += 1;
+        }
+        if (adapter_hidden_desc_sources.len != 0) {
+            for (adapter_hidden_desc_sources) |source| {
+                switch (source) {
+                    .slot => |slot_index| {
+                        if (slot_index >= slot_hidden_descs.len) {
+                            return self.invariantFailedError(
+                                "LIR/interpreter invariant violated: dictionary method hidden descriptor source slot {d} exceeded slot descriptor count {d}",
+                                .{ slot_index, slot_hidden_descs.len },
+                            );
+                        }
+                        const desc = try self.materializeBoxyDescRefValue(hooks, slot_hidden_descs[slot_index]);
+                        arg_values[call_arg_index] = try self.allocPointerIntValue(hooks, @intFromPtr(desc));
+                    },
+                    .call => |call_index| {
+                        if (call_index >= hidden_args.len) {
+                            return self.invariantFailedError(
+                                "LIR/interpreter invariant violated: dictionary method hidden descriptor source call {d} exceeded call descriptor count {d}",
+                                .{ call_index, hidden_args.len },
+                            );
+                        }
+                        arg_values[call_arg_index] = hidden_args[call_index];
+                    },
+                }
+                arg_layouts[call_arg_index] = .opaque_ptr;
+                call_arg_index += 1;
+            }
+        }
+        for (slot_nested_dicts) |dict_ref| {
+            const nested_dict = try hooks.resolveDictRef(dict_ref);
+            arg_values[call_arg_index] = try self.allocPointerIntValue(hooks, @intFromPtr(nested_dict));
+            arg_layouts[call_arg_index] = .opaque_ptr;
+            call_arg_index += 1;
+        }
+        if (call_arg_index != call_arg_count) {
+            return self.invariantFailedError(
+                "LIR/interpreter invariant violated: dictionary call argument collection produced {d} args but expected {d}",
+                .{ call_arg_index, call_arg_count },
+            );
+        }
+        return .{ .call = .{
+            .proc = method_slot.proc,
+            .arg_values = arg_values,
+            .arg_layouts = arg_layouts,
+        } };
     }
 };
