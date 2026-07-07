@@ -14,6 +14,8 @@ base:
   config: rwx/base 1.1.1
   arch: arm64
 
+# Vault for the tool caches PACKAGES declare internally (git/clone, …) — our own compile
+# tasks declare none (see ci.yml for the rationale).
 tool-cache:
   vault: dylan-roc
 
@@ -28,7 +30,7 @@ tasks:
 
   # Extracted into $HOME (OUTSIDE the workspace) with the local zig build cache
   # pinned to $HOME/.zig-cache, so the positive, workspace-relative input filters
-  # stay pure-source without whiting out the toolchain or busting the tool-cache.
+  # stay pure-source without whiting out the toolchain.
   - key: zig-arm64
     run: |
       set -euo pipefail
@@ -62,6 +64,7 @@ tasks:
       - build.zig.zon
       - src
       - test
+      - "!test/snapshots"  # runtime data for the snapshot tool, not a compile input — see ci.yml
       - ci
       - vendor
       - legal_details  # embedded into the roc binary via addAnonymousImport (build.zig:5042)
@@ -83,6 +86,24 @@ tasks:
         if [ "$attempt" -ge "$max" ] || ! grep -qE "$pattern" /tmp/fetch.out; then exit "$rc"; fi
         attempt=$((attempt+1)); echo ">>> transient fetch failure; retry ${attempt}/${max} in 10s" >&2; sleep 10
       done
+
+  # Build-runner precompile — compile build.zig itself once into $HOME/.zig-cache so both
+  # anchors inherit it instead of each paying the ~90s runner compile. Narrow filter =
+  # the runner's exact compile inputs, so source-only PRs content-cache HIT here.
+  # See ci.yml zig-build-runner-x64 for the full rationale.
+  - key: zig-build-runner-arm64
+    use: [code, zig-arm64, zig-deps-arm64]
+    filter:
+      - build.zig
+      - build.zig.zon
+      - src/build
+      - src/target
+    agent:  # CO 4c/8g — one mostly-serial compile; more cores don't help it
+      cpus: 4
+      memory: 8gb
+    run: |
+      set -euo pipefail
+      zig build --list-steps
 
   # Captain CLI — inline per-test results, retry, and partitioning for the unit suites
   # (shared .captain/config.yml). Secret-free; RWX provides the access token automatically.
@@ -121,9 +142,10 @@ tasks:
   # Debug anchor (arm64 native; defaults to musl per build.zig:2217). No retry:
   # deps are pre-fetched, so this builds offline and fails fast on real errors.
   - key: build-ci-arm64
-    use: [code, zig-arm64, system-kcov, zig-deps-arm64]
+    use: [code, zig-arm64, system-kcov, zig-deps-arm64, zig-build-runner-arm64]
     filter: *pos-build
-    tool-cache: ci-build-ci-arm64
+    # No tool-cache (see ci.yml build-ci-x64): warm restores saved ~0s exec while adding
+    # multi-GB layer downloads to this anchor and every leaf that inherits it.
     timeout: 45m  # arm64 build compiles roc + kcov from source; exceeds the 10m default
     agent:  # GP 8c/32g — Debug anchor; builds kcov too, so 8c parallelism needs >16g (OOM'd at CO 8c/16g)
       cpus: 8
@@ -208,9 +230,9 @@ tasks:
 
   # Release anchor (arm64). No retry (deps pre-fetched).
   - key: build-release-arm64
-    use: [code, zig-arm64, system-kcov, zig-deps-arm64]
+    use: [code, zig-arm64, system-kcov, zig-deps-arm64, zig-build-runner-arm64]
     filter: *pos-build
-    tool-cache: ci-build-release-arm64
+    # No tool-cache (see ci.yml build-release-x64): ReleaseFast gains ~0 from a warm restore.
     timeout: 45m
     agent:  # GP 16c/64g — parallel + critical path (arm leg); 16c is the balance point, needs 64g at 16c
       cpus: 16
