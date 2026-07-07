@@ -433,6 +433,40 @@ pub fn roc_boxy_eq(
     ) catch abiCrash(g, "equality");
 }
 
+/// Render a descriptor-guided inspect string for a boxy value, writing the
+/// resulting `RocStr` through `out`.
+pub fn roc_boxy_inspect(
+    out: ?[*]u8,
+    source: ?[*]const u8,
+    source_layout: u32,
+    desc: *const BoxyTypeDesc,
+) callconv(.c) void {
+    const g = requireGlobal();
+    enter(g);
+    defer leave(g);
+
+    // Render into the per-call scratch arena so the accumulated bytes are
+    // released when the outermost wrapper call returns.
+    const scratch = g.value_scratch.allocator();
+    const saved_arena = g.runtime.eval_arena;
+    g.runtime.eval_arena = scratch;
+    defer g.runtime.eval_arena = saved_arena;
+
+    var bytes = std.ArrayList(u8).empty;
+    g.runtime.appendBoxyInspect(
+        hooks(g),
+        &bytes,
+        valueAt(source),
+        layoutIdx(source_layout),
+        desc,
+    ) catch abiCrash(g, "inspect");
+
+    const rendered = builtins.str.RocStr.fromSlice(bytes.items, g.runtime.roc_ops);
+    const out_ptr = out orelse abiCrash(g, "inspect result write without an out pointer");
+    const out_str: *align(1) builtins.str.RocStr = @ptrCast(out_ptr);
+    out_str.* = rendered;
+}
+
 /// Descriptor-guided refcount operation (`op`: 0 = incref, 1 = decref,
 /// 2 = free; `atomicity`: 0 = atomic, 1 = single-thread).
 pub fn roc_boxy_drop(
@@ -509,6 +543,13 @@ pub fn roc_boxy_desc_copy(
     else
         g.runtime.materializeNestedBoxyDescRefValue(hooks(g), desc_ref, nested_index, captures) catch abiCrash(g, "nested descriptor materialization");
     return desc;
+}
+
+/// Resolve a static descriptor id to its descriptor pointer in the global
+/// descriptor table.
+pub fn roc_boxy_static_desc(desc_id: u32) callconv(.c) *const BoxyTypeDesc {
+    const g = requireGlobal();
+    return g.runtime.requireBoxyTypeDesc(@enumFromInt(desc_id));
 }
 
 /// Encode a numeric literal per the descriptor's payload layout and box it

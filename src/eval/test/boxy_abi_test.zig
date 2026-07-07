@@ -62,6 +62,44 @@ test "boxy abi structural equality compares scalars through a descriptor" {
     try std.testing.expect(!boxy_abi.roc_boxy_eq(@ptrCast(&a), @ptrCast(&c), @intFromEnum(layout_mod.Idx.u64), &descs[0]));
 }
 
+test "boxy abi static descriptor lookup resolves ids to the descriptor table" {
+    const allocator = std.testing.allocator;
+    var setup = try TestSetup.init(allocator);
+    defer setup.deinit();
+
+    const descs = [_]BoxyTypeDesc{
+        .{ .payload_layout = .u64, .contains_refcounted = false },
+        .{ .payload_layout = .str, .contains_refcounted = true },
+    };
+    try setup.startRuntime(allocator, .{ .type_descs = &descs });
+
+    try std.testing.expectEqual(&descs[0], boxy_abi.roc_boxy_static_desc(0));
+    try std.testing.expectEqual(&descs[1], boxy_abi.roc_boxy_static_desc(1));
+}
+
+test "boxy abi inspect renders a scalar through its descriptor" {
+    const allocator = std.testing.allocator;
+    var setup = try TestSetup.init(allocator);
+    defer setup.deinit();
+
+    const descs = [_]BoxyTypeDesc{
+        .{ .payload_layout = .u64, .contains_refcounted = false },
+    };
+    try setup.startRuntime(allocator, .{ .type_descs = &descs });
+
+    var value: u64 = 42;
+    var rendered: builtins.str.RocStr = undefined;
+    boxy_abi.roc_boxy_inspect(
+        @ptrCast(&rendered),
+        @ptrCast(&value),
+        @intFromEnum(layout_mod.Idx.u64),
+        &descs[0],
+    );
+    try std.testing.expectEqualStrings("42", rendered.asSlice());
+    rendered.decref(setup.env.get_ops());
+    try setup.env.checkForLeaks();
+}
+
 test "boxy abi box and unbox round-trip a string payload with balanced refcounts" {
     const allocator = std.testing.allocator;
     var setup = try TestSetup.init(allocator);
