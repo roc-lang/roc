@@ -4248,7 +4248,7 @@ pub const BoxyRuntime = struct {
                     // same allocation, not a new wrap.
                     break :blk try self.materializeLocalValue(hooks, payload_value, target_layout);
                 }
-                if (source_desc == alloc_desc) {
+                if (source_desc == alloc_desc and payload_layout == alloc_desc.payload_layout) {
                     break :blk try self.allocBoxyDynamicPayload(
                         hooks,
                         payload_value,
