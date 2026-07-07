@@ -972,11 +972,22 @@ const ProcedureBuilder = struct {
         try self.result.boxy_dicts.append(self.allocator, .{});
 
         const requirements = self.plan.dictionarySlice(worker_dictionaries);
-        const method_start: u32 = @intCast(self.result.boxy_method_slots.items.len);
+
+        // Build each slot into a local buffer first. Emitting a slot's worker
+        // (and collecting its hidden descriptor/dictionary refs) can recursively
+        // construct nested static dictionaries, which append their own entries to
+        // `boxy_method_slots`. Appending this dictionary's slots directly during
+        // the loop would interleave them with those nested entries and leave this
+        // dictionary's `method_slots` span pointing at unrelated methods. The
+        // slots are appended contiguously after the loop instead.
+        var slots = std.ArrayList(LirProgram.BoxyMethodSlot).empty;
+        defer slots.deinit(self.allocator);
+        try slots.ensureTotalCapacity(self.allocator, requirements.len);
+
         for (requirements) |requirement| {
             if (self.staticDictionarySlotIsStructuralEq(rep_id, requirement)) {
                 const operand_desc = try self.staticDescRefForRep(rep_id);
-                try self.result.boxy_method_slots.append(self.allocator, .{
+                try slots.append(self.allocator, .{
                     .method = requirement.fn_name,
                     .proc = @enumFromInt(0),
                     .hidden_descs = try self.appendStaticHiddenDescRefs(&.{operand_desc}),
@@ -997,7 +1008,7 @@ const ProcedureBuilder = struct {
             defer method_nested_dict_refs.deinit(self.allocator);
             try self.collectStaticHiddenDescRefsForWorker(resolved, &descriptor_sources, &desc_context, &method_hidden_desc_refs);
             try self.collectStaticHiddenDictRefsForWorker(resolved, &method_nested_dict_refs);
-            try self.result.boxy_method_slots.append(self.allocator, .{
+            try slots.append(self.allocator, .{
                 .method = requirement.fn_name,
                 .proc = try self.emitWorker(resolved),
                 .hidden_descs = try self.appendStaticHiddenDescRefs(method_hidden_desc_refs.items),
@@ -1006,10 +1017,13 @@ const ProcedureBuilder = struct {
             });
         }
 
+        const method_start: u32 = @intCast(self.result.boxy_method_slots.items.len);
+        try self.result.boxy_method_slots.appendSlice(self.allocator, slots.items);
+
         self.result.boxy_dicts.items[@intFromEnum(dict_id)] = .{
             .method_slots = .{
                 .start = method_start,
-                .len = @intCast(requirements.len),
+                .len = @intCast(slots.items.len),
             },
         };
         return dict_id;
