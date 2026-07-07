@@ -703,6 +703,10 @@ pub const CFStmt = union(enum) {
     assign_struct: struct {
         target: LocalId,
         fields: LocalSpan,
+        /// A static descriptor ARC adopts for the aggregate when a constructed
+        /// field carries a runtime descriptor, so the aggregate is released
+        /// through the descriptor rather than its box-free concrete layout.
+        contents_desc: ?BoxyDescRef = null,
         next: CFStmtId,
     },
     assign_tag: struct {

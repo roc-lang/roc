@@ -3606,6 +3606,11 @@ const ProcBodyBuilder = struct {
         desc: ?LIR.BoxyDescRef = null,
         field_initializers: []DescriptorArgLocal = &.{},
         materialize: ?DescriptorArgLocal = null,
+        /// A static descriptor recorded on the aggregate construction that ARC
+        /// adopts only when a constructed field carries a runtime descriptor,
+        /// keeping the aggregate releasable without forcing a descriptor onto
+        /// aggregates whose fields remain concrete.
+        contents_desc: ?LIR.BoxyDescRef = null,
 
         fn deinit(self: ConstructedAggregateDescriptor, allocator: Allocator) void {
             if (self.field_initializers.len != 0) allocator.free(self.field_initializers);
@@ -5849,6 +5854,7 @@ const ProcBodyBuilder = struct {
         var continuation = try self.parent.result.store.addCFStmt(.{ .assign_struct = .{
             .target = target,
             .fields = try self.parent.result.store.addLocalSpan(field_locals),
+            .contents_desc = aggregate_desc.contents_desc,
             .next = next,
         } });
         continuation = try self.prependOptionalDescriptorMaterialization(aggregate_desc.materialize, continuation);
@@ -6629,6 +6635,7 @@ const ProcBodyBuilder = struct {
         var continuation = try self.parent.result.store.addCFStmt(.{ .assign_struct = .{
             .target = target,
             .fields = try self.parent.result.store.addLocalSpan(field_locals),
+            .contents_desc = aggregate_desc.contents_desc,
             .next = next,
         } });
         continuation = try self.prependOptionalDescriptorMaterialization(aggregate_desc.materialize, continuation);
@@ -10038,6 +10045,45 @@ const ProcBodyBuilder = struct {
             try self.descriptorRefForKnownRep(canonical_rep);
     }
 
+    /// Whether a constructed field local could carry a runtime descriptor. A
+    /// field storage layout that is itself an aggregate (struct, box, list, tag
+    /// union) can receive a descriptor when its value crosses a representation
+    /// boundary, so an aggregate built from such fields needs a descriptor to
+    /// release them.
+    fn fieldLocalMayCarryDescriptor(self: *const ProcBodyBuilder, field_local: LIR.LocalId) bool {
+        return self.parent.layoutNeedsNestedBoxyDesc(self.parent.result.store.getLocal(field_local).layout_idx);
+    }
+
+    fn aggregateFieldsMayCarryDescriptor(
+        self: *const ProcBodyBuilder,
+        fields: []const AggregateDescriptorField,
+    ) bool {
+        for (fields) |field| {
+            if (self.fieldLocalMayCarryDescriptor(field.local)) return true;
+        }
+        return false;
+    }
+
+    /// The static descriptor a concrete aggregate construction records so ARC
+    /// can release it when one of its fields carries a runtime descriptor.
+    /// Aggregates whose representation already requires a descriptor carry it on
+    /// the target local, and aggregates whose fields are all concrete need
+    /// none, so both yield null here.
+    fn concreteAggregateContentsDesc(
+        self: *ProcBodyBuilder,
+        rep_id: Plan.TypeRepId,
+        field_locals: []const LIR.LocalId,
+    ) Allocator.Error!?LIR.BoxyDescRef {
+        const canonical_rep = self.canonicalDescriptorRep(rep_id);
+        if (self.parent.plan.representations.items[@intFromEnum(canonical_rep)].descriptor != null) return null;
+        for (field_locals) |field_local| {
+            if (self.fieldLocalMayCarryDescriptor(field_local)) {
+                return try self.parent.staticDescRefForRep(canonical_rep);
+            }
+        }
+        return null;
+    }
+
     fn constructedAggregateDescriptorForFields(
         self: *ProcBodyBuilder,
         target: LIR.LocalId,
@@ -10046,7 +10092,21 @@ const ProcBodyBuilder = struct {
     ) Allocator.Error!ConstructedAggregateDescriptor {
         const canonical_rep = self.canonicalDescriptorRep(rep_id);
         const rep = self.parent.plan.representations.items[@intFromEnum(canonical_rep)];
-        if (rep.descriptor == null) return .{};
+        if (rep.descriptor == null) {
+            // A struct field can carry a runtime descriptor even when the
+            // struct's own representation is concrete: a value converted across
+            // a representation boundary threads its descriptor onto the field
+            // locals, and ARC treats any descriptor-bearing local as
+            // refcounted. Reconstructing such a struct concretely would leave
+            // the aggregate with no descriptor, so ARC would drop it through
+            // its concrete layout plan — which is a noop for the box-free
+            // layout — and lose the release. Offer the representation's static
+            // descriptor as a candidate the aggregate construction records; ARC
+            // adopts it only when a field actually carries a descriptor, so
+            // aggregates whose fields stay concrete keep the concrete plan.
+            if (!self.aggregateFieldsMayCarryDescriptor(fields)) return .{};
+            return .{ .contents_desc = try self.parent.staticDescRefForRep(canonical_rep) };
+        }
 
         const snapshot = try self.snapshotDescriptorBindings();
         defer snapshot.deinit(self.parent.allocator);
@@ -13695,6 +13755,7 @@ const ProcBodyBuilder = struct {
         var continuation = try self.parent.result.store.addCFStmt(.{ .assign_struct = .{
             .target = target,
             .fields = try self.parent.result.store.addLocalSpan(target_fields),
+            .contents_desc = try self.concreteAggregateContentsDesc(target_rep, target_fields),
             .next = next,
         } });
         continuation = try self.prependConstructedDescriptorRebindForRep(target_rep, continuation);
@@ -13836,6 +13897,7 @@ const ProcBodyBuilder = struct {
         var continuation = try self.parent.result.store.addCFStmt(.{ .assign_struct = .{
             .target = target,
             .fields = try self.parent.result.store.addLocalSpan(target_fields),
+            .contents_desc = try self.concreteAggregateContentsDesc(target_rep, target_fields),
             .next = next,
         } });
         continuation = try self.prependConstructedDescriptorRebindForRep(target_rep, continuation);

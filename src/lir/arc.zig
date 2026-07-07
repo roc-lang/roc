@@ -272,6 +272,20 @@ fn computeBoxyRcDescs(store: *const LirStore) ResourceError![]?LIR.BoxyDescRef {
                         changed = setBoxyRcDesc(descs, origins, assign.target, target_desc, stmt) or changed;
                     }
                 },
+                .assign_struct => |assign| {
+                    // A concretely-represented aggregate keeps no descriptor of
+                    // its own, but a field whose value crossed a representation
+                    // boundary carries one. When such a field is present the
+                    // aggregate must be released through its descriptor, so
+                    // adopt the static descriptor recorded for its contents.
+                    if (assign.contents_desc) |contents_desc| {
+                        if (boxyDescForLocal(descs, assign.target) == null and
+                            spanContainsBoxyRcDesc(store, descs, assign.fields))
+                        {
+                            changed = setBoxyRcDesc(descs, origins, assign.target, contents_desc, stmt) or changed;
+                        }
+                    }
+                },
                 .assign_call => |assign| {
                     if (assign.result_desc) |result_desc| {
                         changed = setBoxyRcDesc(descs, origins, assign.target, result_desc, stmt) or changed;
@@ -300,6 +314,13 @@ fn computeBoxyRcDescs(store: *const LirStore) ResourceError![]?LIR.BoxyDescRef {
     }
 
     return descs;
+}
+
+fn spanContainsBoxyRcDesc(store: *const LirStore, descs: []const ?LIR.BoxyDescRef, span: LIR.LocalSpan) bool {
+    for (store.getLocalSpan(span)) |local| {
+        if (boxyDescForLocal(descs, local) != null) return true;
+    }
+    return false;
 }
 
 fn boxyDescForLocal(descs: []const ?LIR.BoxyDescRef, local: LIR.LocalId) ?LIR.BoxyDescRef {
