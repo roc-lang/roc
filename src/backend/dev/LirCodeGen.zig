@@ -3351,10 +3351,21 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             "LIR/codegen invariant violated: str_from_utf8 had no Err variant",
                             .{},
                         );
-                        const rec_idx = err_record_idx orelse std.debug.panic(
-                            "LIR/codegen invariant violated: str_from_utf8 could not resolve error record layout",
-                            .{},
-                        );
+                        const rec_idx = err_record_idx orelse {
+                            // In a generic (erased) worker the BadUtf8 error record is
+                            // represented as a boxed payload rather than an inline struct,
+                            // so its concrete field offsets are unavailable here. The
+                            // interpreter reports a runtime error for this shape, and such
+                            // a worker is compiled eagerly but never reached with this
+                            // representation. Emit a matching runtime crash and hand back a
+                            // zeroed result of the expected size.
+                            const crash_tag_size = tu_data.size.get(self.layout_store.targetUsize());
+                            const crash_slot = self.codegen.allocStackSlot(crash_tag_size);
+                            try self.zeroStackArea(crash_slot, crash_tag_size);
+                            try self.emitRocCrash("str_from_utf8: could not resolve error record layout");
+                            try self.emitTrap();
+                            return self.stackLocationForLayout(ll.ret_layout, crash_slot);
+                        };
                         const struct_data = ls.getStructData(rec_idx);
                         const fields = ls.struct_fields.sliceRange(struct_data.getFields());
                         var index_off: ?u32 = null;
