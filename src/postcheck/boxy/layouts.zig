@@ -682,12 +682,27 @@ const GraphBuilder = struct {
 
         const fields = try self.parent.allocator.alloc(layout.GraphField, declared_fields.len);
         defer self.parent.allocator.free(fields);
+        var has_padding = false;
         for (declared_fields, fields) |field, *out| {
+            if (field.is_padding) has_padding = true;
             out.* = .{
                 .index = field.index,
                 .child = try self.inputForRep(field.rep),
                 .is_padding = field.is_padding,
             };
+        }
+        // Without padding a nominal record lays out exactly like a structural
+        // record: the shared struct commit sorts by descending alignment and
+        // breaks ties by input order, so the fields are presented in canonical
+        // index order to match how structural records (already alphabetical)
+        // are presented. Records that opt into declared order carry padding and
+        // keep their source-declared field order verbatim.
+        if (!has_padding) {
+            std.mem.sort(layout.GraphField, fields, {}, struct {
+                fn lessThan(_: void, a: layout.GraphField, b: layout.GraphField) bool {
+                    return a.index < b.index;
+                }
+            }.lessThan);
         }
         return try self.graph.appendFields(self.parent.allocator, fields);
     }

@@ -488,6 +488,13 @@ pub const CanonicalNameStore = struct {
         return self.record_field_labels.getText(@intFromEnum(id));
     }
 
+    /// Whether a record field label id has interned text. Real compilation
+    /// always interns every label; minimal test fixtures may reference label
+    /// ids without registering their text.
+    pub fn recordFieldLabelTextInterned(self: *const CanonicalNameStore, id: RecordFieldLabelId) bool {
+        return @intFromEnum(id) < self.record_field_labels.count();
+    }
+
     /// Compare two record field label ids by their canonical text.
     pub fn recordFieldLabelTextEql(self: *const CanonicalNameStore, a: RecordFieldLabelId, b: RecordFieldLabelId) bool {
         return Ident.textEql(self.recordFieldLabelText(a), self.recordFieldLabelText(b));

@@ -1689,6 +1689,25 @@ const ProcedureBuilder = struct {
         return null;
     }
 
+    /// Declared fields ordered by their canonical (alphabetical) index. Nested
+    /// descriptor refs are consumed by materialization in ascending canonical
+    /// index order, so they must be produced in that order regardless of the
+    /// declaration order the fields are stored in. The returned slice is owned
+    /// by the caller.
+    fn declaredFieldsInCanonicalOrder(
+        self: *ProcedureBuilder,
+        fields: []const Plan.DeclaredField,
+    ) Allocator.Error![]Plan.DeclaredField {
+        const ordered = try self.allocator.alloc(Plan.DeclaredField, fields.len);
+        @memcpy(ordered, fields);
+        std.mem.sort(Plan.DeclaredField, ordered, {}, struct {
+            fn lessThan(_: void, a: Plan.DeclaredField, b: Plan.DeclaredField) bool {
+                return a.index < b.index;
+            }
+        }.lessThan);
+        return ordered;
+    }
+
     fn staticNestedDescRefsForWorkerRepWithSourceMap(
         self: *ProcedureBuilder,
         worker_rep_id: Plan.TypeRepId,
@@ -1709,7 +1728,9 @@ const ProcedureBuilder = struct {
         var refs = std.ArrayList(LIR.BoxyDescRef).empty;
         defer refs.deinit(self.allocator);
         if (worker_rep.declared_fields.len != 0) {
-            for (self.plan.declaredFieldSlice(worker_rep.declared_fields)) |field| {
+            const ordered = try self.declaredFieldsInCanonicalOrder(self.plan.declaredFieldSlice(worker_rep.declared_fields));
+            defer self.allocator.free(ordered);
+            for (ordered) |field| {
                 const field_layout = self.recordPayloadFieldLayout(worker_payload_layout, field.index);
                 if (!self.layoutNeedsNestedBoxyDesc(field_layout)) continue;
                 const desc_rep = self.tagPayloadStorageDescRepForLayout(field.rep, field_layout, false) orelse continue;
@@ -2206,7 +2227,9 @@ const ProcedureBuilder = struct {
         var refs = std.ArrayList(LIR.BoxyDescRef).empty;
         defer refs.deinit(self.allocator);
         if (rep.declared_fields.len != 0) {
-            for (self.plan.declaredFieldSlice(rep.declared_fields)) |field| {
+            const ordered = try self.declaredFieldsInCanonicalOrder(self.plan.declaredFieldSlice(rep.declared_fields));
+            defer self.allocator.free(ordered);
+            for (ordered) |field| {
                 const field_layout = self.recordPayloadFieldLayout(payload_layout, field.index);
                 if (!self.layoutNeedsNestedBoxyDesc(field_layout)) continue;
                 const desc_rep = self.tagPayloadStorageDescRepForLayout(field.rep, field_layout, false) orelse continue;

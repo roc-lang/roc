@@ -709,6 +709,13 @@ const Builder = struct {
         var children = std.ArrayList(RepChild).empty;
         defer children.deinit(self.allocator);
         const closed = try self.appendRecordRowChildren(&children, view, fields, ext);
+        // Record-field children are ordered alphabetically by name so every
+        // record representation shares one canonical field-index space (the same
+        // order structural record types already carry). Nominal declaration
+        // backings, which the checker keeps in source-declared order, are
+        // canonicalized here so a value pairs fields identically on both sides of
+        // an erased structural/nominal boundary.
+        sortRecordFieldChildrenByName(view, children.items);
         const child_span = try self.commitPendingChildren(children.items);
 
         if (!closed) {
@@ -725,6 +732,36 @@ const Builder = struct {
             .kind = kind,
             .children = child_span,
         };
+    }
+
+    /// Sort a record representation's record-field children alphabetically by
+    /// name. All children of a record representation carry the `record_field`
+    /// role, so the whole slice is sorted. When the view has no name store, or a
+    /// label has no interned text (minimal test fixtures), the checker-supplied
+    /// order is left in place.
+    fn sortRecordFieldChildrenByName(view: ModuleView, children: []RepChild) void {
+        const names = view.canonical_names orelse return;
+        for (children) |child| {
+            switch (child.role) {
+                .record_field => |label| if (!names.recordFieldLabelTextInterned(label)) return,
+                else => {},
+            }
+        }
+        const SortContext = struct {
+            names: *const canonical.CanonicalNameStore,
+            fn lessThan(ctx: @This(), a: RepChild, b: RepChild) bool {
+                const a_label = switch (a.role) {
+                    .record_field => |label| label,
+                    else => return false,
+                };
+                const b_label = switch (b.role) {
+                    .record_field => |label| label,
+                    else => return false,
+                };
+                return ctx.names.recordFieldLabelTextLessThan(a_label, b_label);
+            }
+        };
+        std.mem.sort(RepChild, children, SortContext{ .names = names }, SortContext.lessThan);
     }
 
     fn appendRecordRowChildren(
@@ -1012,6 +1049,13 @@ const Builder = struct {
             else => boxyPlanInvariant("checked nominal declared field order had a non-record backing"),
         };
 
+        // Canonical field indices are alphabetical-by-name, matching the index
+        // space structural records use, so a value that materializes across an
+        // erased structural/nominal boundary pairs fields by the same key on
+        // both sides. The backing record's stored field order is not relied on.
+        const alpha_ranks = try self.nominalBackingFieldAlphabeticalRanks(backing.view, backing_fields);
+        defer self.allocator.free(alpha_ranks);
+
         var pending = std.ArrayList(DeclaredField).empty;
         defer pending.deinit(self.allocator);
         var padding_ordinal: u16 = 0;
@@ -1021,7 +1065,7 @@ const Builder = struct {
                     const field = self.nominalBackingField(source.field_view, backing.view, backing_fields, name) orelse
                         boxyPlanInvariant("checked nominal declared named field was missing from backing row");
                     try pending.append(self.allocator, .{
-                        .index = field.index,
+                        .index = alpha_ranks[field.index],
                         .source_type = typeRef(backing.view, field.ty),
                         .rep = try self.analyzeType(backing.view, field.ty),
                     });
@@ -1045,6 +1089,46 @@ const Builder = struct {
         const start: u32 = @intCast(self.plan.declared_fields.items.len);
         try self.plan.declared_fields.appendSlice(self.allocator, pending.items);
         return .{ .start = start, .len = @intCast(pending.items.len) };
+    }
+
+    /// For each backing-record field position, its rank when the backing
+    /// record's field names are ordered alphabetically. This is the canonical
+    /// field index space (shared with structural records). When the backing
+    /// view has no name store to compare text with, the backing order is taken
+    /// as canonical.
+    fn nominalBackingFieldAlphabeticalRanks(
+        self: *Builder,
+        backing_view: ModuleView,
+        backing_fields: []const checked.CheckedRecordField,
+    ) Allocator.Error![]u16 {
+        const ranks = try self.allocator.alloc(u16, backing_fields.len);
+        errdefer self.allocator.free(ranks);
+        const names = backing_view.canonical_names orelse {
+            for (ranks, 0..) |*rank, index| rank.* = @intCast(index);
+            return ranks;
+        };
+        for (backing_fields) |field| {
+            if (!names.recordFieldLabelTextInterned(field.name)) {
+                for (ranks, 0..) |*rank, index| rank.* = @intCast(index);
+                return ranks;
+            }
+        }
+
+        const order = try self.allocator.alloc(u16, backing_fields.len);
+        defer self.allocator.free(order);
+        for (order, 0..) |*slot, index| slot.* = @intCast(index);
+
+        const SortContext = struct {
+            names: *const canonical.CanonicalNameStore,
+            fields: []const checked.CheckedRecordField,
+            fn lessThan(ctx: @This(), lhs: u16, rhs: u16) bool {
+                return ctx.names.recordFieldLabelTextLessThan(ctx.fields[lhs].name, ctx.fields[rhs].name);
+            }
+        };
+        std.mem.sort(u16, order, SortContext{ .names = names, .fields = backing_fields }, SortContext.lessThan);
+
+        for (order, 0..) |backing_pos, rank| ranks[backing_pos] = @intCast(rank);
+        return ranks;
     }
 
     const NominalBackingField = struct {
