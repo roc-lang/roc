@@ -14199,7 +14199,6 @@ const ProcBodyBuilder = struct {
         source_rep: Plan.TypeRepId,
         next: LIR.CFStmtId,
     ) Allocator.Error!?LIR.CFStmtId {
-        const target_desc = try self.boundaryTargetDesc(target, target_rep) orelse return null;
         const target_tag_rep = self.tagVariantRepForBoundary(target_rep) orelse return null;
         const source_tag_rep = self.tagVariantRepForBoundary(source_rep) orelse return null;
 
@@ -14208,6 +14207,17 @@ const ProcBodyBuilder = struct {
         const target_layout_value = self.parent.result.layouts.getLayout(target_layout);
         const source_layout_value = self.parent.result.layouts.getLayout(source_layout);
         if (target_layout_value.tag != .tag_union or source_layout_value.tag != .tag_union) return null;
+
+        // Constructing the target's tags needs a descriptor. A concrete target
+        // union needs none of its own, but when its payload representations
+        // differ from the source's (for example an erased box payload becoming
+        // a concrete scalar), the variants still have to be converted, so build
+        // them with the target rep's static descriptor. When the layouts already
+        // match, a plain reinterpret is correct and cheaper, so defer to it.
+        const target_desc = try self.boundaryTargetDesc(target, target_rep) orelse blk: {
+            if (target_layout == source_layout) return null;
+            break :blk try self.constructedTargetDescForRep(target_rep);
+        };
 
         const target_variants = self.parent.plan.tagVariantSlice(self.parent.plan.representations.items[@intFromEnum(target_tag_rep)].tag_variants);
         const source_variants = self.parent.plan.tagVariantSlice(self.parent.plan.representations.items[@intFromEnum(source_tag_rep)].tag_variants);
