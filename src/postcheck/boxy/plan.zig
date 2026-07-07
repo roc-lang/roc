@@ -264,6 +264,13 @@ pub const IteratorCallPlan = struct {
     hidden_dict_args: Span = .{},
 };
 
+pub const ConstEvalCallPlan = struct {
+    worker: WorkerPlanId,
+    ret_type: TypeRef,
+    hidden_desc_args: Span = .{},
+    hidden_dict_args: Span = .{},
+};
+
 pub const RootPlan = struct {
     id: RootPlanId,
     request: checked.RootRequest,
@@ -279,6 +286,7 @@ pub const ProgramPlan = struct {
     roots: std.ArrayList(RootPlan),
     workers: std.ArrayList(WorkerPlan),
     direct_calls: std.ArrayList(DirectCallPlan),
+    const_eval_calls: std.ArrayList(ConstEvalCallPlan),
     iterator_calls: std.ArrayList(IteratorCallPlan),
     iterator_call_arg_types: std.ArrayList(TypeRef),
     root_reps: std.ArrayList(TypeRepId),
@@ -301,6 +309,7 @@ pub const ProgramPlan = struct {
             .roots = .empty,
             .workers = .empty,
             .direct_calls = .empty,
+            .const_eval_calls = .empty,
             .iterator_calls = .empty,
             .iterator_call_arg_types = .empty,
             .root_reps = .empty,
@@ -335,6 +344,7 @@ pub const ProgramPlan = struct {
         self.root_reps.deinit(self.allocator);
         self.iterator_call_arg_types.deinit(self.allocator);
         self.iterator_calls.deinit(self.allocator);
+        self.const_eval_calls.deinit(self.allocator);
         self.direct_calls.deinit(self.allocator);
         self.workers.deinit(self.allocator);
         self.roots.deinit(self.allocator);
@@ -392,6 +402,13 @@ pub const ProgramPlan = struct {
         return null;
     }
 
+    pub fn constEvalCallFor(self: *const ProgramPlan, worker: WorkerPlanId, ret_type: TypeRef) ?ConstEvalCallPlan {
+        for (self.const_eval_calls.items) |call| {
+            if (call.worker == worker and typeRefEql(call.ret_type, ret_type)) return call;
+        }
+        return null;
+    }
+
     pub fn repForSourceType(self: *const ProgramPlan, source_type: TypeRef) ?TypeRepId {
         for (self.type_reps.items) |binding| {
             if (typeRefEql(binding.source_type, source_type)) return binding.rep;
@@ -442,6 +459,7 @@ pub const ModuleView = struct {
     exported_procedure_bindings: checked.ExportedProcedureBindingView = .{},
     interface_capabilities: *const checked.ModuleInterfaceCapabilities = &empty_interface_capabilities,
     const_store: ?*const check.ConstStore.ConstStore = null,
+    const_templates: ?*const checked.ConstTemplateTable = null,
 };
 
 pub const ProgramInput = struct {
@@ -483,8 +501,14 @@ pub fn analyzeProgram(
     try builder.materializeWorkerErasedCaptures();
     try builder.materializeDirectCallHiddenDescriptorArgs();
     try builder.materializeDirectCallHiddenDictionaryArgs();
+    try builder.materializeConstEvalCallHiddenDescriptorArgs();
+    try builder.materializeConstEvalCallHiddenDictionaryArgs();
     try builder.materializeIteratorCallHiddenDescriptorArgs();
     try builder.materializeIteratorCallHiddenDictionaryArgs();
+    // Matching hidden call arguments against concrete use-site types can
+    // analyze new dynamic representations; give any that were created a
+    // descriptor requirement so their worker-mode layout is well defined.
+    try builder.materializeDescriptorRequirements();
     builder.propagateDynamicRequirements();
 
     const out = builder.plan;
@@ -1631,6 +1655,24 @@ const Builder = struct {
             }
             self.plan.direct_calls.items[direct_index].hidden_desc_args =
                 try self.materializeWorkerCallHiddenDescriptorArgs(direct.worker, arg_types, typeRef(call_view, call_expr.ty));
+        }
+    }
+
+    fn materializeConstEvalCallHiddenDescriptorArgs(self: *Builder) Allocator.Error!void {
+        var index: usize = 0;
+        while (index < self.plan.const_eval_calls.items.len) : (index += 1) {
+            const call = self.plan.const_eval_calls.items[index];
+            self.plan.const_eval_calls.items[index].hidden_desc_args =
+                try self.materializeWorkerCallHiddenDescriptorArgs(call.worker, &.{}, call.ret_type);
+        }
+    }
+
+    fn materializeConstEvalCallHiddenDictionaryArgs(self: *Builder) Allocator.Error!void {
+        var index: usize = 0;
+        while (index < self.plan.const_eval_calls.items.len) : (index += 1) {
+            const call = self.plan.const_eval_calls.items[index];
+            self.plan.const_eval_calls.items[index].hidden_dict_args =
+                try self.materializeWorkerCallHiddenDictionaryArgs(call.worker, &.{}, call.ret_type);
         }
     }
 
@@ -2891,7 +2933,40 @@ const Builder = struct {
             .platform_required_const => |required| required.const_use,
             else => return,
         };
+        // The lowerer restores the const through its use-site requested type
+        // (`restoreConstUseInto`), so that type's representation must be
+        // planned. The enclosing expression's type is not always the same
+        // node as the requested payload type in module graphs whose root is
+        // not the app itself.
+        if (const_use.requested_source_ty_payload) |requested_ty| {
+            _ = try self.analyzeType(view, requested_ty);
+        }
         const store_view = self.moduleForId(checked.constModuleId(const_use.const_ref));
+        // A constant whose value is computed by evaluating a body (rather than
+        // a compile-time-stored value) is produced at runtime by calling the
+        // constant's entry-wrapper thunk. Plan that thunk as a worker so the
+        // lowerer can emit the call.
+        if (store_view.const_templates) |const_templates| {
+            switch (const_templates.get(const_use.const_ref).state) {
+                .eval_template => |eval| {
+                    const worker = try self.ensureWorker(
+                        .{ .procedure_template = eval.entry_template },
+                        self.checkedTypeForTemplate(eval.entry_template),
+                        null,
+                    );
+                    if (const_use.requested_source_ty_payload) |requested_ty| {
+                        const ret_type = typeRef(view, requested_ty);
+                        if (self.plan.constEvalCallFor(worker, ret_type) == null) {
+                            try self.plan.const_eval_calls.append(self.allocator, .{
+                                .worker = worker,
+                                .ret_type = ret_type,
+                            });
+                        }
+                    }
+                },
+                .reserved, .stored_const => {},
+            }
+        }
         const definition_ty = switch (const_use.const_ref.owner) {
             .top_level_binding => |owner| blk: {
                 if (@intFromEnum(owner.pattern) >= store_view.checked_bodies.stored_patterns.len) return;
@@ -3531,6 +3606,7 @@ fn moduleViewFromImported(imported: checked.ImportedModuleView) ModuleView {
         .exported_procedure_bindings = imported.exported_procedure_bindings,
         .interface_capabilities = imported.interface_capabilities,
         .const_store = imported.const_store,
+        .const_templates = imported.const_templates,
     };
 }
 
@@ -3554,6 +3630,7 @@ fn moduleViewFromArtifact(artifact: *const checked.CheckedModuleArtifact) Module
         .exported_procedure_bindings = artifact.exported_procedure_bindings.view(),
         .interface_capabilities = &artifact.interface_capabilities,
         .const_store = &artifact.const_store,
+        .const_templates = &artifact.const_templates,
     };
 }
 

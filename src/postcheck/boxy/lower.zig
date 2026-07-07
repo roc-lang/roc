@@ -4233,22 +4233,33 @@ const ProcBodyBuilder = struct {
     ) Allocator.Error!LIR.CFStmtId {
         const requested_ty = const_use.requested_source_ty_payload orelse
             boxyLowerInvariant("checked const use reached boxy lowering without a requested checked type");
-        if (self.workerRuntimeLayoutForType(requested_ty).layoutIdx() != self.parent.result.store.getLocal(target).layout_idx) {
-            boxyLowerInvariant("checked const use target layout disagreed with requested checked type");
-        }
-        if (self.workerRuntimeLayoutForType(checked_ty).layoutIdx() != self.parent.result.store.getLocal(target).layout_idx) {
+        const target_layout = self.parent.result.store.getLocal(target).layout_idx;
+        if (self.workerRuntimeLayoutForType(checked_ty).layoutIdx() != target_layout) {
             boxyLowerInvariant("checked const lookup expression type disagreed with target layout");
         }
 
         const store_module = procedureModuleByKey(self.parent.modules, checked.constModuleId(const_use.const_ref));
         const template = store_module.const_templates.get(const_use.const_ref);
-        const stored = switch (template.state) {
-            .stored_const => |stored| stored,
+        switch (template.state) {
             .reserved => boxyLowerInvariant("reserved checked const template reached runtime boxy lowering"),
-            .eval_template => boxyLowerInvariant("const eval template reached runtime boxy lowering before compile-time finalization stored its value"),
-        };
+            .eval_template => |eval| return try self.lowerConstEvalTemplateUseInto(target, checked_ty, requested_ty, eval, next),
+            .stored_const => {},
+        }
+        const stored = template.state.stored_const;
 
         const requested_rep = self.repForType(requested_ty);
+        if (self.workerRuntimeLayoutForType(requested_ty).layoutIdx() != target_layout) {
+            // The requested type carries a concrete representation while the use
+            // site is erased inside a generic worker (the target holds the
+            // worker's dynamic layout). Restore the concrete value at its
+            // requested type and adapt it across the representation boundary
+            // like any other concrete-to-erased argument.
+            const checked_rep = self.repForType(checked_ty);
+            const temp = try self.addFrameLocalForRep(requested_rep);
+            const convert = try self.assignRepresentationBoundary(target, temp, checked_rep, requested_rep, next);
+            return try self.restoreConstNodeInto(temp, store_module, self.module, stored.node, requested_ty, convert);
+        }
+
         if (self.parent.plan.representations.items[@intFromEnum(requested_rep)].contains_dynamic) {
             // The use site's checked types are generic (the const is an
             // argument to a generic worker), so they cannot guide restoration
@@ -4276,6 +4287,45 @@ const ProcBodyBuilder = struct {
         }
 
         return try self.restoreConstNodeInto(target, store_module, self.module, stored.node, requested_ty, next);
+    }
+
+    /// A constant whose value is computed by evaluating a body (rather than a
+    /// compile-time-stored value) is produced at runtime by calling the
+    /// constant's entry-wrapper thunk, which the planner registered as a
+    /// zero-argument worker. Emit that call and adapt its result to the use
+    /// site's representation.
+    fn lowerConstEvalTemplateUseInto(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        checked_ty: checked.CheckedTypeId,
+        requested_ty: checked.CheckedTypeId,
+        eval: checked.ConstEvalTemplate,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const entry_view = procedureModuleByArtifactRef(self.parent.modules, eval.entry_template.artifact);
+        const entry_template = entry_view.checked_procedure_templates.get(eval.entry_template.template);
+        const fn_ty_ref = Plan.TypeRef{ .module = entry_view.key, .ty = entry_template.checked_fn_root };
+        const worker_id = self.parent.plan.workerForSourceType(.{ .procedure_template = eval.entry_template }, fn_ty_ref) orelse
+            boxyLowerInvariant("const eval template use reached boxy lowering without a planned entry-wrapper worker");
+        const call_plan = self.parent.plan.constEvalCallFor(worker_id, .{ .module = self.module.key, .ty = requested_ty }) orelse
+            boxyLowerInvariant("const eval template use reached boxy lowering without a planned call");
+
+        var pre_arg_descriptor_initializers = std.ArrayList(DescriptorArgLocal).empty;
+        defer pre_arg_descriptor_initializers.deinit(self.parent.allocator);
+
+        var continuation = try self.lowerWorkerCallLocalsInto(
+            target,
+            .{ .module = self.module.key, .ty = checked_ty },
+            &.{},
+            &.{},
+            worker_id,
+            call_plan.hidden_desc_args,
+            call_plan.hidden_dict_args,
+            &pre_arg_descriptor_initializers,
+            next,
+        );
+        continuation = try self.prependDescriptorArgMaterializations(pre_arg_descriptor_initializers.items, continuation);
+        return continuation;
     }
 
     fn restoreConstNodeInto(
