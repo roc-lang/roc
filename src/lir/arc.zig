@@ -55,7 +55,10 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
     inserter.local_contains_refcounted = local_contains_refcounted;
     inserter.boxy_rc_descs = boxy_rc_descs;
 
-    var solution = try arc_solve.solve(store.allocator, store, local_contains_refcounted, options.roots);
+    const borrow_anchor_refcounted = try computeBorrowAnchorRefcounted(store.allocator, store, layouts, local_contains_refcounted);
+    defer store.allocator.free(borrow_anchor_refcounted);
+
+    var solution = try arc_solve.solve(store.allocator, store, borrow_anchor_refcounted, options.roots);
     defer solution.deinit();
     inserter.solution = &solution;
 
@@ -383,32 +386,92 @@ fn computeLocalContainsRefcounted(
     return contains;
 }
 
-fn layoutMayContainBoxyDynamic(layouts: *const layout_mod.Store, layout_idx: layout_mod.Idx) bool {
-    const layout_val = layouts.getLayout(layout_idx);
-    return switch (layout_val.tag) {
-        .box_of_zst => true,
-        .box => layoutMayContainBoxyDynamic(layouts, layout_val.getIdx()),
-        .list => layoutMayContainBoxyDynamic(layouts, layout_val.getIdx()),
-        .list_of_zst => false,
-        .struct_ => blk: {
-            const info = layouts.getStructInfo(layout_val);
-            for (0..info.fields.len) |index| {
-                const field = info.fields.get(@intCast(index));
-                if (layoutMayContainBoxyDynamic(layouts, field.layout)) break :blk true;
+/// Borrow-anchor refcounted set for the ARC solver. Extends the emission-time
+/// refcounted set with payload-read projections (`.field`, `.tag_payload`,
+/// `.tag_payload_struct`) whose result carries descriptor-driven dynamic
+/// (`box_of_zst`) content borrowed out of a refcounted source. Such a
+/// projection is an alias into its source's allocation whose extracted boxes
+/// stay live past the projection, so the source's release must land after the
+/// projection's last use. The projection itself owns no RC unit: its dynamic
+/// payloads are refcounted by descriptor, which the layout-only refcount check
+/// cannot see, so it carries no boxy descriptor of its own. Marking it
+/// refcounted for the solver alone lets it join its source's liveness group as
+/// a borrow. Emission keeps consulting the narrower `local_contains_refcounted`,
+/// so a projection that solves to owned is never forced to carry an RC helper
+/// it lacks.
+fn computeBorrowAnchorRefcounted(
+    allocator: Allocator,
+    store: *const LirStore,
+    layouts: *const layout_mod.Store,
+    local_contains_refcounted: []const bool,
+) ResourceError![]bool {
+    const anchor = try allocator.dupe(bool, local_contains_refcounted);
+    errdefer allocator.free(anchor);
+
+    var visited = std.AutoHashMap(layout_mod.Idx, void).init(allocator);
+    defer visited.deinit();
+    var stack = std.ArrayList(layout_mod.Idx).empty;
+    defer stack.deinit(allocator);
+
+    var changed = true;
+    while (changed) {
+        changed = false;
+        for (store.cf_stmts.items) |stmt| {
+            switch (stmt) {
+                .assign_ref => |assign| switch (assign.op) {
+                    .field, .tag_payload, .tag_payload_struct => {
+                        const source_index = @intFromEnum(refOpSource(assign.op));
+                        if (source_index >= anchor.len or !anchor[source_index]) continue;
+                        const target_layout = store.getLocal(assign.target).layout_idx;
+                        if (!try layoutMayContainBoxyDynamic(allocator, layouts, target_layout, &visited, &stack)) continue;
+                        changed = markLocalRc(anchor, assign.target) or changed;
+                    },
+                    else => {},
+                },
+                else => {},
             }
-            break :blk false;
-        },
-        .tag_union => blk: {
-            const info = layouts.getTagUnionInfo(layout_val);
-            for (0..info.variants.len) |index| {
-                const payload_layout = info.variants.get(@intCast(index)).payload_layout;
-                if (layoutMayContainBoxyDynamic(layouts, payload_layout)) break :blk true;
-            }
-            break :blk false;
-        },
-        .closure => layoutMayContainBoxyDynamic(layouts, layout_val.getClosure().captures_layout_idx),
-        .zst, .scalar, .erased_callable, .ptr => false,
-    };
+        }
+    }
+    return anchor;
+}
+
+/// Cycle-safe check for whether a layout may hold descriptor-driven dynamic
+/// (`box_of_zst`) content. Recursive tag unions reference themselves through
+/// their layout indices, so the walk tracks visited indices; `visited` and
+/// `stack` are caller-owned scratch reused across queries.
+fn layoutMayContainBoxyDynamic(
+    allocator: Allocator,
+    layouts: *const layout_mod.Store,
+    layout_idx: layout_mod.Idx,
+    visited: *std.AutoHashMap(layout_mod.Idx, void),
+    stack: *std.ArrayList(layout_mod.Idx),
+) ResourceError!bool {
+    visited.clearRetainingCapacity();
+    stack.clearRetainingCapacity();
+    try stack.append(allocator, layout_idx);
+    while (stack.pop()) |idx| {
+        if ((try visited.getOrPut(idx)).found_existing) continue;
+        const layout_val = layouts.getLayout(idx);
+        switch (layout_val.tag) {
+            .box_of_zst => return true,
+            .box, .list => try stack.append(allocator, layout_val.getIdx()),
+            .list_of_zst, .zst, .scalar, .erased_callable, .ptr => {},
+            .struct_ => {
+                const info = layouts.getStructInfo(layout_val);
+                for (0..info.fields.len) |index| {
+                    try stack.append(allocator, info.fields.get(@intCast(index)).layout);
+                }
+            },
+            .tag_union => {
+                const info = layouts.getTagUnionInfo(layout_val);
+                for (0..info.variants.len) |index| {
+                    try stack.append(allocator, info.variants.get(@intCast(index)).payload_layout);
+                }
+            },
+            .closure => try stack.append(allocator, layout_val.getClosure().captures_layout_idx),
+        }
+    }
+    return false;
 }
 
 fn markLocalRc(contains: []bool, local: LIR.LocalId) bool {
