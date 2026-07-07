@@ -14652,10 +14652,28 @@ const ProcBodyBuilder = struct {
             for (source_payloads, target_payloads) |source_payload, target_payload| {
                 const canonical_source = self.canonicalDescriptorRep(source_payload.rep);
                 const canonical_target = self.canonicalDescriptorRep(target_payload.rep);
+                // Relabelling reuses the source value's bytes and descriptor
+                // under the target rep's identity, so it is only sound when the
+                // source and target agree on how each payload field is stored.
+                // A worker can return a tag whose payload fields are erased
+                // (`box_of_zst`) while the dynamic target realizes them inline
+                // (a fully-concrete instantiation, e.g. `Ok(val, input)` at a
+                // call site where both are `Str`). Reusing the erased source
+                // descriptor there would leave the boxed fields where the
+                // target expects inline bytes, so require matching storage and
+                // otherwise let the per-variant rebuild materialize the fields.
+                if (self.repStoredAsDynamicBox(canonical_source) != self.repStoredAsDynamicBox(canonical_target)) return false;
                 if (!try self.repsCanReuseSourceDescriptor(canonical_source, canonical_target)) return false;
             }
         }
         return true;
+    }
+
+    fn repStoredAsDynamicBox(self: *const ProcBodyBuilder, rep_id: Plan.TypeRepId) bool {
+        return switch (self.workerRuntimeLayoutForRep(rep_id)) {
+            .dynamic_box => true,
+            .concrete => false,
+        };
     }
 
     fn repsCanReuseSourceDescriptor(
