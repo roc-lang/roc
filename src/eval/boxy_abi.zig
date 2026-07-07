@@ -80,6 +80,12 @@ pub const GlobalBoxyRuntime = struct {
     value_scratch: std.heap.ArenaAllocator,
     call_depth: usize = 0,
     procs: std.AutoHashMapUnmanaged(u32, RegisteredProc) = .empty,
+    /// Return layout of each Roc-created erased-callable proc, keyed by the
+    /// worker's runtime code address. An erased call reads the actual return
+    /// layout here to materialize the worker's result into the caller's
+    /// expected layout. Host-provided callables are absent (the host does not
+    /// register them); their result already uses the caller's exact layout.
+    erased_procs: std.AutoHashMapUnmanaged(usize, layout_mod.Idx) = .empty,
     /// Local-id to descriptor bindings for the descriptor template being
     /// materialized by the active `roc_boxy_desc_copy` call.
     capture_ids: []const u32 = &.{},
@@ -174,6 +180,7 @@ pub fn deinitGlobal() void {
     g.runtime_boxy_desc_refs.deinit(g.gpa);
     g.runtime_boxy_type_descs.deinit(g.gpa);
     g.procs.deinit(g.gpa);
+    g.erased_procs.deinit(g.gpa);
     g.desc_arena.deinit();
     g.value_scratch.deinit();
     g.gpa.destroy(g);
@@ -299,6 +306,67 @@ fn writeResult(g: *GlobalBoxyRuntime, out: ?[*]u8, result: Value, result_layout:
 pub fn roc_boxy_register_proc(proc_id: u32, callee: BoxyProcFn, ret_layout: u32) callconv(.c) void {
     const g = requireGlobal();
     g.procs.put(g.gpa, proc_id, .{ .callee = callee, .ret_layout = layoutIdx(ret_layout) }) catch abiCrash(g, "proc registration");
+}
+
+/// Record the return layout of one Roc-created erased-callable proc under its
+/// runtime code address. `roc_boxy_call_erased` consults this to reconcile a
+/// worker whose actual return layout differs from the call site's expected
+/// layout. Registration happens as each erased callable value is built, so the
+/// address is the relocated runtime address.
+pub fn roc_boxy_register_erased_proc(fn_ptr: ?*const anyopaque, ret_layout: u32) callconv(.c) void {
+    const g = global orelse return;
+    const ptr = fn_ptr orelse return;
+    g.erased_procs.put(g.gpa, @intFromPtr(ptr), layoutIdx(ret_layout)) catch abiCrash(g, "erased proc registration");
+}
+
+/// Invoke an erased callable and deliver its result in the caller's expected
+/// layout. When the callable is a registered Roc worker whose actual return
+/// layout differs from `expected_layout`, the worker writes into a scratch
+/// buffer of its own layout and the result is materialized into the caller's
+/// layout through the target descriptor. When the callable is unregistered (a
+/// host-provided callable) or its actual layout already equals the expected
+/// layout, the callable writes the caller's buffer directly.
+pub fn roc_boxy_call_erased(
+    ops: *RocOps,
+    fn_ptr: ?*const anyopaque,
+    ret: ?[*]u8,
+    args: ?[*]const u8,
+    capture: ?[*]u8,
+    result_desc: ?*const BoxyTypeDesc,
+    expected_layout: u32,
+) callconv(.c) void {
+    const raw = fn_ptr orelse @panic("boxy erased call with null function pointer");
+    const callable: builtins.erased_callable.ErasedCallableFn = @ptrCast(@alignCast(raw));
+    const expected = layoutIdx(expected_layout);
+
+    // Without an installed runtime there are no registered erased procs, so
+    // every erased result already uses the caller's exact layout.
+    const g = global orelse {
+        callable(ops, ret, args, capture);
+        return;
+    };
+
+    const actual = g.erased_procs.get(@intFromPtr(raw));
+    if (actual == null or actual.? == expected) {
+        callable(ops, ret, args, capture);
+        return;
+    }
+
+    const actual_layout = actual.?;
+    enter(g);
+    defer leave(g);
+    const actual_size = g.runtime.helper.sizeOf(actual_layout);
+    const worker_result = hooks(g).allocValue(actual_layout) catch abiCrash(g, "erased call result buffer");
+    callable(ops, if (actual_size == 0) null else @ptrCast(worker_result.ptr), args, capture);
+    const materialized = g.runtime.materializeCallResult(
+        hooks(g),
+        worker_result,
+        actual_layout,
+        null,
+        result_desc,
+        expected,
+    ) catch abiCrash(g, "erased call result materialization");
+    writeResult(g, ret, materialized, expected);
 }
 
 /// Box a payload into dynamic storage. Writes the boxed value through `out`

@@ -128,6 +128,8 @@ comptime {
         "roc_boxy_call_dict",
         "roc_boxy_materialize_call_result",
         "roc_boxy_register_proc",
+        "roc_boxy_register_erased_proc",
+        "roc_boxy_call_erased",
     };
     for (names) |name| {
         @export(&@field(boxy_abi, name), .{ .name = name });

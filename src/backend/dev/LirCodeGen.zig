@@ -484,6 +484,8 @@ pub const BoxyBuiltinFn = enum {
     call_dict,
     materialize_call_result,
     register_proc,
+    register_erased_proc,
+    call_erased,
 
     /// Get the exported symbol name for shim relocation resolution. Each name
     /// must match a `pub fn` in `src/eval/boxy_abi.zig`.
@@ -506,6 +508,8 @@ pub const BoxyBuiltinFn = enum {
             .call_dict => "roc_boxy_call_dict",
             .materialize_call_result => "roc_boxy_materialize_call_result",
             .register_proc => "roc_boxy_register_proc",
+            .register_erased_proc => "roc_boxy_register_erased_proc",
+            .call_erased => "roc_boxy_call_erased",
         };
     }
 };
@@ -11318,7 +11322,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             closure_local: LocalId,
             call_args: LocalSpan,
             ret_layout: layout.Idx,
+            result_desc: ?lir.LIR.BoxyDescRef,
         ) Allocator.Error!ValueLocation {
+            // Resolve the result descriptor first: descriptor resolution can
+            // itself emit calls, which must not happen while temporary
+            // registers hold the closure, arguments, or capture pointer.
+            const result_desc_slot: ?i32 = if (result_desc) |ref| try self.boxyDescRefToSlot(ref) else null;
             const closure_layout = self.localLayout(closure_local);
             const runtime_closure_layout = self.runtimeRepresentationLayoutIdx(closure_layout);
             const closure_layout_val = self.layout_store.getLayout(runtime_closure_layout);
@@ -11387,13 +11396,28 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const ret_size = self.layout_store.layoutSizeAlign(self.layout_store.getLayout(runtime_ret_layout)).size;
             const ret_buffer_offset = if (ret_size == 0) 0 else self.codegen.allocStackSlot(ret_size);
 
-            const closure_ptr_reg: GeneralReg = if (comptime target.toCpuArch() == .aarch64) .X11 else .R11;
-            const fn_ptr_reg: GeneralReg = if (comptime target.toCpuArch() == .aarch64) .X10 else .RAX;
-            try self.emitLoad(.w64, closure_ptr_reg, frame_ptr, closure_ptr_slot);
-            try self.emitLoad(.w64, fn_ptr_reg, closure_ptr_reg, 0);
+            // Load the closure's function pointer into a stack slot so the
+            // wrapper call's argument shuffling cannot clobber it.
+            const fn_ptr_slot = self.codegen.allocStackSlot(8);
+            {
+                const closure_reg = try self.allocTempGeneral();
+                try self.emitLoad(.w64, closure_reg, frame_ptr, closure_ptr_slot);
+                const fn_reg = try self.allocTempGeneral();
+                try self.emitLoad(.w64, fn_reg, closure_reg, 0);
+                try self.emitStore(.w64, frame_ptr, fn_ptr_slot, fn_reg);
+                self.codegen.freeGeneral(closure_reg);
+                self.codegen.freeGeneral(fn_reg);
+            }
 
+            // `roc_boxy_call_erased(ops, fn_ptr, ret, args, capture,
+            // result_desc, expected_layout)` invokes the callable and, when it
+            // is a registered Roc worker whose actual return layout differs
+            // from the site's expected layout, materializes the result into the
+            // expected layout. Host-provided callables are unregistered and are
+            // invoked directly into the result buffer.
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
             try builder.addRegArg(roc_ops_reg);
+            try builder.addMemArg(frame_ptr, fn_ptr_slot);
             if (ret_size == 0) {
                 try builder.addImmArg(0);
             } else {
@@ -11405,7 +11429,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try builder.addLeaArg(frame_ptr, args_slot);
             }
             try builder.addMemArg(frame_ptr, capture_stack_offset);
-            try builder.callReg(fn_ptr_reg);
+            if (result_desc_slot) |s| try builder.addMemArg(frame_ptr, s) else try builder.addImmArg(0);
+            try builder.addImmArg(@intFromEnum(runtime_ret_layout));
+            try self.callBoxyBuiltin(&builder, .call_erased);
 
             if (ret_size == 0) return .{ .immediate_i64 = 0 };
             return self.stackLocationForLayout(runtime_ret_layout, ret_buffer_offset);
@@ -11541,7 +11567,28 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 }
             }
 
-            return .{ .general_reg = heap_ptr };
+            // Record this worker's actual return layout under its runtime code
+            // address so an erased call whose site expects a different layout
+            // materializes the worker's result into that layout. The address is
+            // the same value stored at the closure's function-pointer field.
+            self.codegen.freeGeneral(heap_ptr);
+            {
+                const worker_ret_layout = self.runtimeRepresentationLayoutIdx(self.store.getProcSpec(proc_id).ret_layout);
+                const addr_reg = try self.allocTempGeneral();
+                if (proc.code_start == unresolved_proc_code_start)
+                    try self.emitPendingProcAddress(proc_id, addr_reg)
+                else
+                    try self.emitInternalCodeAddress(proc.code_start, addr_reg);
+                var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                try builder.addRegArg(addr_reg);
+                try builder.addImmArg(@intFromEnum(worker_ret_layout));
+                try self.callBoxyBuiltin(&builder, .register_erased_proc);
+                self.codegen.freeGeneral(addr_reg);
+            }
+
+            const result_reg = try self.allocTempGeneral();
+            try self.emitLoad(.w64, result_reg, frame_ptr, heap_ptr_slot);
+            return .{ .general_reg = result_reg };
         }
 
         fn materializeErasedCallableOnDrop(
@@ -15823,6 +15870,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                 assign.closure,
                                 assign.args,
                                 self.localLayout(assign.target),
+                                assign.result_desc,
                             );
                             try self.bindAssignedLocal(assign.target, value_loc);
                             try work.append(wa, .{ .node = assign.next });
