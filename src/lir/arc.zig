@@ -1261,7 +1261,7 @@ const Inserter = struct {
                     return;
                 },
                 .assign_call_dict => |assign| {
-                    const transfer_mask = try self.spanTransferMask(assign.args, ~@as(u64, 0), assign.next, assign.target, &path.owned, path.options.loop_keep);
+                    const transfer_mask = try self.spanTransferMask(assign.args, ~@as(u64, 0), assign.next, assign.target, &path.owned, path.options.loop_keep, .no);
                     current_start = try self.releaseOldTargetIfNeeded(assign.target, &path.owned, current_start);
                     self.addOwnedIfRc(&path.owned, assign.target);
                     var deaths: std.ArrayList(LIR.LocalId) = .empty;
@@ -1324,7 +1324,7 @@ const Inserter = struct {
                     path.cursor = assign.next;
                 },
                 .assign_list => |assign| {
-                    const transfer_mask = try self.spanTransferMask(assign.elems, ~@as(u64, 0), assign.next, assign.target, &path.owned, path.options.loop_keep);
+                    const transfer_mask = try self.spanTransferMask(assign.elems, ~@as(u64, 0), assign.next, assign.target, &path.owned, path.options.loop_keep, .yes);
                     current_start = try self.releaseOldTargetIfNeeded(assign.target, &path.owned, current_start);
                     self.addOwnedIfRc(&path.owned, assign.target);
                     var deaths: std.ArrayList(LIR.LocalId) = .empty;
@@ -1340,7 +1340,7 @@ const Inserter = struct {
                     path.cursor = assign.next;
                 },
                 .assign_struct => |assign| {
-                    const transfer_mask = try self.spanTransferMask(assign.fields, ~@as(u64, 0), assign.next, assign.target, &path.owned, path.options.loop_keep);
+                    const transfer_mask = try self.spanTransferMask(assign.fields, ~@as(u64, 0), assign.next, assign.target, &path.owned, path.options.loop_keep, .yes);
                     current_start = try self.releaseOldTargetIfNeeded(assign.target, &path.owned, current_start);
                     self.addOwnedIfRc(&path.owned, assign.target);
                     var deaths: std.ArrayList(LIR.LocalId) = .empty;
@@ -2723,7 +2723,7 @@ const Inserter = struct {
                     return;
                 },
                 .assign_call_dict => |assign| {
-                    _ = try self.spanTransferMask(assign.args, ~@as(u64, 0), assign.next, assign.target, &path.owned, path.loop_keep);
+                    _ = try self.spanTransferMask(assign.args, ~@as(u64, 0), assign.next, assign.target, &path.owned, path.loop_keep, .no);
                     self.addOwnedIfRc(&path.owned, assign.target);
                     const singles = [_]LIR.LocalId{assign.target};
                     try self.postStmtDeaths(&path.owned, &singles, assign.args, assign.next, path.loop_keep, null);
@@ -2744,7 +2744,7 @@ const Inserter = struct {
                     }
                     self.unsetMaskedArgsExcept(&path.owned, assign.args, assign.rc_effect.consume_args & ~preserve_consumed_args, assign.target);
                     if (assign.rc_effect.retain_args != 0) {
-                        _ = try self.spanTransferMask(assign.args, assign.rc_effect.retain_args, assign.next, assign.target, &path.owned, path.loop_keep);
+                        _ = try self.spanTransferMask(assign.args, assign.rc_effect.retain_args, assign.next, assign.target, &path.owned, path.loop_keep, .yes);
                     }
                     self.addOwnedIfRc(&path.owned, assign.target);
                     const singles = [_]LIR.LocalId{assign.target};
@@ -2752,14 +2752,14 @@ const Inserter = struct {
                     path.cursor = assign.next;
                 },
                 .assign_list => |assign| {
-                    _ = try self.spanTransferMask(assign.elems, ~@as(u64, 0), assign.next, assign.target, &path.owned, path.loop_keep);
+                    _ = try self.spanTransferMask(assign.elems, ~@as(u64, 0), assign.next, assign.target, &path.owned, path.loop_keep, .yes);
                     self.addOwnedIfRc(&path.owned, assign.target);
                     const singles = [_]LIR.LocalId{assign.target};
                     try self.postStmtDeaths(&path.owned, &singles, assign.elems, assign.next, path.loop_keep, null);
                     path.cursor = assign.next;
                 },
                 .assign_struct => |assign| {
-                    _ = try self.spanTransferMask(assign.fields, ~@as(u64, 0), assign.next, assign.target, &path.owned, path.loop_keep);
+                    _ = try self.spanTransferMask(assign.fields, ~@as(u64, 0), assign.next, assign.target, &path.owned, path.loop_keep, .yes);
                     self.addOwnedIfRc(&path.owned, assign.target);
                     const singles = [_]LIR.LocalId{assign.target};
                     try self.postStmtDeaths(&path.owned, &singles, assign.fields, assign.next, path.loop_keep, null);
@@ -3369,6 +3369,11 @@ const Inserter = struct {
     /// `position_mask`) can move their ownership unit into the value being
     /// constructed: the operand is owned and its liveness group has no use
     /// after this statement. Transferred operands leave the owned set.
+    /// Whether a transferred operand's unit lands inside the statement's
+    /// result (`.yes`, for aggregate and low-level constructions) or is handed
+    /// off to a callee that owns it (`.no`, for dict calls).
+    const TargetHoldsUnit = enum { yes, no };
+
     fn spanTransferMask(
         self: *Inserter,
         span: LIR.LocalSpan,
@@ -3377,9 +3382,15 @@ const Inserter = struct {
         target: LIR.LocalId,
         owned: *OwnedSet,
         loop_keep: ?*const OwnedSet,
+        target_holds_unit: TargetHoldsUnit,
     ) ResourceError!u64 {
         var transfer: u64 = 0;
-        if (!self.localContainsRefcounted(target)) return 0;
+        // Aggregate and low-level transfers move the operand's unit into the
+        // result, so a non-refcounted result has nothing to carry it and the
+        // operand must be retained instead. A dict call instead hands the unit
+        // to the callee, which owns it regardless of the result's layout, so
+        // that transfer stays valid even when the result is not refcounted.
+        if (target_holds_unit == .yes and !self.localContainsRefcounted(target)) return 0;
         const locals = self.store.getLocalSpan(span);
         for (locals, 0..) |local, i| {
             if (i >= 64) break;
