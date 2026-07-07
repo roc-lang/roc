@@ -3838,8 +3838,16 @@ const ProcBodyBuilder = struct {
                         boxyLowerInvariant("boxy hidden descriptor capture had no descriptor requirement");
                     try self.ensureDescriptorLocals();
                     const desc_index = @intFromEnum(desc);
-                    self.descriptor_slots[desc_index] = local;
-                    self.descriptor_locals[desc_index] = local;
+                    // A captured-value pattern sharing this descriptor
+                    // requirement may already have reserved a local for it. The
+                    // capture field materializes the descriptor, so read it into
+                    // that reserved local rather than a fresh one; otherwise the
+                    // reserved local stays unassigned while binders that froze a
+                    // reference to it read an undefined descriptor.
+                    const slot_local = self.descriptor_slots[desc_index] orelse local;
+                    self.erased_capture_locals.items[self.erased_capture_locals.items.len - 1] = slot_local;
+                    self.descriptor_slots[desc_index] = slot_local;
+                    self.descriptor_locals[desc_index] = slot_local;
                     self.descriptor_bound[desc_index] = true;
                 },
                 .hidden_dict => {
