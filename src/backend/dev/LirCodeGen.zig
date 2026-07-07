@@ -468,6 +468,7 @@ pub const BuiltinFn = enum {
 /// machine-code shim against `eval.boxy_abi`, not through `dev_wrappers`.
 pub const BoxyBuiltinFn = enum {
     static_desc,
+    static_dict,
     inspect,
     box,
     unbox,
@@ -478,6 +479,7 @@ pub const BoxyBuiltinFn = enum {
     tag_match,
     desc_copy,
     dynamic_num_literal,
+    dynamic_num_literal_ref,
     call_dict,
     register_proc,
 
@@ -486,6 +488,7 @@ pub const BoxyBuiltinFn = enum {
     pub fn symbolName(self: BoxyBuiltinFn) []const u8 {
         return switch (self) {
             .static_desc => "roc_boxy_static_desc",
+            .static_dict => "roc_boxy_static_dict",
             .inspect => "roc_boxy_inspect",
             .box => "roc_boxy_box",
             .unbox => "roc_boxy_unbox",
@@ -496,6 +499,7 @@ pub const BoxyBuiltinFn = enum {
             .tag_match => "roc_boxy_tag_match",
             .desc_copy => "roc_boxy_desc_copy",
             .dynamic_num_literal => "roc_boxy_dynamic_num_literal",
+            .dynamic_num_literal_ref => "roc_boxy_dynamic_num_literal_ref",
             .call_dict => "roc_boxy_call_dict",
             .register_proc => "roc_boxy_register_proc",
         };
@@ -9830,8 +9834,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         fn emitExplicitRcStmtHelperCallForValue(
             self: *Self,
             helper: LIR.RcHelper,
+            op: RcOp,
             atomicity: RcAtomicity,
             value_loc: ValueLocation,
+            value_layout: layout.Idx,
             count: u16,
         ) Allocator.Error!void {
             switch (helper) {
@@ -9839,10 +9845,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     .key = concrete,
                     .atomicity = atomicity,
                 }, value_loc, count),
-                .boxy => std.debug.panic(
-                    "LIR/codegen invariant violated: boxy descriptor RC reached dev backend before descriptor RC codegen is implemented",
-                    .{},
-                ),
+                .boxy => |desc_ref| try self.emitBoxyRcDrop(desc_ref, op, atomicity, value_loc, value_layout, count),
             }
         }
 
@@ -12079,6 +12082,359 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
         }
 
+        /// Call a boxy runtime C-ABI wrapper. Boxy wrappers live in `eval`,
+        /// which the native evaluator cannot reference by pointer, so they are
+        /// only reachable through the machine-code shim's symbol resolution.
+        fn callBoxyBuiltin(self: *Self, builder: *Builder, boxy_fn: BoxyBuiltinFn) Allocator.Error!void {
+            switch (self.generation_mode) {
+                .shim_execution, .object_file => {
+                    try builder.callRelocatable(boxy_fn.symbolName(), self.allocator, &self.codegen.relocations);
+                },
+                .native_execution => std.debug.panic(
+                    "Dev/codegen invariant violated: boxy dev codegen requires shim execution",
+                    .{},
+                ),
+            }
+        }
+
+        /// Resolve a boxy descriptor reference to an 8-byte stack slot holding
+        /// the resolved `*const BoxyTypeDesc` pointer. Returns the slot's frame
+        /// offset so later calls can pass the pointer with `addMemArg`.
+        fn boxyDescRefToSlot(self: *Self, desc_ref: LIR.BoxyDescRef) Allocator.Error!i32 {
+            switch (desc_ref) {
+                .static => |desc_id| {
+                    var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                    try builder.addImmArg(@intFromEnum(desc_id));
+                    try self.callBoxyBuiltin(&builder, .static_desc);
+                    const slot = self.codegen.allocStackSlot(8);
+                    try self.emitStore(.w64, frame_ptr, slot, ret_reg_0);
+                    return slot;
+                },
+                .local => |local| {
+                    const loc = try self.emitValueLocal(local);
+                    return try self.ensureOnStack(loc, 8);
+                },
+                .runtime => std.debug.panic(
+                    "Dev/codegen invariant violated: runtime boxy desc ref in dev codegen not implemented",
+                    .{},
+                ),
+            }
+        }
+
+        /// Resolve a boxy dictionary reference to an 8-byte stack slot holding
+        /// the resolved `*const BoxyDict` pointer. Returns the slot's frame
+        /// offset.
+        fn boxyDictRefToSlot(self: *Self, dict_ref: LIR.BoxyDictRef) Allocator.Error!i32 {
+            switch (dict_ref) {
+                .static => |dict_id| {
+                    var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                    try builder.addImmArg(@intFromEnum(dict_id));
+                    try self.callBoxyBuiltin(&builder, .static_dict);
+                    const slot = self.codegen.allocStackSlot(8);
+                    try self.emitStore(.w64, frame_ptr, slot, ret_reg_0);
+                    return slot;
+                },
+                .local => |local| {
+                    const loc = try self.emitValueLocal(local);
+                    return try self.ensureOnStack(loc, 8);
+                },
+            }
+        }
+
+        /// Materialize a local's value bytes onto the stack and return the
+        /// address argument to pass for it: the frame offset of its bytes, or
+        /// null when the local's layout is zero-sized (the wrapper receives a
+        /// null pointer, matching the interpreter's zero-sized value handling).
+        fn boxyLocalBytesOffset(self: *Self, local: LocalId) Allocator.Error!?i32 {
+            const size = self.getLayoutSize(self.localLayout(local));
+            if (size == 0) return null;
+            const loc = try self.emitValueLocal(local);
+            return try self.ensureOnStack(loc, size);
+        }
+
+        /// Allocate a zeroed stack slot to receive a boxy wrapper's result
+        /// written through an out-pointer. The slot is at least eight bytes so
+        /// pointer-sized dynamic values always have room.
+        fn allocBoxyOutSlot(self: *Self, target_layout: layout.Idx) Allocator.Error!i32 {
+            const size = @max(@as(u32, 8), self.getLayoutSize(target_layout));
+            const slot = self.codegen.allocStackSlot(size);
+            try self.zeroStackArea(slot, size);
+            return slot;
+        }
+
+        /// Store a 128-bit literal into a 16-byte stack slot and return its
+        /// frame offset so the value can be passed by address.
+        fn boxyI128LiteralSlot(self: *Self, value: i128) Allocator.Error!i32 {
+            const slot = self.codegen.allocStackSlot(16);
+            const tmp = try self.allocTempGeneral();
+            defer self.codegen.freeGeneral(tmp);
+            const bits: u128 = @bitCast(value);
+            try self.codegen.emitLoadImm(tmp, @bitCast(@as(u64, @truncate(bits))));
+            try self.emitStore(.w64, frame_ptr, slot, tmp);
+            try self.codegen.emitLoadImm(tmp, @bitCast(@as(u64, @truncate(bits >> 64))));
+            try self.emitStore(.w64, frame_ptr, slot + 8, tmp);
+            return slot;
+        }
+
+        fn generateBoxyDescRef(self: *Self, assign: anytype) Allocator.Error!ValueLocation {
+            const target_layout = self.localLayout(assign.target);
+            const captures = self.store.getLocalSpan(assign.captures);
+            if (assign.nested_index == null and captures.len == 0) {
+                switch (assign.desc) {
+                    .static => |desc_id| {
+                        var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                        try builder.addImmArg(@intFromEnum(desc_id));
+                        try self.callBoxyBuiltin(&builder, .static_desc);
+                        const slot = self.codegen.allocStackSlot(8);
+                        try self.emitStore(.w64, frame_ptr, slot, ret_reg_0);
+                        return self.stackLocationForLayout(target_layout, slot);
+                    },
+                    .local => |local| return try self.emitValueLocal(local),
+                    .runtime => std.debug.panic(
+                        "Dev/codegen invariant violated: runtime boxy desc ref in dev codegen not implemented",
+                        .{},
+                    ),
+                }
+            }
+
+            const desc_id = switch (assign.desc) {
+                .static => |id| id,
+                else => std.debug.panic(
+                    "Dev/codegen invariant violated: boxy desc copy requires a static descriptor template",
+                    .{},
+                ),
+            };
+            const count = captures.len;
+            const ids_slot = if (count == 0) @as(i32, 0) else self.codegen.allocStackSlot(@intCast(count * 4));
+            const descs_slot = if (count == 0) @as(i32, 0) else self.codegen.allocStackSlot(@intCast(count * 8));
+            for (captures, 0..) |capture_local, i| {
+                const id_reg = try self.allocTempGeneral();
+                try self.codegen.emitLoadImm(id_reg, @intFromEnum(capture_local));
+                try self.emitStore(.w32, frame_ptr, ids_slot + @as(i32, @intCast(i * 4)), id_reg);
+                self.codegen.freeGeneral(id_reg);
+
+                const desc_off = try self.boxyDescRefToSlot(.{ .local = capture_local });
+                const ptr_reg = try self.allocTempGeneral();
+                try self.emitLoad(.w64, ptr_reg, frame_ptr, desc_off);
+                try self.emitStore(.w64, frame_ptr, descs_slot + @as(i32, @intCast(i * 8)), ptr_reg);
+                self.codegen.freeGeneral(ptr_reg);
+            }
+
+            const nested_arg: i64 = if (assign.nested_index) |n| @intCast(n) else 0xFFFF_FFFF;
+            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            try builder.addImmArg(@intFromEnum(desc_id));
+            try builder.addImmArg(nested_arg);
+            if (count == 0) try builder.addImmArg(0) else try builder.addLeaArg(frame_ptr, ids_slot);
+            if (count == 0) try builder.addImmArg(0) else try builder.addLeaArg(frame_ptr, descs_slot);
+            try builder.addImmArg(@intCast(count));
+            try self.callBoxyBuiltin(&builder, .desc_copy);
+            const slot = self.codegen.allocStackSlot(8);
+            try self.emitStore(.w64, frame_ptr, slot, ret_reg_0);
+            return self.stackLocationForLayout(target_layout, slot);
+        }
+
+        fn generateBoxyDictRef(self: *Self, assign: anytype) Allocator.Error!ValueLocation {
+            const target_layout = self.localLayout(assign.target);
+            switch (assign.dict) {
+                .static => |dict_id| {
+                    var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                    try builder.addImmArg(@intFromEnum(dict_id));
+                    try self.callBoxyBuiltin(&builder, .static_dict);
+                    const slot = self.codegen.allocStackSlot(8);
+                    try self.emitStore(.w64, frame_ptr, slot, ret_reg_0);
+                    return self.stackLocationForLayout(target_layout, slot);
+                },
+                .local => |local| return try self.emitValueLocal(local),
+            }
+        }
+
+        fn generateBoxyBox(self: *Self, assign: anytype) Allocator.Error!ValueLocation {
+            const target_layout = self.localLayout(assign.target);
+            const payload_off = try self.boxyLocalBytesOffset(assign.payload);
+            const payload_desc_ref = assign.payload_desc orelse std.debug.panic(
+                "Dev/codegen invariant violated: assign_boxy_box reached dev codegen without a payload descriptor",
+                .{},
+            );
+            const payload_desc_slot = try self.boxyDescRefToSlot(payload_desc_ref);
+            const source_desc_slot: ?i32 = if (assign.source_desc) |ref| try self.boxyDescRefToSlot(ref) else null;
+            const out_slot = try self.allocBoxyOutSlot(target_layout);
+            const out_desc_slot = self.codegen.allocStackSlot(8);
+
+            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            try builder.addLeaArg(frame_ptr, out_slot);
+            try builder.addLeaArg(frame_ptr, out_desc_slot);
+            if (payload_off) |off| try builder.addLeaArg(frame_ptr, off) else try builder.addImmArg(0);
+            try builder.addImmArg(@intFromEnum(assign.payload_layout));
+            if (source_desc_slot) |s| try builder.addMemArg(frame_ptr, s) else try builder.addImmArg(0);
+            try builder.addMemArg(frame_ptr, payload_desc_slot);
+            try builder.addImmArg(@intFromEnum(assign.payload_mode));
+            try builder.addImmArg(@intFromEnum(target_layout));
+            try self.callBoxyBuiltin(&builder, .box);
+            return self.stackLocationForLayout(target_layout, out_slot);
+        }
+
+        fn generateBoxyUnbox(self: *Self, assign: anytype) Allocator.Error!ValueLocation {
+            const target_layout = assign.target_layout;
+            const source_off = try self.boxyLocalBytesOffset(assign.source);
+            const source_layout = self.localLayout(assign.source);
+            const source_desc_slot = try self.boxyDescRefToSlot(assign.source_desc);
+            const target_desc_slot: ?i32 = if (assign.target_desc) |ref| try self.boxyDescRefToSlot(ref) else null;
+            const out_slot = try self.allocBoxyOutSlot(target_layout);
+            const out_desc_slot = self.codegen.allocStackSlot(8);
+
+            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            try builder.addLeaArg(frame_ptr, out_slot);
+            try builder.addLeaArg(frame_ptr, out_desc_slot);
+            if (source_off) |off| try builder.addLeaArg(frame_ptr, off) else try builder.addImmArg(0);
+            try builder.addImmArg(@intFromEnum(source_layout));
+            try builder.addMemArg(frame_ptr, source_desc_slot);
+            if (target_desc_slot) |s| try builder.addMemArg(frame_ptr, s) else try builder.addImmArg(0);
+            try builder.addImmArg(@intFromEnum(target_layout));
+            try builder.addImmArg(@intFromEnum(assign.source_mode));
+            try self.callBoxyBuiltin(&builder, .unbox);
+            return self.stackLocationForLayout(target_layout, out_slot);
+        }
+
+        fn generateBoxyTag(self: *Self, assign: anytype) Allocator.Error!ValueLocation {
+            const target_layout = self.localLayout(assign.target);
+            const payload_off: ?i32 = if (assign.payload) |p| try self.boxyLocalBytesOffset(p) else null;
+            const target_desc_slot = try self.boxyDescRefToSlot(assign.target_desc);
+            const payload_desc_slot: ?i32 = if (assign.payload_desc) |ref| try self.boxyDescRefToSlot(ref) else null;
+            const out_slot = try self.allocBoxyOutSlot(target_layout);
+
+            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            try builder.addLeaArg(frame_ptr, out_slot);
+            try builder.addMemArg(frame_ptr, target_desc_slot);
+            try builder.addImmArg(@intFromEnum(assign.tag_name));
+            if (payload_off) |off| try builder.addLeaArg(frame_ptr, off) else try builder.addImmArg(0);
+            try builder.addImmArg(@intFromEnum(assign.payload_layout));
+            if (payload_desc_slot) |s| try builder.addMemArg(frame_ptr, s) else try builder.addImmArg(0);
+            try builder.addImmArg(@intFromEnum(target_layout));
+            try self.callBoxyBuiltin(&builder, .tag);
+            return self.stackLocationForLayout(target_layout, out_slot);
+        }
+
+        fn generateBoxyTagPayload(self: *Self, assign: anytype) Allocator.Error!ValueLocation {
+            const target_layout = self.localLayout(assign.target);
+            const source_off = try self.boxyLocalBytesOffset(assign.source);
+            const source_layout = self.localLayout(assign.source);
+            const source_desc_slot = try self.boxyDescRefToSlot(assign.source_desc);
+            const out_slot = try self.allocBoxyOutSlot(target_layout);
+            const out_desc_slot = self.codegen.allocStackSlot(8);
+
+            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            try builder.addLeaArg(frame_ptr, out_slot);
+            try builder.addLeaArg(frame_ptr, out_desc_slot);
+            if (source_off) |off| try builder.addLeaArg(frame_ptr, off) else try builder.addImmArg(0);
+            try builder.addImmArg(@intFromEnum(source_layout));
+            try builder.addMemArg(frame_ptr, source_desc_slot);
+            try builder.addImmArg(@intFromEnum(assign.tag_name));
+            try builder.addImmArg(@intCast(assign.payload_index));
+            try builder.addImmArg(@intFromEnum(target_layout));
+            try self.callBoxyBuiltin(&builder, .tag_payload);
+
+            if (assign.target_desc) |target_desc_local| {
+                try self.bindAssignedLocal(
+                    target_desc_local,
+                    self.stackLocationForLayout(self.localLayout(target_desc_local), out_desc_slot),
+                );
+            }
+            return self.stackLocationForLayout(target_layout, out_slot);
+        }
+
+        fn generateBoxyInspect(self: *Self, assign: anytype) Allocator.Error!ValueLocation {
+            const target_layout = self.localLayout(assign.target);
+            const source_off = try self.boxyLocalBytesOffset(assign.source);
+            const source_layout = self.localLayout(assign.source);
+            const source_desc_slot = try self.boxyDescRefToSlot(assign.source_desc);
+            const out_slot = self.codegen.allocStackSlot(roc_str_size);
+            try self.zeroStackArea(out_slot, roc_str_size);
+
+            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            try builder.addLeaArg(frame_ptr, out_slot);
+            if (source_off) |off| try builder.addLeaArg(frame_ptr, off) else try builder.addImmArg(0);
+            try builder.addImmArg(@intFromEnum(source_layout));
+            try builder.addMemArg(frame_ptr, source_desc_slot);
+            try self.callBoxyBuiltin(&builder, .inspect);
+            return self.stackLocationForLayout(target_layout, out_slot);
+        }
+
+        fn generateBoxyEq(self: *Self, assign: anytype) Allocator.Error!ValueLocation {
+            const target_layout = self.localLayout(assign.target);
+            const lhs_off = try self.boxyLocalBytesOffset(assign.lhs);
+            const rhs_off = try self.boxyLocalBytesOffset(assign.rhs);
+            const value_layout = self.localLayout(assign.lhs);
+            const desc_slot = try self.boxyDescRefToSlot(assign.source_desc);
+
+            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            if (lhs_off) |off| try builder.addLeaArg(frame_ptr, off) else try builder.addImmArg(0);
+            if (rhs_off) |off| try builder.addLeaArg(frame_ptr, off) else try builder.addImmArg(0);
+            try builder.addImmArg(@intFromEnum(value_layout));
+            try builder.addMemArg(frame_ptr, desc_slot);
+            try self.callBoxyBuiltin(&builder, .eq);
+            const out_slot = self.codegen.allocStackSlot(8);
+            try self.emitStore(.w64, frame_ptr, out_slot, ret_reg_0);
+            return self.stackLocationForLayout(target_layout, out_slot);
+        }
+
+        fn generateBoxyDynamicNumLiteral(self: *Self, target_local: LocalId, lit: anytype) Allocator.Error!ValueLocation {
+            const target_layout = self.localLayout(target_local);
+            const desc_slot = try self.boxyDescRefToSlot(lit.desc);
+            const value_slot = try self.boxyI128LiteralSlot(lit.value);
+            const out_slot = try self.allocBoxyOutSlot(target_layout);
+
+            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            try builder.addLeaArg(frame_ptr, out_slot);
+            try builder.addLeaArg(frame_ptr, value_slot);
+            try builder.addMemArg(frame_ptr, desc_slot);
+            try builder.addImmArg(@intFromEnum(lit.default_layout));
+            try builder.addImmArg(@intFromEnum(target_layout));
+            try self.callBoxyBuiltin(&builder, .dynamic_num_literal_ref);
+            return self.stackLocationForLayout(target_layout, out_slot);
+        }
+
+        /// Emit a descriptor-guided tag test and the conditional branch to its
+        /// miss target. Returns the jump patch taken when the tag does not
+        /// match (the wrapper returned zero).
+        fn generateBoxyTagMatch(self: *Self, tag_match: anytype) Allocator.Error!usize {
+            const source_off = try self.boxyLocalBytesOffset(tag_match.source);
+            const source_layout = self.localLayout(tag_match.source);
+            const source_desc_slot = try self.boxyDescRefToSlot(tag_match.source_desc);
+
+            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            if (source_off) |off| try builder.addLeaArg(frame_ptr, off) else try builder.addImmArg(0);
+            try builder.addImmArg(@intFromEnum(source_layout));
+            try builder.addMemArg(frame_ptr, source_desc_slot);
+            try builder.addImmArg(@intFromEnum(tag_match.tag_name));
+            try self.callBoxyBuiltin(&builder, .tag_match);
+            try self.emitCmpImm(ret_reg_0, 0);
+            return try self.emitJumpIfEqual();
+        }
+
+        /// Emit a descriptor-guided refcount operation over a boxy value.
+        fn emitBoxyRcDrop(
+            self: *Self,
+            desc_ref: LIR.BoxyDescRef,
+            op: RcOp,
+            atomicity: RcAtomicity,
+            value_loc: ValueLocation,
+            value_layout: layout.Idx,
+            count: u16,
+        ) Allocator.Error!void {
+            const value_size = self.getLayoutSize(value_layout);
+            const value_off = try self.ensureValueOnStackForRc(value_loc, value_size);
+            const desc_slot = try self.boxyDescRefToSlot(desc_ref);
+
+            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            try builder.addLeaArg(frame_ptr, value_off);
+            try builder.addImmArg(@intFromEnum(value_layout));
+            try builder.addMemArg(frame_ptr, desc_slot);
+            try builder.addImmArg(@intFromEnum(op));
+            try builder.addImmArg(count);
+            try builder.addImmArg(@intFromEnum(atomicity));
+            try self.callBoxyBuiltin(&builder, .drop);
+        }
+
         fn emitBuiltinAddress(self: *Self, dst_reg: GeneralReg, fn_addr: usize, builtin_fn: BuiltinFn) Allocator.Error!void {
             switch (self.generation_mode) {
                 .native_execution => {
@@ -13456,14 +13812,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Generate code for incref operation.
         fn generateIncref(self: *Self, rc_op: anytype) Allocator.Error!ValueLocation {
             const value_loc = try self.generateRcOperandValue(rc_op.value);
-            try self.emitExplicitRcStmtHelperCallForValue(rc_op.rc, rc_op.atomicity, value_loc, rc_op.count);
+            try self.emitExplicitRcStmtHelperCallForValue(rc_op.rc, .incref, rc_op.atomicity, value_loc, self.localLayout(rc_op.value), rc_op.count);
             return value_loc;
         }
 
         /// Generate code for decref operation.
         fn generateDecref(self: *Self, rc_op: anytype) Allocator.Error!ValueLocation {
             const value_loc = try self.generateRcOperandValue(rc_op.value);
-            try self.emitExplicitRcStmtHelperCallForValue(rc_op.rc, rc_op.atomicity, value_loc, 1);
+            try self.emitExplicitRcStmtHelperCallForValue(rc_op.rc, .decref, rc_op.atomicity, value_loc, self.localLayout(rc_op.value), 1);
             return value_loc;
         }
 
@@ -13495,7 +13851,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Generate code for free operation.
         fn generateFree(self: *Self, rc_op: anytype) Allocator.Error!ValueLocation {
             const value_loc = try self.generateRcOperandValue(rc_op.value);
-            try self.emitExplicitRcStmtHelperCallForValue(rc_op.rc, rc_op.atomicity, value_loc, 1);
+            try self.emitExplicitRcStmtHelperCallForValue(rc_op.rc, .free, rc_op.atomicity, value_loc, self.localLayout(rc_op.value), 1);
             return value_loc;
         }
 
@@ -15172,10 +15528,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                 .f32_literal => |lit| .{ .immediate_f64 = @floatCast(lit) },
                                 .dec_literal => |lit| try self.generateI128Literal(lit),
                                 .str_literal => |str_idx| try self.generateStrLiteral(str_idx),
-                                .boxy_dynamic_num_literal => std.debug.panic(
-                                    "Dev/codegen invariant violated: boxy LIR statement reached dev codegen before boxy codegen is implemented",
-                                    .{},
-                                ),
+                                .boxy_dynamic_num_literal => |lit| try self.generateBoxyDynamicNumLiteral(assign.target, lit),
                                 .null_ptr => .{ .immediate_i64 = 0 },
                                 .proc_ref => |proc_id| blk: {
                                     const proc = self.proc_registry.get(@intFromEnum(proc_id)) orelse unreachable;
@@ -15228,20 +15581,82 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             try work.append(wa, .{ .node = assign.next });
                         },
 
-                        .assign_boxy_desc_ref,
-                        .assign_boxy_dict_ref,
-                        .assign_boxy_box,
-                        .assign_boxy_reuse_box,
-                        .assign_boxy_unbox,
-                        .assign_boxy_adapt,
-                        .assign_boxy_inspect,
-                        .assign_boxy_eq,
-                        .assign_boxy_tag,
-                        .assign_boxy_tag_payload,
-                        .boxy_tag_match,
-                        .assign_call_dict,
-                        => std.debug.panic(
-                            "Dev/codegen invariant violated: boxy LIR statement reached dev codegen before boxy codegen is implemented",
+                        .assign_boxy_desc_ref => |assign| {
+                            const value_loc = try self.generateBoxyDescRef(assign);
+                            try self.bindAssignedLocal(assign.target, value_loc);
+                            try work.append(wa, .{ .node = assign.next });
+                        },
+
+                        .assign_boxy_dict_ref => |assign| {
+                            const value_loc = try self.generateBoxyDictRef(assign);
+                            try self.bindAssignedLocal(assign.target, value_loc);
+                            try work.append(wa, .{ .node = assign.next });
+                        },
+
+                        .assign_boxy_box => |assign| {
+                            const value_loc = try self.generateBoxyBox(assign);
+                            try self.bindAssignedLocal(assign.target, value_loc);
+                            try work.append(wa, .{ .node = assign.next });
+                        },
+
+                        .assign_boxy_reuse_box => |assign| {
+                            const value_loc = try self.emitValueLocal(assign.source);
+                            try self.bindAssignedLocal(assign.target, value_loc);
+                            try work.append(wa, .{ .node = assign.next });
+                        },
+
+                        .assign_boxy_unbox => |assign| {
+                            const value_loc = try self.generateBoxyUnbox(assign);
+                            try self.bindAssignedLocal(assign.target, value_loc);
+                            try work.append(wa, .{ .node = assign.next });
+                        },
+
+                        .assign_boxy_inspect => |assign| {
+                            const value_loc = try self.generateBoxyInspect(assign);
+                            try self.bindAssignedLocal(assign.target, value_loc);
+                            try work.append(wa, .{ .node = assign.next });
+                        },
+
+                        .assign_boxy_eq => |assign| {
+                            const value_loc = try self.generateBoxyEq(assign);
+                            try self.bindAssignedLocal(assign.target, value_loc);
+                            try work.append(wa, .{ .node = assign.next });
+                        },
+
+                        .assign_boxy_tag => |assign| {
+                            const value_loc = try self.generateBoxyTag(assign);
+                            try self.bindAssignedLocal(assign.target, value_loc);
+                            try work.append(wa, .{ .node = assign.next });
+                        },
+
+                        .assign_boxy_tag_payload => |assign| {
+                            const value_loc = try self.generateBoxyTagPayload(assign);
+                            try self.bindAssignedLocal(assign.target, value_loc);
+                            try work.append(wa, .{ .node = assign.next });
+                        },
+
+                        .boxy_tag_match => |tag_match| {
+                            const miss_patch = try self.generateBoxyTagMatch(tag_match);
+                            const branch_env = try self.captureStmtEnv();
+                            const state = try self.allocator.create(SwitchState1);
+                            state.* = .{
+                                .owner = stmt_id,
+                                .switch_env = branch_env,
+                                .else_patch = miss_patch,
+                                .default_branch = tag_match.on_miss,
+                                .end_patch = 0,
+                            };
+                            try work.append(wa, .{ .switch1_after_branch = state });
+                            try work.append(wa, .{ .node = tag_match.on_match });
+                        },
+
+                        .assign_boxy_adapt => std.debug.panic(
+                            "Dev/codegen invariant violated: assign_boxy_adapt is not implemented in dev codegen",
+                            .{},
+                        ),
+
+                        .assign_call_dict => std.debug.panic(
+                            "Dev/codegen invariant violated: assign_call_dict is not implemented in dev codegen",
                             .{},
                         ),
 

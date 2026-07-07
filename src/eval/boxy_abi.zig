@@ -552,6 +552,13 @@ pub fn roc_boxy_static_desc(desc_id: u32) callconv(.c) *const BoxyTypeDesc {
     return g.runtime.requireBoxyTypeDesc(@enumFromInt(desc_id));
 }
 
+/// Resolve a static dictionary id to its dictionary pointer in the global
+/// dictionary table.
+pub fn roc_boxy_static_dict(dict_id: u32) callconv(.c) *const BoxyDict {
+    const g = requireGlobal();
+    return g.runtime.requireBoxyDict(@enumFromInt(dict_id));
+}
+
 /// Encode a numeric literal per the descriptor's payload layout and box it
 /// into dynamic storage.
 pub fn roc_boxy_dynamic_num_literal(
@@ -567,6 +574,32 @@ pub fn roc_boxy_dynamic_num_literal(
         hooks(g),
         value.*,
         desc,
+        layoutIdx(target_layout),
+    ) catch abiCrash(g, "dynamic numeric literal");
+    writeResult(g, out, literal, layoutIdx(target_layout));
+}
+
+/// Encode a numeric literal per `desc`'s payload layout, falling back to
+/// `default_layout` when the descriptor carries no concrete scalar payload
+/// (the binding is erased), and box the result into dynamic storage.
+pub fn roc_boxy_dynamic_num_literal_ref(
+    out: ?[*]u8,
+    value: *align(1) const i128,
+    desc: *const BoxyTypeDesc,
+    default_layout: u32,
+    target_layout: u32,
+) callconv(.c) void {
+    const g = requireGlobal();
+    enter(g);
+    defer leave(g);
+    const effective = if (g.runtime.boxyDescHasConcreteScalarPayload(desc))
+        desc
+    else
+        g.runtime.makeRuntimeScalarDesc(layoutIdx(default_layout)) catch abiCrash(g, "dynamic numeric literal descriptor");
+    const literal = g.runtime.boxyDynamicNumLiteral(
+        hooks(g),
+        value.*,
+        effective,
         layoutIdx(target_layout),
     ) catch abiCrash(g, "dynamic numeric literal");
     writeResult(g, out, literal, layoutIdx(target_layout));
