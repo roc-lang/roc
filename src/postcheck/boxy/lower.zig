@@ -14424,14 +14424,27 @@ const ProcBodyBuilder = struct {
 
         const variants = self.parent.plan.tagVariantSlice(self.parent.plan.representations.items[@intFromEnum(source_tag_rep)].tag_variants);
         if (variants.len == 0) return null;
+        var all_variants_have_no_payload = true;
         for (variants) |variant| {
             const source_payloads = self.parent.plan.childSlice(variant.payloads);
+            if (source_payloads.len != 0) all_variants_have_no_payload = false;
             var seen_payloads = std.AutoHashMap(Plan.TypeRepId, void).init(self.parent.allocator);
             defer seen_payloads.deinit();
             const target_payloads = (try self.dynamicTagPayloadsForTextInner(target_rep, self.tagVariantNameText(variant), &seen_payloads)) orelse return null;
             if (source_payloads.len != target_payloads.len) return null;
         }
-        if (self.tagDomainHasOpenExtension(target_rep) and
+        // Reusing the concrete source descriptor relabels the source value's box
+        // as the open target without rewriting it. When the open row's storage
+        // is wider than the concrete tag, reading the relabelled box through the
+        // open descriptor runs past the boxed allocation. For payloadless
+        // variants the per-variant conversion below rebuilds the open tag
+        // exactly, so decline the relabel there and let it run.
+        const target_payload_layout = self.parent.descriptorPayloadLayoutForRep(target_rep);
+        const source_storage_size = self.parent.result.layouts.layoutSize(self.parent.result.layouts.getLayout(source_layout));
+        const target_storage_size = self.parent.result.layouts.layoutSize(self.parent.result.layouts.getLayout(target_payload_layout));
+        const relabel_would_overread = all_variants_have_no_payload and source_storage_size < target_storage_size;
+        if (!relabel_would_overread and
+            self.tagDomainHasOpenExtension(target_rep) and
             try self.concreteTagUnionBoundaryCanReuseSourceDescriptor(target_rep, source_tag_rep, variants))
         {
             const source_desc = try self.descriptorRefForLocalOrKnownRep(source, source_rep);
