@@ -7036,8 +7036,14 @@ const ProcBodyBuilder = struct {
                 const payload = try self.addFrameLocal(payload_layout);
                 const source_desc = try self.descriptorRefForSourceLocalRep(source, source_rep);
                 const target_desc_info = try self.storageDescriptorForRepIfNeeded(record_rep);
-                if (target_desc_info.desc) |target_desc| {
-                    self.parent.result.store.replaceLocalBoxyDesc(payload, target_desc);
+                // A `.dynamic`-rep record reports no static storage descriptor, but
+                // when its unboxed payload carries an erased `box_of_zst` the value
+                // must be reference-counted through a descriptor. The unboxed payload
+                // has the box's payload shape, so reuse the source box's descriptor.
+                const payload_desc: ?LIR.BoxyDescRef = target_desc_info.desc orelse
+                    if (self.layoutContainsBoxOfZst(payload_layout)) source_desc else null;
+                if (payload_desc) |desc| {
+                    self.parent.result.store.replaceLocalBoxyDesc(payload, desc);
                 }
                 break :blk .{
                     .local = payload,
@@ -7047,7 +7053,7 @@ const ProcBodyBuilder = struct {
                     .unbox = .{
                         .source = source,
                         .source_desc = source_desc,
-                        .target_desc = target_desc_info.desc,
+                        .target_desc = payload_desc,
                         .target_layout = payload_layout,
                     },
                 };
@@ -9110,7 +9116,41 @@ const ProcBodyBuilder = struct {
             sublist_record_adapt = continuation;
         }
 
-        var continuation = sublist_record_adapt orelse try self.parent.result.store.addCFStmt(.{ .assign_low_level = .{
+        // list_replace_unsafe returns a concrete `{ list, prev }` record, but a
+        // generic caller receives that record erased into a dynamic box. The
+        // builtin can only build the concrete record, so compute it into a
+        // concrete temp and box the temp into the erased target.
+        var replace_result_box: ?LIR.CFStmtId = null;
+        if (op == .list_replace_unsafe and
+            self.layoutIsBoxyDynamicStorage(self.parent.result.store.getLocal(target).layout_idx))
+        {
+            const result_rep = self.repForType(result_ty);
+            const concrete_layout = self.tagPayloadStorageLayoutForRep(result_rep);
+            const concrete = try self.addFrameLocal(concrete_layout);
+            const payload_desc_info = try self.storageDescriptorForRepIfNeeded(result_rep);
+            const payload_desc = payload_desc_info.desc orelse
+                boxyLowerInvariant("boxy list_replace_unsafe result box had no payload descriptor");
+            self.parent.result.store.replaceLocalBoxyDesc(target, payload_desc);
+            const box = try self.parent.result.store.addCFStmt(.{ .assign_boxy_box = .{
+                .target = target,
+                .payload = concrete,
+                .payload_layout = concrete_layout,
+                .source_desc = null,
+                .payload_desc = payload_desc,
+                .payload_mode = .move,
+                .next = next,
+            } });
+            const box_with_desc = try self.prependOptionalDescriptorMaterialization(payload_desc_info.materialize, box);
+            replace_result_box = try self.parent.result.store.addCFStmt(.{ .assign_low_level = .{
+                .target = concrete,
+                .op = op,
+                .rc_effect = op.rcEffect(),
+                .args = try self.parent.result.store.addLocalSpan(lowered),
+                .next = box_with_desc,
+            } });
+        }
+
+        var continuation = replace_result_box orelse sublist_record_adapt orelse try self.parent.result.store.addCFStmt(.{ .assign_low_level = .{
             .target = target,
             .op = op,
             .rc_effect = op.rcEffect(),
@@ -13730,14 +13770,22 @@ const ProcBodyBuilder = struct {
                 else blk: {
                     const source_desc = try self.descriptorRefForSourceLocalRep(source, canonical_source_rep);
                     const target_desc_info = try self.storageDescriptorForRepIfNeeded(canonical_target_rep);
-                    if (target_desc_info.desc) |target_desc| {
-                        self.parent.result.store.replaceLocalBoxyDesc(target, target_desc);
+                    // A `.dynamic`-rep target reports no static storage descriptor,
+                    // but when its unboxed storage layout carries an erased
+                    // `box_of_zst` the value must still be reference-counted through
+                    // a descriptor (a layout-driven concrete RC walk cannot align
+                    // the box's allocation). The unboxed storage has the same shape
+                    // as the box payload, so reuse the source box's descriptor.
+                    const target_desc: ?LIR.BoxyDescRef = target_desc_info.desc orelse
+                        if (self.layoutContainsBoxOfZst(target_layout)) source_desc else null;
+                    if (target_desc) |desc| {
+                        self.parent.result.store.replaceLocalBoxyDesc(target, desc);
                     }
                     const unbox = try self.parent.result.store.addCFStmt(.{ .assign_boxy_unbox = .{
                         .target = target,
                         .source = source,
                         .source_desc = source_desc,
-                        .target_desc = target_desc_info.desc,
+                        .target_desc = target_desc,
                         .target_layout = target_layout,
                         .source_mode = .borrow,
                         .next = next,
@@ -13811,6 +13859,17 @@ const ProcBodyBuilder = struct {
         if (target_field_count == 0) return null;
 
         const source_payload = try self.addFrameLocal(source_payload_layout);
+        // The unboxed source payload lives past the field conversions and is then
+        // dropped. When it carries an erased `box_of_zst` it must be
+        // reference-counted through a descriptor, so tag it with the source box's
+        // descriptor (which describes exactly this payload shape).
+        const source_payload_desc: ?LIR.BoxyDescRef = if (self.layoutContainsBoxOfZst(source_payload_layout))
+            try self.descriptorRefForSourceLocalRep(source, source_rep)
+        else
+            null;
+        if (source_payload_desc) |desc| {
+            self.parent.result.store.replaceLocalBoxyDesc(source_payload, desc);
+        }
         const target_fields = try self.parent.allocator.alloc(LIR.LocalId, target_field_count);
         defer self.parent.allocator.free(target_fields);
         const source_fields = try self.parent.allocator.alloc(LIR.LocalId, target_field_count);
@@ -13881,6 +13940,7 @@ const ProcBodyBuilder = struct {
             .target = source_payload,
             .source = source,
             .source_desc = try self.descriptorRefForSourceLocalRep(source, source_rep),
+            .target_desc = source_payload_desc,
             .target_layout = source_payload_layout,
             .source_mode = .borrow,
             .next = continuation,
@@ -14224,8 +14284,13 @@ const ProcBodyBuilder = struct {
         const target_variants = self.parent.plan.tagVariantSlice(self.parent.plan.representations.items[@intFromEnum(target_tag_rep)].tag_variants);
         const source_variants = self.parent.plan.tagVariantSlice(self.parent.plan.representations.items[@intFromEnum(source_tag_rep)].tag_variants);
         if (target_variants.len == 0 or target_variants.len != source_variants.len) return null;
+        // Tag labels are interned per module, so the same label reaches this
+        // boundary with different `TagLabelId`s on the source and target sides
+        // (a worker's builtin `Result` versus the caller's `Result`). Both
+        // variant lists are ordered alphabetically over the same checked tag
+        // set, so pair them positionally and compare the label text.
         for (target_variants, source_variants) |target_variant, source_variant| {
-            if (target_variant.name != source_variant.name) return null;
+            if (!std.mem.eql(u8, self.tagVariantNameText(target_variant), self.tagVariantNameText(source_variant))) return null;
         }
 
         const branches = try self.parent.allocator.alloc(LIR.CFSwitchBranch, target_variants.len);
@@ -17119,6 +17184,50 @@ const ProcBodyBuilder = struct {
 
     fn layoutIsBoxyDynamicStorage(self: *const ProcBodyBuilder, layout_idx: layout.Idx) bool {
         return self.parent.result.layouts.getLayout(layout_idx).tag == .box_of_zst;
+    }
+
+    /// Whether a layout transitively contains an erased `box_of_zst`. Such a box
+    /// carries no static payload shape (its `box_of_zst` alignment is 1), so a
+    /// layout-driven concrete RC walk would decref its allocation with the wrong
+    /// alignment; a value holding one must be reference-counted through its
+    /// runtime descriptor instead.
+    fn layoutContainsBoxOfZst(self: *const ProcBodyBuilder, layout_idx: layout.Idx) bool {
+        var seen = std.AutoHashMap(layout.Idx, void).init(self.parent.allocator);
+        defer seen.deinit();
+        return self.layoutContainsBoxOfZstInner(layout_idx, &seen) catch true;
+    }
+
+    fn layoutContainsBoxOfZstInner(
+        self: *const ProcBodyBuilder,
+        layout_idx: layout.Idx,
+        seen: *std.AutoHashMap(layout.Idx, void),
+    ) Allocator.Error!bool {
+        if ((try seen.getOrPut(layout_idx)).found_existing) return false;
+        const layouts = self.parent.result.layouts;
+        const value = layouts.getLayout(layout_idx);
+        return switch (value.tag) {
+            .box_of_zst => true,
+            .box, .list => try self.layoutContainsBoxOfZstInner(value.getIdx(), seen),
+            .list_of_zst => false,
+            .struct_ => blk: {
+                const struct_idx = value.getStruct().idx;
+                const fields = layouts.struct_fields.sliceRange(layouts.getStructData(struct_idx).getFields());
+                var i: u32 = 0;
+                while (i < fields.len) : (i += 1) {
+                    if (try self.layoutContainsBoxOfZstInner(fields.get(i).layout, seen)) break :blk true;
+                }
+                break :blk false;
+            },
+            .tag_union => blk: {
+                const info = layouts.getTagUnionInfo(value);
+                var i: u32 = 0;
+                while (i < info.variants.len) : (i += 1) {
+                    if (try self.layoutContainsBoxOfZstInner(info.variants.get(i).payload_layout, seen)) break :blk true;
+                }
+                break :blk false;
+            },
+            else => false,
+        };
     }
 
     fn isZstLocal(self: *const ProcBodyBuilder, local: LIR.LocalId) bool {
