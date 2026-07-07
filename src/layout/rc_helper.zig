@@ -106,7 +106,13 @@ pub const Resolver = struct {
     /// Plan the RC behavior for a canonical helper key.
     pub fn plan(self: *const Resolver, helper_key: HelperKey) Plan {
         const l = self.store.getLayout(helper_key.layout_idx);
-        if (!self.store.layoutContainsRefcounted(l)) return .noop;
+        switch (l.tag) {
+            // An erased box carries a real refcounted heap allocation even
+            // though its payload layout is zero-sized, so it participates in
+            // reference counting exactly like a box.
+            .box_of_zst => {},
+            else => if (!self.store.layoutContainsRefcounted(l)) return .noop,
+        }
 
         return switch (l.tag) {
             // ptr is never refcounted, so the early return above already handled it.
