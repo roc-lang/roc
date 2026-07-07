@@ -2653,6 +2653,66 @@ pub const BoxyRuntime = struct {
         return target;
     }
 
+    /// Coerce a fully-concrete value into the erased representation a generic
+    /// worker's parameter expects, driven entirely by layouts. This bridges a
+    /// cross-module erased-callable ABI seam: the caller module resolved a
+    /// closure's argument to a concrete layout while the closure's worker (built
+    /// in the providing module against an abstract type) reads that argument in
+    /// its erased form. The closure carries no target descriptor at the call, so
+    /// the boxing shape is derived from the concrete source layout: every field
+    /// the target boxes is a self-describing concrete value whose refcounting is
+    /// known from its own layout.
+    pub fn materializeConcreteValueToErasedLayout(
+        self: *const BoxyRuntime,
+        hooks: anytype,
+        value: Value,
+        actual_layout: layout_mod.Idx,
+        expected_layout: layout_mod.Idx,
+    ) Error!Value {
+        if (actual_layout == expected_layout) {
+            return try self.materializeLocalValue(hooks, value, expected_layout);
+        }
+
+        const actual_layout_val = self.layout_store.getLayout(actual_layout);
+        const expected_layout_val = self.layout_store.getLayout(expected_layout);
+
+        if (actual_layout_val.tag == .struct_ and expected_layout_val.tag == .struct_) {
+            const actual_struct_idx = actual_layout_val.getStruct().idx;
+            const expected_struct_idx = expected_layout_val.getStruct().idx;
+            const expected_data = self.layout_store.getStructData(expected_struct_idx);
+            const target = try hooks.allocValue(expected_layout);
+            var original_index: u32 = 0;
+            while (original_index < expected_data.fields.count) : (original_index += 1) {
+                const expected_field_layout = self.layout_store.getStructFieldLayoutByOriginalIndex(expected_struct_idx, original_index);
+                const expected_field_size = self.helper.sizeOf(expected_field_layout);
+                if (expected_field_size == 0) continue;
+                const actual_field_layout = self.layout_store.getStructFieldLayoutByOriginalIndex(actual_struct_idx, original_index);
+                const expected_field_offset = self.layout_store.getStructFieldOffsetByOriginalIndex(expected_struct_idx, original_index);
+                const actual_field_offset = self.layout_store.getStructFieldOffsetByOriginalIndex(actual_struct_idx, original_index);
+                const field_value = try self.materializeConcreteValueToErasedLayout(
+                    hooks,
+                    value.offset(actual_field_offset),
+                    actual_field_layout,
+                    expected_field_layout,
+                );
+                target.offset(expected_field_offset).copyFrom(field_value, expected_field_size);
+            }
+            return target;
+        }
+
+        if ((expected_layout_val.tag == .box or expected_layout_val.tag == .box_of_zst) and
+            actual_layout_val.tag != .box and actual_layout_val.tag != .box_of_zst)
+        {
+            var synthesized = LirProgram.BoxyTypeDesc{
+                .payload_layout = actual_layout,
+                .contains_refcounted = self.layout_store.layoutContainsRefcounted(actual_layout_val),
+            };
+            return try self.allocBoxyDynamicPayload(hooks, value, actual_layout, &synthesized, expected_layout);
+        }
+
+        return try self.coerceExplicitRefValueToLayout(hooks, value, actual_layout, expected_layout);
+    }
+
     fn materializeBoxyStructPayloadToLayoutWithTargetDesc(
         self: *const BoxyRuntime,
         hooks: anytype,

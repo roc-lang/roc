@@ -3536,8 +3536,25 @@ pub const Interpreter = struct {
             const proc_args = try self.arena.allocator().alloc(Value, proc_params.len);
             const proc_arg_layouts = try self.arena.allocator().alloc(layout_mod.Idx, proc_params.len);
             for (args, arg_layouts, 0..) |arg, arg_layout, index| {
-                proc_args[index] = arg;
-                proc_arg_layouts[index] = arg_layout;
+                const param_layout = self.store.getLocal(proc_params[index]).layout_idx;
+                // A closure built in a providing module against an abstract type
+                // reads its arguments in an erased form; a caller that resolved
+                // the same argument to a concrete layout must box it into that
+                // erased form before the worker runs. Only the erased worker's
+                // param layout differs from the concrete call-site layout, so the
+                // conversion is confined to those args.
+                if (arg_layout != param_layout) {
+                    proc_args[index] = try self.boxy_runtime.materializeConcreteValueToErasedLayout(
+                        self.boxyFrameHooks(frame),
+                        arg,
+                        arg_layout,
+                        param_layout,
+                    );
+                    proc_arg_layouts[index] = param_layout;
+                } else {
+                    proc_args[index] = arg;
+                    proc_arg_layouts[index] = arg_layout;
+                }
             }
             proc_args[explicit_arg_count] = try self.allocPointerIntValue(@intFromPtr(erasedCallableInterpreterCaptureValuePtr(closure_ptr)));
             proc_arg_layouts[explicit_arg_count] = .opaque_ptr;
