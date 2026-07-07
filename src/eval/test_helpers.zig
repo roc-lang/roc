@@ -20,6 +20,10 @@ const native_runtime_libcalls = builtins.native_runtime_libcalls;
 const CompileTimeFinalization = @import("compile_time_finalization.zig");
 const Interpreter = @import("interpreter.zig").Interpreter;
 const RuntimeHostEnv = @import("test/RuntimeHostEnv.zig");
+const boxy_abi = @import("boxy_abi.zig");
+const boxy_runtime = @import("boxy_runtime.zig");
+const BoxyBuiltinFn = backend.LirCodeGenMod.BoxyBuiltinFn;
+const BoxyNativeFnTable = backend.LirCodeGenMod.BoxyNativeFnTable;
 
 const Allocator = std.mem.Allocator;
 const Can = can.Can;
@@ -1922,11 +1926,46 @@ fn runExecutableBoolRoot(
     return result;
 }
 
+/// Native addresses of the boxy runtime wrappers, indexed by
+/// `@intFromEnum(BoxyBuiltinFn)`. The dev backend calls these directly when it
+/// runs generated boxy code in this process.
+fn boxyNativeFnTable() BoxyNativeFnTable {
+    var table: BoxyNativeFnTable = undefined;
+    inline for (@typeInfo(BoxyBuiltinFn).@"enum".fields) |field| {
+        const boxy_fn: BoxyBuiltinFn = @enumFromInt(field.value);
+        const name = comptime boxy_fn.symbolName();
+        table[field.value] = @intFromPtr(&@field(boxy_abi, name));
+    }
+    return table;
+}
+
+/// Install the process-global boxy runtime from live stores so in-process dev
+/// code can call the boxy wrappers. A no-op when the program has no boxy tables.
+/// Returns whether the global was installed and must be torn down.
+fn installBoxyGlobal(
+    allocator: Allocator,
+    store: *const lir.LirStore,
+    layouts: *const LayoutStore,
+    tables: boxy_runtime.BoxyTables,
+    roc_ops: *builtins.host_abi.RocOps,
+) Allocator.Error!bool {
+    if (tables.type_descs.len == 0 and tables.dicts.len == 0) return false;
+    // Clear any runtime an earlier program left installed after longjmping past
+    // its teardown on a crash.
+    boxy_abi.deinitGlobal();
+    boxy_abi.initGlobal(allocator, store, layouts, tables, roc_ops) catch |err| switch (err) {
+        error.AlreadyInitialized => return false,
+        error.OutOfMemory => return error.OutOfMemory,
+    };
+    return true;
+}
+
 /// JIT-compile and run bool-returning test roots via the dev backend.
 pub fn devEvalBoolRoots(
     allocator: Allocator,
     store: *const lir.LirStore,
     layouts: *const LayoutStore,
+    tables: boxy_runtime.BoxyTables,
     roots: []const BoolRoot,
 ) TestHelperError![]BoolRootEvalResult {
     if (comptime !backend.host_lir_codegen_available) {
@@ -1934,10 +1973,15 @@ pub fn devEvalBoolRoots(
     } else {
         var codegen = try HostLirCodeGen.init(allocator, store, layouts, &.{});
         defer codegen.deinit();
+        var native_fns = boxyNativeFnTable();
+        codegen.boxy_native_fns = &native_fns;
         try codegen.compileAllProcSpecs(store.getProcSpecs());
 
         var runtime_env = RuntimeHostEnv.init(allocator);
         defer runtime_env.deinit();
+
+        const boxy_installed = try installBoxyGlobal(allocator, store, layouts, tables, runtime_env.get_ops());
+        defer if (boxy_installed) boxy_abi.deinitGlobal();
 
         const results = try allocator.alloc(BoolRootEvalResult, roots.len);
         var result_len: usize = 0;
@@ -2166,6 +2210,8 @@ pub fn devEvaluatorStrWithStats(allocator: Allocator, lowered: *const LoweredPro
             &.{},
         );
         defer codegen.deinit();
+        var native_fns = boxyNativeFnTable();
+        codegen.boxy_native_fns = &native_fns;
         try codegen.compileAllProcSpecs(lowered.view.store.getProcSpecs());
 
         const proc = lowered.view.store.getProcSpec(lowered.mainProc());
@@ -2185,6 +2231,15 @@ pub fn devEvaluatorStrWithStats(allocator: Allocator, lowered: *const LoweredPro
 
         var runtime_env = RuntimeHostEnv.init(allocator);
         defer runtime_env.deinit();
+
+        const boxy_installed = try installBoxyGlobal(
+            allocator,
+            &lowered.view.store,
+            &lowered.view.layouts,
+            boxy_runtime.BoxyTables.fromImageView(&lowered.view),
+            runtime_env.get_ops(),
+        );
+        defer if (boxy_installed) boxy_abi.deinitGlobal();
 
         const arg_buffer = try zeroedEntrypointArgBuffer(allocator, lowered, arg_layouts);
         defer if (arg_buffer) |buf| allocator.free(buf);

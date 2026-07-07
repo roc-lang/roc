@@ -510,6 +510,16 @@ pub const BoxyBuiltinFn = enum {
     }
 };
 
+/// Number of boxy runtime C-ABI wrappers the dev backend can call.
+pub const boxy_builtin_fn_count = @typeInfo(BoxyBuiltinFn).@"enum".fields.len;
+
+/// Native addresses of the boxy runtime C-ABI wrappers, indexed by
+/// `@intFromEnum(BoxyBuiltinFn)`. In-process (native execution) callers supply
+/// this so the dev backend can call the wrappers by absolute address; `eval`
+/// populates it because the `backend` module cannot reference `eval.boxy_abi`
+/// directly.
+pub const BoxyNativeFnTable = [boxy_builtin_fn_count]usize;
+
 /// Special layout index for List I64 type (must match dev_evaluator.zig).
 /// Lists are (ptr, len, capacity) = 24 bytes and need special handling when returning results.
 
@@ -970,6 +980,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// entrypoints read this to decide whether to install the process-global
         /// boxy runtime (via `roc_boxy_init_embedded`) before running procs.
         boxy_runtime_used: bool = false,
+
+        /// Native addresses of the boxy runtime wrappers for in-process
+        /// execution. When set, `native_execution` boxy calls dispatch through
+        /// these; otherwise boxy codegen requires the shim or object-file symbol
+        /// ABI. The caller installs the process-global boxy runtime before
+        /// running the generated code.
+        boxy_native_fns: ?*const BoxyNativeFnTable = null,
 
         /// Scratch buffer for argument locations during lambda body inlining
         scratch_arg_locs: base.Scratch(ValueLocation),
@@ -12204,10 +12221,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .shim_execution, .object_file => {
                     try builder.callRelocatable(boxy_fn.symbolName(), self.allocator, &self.codegen.relocations);
                 },
-                .native_execution => std.debug.panic(
-                    "Dev/codegen invariant violated: boxy dev codegen requires shim execution",
-                    .{},
-                ),
+                .native_execution => {
+                    const table = self.boxy_native_fns orelse std.debug.panic(
+                        "Dev/codegen invariant violated: boxy dev codegen requires shim execution",
+                        .{},
+                    );
+                    try builder.call(table[@intFromEnum(boxy_fn)]);
+                },
             }
         }
 

@@ -9939,6 +9939,7 @@ fn runCompiledTestRoots(
             ctx.gpa,
             &lowered.lir_result.store,
             &lowered.lir_result.layouts,
+            eval.boxy_runtime.BoxyTables.fromResult(&lowered.lir_result),
             bool_roots,
         ),
         .llvm_size => eval.test_helpers.llvmEvalBoolRoots(
