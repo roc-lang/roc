@@ -2247,7 +2247,14 @@ const ProcedureBuilder = struct {
             for (ordered) |field| {
                 const field_layout = self.recordPayloadFieldLayout(payload_layout, field.index);
                 if (!self.layoutNeedsNestedBoxyDesc(field_layout)) continue;
-                const desc_rep = self.tagPayloadStorageDescRepForLayout(field.rep, field_layout, false) orelse continue;
+                // A box-storage field is refcounted by its own allocation, so the
+                // drop always resolves a nested descriptor for it. Force the
+                // descriptor even when the field's representation would not
+                // otherwise carry a payload descriptor (a dynamic-rep field),
+                // keeping the emitted nested descriptors aligned with the fields
+                // the drop expects.
+                const force_field = self.layoutIsBoxStorage(field_layout);
+                const desc_rep = self.tagPayloadStorageDescRepForLayout(field.rep, field_layout, force_field) orelse continue;
                 try refs.append(self.allocator, try self.staticDescRefForRep(desc_rep));
             }
         } else {
@@ -2255,7 +2262,6 @@ const ProcedureBuilder = struct {
             var record_field_index: usize = 0;
             for (self.plan.childSlice(rep.children)) |child| {
                 if (child.role == .tag_ext) continue;
-                const force_desc = child.role == .box_payload;
                 const field_layout = switch (child.role) {
                     .record_field => blk: {
                         const field_layout = self.recordPayloadFieldLayout(payload_layout, record_field_index);
@@ -2267,6 +2273,13 @@ const ProcedureBuilder = struct {
                     .list_elem => self.listElementLayout(payload_layout),
                     else => continue,
                 };
+                // A box-storage field or element is refcounted by its own
+                // allocation, so the drop always resolves a nested descriptor for
+                // it. Force the descriptor even when the child's representation
+                // would not otherwise carry a payload descriptor, keeping the
+                // emitted nested descriptors aligned with the fields the drop
+                // expects.
+                const force_desc = child.role == .box_payload or self.layoutIsBoxStorage(field_layout);
                 if (!force_desc and !self.layoutNeedsNestedBoxyDesc(field_layout)) continue;
                 const desc_rep = self.tagPayloadStorageDescRepForLayout(child.rep, field_layout, force_desc) orelse continue;
                 try refs.append(self.allocator, try self.staticDescRefForRep(desc_rep));
