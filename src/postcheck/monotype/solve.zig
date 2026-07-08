@@ -1741,8 +1741,6 @@ pub const InstGraph = struct {
     /// drain. Run only when no constraint walk holds slices into the type
     /// store.
     pub fn drainDirty(self: *InstGraph) Allocator.Error!void {
-        self.types.beginDigestCacheInvalidationBatch();
-        defer self.types.endDigestCacheInvalidationBatch();
         while (self.dirty.pop()) |raw_root| {
             const root = self.find(raw_root);
             if (!self.dirty_set.remove(root)) continue;

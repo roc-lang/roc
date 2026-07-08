@@ -160,8 +160,9 @@ pub const Store = struct {
     types: StoreList(Content, "types"),
     type_digests: StoreList(?names.TypeDigest, "type_digests"),
     specialization_digests: StoreList(?names.TypeDigest, "specialization_digests"),
-    digest_cache_batch_depth: u32,
-    digest_cache_dirty: bool,
+    type_digest_generations: StoreList(u64, "type_digest_generations"),
+    specialization_digest_generations: StoreList(u64, "specialization_digest_generations"),
+    digest_cache_generation: u64,
     spans: StoreList(TypeId, "spans"),
     fields: StoreList(Field, "fields"),
     tags: StoreList(Tag, "tags"),
@@ -174,8 +175,9 @@ pub const Store = struct {
             .types = .empty,
             .type_digests = .empty,
             .specialization_digests = .empty,
-            .digest_cache_batch_depth = 0,
-            .digest_cache_dirty = false,
+            .type_digest_generations = .empty,
+            .specialization_digest_generations = .empty,
+            .digest_cache_generation = 1,
             .spans = .empty,
             .fields = .empty,
             .tags = .empty,
@@ -189,6 +191,8 @@ pub const Store = struct {
         self.tags.deinit(self.allocator);
         self.fields.deinit(self.allocator);
         self.spans.deinit(self.allocator);
+        self.specialization_digest_generations.deinit(self.allocator);
+        self.type_digest_generations.deinit(self.allocator);
         self.specialization_digests.deinit(self.allocator);
         self.type_digests.deinit(self.allocator);
         self.types.deinit(self.allocator);
@@ -254,6 +258,10 @@ pub const Store = struct {
         try self.type_digests.append(self.allocator, null);
         errdefer _ = self.type_digests.pop();
         try self.specialization_digests.append(self.allocator, null);
+        errdefer _ = self.specialization_digests.pop();
+        try self.type_digest_generations.append(self.allocator, 0);
+        errdefer _ = self.type_digest_generations.pop();
+        try self.specialization_digest_generations.append(self.allocator, 0);
         return @enumFromInt(@as(u32, @intCast(index)));
     }
 
@@ -323,6 +331,8 @@ pub const Store = struct {
         types_len: usize,
         type_digests_len: usize,
         specialization_digests_len: usize,
+        type_digest_generations_len: usize,
+        specialization_digest_generations_len: usize,
         spans_len: usize,
         fields_len: usize,
         tags_len: usize,
@@ -334,6 +344,8 @@ pub const Store = struct {
             .types_len = self.types.len(),
             .type_digests_len = self.type_digests.len(),
             .specialization_digests_len = self.specialization_digests.len(),
+            .type_digest_generations_len = self.type_digest_generations.len(),
+            .specialization_digest_generations_len = self.specialization_digest_generations.len(),
             .spans_len = self.spans.len(),
             .fields_len = self.fields.len(),
             .tags_len = self.tags.len(),
@@ -346,6 +358,8 @@ pub const Store = struct {
         self.types.restoreLen(mark_.types_len);
         self.type_digests.restoreLen(mark_.type_digests_len);
         self.specialization_digests.restoreLen(mark_.specialization_digests_len);
+        self.type_digest_generations.restoreLen(mark_.type_digest_generations_len);
+        self.specialization_digest_generations.restoreLen(mark_.specialization_digest_generations_len);
         self.spans.restoreLen(mark_.spans_len);
         self.fields.restoreLen(mark_.fields_len);
         self.tags.restoreLen(mark_.tags_len);
@@ -629,30 +643,9 @@ pub const Store = struct {
         identity_only,
     };
 
-    pub fn beginDigestCacheInvalidationBatch(self: *Store) void {
-        self.digest_cache_batch_depth += 1;
-    }
-
-    pub fn endDigestCacheInvalidationBatch(self: *Store) void {
-        if (self.digest_cache_batch_depth == 0) Common.invariant("ended Monotype digest cache invalidation batch without a matching begin");
-        self.digest_cache_batch_depth -= 1;
-        if (self.digest_cache_batch_depth == 0 and self.digest_cache_dirty) {
-            self.clearTypeDigestCacheNow();
-            self.digest_cache_dirty = false;
-        }
-    }
-
     fn clearTypeDigestCache(self: *Store) void {
-        if (self.digest_cache_batch_depth != 0) {
-            self.digest_cache_dirty = true;
-            return;
-        }
-        self.clearTypeDigestCacheNow();
-    }
-
-    fn clearTypeDigestCacheNow(self: *Store) void {
-        @memset(self.type_digests.unsafeRawItemsMutForStore(), null);
-        @memset(self.specialization_digests.unsafeRawItemsMutForStore(), null);
+        if (self.digest_cache_generation == std.math.maxInt(u64)) Common.invariant("Monotype digest cache generation exhausted");
+        self.digest_cache_generation += 1;
     }
 
     fn assertMutable(self: *const Store) void {
@@ -735,15 +728,24 @@ pub const Store = struct {
             }
         }
 
-        const cached = if (self.digest_cache_dirty)
-            null
-        else switch (named_mode) {
-            .full => self.type_digests.unsafeRawItemsForView()[@intFromEnum(ty)],
-            .identity_only => self.specialization_digests.unsafeRawItemsForView()[@intFromEnum(ty)],
-        };
-        if (cached) |digest| {
-            if (stats) |s| s.cache_hits += 1;
-            return digest;
+        const index = @intFromEnum(ty);
+        switch (named_mode) {
+            .full => {
+                if (self.type_digest_generations.unsafeRawItemsForView()[index] == self.digest_cache_generation) {
+                    if (self.type_digests.unsafeRawItemsForView()[index]) |digest| {
+                        if (stats) |s| s.cache_hits += 1;
+                        return digest;
+                    }
+                }
+            },
+            .identity_only => {
+                if (self.specialization_digest_generations.unsafeRawItemsForView()[index] == self.digest_cache_generation) {
+                    if (self.specialization_digests.unsafeRawItemsForView()[index]) |digest| {
+                        if (stats) |s| s.cache_hits += 1;
+                        return digest;
+                    }
+                }
+            },
         }
 
         if (stats) |s| {
@@ -764,10 +766,16 @@ pub const Store = struct {
         ctx.len -= 1;
 
         const digest: names.TypeDigest = .{ .bytes = hasher.finalResult() };
-        if (!self.digest_cache_dirty and ctx.saw_cycle == saw_cycle_before) {
+        if (ctx.saw_cycle == saw_cycle_before) {
             switch (named_mode) {
-                .full => self.type_digests.set(@intFromEnum(ty), digest),
-                .identity_only => self.specialization_digests.set(@intFromEnum(ty), digest),
+                .full => {
+                    self.type_digests.set(index, digest);
+                    self.type_digest_generations.set(index, self.digest_cache_generation);
+                },
+                .identity_only => {
+                    self.specialization_digests.set(index, digest);
+                    self.specialization_digest_generations.set(index, self.digest_cache_generation);
+                },
             }
         }
         return digest;
