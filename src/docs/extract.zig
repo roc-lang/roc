@@ -2298,6 +2298,7 @@ fn moveEntryForReparenting(
     entry.children = empty_children;
     entry.type_signature = null;
     entry.doc_comment = null;
+    entry.doc_refs = &.{};
 
     return moved;
 }

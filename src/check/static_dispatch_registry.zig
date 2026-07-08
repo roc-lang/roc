@@ -1204,6 +1204,15 @@ pub const StaticDispatchPlanTable = struct {
                 }
                 unreachable;
             };
+            if (!literal.isMaterialized()) {
+                if (@import("builtin").mode == .Debug) {
+                    std.debug.panic(
+                        "checked static dispatch invariant violated: runtime from_numeral plan {d} has an unmaterialized literal",
+                        .{numeral_plan.node_idx},
+                    );
+                }
+                unreachable;
+            }
             var args = [_]StaticDispatchOperand{.{ .generated_numeral = literal }};
             const ar = try pushOperands(StaticDispatchOperand, &operand_pool, allocator, &args);
 

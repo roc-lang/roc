@@ -22,6 +22,7 @@ const Interpreter = @import("interpreter.zig").Interpreter;
 const RuntimeHostEnv = @import("test/RuntimeHostEnv.zig");
 
 const Allocator = std.mem.Allocator;
+const CoreCtx = @import("ctx").CoreCtx;
 const Can = can.Can;
 const Check = check.Check;
 const CIR = can.CIR;
@@ -520,17 +521,23 @@ pub fn parseAndCanonicalizeProgramWithBuiltin(
         false,
         .{ .eval_root = false },
         pre_published_builtin,
+        null,
     );
 }
 
 /// Same as `parseAndCanonicalizeProgramPublishedRoots` but reuses a Builtin
 /// artifact the caller has already published.
+///
+/// `roc_ctx` supplies filesystem access for `import "path" as x : Str`/`:
+/// List(U8)` statements; the REPL passes its real `CoreCtx` so file imports can
+/// be read.
 pub fn parseAndCanonicalizeProgramPublishedRootsWithBuiltin(
     allocator: Allocator,
     source_kind: SourceKind,
     source: []const u8,
     imports: []const ModuleSource,
     pre_published_builtin: PrePublishedBuiltin,
+    roc_ctx: ?CoreCtx,
 ) TestHelperError!ParsedResources {
     return parseAndCanonicalizeProgramWithRootMode(
         allocator,
@@ -540,6 +547,7 @@ pub fn parseAndCanonicalizeProgramPublishedRootsWithBuiltin(
         false,
         .published_roots_only,
         pre_published_builtin,
+        roc_ctx,
     );
 }
 
@@ -555,7 +563,7 @@ pub fn parseAndCheckProgramForProblems(
     source: []const u8,
     imports: []const ModuleSource,
 ) TestHelperError!ProblemResources {
-    return parseAndCheckProgramForProblemsImpl(allocator, source_kind, source, imports, null);
+    return parseAndCheckProgramForProblemsImpl(allocator, source_kind, source, imports, null, null);
 }
 
 /// Same as `parseAndCheckProgramForProblems` but reuses a Builtin module the
@@ -568,7 +576,7 @@ pub fn parseAndCheckProgramForProblemsWithBuiltin(
     imports: []const ModuleSource,
     pre_published_builtin: PrePublishedBuiltin,
 ) TestHelperError!ProblemResources {
-    return parseAndCheckProgramForProblemsImpl(allocator, source_kind, source, imports, pre_published_builtin);
+    return parseAndCheckProgramForProblemsImpl(allocator, source_kind, source, imports, pre_published_builtin, null);
 }
 
 fn parseAndCheckProgramForProblemsImpl(
@@ -577,6 +585,7 @@ fn parseAndCheckProgramForProblemsImpl(
     source: []const u8,
     imports: []const ModuleSource,
     pre_published_builtin: ?PrePublishedBuiltin,
+    roc_ctx: ?CoreCtx,
 ) TestHelperError!ProblemResources {
     const builtin_indices: CIR.BuiltinIndices = if (pre_published_builtin) |ppb|
         ppb.indices
@@ -628,6 +637,7 @@ fn parseAndCheckProgramForProblemsImpl(
             builtin_env,
             builtin_indices,
             available_imports,
+            roc_ctx,
         );
         try extra_modules.append(allocator, checked);
     }
@@ -664,6 +674,7 @@ fn parseAndCheckProgramForProblemsImpl(
         builtin_env,
         builtin_indices,
         main_imports,
+        roc_ctx,
     );
     errdefer cleanupCheckedModule(allocator, main_checked);
 
@@ -757,6 +768,8 @@ pub fn compileProgramForTargetWithBuiltin(
         false,
         .{ .eval_root = false },
         pre_published_builtin,
+        // No file-reading CoreCtx: this helper is not used for file imports.
+        null,
     );
     errdefer cleanupParseAndCanonical(allocator, resources);
 
@@ -780,11 +793,12 @@ pub fn compileInspectedProgram(
     source: []const u8,
     imports: []const ModuleSource,
 ) TestHelperError!CompiledProgram {
-    return compileInspectedProgramImpl(allocator, io, source_kind, source, imports, null);
+    return compileInspectedProgramImpl(allocator, io, source_kind, source, imports, null, null);
 }
 
 /// Same as `compileInspectedProgram` but reuses a pre-published Builtin
-/// artifact owned by the caller.
+/// artifact owned by the caller. `roc_ctx` supplies filesystem access for file
+/// imports (the REPL passes its real `CoreCtx`); pass `null` otherwise.
 pub fn compileInspectedProgramWithBuiltin(
     allocator: Allocator,
     io: std.Io,
@@ -792,8 +806,9 @@ pub fn compileInspectedProgramWithBuiltin(
     source: []const u8,
     imports: []const ModuleSource,
     pre_published_builtin: PrePublishedBuiltin,
+    roc_ctx: ?CoreCtx,
 ) TestHelperError!CompiledProgram {
-    return compileInspectedProgramImpl(allocator, io, source_kind, source, imports, pre_published_builtin);
+    return compileInspectedProgramImpl(allocator, io, source_kind, source, imports, pre_published_builtin, roc_ctx);
 }
 
 fn compileInspectedProgramImpl(
@@ -803,6 +818,7 @@ fn compileInspectedProgramImpl(
     source: []const u8,
     imports: []const ModuleSource,
     pre_published_builtin: ?PrePublishedBuiltin,
+    roc_ctx: ?CoreCtx,
 ) TestHelperError!CompiledProgram {
     var resources = try parseAndCanonicalizeProgramWithRootMode(
         allocator,
@@ -812,6 +828,7 @@ fn compileInspectedProgramImpl(
         true,
         .{ .eval_root = true },
         pre_published_builtin,
+        roc_ctx,
     );
     errdefer cleanupParseAndCanonical(allocator, resources);
 
@@ -843,11 +860,12 @@ pub fn compileInspectedProgramForTarget(
     imports: []const ModuleSource,
     target_usize: base.target.TargetUsize,
 ) TestHelperError!CompiledTargetProgram {
-    return compileInspectedProgramForTargetImpl(allocator, io, source_kind, source, imports, target_usize, null);
+    return compileInspectedProgramForTargetImpl(allocator, io, source_kind, source, imports, target_usize, null, null);
 }
 
 /// Same as `compileInspectedProgramForTarget` but reuses a pre-published
-/// Builtin artifact owned by the caller.
+/// Builtin artifact owned by the caller. `roc_ctx` supplies filesystem access
+/// for file imports (the REPL passes its real `CoreCtx`); pass `null` otherwise.
 pub fn compileInspectedProgramForTargetWithBuiltin(
     allocator: Allocator,
     io: std.Io,
@@ -856,8 +874,9 @@ pub fn compileInspectedProgramForTargetWithBuiltin(
     imports: []const ModuleSource,
     target_usize: base.target.TargetUsize,
     pre_published_builtin: PrePublishedBuiltin,
+    roc_ctx: ?CoreCtx,
 ) TestHelperError!CompiledTargetProgram {
-    return compileInspectedProgramForTargetImpl(allocator, io, source_kind, source, imports, target_usize, pre_published_builtin);
+    return compileInspectedProgramForTargetImpl(allocator, io, source_kind, source, imports, target_usize, pre_published_builtin, roc_ctx);
 }
 
 fn compileInspectedProgramForTargetImpl(
@@ -868,6 +887,7 @@ fn compileInspectedProgramForTargetImpl(
     imports: []const ModuleSource,
     target_usize: base.target.TargetUsize,
     pre_published_builtin: ?PrePublishedBuiltin,
+    roc_ctx: ?CoreCtx,
 ) TestHelperError!CompiledTargetProgram {
     var resources = try parseAndCanonicalizeProgramWithRootMode(
         allocator,
@@ -877,6 +897,7 @@ fn compileInspectedProgramForTargetImpl(
         true,
         .{ .eval_root = true },
         pre_published_builtin,
+        roc_ctx,
     );
     errdefer cleanupParseAndCanonical(allocator, resources);
 
@@ -911,7 +932,7 @@ pub fn parseAndCanonicalizeProgramWrapped(
     imports: []const ModuleSource,
     inspect_wrap: bool,
 ) TestHelperError!ParsedResources {
-    return parseAndCanonicalizeProgramWithRootMode(allocator, source_kind, source, imports, inspect_wrap, .{ .eval_root = inspect_wrap }, null);
+    return parseAndCanonicalizeProgramWithRootMode(allocator, source_kind, source, imports, inspect_wrap, .{ .eval_root = inspect_wrap }, null, null);
 }
 
 /// Parse and canonicalize a program using published-roots-only root selection.
@@ -921,7 +942,7 @@ pub fn parseAndCanonicalizeProgramPublishedRoots(
     source: []const u8,
     imports: []const ModuleSource,
 ) TestHelperError!ParsedResources {
-    return parseAndCanonicalizeProgramWithRootMode(allocator, source_kind, source, imports, false, .published_roots_only, null);
+    return parseAndCanonicalizeProgramWithRootMode(allocator, source_kind, source, imports, false, .published_roots_only, null, null);
 }
 
 /// Whether publishing a program for compile-time evaluation reported problems.
@@ -970,6 +991,7 @@ fn publishProgramForComptimeProblemsImpl(
         .published_roots_only,
         pre_published_builtin,
         .report_comptime_problems,
+        null,
     ) catch |err| switch (err) {
         error.CompileTimeProblem => return .comptime_problems,
         else => return err,
@@ -1014,6 +1036,7 @@ fn parseAndCanonicalizeProgramWithRootMode(
     inspect_wrap: bool,
     root_mode: PublishedRootMode,
     pre_published_builtin: ?PrePublishedBuiltin,
+    roc_ctx: ?CoreCtx,
 ) TestHelperError!ParsedResources {
     return parseAndCanonicalizeProgramWithRootModeReporting(
         allocator,
@@ -1024,6 +1047,7 @@ fn parseAndCanonicalizeProgramWithRootMode(
         root_mode,
         pre_published_builtin,
         .ignore_comptime_problems,
+        roc_ctx,
     );
 }
 
@@ -1036,6 +1060,7 @@ fn parseAndCanonicalizeProgramWithRootModeReporting(
     root_mode: PublishedRootMode,
     pre_published_builtin: ?PrePublishedBuiltin,
     problem_reporting: ComptimeProblemReporting,
+    roc_ctx: ?CoreCtx,
 ) TestHelperError!ParsedResources {
     const builtin_indices: CIR.BuiltinIndices = if (pre_published_builtin) |ppb|
         ppb.indices
@@ -1093,6 +1118,7 @@ fn parseAndCanonicalizeProgramWithRootModeReporting(
             builtin_env,
             builtin_indices,
             available_imports,
+            roc_ctx,
         );
         if (checkedModuleHasArtifactBlockingProblems(&checked)) {
             cleanupCheckedModule(allocator, checked);
@@ -1133,6 +1159,7 @@ fn parseAndCanonicalizeProgramWithRootModeReporting(
         builtin_env,
         builtin_indices,
         main_imports,
+        roc_ctx,
     );
     errdefer cleanupCheckedModule(allocator, main_checked);
     if (checkedModuleHasArtifactBlockingProblems(&main_checked)) {
@@ -1238,6 +1265,12 @@ fn parseAndCanonicalizeProgramWithRootModeReporting(
 }
 
 /// Run parse, canonicalize, and typecheck for a single named module.
+///
+/// `roc_ctx` supplies the filesystem access canonicalization needs for `import
+/// "path" as x : Str`/`: List(U8)` statements. Pass a real `CoreCtx` (as the
+/// REPL does, built at the CLI entrypoint) to read imported files; pass `null`
+/// for tests that never import a file, in which case any file read panics via
+/// the testing ctx as a guardrail.
 pub fn parseCheckModule(
     allocator: Allocator,
     module_name: []const u8,
@@ -1250,6 +1283,7 @@ pub fn parseCheckModule(
     builtin_module_env: *const ModuleEnv,
     builtin_indices: CIR.BuiltinIndices,
     available_imports: []const AvailableImport,
+    roc_ctx: ?CoreCtx,
 ) TestHelperError!CheckedModule {
     const owned_source = try makeModuleSource(allocator, source_kind, source, inspect_wrap);
     errdefer allocator.free(owned_source);
@@ -1296,8 +1330,8 @@ pub fn parseCheckModule(
 
     const czer = try allocator.create(Can);
     errdefer allocator.destroy(czer);
-    const roc_ctx = @import("ctx").CoreCtx.testing(allocator, allocator);
-    czer.* = try Can.initModule(roc_ctx, module_env, parse_ast, .{
+    const canon_ctx = roc_ctx orelse CoreCtx.testing(allocator, allocator);
+    czer.* = try Can.initModule(canon_ctx, module_env, parse_ast, .{
         .builtin_types = .{
             .builtin_module_env = builtin_module_env,
             .builtin_indices = builtin_indices,
@@ -1484,6 +1518,12 @@ fn publishImportArtifacts(
         for (artifacts.items) |*artifact| artifact.deinit(allocator);
         artifacts.deinit(allocator);
     }
+    // Reserve the final size up front so `artifacts` never reallocates while we
+    // publish. The `view` we store for each artifact in `published_keys` aliases
+    // the artifact's in-list storage; if the backing array moved, those views
+    // would dangle and later modules would read another module's identity.
+    const builtin_in_artifacts: usize = if (pre_published_builtin == null) 1 else 0;
+    try artifacts.ensureTotalCapacityPrecise(allocator, extra_module_count + builtin_in_artifacts);
 
     var published_keys = std.ArrayList(check.CheckedArtifact.PublishImportArtifact).empty;
     defer published_keys.deinit(allocator);
@@ -1495,7 +1535,7 @@ fn publishImportArtifacts(
             .view = check.CheckedArtifact.importedView(ppb.artifact),
         });
     } else {
-        var builtin_artifact = try check.CheckedArtifact.publishFromTypedModule(
+        const builtin_artifact = try check.CheckedArtifact.publishFromTypedModule(
             allocator,
             typed_cir_modules,
             1,
@@ -1505,19 +1545,15 @@ fn publishImportArtifacts(
             },
         );
         builtin_module_owned_by_artifact.* = true;
-        published_keys.append(allocator, .{
+        // Move into stable storage first, then build the view from that pointer.
+        // On failure the artifact is owned by `artifacts` and freed by errdefer.
+        artifacts.appendAssumeCapacity(builtin_artifact);
+        const builtin_ptr = &artifacts.items[artifacts.items.len - 1];
+        try published_keys.append(allocator, .{
             .module_idx = 1,
-            .key = builtin_artifact.key,
-            .view = check.CheckedArtifact.importedView(&builtin_artifact),
-        }) catch |err| {
-            builtin_artifact.deinit(allocator);
-            return err;
-        };
-        artifacts.append(allocator, builtin_artifact) catch |err| {
-            _ = published_keys.pop();
-            builtin_artifact.deinit(allocator);
-            return err;
-        };
+            .key = builtin_ptr.key,
+            .view = check.CheckedArtifact.importedView(builtin_ptr),
+        });
     }
 
     if (extra_module_count == 0) return try artifacts.toOwnedSlice(allocator);
@@ -1539,7 +1575,7 @@ fn publishImportArtifacts(
             const available_artifacts = try importedViewsFromPublishImports(allocator, published_keys.items);
             defer allocator.free(available_artifacts);
 
-            var artifact = try check.CheckedArtifact.publishFromTypedModule(
+            const artifact = try check.CheckedArtifact.publishFromTypedModule(
                 allocator,
                 typed_cir_modules,
                 module_idx,
@@ -1553,19 +1589,15 @@ fn publishImportArtifacts(
             extra_modules[extra_i].published_owns_module_env = true;
             extra_modules[extra_i].owned_source = null;
 
-            published_keys.append(allocator, .{
+            // Move into stable storage first, then build the view from that
+            // pointer so it cannot dangle when later modules are published.
+            artifacts.appendAssumeCapacity(artifact);
+            const artifact_ptr = &artifacts.items[artifacts.items.len - 1];
+            try published_keys.append(allocator, .{
                 .module_idx = module_idx,
-                .key = artifact.key,
-                .view = check.CheckedArtifact.importedView(&artifact),
-            }) catch |err| {
-                artifact.deinit(allocator);
-                return err;
-            };
-            artifacts.append(allocator, artifact) catch |err| {
-                _ = published_keys.pop();
-                artifact.deinit(allocator);
-                return err;
-            };
+                .key = artifact_ptr.key,
+                .view = check.CheckedArtifact.importedView(artifact_ptr),
+            });
 
             published_extra[extra_i] = true;
             remaining -= 1;
@@ -1656,7 +1688,26 @@ pub fn renderProblemsWithConfig(
     source: []const u8,
     config: reporting.ReportingConfig,
 ) TestHelperError![]u8 {
-    var resources = try parseAndCheckProgramForProblems(allocator, source_kind, source, &.{});
+    return try renderProblemsWithConfigAndImports(allocator, source_kind, source, &.{}, config, null);
+}
+
+/// Like `renderProblemsWithConfig` but type-checks against the supplied imported
+/// modules so a source containing `import` statements does not hit unresolved
+/// imports while rendering problems.
+///
+/// `roc_ctx` supplies filesystem access for `import "path" as x : Str`/`:
+/// List(U8)` statements so re-canonicalizing to render diagnostics can read the
+/// file again; the REPL passes its real `CoreCtx`. Pass `null` when no file
+/// imports are involved.
+pub fn renderProblemsWithConfigAndImports(
+    allocator: Allocator,
+    source_kind: SourceKind,
+    source: []const u8,
+    imports: []const ModuleSource,
+    config: reporting.ReportingConfig,
+    roc_ctx: ?CoreCtx,
+) TestHelperError![]u8 {
+    var resources = try parseAndCheckProgramForProblemsImpl(allocator, source_kind, source, imports, null, roc_ctx);
     defer resources.deinit(allocator);
 
     return try renderCheckedModuleProblemsWithConfig(allocator, &resources.main, "repl", config);

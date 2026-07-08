@@ -1465,6 +1465,25 @@ test "check type - alias open tag union" {
     try checkTypesModule(source, .{ .pass = .last_def }, "{} -> MyAlias([C])");
 }
 
+test "check type - alias forward reference in open tag union completes" {
+    // repro for https://github.com/roc-lang/roc/issues/9959
+    const source =
+        \\Repro :: U8
+        \\
+        \\hang : Str -> Foo([])
+        \\hang = |_| { foo: Thing }
+        \\
+        \\Foo(tags) : { foo: Union(tags) }
+        \\
+        \\Union(others) : [Thing, ..others]
+    ;
+
+    var test_env = try TestEnv.init("Repro", source);
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+}
+
 test "check type - alias open record" {
     const source =
         \\main! = |_| {}
@@ -4694,10 +4713,8 @@ test "check type - try operator on method call should apply to whole expression 
     try checkTypesModule(source, .{ .pass = .last_def }, "List(Str) -> Try(Str, [ListWasEmpty, ..])");
 }
 
-test "check type - try does not widen closed error row into open return error row" {
-    // Verifies intended behavior for https://github.com/roc-lang/roc/issues/9798:
-    // `?` does not widen a callee's closed error tag union into the enclosing
-    // annotation's open error row, so this program is a type error.
+test "check type - try closed error row satisfies open return error row" {
+    // Regression test for https://github.com/roc-lang/roc/issues/9798
     const source =
         \\inner : {} -> Try({}, [InnerErr])
         \\inner = |{}| Err(InnerErr)
@@ -4708,7 +4725,7 @@ test "check type - try does not widen closed error row into open return error ro
         \\    Ok({})
         \\}
     ;
-    try checkTypesModule(source, .fail, "Type Mismatch");
+    try checkTypesModule(source, .{ .pass = .last_def }, "{} -> Try({}, [InnerErr, ..])");
 }
 
 // record extension in type annotations //
@@ -5510,24 +5527,23 @@ test "check type - self recursive function - fibonacci - fail" {
         \\  }
         \\}
     ;
+    // The binding-group recursion rule unifies the recursive reference with
+    // the def's in-flight type immediately, so the mismatch surfaces at the
+    // bad argument itself rather than as a post-hoc recursive-def validation.
     try checkTypesModule(
         source,
         .fail_with,
         \\**Type Mismatch**
-        \\The recursive definition `fib` is used in an unexpected way.
-        \\**test:5:5:5:8:**
+        \\This string literal is being used where a non-string type is needed.
+        \\**test:5:9:5:18:**
         \\```roc
         \\    fib("bad arg") + fib(n - 2.U8)
         \\```
-        \\    ^^^
+        \\        ^^^^^^^^^
         \\
-        \\It has the type:
+        \\The type was determined to be:
         \\
-        \\    Str -> U8
-        \\
-        \\But other places expect it to be:
-        \\
-        \\    U8 -> U8
+        \\    U8
         \\
         \\
         ,
@@ -6339,9 +6355,63 @@ test "check type - mutually recursive functions - partially annotated polymorphi
     );
 }
 
+test "check type - mutually recursive functions - three member unannotated group" {
+    // Three unannotated members inferred as one binding group; the whole
+    // group generalizes together at its boundary.
+    const source =
+        \\red = |n| if n == 0.U64 { 0.U64 } else { green(n - 1.U64) }
+        \\green = |n| if n == 0.U64 { 0.U64 } else { blue(n - 1.U64) }
+        \\blue = |n| if n == 0.U64 { 0.U64 } else { red(n - 1.U64) }
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "red", .expected = "U64 -> U64" },
+            .{ .def = "green", .expected = "U64 -> U64" },
+            .{ .def = "blue", .expected = "U64 -> U64" },
+        },
+    );
+}
+
+test "check type - mutually recursive functions - all annotated polymorphic" {
+    // Both members' schemes are pre-declared from their annotations, so each
+    // in-group reference instantiates the other's scheme (sound polymorphic
+    // recursion) and both keep their own rigid type parameters.
+    const source =
+        \\walk : U64, a -> a
+        \\walk = |n, x| if n <= 0.U64 { x } else { jump(n - 1.U64, x) }
+        \\jump : U64, b -> b
+        \\jump = |n, x| if n <= 0.U64 { x } else { walk(n - 1.U64, x) }
+        \\test = (walk(1.U64, "hi"), jump(1.U64, 42.U8))
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "walk", .expected = "U64, a -> a" },
+            .{ .def = "jump", .expected = "U64, b -> b" },
+            .{ .def = "test", .expected = "(Str, U8)" },
+        },
+    );
+}
+
+test "check type - annotated self recursive function - polymorphic recursion allowed" {
+    // An annotated def's self-reference instantiates its pre-declared scheme,
+    // so a recursive use at a specialized type is legal (polymorphic
+    // recursion for annotated defs).
+    const source =
+        \\depth : List(a) -> U64
+        \\depth = |list| match list {
+        \\    [] => 0
+        \\    [first, ..] => 1 + depth([[first]])
+        \\}
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "depth" } }, "List(a) -> U64");
+}
+
 test "check type - mutually recursive functions - inner let-def lambda inside cycle participant is generalized" {
-    // Inner let-def lambda should generalize normally even while
-    // defer_generalize is active for the outer cycle.
+    // Inner let-def lambda should generalize normally even while the
+    // enclosing binding group's own generalization waits for the group
+    // boundary.
     const source =
         \\f = |n| {
         \\    id = |x| x

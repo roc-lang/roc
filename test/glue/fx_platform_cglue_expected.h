@@ -31,9 +31,14 @@
 extern "C" {
 #endif
 
-// =============================================================================
 // Core Roc Types
-// =============================================================================
+
+typedef struct {
+    __int128 num;
+} RocDec;
+
+ROC_STATIC_ASSERT(sizeof(RocDec) == 16, "RocDec must be sixteen bytes");
+ROC_STATIC_ASSERT(ROC_ALIGNOF(RocDec) == 16, "RocDec must be 16-byte aligned");
 
 typedef struct {
     uint8_t* bytes;
@@ -76,99 +81,77 @@ static inline uint8_t* roc_erased_callable_capture_ptr(RocErasedCallable callabl
 }
 
 
-// =============================================================================
 // Reflected Roc Types
-// =============================================================================
 
-#if UINTPTR_MAX == UINT32_MAX
-typedef struct {
-    ROC_ALIGNAS(8) uint8_t bytes[24];
-} Builder;
-#elif UINTPTR_MAX == UINT64_MAX
+#if UINTPTR_MAX == UINT64_MAX
 typedef struct {
     ROC_ALIGNAS(8) uint8_t bytes[32];
 } Builder;
-#else
-#error "unsupported pointer width"
-#endif
-#if UINTPTR_MAX == UINT32_MAX
-ROC_STATIC_ASSERT(sizeof(Builder) == 24, "Builder size mismatch");
-ROC_STATIC_ASSERT(ROC_ALIGNOF(Builder) == 8, "Builder alignment mismatch");
-#elif UINTPTR_MAX == UINT64_MAX
 ROC_STATIC_ASSERT(sizeof(Builder) == 32, "Builder size mismatch");
+ROC_STATIC_ASSERT(ROC_ALIGNOF(Builder) == 8, "Builder alignment mismatch");
+#else
+typedef struct {
+    ROC_ALIGNAS(8) uint8_t bytes[24];
+} Builder;
+ROC_STATIC_ASSERT(sizeof(Builder) == 24, "Builder size mismatch");
 ROC_STATIC_ASSERT(ROC_ALIGNOF(Builder) == 8, "Builder alignment mismatch");
 #endif
 
-#if UINTPTR_MAX == UINT32_MAX
+#if UINTPTR_MAX == UINT64_MAX
+typedef struct {
+    ROC_ALIGNAS(8) uint8_t bytes[24];
+} HostTree;
+ROC_STATIC_ASSERT(sizeof(HostTree) == 24, "HostTree size mismatch");
+ROC_STATIC_ASSERT(ROC_ALIGNOF(HostTree) == 8, "HostTree alignment mismatch");
+#else
 typedef struct {
     ROC_ALIGNAS(8) uint8_t bytes[16];
 } HostTree;
-#elif UINTPTR_MAX == UINT64_MAX
-typedef struct {
-    ROC_ALIGNAS(8) uint8_t bytes[24];
-} HostTree;
-#else
-#error "unsupported pointer width"
-#endif
-#if UINTPTR_MAX == UINT32_MAX
 ROC_STATIC_ASSERT(sizeof(HostTree) == 16, "HostTree size mismatch");
 ROC_STATIC_ASSERT(ROC_ALIGNOF(HostTree) == 8, "HostTree alignment mismatch");
-#elif UINTPTR_MAX == UINT64_MAX
-ROC_STATIC_ASSERT(sizeof(HostTree) == 24, "HostTree size mismatch");
-ROC_STATIC_ASSERT(ROC_ALIGNOF(HostTree) == 8, "HostTree alignment mismatch");
 #endif
 
-#if UINTPTR_MAX == UINT32_MAX
-typedef struct {
-    ROC_ALIGNAS(4) uint8_t bytes[12];
-} Host;
-#elif UINTPTR_MAX == UINT64_MAX
+#if UINTPTR_MAX == UINT64_MAX
 typedef struct {
     ROC_ALIGNAS(8) uint8_t bytes[24];
 } Host;
-#else
-#error "unsupported pointer width"
-#endif
-#if UINTPTR_MAX == UINT32_MAX
-ROC_STATIC_ASSERT(sizeof(Host) == 12, "Host size mismatch");
-ROC_STATIC_ASSERT(ROC_ALIGNOF(Host) == 4, "Host alignment mismatch");
-#elif UINTPTR_MAX == UINT64_MAX
 ROC_STATIC_ASSERT(sizeof(Host) == 24, "Host size mismatch");
 ROC_STATIC_ASSERT(ROC_ALIGNOF(Host) == 8, "Host alignment mismatch");
-#endif
-
-#if UINTPTR_MAX == UINT32_MAX
-typedef struct {
-    ROC_ALIGNAS(4) uint8_t bytes[12];
-} Padded;
-#elif UINTPTR_MAX == UINT64_MAX
-typedef struct {
-    ROC_ALIGNAS(4) uint8_t bytes[12];
-} Padded;
 #else
-#error "unsupported pointer width"
+typedef struct {
+    ROC_ALIGNAS(4) uint8_t bytes[12];
+} Host;
+ROC_STATIC_ASSERT(sizeof(Host) == 12, "Host size mismatch");
+ROC_STATIC_ASSERT(ROC_ALIGNOF(Host) == 4, "Host alignment mismatch");
 #endif
-#if UINTPTR_MAX == UINT32_MAX
+
+#if UINTPTR_MAX == UINT64_MAX
+typedef struct {
+    ROC_ALIGNAS(4) uint8_t bytes[12];
+} Padded;
 ROC_STATIC_ASSERT(sizeof(Padded) == 12, "Padded size mismatch");
 ROC_STATIC_ASSERT(ROC_ALIGNOF(Padded) == 4, "Padded alignment mismatch");
-#elif UINTPTR_MAX == UINT64_MAX
+#else
+typedef struct {
+    ROC_ALIGNAS(4) uint8_t bytes[12];
+} Padded;
 ROC_STATIC_ASSERT(sizeof(Padded) == 12, "Padded size mismatch");
 ROC_STATIC_ASSERT(ROC_ALIGNOF(Padded) == 4, "Padded alignment mismatch");
 #endif
 
 
-// =============================================================================
+// Platform Type Aliases
+
+typedef HostTree HostTreeNode;
+
 // Hosted Function Infrastructure
-// =============================================================================
 
 struct RocOps;
 
 typedef void (*HostedFn)(void);
 
 
-// =============================================================================
 // Hosted Function Count
-// =============================================================================
 
 #define HOSTED_FUNCTION_COUNT 17
 
@@ -191,9 +174,7 @@ typedef void (*HostedFn)(void);
 #define HOSTED_IDX_STDIN_LINE 15
 #define HOSTED_IDX_STDOUT_LINE 16
 
-// =============================================================================
 // Argument Structures
-// =============================================================================
 
 
 /**
@@ -201,24 +182,19 @@ typedef void (*HostedFn)(void);
  * Roc signature: Builder => {}
  * Refcounted fields are owned by the hosted function.
  */
-#if UINTPTR_MAX == UINT32_MAX
+#if UINTPTR_MAX == UINT64_MAX
 typedef struct {
     RocStr value;
     uint64_t count;
 } BuilderPrintValueArgs;
-#elif UINTPTR_MAX == UINT64_MAX
-typedef struct {
-    RocStr value;
-    uint64_t count;
-} BuilderPrintValueArgs;
-#else
-#error "unsupported pointer width"
-#endif
-#if UINTPTR_MAX == UINT32_MAX
-ROC_STATIC_ASSERT(sizeof(BuilderPrintValueArgs) == 24, "BuilderPrintValueArgs size mismatch");
-ROC_STATIC_ASSERT(ROC_ALIGNOF(BuilderPrintValueArgs) == 8, "BuilderPrintValueArgs alignment mismatch");
-#elif UINTPTR_MAX == UINT64_MAX
 ROC_STATIC_ASSERT(sizeof(BuilderPrintValueArgs) == 32, "BuilderPrintValueArgs size mismatch");
+ROC_STATIC_ASSERT(ROC_ALIGNOF(BuilderPrintValueArgs) == 8, "BuilderPrintValueArgs alignment mismatch");
+#else
+typedef struct {
+    RocStr value;
+    uint64_t count;
+} BuilderPrintValueArgs;
+ROC_STATIC_ASSERT(sizeof(BuilderPrintValueArgs) == 24, "BuilderPrintValueArgs size mismatch");
 ROC_STATIC_ASSERT(ROC_ALIGNOF(BuilderPrintValueArgs) == 8, "BuilderPrintValueArgs alignment mismatch");
 #endif
 
@@ -274,23 +250,18 @@ typedef struct {
  * Roc signature: Host => Str
  * Refcounted fields are owned by the hosted function.
  */
-#if UINTPTR_MAX == UINT32_MAX
+#if UINTPTR_MAX == UINT64_MAX
 typedef struct {
     RocStr name;
 } HostGetGreetingArgs;
-#elif UINTPTR_MAX == UINT64_MAX
-typedef struct {
-    RocStr name;
-} HostGetGreetingArgs;
-#else
-#error "unsupported pointer width"
-#endif
-#if UINTPTR_MAX == UINT32_MAX
-ROC_STATIC_ASSERT(sizeof(HostGetGreetingArgs) == 12, "HostGetGreetingArgs size mismatch");
-ROC_STATIC_ASSERT(ROC_ALIGNOF(HostGetGreetingArgs) == 4, "HostGetGreetingArgs alignment mismatch");
-#elif UINTPTR_MAX == UINT64_MAX
 ROC_STATIC_ASSERT(sizeof(HostGetGreetingArgs) == 24, "HostGetGreetingArgs size mismatch");
 ROC_STATIC_ASSERT(ROC_ALIGNOF(HostGetGreetingArgs) == 8, "HostGetGreetingArgs alignment mismatch");
+#else
+typedef struct {
+    RocStr name;
+} HostGetGreetingArgs;
+ROC_STATIC_ASSERT(sizeof(HostGetGreetingArgs) == 12, "HostGetGreetingArgs size mismatch");
+ROC_STATIC_ASSERT(ROC_ALIGNOF(HostGetGreetingArgs) == 4, "HostGetGreetingArgs alignment mismatch");
 #endif
 
 /**
@@ -325,25 +296,20 @@ typedef struct {
  * Roc signature: Padded => Str
  * Refcounted fields are owned by the hosted function.
  */
-#if UINTPTR_MAX == UINT32_MAX
+#if UINTPTR_MAX == UINT64_MAX
 typedef struct {
     uint32_t z;
     uint8_t _pad0[4];
     uint32_t a;
 } PaddedCheckArgs;
-#elif UINTPTR_MAX == UINT64_MAX
-typedef struct {
-    uint32_t z;
-    uint8_t _pad0[4];
-    uint32_t a;
-} PaddedCheckArgs;
-#else
-#error "unsupported pointer width"
-#endif
-#if UINTPTR_MAX == UINT32_MAX
 ROC_STATIC_ASSERT(sizeof(PaddedCheckArgs) == 12, "PaddedCheckArgs size mismatch");
 ROC_STATIC_ASSERT(ROC_ALIGNOF(PaddedCheckArgs) == 4, "PaddedCheckArgs alignment mismatch");
-#elif UINTPTR_MAX == UINT64_MAX
+#else
+typedef struct {
+    uint32_t z;
+    uint8_t _pad0[4];
+    uint32_t a;
+} PaddedCheckArgs;
 ROC_STATIC_ASSERT(sizeof(PaddedCheckArgs) == 12, "PaddedCheckArgs size mismatch");
 ROC_STATIC_ASSERT(ROC_ALIGNOF(PaddedCheckArgs) == 4, "PaddedCheckArgs alignment mismatch");
 #endif
@@ -367,9 +333,7 @@ typedef struct {
 } StdoutLineArgs;
 
 
-// =============================================================================
 // Hosted Symbols
-// =============================================================================
 
 /* Builder.print_value!: Builder => {} */
 extern void roc_builder_print_value(Builder arg0);
@@ -423,17 +387,13 @@ extern RocStr roc_stdin_line(void);
 extern void roc_stdout_line(RocStr arg0);
 
 
-// =============================================================================
 // Provided Symbols
-// =============================================================================
 
 /* Entrypoint: main_for_host! */
 extern void roc_main(void);
 
 
-// =============================================================================
 // HostedFunctions Registry
-// =============================================================================
 
 /**
  * Registry of all hosted function implementations.

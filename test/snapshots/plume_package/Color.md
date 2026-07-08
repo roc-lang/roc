@@ -763,9 +763,9 @@ is_named_color = |str| {
 			(e-block
 				(s-let
 					(p-assign (ident "rounded"))
-					(e-dispatch-call (method "div_by") (constraint-fn-var 652)
+					(e-dispatch-call (method "div_by") (constraint-fn-var 1045)
 						(receiver
-							(e-dispatch-call (method "to_frac") (constraint-fn-var 616)
+							(e-dispatch-call (method "to_frac") (constraint-fn-var 1009)
 								(receiver
 									(e-lookup-local
 										(p-assign (ident "a"))))
@@ -798,7 +798,7 @@ is_named_color = |str| {
 			(e-block
 				(s-let
 					(p-assign (ident "bytes"))
-					(e-dispatch-call (method "to_utf8") (constraint-fn-var 847)
+					(e-dispatch-call (method "to_utf8") (constraint-fn-var 1235)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "str"))))
@@ -814,13 +814,13 @@ is_named_color = |str| {
 									(e-if
 										(if-branches
 											(if-branch
-												(e-dispatch-call (method "is_gte") (constraint-fn-var 905)
+												(e-dispatch-call (method "is_gte") (constraint-fn-var 1293)
 													(receiver
 														(e-lookup-local
 															(p-assign (ident "b"))))
 													(args
 														(e-num (value "48"))))
-												(e-dispatch-call (method "is_lte") (constraint-fn-var 946)
+												(e-dispatch-call (method "is_lte") (constraint-fn-var 1334)
 													(receiver
 														(e-lookup-local
 															(p-assign (ident "b"))))
@@ -840,13 +840,13 @@ is_named_color = |str| {
 											(e-if
 												(if-branches
 													(if-branch
-														(e-dispatch-call (method "is_gte") (constraint-fn-var 1000)
+														(e-dispatch-call (method "is_gte") (constraint-fn-var 1388)
 															(receiver
 																(e-lookup-local
 																	(p-assign (ident "b"))))
 															(args
 																(e-num (value "97"))))
-														(e-dispatch-call (method "is_lte") (constraint-fn-var 1041)
+														(e-dispatch-call (method "is_lte") (constraint-fn-var 1429)
 															(receiver
 																(e-lookup-local
 																	(p-assign (ident "b"))))
@@ -863,13 +863,13 @@ is_named_color = |str| {
 										(e-if
 											(if-branches
 												(if-branch
-													(e-dispatch-call (method "is_gte") (constraint-fn-var 1092)
+													(e-dispatch-call (method "is_gte") (constraint-fn-var 1480)
 														(receiver
 															(e-lookup-local
 																(p-assign (ident "b"))))
 														(args
 															(e-num (value "65"))))
-													(e-dispatch-call (method "is_lte") (constraint-fn-var 1133)
+													(e-dispatch-call (method "is_lte") (constraint-fn-var 1521)
 														(receiver
 															(e-lookup-local
 																(p-assign (ident "b"))))
@@ -904,7 +904,7 @@ is_named_color = |str| {
 											(e-if
 												(if-branches
 													(if-branch
-														(e-dispatch-call (method "is_char_in_hex_range") (constraint-fn-var 1265)
+														(e-dispatch-call (method "is_char_in_hex_range") (constraint-fn-var 1653)
 															(receiver
 																(e-lookup-local
 																	(p-assign (ident "a"))))
@@ -912,7 +912,7 @@ is_named_color = |str| {
 														(e-if
 															(if-branches
 																(if-branch
-																	(e-dispatch-call (method "is_char_in_hex_range") (constraint-fn-var 1271)
+																	(e-dispatch-call (method "is_char_in_hex_range") (constraint-fn-var 1659)
 																		(receiver
 																			(e-lookup-local
 																				(p-assign (ident "b"))))
@@ -920,7 +920,7 @@ is_named_color = |str| {
 																	(e-if
 																		(if-branches
 																			(if-branch
-																				(e-dispatch-call (method "is_char_in_hex_range") (constraint-fn-var 1277)
+																				(e-dispatch-call (method "is_char_in_hex_range") (constraint-fn-var 1665)
 																					(receiver
 																						(e-lookup-local
 																							(p-assign (ident "c"))))
@@ -928,7 +928,7 @@ is_named_color = |str| {
 																				(e-if
 																					(if-branches
 																						(if-branch
-																							(e-dispatch-call (method "is_char_in_hex_range") (constraint-fn-var 1283)
+																							(e-dispatch-call (method "is_char_in_hex_range") (constraint-fn-var 1671)
 																								(receiver
 																									(e-lookup-local
 																										(p-assign (ident "d"))))
@@ -936,12 +936,12 @@ is_named_color = |str| {
 																							(e-if
 																								(if-branches
 																									(if-branch
-																										(e-dispatch-call (method "is_char_in_hex_range") (constraint-fn-var 1289)
+																										(e-dispatch-call (method "is_char_in_hex_range") (constraint-fn-var 1677)
 																											(receiver
 																												(e-lookup-local
 																													(p-assign (ident "e"))))
 																											(args))
-																										(e-dispatch-call (method "is_char_in_hex_range") (constraint-fn-var 1295)
+																										(e-dispatch-call (method "is_char_in_hex_range") (constraint-fn-var 1683)
 																											(receiver
 																												(e-lookup-local
 																													(p-assign (ident "f"))))
@@ -988,7 +988,7 @@ is_named_color = |str| {
 																		(p-assign (ident "#interp_0"))
 																		(e-lookup-local
 																			(p-assign (ident "str"))))
-																	(e-interpolation (constraint-fn-var 1414)
+																	(e-interpolation (constraint-fn-var 1802)
 																		(first
 																			(e-literal (string "Expected Hex to be in the range 0-9, a-f, A-F, got ")))
 																		(parts
@@ -1009,7 +1009,7 @@ is_named_color = |str| {
 															(p-assign (ident "#interp_1"))
 															(e-lookup-local
 																(p-assign (ident "str"))))
-														(e-interpolation (constraint-fn-var 1478)
+														(e-interpolation (constraint-fn-var 1866)
 															(first
 																(e-literal (string "Expected Hex must start with # and be 7 characters long, got ")))
 															(parts
@@ -1148,7 +1148,7 @@ is_named_color = |str| {
 			(e-if
 				(if-branches
 					(if-branch
-						(e-dispatch-call (method "is_named_color") (constraint-fn-var 1890)
+						(e-dispatch-call (method "is_named_color") (constraint-fn-var 2278)
 							(receiver
 								(e-lookup-local
 									(p-assign (ident "str"))))
@@ -1170,7 +1170,7 @@ is_named_color = |str| {
 											(p-assign (ident "#interp_9"))
 											(e-lookup-local
 												(p-assign (ident "str"))))
-										(e-interpolation (constraint-fn-var 1983)
+										(e-interpolation (constraint-fn-var 2371)
 											(first
 												(e-literal (string "Unknown color ")))
 											(parts
@@ -1193,7 +1193,7 @@ is_named_color = |str| {
 			(e-block
 				(s-let
 					(p-assign (ident "colors"))
-					(e-call (constraint-fn-var 2073)
+					(e-call (constraint-fn-var 2461)
 						(e-lookup-external
 							(builtin))
 						(e-list
@@ -1204,7 +1204,7 @@ is_named_color = |str| {
 									(e-literal (string "AntiqueWhite")))
 								(e-string
 									(e-literal (string "Aqua")))))))
-				(e-dispatch-call (method "contains") (constraint-fn-var 2074)
+				(e-dispatch-call (method "contains") (constraint-fn-var 2462)
 					(receiver
 						(e-lookup-local
 							(p-assign (ident "colors"))))
@@ -1230,9 +1230,9 @@ is_named_color = |str| {
 	(s-expect
 		(e-method-eq (negated "false")
 			(lhs
-				(e-dispatch-call (method "to_str") (constraint-fn-var 2416)
+				(e-dispatch-call (method "to_str") (constraint-fn-var 2804)
 					(receiver
-						(e-call (constraint-fn-var 2205)
+						(e-call (constraint-fn-var 2593)
 							(e-lookup-local
 								(p-assign (ident "rgb")))
 							(e-num (value "124"))
@@ -1245,9 +1245,9 @@ is_named_color = |str| {
 	(s-expect
 		(e-method-eq (negated "false")
 			(lhs
-				(e-dispatch-call (method "to_str") (constraint-fn-var 2856)
+				(e-dispatch-call (method "to_str") (constraint-fn-var 3244)
 					(receiver
-						(e-call (constraint-fn-var 2575)
+						(e-call (constraint-fn-var 2963)
 							(e-lookup-local
 								(p-assign (ident "rgba")))
 							(e-num (value "124"))
@@ -1261,9 +1261,9 @@ is_named_color = |str| {
 	(s-expect
 		(e-method-eq (negated "false")
 			(lhs
-				(e-dispatch-call (method "map_ok") (constraint-fn-var 2924)
+				(e-dispatch-call (method "map_ok") (constraint-fn-var 3312)
 					(receiver
-						(e-call (constraint-fn-var 2899)
+						(e-call (constraint-fn-var 3287)
 							(e-lookup-local
 								(p-assign (ident "hex")))
 							(e-string

@@ -254,7 +254,7 @@ main = (added, subtracted, multiplied)
 			(e-record
 				(fields
 					(field (name "x")
-						(e-dispatch-call (method "plus") (constraint-fn-var 204)
+						(e-dispatch-call (method "plus") (constraint-fn-var 514)
 							(receiver
 								(e-field-access (field "x")
 									(receiver
@@ -266,7 +266,7 @@ main = (added, subtracted, multiplied)
 										(e-lookup-local
 											(p-assign (ident "b"))))))))
 					(field (name "y")
-						(e-dispatch-call (method "plus") (constraint-fn-var 222)
+						(e-dispatch-call (method "plus") (constraint-fn-var 532)
 							(receiver
 								(e-field-access (field "y")
 									(receiver
@@ -291,7 +291,7 @@ main = (added, subtracted, multiplied)
 			(e-record
 				(fields
 					(field (name "x")
-						(e-dispatch-call (method "minus") (constraint-fn-var 297)
+						(e-dispatch-call (method "minus") (constraint-fn-var 607)
 							(receiver
 								(e-field-access (field "x")
 									(receiver
@@ -303,7 +303,7 @@ main = (added, subtracted, multiplied)
 										(e-lookup-local
 											(p-assign (ident "b"))))))))
 					(field (name "y")
-						(e-dispatch-call (method "minus") (constraint-fn-var 315)
+						(e-dispatch-call (method "minus") (constraint-fn-var 625)
 							(receiver
 								(e-field-access (field "y")
 									(receiver
@@ -328,7 +328,7 @@ main = (added, subtracted, multiplied)
 			(e-record
 				(fields
 					(field (name "x")
-						(e-dispatch-call (method "times") (constraint-fn-var 390)
+						(e-dispatch-call (method "times") (constraint-fn-var 700)
 							(receiver
 								(e-field-access (field "x")
 									(receiver
@@ -340,7 +340,7 @@ main = (added, subtracted, multiplied)
 										(e-lookup-local
 											(p-assign (ident "b"))))))))
 					(field (name "y")
-						(e-dispatch-call (method "times") (constraint-fn-var 408)
+						(e-dispatch-call (method "times") (constraint-fn-var 718)
 							(receiver
 								(e-field-access (field "y")
 									(receiver
@@ -378,7 +378,7 @@ main = (added, subtracted, multiplied)
 			(ty-lookup (name "Vec") (local))))
 	(d-let
 		(p-assign (ident "added"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 890)
+		(e-dispatch-call (method "plus") (constraint-fn-var 1200)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "v1"))))
@@ -389,7 +389,7 @@ main = (added, subtracted, multiplied)
 			(ty-lookup (name "Vec") (local))))
 	(d-let
 		(p-assign (ident "subtracted"))
-		(e-dispatch-call (method "minus") (constraint-fn-var 911)
+		(e-dispatch-call (method "minus") (constraint-fn-var 1221)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "v1"))))
@@ -400,7 +400,7 @@ main = (added, subtracted, multiplied)
 			(ty-lookup (name "Vec") (local))))
 	(d-let
 		(p-assign (ident "multiplied"))
-		(e-dispatch-call (method "times") (constraint-fn-var 932)
+		(e-dispatch-call (method "times") (constraint-fn-var 1242)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "v1"))))

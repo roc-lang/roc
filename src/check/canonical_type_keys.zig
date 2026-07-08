@@ -557,6 +557,7 @@ const Builder = struct {
                 self.writeBool(num_literal.is_u128);
                 self.writeBool(num_literal.is_negative);
                 self.writeBool(num_literal.is_fractional);
+                self.writeBool(num_literal.can_materialize_numeral);
             }
         }
     }

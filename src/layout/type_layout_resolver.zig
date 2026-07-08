@@ -265,6 +265,8 @@ pub const Resolver = struct {
 
         switch (backing_ref) {
             .canonical => {
+                // `internGraph` validates every reserved node, even when the caller returns a canonical ref.
+                build_state.graph.setNode(placeholder_id, .{ .nominal = backing_ref });
                 try build_state.refs_by_var.put(cache_key, backing_ref);
                 return backing_ref;
             },

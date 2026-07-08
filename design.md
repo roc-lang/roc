@@ -748,6 +748,16 @@ CheckedModuleId =
   + direct_import_checked_module_ids
 ```
 
+The cache id is not merely the module's source bytes plus recursive import
+ids. Source bytes are only one input. The id also includes the compiler build
+hash, the module identity, the checking context identity, and the ordered direct
+import checked module ids. The checking context identity includes import-name
+hashes, resolved import ids, platform requirement context, platform/app
+relation identity, and explicit root requests. Any additional checked tables
+stored in the checked module cache must be deterministic output of those
+checked inputs and the checked modules they name. Such tables are serialized
+data, not new cache-id inputs.
+
 `module_identity` includes the module's name. Canonicalization output is not
 a function of source bytes alone — a type module's main type takes its name
 from the module's file name — so no key or identity derived from module
@@ -762,6 +772,22 @@ runtime behavior or performance of the compiled program, except for debug
 information. Compiling one large module and compiling the same code split across
 imports must produce the same reachable specializations, callable
 representations, layout decisions, ARC statements, and backend behavior.
+
+Checked modules store the target-independent lowering visibility selected by
+checking. This includes the complete checked module id set needed by later
+post-check stages for the module's explicit roots, checked type roots, checked
+type schemes, public API dependencies, type-owner dependencies, and
+platform/app relation closures. The set is duplicate-free and stable. It is
+serialized as relocatable sorted POD slices, with binary-search lookup where a
+map is needed; mutable hash maps may be used only while constructing the checked
+module and must not be the persisted representation.
+
+On a cache hit, the coordinator consumes this lowering visibility directly to
+materialize imported checked module views. It must not rebuild the same set by
+walking checked bodies, checked type roots, checked type schemes, public API
+dependency lists, or platform/app relation closure data. Recomputing that
+visibility during post-check lowering is a producer-boundary bug: the checked
+module cache already owns this target-independent checked information.
 
 The compiler does not cache Monotype IR, Monotype Lifted IR, Lambda Solved IR,
 Lambda Mono decisions, LIR, or any callable/layout representation derived from
@@ -802,6 +828,81 @@ cache format or the specific checked-data selection version must be bumped. A
 cache hit with a matching key and version is consumed as already-checked output;
 the compiler must not pay an extra pass to rediscover whether the cached output
 is complete for the checked module.
+
+## Def Checking Order
+
+Type checking processes a module's top-level defs as binding groups: the SCC
+condensation of the name-reference graph, in deterministic topological order
+(groups ordered by their first member's source position among independent
+groups; members within a group in source order). The graph covers every name
+reference in a def's expression tree — nested lambda bodies and blocks
+included — plus statically-resolvable type-qualified method-call targets. It
+is transient checking input computed from canonicalization output when
+checking starts and freed with the checker; a checked module never stores it.
+
+Because groups are checked in dependency order, a name reference between
+groups always points at an already-checked def. There is no re-entrant
+`checkDef` from inside an expression walk, and no code path exists for a name
+reference to an unchecked def outside the current group (it is a debug
+invariant violation).
+
+Annotated schemes come before any body. A pre-pass declares a standalone
+generalized scheme from every eligible annotation (a simple `.assign` binding
+whose annotation has no `_` hole): the annotation's type is generated once in
+place, deep-copied into disjoint orphan vars, generalized, and the annotation
+nodes are reset so the def's own body check generates them again exactly as
+always. A reference to an annotated def — by name or by dispatch — before or
+while its body checks instantiates this standalone scheme, exactly like a
+reference to an imported scheme copy; the def itself still checks with its
+annotation generated in its body's frame, sharing vars with the scheme the
+checked module outputs, which checked dispatch-evidence resolution relies on.
+
+The recursion rule is the ML binding-group rule. A recursive group gets one
+shared rank frame: members' patterns are ranked in it first, an in-group
+reference to an unannotated member unifies monomorphically with the member's
+in-flight type (call-site constraints flow into the inferred scheme), unannotated
+members' top-level lambdas stay in the frame instead of generalizing on their
+own, and the whole group generalizes at the frame's boundary. References to
+annotated members instantiate the pre-declared scheme, preserving sound
+polymorphic recursion for annotated defs. The same rule applies to
+block-local `s_decl` functions: each local function decl is a binding group
+of one with its own rank frame, and annotated (type-var-free) locals
+pre-declare their scheme. There is no deferred post-generalization validation
+of recursive references anywhere; the monomorphic rule leaves nothing to
+validate afterwards. A consequence is that an unannotated recursive def
+used at two incompatible types within its own group is a type error — the
+old deferral silently accepted such programs unsoundly.
+
+Static-dispatch dependencies are inherently dynamic (`|a| a.foo()` dispatches
+on an inferred type), so they cannot be in the name graph. When a deferred
+static-dispatch constraint resolves to an unchecked, unannotated local def
+mid-body, the target is only *recorded* (`pending_dispatch_targets`, owned by
+the discovering group) and the constraint re-deferred; the constraint's vars
+are pinned at the group's boundary rank so no inner lambda can generalize
+them first. At the group's generalization boundary — a singleton def's RHS
+frame or a recursive group's shared frame, where no mid-body state is pending
+— the driver checks each target's group in its own nested frame (together
+with any unchecked topological prefix), re-runs dispatch, and interleaves
+boundary literal defaulting to a fixpoint before generalizing. Group checks
+nest only at such boundaries.
+
+Group suspension and merge need no dedicated machinery: a suspended group's
+members are `.processed` with still-live, not-yet-generalized vars, so a
+dispatch back-edge from a nested group links to them monomorphically and rank
+adjustment keeps the shared structure at the suspended group's rank, where it
+generalizes when that group's boundary completes. A group therefore never
+generalizes while one of its deferred dispatch constraints into an unchecked
+group is outstanding, and a suspended group is never re-entered — both are
+asserted in
+debug builds (`group_stack`, group states, and the pending-target
+stack-suffix discipline).
+
+Deferred early-return / `?` constraints record the lambda that created them,
+and each lambda's end drains exactly its own entries; a drain cannot touch
+another lambda's constraints, by construction. Rank bookkeeping is therefore
+strictly stack-shaped: unification only ever runs while the frame owning its
+vars is active, and `addVarToRank`'s debug guard is a regression tripwire
+rather than a reachable condition.
 
 ## Checked Boundary
 
@@ -877,6 +978,19 @@ as:
 - opaque, nominal, alias, row, and builtin ownership data
 
 Those data must remain target-independent and representation-free.
+
+Named checked types carry explicit owner identity. The source-origin module
+identity remains the source identity used for `TypeDef`, diagnostics, source
+locations, and name-store interning. Alias and nominal checked payloads also
+carry the checked module id that owns the declaration or representation
+authority. For local named types, that id is the current checked module id; for
+imports, checked type copying preserves the imported owner id; for builtins, it
+is the builtin checked module id.
+
+Monotype and runtime lowering consume the owner checked module id directly as a
+checked module address. If a checked type mentions an owner checked module id
+that is not present in lowering visibility, the checked module producer is
+incomplete.
 
 ### Compile-Time Constants and Hoisted Roots
 
@@ -2344,6 +2458,16 @@ declaration template. Box payload capabilities remain separate explicit
 representation authorities; their backing roots come from the capability entry
 in checked module data instead of from declaration template lookup.
 
+Named type ownership is already decided before Monotype lowering starts. A
+checked alias or nominal payload names its owner checked module id explicitly,
+and the lowering input includes every checked module id recorded in checked
+lowering visibility. Monotype may build a stage-local lookup table from those
+ids to module views for speed, but that lookup is only an address table over
+explicit checked data. The source-origin identity remains part of the lowered
+type definition identity; the owner checked module id is the module address used
+to find checked declarations, representation authorities, method owners, and
+type-store entries.
+
 This solves two classes of bugs:
 
 - generic nominal backings cannot accidentally swap, lose, or default one
@@ -2561,7 +2685,7 @@ Monotype IR has no:
 - source `for` node
 - source row variable requiring closure
 - uninstantiated checked type variable
-- pending owner search
+- missing checked owner address
 
 `FnDef` is the checked identity for a checked, imported, nested, hosted,
 promoted, or checked-stage generated function. It does not contain a capture
@@ -4915,7 +5039,7 @@ The post-check pipeline must not contain:
   patching lowering paths
 - checked-module runtime payloads, value conversion plans, callable-set
   descriptors, or erased ABI decisions
-- owner discovery by method-registry intersection
+- method-registry intersection used as an ownership source
 - backend reference-counting decisions
 - mode, lifetime, or RC-signature data stored in checked modules, LirImage,
   or any structure that outlives ARC insertion

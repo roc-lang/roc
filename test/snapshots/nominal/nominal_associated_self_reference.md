@@ -122,7 +122,7 @@ external = Foo.defaultBar
 				(ty-lookup (name "Bar") (local)))))
 	(d-let
 		(p-assign (ident "Foo.useDefault"))
-		(e-call (constraint-fn-var 69)
+		(e-call (constraint-fn-var 94)
 			(e-lookup-local
 				(p-assign (ident "Foo.transform")))
 			(e-lookup-local

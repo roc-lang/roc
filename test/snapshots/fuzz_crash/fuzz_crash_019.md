@@ -196,12 +196,12 @@ MISSING METHOD - fuzz_crash_019.md:39:2:39:3
 MISSING METHOD - fuzz_crash_019.md:58:6:58:11
 TYPE MISMATCH - fuzz_crash_019.md:52:2:52:2
 DECLARATION HAS NO VALUE - fuzz_crash_019.md:74:1:74:22
+DECLARATION HAS NO VALUE - fuzz_crash_019.md:113:1:113:7
 TOO FEW ARGS - fuzz_crash_019.md:84:2:86:3
 MISSING METHOD - fuzz_crash_019.md:86:11:86:17
 TYPE MISMATCH - fuzz_crash_019.md:98:4:104:3
 TYPE MISMATCH - fuzz_crash_019.md:105:2:105:54
 TYPE MISMATCH - fuzz_crash_019.md:93:22:93:24
-DECLARATION HAS NO VALUE - fuzz_crash_019.md:113:1:113:7
 DECLARATION HAS NO VALUE - fuzz_crash_019.md:116:1:116:13
 TYPE MISMATCH - fuzz_crash_019.md:119:2:119:10
 MISSING METHOD - fuzz_crash_019.md:105:55:105:66
@@ -1051,6 +1051,18 @@ MISSING METHOD - fuzz_crash_019.md:105:55:105:72
     they are published through the host boundary.
 
 
+┌──────────────────────────┐
+│ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
+└┬─────────────────────────┘  implementation.                                 │
+ │                                                                            │
+ │  y : {}                                                                    │
+ │  ‾‾‾‾‾‾                                                                    │
+ └─────────────────────────────────────────────────── fuzz_crash_019.md:113:1 ┘
+
+    Add a value body here, or put hosted functions in a platform type module so
+    they are published through the host boundary.
+
+
 ┌──────────────┐
 │ TOO FEW ARGS ├─ The `me` function expects 2 arguments, but it got 1 ────────┐
 └┬─────────────┘  instead.                                                    │
@@ -1139,18 +1151,6 @@ MISSING METHOD - fuzz_crash_019.md:105:55:105:72
     But you are trying to use it as:
 
         Str
-
-
-┌──────────────────────────┐
-│ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
-└┬─────────────────────────┘  implementation.                                 │
- │                                                                            │
- │  y : {}                                                                    │
- │  ‾‾‾‾‾‾                                                                    │
- └─────────────────────────────────────────────────── fuzz_crash_019.md:113:1 ┘
-
-    Add a value body here, or put hosted functions in a platform type module so
-    they are published through the host boundary.
 
 
 ┌──────────────────────────┐
@@ -1995,7 +1995,7 @@ expect {
 				(s-return
 					(e-runtime-error (tag "expr_not_canonicalized")))
 				(s-expr
-					(e-call (constraint-fn-var 2311)
+					(e-call (constraint-fn-var 2322)
 						(e-lookup-local
 							(p-assign (ident "me")))
 						(e-not-implemented)))
@@ -2043,7 +2043,7 @@ expect {
 										(p-assign (ident "#interp_2"))
 										(e-lookup-local
 											(p-assign (ident "er"))))
-									(e-interpolation (constraint-fn-var 2595)
+									(e-interpolation (constraint-fn-var 2606)
 										(first
 											(e-literal (string "Ag ")))
 										(parts
@@ -2053,7 +2053,7 @@ expect {
 											(e-lookup-local
 												(p-assign (ident "#interp_2")))
 											(e-literal (string "")))))))
-						(e-dispatch-call (method "plus") (constraint-fn-var 2598)
+						(e-dispatch-call (method "plus") (constraint-fn-var 2609)
 							(receiver
 								(e-runtime-error (tag "ident_not_in_scope")))
 							(args
@@ -2117,7 +2117,7 @@ expect {
 					(e-if
 						(if-branches
 							(if-branch
-								(e-dispatch-call (method "is_gt") (constraint-fn-var 3044)
+								(e-dispatch-call (method "is_gt") (constraint-fn-var 3055)
 									(receiver
 										(e-match
 											(match
@@ -2151,18 +2151,18 @@ expect {
 										(e-if
 											(if-branches
 												(if-branch
-													(e-dispatch-call (method "is_lt") (constraint-fn-var 3161)
+													(e-dispatch-call (method "is_lt") (constraint-fn-var 3172)
 														(receiver
-															(e-dispatch-call (method "plus") (constraint-fn-var 3123)
+															(e-dispatch-call (method "plus") (constraint-fn-var 3134)
 																(receiver
 																	(e-num (value "13")))
 																(args
 																	(e-num (value "2")))))
 														(args
 															(e-num (value "5"))))
-													(e-dispatch-call (method "is_gte") (constraint-fn-var 3270)
+													(e-dispatch-call (method "is_gte") (constraint-fn-var 3281)
 														(receiver
-															(e-dispatch-call (method "minus") (constraint-fn-var 3232)
+															(e-dispatch-call (method "minus") (constraint-fn-var 3243)
 																(receiver
 																	(e-num (value "10")))
 																(args
@@ -2177,7 +2177,7 @@ expect {
 											(builtin)
 											(e-tag (name "True")))))
 								(if-else
-									(e-dispatch-call (method "is_lte") (constraint-fn-var 3354)
+									(e-dispatch-call (method "is_lte") (constraint-fn-var 3365)
 										(receiver
 											(e-num (value "12")))
 										(args
@@ -2191,12 +2191,12 @@ expect {
 										(e-match
 											(match
 												(cond
-													(e-dispatch-call (method "ned") (constraint-fn-var 3421)
+													(e-dispatch-call (method "ned") (constraint-fn-var 3432)
 														(receiver
 															(e-match
 																(match
 																	(cond
-																		(e-dispatch-call (method "od") (constraint-fn-var 3388)
+																		(e-dispatch-call (method "od") (constraint-fn-var 3399)
 																			(receiver
 																				(e-match
 																					(match

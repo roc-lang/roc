@@ -129,6 +129,9 @@ pub const Options = struct {
     list_in_place_map: bool = false,
     /// Preserve source-level procedure names in LIR for runtime diagnostics.
     proc_debug_names: bool = false,
+    /// Build ConstStore materialization plans for requested layouts.
+    /// Static-data exports require this; layout-only consumers such as glue do not.
+    layout_request_const_plans: bool = true,
 };
 
 /// Lower Lambda Solved directly into LIR.
@@ -301,6 +304,7 @@ const Lowerer = struct {
     inline_expects: InlineExpectMode,
     list_in_place_map: bool,
     proc_debug_names: bool,
+    layout_request_const_plans: bool,
     /// Match sites statically resolved by `foldListMapCanReuseMatch`,
     /// recorded (Debug only) so the Lambda Mono verifier replays them.
     folded_map_matches: std.ArrayList(Lifted.Program.FoldedMatch),
@@ -370,6 +374,7 @@ const Lowerer = struct {
             .inline_expects = options.inline_expects,
             .list_in_place_map = options.list_in_place_map,
             .proc_debug_names = options.proc_debug_names,
+            .layout_request_const_plans = options.layout_request_const_plans,
             .folded_map_matches = .empty,
             .source_symbols = std.AutoHashMap(Common.Symbol, Lifted.FnId).init(allocator),
             .capture_types = CaptureTypeMap.initContext(allocator, .{}),
@@ -1244,9 +1249,18 @@ const Lowerer = struct {
                 .ty = self.types.typeDigest(&self.solved.lifted.names, request.ty),
                 .checked_type = request.checked_type,
                 .layout_idx = try self.layoutOfType(request.ty),
-                .plan = try self.constPlanOfType(request.ty),
+                .plan = if (self.layout_request_const_plans)
+                    try self.constPlanOfType(request.ty)
+                else
+                    try self.layoutOnlyConstPlan(),
             });
         }
+    }
+
+    fn layoutOnlyConstPlan(self: *Lowerer) Common.LowerError!LirProgram.ConstPlanId {
+        const id: LirProgram.ConstPlanId = @enumFromInt(@as(u32, @intCast(self.result.const_plans.items.len)));
+        try self.result.const_plans.append(self.allocator, .layout_only);
+        return id;
     }
 
     fn constPlanOfType(self: *Lowerer, ty: Type.TypeId) Common.LowerError!LirProgram.ConstPlanId {

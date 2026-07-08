@@ -95,6 +95,9 @@ pub const ConstTagVariant = struct {
 /// Shape plan used to store an interpreted compile-time result in ConstStore.
 pub const ConstPlan = union(enum) {
     pending,
+    /// Layout-only request. This plan has no ConstStore materialization shape;
+    /// consumers must use it only for requested layout metadata.
+    layout_only,
     zst,
     scalar,
     str,
@@ -217,6 +220,7 @@ pub fn deinitConstPlans(allocator: Allocator, plans: []const ConstPlan) void {
                 allocator.free(variants);
             },
             .zst,
+            .layout_only,
             .pending,
             .scalar,
             .str,

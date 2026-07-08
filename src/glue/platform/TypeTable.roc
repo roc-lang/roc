@@ -1,22 +1,22 @@
+import AbiLayout exposing [AbiLayout]
+import HostRcPlan exposing [HostRcPlan]
 import RecordField exposing [RecordField]
 import TagUnionRepr exposing [TagUnionRepr]
+import TypeInfo exposing [TypeInfo]
 import TypeRepr exposing [TypeRepr]
 
-## Typed view over the reflected glue type table.
+## Typed view over compiler-emitted glue type metadata.
 ##
-## Glue scripts should ask ABI-shape questions through this module instead of
-## re-deriving them independently per target language.
-TypeTable := { entries : List(TypeRepr) }.{
+## Authoritative compiler sources:
+## - src/glue/glue.zig builds each TypeInfo row from checked type shape plus the
+##   requested LIR layout metadata for the same checked type id.
+## - src/layout/store.zig owns layout facts; TypeTable only exposes them.
+##
+## Glue scripts should ask semantic and ABI questions through this receiver
+## module instead of rebuilding lookup tables or deriving layout facts locally.
+TypeTable := { entries : List(TypeInfo) }.{
 	RecordLookup := [
-		RecordFound({
-			alignment : U64,
-			alignment_32 : U64,
-			alignment_64 : U64,
-			fields : List(RecordField),
-			size : U64,
-			size_32 : U64,
-			size_64 : U64,
-		}),
+		RecordFound({ fields : List(RecordField), type_id : U64 }),
 		NotRecord,
 	]
 
@@ -26,40 +26,47 @@ TypeTable := { entries : List(TypeRepr) }.{
 		NotSingleVariant,
 	]
 
-	from_list : List(TypeRepr) -> TypeTable
+	from_list : List(TypeInfo) -> TypeTable
 	from_list = |entries| TypeTable.{ entries }
 
-	entries : TypeTable -> List(TypeRepr)
+	entries : TypeTable -> List(TypeInfo)
 	entries = |{ entries }| entries
 
-	get : TypeTable, U64 -> TypeRepr
-	get = |table, type_id|
-		match List.get(entries(table), type_id) {
-			Ok(type_repr) => type_repr
+	type_info : TypeTable, U64 -> TypeInfo
+	type_info = |table, type_id|
+		match List.get(table.entries(), type_id) {
+			Ok(info) => info
 			Err(_) => {
 				crash "glue invariant violated: missing type table entry ${U64.to_str(type_id)}"
 			}
 		}
 
+	get : TypeTable, U64 -> TypeRepr
+	get = |table, type_id| (table.type_info(type_id)).repr
+
+	layout : TypeTable, U64 -> AbiLayout
+	layout = |table, type_id| (table.type_info(type_id)).layout
+
+	rc_plan : TypeTable, U64 -> HostRcPlan
+	rc_plan = |table, type_id| (table.type_info(type_id)).rc
+
 	is_unit : TypeTable, U64 -> Bool
 	is_unit = |table, type_id|
-		match get(table, type_id) {
+		match table.get(type_id) {
 			RocUnit => Bool.True
 			_ => Bool.False
 		}
 
 	is_refcounted : TypeTable, U64 -> Bool
-	is_refcounted = |table, type_id| repr_is_refcounted(table, get(table, type_id))
+	is_refcounted = |table, type_id| (table.layout(type_id)).contains_refcounted
 
 	repr_is_refcounted : TypeTable, TypeRepr -> Bool
-	repr_is_refcounted = |table, type_repr|
+	repr_is_refcounted = |_table, type_repr|
 		match type_repr {
 			RocStr => Bool.True
 			RocBox(_) => Bool.True
 			RocList(_) => Bool.True
 			RocFunction(_) => Bool.True
-			RocRecord(rec) => List.any(rec.fields, |field| !field.is_padding and is_refcounted(table, field.type_id))
-			RocTagUnion(tu) => List.any(tu.tags, |tag| List.any(tag.payload, |payload_id| is_refcounted(table, payload_id)))
 			_ => Bool.False
 		}
 
@@ -72,42 +79,36 @@ TypeTable := { entries : List(TypeRepr) }.{
 						Ok(payload_id) => SinglePayload(payload_id)
 						Err(_) => SingleNoPayload
 					}
-				Err(_) => SingleNoPayload
+				Err(_) => {
+					crash "glue invariant violated: single-tag union had no tag"
+				}
 			}
 		} else {
 			NotSingleVariant
 		}
 
 	record_layout : TypeTable, U64 -> RecordLookup
-	record_layout = |table, type_id| record_layout_from_repr(table, get(table, type_id))
+	record_layout = |table, type_id| table.record_layout_from_repr(type_id, table.get(type_id))
 
-	record_layout_from_repr : TypeTable, TypeRepr -> RecordLookup
-	record_layout_from_repr = |table, type_repr|
+	record_layout_from_repr : TypeTable, U64, TypeRepr -> RecordLookup
+	record_layout_from_repr = |table, type_id, type_repr|
 		match type_repr {
 			RocRecord(rec) =>
 				if List.len(rec.fields) > 0 {
-					RecordFound({
-						alignment: rec.alignment,
-						alignment_32: rec.alignment_32,
-						alignment_64: rec.alignment_64,
-						fields: rec.fields,
-						size: rec.size,
-						size_32: rec.size_32,
-						size_64: rec.size_64,
-					})
+					RecordFound({ fields: rec.fields, type_id })
 				} else {
 					NotRecord
 				}
 			RocTagUnion(tu) =>
 				match single_variant_payload(tu) {
-					SinglePayload(payload_id) => record_layout(table, payload_id)
+					SinglePayload(payload_id) => table.record_layout(payload_id)
 					_ => NotRecord
 				}
 			_ => NotRecord
 		}
 
 	is_anonymous_record : TypeTable, U64 -> Bool
-	is_anonymous_record = |table, type_id| is_anonymous_record_repr(table, get(table, type_id))
+	is_anonymous_record = |table, type_id| table.is_anonymous_record_repr(table.get(type_id))
 
 	is_anonymous_record_repr : TypeTable, TypeRepr -> Bool
 	is_anonymous_record_repr = |table, type_repr|
@@ -115,7 +116,7 @@ TypeTable := { entries : List(TypeRepr) }.{
 			RocRecord(rec) => rec.anonymous
 			RocTagUnion(tu) =>
 				match single_variant_payload(tu) {
-					SinglePayload(payload_id) => is_anonymous_record(table, payload_id)
+					SinglePayload(payload_id) => table.is_anonymous_record(payload_id)
 					_ => Bool.False
 				}
 			_ => Bool.False
@@ -136,8 +137,8 @@ TypeTable := { entries : List(TypeRepr) }.{
 		var $seen_names = []
 		var $duplicates = []
 
-		for type_repr in entries(table) {
-			match type_repr {
+		for entry in table.entries() {
+			match entry.repr {
 				RocTagUnion(tu) =>
 					if List.len(tu.tags) >= 2 and tu.name != "" {
 						if List.contains($seen_names, tu.name) {
@@ -156,46 +157,53 @@ TypeTable := { entries : List(TypeRepr) }.{
 	}
 }
 
-sample_table : TypeTable
-sample_table = {
-	str_field = {
-		alignment: 8,
-		alignment_32: 4,
-		alignment_64: 8,
-		is_padding: Bool.False,
-		name: "left",
-		offset_32: 0,
-		offset_64: 0,
-		size: 24,
-		size_32: 12,
-		size_64: 24,
-		type_id: 1,
-	}
-	wrapped_tag = { name: "Wrapped", payload: [3], payload_size: 24, payload_alignment: 8, payload_size_32: 12, payload_alignment_32: 4, payload_size_64: 24, payload_alignment_64: 8 }
-	err_str = { name: "Err", payload: [1], payload_size: 24, payload_alignment: 8, payload_size_32: 12, payload_alignment_32: 4, payload_size_64: 24, payload_alignment_64: 8 }
-	err_list = { name: "Err", payload: [2], payload_size: 24, payload_alignment: 8, payload_size_32: 12, payload_alignment_32: 4, payload_size_64: 24, payload_alignment_64: 8 }
-	ok_u8 = { name: "Ok", payload: [0], payload_size: 1, payload_alignment: 1, payload_size_32: 1, payload_alignment_32: 1, payload_size_64: 1, payload_alignment_64: 1 }
-
-	TypeTable.from_list([
-		RocU8,
-		RocStr,
-		RocList(0),
-		RocRecord({ name: "Pair", anonymous: Bool.False, fields: [str_field], size: 24, alignment: 8, size_32: 12, alignment_32: 4, size_64: 24, alignment_64: 8 }),
-		RocTagUnion({ name: "Wrapped", tags: [wrapped_tag], size: 24, alignment: 8, size_32: 12, alignment_32: 4, size_64: 24, alignment_64: 8, discriminant_size: 0, discriminant_offset_32: 12, discriminant_offset_64: 24 }),
-		RocTagUnion({ name: "Try", tags: [err_str, ok_u8], size: 32, alignment: 8, size_32: 16, alignment_32: 4, size_64: 32, alignment_64: 8, discriminant_size: 1, discriminant_offset_32: 12, discriminant_offset_64: 24 }),
-		RocTagUnion({ name: "Try", tags: [err_list, ok_u8], size: 32, alignment: 8, size_32: 16, alignment_32: 4, size_64: 32, alignment_64: 8, discriminant_size: 1, discriminant_offset_32: 12, discriminant_offset_64: 24 }),
-	])
+sample_layout = {
+	size32: 1,
+	alignment32: 1,
+	size64: 1,
+	alignment64: 1,
+	contains_refcounted: Bool.False,
+	details: AbiBuiltin,
 }
 
-expect TypeTable.is_unit(sample_table, 0) == Bool.False
-expect TypeTable.is_refcounted(sample_table, 1)
-expect TypeTable.is_refcounted(sample_table, 2)
-expect TypeTable.is_refcounted(sample_table, 3)
-expect TypeTable.is_anonymous_record(sample_table, 4) == Bool.False
-expect TypeTable.duplicate_tag_union_names(sample_table) == ["Try"]
+ref_layout = {
+	size32: 12,
+	alignment32: 4,
+	size64: 24,
+	alignment64: 8,
+	contains_refcounted: Bool.True,
+	details: AbiBuiltin,
+}
 
-expect
-	match TypeTable.record_layout(sample_table, 4) {
-		RecordFound(layout) => layout.size == 24 and List.len(layout.fields) == 1
-		NotRecord => Bool.False
-	}
+sample_info : TypeRepr -> TypeInfo
+sample_info = |repr| { repr, layout: sample_layout, rc: RcNoop }
+
+ref_info : TypeRepr -> TypeInfo
+ref_info = |repr| { repr, layout: ref_layout, rc: RcRefcounted }
+
+sample_table : TypeTable
+sample_table = TypeTable.from_list([
+	sample_info(RocU8),
+	ref_info(RocStr),
+	ref_info(RocList(0)),
+	ref_info(RocRecord({ name: "Pair", anonymous: Bool.False, fields: [{ name: "left", type_id: 1, is_padding: Bool.False }] })),
+	ref_info(RocTagUnion({ name: "Wrapped", tags: [{ name: "Wrapped", payload: [3] }] })),
+	ref_info(RocTagUnion({ name: "Try", tags: [{ name: "Err", payload: [1] }, { name: "Ok", payload: [0] }] })),
+	ref_info(RocTagUnion({ name: "Try", tags: [{ name: "Err", payload: [2] }, { name: "Ok", payload: [0] }] })),
+])
+
+## Checks the sample `TypeTable.is_unit` behavior.
+expect sample_table.is_unit(0) == Bool.False
+## Checks the sample `TypeTable.is_refcounted` behavior.
+expect sample_table.is_refcounted(1)
+## Checks the sample `TypeTable.is_refcounted` behavior.
+expect sample_table.is_refcounted(2)
+## Checks the sample `TypeTable.is_refcounted` behavior.
+expect sample_table.is_refcounted(3)
+## Checks the sample `TypeTable.is_anonymous_record` behavior.
+expect sample_table.is_anonymous_record(4) == Bool.False
+## Checks the sample `TypeTable.duplicate_tag_union_names` behavior.
+expect sample_table.duplicate_tag_union_names() == ["Try"]
+
+## Checks `TypeTable.is_named_multi_tag_union` for this representative case.
+expect TypeTable.is_named_multi_tag_union(sample_table.get(5))

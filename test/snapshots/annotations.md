@@ -249,7 +249,7 @@ NO CHANGE
 					(ty-rigid-var-lookup (ty-rigid-var (name "a")))))))
 	(d-let
 		(p-assign (ident "succeedPairSameType"))
-		(e-call (constraint-fn-var 429)
+		(e-call (constraint-fn-var 502)
 			(e-lookup-local
 				(p-assign (ident "mkPair")))
 			(e-num (value "1"))
@@ -259,7 +259,7 @@ NO CHANGE
 				(ty-lookup (name "U8") (builtin)))))
 	(d-let
 		(p-assign (ident "failPairDiffTypes"))
-		(e-call (constraint-fn-var 565)
+		(e-call (constraint-fn-var 638)
 			(e-lookup-local
 				(p-assign (ident "mkPair")))
 			(e-string

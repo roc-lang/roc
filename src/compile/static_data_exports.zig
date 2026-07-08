@@ -273,6 +273,7 @@ const StaticDataBuilder = struct {
         const plan = self.constPlan(plan_id);
         switch (plan) {
             .pending => staticDataInvariant("pending const plan reached static data export"),
+            .layout_only => staticDataInvariant("layout-only const plan reached static data export"),
             .zst => switch (value) {
                 .zst => {},
                 else => staticDataInvariant("ZST const plan received non-ZST ConstStore node"),

@@ -151,6 +151,8 @@ pub const Resolver = struct {
         const backing_ref = try self.buildRefForType(artifact, nominal.backing, parent_context, build_state);
         switch (backing_ref) {
             .canonical => {
+                // `internGraph` validates every reserved node, even when the caller returns a canonical ref.
+                build_state.graph.setNode(placeholder, .{ .nominal = backing_ref });
                 try build_state.refs_by_type.put(key, backing_ref);
                 return backing_ref;
             },

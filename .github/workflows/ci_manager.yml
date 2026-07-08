@@ -118,6 +118,13 @@ jobs:
           version: 0.16.0
           use-cache: true
 
+      - name: Install Rust wasm target
+        run: rustup target add wasm32-unknown-unknown
+
+      - name: Install Rust musl target (Linux)
+        if: runner.os == 'Linux'
+        run: rustup target add x86_64-unknown-linux-musl
+
       - name: Cache Zig dependency packages
         uses: actions/cache@v4 # ratchet:actions/cache@v4
         with:

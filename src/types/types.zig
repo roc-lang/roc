@@ -855,6 +855,9 @@ pub const NumeralInfo = struct {
     /// Representation requirements for fractional literals.
     frac_requirements: ?FracRequirements = null,
 
+    /// Whether the literal's exact digits can be materialized as a `Num.Numeral`.
+    can_materialize_numeral: bool,
+
     /// Source region for error reporting
     region: base.Region,
 
@@ -880,6 +883,7 @@ pub const NumeralInfo = struct {
             .is_fractional = is_fractional,
             .fits_dec = null,
             .frac_requirements = null,
+            .can_materialize_numeral = true,
             .region = region,
             .explicit_suffix = false,
         };
@@ -894,6 +898,7 @@ pub const NumeralInfo = struct {
             .is_fractional = is_fractional,
             .fits_dec = null,
             .frac_requirements = null,
+            .can_materialize_numeral = true,
             .region = region,
             .explicit_suffix = false,
         };
@@ -902,7 +907,13 @@ pub const NumeralInfo = struct {
     /// Create metadata for a literal whose exact digits are stored outside the
     /// type store. Type checking only needs sign, fractional-ness, and region;
     /// lowering consumes the recorded digit bytes.
-    pub fn fromExact(is_negative: bool, is_fractional: bool, fits_dec: ?bool, region: base.Region) NumeralInfo {
+    pub fn fromExact(
+        is_negative: bool,
+        is_fractional: bool,
+        fits_dec: ?bool,
+        can_materialize_numeral: bool,
+        region: base.Region,
+    ) NumeralInfo {
         return .{
             .bytes = [_]u8{0} ** 16,
             .is_u128 = false,
@@ -913,6 +924,7 @@ pub const NumeralInfo = struct {
                 .{ .fits_in_f32 = true, .fits_in_dec = fits_dec.? }
             else
                 null,
+            .can_materialize_numeral = can_materialize_numeral,
             .region = region,
             .explicit_suffix = false,
         };

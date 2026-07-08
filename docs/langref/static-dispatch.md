@@ -59,7 +59,7 @@ packages can define and require their own methods with `where` clauses.
 | `iter : T -> Iter(item)` | `for item in value` | The type should be iterable in `for` loops. |
 | `next` | `for` loop iteration steps | Usually provided by `Iter`; collection authors usually implement `iter`. |
 | `parser_for : encoding -> (state -> Try({ value : T, rest : state }, err))` | Generic parser APIs such as JSON parsing | A format should be able to parse the type. |
-| `encode_to : T, encoding -> (state -> Try(state, err))` | Generic encoder APIs such as JSON encoding | A format should be able to encode the type. |
+| `encoder_for : encoding -> (T, state -> Try(state, err))` | Generic encoder APIs such as JSON encoding | A format should be able to encode the type. |
 
 ### `to_inspect`
 
@@ -276,7 +276,7 @@ iterator value itself.
 
 ### Parsing and Encoding
 
-Generic parser and encoder APIs use `parser_for` and `encode_to` to ask a type
+Generic parser and encoder APIs use `parser_for` and `encoder_for` to ask a type
 how it should be read or written for a particular format.
 
 ```roc
@@ -294,14 +294,14 @@ Token := { raw : Str }.{
         }
     }
 
-    encode_to : Token, encoding -> (state -> Try(state, err))
+    encoder_for : encoding -> (Token, state -> Try(state, err))
         where [
             encoding.encode_str : encoding, Str, state -> Try(state, err),
         ]
-    encode_to = |token, encoding| {
+    encoder_for = |encoding| {
         Encoding : encoding
 
-        |state| Encoding.encode_str(encoding, token.raw, state)
+        |token, state| Encoding.encode_str(encoding, token.raw, state)
     }
 }
 ```
@@ -309,7 +309,7 @@ Token := { raw : Str }.{
 Structural records, tag unions, lists, sets, dictionaries, and supported
 builtins can use derived parser and encoder implementations when the selected
 format supports their shape. A nominal type can provide explicit `parser_for`
-or `encode_to` methods when it wants a custom representation or when its
+or `encoder_for` methods when it wants a custom representation or when its
 backing should remain hidden.
 
 ### Number Literal Defaulting

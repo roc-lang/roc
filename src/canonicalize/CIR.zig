@@ -820,7 +820,7 @@ pub const NumeralDigits = struct {
     /// Number of bytes for digits_after_pt
     after_pt_len: u16,
     /// Number of decimal digits after the point before base-256 encoding
-    after_pt_digit_count: u32,
+    after_pt_digit_count: u64,
     /// Whether the literal had a minus sign
     is_negative: bool,
 

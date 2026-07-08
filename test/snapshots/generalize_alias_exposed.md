@@ -71,7 +71,7 @@ shorthand = FooBar.myfunc
 		(e-lambda
 			(args
 				(p-assign (ident "list")))
-			(e-dispatch-call (method "len") (constraint-fn-var 42)
+			(e-dispatch-call (method "len") (constraint-fn-var 54)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "list"))))

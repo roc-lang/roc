@@ -6,6 +6,14 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
+/// Maximum number of bytes a materialized `Num.Numeral` digit list can carry.
+/// The checked IR stores these list lengths in `u16` fields.
+pub const max_numeral_digit_bytes: usize = std.math.maxInt(u16);
+
+/// Any nonzero base-10 digit sequence longer than this cannot fit in
+/// `max_numeral_digit_bytes` base-256 bytes.
+const max_decimal_digits_for_numeral_bytes: u64 = 157_825;
+
 /// Index of a parsed numeric literal stored in `NodeStore.numeric_literals`.
 pub const Idx = enum(u32) { _ };
 
@@ -112,19 +120,25 @@ pub const Stored = struct {
     digits_start: u32,
     before_len: u32,
     after_len: u32,
-    after_decimal_digit_count: u32,
+    after_decimal_digit_count: u64,
     flags: Flags,
 
     /// Boolean facts packed into a byte for storage.
     pub const Flags = packed struct(u8) {
         is_negative: bool = false,
         had_decimal_point: bool = false,
-        _padding: u6 = 0,
+        is_materialized: bool = true,
+        _padding: u5 = 0,
     };
 
     /// Return whether the literal has a leading minus sign.
     pub fn isNegative(self: Stored) bool {
         return self.flags.is_negative;
+    }
+
+    /// Return whether exact `Num.Numeral` digit lists are stored for this literal.
+    pub fn isMaterialized(self: Stored) bool {
+        return self.flags.is_materialized;
     }
 };
 
@@ -134,9 +148,10 @@ pub const Owned = struct {
     compact: Compact,
     before: []u8,
     after: []u8,
-    after_decimal_digit_count: u32,
+    after_decimal_digit_count: u64,
     is_negative: bool,
     had_decimal_point: bool,
+    is_materialized: bool,
 
     /// Free owned digit buffers.
     pub fn deinit(self: Owned, allocator: std.mem.Allocator) void {
@@ -160,6 +175,8 @@ pub const DeprecatedSuffixSource = struct {
 const DecimalParts = struct {
     before: []u8,
     after: []u8,
+    after_decimal_digit_count: u64,
+    is_materialized: bool,
 
     fn deinit(self: DecimalParts, allocator: std.mem.Allocator) void {
         allocator.free(self.before);
@@ -170,9 +187,10 @@ const DecimalParts = struct {
 const Exact = struct {
     before: []u8,
     after: []u8,
-    after_decimal_digit_count: u32,
+    after_decimal_digit_count: u64,
     is_negative: bool,
     had_decimal_point: bool,
+    is_materialized: bool,
 
     fn deinit(self: Exact, allocator: std.mem.Allocator) void {
         allocator.free(self.before);
@@ -193,6 +211,7 @@ pub fn parse(allocator: std.mem.Allocator, raw_text: []const u8, kind: Kind) std
             .after_decimal_digit_count = 0,
             .is_negative = false,
             .had_decimal_point = kind == .frac,
+            .is_materialized = true,
         },
     };
     errdefer exact.deinit(allocator);
@@ -210,6 +229,7 @@ pub fn parse(allocator: std.mem.Allocator, raw_text: []const u8, kind: Kind) std
         .after_decimal_digit_count = exact.after_decimal_digit_count,
         .is_negative = exact.is_negative,
         .had_decimal_point = exact.had_decimal_point,
+        .is_materialized = exact.is_materialized,
     };
 }
 
@@ -360,8 +380,17 @@ fn parseExactInteger(allocator: std.mem.Allocator, text: []const u8) (Allocator.
     }
     if (first_digit >= text.len) return error.InvalidNumeral;
 
-    const before = try intDigitsToBase256(allocator, trimLeadingZeros(text[first_digit..]), radix);
+    const magnitude_digits = trimLeadingZeros(text[first_digit..]);
+    if (!sourceDigitsMayFitBase256(magnitude_digits, radix)) {
+        return unmaterializedExact(allocator, is_negative, false, 0);
+    }
+
+    const before = try intDigitsToBase256(allocator, magnitude_digits, radix);
     errdefer allocator.free(before);
+    if (before.len > max_numeral_digit_bytes) {
+        allocator.free(before);
+        return unmaterializedExact(allocator, is_negative, false, 0);
+    }
     const after = try allocator.alloc(u8, 0);
 
     return .{
@@ -370,6 +399,7 @@ fn parseExactInteger(allocator: std.mem.Allocator, text: []const u8) (Allocator.
         .after_decimal_digit_count = 0,
         .is_negative = is_negative,
         .had_decimal_point = false,
+        .is_materialized = true,
     };
 }
 
@@ -383,19 +413,32 @@ fn parseExactDecimal(allocator: std.mem.Allocator, text: []const u8) (Allocator.
     const parts = try decimalParts(allocator, text[first..]);
     defer parts.deinit(allocator);
 
-    const after_decimal_digit_count = std.math.cast(u32, parts.after.len) orelse return error.InvalidNumeral;
+    if (!parts.is_materialized) {
+        return unmaterializedExact(allocator, is_negative, had_decimal_point, parts.after_decimal_digit_count);
+    }
 
     const before = try decimalDigitsToBase256(allocator, trimLeadingZeros(parts.before));
     errdefer allocator.free(before);
     const after = try decimalDigitsToBase256(allocator, parts.after);
     errdefer allocator.free(after);
+    if (before.len > max_numeral_digit_bytes or after.len > max_numeral_digit_bytes) {
+        return unmaterializedExactAfterFreeing(
+            allocator,
+            is_negative,
+            had_decimal_point,
+            parts.after_decimal_digit_count,
+            before,
+            after,
+        );
+    }
 
     return .{
         .before = before,
         .after = after,
-        .after_decimal_digit_count = after_decimal_digit_count,
+        .after_decimal_digit_count = parts.after_decimal_digit_count,
         .is_negative = is_negative,
         .had_decimal_point = had_decimal_point,
+        .is_materialized = true,
     };
 }
 
@@ -439,47 +482,199 @@ fn decimalParts(allocator: std.mem.Allocator, unsigned_text: []const u8) (Alloca
     if (!saw_digit) return error.InvalidNumeral;
 
     if (exponent >= 0) {
-        const exponent_usize = std.math.cast(usize, exponent) orelse return error.InvalidNumeral;
-        const move_count: usize = @min(exponent_usize, after_raw.items.len);
-        const zeros_count: usize = exponent_usize - move_count;
-        const before_prefix_len = checkedAddUsize(before_raw.items.len, move_count) orelse return error.InvalidNumeral;
-        const before_len = checkedAddUsize(before_prefix_len, zeros_count) orelse return error.InvalidNumeral;
+        const exponent_u64: u64 = @intCast(exponent);
+        const after_len_u64 = usizeToU64(after_raw.items.len) orelse return error.InvalidNumeral;
+        if (exponent_u64 <= after_len_u64) {
+            const move_count: usize = @intCast(exponent_u64);
+            const after_full = after_raw.items[move_count..];
+            const after_count = usizeToU64(after_full.len) orelse return error.InvalidNumeral;
 
-        var before = try allocator.alloc(u8, before_len);
+            const before = try materializedJoinedDecimalDigits(
+                allocator,
+                before_raw.items,
+                after_raw.items[0..move_count],
+                0,
+            ) orelse return unmaterializedDecimalParts(allocator, after_count);
+            errdefer allocator.free(before);
+            const after = try materializedJoinedDecimalDigits(allocator, after_full, &.{}, 0) orelse {
+                allocator.free(before);
+                return unmaterializedDecimalParts(allocator, after_count);
+            };
+            errdefer allocator.free(after);
+            return .{
+                .before = before,
+                .after = after,
+                .after_decimal_digit_count = after_count,
+                .is_materialized = true,
+            };
+        }
+
+        const zeros_count = exponent_u64 - after_len_u64;
+        const before = try materializedJoinedDecimalDigits(
+            allocator,
+            before_raw.items,
+            after_raw.items,
+            zeros_count,
+        ) orelse return unmaterializedDecimalParts(allocator, 0);
         errdefer allocator.free(before);
-        @memcpy(before[0..before_raw.items.len], before_raw.items);
-        @memcpy(before[before_raw.items.len..][0..move_count], after_raw.items[0..move_count]);
-        @memset(before[before_prefix_len..], '0');
-
-        const after = try allocator.dupe(u8, after_raw.items[move_count..]);
+        const after = try allocator.alloc(u8, 0);
         errdefer allocator.free(after);
-        return .{ .before = before, .after = after };
+        return .{
+            .before = before,
+            .after = after,
+            .after_decimal_digit_count = 0,
+            .is_materialized = true,
+        };
     }
 
-    const move_left = std.math.cast(usize, -@as(i128, exponent)) orelse return error.InvalidNumeral;
-    if (move_left <= before_raw.items.len) {
-        const split = before_raw.items.len - move_left;
-        const before = try allocator.dupe(u8, before_raw.items[0..split]);
+    const move_left = std.math.cast(u64, -@as(i128, exponent)) orelse return error.InvalidNumeral;
+    const before_len_u64 = usizeToU64(before_raw.items.len) orelse return error.InvalidNumeral;
+    const after_raw_len_u64 = usizeToU64(after_raw.items.len) orelse return error.InvalidNumeral;
+    const after_count = checkedAddU64(move_left, after_raw_len_u64) orelse return error.InvalidNumeral;
+
+    if (move_left <= before_len_u64) {
+        const split: usize = @intCast(before_len_u64 - move_left);
+        const before = try materializedJoinedDecimalDigits(allocator, before_raw.items[0..split], &.{}, 0) orelse
+            return unmaterializedDecimalParts(allocator, after_count);
         errdefer allocator.free(before);
-        const after_len = checkedAfterDecimalLength(move_left, after_raw.items.len) orelse return error.InvalidNumeral;
-        var after = try allocator.alloc(u8, after_len);
+        const after = try materializedJoinedDecimalDigits(allocator, before_raw.items[split..], after_raw.items, 0) orelse {
+            allocator.free(before);
+            return unmaterializedDecimalParts(allocator, after_count);
+        };
         errdefer allocator.free(after);
-        @memcpy(after[0..move_left], before_raw.items[split..]);
-        @memcpy(after[move_left..], after_raw.items);
-        return .{ .before = before, .after = after };
+        return .{
+            .before = before,
+            .after = after,
+            .after_decimal_digit_count = after_count,
+            .is_materialized = true,
+        };
     }
 
-    const zeros_count = move_left - before_raw.items.len;
     const before = try allocator.alloc(u8, 0);
     errdefer allocator.free(before);
-    const after_prefix_len = checkedAddUsize(zeros_count, before_raw.items.len) orelse return error.InvalidNumeral;
-    const after_len = checkedAfterDecimalLength(after_prefix_len, after_raw.items.len) orelse return error.InvalidNumeral;
-    var after = try allocator.alloc(u8, after_len);
+    const after = try materializedJoinedDecimalDigits(allocator, before_raw.items, after_raw.items, 0) orelse {
+        allocator.free(before);
+        return unmaterializedDecimalParts(allocator, after_count);
+    };
     errdefer allocator.free(after);
-    @memset(after[0..zeros_count], '0');
-    @memcpy(after[zeros_count..][0..before_raw.items.len], before_raw.items);
-    @memcpy(after[after_prefix_len..], after_raw.items);
-    return .{ .before = before, .after = after };
+    return .{
+        .before = before,
+        .after = after,
+        .after_decimal_digit_count = after_count,
+        .is_materialized = true,
+    };
+}
+
+fn unmaterializedExact(
+    allocator: std.mem.Allocator,
+    is_negative: bool,
+    had_decimal_point: bool,
+    after_decimal_digit_count: u64,
+) std.mem.Allocator.Error!Exact {
+    const before = try allocator.alloc(u8, 0);
+    errdefer allocator.free(before);
+    const after = try allocator.alloc(u8, 0);
+    return .{
+        .before = before,
+        .after = after,
+        .after_decimal_digit_count = after_decimal_digit_count,
+        .is_negative = is_negative,
+        .had_decimal_point = had_decimal_point,
+        .is_materialized = false,
+    };
+}
+
+fn unmaterializedExactAfterFreeing(
+    allocator: std.mem.Allocator,
+    is_negative: bool,
+    had_decimal_point: bool,
+    after_decimal_digit_count: u64,
+    before: []u8,
+    after: []u8,
+) std.mem.Allocator.Error!Exact {
+    allocator.free(before);
+    allocator.free(after);
+    return unmaterializedExact(allocator, is_negative, had_decimal_point, after_decimal_digit_count);
+}
+
+fn unmaterializedDecimalParts(
+    allocator: std.mem.Allocator,
+    after_decimal_digit_count: u64,
+) std.mem.Allocator.Error!DecimalParts {
+    const before = try allocator.alloc(u8, 0);
+    errdefer allocator.free(before);
+    const after = try allocator.alloc(u8, 0);
+    return .{
+        .before = before,
+        .after = after,
+        .after_decimal_digit_count = after_decimal_digit_count,
+        .is_materialized = false,
+    };
+}
+
+fn materializedJoinedDecimalDigits(
+    allocator: std.mem.Allocator,
+    first: []const u8,
+    second: []const u8,
+    trailing_zero_count: u64,
+) std.mem.Allocator.Error!?[]u8 {
+    const first_nonzero = firstNonZeroJoined(first, second) orelse {
+        return try allocator.alloc(u8, 0);
+    };
+    const source_tail_len = first.len + second.len - first_nonzero;
+    const total_len_u64 = checkedAddU64(
+        usizeToU64(source_tail_len) orelse return null,
+        trailing_zero_count,
+    ) orelse return null;
+    if (total_len_u64 > max_decimal_digits_for_numeral_bytes) return null;
+
+    const total_len = std.math.cast(usize, total_len_u64) orelse return null;
+    var digits = try allocator.alloc(u8, total_len);
+    errdefer allocator.free(digits);
+
+    var out_index: usize = 0;
+    if (first_nonzero < first.len) {
+        const first_tail = first[first_nonzero..];
+        @memcpy(digits[out_index..][0..first_tail.len], first_tail);
+        out_index += first_tail.len;
+        @memcpy(digits[out_index..][0..second.len], second);
+        out_index += second.len;
+    } else {
+        const second_start = first_nonzero - first.len;
+        const second_tail = second[second_start..];
+        @memcpy(digits[out_index..][0..second_tail.len], second_tail);
+        out_index += second_tail.len;
+    }
+
+    const zeros_len: usize = @intCast(trailing_zero_count);
+    @memset(digits[out_index..][0..zeros_len], '0');
+    return digits;
+}
+
+fn firstNonZeroJoined(first: []const u8, second: []const u8) ?usize {
+    for (first, 0..) |byte, index| {
+        if (byte != '0') return index;
+    }
+    for (second, 0..) |byte, index| {
+        if (byte != '0') return first.len + index;
+    }
+    return null;
+}
+
+fn sourceDigitsMayFitBase256(digits: []const u8, radix: u8) bool {
+    var digit_count: u64 = 0;
+    for (digits) |byte| {
+        if (byte != '_') digit_count += 1;
+    }
+
+    const max_source_digits: u64 = switch (radix) {
+        2 => @as(u64, max_numeral_digit_bytes) * 8,
+        8 => (@as(u64, max_numeral_digit_bytes) * 8 + 2) / 3,
+        10 => max_decimal_digits_for_numeral_bytes,
+        16 => @as(u64, max_numeral_digit_bytes) * 2,
+        else => unreachable,
+    };
+    return digit_count <= max_source_digits;
 }
 
 fn compactInt(text: []const u8) ?Compact {
@@ -553,11 +748,13 @@ fn compactFrac(
         error.InvalidNumeral => return .invalid,
     };
     defer parts.deinit(allocator);
+    if (!parts.is_materialized) return .exact;
 
     const is_negative = text.len > 0 and text[0] == '-';
     const trimmed_before = trimLeadingZeros(parts.before);
-    const trimmed_after = trimTrailingZeros(parts.after);
-    const trimmed_after_count = std.math.cast(u32, trimmed_after.len) orelse return .exact;
+    const trimmed_after_info = trimTrailingZerosWithCount(parts.after, parts.after_decimal_digit_count);
+    const trimmed_after = trimmed_after_info.digits;
+    const trimmed_after_count = trimmed_after_info.after_decimal_digit_count;
 
     if (smallDecFromParts(trimmed_before, trimmed_after, trimmed_after_count, is_negative)) |small| {
         return .{ .small_dec = small };
@@ -570,14 +767,24 @@ fn compactFrac(
     return .exact;
 }
 
-fn smallDecFromParts(before: []const u8, after: []const u8, after_count: u32, is_negative: bool) ?SmallDecValue {
+fn smallDecFromParts(before: []const u8, after: []const u8, after_count: u64, is_negative: bool) ?SmallDecValue {
     if (after_count > std.math.maxInt(u8)) return null;
+    const after_digit_count = usizeToU64(after.len) orelse return null;
+    if (after_digit_count > after_count) return null;
+    const after_leading_zero_count = after_count - after_digit_count;
+
     var magnitude: u32 = 0;
     var saw_digit = false;
     for (before) |byte| {
         if (byte < '0' or byte > '9') return null;
         saw_digit = true;
         magnitude = checkedMulAdd(u32, magnitude, 10, byte - '0') orelse return null;
+        if (magnitude > @as(u32, @intCast(std.math.maxInt(i16))) + @intFromBool(is_negative)) return null;
+    }
+    var leading_zero_index: u64 = 0;
+    while (leading_zero_index < after_leading_zero_count) : (leading_zero_index += 1) {
+        saw_digit = true;
+        magnitude = checkedMulAdd(u32, magnitude, 10, 0) orelse return null;
         if (magnitude > @as(u32, @intCast(std.math.maxInt(i16))) + @intFromBool(is_negative)) return null;
     }
     for (after) |byte| {
@@ -596,14 +803,23 @@ fn smallDecFromParts(before: []const u8, after: []const u8, after_count: u32, is
     };
 }
 
-fn decFromParts(before: []const u8, after: []const u8, after_count: u32, is_negative: bool) ?i128 {
+fn decFromParts(before: []const u8, after: []const u8, after_count: u64, is_negative: bool) ?i128 {
     if (after_count > 18) return null;
+    const after_digit_count = usizeToU64(after.len) orelse return null;
+    if (after_digit_count > after_count) return null;
+    const after_leading_zero_count = after_count - after_digit_count;
+
     var magnitude: u128 = 0;
     var saw_digit = false;
     for (before) |byte| {
         if (byte < '0' or byte > '9') return null;
         saw_digit = true;
         magnitude = checkedMulAdd(u128, magnitude, 10, byte - '0') orelse return null;
+    }
+    var leading_zero_index: u64 = 0;
+    while (leading_zero_index < after_leading_zero_count) : (leading_zero_index += 1) {
+        saw_digit = true;
+        magnitude = checkedMulAdd(u128, magnitude, 10, 0) orelse return null;
     }
     for (after) |byte| {
         if (byte < '0' or byte > '9') return null;
@@ -612,7 +828,7 @@ fn decFromParts(before: []const u8, after: []const u8, after_count: u32, is_nega
     }
     if (!saw_digit) magnitude = 0;
 
-    var scale_count: u32 = 18 - after_count;
+    var scale_count: u64 = 18 - after_count;
     while (scale_count > 0) : (scale_count -= 1) {
         const multiplied = @mulWithOverflow(magnitude, 10);
         if (multiplied[1] != 0) return null;
@@ -638,16 +854,14 @@ fn checkedMulAdd(comptime T: type, value: T, multiplier: T, addend: u8) ?T {
     return added[0];
 }
 
-fn checkedAddUsize(lhs: usize, rhs: usize) ?usize {
+fn checkedAddU64(lhs: u64, rhs: u64) ?u64 {
     const added = @addWithOverflow(lhs, rhs);
     if (added[1] != 0) return null;
     return added[0];
 }
 
-fn checkedAfterDecimalLength(lhs: usize, rhs: usize) ?usize {
-    const len = checkedAddUsize(lhs, rhs) orelse return null;
-    if (len > std.math.maxInt(u32)) return null;
-    return len;
+fn usizeToU64(value: usize) ?u64 {
+    return std.math.cast(u64, value);
 }
 
 fn parseI64NoUnderscores(allocator: std.mem.Allocator, text: []const u8) (Allocator.Error || error{ InvalidCharacter, Overflow })!i64 {
@@ -793,6 +1007,23 @@ fn trimTrailingZeros(digits: []const u8) []const u8 {
     return digits[0..end];
 }
 
+const TrimmedAfter = struct {
+    digits: []const u8,
+    after_decimal_digit_count: u64,
+};
+
+fn trimTrailingZerosWithCount(digits: []const u8, after_decimal_digit_count: u64) TrimmedAfter {
+    const trimmed = trimTrailingZeros(digits);
+    if (trimmed.len == 0) {
+        return .{ .digits = trimmed, .after_decimal_digit_count = 0 };
+    }
+    const removed = digits.len - trimmed.len;
+    return .{
+        .digits = trimmed,
+        .after_decimal_digit_count = after_decimal_digit_count - removed,
+    };
+}
+
 test "deprecated suffix source splits without mistaking hex digits for suffixes" {
     const cases = [_]struct {
         text: []const u8,
@@ -891,7 +1122,7 @@ test "parse exact fractional chunks retain digits after decimal count" {
 
     try std.testing.expectEqualSlices(u8, &.{}, literal.before);
     try std.testing.expectEqualSlices(u8, &.{10}, literal.after);
-    try std.testing.expectEqual(@as(u32, 4), literal.after_decimal_digit_count);
+    try std.testing.expectEqual(@as(u64, 4), literal.after_decimal_digit_count);
 }
 
 test "compact fractional literals trim trailing zero scale consistently" {
@@ -903,17 +1134,29 @@ test "compact fractional literals trim trailing zero scale consistently" {
     try std.testing.expectEqual(@as(u8, 0), literal.compact.small_dec.denominator_power_of_ten);
     try std.testing.expectEqualSlices(u8, &.{3}, literal.before);
     try std.testing.expectEqualSlices(u8, &.{}, literal.after);
-    try std.testing.expectEqual(@as(u32, 1), literal.after_decimal_digit_count);
+    try std.testing.expectEqual(@as(u64, 1), literal.after_decimal_digit_count);
 }
 
-test "parse fractional literal with minimum i64 exponent is invalid instead of panicking" {
+test "compact fractional literals preserve counted leading zeros after decimal point" {
+    var literal = try parse(std.testing.allocator, "1.0000005", .frac);
+    defer literal.deinit(std.testing.allocator);
+
+    try std.testing.expect(literal.compact == .dec);
+    try std.testing.expectEqual(@as(i128, 1_000_000_500_000_000_000), literal.compact.dec);
+    try std.testing.expectEqualSlices(u8, &.{1}, literal.before);
+    try std.testing.expectEqualSlices(u8, &.{5}, literal.after);
+    try std.testing.expectEqual(@as(u64, 7), literal.after_decimal_digit_count);
+}
+
+test "parse fractional literal with minimum i64 exponent as compact numeral facts" {
     var literal = try parse(std.testing.allocator, "4e-9223372036854775808", .frac);
     defer literal.deinit(std.testing.allocator);
 
-    try std.testing.expect(literal.compact == .invalid);
+    try std.testing.expect(literal.compact == .exact);
     try std.testing.expectEqualSlices(u8, &.{}, literal.before);
-    try std.testing.expectEqualSlices(u8, &.{}, literal.after);
-    try std.testing.expectEqual(@as(u32, 0), literal.after_decimal_digit_count);
+    try std.testing.expectEqualSlices(u8, &.{4}, literal.after);
+    try std.testing.expectEqual(@as(u64, 9_223_372_036_854_775_808), literal.after_decimal_digit_count);
+    try std.testing.expect(literal.is_materialized);
 }
 
 test "parse large positive scientific exponent exactly" {
@@ -921,11 +1164,29 @@ test "parse large positive scientific exponent exactly" {
     defer literal.deinit(std.testing.allocator);
 
     try std.testing.expect(literal.compact == .exact);
-    try std.testing.expectEqual(@as(u32, 0), literal.after_decimal_digit_count);
+    try std.testing.expectEqual(@as(u64, 0), literal.after_decimal_digit_count);
     try std.testing.expectEqualSlices(u8, &.{}, literal.after);
     try std.testing.expectEqual(@as(usize, 33220), literal.before.len);
     try std.testing.expect(literal.before[0] != 0);
     for (literal.before[literal.before.len - 10000 ..]) |byte| {
         try std.testing.expectEqual(@as(u8, 0), byte);
     }
+}
+
+test "parse enormous positive scientific exponent without expanding zeros" {
+    // Repro for https://github.com/roc-lang/roc/issues/9561
+    var buffer: [4096]u8 = undefined;
+    var fixed = std.heap.FixedBufferAllocator.init(&buffer);
+
+    var literal = try parse(fixed.allocator(), "3e6000000000", .frac);
+    defer literal.deinit(fixed.allocator());
+
+    try std.testing.expect(literal.compact == .exact);
+    try std.testing.expect(!literal.is_negative);
+    try std.testing.expectEqual(Kind.frac, literal.kind);
+    try std.testing.expect(!literal.had_decimal_point);
+    try std.testing.expect(!literal.is_materialized);
+    try std.testing.expectEqual(@as(u64, 0), literal.after_decimal_digit_count);
+    try std.testing.expectEqual(@as(usize, 0), literal.before.len);
+    try std.testing.expectEqual(@as(usize, 0), literal.after.len);
 }

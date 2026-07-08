@@ -91,6 +91,7 @@ test "compile tests" {
 
     std.testing.refAllDecls(@import("Can.zig"));
     std.testing.refAllDecls(@import("CIR.zig"));
+    std.testing.refAllDecls(@import("DependencyGraph.zig"));
     std.testing.refAllDecls(@import("Diagnostic.zig"));
     std.testing.refAllDecls(@import("Expression.zig"));
     std.testing.refAllDecls(@import("ExternalDecl.zig"));

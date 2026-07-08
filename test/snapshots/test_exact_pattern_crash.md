@@ -250,12 +250,12 @@ main = {
 				(p-assign (ident "g")))
 			(e-tuple
 				(elems
-					(e-call (constraint-fn-var 124)
+					(e-call (constraint-fn-var 150)
 						(e-lookup-local
 							(p-assign (ident "f")))
 						(e-lookup-local
 							(p-assign (ident "x"))))
-					(e-call (constraint-fn-var 125)
+					(e-call (constraint-fn-var 151)
 						(e-lookup-local
 							(p-assign (ident "g")))
 						(e-lookup-local
@@ -281,7 +281,7 @@ main = {
 		(e-block
 			(s-let
 				(p-assign (ident "p1"))
-				(e-call (constraint-fn-var 199)
+				(e-call (constraint-fn-var 225)
 					(e-lookup-local
 						(p-assign (ident "swap_pair")))
 					(e-tuple
@@ -290,7 +290,7 @@ main = {
 							(e-num (value "2"))))))
 			(s-let
 				(p-assign (ident "p2"))
-				(e-call (constraint-fn-var 349)
+				(e-call (constraint-fn-var 375)
 					(e-lookup-local
 						(p-assign (ident "map_pair")))
 					(e-num (value "3"))
@@ -298,7 +298,7 @@ main = {
 					(e-lambda
 						(args
 							(p-assign (ident "x")))
-						(e-dispatch-call (method "plus") (constraint-fn-var 310)
+						(e-dispatch-call (method "plus") (constraint-fn-var 336)
 							(receiver
 								(e-lookup-local
 									(p-assign (ident "x"))))
@@ -307,7 +307,7 @@ main = {
 					(e-lambda
 						(args
 							(p-assign (ident "y")))
-						(e-dispatch-call (method "times") (constraint-fn-var 345)
+						(e-dispatch-call (method "times") (constraint-fn-var 371)
 							(receiver
 								(e-lookup-local
 									(p-assign (ident "y"))))

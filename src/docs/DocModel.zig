@@ -37,6 +37,20 @@ pub const PackageDocs = struct {
         try writer.writeAll(")\n");
     }
 
+    /// Resolve every shorthand `[Name]` reference in doc comments against the
+    /// final package docs layout.
+    pub fn resolveDocRefs(self: *PackageDocs, gpa: Allocator) Allocator.Error!void {
+        clearDocRefs(self, gpa);
+        errdefer clearDocRefs(self, gpa);
+
+        var resolver = try PackageDocRefResolver.init(gpa, self);
+        defer resolver.deinit();
+
+        for (self.modules) |*mod| {
+            try resolver.resolveModule(gpa, mod);
+        }
+    }
+
     /// Promote the builtin types to top-level modules.
     ///
     /// The compiler models every builtin type (`Str`, `List`, `Num`, `Hasher`, …)
@@ -89,6 +103,7 @@ pub const PackageDocs = struct {
         // the backing slice, not the elements.
         gpa.free(builtin.entries);
         if (builtin.module_doc) |doc| gpa.free(doc);
+        deinitDocRefs(gpa, builtin.module_doc_refs);
         if (builtin.source_path) |p| gpa.free(p);
         gpa.free(builtin.name);
         gpa.free(builtin.package_name);
@@ -114,6 +129,419 @@ pub const PackageDocs = struct {
         }
     }
 };
+
+fn clearDocRefs(package_docs: *PackageDocs, gpa: Allocator) void {
+    for (package_docs.modules) |*mod| {
+        deinitDocRefs(gpa, mod.module_doc_refs);
+        mod.module_doc_refs = &.{};
+        for (mod.entries) |*entry| {
+            clearEntryDocRefs(entry, gpa);
+        }
+    }
+}
+
+fn clearEntryDocRefs(entry: *DocEntry, gpa: Allocator) void {
+    deinitDocRefs(gpa, entry.doc_refs);
+    entry.doc_refs = &.{};
+    for (entry.children) |*child| {
+        clearEntryDocRefs(child, gpa);
+    }
+}
+
+const PackageDocRefResolver = struct {
+    gpa: Allocator,
+    package_docs: *const PackageDocs,
+    known_modules: std.StringHashMapUnmanaged(*const ModuleDocs),
+    builtin_type_owners: std.StringHashMapUnmanaged([]const u8),
+    documenting_builtin: bool,
+
+    fn init(gpa: Allocator, package_docs: *const PackageDocs) Allocator.Error!PackageDocRefResolver {
+        var known_modules = std.StringHashMapUnmanaged(*const ModuleDocs).empty;
+        errdefer known_modules.deinit(gpa);
+
+        var builtin_type_owners = std.StringHashMapUnmanaged([]const u8).empty;
+        errdefer builtin_type_owners.deinit(gpa);
+
+        var documenting_builtin = false;
+        for (package_docs.modules) |*mod| {
+            try known_modules.put(gpa, mod.name, mod);
+            if (std.mem.eql(u8, mod.name, "Builtin") or mod.builtin_derived) {
+                documenting_builtin = true;
+            }
+            if (mod.builtin_derived) {
+                for (mod.entries) |*entry| {
+                    try collectBuiltinDocTypeOwners(&builtin_type_owners, gpa, entry, mod.name);
+                }
+            }
+        }
+
+        return .{
+            .gpa = gpa,
+            .package_docs = package_docs,
+            .known_modules = known_modules,
+            .builtin_type_owners = builtin_type_owners,
+            .documenting_builtin = documenting_builtin,
+        };
+    }
+
+    fn deinit(self: *PackageDocRefResolver) void {
+        self.known_modules.deinit(self.gpa);
+        self.builtin_type_owners.deinit(self.gpa);
+    }
+
+    fn resolveModule(
+        self: *const PackageDocRefResolver,
+        gpa: Allocator,
+        mod: *ModuleDocs,
+    ) Allocator.Error!void {
+        var module_resolver = try ModuleDocRefResolver.init(gpa, self, mod);
+        defer module_resolver.deinit();
+
+        if (mod.module_doc) |doc| {
+            mod.module_doc_refs = try module_resolver.resolveDocComment(gpa, doc);
+        }
+        for (mod.entries) |*entry| {
+            try module_resolver.resolveEntry(gpa, entry);
+        }
+    }
+};
+
+const ModuleDocRefResolver = struct {
+    package: *const PackageDocRefResolver,
+    module: *const ModuleDocs,
+    local_anchors: std.StringHashMapUnmanaged([]const u8),
+    local_arena: std.heap.ArenaAllocator,
+
+    fn init(
+        gpa: Allocator,
+        package: *const PackageDocRefResolver,
+        mod: *const ModuleDocs,
+    ) Allocator.Error!ModuleDocRefResolver {
+        var resolver = ModuleDocRefResolver{
+            .package = package,
+            .module = mod,
+            .local_anchors = .empty,
+            .local_arena = std.heap.ArenaAllocator.init(gpa),
+        };
+        errdefer resolver.deinit();
+
+        for (mod.entries) |*entry| {
+            try resolver.registerEntry(gpa, entry, "");
+        }
+
+        return resolver;
+    }
+
+    fn deinit(self: *ModuleDocRefResolver) void {
+        self.local_anchors.deinit(self.package.gpa);
+        self.local_arena.deinit();
+    }
+
+    fn resolveEntry(self: *ModuleDocRefResolver, gpa: Allocator, entry: *DocEntry) Allocator.Error!void {
+        if (entry.doc_comment) |doc| {
+            entry.doc_refs = try self.resolveDocComment(gpa, doc);
+        }
+        for (entry.children) |*child| {
+            try self.resolveEntry(gpa, child);
+        }
+    }
+
+    fn resolveDocComment(
+        self: *const ModuleDocRefResolver,
+        gpa: Allocator,
+        doc: []const u8,
+    ) Allocator.Error![]const DocRef {
+        var refs = std.ArrayList(DocRef).empty;
+        errdefer {
+            for (refs.items) |*ref| {
+                ref.deinit(gpa);
+            }
+            refs.deinit(gpa);
+        }
+
+        var i: usize = 0;
+        var line_start: usize = 0;
+        var in_fence = false;
+        while (i < doc.len) {
+            if (i == line_start and std.mem.startsWith(u8, doc[i..], "```")) {
+                in_fence = !in_fence;
+                i = skipLine(doc, i);
+                line_start = i;
+                continue;
+            }
+
+            if (in_fence) {
+                i = skipLine(doc, i);
+                line_start = i;
+                continue;
+            }
+
+            if (doc[i] == '\n') {
+                i += 1;
+                line_start = i;
+                continue;
+            }
+
+            if (doc[i] == '`') {
+                i = skipInlineCode(doc, i);
+                continue;
+            }
+
+            if (doc[i] == '[') {
+                if (parseMarkdownLink(doc, i)) |link| {
+                    i = link.end;
+                    continue;
+                }
+                if (parseDocRef(doc, i)) |parsed| {
+                    const label = try gpa.dupe(u8, parsed.label);
+                    var label_moved = false;
+                    errdefer if (!label_moved) gpa.free(label);
+
+                    var target = try self.resolveLabel(gpa, parsed.label);
+                    var target_moved = false;
+                    errdefer if (!target_moved) target.deinit(gpa);
+
+                    try refs.append(gpa, .{
+                        .byte_offset = @intCast(i),
+                        .label = label,
+                        .target = target,
+                    });
+                    label_moved = true;
+                    target_moved = true;
+
+                    i = parsed.end;
+                    continue;
+                }
+            }
+
+            i += 1;
+        }
+
+        if (refs.items.len == 0) {
+            refs.deinit(gpa);
+            return &.{};
+        }
+
+        return refs.toOwnedSlice(gpa);
+    }
+
+    fn resolveLabel(
+        self: *const ModuleDocRefResolver,
+        gpa: Allocator,
+        label: []const u8,
+    ) Allocator.Error!DocRefTarget {
+        if (self.local_anchors.get(label)) |anchor| {
+            return .{ .local_anchor = try gpa.dupe(u8, anchor) };
+        }
+
+        const first_dot = std.mem.findScalar(u8, label, '.');
+        const head = if (first_dot) |d| label[0..d] else label;
+        const tail: []const u8 = if (first_dot) |d| label[d..] else "";
+
+        if (self.local_anchors.get(head)) |anchor_head| {
+            const anchor = if (tail.len == 0)
+                try gpa.dupe(u8, anchor_head)
+            else
+                try std.fmt.allocPrint(gpa, "{s}{s}", .{ anchor_head, tail });
+            return .{ .local_anchor = anchor };
+        }
+
+        if (self.package.known_modules.get(head)) |target_module| {
+            if (tail.len == 0) {
+                return .{ .module_page = try gpa.dupe(u8, head) };
+            }
+
+            const anchor = if (target_module.builtin_derived)
+                try gpa.dupe(u8, tail[1..])
+            else
+                try gpa.dupe(u8, label);
+            errdefer gpa.free(anchor);
+
+            return .{ .module_anchor = .{
+                .module = try gpa.dupe(u8, head),
+                .anchor = anchor,
+            } };
+        }
+
+        if (self.package.documenting_builtin) {
+            if (self.package.builtin_type_owners.get(head)) |owner| {
+                const anchor = if (tail.len == 0)
+                    try gpa.dupe(u8, head)
+                else
+                    try std.fmt.allocPrint(gpa, "{s}{s}", .{ head, tail });
+                errdefer gpa.free(anchor);
+
+                if (std.mem.eql(u8, owner, self.module.name)) {
+                    return .{ .local_anchor = anchor };
+                }
+
+                return .{ .module_anchor = .{
+                    .module = try gpa.dupe(u8, owner),
+                    .anchor = anchor,
+                } };
+            }
+        } else if (isBuiltinDocTypeName(head)) {
+            return .{ .builtin_type = try gpa.dupe(u8, label) };
+        }
+
+        return .{ .unresolved_anchor = try unresolvedAnchor(gpa, self.module.name, label) };
+    }
+
+    fn registerEntry(
+        self: *ModuleDocRefResolver,
+        gpa: Allocator,
+        entry: *const DocEntry,
+        parent_path: []const u8,
+    ) Allocator.Error!void {
+        const arena = self.local_arena.allocator();
+        const full_path = if (parent_path.len == 0) blk: {
+            if (entryNameHasModulePrefix(self.module.name, entry.name)) {
+                break :blk try arena.dupe(u8, entry.name);
+            }
+            break :blk try std.fmt.allocPrint(arena, "{s}.{s}", .{ self.module.name, entry.name });
+        } else try std.fmt.allocPrint(arena, "{s}.{s}", .{ parent_path, entry.name });
+
+        const anchor_path = if (self.module.builtin_derived)
+            moduleRelativeEntryName(self.module.name, full_path)
+        else
+            full_path;
+
+        try self.putLocalAnchor(gpa, anchor_path, anchor_path);
+        if (!std.mem.eql(u8, full_path, anchor_path)) {
+            try self.putLocalAnchor(gpa, full_path, anchor_path);
+        }
+
+        var prefix_end: usize = anchor_path.len;
+        if (entry.kind == .value) {
+            if (std.mem.findScalarLast(u8, anchor_path, '.')) |last_dot| {
+                prefix_end = last_dot;
+            } else {
+                prefix_end = 0;
+            }
+        }
+
+        var seg_start: usize = 0;
+        while (seg_start < prefix_end) {
+            const next_dot = std.mem.findScalarPos(u8, anchor_path[0..prefix_end], seg_start, '.');
+            const seg_end = next_dot orelse prefix_end;
+            const short_name = anchor_path[seg_start..seg_end];
+            const prefix_path = anchor_path[0..seg_end];
+            try self.putLocalAnchor(gpa, short_name, prefix_path);
+            try self.putLocalAnchor(gpa, prefix_path, prefix_path);
+            seg_start = if (next_dot) |d| d + 1 else prefix_end;
+        }
+
+        for (entry.children) |*child| {
+            try self.registerEntry(gpa, child, full_path);
+        }
+    }
+
+    fn putLocalAnchor(
+        self: *ModuleDocRefResolver,
+        gpa: Allocator,
+        key: []const u8,
+        anchor: []const u8,
+    ) Allocator.Error!void {
+        const result = try self.local_anchors.getOrPut(gpa, key);
+        if (!result.found_existing) {
+            const arena = self.local_arena.allocator();
+            result.key_ptr.* = try arena.dupe(u8, key);
+            result.value_ptr.* = try arena.dupe(u8, anchor);
+        }
+    }
+};
+
+fn collectBuiltinDocTypeOwners(
+    map: *std.StringHashMapUnmanaged([]const u8),
+    gpa: Allocator,
+    entry: *const DocEntry,
+    module_name: []const u8,
+) Allocator.Error!void {
+    if (entry.kind != .value) {
+        const short = if (std.mem.findScalarLast(u8, entry.name, '.')) |d| entry.name[d + 1 ..] else entry.name;
+        const result = try map.getOrPut(gpa, short);
+        if (!result.found_existing) {
+            result.value_ptr.* = module_name;
+        }
+    }
+    for (entry.children) |*child| {
+        try collectBuiltinDocTypeOwners(map, gpa, child, module_name);
+    }
+}
+
+fn unresolvedAnchor(gpa: Allocator, module_name: []const u8, label: []const u8) Allocator.Error![]const u8 {
+    if (std.mem.eql(u8, label, module_name) or
+        (std.mem.startsWith(u8, label, module_name) and
+            label.len > module_name.len and
+            label[module_name.len] == '.'))
+    {
+        return try gpa.dupe(u8, label);
+    }
+    return try std.fmt.allocPrint(gpa, "{s}.{s}", .{ module_name, label });
+}
+
+fn skipLine(text: []const u8, start: usize) usize {
+    var i = start;
+    while (i < text.len and text[i] != '\n') {
+        i += 1;
+    }
+    return if (i < text.len) i + 1 else i;
+}
+
+fn skipInlineCode(text: []const u8, start: usize) usize {
+    var i = start + 1;
+    while (i < text.len and text[i] != '`' and text[i] != '\n') {
+        i += 1;
+    }
+    return if (i < text.len and text[i] == '`') i + 1 else start + 1;
+}
+
+fn entryNameHasModulePrefix(module_name: []const u8, entry_name: []const u8) bool {
+    return std.mem.eql(u8, entry_name, module_name) or
+        (std.mem.startsWith(u8, entry_name, module_name) and
+            entry_name.len > module_name.len and
+            entry_name[module_name.len] == '.');
+}
+
+fn moduleRelativeEntryName(module_name: []const u8, entry_name: []const u8) []const u8 {
+    if (std.mem.startsWith(u8, entry_name, module_name) and
+        entry_name.len > module_name.len and
+        entry_name[module_name.len] == '.')
+    {
+        return entry_name[module_name.len + 1 ..];
+    }
+    return entry_name;
+}
+
+fn isBuiltinDocTypeName(name: []const u8) bool {
+    inline for (.{
+        "Str",
+        "List",
+        "Bool",
+        "Num",
+        "U8",
+        "U16",
+        "U32",
+        "U64",
+        "U128",
+        "I8",
+        "I16",
+        "I32",
+        "I64",
+        "I128",
+        "F32",
+        "F64",
+        "Dec",
+        "Box",
+        "Dict",
+        "Set",
+        "Iter",
+        "Try",
+    }) |builtin| {
+        if (std.mem.eql(u8, name, builtin)) return true;
+    }
+    return false;
+}
 
 /// Short (final dotted segment) of a possibly-qualified name.
 fn shortTypeName(name: []const u8) []const u8 {
@@ -302,6 +730,141 @@ pub const ModuleKind = enum {
     }
 };
 
+/// A resolved shorthand reference from doc-comment text, such as `[Str]` or
+/// `[Utf8.default]`.
+pub const DocRef = struct {
+    /// Byte offset of the opening `[` within the owning doc-comment string.
+    byte_offset: u32,
+    /// Label as written by the user, without brackets.
+    label: []const u8,
+    target: DocRefTarget,
+
+    pub fn deinit(self: *const DocRef, gpa: Allocator) void {
+        gpa.free(self.label);
+        self.target.deinit(gpa);
+    }
+};
+
+/// Destination for a resolved shorthand doc reference.
+pub const DocRefTarget = union(enum) {
+    /// Exact HTML fragment id in the current page, without the leading `#`.
+    local_anchor: []const u8,
+    /// Another module's index page.
+    module_page: []const u8,
+    /// Exact HTML fragment id in another module's page.
+    module_anchor: ModuleAnchor,
+    /// Builtin type path in the published builtin docs, e.g. `Str` or `U8`.
+    builtin_type: []const u8,
+    /// Explicitly unresolved target used only for diagnostics.
+    unresolved_anchor: []const u8,
+
+    pub const ModuleAnchor = struct {
+        module: []const u8,
+        anchor: []const u8,
+    };
+
+    pub fn deinit(self: *const DocRefTarget, gpa: Allocator) void {
+        switch (self.*) {
+            .local_anchor, .module_page, .builtin_type, .unresolved_anchor => |s| gpa.free(s),
+            .module_anchor => |ma| {
+                gpa.free(ma.module);
+                gpa.free(ma.anchor);
+            },
+        }
+    }
+};
+
+pub fn deinitDocRefs(gpa: Allocator, refs: []const DocRef) void {
+    for (refs) |*ref| {
+        ref.deinit(gpa);
+    }
+    if (refs.len > 0) {
+        gpa.free(refs);
+    }
+}
+
+/// Parsed Markdown inline link, `[label](url)`.
+pub const MarkdownLink = struct {
+    label: []const u8,
+    url: []const u8,
+    end: usize,
+};
+
+/// Parses a `[label](url)` markdown link starting at `start`, which must point
+/// to `[`. Returns null if the pattern doesn't match.
+pub fn parseMarkdownLink(text: []const u8, start: usize) ?MarkdownLink {
+    std.debug.assert(text[start] == '[');
+    var j = start + 1;
+    while (j < text.len and text[j] != ']') {
+        if (text[j] == '\n') return null;
+        j += 1;
+    }
+    if (j >= text.len) return null;
+    const label_end = j;
+    if (label_end + 1 >= text.len or text[label_end + 1] != '(') return null;
+    // Allow balanced parentheses inside the URL (e.g. a trailing ')' in a
+    // Wikipedia link like `Union_(set_theory)`): only a `)` at depth 0
+    // terminates the destination.
+    var k = label_end + 2;
+    var depth: usize = 0;
+    while (k < text.len) : (k += 1) {
+        const c = text[k];
+        if (c == '\n') return null;
+        if (c == '(') {
+            depth += 1;
+        } else if (c == ')') {
+            if (depth == 0) break;
+            depth -= 1;
+        }
+    }
+    if (k >= text.len) return null;
+    return .{
+        .label = text[start + 1 .. label_end],
+        .url = text[label_end + 2 .. k],
+        .end = k + 1,
+    };
+}
+
+/// Parsed shorthand doc reference, `[Name]` or `[Name.member]`.
+pub const ParsedDocRef = struct {
+    label: []const u8,
+    end: usize,
+};
+
+/// Parses a shorthand `[Name]` or `[Name.member]` reference to another doc
+/// entry. The label must be a (possibly dotted) identifier, and the closing
+/// bracket must not be followed by `(`.
+pub fn parseDocRef(text: []const u8, start: usize) ?ParsedDocRef {
+    std.debug.assert(text[start] == '[');
+    const label_start = start + 1;
+    if (label_start >= text.len) return null;
+    if (!isDocIdentStart(text[label_start])) return null;
+    var j = label_start + 1;
+    while (j < text.len and text[j] != ']') {
+        const c = text[j];
+        if (c == '.') {
+            if (j + 1 >= text.len or !isDocIdentStart(text[j + 1])) return null;
+        } else if (!isDocIdentCont(c)) {
+            return null;
+        }
+        j += 1;
+    }
+    if (j >= text.len) return null;
+    if (j + 1 < text.len and text[j + 1] == '(') return null;
+    return .{
+        .label = text[label_start..j],
+        .end = j + 1,
+    };
+}
+
+fn isDocIdentStart(c: u8) bool {
+    return (c >= 'A' and c <= 'Z') or (c >= 'a' and c <= 'z') or c == '_';
+}
+
+fn isDocIdentCont(c: u8) bool {
+    return isDocIdentStart(c) or (c >= '0' and c <= '9');
+}
+
 /// Orders modules by (package name, module name) so docs output is
 /// deterministic regardless of the hash-map order modules are collected in.
 pub fn moduleDocsLessThan(_: void, a: ModuleDocs, b: ModuleDocs) bool {
@@ -316,6 +879,7 @@ pub const ModuleDocs = struct {
     package_name: []const u8,
     kind: ModuleKind,
     module_doc: ?[]const u8,
+    module_doc_refs: []const DocRef = &.{},
     entries: []DocEntry,
     /// Filesystem path to the module's source `.roc` file. Used by the
     /// renderer when reporting source-level diagnostics (e.g. broken
@@ -337,6 +901,7 @@ pub const ModuleDocs = struct {
         }
         gpa.free(self.entries);
         if (self.module_doc) |doc| gpa.free(doc);
+        deinitDocRefs(gpa, self.module_doc_refs);
         if (self.source_path) |p| gpa.free(p);
         gpa.free(self.name);
         gpa.free(self.package_name);
@@ -729,6 +1294,7 @@ pub const DocEntry = struct {
     kind: DocEntryKind,
     type_signature: ?*const DocType,
     doc_comment: ?[]const u8,
+    doc_refs: []const DocRef = &.{},
     children: []DocEntry,
     /// 1-based source line where `doc_comment`'s first `##` line begins.
     /// Zero when there is no doc comment or the line is unknown.
@@ -744,6 +1310,7 @@ pub const DocEntry = struct {
             gpa.destroy(sig);
         }
         if (self.doc_comment) |doc| gpa.free(doc);
+        deinitDocRefs(gpa, self.doc_refs);
         gpa.free(self.name);
     }
 

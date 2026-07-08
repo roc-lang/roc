@@ -187,7 +187,8 @@ table tr td {
   visibility: visible;
 }
 
-.entry-name-link {
+.entry-name-link,
+.entry-name-link:visited {
   color: inherit;
   text-decoration: none;
 }
@@ -1247,6 +1248,54 @@ code .dim {
 .copy-button:hover {
   border-color: var(--link-hover-color);
   color: var(--link-hover-color);
+}
+
+/* Docs soft navigation */
+#docs-loader {
+    display: block;
+    height: 24px;
+    margin: 32px 0 0;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 120ms ease-out;
+    width: 100%;
+}
+
+#docs-loader::before {
+    background: var(--cyan);
+    content: "";
+    display: block;
+    height: 3px;
+    transform: scaleX(0);
+    transform-origin: left;
+    transition: transform 0s linear;
+    width: 100%;
+}
+
+#docs-loader.is-loading {
+    opacity: 1;
+}
+
+#docs-loader.is-loading::before {
+    transform: scaleX(0.7);
+    transition: transform 2s cubic-bezier(0.1, 0.8, 0.2, 1);
+}
+
+#docs-loader.is-done {
+    opacity: 1;
+}
+
+#docs-loader.is-done::before {
+    transform: scaleX(1);
+    transition: transform 160ms ease-out;
+}
+
+main > .main-content[tabindex="-1"]:focus {
+    outline: none;
+}
+
+main > .main-content[aria-busy="true"] {
+    cursor: progress;
 }
 
 /* Search container and input styling */

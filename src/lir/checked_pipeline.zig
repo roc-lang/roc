@@ -54,6 +54,10 @@ pub const TargetConfig = struct {
     proc_debug_names: bool = false,
     /// Control Monotype specialization cache reads and writes.
     monotype_cache: MonotypeCacheControl = .{},
+    /// Build ConstStore materialization plans for requested layouts.
+    /// Disable this only for consumers that read requested layout metadata and
+    /// never materialize requested-layout values.
+    layout_request_const_plans: bool = true,
     /// Delete LIR switch edges whose tag discriminants are unreachable. This
     /// is enabled for optimized builds and kept off for dev and compile-time
     /// evaluation.
@@ -248,6 +252,7 @@ pub fn lowerCheckedModulesToLir(
         .inline_expects = target.inline_expects,
         .list_in_place_map = target.list_in_place_map,
         .proc_debug_names = target.proc_debug_names,
+        .layout_request_const_plans = target.layout_request_const_plans,
     });
     solved_owned = false;
     solved = undefined;

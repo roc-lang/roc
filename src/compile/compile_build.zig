@@ -2891,12 +2891,16 @@ pub const BuildEnv = struct {
             &self.builtin_modules.checked_artifact,
         );
 
-        for (modules) |module| {
-            const artifact = module.semantic.checked_artifact orelse continue;
-            if (rootRelationContainsArtifact(root_artifact, artifact.key)) continue;
+        for (root_artifact.lowering_visibility.module_ids) |key| {
+            if (rootRelationContainsArtifact(root_artifact, key)) continue;
+            const artifact = artifactByKey(modules, key) orelse {
+                if (builtin.mode == .Debug) {
+                    std.debug.panic("build env invariant violated: missing lowering visibility artifact", .{});
+                }
+                unreachable;
+            };
             try appendImportedArtifactViewIfMissing(&views, allocator, root_artifact.key, artifact);
         }
-        try self.appendRelationClosureDependencyViews(&views, allocator, modules, root_artifact);
 
         return views.toOwnedSlice(allocator);
     }
@@ -2960,49 +2964,6 @@ pub const BuildEnv = struct {
             if (checkedArtifactKeysEqual(binding.app_value.artifact, key)) return true;
         }
         return false;
-    }
-
-    fn appendRelationClosureDependencyViews(
-        self: *BuildEnv,
-        views: *std.ArrayList(check.CheckedArtifact.ImportedModuleView),
-        allocator: Allocator,
-        modules: []const CompiledModuleInfo,
-        root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
-    ) Allocator.Error!void {
-        var keys = std.ArrayList(check.CheckedArtifact.CheckedModuleArtifactKey).empty;
-        defer keys.deinit(allocator);
-
-        for (root_artifact.platform_required_bindings.bindings) |binding| {
-            const relation_artifact = artifactByKey(modules, binding.app_value.artifact) orelse {
-                if (@import("builtin").mode == .Debug) {
-                    std.debug.panic("build env invariant violated: platform relation references unavailable app artifact", .{});
-                }
-                unreachable;
-            };
-            try check.CheckedArtifact.appendPlatformRelationDependencyArtifactKeys(
-                allocator,
-                &keys,
-                relation_artifact,
-                binding,
-                root_artifact.platform_required_bindings.relationClosure(binding),
-            );
-        }
-
-        for (keys.items) |key| {
-            if (checkedArtifactKeysEqual(key, root_artifact.key)) continue;
-            if (rootRelationContainsArtifact(root_artifact, key)) continue;
-            if (checkedArtifactKeysEqual(key, self.builtin_modules.checked_artifact.key)) {
-                try appendImportedArtifactViewIfMissing(views, allocator, root_artifact.key, &self.builtin_modules.checked_artifact);
-                continue;
-            }
-            const artifact = artifactByKey(modules, key) orelse {
-                if (@import("builtin").mode == .Debug) {
-                    std.debug.panic("build env invariant violated: platform relation closure references unavailable checked artifact", .{});
-                }
-                unreachable;
-            };
-            try appendImportedArtifactViewIfMissing(views, allocator, root_artifact.key, artifact);
-        }
     }
 
     fn artifactByKey(

@@ -814,6 +814,9 @@ fn emitRecordedNumeral(self: *Self, expr_idx: Expr.Idx, maybe_type_name: ?base.I
     const literal = self.module_env.numeralLiteralForNode(ModuleEnv.nodeIdxFrom(expr_idx)) orelse {
         std.debug.panic("missing recorded numeral for expression {}", .{@intFromEnum(expr_idx)});
     };
+    if (!literal.isMaterialized()) {
+        std.debug.panic("cannot emit an unmaterialized numeral for expression {}", .{@intFromEnum(expr_idx)});
+    }
 
     if (literal.isNegative()) {
         try self.write("-");
@@ -830,7 +833,9 @@ fn emitRecordedNumeral(self: *Self, expr_idx: Expr.Idx, maybe_type_name: ?base.I
         const after_digits = try self.base256ToDecimalDigits(after);
         defer self.allocator.free(after_digits);
 
-        const after_count: usize = @intCast(literal.after_decimal_digit_count);
+        const after_count = std.math.cast(usize, literal.after_decimal_digit_count) orelse {
+            std.debug.panic("recorded numeral decimal digit count exceeded host usize", .{});
+        };
         if (after_count <= after_digits.len) {
             try self.write(after_digits);
         } else {

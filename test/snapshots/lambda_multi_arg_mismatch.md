@@ -231,7 +231,7 @@ result = multi_arg_fn(
 					(ty-rigid-var-lookup (ty-rigid-var (name "e")))))))
 	(d-let
 		(p-assign (ident "result"))
-		(e-call (constraint-fn-var 293)
+		(e-call (constraint-fn-var 300)
 			(e-lookup-local
 				(p-assign (ident "multi_arg_fn")))
 			(e-num (value "42"))

@@ -108,7 +108,7 @@ describe = |rec| match rec {
 												(required
 													(p-assign (ident "y"))))))))
 							(value
-								(e-dispatch-call (method "plus") (constraint-fn-var 63)
+								(e-dispatch-call (method "plus") (constraint-fn-var 87)
 									(receiver
 										(e-lookup-local
 											(p-assign (ident "x"))))

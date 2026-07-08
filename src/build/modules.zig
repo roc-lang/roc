@@ -423,7 +423,7 @@ pub const RocModules = struct {
     vendor_llvm_ir: *Module,
     vendor_llvm_compile_bindings: *Module,
 
-    pub fn create(b: *Build, build_options_step: *Step.Options, zstd: ?*Dependency) RocModules {
+    pub fn create(b: *Build, build_options_step: *Step.Options, zstd: ?*Dependency, valgrind: ?bool) RocModules {
         const self = RocModules{
             .collections = b.addModule(
                 "collections",
@@ -478,6 +478,10 @@ pub const RocModules = struct {
             .vendor_llvm_ir = b.addModule("vendor_llvm_ir", .{ .root_source_file = b.path("vendor/llvm_ir/mod.zig") }),
             .vendor_llvm_compile_bindings = b.addModule("vendor_llvm_compile_bindings", .{ .root_source_file = b.path("vendor/llvm_compile_bindings.zig") }),
         };
+
+        if (valgrind) |enabled| {
+            self.ctx.valgrind = enabled;
+        }
 
         // Link zstd to bundle module if available (it's unsupported on wasm32, so don't link it)
         // Note: unbundle uses Zig's stdlib zstd for WASM compatibility

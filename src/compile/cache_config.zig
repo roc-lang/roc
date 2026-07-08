@@ -39,7 +39,8 @@ pub const Constants = struct {
     /// 14: ModuleEnv also stores scheme instantiation evidence records.
     /// 15: Checked encoder_for runtime representation changed serialized compiler state.
     /// 16: Static dispatch constraints carry introducing-site provenance.
-    pub const CACHE_VERSION = 16;
+    /// 17: Numeral literals carry materialization metadata.
+    pub const CACHE_VERSION = 17;
 };
 
 /// Configuration for the Roc cache system.

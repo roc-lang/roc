@@ -249,6 +249,30 @@ fn hostedStdoutLine(str: RocStr) callconv(.c) void {
     std.Io.File.stdout().writeStreamingAll(host.std_io, "\n") catch {};
 }
 
+// Matches the Roc type `Try(Str, [HostErr(Str)])` for FallibleHost.str_ok!.
+const FallibleStrResultTag = enum(u8) {
+    err = 0,
+    ok = 1,
+};
+
+const FallibleStrResult = extern struct {
+    payload: extern union {
+        err: RocStr,
+        ok: RocStr,
+    },
+    tag: FallibleStrResultTag,
+};
+
+/// Hosted function: FallibleHost.str_ok!
+/// Always returns Ok("ok").
+fn hostedFallibleStrOk() callconv(.c) FallibleStrResult {
+    const ops = g_roc_ops.?;
+    return .{
+        .payload = .{ .ok = RocStr.fromSlice("ok", ops) },
+        .tag = .ok,
+    };
+}
+
 // --- Symbol-ABI runtime exports
 // The fixed runtime symbols every symbol-ABI host defines, plus this
 // platform's hosted function symbols. All hidden: they are link-time plumbing
@@ -279,6 +303,7 @@ fn hostCrashed(bytes: [*]const u8, len: usize) callconv(.c) void {
 }
 
 comptime {
+    @export(&hostedFallibleStrOk, .{ .name = "roc_fallible_str_ok", .visibility = .hidden });
     @export(&hostedStderrLine, .{ .name = "roc_stderr_line", .visibility = .hidden });
     @export(&hostedStdinLine, .{ .name = "roc_stdin_line", .visibility = .hidden });
     @export(&hostedStdoutLine, .{ .name = "roc_stdout_line", .visibility = .hidden });

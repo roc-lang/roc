@@ -470,6 +470,23 @@ pub const Store = struct {
 
     // setting variables //
 
+    /// Reset a variable's slot to a pristine unbound flex root at the given
+    /// rank — the state initial slot filling produces — severing any redirect.
+    ///
+    /// IMPORTANT: Only sound when nothing live references the variable's
+    /// previous class through this slot. Used by the annotated-scheme
+    /// pre-pass to return annotation nodes to their pre-generation state
+    /// (after the declared scheme was copied out of them) so the def's body
+    /// check can generate the annotation again.
+    pub fn resetVarToUnbound(self: *Self, target_var: Var, rank: Rank) Allocator.Error!void {
+        std.debug.assert(@intFromEnum(target_var) < self.len());
+        const desc_idx = try self.descs.insert(self.gpa, .{
+            .content = .{ .flex = Flex.init() },
+            .rank = rank,
+        });
+        try self.setSlot(Self.varToSlotIdx(target_var), .{ .root = desc_idx });
+    }
+
     /// Set a type variable to the provided content
     ///
     /// IMPORTANT: When using this function during type checking, it's possible

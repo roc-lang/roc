@@ -124,9 +124,9 @@ NO CHANGE
 					(e-num (value "42")))
 				(s-let
 					(p-assign (ident "result"))
-					(e-dispatch-call (method "ok_or") (constraint-fn-var 103)
+					(e-dispatch-call (method "ok_or") (constraint-fn-var 110)
 						(receiver
-							(e-call (constraint-fn-var 102)
+							(e-call (constraint-fn-var 109)
 								(e-lookup-external
 									(builtin))
 								(e-lookup-local

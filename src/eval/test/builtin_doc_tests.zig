@@ -560,6 +560,7 @@ fn compileNative(
             &.{},
             .native,
             ppb,
+            null,
         );
     }
     return test_helpers.compileInspectedProgramForTarget(

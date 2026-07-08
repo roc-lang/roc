@@ -2317,7 +2317,7 @@ errTryGrand = grandchildVal # ERROR: not in scope
 		(e-num (value "10")))
 	(d-let
 		(p-assign (ident "associated_items_comprehensive.Multi.b"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 1003)
+		(e-dispatch-call (method "plus") (constraint-fn-var 1028)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "associated_items_comprehensive.Multi.a"))))
@@ -2325,7 +2325,7 @@ errTryGrand = grandchildVal # ERROR: not in scope
 				(e-num (value "5")))))
 	(d-let
 		(p-assign (ident "associated_items_comprehensive.Multi.c"))
-		(e-dispatch-call (method "times") (constraint-fn-var 1038)
+		(e-dispatch-call (method "times") (constraint-fn-var 1063)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "associated_items_comprehensive.Multi.b"))))
@@ -2370,7 +2370,7 @@ errTryGrand = grandchildVal # ERROR: not in scope
 			(p-assign (ident "associated_items_comprehensive.Outer2.shared"))))
 	(d-let
 		(p-assign (ident "associated_items_comprehensive.Outer2.Inner2.doubled"))
-		(e-dispatch-call (method "times") (constraint-fn-var 1172)
+		(e-dispatch-call (method "times") (constraint-fn-var 1197)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "associated_items_comprehensive.Outer2.Inner2.usesOuter"))))
@@ -2411,7 +2411,7 @@ errTryGrand = grandchildVal # ERROR: not in scope
 		(e-num (value "2")))
 	(d-let
 		(p-assign (ident "associated_items_comprehensive.Outer4.InnerB.valB"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 1306)
+		(e-dispatch-call (method "plus") (constraint-fn-var 1331)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "associated_items_comprehensive.Outer4.InnerA.valA"))))
@@ -2455,7 +2455,7 @@ errTryGrand = grandchildVal # ERROR: not in scope
 		(e-num (value "5")))
 	(d-let
 		(p-assign (ident "associated_items_comprehensive.CrossRef.Mid.middle"))
-		(e-dispatch-call (method "times") (constraint-fn-var 1473)
+		(e-dispatch-call (method "times") (constraint-fn-var 1498)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "associated_items_comprehensive.CrossRef.top"))))
@@ -2463,7 +2463,7 @@ errTryGrand = grandchildVal # ERROR: not in scope
 				(e-num (value "2")))))
 	(d-let
 		(p-assign (ident "associated_items_comprehensive.CrossRef.Mid.Deep.deep"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 1475)
+		(e-dispatch-call (method "plus") (constraint-fn-var 1500)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "associated_items_comprehensive.CrossRef.Mid.middle"))))
@@ -2548,7 +2548,7 @@ errTryGrand = grandchildVal # ERROR: not in scope
 		(e-num (value "1")))
 	(d-let
 		(p-assign (ident "associated_items_comprehensive.Full.L2.val2"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 1774)
+		(e-dispatch-call (method "plus") (constraint-fn-var 1799)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "associated_items_comprehensive.Full.val1"))))
@@ -2556,7 +2556,7 @@ errTryGrand = grandchildVal # ERROR: not in scope
 				(e-num (value "1")))))
 	(d-let
 		(p-assign (ident "associated_items_comprehensive.Full.L2.L3.val3"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 1809)
+		(e-dispatch-call (method "plus") (constraint-fn-var 1834)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "associated_items_comprehensive.Full.L2.val2"))))
@@ -2564,7 +2564,7 @@ errTryGrand = grandchildVal # ERROR: not in scope
 				(e-num (value "1")))))
 	(d-let
 		(p-assign (ident "associated_items_comprehensive.Full.L2.L3.L4.val4"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 1844)
+		(e-dispatch-call (method "plus") (constraint-fn-var 1869)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "associated_items_comprehensive.Full.L2.L3.val3"))))
@@ -2572,7 +2572,7 @@ errTryGrand = grandchildVal # ERROR: not in scope
 				(e-num (value "1")))))
 	(d-let
 		(p-assign (ident "associated_items_comprehensive.Full.L2.L3.L4.L5.val5"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 1879)
+		(e-dispatch-call (method "plus") (constraint-fn-var 1904)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "associated_items_comprehensive.Full.L2.L3.L4.val4"))))
@@ -2650,7 +2650,7 @@ errTryGrand = grandchildVal # ERROR: not in scope
 		(e-num (value "1")))
 	(d-let
 		(p-assign (ident "associated_items_comprehensive.Chain.Mid.step1"))
-		(e-dispatch-call (method "times") (constraint-fn-var 2264)
+		(e-dispatch-call (method "times") (constraint-fn-var 2289)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "associated_items_comprehensive.Chain.start"))))
@@ -2658,7 +2658,7 @@ errTryGrand = grandchildVal # ERROR: not in scope
 				(e-num (value "2")))))
 	(d-let
 		(p-assign (ident "associated_items_comprehensive.Chain.Mid.Deep.step2"))
-		(e-dispatch-call (method "times") (constraint-fn-var 2299)
+		(e-dispatch-call (method "times") (constraint-fn-var 2324)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "associated_items_comprehensive.Chain.Mid.step1"))))
@@ -2666,7 +2666,7 @@ errTryGrand = grandchildVal # ERROR: not in scope
 				(e-num (value "3")))))
 	(d-let
 		(p-assign (ident "associated_items_comprehensive.Chain.Mid.Deep.Deeper.step3"))
-		(e-dispatch-call (method "times") (constraint-fn-var 2334)
+		(e-dispatch-call (method "times") (constraint-fn-var 2359)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "associated_items_comprehensive.Chain.Mid.Deep.step2"))))
@@ -2674,7 +2674,7 @@ errTryGrand = grandchildVal # ERROR: not in scope
 				(e-num (value "4")))))
 	(d-let
 		(p-assign (ident "associated_items_comprehensive.Chain.Mid.Deep.Deeper.Deepest.final"))
-		(e-dispatch-call (method "times") (constraint-fn-var 2369)
+		(e-dispatch-call (method "times") (constraint-fn-var 2394)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "associated_items_comprehensive.Chain.Mid.Deep.Deeper.step3"))))
@@ -2702,9 +2702,9 @@ errTryGrand = grandchildVal # ERROR: not in scope
 			(p-assign (ident "associated_items_comprehensive.Chain.Mid.Deep.Deeper.Deepest.final"))))
 	(d-let
 		(p-assign (ident "associated_items_comprehensive.Circular.sum"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 2472)
+		(e-dispatch-call (method "plus") (constraint-fn-var 2497)
 			(receiver
-				(e-dispatch-call (method "plus") (constraint-fn-var 2437)
+				(e-dispatch-call (method "plus") (constraint-fn-var 2495)
 					(receiver
 						(e-lookup-local
 							(p-assign (ident "associated_items_comprehensive.Circular.a"))))
@@ -2734,7 +2734,7 @@ errTryGrand = grandchildVal # ERROR: not in scope
 			(ty-lookup (name "U64") (builtin))))
 	(d-let
 		(p-assign (ident "associated_items_comprehensive.Ultimate.Branch1.b1val"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 2692)
+		(e-dispatch-call (method "plus") (constraint-fn-var 2717)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "associated_items_comprehensive.Ultimate.base"))))
@@ -2743,7 +2743,7 @@ errTryGrand = grandchildVal # ERROR: not in scope
 					(p-assign (ident "associated_items_comprehensive.Ultimate.Branch2.b2forward"))))))
 	(d-let
 		(p-assign (ident "associated_items_comprehensive.Ultimate.Branch1.Branch1Inner.innerSum"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 2708)
+		(e-dispatch-call (method "plus") (constraint-fn-var 2733)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "associated_items_comprehensive.Ultimate.base"))))
@@ -2759,11 +2759,11 @@ errTryGrand = grandchildVal # ERROR: not in scope
 			(ty-lookup (name "U64") (builtin))))
 	(d-let
 		(p-assign (ident "associated_items_comprehensive.Ultimate.Branch2.Branch2Inner.usesEverything"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 2738)
+		(e-dispatch-call (method "plus") (constraint-fn-var 2763)
 			(receiver
-				(e-dispatch-call (method "plus") (constraint-fn-var 2728)
+				(e-dispatch-call (method "plus") (constraint-fn-var 2753)
 					(receiver
-						(e-dispatch-call (method "plus") (constraint-fn-var 2718)
+						(e-dispatch-call (method "plus") (constraint-fn-var 2743)
 							(receiver
 								(e-lookup-local
 									(p-assign (ident "associated_items_comprehensive.Ultimate.base"))))

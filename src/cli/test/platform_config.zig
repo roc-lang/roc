@@ -77,6 +77,10 @@ const fx_open_tests = [_]SimpleTestSpec{
         .roc_file = "test/fx-open/method_on_platform_args.roc",
         .description = "Method call on platform-typed args (dispatch resolved via platform requirements)",
     },
+    .{
+        .roc_file = "test/fx-open/issue_9963_hosted_try_question_mark.roc",
+        .description = "Regression test: hosted Try unwrapped with ? widens the closed error row at the use site (issue 9963)",
+    },
 };
 
 /// Str platform test apps - test cross-module function calls

@@ -2329,6 +2329,12 @@ pub fn build(b: *std.Build) void {
     const eval_no_fork = b.option(bool, "eval-no-fork", "Run eval tests in-process instead of through fork isolation") orelse false;
     const eval_time_worker = b.option(bool, "eval-time-worker", "Print eval worker startup timing instrumentation") orelse false;
     const glue_release_tag = b.option([]const u8, "glue-release-tag", "Nightly release tag used in generated glue package URLs");
+    const enable_valgrind = b.option(bool, "valgrind", "Emit Valgrind client request support") orelse false;
+    if (enable_valgrind and (builtin.target.os.tag != .linux or target.result.os.tag != .linux)) {
+        std.log.err("-Dvalgrind=true requires a Linux build host and Linux target", .{});
+        std.process.exit(1);
+    }
+    const valgrind_support = if (enable_valgrind) true else null;
     if (shared_memory_size) |size| {
         if (size == 0) {
             std.log.err("-Dshared-memory-size must be greater than 0", .{});
@@ -2451,7 +2457,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    const roc_modules = modules.RocModules.create(b, build_options, zstd);
+    const roc_modules = modules.RocModules.create(b, build_options, zstd, valgrind_support);
 
     // Build-time compiler for builtin .roc modules
     //
@@ -2691,7 +2697,7 @@ pub fn build(b: *std.Build) void {
     llvm_codegen_module.addImport("roc_target", roc_modules.roc_target);
     llvm_codegen_module.addImport("vendor_llvm_ir", roc_modules.vendor_llvm_ir);
 
-    const roc_exe = addMainExe(b, roc_modules, target, optimize, strip, omit_frame_pointer, use_system_llvm, user_llvm_path, flag_enable_tracy, zstd, compiled_builtins_module, write_compiled_builtins, llvm_codegen_module, flag_enable_tracy, true) orelse return;
+    const roc_exe = addMainExe(b, roc_modules, target, optimize, strip, omit_frame_pointer, use_system_llvm, user_llvm_path, flag_enable_tracy, zstd, compiled_builtins_module, write_compiled_builtins, llvm_codegen_module, flag_enable_tracy, true, valgrind_support) orelse return;
     roc_modules.addAll(roc_exe);
     _ = install_and_run(b, no_bin, roc_exe, build_roc_step, run_roc_step, run_args);
 
@@ -2731,6 +2737,7 @@ pub fn build(b: *std.Build) void {
             llvm_codegen_module,
             null, // No tracy
             false,
+            valgrind_support,
         );
         if (release_exe) |exe| {
             roc_modules.addAll(exe);
@@ -2775,6 +2782,7 @@ pub fn build(b: *std.Build) void {
                 .imports = &.{
                     .{ .name = "test_harness", .module = createTestHarnessModule(b, roc_modules) },
                     .{ .name = "collections", .module = roc_modules.collections },
+                    .{ .name = "bytebox", .module = bytebox.module("bytebox") },
                 },
             }),
         });
@@ -3136,6 +3144,7 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
             .link_libc = true,
+            .valgrind = valgrind_support,
         }),
     });
     configureBackend(snapshot_exe, target);
@@ -5302,6 +5311,7 @@ fn addMainExe(
     llvm_codegen_module: *std.Build.Module,
     flag_enable_tracy: ?[]const u8,
     add_machine_code_shim_test: bool,
+    valgrind_support: ?bool,
 ) ?*Step.Compile {
     const exe = b.addExecutable(.{
         .name = "roc",
@@ -5312,6 +5322,7 @@ fn addMainExe(
             .strip = strip,
             .omit_frame_pointer = omit_frame_pointer,
             .link_libc = true,
+            .valgrind = valgrind_support,
         }),
     });
     // The in-process interpreter (used by `--opt=interpreter`) recurses Zig stack

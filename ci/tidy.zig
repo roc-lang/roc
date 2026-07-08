@@ -1055,6 +1055,11 @@ const DeadFilesDetector = struct {
             const path = result2[0];
             rest = result2[1];
             if (!std.mem.endsWith(u8, path, ".zig")) continue;
+            if (std.mem.eql(u8, path, "roc_platform_abi.zig")) {
+                // Glue runtime hosts import this generated ABI file from an
+                // isolated work directory after `roc glue` writes it.
+                continue;
+            }
             if (require_repo_path and
                 !std.mem.startsWith(u8, path, "src/") and
                 !std.mem.startsWith(u8, path, "test/"))

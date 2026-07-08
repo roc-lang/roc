@@ -295,7 +295,7 @@ roundtrip = parse_show("hi")
 		(e-lambda
 			(args
 				(p-assign (ident "x")))
-			(e-dispatch-call (method "to_i128") (constraint-fn-var 132)
+			(e-dispatch-call (method "to_i128") (constraint-fn-var 199)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "x"))))
@@ -311,7 +311,7 @@ roundtrip = parse_show("hi")
 					(ty-lookup (name "I128") (builtin))))))
 	(d-let
 		(p-assign (ident "ok_arg"))
-		(e-call (constraint-fn-var 172)
+		(e-call (constraint-fn-var 239)
 			(e-lookup-local
 				(p-assign (ident "via_arg")))
 			(e-typed-int (value "5") (type "U8"))))
@@ -335,7 +335,7 @@ roundtrip = parse_show("hi")
 												(p-assign (ident "x")))
 											(rest-at (index 1)))))
 								(value
-									(e-dispatch-call (method "to_i128") (constraint-fn-var 210)
+									(e-dispatch-call (method "to_i128") (constraint-fn-var 277)
 										(receiver
 											(e-lookup-local
 												(p-assign (ident "x"))))
@@ -359,7 +359,7 @@ roundtrip = parse_show("hi")
 					(ty-lookup (name "I128") (builtin))))))
 	(d-let
 		(p-assign (ident "ok_data"))
-		(e-call (constraint-fn-var 359)
+		(e-call (constraint-fn-var 426)
 			(e-lookup-local
 				(p-assign (ident "via_data")))
 			(e-list
@@ -385,7 +385,7 @@ roundtrip = parse_show("hi")
 					(ty-rigid-var-lookup (ty-rigid-var (name "a")))))))
 	(d-let
 		(p-assign (ident "unpinned_ret"))
-		(e-call (constraint-fn-var 390)
+		(e-call (constraint-fn-var 457)
 			(e-lookup-local
 				(p-assign (ident "gen")))
 			(e-empty_record)))
@@ -410,7 +410,7 @@ roundtrip = parse_show("hi")
 					(ty-lookup (name "Str") (builtin))))))
 	(d-let
 		(p-assign (ident "roundtrip"))
-		(e-call (constraint-fn-var 437)
+		(e-call (constraint-fn-var 501)
 			(e-lookup-local
 				(p-assign (ident "parse_show")))
 			(e-string
