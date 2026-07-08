@@ -13740,6 +13740,108 @@ const ProcBodyBuilder = struct {
         return children[function.args_start..][0..function.arg_count];
     }
 
+    /// A representation is fully concrete when its value carries no
+    /// descriptor-driven storage: it needs neither a static descriptor nor any
+    /// dynamically boxed field. Such a value's reference counting is entirely
+    /// determined by its layout, so two fully-concrete values with byte-identical
+    /// layouts are interchangeable without any conversion.
+    fn repIsFullyConcrete(self: *const ProcBodyBuilder, rep_id: Plan.TypeRepId) bool {
+        const rep = self.parent.plan.representations.items[@intFromEnum(rep_id)];
+        return rep.descriptor == null and !rep.contains_dynamic;
+    }
+
+    /// Whether a layout stores its contents behind a heap indirection (a list or
+    /// a box). The runtime coerces a value across two byte-identical layouts of
+    /// this kind by relabelling it, so a boundary reinterpret at such a slot is
+    /// safe even when the two layouts carry distinct store indices.
+    fn layoutIsHeapIndirect(self: *const ProcBodyBuilder, layout_idx: layout.Idx) bool {
+        return switch (self.parent.result.layouts.getLayout(layout_idx).tag) {
+            .list, .list_of_zst, .box, .box_of_zst => true,
+            else => false,
+        };
+    }
+
+    /// Whether a value laid out as `a` can be reinterpreted as a value laid out
+    /// as `b` with no byte-level conversion: the two layouts have the same tag,
+    /// size, and recursively-interchangeable children. Distinct recursive size
+    /// cycles are interned under distinct indices, so a seen set pairs the two
+    /// cycles and treats a re-encountered pair as already matched.
+    fn boundaryLayoutsInterchangeable(
+        self: *ProcBodyBuilder,
+        a: layout.Idx,
+        b: layout.Idx,
+    ) Allocator.Error!bool {
+        var seen = std.AutoHashMap(u64, void).init(self.parent.allocator);
+        defer seen.deinit();
+        return try self.boundaryLayoutsInterchangeableInner(a, b, &seen);
+    }
+
+    fn boundaryLayoutsInterchangeableInner(
+        self: *ProcBodyBuilder,
+        a: layout.Idx,
+        b: layout.Idx,
+        seen: *std.AutoHashMap(u64, void),
+    ) Allocator.Error!bool {
+        if (a == b) return true;
+
+        const layouts = &self.parent.result.layouts;
+        const a_layout = layouts.getLayout(a);
+        const b_layout = layouts.getLayout(b);
+        if (a_layout.tag != b_layout.tag) return false;
+        if (layouts.layoutSize(a_layout) != layouts.layoutSize(b_layout)) return false;
+
+        const key = (@as(u64, @intFromEnum(a)) << 32) | @as(u64, @intFromEnum(b));
+        if ((try seen.getOrPut(key)).found_existing) return true;
+
+        switch (a_layout.tag) {
+            .scalar => return std.meta.eql(a_layout.getScalar(), b_layout.getScalar()),
+            .zst => return true,
+            .box, .box_of_zst => {
+                return try self.boundaryLayoutsInterchangeableInner(
+                    layouts.getBoxInfo(a_layout).elem_layout_idx,
+                    layouts.getBoxInfo(b_layout).elem_layout_idx,
+                    seen,
+                );
+            },
+            .list, .list_of_zst => {
+                return try self.boundaryLayoutsInterchangeableInner(
+                    layouts.getListInfo(a_layout).elem_layout_idx,
+                    layouts.getListInfo(b_layout).elem_layout_idx,
+                    seen,
+                );
+            },
+            .struct_ => {
+                const a_info = layouts.getStructInfo(a_layout);
+                const b_info = layouts.getStructInfo(b_layout);
+                if (a_info.fields.len != b_info.fields.len) return false;
+                var i: u32 = 0;
+                while (i < a_info.fields.len) : (i += 1) {
+                    const a_field = a_info.fields.get(i);
+                    const b_field = b_info.fields.get(i);
+                    if (a_field.is_padding != b_field.is_padding) return false;
+                    if (!try self.boundaryLayoutsInterchangeableInner(a_field.layout, b_field.layout, seen)) return false;
+                }
+                return true;
+            },
+            .tag_union => {
+                const a_info = layouts.getTagUnionInfo(a_layout);
+                const b_info = layouts.getTagUnionInfo(b_layout);
+                if (a_info.variants.len != b_info.variants.len) return false;
+                if (a_info.discriminant_offset != b_info.discriminant_offset) return false;
+                var i: u32 = 0;
+                while (i < a_info.variants.len) : (i += 1) {
+                    if (!try self.boundaryLayoutsInterchangeableInner(
+                        a_info.variants.get(i).payload_layout,
+                        b_info.variants.get(i).payload_layout,
+                        seen,
+                    )) return false;
+                }
+                return true;
+            },
+            .closure, .erased_callable, .ptr => return false,
+        }
+    }
+
     fn assignRepresentationBoundary(
         self: *ProcBodyBuilder,
         target: LIR.LocalId,
@@ -13753,6 +13855,29 @@ const ProcBodyBuilder = struct {
         const canonical_target_rep = self.canonicalDescriptorRep(target_rep);
         const canonical_source_rep = self.canonicalDescriptorRep(source_rep);
         if (target_layout == source_layout and canonical_target_rep == canonical_source_rep) {
+            return if (target == source) next else try self.assignLocal(target, source, next);
+        }
+
+        // Two representations of the same source-level recursive nominal type
+        // (for example an `Elem` produced by a worker and the same `Elem` in the
+        // caller's module) are structurally identical but receive distinct rep
+        // ids and distinct — yet byte-identical — layout indices, because the
+        // layout store interns each recursive size cycle separately. Converting
+        // one into the other field-by-field would recurse forever through the
+        // shared cycle. Every recursive size cycle passes through a heap-indirect
+        // slot (a list or a box), and the runtime already coerces a value across
+        // byte-identical list/box layouts by relabelling it. When both sides are
+        // fully concrete (no descriptor-driven storage) and their worker layouts
+        // are byte-for-byte interchangeable, reinterpreting at that heap-indirect
+        // slot is correct and cuts the cycle; the surrounding aggregates keep
+        // converting field-by-field until they reach it.
+        if (target_layout != source_layout and
+            self.layoutIsHeapIndirect(target_layout) and
+            self.layoutIsHeapIndirect(source_layout) and
+            self.repIsFullyConcrete(canonical_target_rep) and
+            self.repIsFullyConcrete(canonical_source_rep) and
+            try self.boundaryLayoutsInterchangeable(target_layout, source_layout))
+        {
             return if (target == source) next else try self.assignLocal(target, source, next);
         }
 

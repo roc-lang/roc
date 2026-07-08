@@ -9371,6 +9371,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const expected_val = ls.getLayout(expected_layout);
                 const actual_is_box = actual_val.tag == .box or actual_val.tag == .box_of_zst;
                 const expected_is_box = expected_val.tag == .box or expected_val.tag == .box_of_zst;
+                const actual_is_list = actual_val.tag == .list or actual_val.tag == .list_of_zst;
                 const expected_is_list = expected_val.tag == .list or expected_val.tag == .list_of_zst;
                 const expected_is_erased_ptr = expected_val.tag == .scalar and expected_val.getScalar().tag == .opaque_ptr;
                 if (actual_is_box and !expected_is_box and !expected_is_list and !expected_is_erased_ptr) {
@@ -9386,6 +9387,18 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try self.copyChunked(temp_reg, box_reg, 0, frame_ptr, result_offset, expected_size);
 
                     return self.stackLocationForLayout(expected_layout, result_offset);
+                }
+                // A list or box relabelled to another layout of the same family
+                // and byte size is a bitwise identity: a list is a fat pointer and
+                // a box is a pointer regardless of which element layout labels it.
+                // Structurally identical recursive nominal types are interned as
+                // distinct layout indices, so a reinterpret across them lands
+                // here; copy the value through unchanged. This mirrors the
+                // interpreter's list/box relabel coercion.
+                if (((actual_is_list and expected_is_list) or (actual_is_box and expected_is_box)) and
+                    self.getLayoutSize(actual_layout) == self.getLayoutSize(expected_layout))
+                {
+                    return self.coerceImmediateToLayout(loc, expected_layout);
                 }
             }
 
