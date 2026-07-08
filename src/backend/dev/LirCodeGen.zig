@@ -9374,6 +9374,37 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return self.requireExactValueLocationToLayout(loc, actual_layout, expected_layout, site);
         }
 
+        /// Coerce a value being written into a struct field to the field's
+        /// layout. A box-family value (`box` / `box_of_zst`) relabelled to a
+        /// different box-family layout of the same pointer size is a bitwise
+        /// identity: a box holds a pointer regardless of which element layout
+        /// labels it, so the pointer is copied as-is. This mirrors the
+        /// interpreter, which treats box-family relabels as identity. Every
+        /// other mismatch keeps the strict `requireExactValueLocationToLayout`
+        /// check.
+        fn coerceStructFieldValueToLayout(
+            self: *Self,
+            loc: ValueLocation,
+            actual_layout: layout.Idx,
+            expected_layout: layout.Idx,
+            comptime site: []const u8,
+        ) ValueLocation {
+            if (actual_layout != expected_layout) {
+                const ls = self.layout_store;
+                const actual_val = ls.getLayout(actual_layout);
+                const expected_val = ls.getLayout(expected_layout);
+                const actual_is_box = actual_val.tag == .box or actual_val.tag == .box_of_zst;
+                const expected_is_box = expected_val.tag == .box or expected_val.tag == .box_of_zst;
+                if (actual_is_box and expected_is_box and
+                    self.getLayoutSize(actual_layout) == self.getLayoutSize(expected_layout))
+                {
+                    return self.coerceImmediateToLayout(loc, expected_layout);
+                }
+            }
+
+            return self.requireExactValueLocationToLayout(loc, actual_layout, expected_layout, site);
+        }
+
         fn requireExplicitNominalValueLocationToLayout(
             self: *Self,
             loc: ValueLocation,
@@ -11049,7 +11080,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         const field_offset = ls.getStructFieldOffsetByOriginalIndex(inner_layout.getStruct().idx, @intCast(i));
                         const field_size = ls.getStructFieldSizeByOriginalIndex(inner_layout.getStruct().idx, @intCast(i));
                         const field_layout_idx = ls.getStructFieldLayoutByOriginalIndex(inner_layout.getStruct().idx, @intCast(i));
-                        const field_loc = self.requireExactValueLocationToLayout(
+                        const field_loc = self.coerceStructFieldValueToLayout(
                             try self.emitValueLocal(field_expr_id),
                             self.valueLayout(field_expr_id),
                             field_layout_idx,
@@ -11087,7 +11118,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         const field_size = ls.getStructFieldSizeByOriginalIndex(struct_layout.getStruct().idx, @intCast(i));
                         if (field_size == 0) continue;
                         const field_layout_idx = ls.getStructFieldLayoutByOriginalIndex(struct_layout.getStruct().idx, @intCast(i));
-                        const field_loc = self.requireExactValueLocationToLayout(
+                        const field_loc = self.coerceStructFieldValueToLayout(
                             try self.emitValueLocal(field_expr_id),
                             self.valueLayout(field_expr_id),
                             field_layout_idx,
