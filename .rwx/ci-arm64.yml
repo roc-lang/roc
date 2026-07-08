@@ -23,7 +23,7 @@ tasks:
   # No .git here — preserving it busts the cache key every commit. Only the
   # snapshot zero-drift check needs git, via the separate code-git clone below.
   - key: code
-    call: git/clone 2.0.7
+    call: git/clone 2.0.8
     with:
       repository: https://github.com/roc-lang/roc.git
       ref: ${{ init.commit-sha }}
@@ -64,10 +64,10 @@ tasks:
       - build.zig.zon
       - src
       - test
-      - "!test/snapshots"  # runtime data for the snapshot tool, not a compile input — see ci.yml
+      - "!test/snapshots" # runtime data for the snapshot tool, not a compile input — see ci.yml
       - ci
       - vendor
-      - legal_details  # embedded into the roc binary via addAnonymousImport (build.zig:5042)
+      - legal_details # embedded into the roc binary via addAnonymousImport (build.zig:5042)
     run: |
       set +e
       pattern="HttpConnectionClosing|EndOfStream|503|Timeout|WriteFailed|TemporaryNameServerFailure|cannot download|ConnectionResetByPeer|ConnectionTimedOut|FetchFailed|invalid HTTP response|bad HTTP response"
@@ -98,7 +98,7 @@ tasks:
       - build.zig.zon
       - src/build
       - src/target
-    agent:  # CO 4c/8g — one mostly-serial compile; more cores don't help it
+    agent: # CO 4c/8g — one mostly-serial compile; more cores don't help it
       cpus: 4
       memory: 8gb
     run: |
@@ -146,8 +146,8 @@ tasks:
     filter: *pos-build
     # No tool-cache (see ci.yml build-ci-x64): warm restores saved ~0s exec while adding
     # multi-GB layer downloads to this anchor and every leaf that inherits it.
-    timeout: 45m  # arm64 build compiles roc + kcov from source; exceeds the 10m default
-    agent:  # GP 8c/32g — Debug anchor; builds kcov too, so 8c parallelism needs >16g (OOM'd at CO 8c/16g)
+    timeout: 45m # arm64 build compiles roc + kcov from source; exceeds the 10m default
+    agent: # GP 8c/32g — Debug anchor; builds kcov too, so 8c parallelism needs >16g (OOM'd at CO 8c/16g)
       cpus: 8
       memory: 32gb
     run: |
@@ -172,8 +172,8 @@ tasks:
       - vendor
       - legal_details
       - zig-out
-      - .captain  # Captain suite config (.captain/config.yml); without it `captain run` finds no command
-    agent: &test-agent  # CPU-bound test leaves: CO 8c/16g
+      - .captain # Captain suite config (.captain/config.yml); without it `captain run` finds no command
+    agent: &test-agent # CPU-bound test leaves: CO 8c/16g
       cpus: 8
       memory: 16gb
     run: |
@@ -201,7 +201,7 @@ tasks:
       - vendor
       - legal_details
       - zig-out
-      - .captain  # Captain suite config; without it `captain run` finds no command
+      - .captain # Captain suite config; without it `captain run` finds no command
       # Data files imported by the CLI test fixtures (run-test-cli): test/fx
       # imports CONTRIBUTING/profiling/…, test/echo/all_syntax_test.roc imports
       # the repo-root README.md. Both must survive the filter (FILE NOT FOUND otherwise).
@@ -234,7 +234,7 @@ tasks:
     filter: *pos-build
     # No tool-cache (see ci.yml build-release-x64): ReleaseFast gains ~0 from a warm restore.
     timeout: 45m
-    agent:  # GP 16c/64g — parallel + critical path (arm leg); 16c is the balance point, needs 64g at 16c
+    agent: # GP 16c/64g — parallel + critical path (arm leg); 16c is the balance point, needs 64g at 16c
       cpus: 16
       memory: 64gb
     run: |

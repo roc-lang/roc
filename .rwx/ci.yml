@@ -8,7 +8,7 @@ on:
   cli:
     init:
       commit-sha: ${{ event.git.sha }}
-      pr-number: ''
+      pr-number: ""
 
 # Match GHA's `concurrency: cancel-in-progress` (grouped per ref): a new commit on a PR cancels
 # the superseded run. Scoped to PR runs via `if` so local `rwx run` iterations (pr-number empty)
@@ -38,7 +38,7 @@ tasks:
   # the cache key on every commit and bust hits for the build anchors and leaves.
   # Only the two git-specific checks use the separate `code-git` clone below.
   - key: code
-    call: git/clone 2.0.7
+    call: git/clone 2.0.8
     with:
       repository: https://github.com/roc-lang/roc.git
       ref: ${{ init.commit-sha }}
@@ -47,7 +47,7 @@ tasks:
   # zero-drift `git diff`, and run-check-git-lints which otherwise skips itself).
   # This one busts cache per-commit by design; the expensive anchors don't.
   - key: code-git
-    call: git/clone 2.0.7
+    call: git/clone 2.0.8
     with:
       repository: https://github.com/roc-lang/roc.git
       ref: ${{ init.commit-sha }}
@@ -118,7 +118,7 @@ tasks:
       - "!test/snapshots"
       - ci
       - vendor
-      - legal_details  # embedded into the roc binary via addAnonymousImport (build.zig:5042)
+      - legal_details # embedded into the roc binary via addAnonymousImport (build.zig:5042)
     run: |
       # The ONLY network boundary — retry transient fetch flakes here (faithful
       # port of GHA .github/actions/flaky-retry) so the build anchors run offline
@@ -155,7 +155,7 @@ tasks:
       - build.zig.zon
       - src/build
       - src/target
-    agent:  # CO 4c/8g — one mostly-serial compile; more cores don't help it
+    agent: # CO 4c/8g — one mostly-serial compile; more cores don't help it
       cpus: 4
       memory: 8gb
     run: |
@@ -198,7 +198,7 @@ tasks:
     # inherited filesystem so every leaf pulled ~24.6 GB (tool-cache + task layer) instead of
     # ~14 GB. Plus the 48h TTL means it was cold after any quiet spell.
     timeout: 45m
-    agent:  # GP 8c/32g — Debug anchor; 8c parallelism OOM'd at 16g on newer main (same as build-ci-arm64) → 32g floor for build tasks. Off crit path but feeds gates+leaves, keep 8c (4c gated the run).
+    agent: # GP 8c/32g — Debug anchor; 8c parallelism OOM'd at 16g on newer main (same as build-ci-arm64) → 32g floor for build tasks. Off crit path but feeds gates+leaves, keep 8c (4c gated the run).
       cpus: 8
       memory: 32gb
     run: |
@@ -264,7 +264,7 @@ tasks:
       - vendor
       - legal_details
       - zig-out
-      - .captain  # Captain suite config (.captain/config.yml); without it `captain run` finds no command
+      - .captain # Captain suite config (.captain/config.yml); without it `captain run` finds no command
     agent: &test-agent
       cpus: 8
       memory: 16gb
@@ -317,7 +317,7 @@ tasks:
       - vendor
       - legal_details
       - zig-out
-      - .captain  # Captain suite config; without it `captain run` finds no command
+      - .captain # Captain suite config; without it `captain run` finds no command
       # Data files imported by the CLI test fixtures (run-test-cli): test/fx
       # imports CONTRIBUTING/profiling/…, test/echo/all_syntax_test.roc imports
       # the repo-root README.md. Both must survive the filter or the tests fail
@@ -478,7 +478,7 @@ tasks:
     # Match the build anchors: Compute-Optimized 32c/64gb. A full `zig build` of roc is
     # memory-heavy (LLVM/link peak) — 32gb (CO 16c) OOMs; 64gb is the next CO tier (32c) and is
     # what the anchors use to build roc with even more pressure (-Droc-test-runner -Dfuzz).
-    agent:  # MO 4c/32g — off critical path; 4c is a free cost win, 32g holds the 32-bit-target peak
+    agent: # MO 4c/32g — off critical path; 4c is a free cost win, 32g holds the 32-bit-target peak
       cpus: 4
       memory: 32gb
     parallel:
@@ -497,7 +497,7 @@ tasks:
   # ============================================================ tracy compile-check
   # Anti-bitrot: ensure the Tracy-instrumented build still compiles (-Dno-bin).
   - key: tracy-src
-    call: git/clone 2.0.7
+    call: git/clone 2.0.8
     with:
       repository: https://github.com/wolfpld/tracy.git
       ref: v0.11.0
@@ -515,13 +515,13 @@ tasks:
       - build.zig.zon
       - src
       - test
-      - "!test/snapshots"  # compile-only check; snapshot data is never an input (see &pos-build)
+      - "!test/snapshots" # compile-only check; snapshot data is never an input (see &pos-build)
       - ci
       - vendor
       - legal_details
       - tracy
     timeout: 45m
-    agent:  # CO 8c/16g — -Dno-bin compile-check; off-path. 8c (not 2c) is cheaper AND faster; needs 16g (8g stalls)
+    agent: # CO 8c/16g — -Dno-bin compile-check; off-path. 8c (not 2c) is cheaper AND faster; needs 16g (8g stalls)
       cpus: 8
       memory: 16gb
     run: |
@@ -538,7 +538,7 @@ tasks:
     # No tool-cache (see build-ci-x64): ReleaseFast is serial-bound on the roc binary; a warm
     # restore saved ~0s while its layers grew to ~13 GB.
     timeout: 45m
-    agent:  # CO 32c/64g — kept large: genuinely parallel ReleaseFast build; shrinking cost both time and money
+    agent: # CO 32c/64g — kept large: genuinely parallel ReleaseFast build; shrinking cost both time and money
       cpus: 32
       memory: 64gb
     run: |
@@ -622,7 +622,7 @@ tasks:
     # so compiler incrementality never survived a PR anyway. Dropping ALL tool caches also
     # frees CI from needing a vault at all.
     timeout: 45m
-    agent:  # MO 4c/32g — serial build (cores don't help); memory headroom for the full-DWARF -Dstrip=false build
+    agent: # MO 4c/32g — serial build (cores don't help); memory headroom for the full-DWARF -Dstrip=false build
       cpus: 4
       memory: 32gb
     run: |
