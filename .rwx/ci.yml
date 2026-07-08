@@ -207,13 +207,6 @@ tasks:
         exit 1
       fi
 
-  # Captain runs roc's custom runner (-Droc-test-runner; binaries pre-built by the anchor so
-  # this only RUNS them), emits rwx-v1-json per module, and gives inline per-test results +
-  # "retry failed tests" via outputs.test-results. See .captain/config.yml (roc-unit-debug).
-  # NOT partitioned: with the anchor pre-build, running all ~2800 module tests is ~14s, so
-  # `parallel:` only saved ~9s wall while paying the ~64s/agent fixed cost (tool-cache download
-  # + build-graph eval) N times. The partition config/globs/flags stay wired — re-add
-  # `parallel: N` here if the suite grows enough to be worth it.
   - key: unit-debug
     use: [build-ci-x64, captain]
     filter: *pos-leaf
@@ -225,12 +218,6 @@ tasks:
       test-results:
         - path: tmp/captain/roc-unit-debug.json
 
-  # 4c/8g — measured faster AND more consistent than 2c (4c ~167-174s vs 2c ~181-270s
-  # exec, benchmarked with cache:false). The snapshot *regeneration* is single-threaded
-  # under --debug (src/snapshot_tool/main.zig:726-728), but the rest of the exec (LLVM
-  # relink of snapshot_exe, write_compiled_builtins, build runner) is multi-threaded and
-  # benefits; 2c also contends more (high variance). 4 cores is the sweet spot — the
-  # single-threaded regen means more cores wouldn't help further.
   - key: snapshots
     use: [build-ci-x64, code-git]
     agent:
@@ -321,36 +308,8 @@ tasks:
         zig build "run-repro-${target}" -- "$ROC_FUZZ_INPUT"
       done
 
-  # ============================================================ cross-compile (compile-only)
-  # GHA ci_zig.yml `zig-cross-compile`: compile-only checks that roc builds for each cross
-  # target (no execution). Runs on every build like the anchors; the *pos-build filter makes
-  # docs/test-only changes a HIT. x64-only — cross output is build-host-independent and GHA
-  # runs it x64-only too.
-  #
-  # The roc-cross-compile / on-target-run job (ci_cross_compile.yml) deliberately STAYS on GHA:
-  # it builds from 4 hosts (3 are mac/win — never on RWX) and its on-target check runs every
-  # host's binary together on one target runner. RWX can't reproduce that — arch is run-level so
-  # arm64 is an embedded run, and embedded runs are filesystem-isolated (only string init params
-  # cross the boundary, never the cross-built binary). So it's part of the mac/win GHA remainder.
-  #
-  # Each cross target lazily pulls its roc_deps_<target> (roc-bootstrap prebuilt deps). `zig build
-  # --fetch` only gets EAGER deps, so pre-fetch the lazy per-target deps here as a dedicated,
-  # retryable network boundary — kept separate from zig-deps-x64 so cross-dep churn doesn't bust
-  # the native anchor deps cache. Mirrors the arm64 zig-deps lazy-fetch pattern.
   - key: zig-deps-cross-x64
     use: [code, zig-x64]
-    # Narrow key: this task only reads build.zig.zon (greps the dep URLs) but build.zig MUST be in
-    # the filter too — `zig fetch <url>` errors "no build.zig file found" without a project root
-    # (validated). Keying on just these two — NOT *pos-build — means a src/test change is a HIT here;
-    # it only re-runs when build.zig OR build.zig.zon changes.
-    # No tool-cache on purpose: `zig fetch <url>` is URL-keyed (it downloads, THEN hashes), so it
-    # re-downloads even when the package is already in the global cache — verified: a warm 2.3 GB
-    # tool-cache restored, yet every dep still re-fetched. A tool-cache would just move the same
-    # ~2.3 GB over the wire for nothing. (Zig's hash-skip lives in `zig build`, not `zig fetch`.)
-    # Instead the 6 prebuilt bundles fetch in PARALLEL — independent downloads into distinct
-    # p/<hash> dirs. `zig fetch` is CPU-bound on decompression (`.tar.xz`/`.zip`, user≈real), not
-    # network, so wall time scales with cores: 4 cpus runs the 6 extractions in ~2 waves (~100s vs
-    # the ~290s serial sum). Memory stays small (8gb) — fetch/extract isn't memory-heavy.
     agent:
       cpus: 4
       memory: 8gb
@@ -399,19 +358,13 @@ tasks:
       for p in $pids; do wait "$p" || rc=1; done
       exit "$rc"
 
-  # Compile-only matrix (6 targets), structured like a build anchor: offline build off the deps
-  # boundary. No tool-cache (see build-ci-x64): warm restores don't meaningfully cut a fresh
-  # zig compile, and 6 per-target caches at multi-GB layers were pure download+storage cost.
   - key: zig-cross-compile
     use: [code, zig-x64, zig-deps-x64, zig-deps-cross-x64, zig-build-runner-x64]
     filter: *pos-build
     timeout: 45m
-    # Match the build anchors: Compute-Optimized 32c/64gb. A full `zig build` of roc is
-    # memory-heavy (LLVM/link peak) — 32gb (CO 16c) OOMs; 64gb is the next CO tier (32c) and is
-    # what the anchors use to build roc with even more pressure (-Droc-test-runner -Dfuzz).
-    agent: # MO 4c/32g — off critical path; 4c is a free cost win, 32g holds the 32-bit-target peak
+    agent:
       cpus: 4
-      memory: 32gb
+      memory: 32gb # OOMs with any less memory
     parallel:
       matrix:
         target:
@@ -425,8 +378,6 @@ tasks:
       set -euo pipefail
       zig build -Dtarget=${{ parallel.target }}
 
-  # ============================================================ tracy compile-check
-  # Anti-bitrot: ensure the Tracy-instrumented build still compiles (-Dno-bin).
   - key: tracy-src
     call: git/clone 2.0.8
     with:
@@ -434,52 +385,32 @@ tasks:
       ref: v0.11.0
       path: tracy
 
-  # tracy-check is a full compiler compile (with Tracy instrumentation), not a
-  # cheap check — it needs compile-class CPU + a longer timeout. No tool-cache
-  # (see build-ci-x64): its warm layers ran ~8.8 GB for ~no exec saving.
+  # tracy-check is a full compile with Tracy instrumentation
   - key: tracy-check
     use: [code, zig-x64, zig-deps-x64, zig-build-runner-x64, tracy-src]
     # pos-build inputs plus the tracy/ clone this build consumes (-Dtracy=./tracy).
-    # Can't reuse *pos-build (it lacks tracy/), so the include set is inline.
     filter:
-      - build.zig
-      - build.zig.zon
-      - src
-      - test
-      - "!test/snapshots" # compile-only check; snapshot data is never an input (see &pos-build)
-      - ci
-      - vendor
-      - legal_details
+      - *pos-build
       - tracy
     timeout: 45m
-    agent: # CO 8c/16g — -Dno-bin compile-check; off-path. 8c (not 2c) is cheaper AND faster; needs 16g (8g stalls)
+    agent:
       cpus: 8
       memory: 16gb
     run: |
       set -euo pipefail
       zig build -Dno-bin -Dfuzz -Dtracy=./tracy
 
-  # ============================================================ RELEASE anchor
-  # ReleaseFast musl/x86_64_v3 — separate compilation from Debug (no artifact
-  # sharing). Serves release unit tests + the static-link assertion on the
-  # distribution binary.
   - key: build-release-x64
     use: [code, zig-x64, zig-deps-x64, zig-build-runner-x64]
     filter: *pos-build
-    # No tool-cache (see build-ci-x64): ReleaseFast is serial-bound on the roc binary; a warm
-    # restore saved ~0s while its layers grew to ~13 GB.
     timeout: 45m
-    agent: # CO 32c/64g — kept large: genuinely parallel ReleaseFast build; shrinking cost both time and money
+    agent:
       cpus: 32
       memory: 64gb
     run: |
       set -euo pipefail
-      # -Droc-test-runner: pre-build the custom-runner test binaries (see build-ci-x64) so the
-      # ReleaseFast unit partitions cache-hit and only run.
       zig build build-ci -Droc-test-runner -Doptimize=ReleaseFast -Dfuzz -Dsystem-afl=false
 
-  # Module unit tests in ReleaseFast via Captain (single task — see unit-debug; not worth
-  # partitioning).
   - key: unit-release
     use: [build-release-x64, captain]
     filter: *pos-leaf
@@ -491,8 +422,6 @@ tasks:
       test-results:
         - path: tmp/captain/roc-unit-release.json
 
-  # LSP integration specs — bespoke fork-based runner, now in Captain (was part of the old
-  # plain `unit-misc` non-module run). rwx-v1-json from its parent via the shared reporter.
   - key: lsp
     use: [build-ci-x64, captain]
     filter: *pos-leaf
@@ -504,9 +433,6 @@ tasks:
       test-results:
         - path: tmp/captain/roc-lsp.json
 
-  # fx / http / json / watch platform tests — Zig-native (b.addTest), reuse the unit runner's
-  # rwx-v1-json reporter via -Droc-test-runner. Needs pos-cli inputs (the fx platform fixtures
-  # import CONTRIBUTING/profiling). Replaces the rest of the old plain `unit-misc` task.
   - key: platform-tests
     use: [build-ci-x64, captain]
     filter: *pos-cli
@@ -518,9 +444,6 @@ tasks:
       test-results:
         - path: tmp/captain/roc-platforms.json
 
-  # System packages not on the rwx/base image (verified via probe), pulled into
-  # their own cached tasks. Leaves `use:` them so the apt layer is shared and
-  # not re-installed inline on every run.
   - key: system-file
     run: |
       set -euo pipefail
@@ -540,20 +463,11 @@ tasks:
       file ./zig-out/bin/roc
       file ./zig-out/bin/roc | grep "statically linked"
 
-  # ============================================================ VALGRIND anchor
-  # Special config: ReleaseFast musl/x86_64_v3, -Dstrip=false + larger shared
-  # memory (build.zig valgrind path). Distinct from the release anchor.
   - key: build-valgrind-x64
     use: [code, zig-x64, zig-deps-x64, zig-build-runner-x64]
     filter: *pos-build
-    # No tool-cache (the last one dropped): its warm value was the fixed prelude — the
-    # build-runner compile (~94s at 4c, now covered on the content cache by
-    # zig-build-runner-x64) + the test-platform host libs (small) — while real src changes
-    # rerun builtin_compiler, whose bake cascades into everything embedding compiled_builtins,
-    # so compiler incrementality never survived a PR anyway. Dropping ALL tool caches also
-    # frees CI from needing a vault at all.
     timeout: 45m
-    agent: # MO 4c/32g — serial build (cores don't help); memory headroom for the full-DWARF -Dstrip=false build
+    agent:
       cpus: 4
       memory: 32gb
     run: |
@@ -582,8 +496,6 @@ tasks:
       # the default target, which misses the anchor's -Dcpu/-Dtarget cache key (~406s wasted).
       SNAPSHOT_BIN=./zig-out/bin/snapshot ./ci/valgrind_snapshots.sh
 
-  # ============================================================ arm64 leg
-  # arch is run-level, so the arm64 matrix is an embedded run with its own base.
   - key: arm64
     call: ${{ run.dir }}/ci-arm64.yml
     init:

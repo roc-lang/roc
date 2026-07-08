@@ -8,7 +8,7 @@ base:
   config: rwx/base 1.1.1
   arch: arm64
 
-# Vault for the tool caches PACKAGES declare internally (git/clone, …) — our own compile
+# Vault for the tool caches PACKAGES declare internally (git/clone, …), our own compile
 # tasks declare none (see ci.yml for the rationale).
 tool-cache:
   vault: dylan-roc
@@ -34,7 +34,7 @@ aliases:
     - vendor
     - legal_details
     - zig-out
-    - .captain # Captain suite config (.captain/config.yml); without it `captain run` finds no command
+    - .captain
 
   # Leaf inputs + data files imported by the CLI/platform test fixtures (test/fx imports
   # CONTRIBUTING/profiling/…, test/echo/all_syntax_test.roc imports the repo-root README.md).
@@ -48,8 +48,6 @@ aliases:
     memory: 16gb
 
 tasks:
-  # No .git here — preserving it busts the cache key every commit. Only the
-  # snapshot zero-drift check needs git, via the separate code-git clone below.
   - key: code
     call: git/clone 2.0.8
     with:
@@ -77,14 +75,7 @@ tasks:
       echo "$HOME/.zig-cache" > "$RWX_ENV/ZIG_LOCAL_CACHE_DIR"
       "$HOME/${ZIG_DIR}/zig" version
 
-  # The ONLY network boundary — retry transient fetch flakes here so the build
-  # anchors run offline and need no retry. `--fetch` fetches only EAGER deps;
-  # kcov is a LAZY dep (build.zig.zon `lazy = true`) that arm64 build-ci needs,
-  # so we additionally `zig fetch` it (URL read from build.zig.zon to stay in
-  # sync). Both land in ~/.cache/zig, which carries across `use:`.
-  # POSITIVE input filter (include only build inputs). Toolchain + local zig cache
-  # live in $HOME (outside the workspace), so this workspace-relative filter never
-  # drops them.
+  # Fetches network dependencies for zig build
   - key: zig-deps-arm64
     use: [code, zig-arm64]
     filter: *pos-build
@@ -107,10 +98,7 @@ tasks:
         attempt=$((attempt+1)); echo ">>> transient fetch failure; retry ${attempt}/${max} in 10s" >&2; sleep 10
       done
 
-  # Build-runner precompile — compile build.zig itself once into $HOME/.zig-cache so both
-  # anchors inherit it instead of each paying the ~90s runner compile. Narrow filter =
-  # the runner's exact compile inputs, so source-only PRs content-cache HIT here.
-  # See ci.yml zig-build-runner-x64 for the full rationale.
+  # Precompile build runner
   - key: zig-build-runner-arm64
     use: [code, zig-arm64, zig-deps-arm64]
     filter:
@@ -118,35 +106,26 @@ tasks:
       - build.zig.zon
       - src/build
       - src/target
-    agent: # CO 4c/8g — one mostly-serial compile; more cores don't help it
+    agent:
       cpus: 4
       memory: 8gb
     run: |
       set -euo pipefail
       zig build --list-steps
 
-  # Captain CLI — inline per-test results, retry, and partitioning for the unit suites
-  # (shared .captain/config.yml). Secret-free; RWX provides the access token automatically.
   - key: captain
     call: rwx/install-captain 1.1.7
 
-  # Rust toolchain — the CLI glue matrix (run-test-cli, suite cli-platforms) compiles generated
-  # Rust glue with `rustc`. GHA gets it free from the runner image; rwx/base has none. The leaf
-  # exports ~/.cargo/bin onto PATH (arch auto-detected via uname -m, so aarch64 here). Only the
-  # `platforms` task needs it.
   - key: rust-lang
     call: rust-lang/install 1.0.7
     with:
       rust-version: 1.83.0
 
-  # System packages not on the rwx/base image, pulled into their own cached tasks.
   - key: system-file
     run: |
       set -euo pipefail
       sudo apt-get update && sudo apt-get install -y file
 
-  # kcov build/link deps. On arm64 `zig build build-ci` builds kcov (coverage
-  # tools); x86_64 build-ci skips kcov (Zig DWARF bug), so this is arm64-only.
   - key: system-kcov
     run: |
       set -euo pipefail
@@ -159,24 +138,17 @@ tasks:
       sudo apt-get update && sudo apt-get install -y \
         pkg-config libdw-dev libelf-dev libcurl4-openssl-dev zlib1g-dev
 
-  # Debug anchor (arm64 native; defaults to musl per build.zig:2217). No retry:
-  # deps are pre-fetched, so this builds offline and fails fast on real errors.
   - key: build-ci-arm64
     use: [code, zig-arm64, system-kcov, zig-deps-arm64, zig-build-runner-arm64]
     filter: *pos-build
-    # No tool-cache (see ci.yml build-ci-x64): warm restores saved ~0s exec while adding
-    # multi-GB layer downloads to this anchor and every leaf that inherits it.
-    timeout: 45m # arm64 build compiles roc + kcov from source; exceeds the 10m default
-    agent: # GP 8c/32g — Debug anchor; builds kcov too, so 8c parallelism needs >16g (OOM'd at CO 8c/16g)
+    timeout: 45m
+    agent:
       cpus: 8
       memory: 32gb
     run: |
       set -euo pipefail
-      # -Droc-test-runner: pre-build the custom-runner test binaries so the unit tasks cache-hit
-      # and only run them (see ci.yml build-ci-x64).
       zig build build-ci -Droc-test-runner -Dfuzz -Dsystem-afl=false
 
-  # Captain-partitioned module unit tests (see .captain/config.yml, suite roc-unit-debug).
   - key: unit-debug
     use: [build-ci-arm64, captain]
     filter: *pos-leaf
@@ -187,9 +159,6 @@ tasks:
     outputs:
       test-results:
         - path: tmp/captain/roc-unit-debug.json
-
-  # NB: snapshot tests are arch-independent (compiler front-end output, not
-  # codegen), so they run once on x64 (ci.yml) — not duplicated here.
 
   - key: platforms
     use: [build-ci-arm64, captain, rust-lang]
@@ -203,10 +172,6 @@ tasks:
       test-results:
         - path: tmp/captain/roc-cli-platforms.json
 
-  # Parser coverage via kcov (arm64-only). kcov is built from the build.zig.zon
-  # dep; it needs the system-kcov libs at runtime too.
-  # system-kcov must precede build-ci-arm64 in `use:` because build-ci-arm64
-  # itself uses system-kcov (a dependency must be listed before its dependents).
   - key: coverage-parser
     use: [system-kcov, build-ci-arm64]
     filter: *pos-leaf
@@ -215,21 +180,17 @@ tasks:
       set -euo pipefail
       zig build run-coverage-parser
 
-  # Release anchor (arm64). No retry (deps pre-fetched).
   - key: build-release-arm64
     use: [code, zig-arm64, system-kcov, zig-deps-arm64, zig-build-runner-arm64]
     filter: *pos-build
-    # No tool-cache (see ci.yml build-release-x64): ReleaseFast gains ~0 from a warm restore.
     timeout: 45m
-    agent: # GP 16c/64g — parallel + critical path (arm leg); 16c is the balance point, needs 64g at 16c
+    agent:
       cpus: 16
       memory: 64gb
     run: |
       set -euo pipefail
-      # -Droc-test-runner: pre-build custom-runner test binaries so unit-release cache-hits.
       zig build build-ci -Droc-test-runner -Doptimize=ReleaseFast -Dfuzz -Dsystem-afl=false
 
-  # Module unit tests in ReleaseFast via Captain (single task — not worth partitioning).
   - key: unit-release
     use: [build-release-arm64, captain]
     filter: *pos-leaf
@@ -241,7 +202,6 @@ tasks:
       test-results:
         - path: tmp/captain/roc-unit-release.json
 
-  # LSP integration specs via Captain (bespoke fork-based runner; was part of plain unit-misc).
   - key: lsp
     use: [build-ci-arm64, captain]
     filter: *pos-leaf
@@ -253,8 +213,6 @@ tasks:
       test-results:
         - path: tmp/captain/roc-lsp.json
 
-  # fx / http / json / watch platform tests via Captain (Zig-native; was part of plain
-  # unit-misc). Needs pos-cli inputs (fx fixtures import CONTRIBUTING/profiling + README.md).
   - key: platform-tests
     use: [build-ci-arm64, captain]
     filter: *pos-cli
