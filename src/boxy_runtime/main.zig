@@ -169,6 +169,7 @@ comptime {
         "roc_boxy_desc_copy",
         "roc_boxy_dynamic_num_literal",
         "roc_boxy_dynamic_num_literal_ref",
+        "roc_boxy_dynamic_frac_literal_ref",
         "roc_boxy_call_dict",
         "roc_boxy_materialize_call_result",
         "roc_boxy_register_proc",

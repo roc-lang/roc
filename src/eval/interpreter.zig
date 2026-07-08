@@ -2132,6 +2132,19 @@ pub const Interpreter = struct {
                         current = assign.next;
                         continue;
                     }
+                    if (assign.value == .boxy_dynamic_frac_literal) {
+                        const lit = assign.value.boxy_dynamic_frac_literal;
+                        var desc = try self.resolveBoxyDescRef(frame, lit.desc);
+                        const target_layout = self.store.getLocal(assign.target).layout_idx;
+                        if (!self.boxyDescHasConcreteScalarPayload(desc)) {
+                            desc = try self.makeRuntimeScalarDesc(lit.default_layout);
+                        }
+                        const boxed = try self.evalBoxyDynamicFracLiteral(lit.dec_bits, desc, target_layout);
+                        self.setLocalChecked(frame, current, assign.target, boxed);
+                        frame.setLocalDesc(assign.target, desc);
+                        current = assign.next;
+                        continue;
+                    }
                     self.setLocalChecked(frame, current, assign.target, try self.evalLiteral(assign.value, self.store.getLocal(assign.target).layout_idx));
                     current = assign.next;
                 },
@@ -3365,6 +3378,10 @@ pub const Interpreter = struct {
                 "LIR/interpreter invariant violated: descriptor-guided numeric literal reached plain literal evaluation",
                 .{},
             ),
+            .boxy_dynamic_frac_literal => self.invariantFailedError(
+                "LIR/interpreter invariant violated: descriptor-guided fractional literal reached plain literal evaluation",
+                .{},
+            ),
             .bytes_literal => |idx| self.evalBytesLiteral(idx, target_layout),
             .null_ptr => self.evalNullPtrLiteral(),
             .proc_ref => |proc_id| self.evalProcRefLiteral(proc_id),
@@ -3386,6 +3403,15 @@ pub const Interpreter = struct {
         target_layout: layout_mod.Idx,
     ) Error!Value {
         return try self.boxy_runtime.boxyDynamicNumLiteral(self.boxyFrameHooks(null), value, desc, target_layout);
+    }
+
+    fn evalBoxyDynamicFracLiteral(
+        self: *LirInterpreter,
+        dec_bits: i128,
+        desc: *const LirProgram.BoxyTypeDesc,
+        target_layout: layout_mod.Idx,
+    ) Error!Value {
+        return try self.boxy_runtime.boxyDynamicFracLiteral(self.boxyFrameHooks(null), dec_bits, desc, target_layout);
     }
 
     fn evalNullPtrLiteral(self: *LirInterpreter) Error!Value {

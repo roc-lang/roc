@@ -399,6 +399,17 @@ pub const LiteralValue = union(enum) {
         /// literal meets.
         default_layout: layout.Idx,
     },
+    /// A fractional numeric literal whose runtime representation is only known
+    /// through a descriptor. The runtime re-encodes the `RocDec` bits per the
+    /// descriptor's payload layout (`Dec`, `F64`, or `F32`) and boxes it into
+    /// the dynamic-storage target.
+    boxy_dynamic_frac_literal: struct {
+        dec_bits: i128,
+        desc: BoxyDescRef,
+        /// Encoding used when the descriptor is erased and carries no concrete
+        /// payload layout.
+        default_layout: layout.Idx,
+    },
     bytes_literal: StrLiteral,
     null_ptr,
     proc_ref: LirProcSpecId,

@@ -2362,6 +2362,7 @@ pub const MonoLlvmCodeGen = struct {
             .dec_literal => |lit| try self.storeI128Literal(slot_v.ptr, .dec, lit),
             .str_literal => |str_idx| try self.emitStrLiteral(slot_v.ptr, str_idx),
             .boxy_dynamic_num_literal => return error.CompilationFailed,
+            .boxy_dynamic_frac_literal => return error.CompilationFailed,
             .bytes_literal => |bytes_idx| try self.emitBytesLiteral(slot_v.ptr, bytes_idx),
             .null_ptr => {
                 if (slot_v.size > 0) try self.zeroBytes(slot_v.ptr, slot_v.size);

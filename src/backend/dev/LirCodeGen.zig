@@ -521,6 +521,7 @@ pub const BoxyBuiltinFn = enum {
     desc_copy,
     dynamic_num_literal,
     dynamic_num_literal_ref,
+    dynamic_frac_literal_ref,
     call_dict,
     materialize_call_result,
     register_proc,
@@ -545,6 +546,7 @@ pub const BoxyBuiltinFn = enum {
             .desc_copy => "roc_boxy_desc_copy",
             .dynamic_num_literal => "roc_boxy_dynamic_num_literal",
             .dynamic_num_literal_ref => "roc_boxy_dynamic_num_literal_ref",
+            .dynamic_frac_literal_ref => "roc_boxy_dynamic_frac_literal_ref",
             .call_dict => "roc_boxy_call_dict",
             .materialize_call_result => "roc_boxy_materialize_call_result",
             .register_proc => "roc_boxy_register_proc",
@@ -13361,6 +13363,22 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return self.stackLocationForLayout(target_layout, out_slot);
         }
 
+        fn generateBoxyDynamicFracLiteral(self: *Self, target_local: LocalId, lit: anytype) Allocator.Error!ValueLocation {
+            const target_layout = self.localLayout(target_local);
+            const desc_slot = try self.boxyDescRefToSlot(lit.desc);
+            const value_slot = try self.boxyI128LiteralSlot(lit.dec_bits);
+            const out_slot = try self.allocBoxyOutSlot(target_layout);
+
+            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            try builder.addLeaArg(frame_ptr, out_slot);
+            try builder.addLeaArg(frame_ptr, value_slot);
+            try builder.addMemArg(frame_ptr, desc_slot);
+            try builder.addImmArg(@intFromEnum(lit.default_layout));
+            try builder.addImmArg(@intFromEnum(target_layout));
+            try self.callBoxyBuiltin(&builder, .dynamic_frac_literal_ref);
+            return self.stackLocationForLayout(target_layout, out_slot);
+        }
+
         /// Emit a descriptor-guided tag test and the conditional branch to its
         /// miss target. Returns the jump patch taken when the tag does not
         /// match (the wrapper returned zero).
@@ -16555,6 +16573,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                 .dec_literal => |lit| try self.generateI128Literal(lit),
                                 .str_literal => |str_idx| try self.generateStrLiteral(str_idx),
                                 .boxy_dynamic_num_literal => |lit| try self.generateBoxyDynamicNumLiteral(assign.target, lit),
+                                .boxy_dynamic_frac_literal => |lit| try self.generateBoxyDynamicFracLiteral(assign.target, lit),
                                 .bytes_literal => |bytes_idx| try self.generateBytesLiteral(bytes_idx),
                                 .null_ptr => .{ .immediate_i64 = 0 },
                                 .proc_ref => |proc_id| blk: {

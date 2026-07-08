@@ -247,6 +247,11 @@ pub const DirectCallPlan = struct {
     hidden_dict_args: Span = .{},
 };
 
+pub const NestedCallableUsePlan = struct {
+    worker: WorkerPlanId,
+    callable_ty: TypeRef,
+};
+
 pub const IteratorCallKind = enum {
     iter,
     next,
@@ -286,6 +291,7 @@ pub const ProgramPlan = struct {
     roots: std.ArrayList(RootPlan),
     workers: std.ArrayList(WorkerPlan),
     direct_calls: std.ArrayList(DirectCallPlan),
+    nested_callable_uses: std.ArrayList(NestedCallableUsePlan),
     const_eval_calls: std.ArrayList(ConstEvalCallPlan),
     iterator_calls: std.ArrayList(IteratorCallPlan),
     iterator_call_arg_types: std.ArrayList(TypeRef),
@@ -309,6 +315,7 @@ pub const ProgramPlan = struct {
             .roots = .empty,
             .workers = .empty,
             .direct_calls = .empty,
+            .nested_callable_uses = .empty,
             .const_eval_calls = .empty,
             .iterator_calls = .empty,
             .iterator_call_arg_types = .empty,
@@ -345,6 +352,7 @@ pub const ProgramPlan = struct {
         self.iterator_call_arg_types.deinit(self.allocator);
         self.iterator_calls.deinit(self.allocator);
         self.const_eval_calls.deinit(self.allocator);
+        self.nested_callable_uses.deinit(self.allocator);
         self.direct_calls.deinit(self.allocator);
         self.workers.deinit(self.allocator);
         self.roots.deinit(self.allocator);
@@ -402,6 +410,19 @@ pub const ProgramPlan = struct {
         return null;
     }
 
+    pub fn uniqueNestedCallableUseType(self: *const ProgramPlan, worker: WorkerPlanId) ?TypeRef {
+        var found: ?TypeRef = null;
+        for (self.nested_callable_uses.items) |use| {
+            if (use.worker != worker) continue;
+            if (found) |existing| {
+                if (!typeRefEql(existing, use.callable_ty)) return null;
+                continue;
+            }
+            found = use.callable_ty;
+        }
+        return found;
+    }
+
     pub fn constEvalCallFor(self: *const ProgramPlan, worker: WorkerPlanId, ret_type: TypeRef) ?ConstEvalCallPlan {
         for (self.const_eval_calls.items) |call| {
             if (call.worker == worker and typeRefEql(call.ret_type, ret_type)) return call;
@@ -418,8 +439,10 @@ pub const ProgramPlan = struct {
 
     pub fn workerForSourceType(self: *const ProgramPlan, source: WorkerSource, checked_type: TypeRef) ?WorkerPlanId {
         for (self.workers.items) |worker| {
-            if (typeRefEql(worker.checked_type, checked_type) and workerSourceEql(worker.source, source)) {
-                return worker.id;
+            if (!workerSourceEql(worker.source, source)) continue;
+            switch (source) {
+                .nested_expr => return worker.id,
+                else => if (typeRefEql(worker.checked_type, checked_type)) return worker.id,
             }
         }
         return null;
@@ -491,6 +514,7 @@ pub fn analyzeProgram(
     try builder.materializeWorkerHiddenDictionaryParams();
     try builder.materializeDirectCallHiddenDictionaryArgs();
     try builder.materializeIteratorCallHiddenDictionaryArgs();
+    try builder.planNestedCallableUseDictionaries();
     // The dictionary phases above analyze new types (static dictionary
     // workers), so representations created there need the dynamic-content
     // propagation re-run before descriptor requirements are derived from it.
@@ -620,9 +644,13 @@ const Builder = struct {
         checked_type: TypeRef,
         root_request: ?checked.RootRequest,
     ) Allocator.Error!WorkerPlanId {
-        const rep = try self.analyzeType(self.moduleForId(checked_type.module), checked_type.ty);
+        const worker_type = switch (source) {
+            .nested_expr => self.workerCheckedTypeForSource(source, checked_type),
+            else => checked_type,
+        };
+        const rep = try self.analyzeType(self.moduleForId(worker_type.module), worker_type.ty);
         for (self.plan.workers.items) |worker| {
-            if (typeRefEql(worker.checked_type, checked_type) and workerSourceEql(worker.source, source)) {
+            if (workerSourceEql(worker.source, source) and (source == .nested_expr or typeRefEql(worker.checked_type, worker_type))) {
                 if (root_request) |request| {
                     if (worker.root_request == null) {
                         self.plan.workers.items[@intFromEnum(worker.id)].root_request = request;
@@ -637,7 +665,7 @@ const Builder = struct {
             .id = worker_id,
             .root_request = root_request,
             .source = source,
-            .checked_type = checked_type,
+            .checked_type = worker_type,
             .rep = rep,
         });
 
@@ -2896,7 +2924,9 @@ const Builder = struct {
                 }
                 try self.analyzeExprSliceTypes(view, call.args);
                 _ = try self.analyzeType(view, call.source_fn_ty_payload);
-                if (!local_proc_direct_target) {
+                if (local_proc_direct_target) {
+                    try self.recordNestedCallableUse(view, call.direct_target.?, call.func);
+                } else {
                     try self.analyzeDirectCallTarget(view, expr_id, call);
                 }
             },
@@ -2988,7 +3018,11 @@ const Builder = struct {
             },
             else => {},
         }
-        _ = try self.ensureWorker(source, typeRef(view, expr.ty), null);
+        const checked_type = switch (source) {
+            .nested_expr => self.workerCheckedTypeForSource(source, typeRef(view, expr.ty)),
+            else => typeRef(view, expr.ty),
+        };
+        _ = try self.ensureWorker(source, checked_type, null);
     }
 
     /// A constant referenced at a use site whose checked types are generic
@@ -3059,8 +3093,50 @@ const Builder = struct {
         view: ModuleView,
         expr_id: checked.CheckedExprId,
     ) Allocator.Error!void {
-        const expr = view.checked_bodies.expr(expr_id);
-        _ = try self.ensureWorker(.{ .nested_expr = .{ .module = view.key, .expr = expr_id } }, typeRef(view, expr.ty), null);
+        const source = WorkerSource{ .nested_expr = .{ .module = view.key, .expr = expr_id } };
+        _ = try self.ensureWorker(source, self.workerCheckedTypeForSource(source, typeRef(view, view.checked_bodies.expr(expr_id).ty)), null);
+    }
+
+    fn recordNestedCallableUse(
+        self: *Builder,
+        view: ModuleView,
+        target: checked.ResolvedValueId,
+        func: checked.CheckedExprId,
+    ) Allocator.Error!void {
+        const source = self.workerSourceForDirectTarget(view, target);
+        switch (source) {
+            .nested_expr => {},
+            else => return,
+        }
+        const callable_ty = typeRef(view, view.checked_bodies.expr(func).ty);
+        const worker = try self.ensureWorker(source, self.workerCheckedTypeForSource(source, callable_ty), null);
+        try self.plan.nested_callable_uses.append(self.allocator, .{
+            .worker = worker,
+            .callable_ty = callable_ty,
+        });
+    }
+
+    fn planNestedCallableUseDictionaries(self: *Builder) Allocator.Error!void {
+        var index: usize = 0;
+        while (index < self.plan.nested_callable_uses.items.len) : (index += 1) {
+            const use = self.plan.nested_callable_uses.items[index];
+            const worker = self.plan.workers.items[@intFromEnum(use.worker)];
+            if (worker.hidden_dicts.len == 0) continue;
+            const callable_rep = self.plan.repForSourceType(use.callable_ty) orelse continue;
+            const fn_children = (try self.functionChildren(callable_rep)) orelse continue;
+            const fn_rep = fn_children.rep;
+
+            const arg_types = try self.allocator.alloc(TypeRef, fn_children.arg_count);
+            defer self.allocator.free(arg_types);
+            const children_span = self.plan.representations.items[@intFromEnum(fn_rep)].children;
+            var arg_index: usize = 0;
+            while (arg_index < fn_children.arg_count) : (arg_index += 1) {
+                const child = self.plan.children.items[children_span.start + fn_children.args_start + arg_index];
+                arg_types[arg_index] = self.plan.representations.items[@intFromEnum(child.rep)].source_type;
+            }
+            const ret_type = self.plan.representations.items[@intFromEnum(fn_children.ret)].source_type;
+            _ = try self.materializeWorkerCallHiddenDictionaryArgs(use.worker, arg_types, ret_type);
+        }
     }
 
     fn analyzeExprSliceTypes(self: *Builder, view: ModuleView, exprs: []const checked.CheckedExprId) Allocator.Error!void {
@@ -3526,8 +3602,13 @@ const Builder = struct {
                 .imported => |imported| self.checkedTypeForImportedBinding(imported),
                 .hosted => fallback,
             },
-            .nested_expr => fallback,
+            .nested_expr => |expr_ref| self.nestedExprDefinitionType(expr_ref),
         };
+    }
+
+    fn nestedExprDefinitionType(self: *Builder, expr_ref: ExprRef) TypeRef {
+        const view = self.moduleForId(expr_ref.module);
+        return typeRef(view, view.checked_bodies.expr(expr_ref.expr).ty);
     }
 
     fn checkedTypeForTopLevelBinding(

@@ -736,6 +736,29 @@ pub fn roc_boxy_dynamic_num_literal_ref(
     writeResult(g, out, literal, layoutIdx(target_layout));
 }
 
+pub fn roc_boxy_dynamic_frac_literal_ref(
+    out: ?[*]u8,
+    dec_bits: *align(1) const i128,
+    desc: *const BoxyTypeDesc,
+    default_layout: u32,
+    target_layout: u32,
+) callconv(.c) void {
+    const g = requireGlobal();
+    enter(g);
+    defer leave(g);
+    const effective = if (g.runtime.boxyDescHasConcreteScalarPayload(desc))
+        desc
+    else
+        g.runtime.makeRuntimeScalarDesc(layoutIdx(default_layout)) catch abiCrash(g, "dynamic fractional literal descriptor");
+    const literal = g.runtime.boxyDynamicFracLiteral(
+        hooks(g),
+        dec_bits.*,
+        effective,
+        layoutIdx(target_layout),
+    ) catch abiCrash(g, "dynamic fractional literal");
+    writeResult(g, out, literal, layoutIdx(target_layout));
+}
+
 /// Dispatch one dictionary method call: adapt the explicit arguments per the
 /// slot's adapter, append hidden descriptors and nested dictionaries, and
 /// either run descriptor-guided structural equality (writing a `u8` result)

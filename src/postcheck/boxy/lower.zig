@@ -3721,7 +3721,9 @@ const ProcBodyBuilder = struct {
         const worker_args = self.parent.layout_plan.workerLayoutSlice(self.worker_layout.args);
         for (args, worker_args) |pattern_id, arg_layout| {
             const local = try self.addArgLocal(arg_layout.layoutIdx());
-            if (self.workerRuntimeLayoutForType(self.module.checked_bodies.pattern(pattern_id).ty).layoutIdx() != arg_layout.layoutIdx()) {
+            const pattern_ty = self.module.checked_bodies.pattern(pattern_id).ty;
+            const pattern_layout = self.workerRuntimeLayoutForType(pattern_ty).layoutIdx();
+            if (pattern_layout != arg_layout.layoutIdx()) {
                 boxyLowerInvariant("boxy worker lambda argument layout disagreed with checked pattern type");
             }
             const pattern = self.module.checked_bodies.pattern(pattern_id);
@@ -4071,8 +4073,12 @@ const ProcBodyBuilder = struct {
             .break_ => try self.lowerBreak(),
             .return_ => |ret| try self.lowerReturn(ret.expr, ret.lambda),
             .runtime_error => try self.parent.result.store.addCFStmt(.runtime_error),
-            .lambda => try self.lowerCallableExprInto(target, expr_id, next),
-            .closure => try self.lowerCallableExprInto(target, expr_id, next),
+            .lambda,
+            .closure,
+            => if (self.nestedCallableSingleUseType(expr_id)) |use_type|
+                try self.lowerCallableExprTypeRefInto(target, use_type, expr_id, next)
+            else
+                try self.lowerCallableExprInto(target, expr_id, next),
             .num_from_numeral => |maybe_plan| try self.lowerNumFromNumeralInto(target, maybe_plan, next),
             .typed_num_from_numeral => |maybe_plan| try self.lowerNumFromNumeralInto(target, maybe_plan, next),
             else => {
@@ -4886,6 +4892,12 @@ const ProcBodyBuilder = struct {
         );
     }
 
+    fn nestedCallableSingleUseType(self: *ProcBodyBuilder, expr_id: checked.CheckedExprId) ?Plan.TypeRef {
+        const source = self.workerSourceForCallableExpr(expr_id);
+        const worker = self.parent.plan.workerForSourceType(source, .{ .module = self.module.key, .ty = self.module.checked_bodies.expr(expr_id).ty }) orelse return null;
+        return self.parent.plan.uniqueNestedCallableUseType(worker);
+    }
+
     fn lowerProcedureValueRefInto(
         self: *ProcBodyBuilder,
         target: LIR.LocalId,
@@ -4944,10 +4956,10 @@ const ProcBodyBuilder = struct {
         if (try self.callableBoundaryNeedsAdapter(value_function, worker_function)) {
             const raw_target = try self.addFrameLocalForRep(worker_function.rep);
             const adapted = try self.assignErasedCallableBoundary(target, raw_target, value_function, worker_function, next);
-            return try self.lowerRawWorkerValueInto(raw_target, source, maybe_expr, worker_id, value_function, adapted);
+            return try self.lowerRawWorkerValueInto(raw_target, source, maybe_expr, worker_id, value_function, value_function, adapted);
         }
 
-        return try self.lowerRawWorkerValueInto(target, source, maybe_expr, worker_id, value_function, next);
+        return try self.lowerRawWorkerValueInto(target, source, maybe_expr, worker_id, value_function, value_function, next);
     }
 
     fn lowerRawWorkerValueInto(
@@ -4957,6 +4969,7 @@ const ProcBodyBuilder = struct {
         maybe_expr: ?checked.CheckedExprId,
         worker_id: Plan.WorkerPlanId,
         call_function: FunctionChildren,
+        value_function: FunctionChildren,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
         const erased_proc = try self.parent.emitErasedWorker(worker_id);
@@ -4971,6 +4984,8 @@ const ProcBodyBuilder = struct {
         };
         const capture_desc_reps = try self.erasedCaptureDescriptorRepsForFunctionUse(worker_id, capture_function, captures);
         defer self.parent.allocator.free(capture_desc_reps);
+        const capture_dict_reps = try self.erasedCaptureDictionaryRepsForFunctionUse(worker_id, value_function, captures);
+        defer self.parent.allocator.free(capture_dict_reps);
 
         const capture_local: ?LIR.LocalId = if (captures.len == 0) null else try self.addFrameLocal(worker_layout.erased_capture_layout);
         const capture_layout: ?layout.Idx = if (capture_local != null) worker_layout.erased_capture_layout else null;
@@ -5044,7 +5059,7 @@ const ProcBodyBuilder = struct {
             if (captures[index].kind == .hidden_desc) {
                 continuation = try self.materializeErasedCaptureDescriptor(field_locals[index], captures[index], capture_desc_reps[index], continuation);
             } else if (captures[index].kind == .hidden_dict) {
-                continuation = try self.materializeErasedCaptureDictionary(field_locals[index], captures[index], continuation);
+                continuation = try self.materializeErasedCaptureDictionary(field_locals[index], captures[index], capture_dict_reps[index], continuation);
             }
         }
         return continuation;
@@ -5122,6 +5137,7 @@ const ProcBodyBuilder = struct {
         self: *ProcBodyBuilder,
         target: LIR.LocalId,
         capture: Plan.ErasedCapture,
+        source_rep: Plan.TypeRepId,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
         if (capture.kind != .hidden_dict) {
@@ -5129,7 +5145,7 @@ const ProcBodyBuilder = struct {
         }
         return try self.parent.result.store.addCFStmt(.{ .assign_boxy_dict_ref = .{
             .target = target,
-            .dict = try self.dictionaryRefForKnownRep(capture.rep, capture.dictionaries),
+            .dict = try self.dictionaryRefForKnownRep(source_rep, capture.dictionaries),
             .next = next,
         } });
     }
@@ -8104,6 +8120,17 @@ const ProcBodyBuilder = struct {
         value: builtins.dec.RocDec,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
+        if (self.dynamicLiteralRuntimeDesc(target)) |desc_ref| {
+            return try self.parent.result.store.addCFStmt(.{ .assign_literal = .{
+                .target = target,
+                .value = .{ .boxy_dynamic_frac_literal = .{
+                    .dec_bits = value.num,
+                    .desc = desc_ref,
+                    .default_layout = .dec,
+                } },
+                .next = next,
+            } });
+        }
         if (self.dynamicLiteralTarget(target)) |info| {
             if (info.payload_layout != .dec) {
                 boxyLowerInvariant("boxy dynamic decimal literal descriptor did not resolve to decimal payload layout");
@@ -17191,6 +17218,117 @@ const ProcBodyBuilder = struct {
             return false;
         }
         return true;
+    }
+
+    fn erasedCaptureDictionaryRepsForFunctionUse(
+        self: *ProcBodyBuilder,
+        worker_id: Plan.WorkerPlanId,
+        value_function: FunctionChildren,
+        captures: []const Plan.ErasedCapture,
+    ) Allocator.Error![]Plan.TypeRepId {
+        const result = try self.parent.allocator.alloc(Plan.TypeRepId, captures.len);
+        errdefer self.parent.allocator.free(result);
+        for (captures, result) |capture, *rep| {
+            rep.* = capture.rep;
+        }
+
+        const worker = self.parent.plan.workers.items[@intFromEnum(worker_id)];
+        const params = self.parent.plan.hiddenDictionaryParamSlice(worker.hidden_dicts);
+        if (params.len == 0) return result;
+
+        const worker_function = self.functionChildrenForRep(worker.rep) orelse
+            boxyLowerInvariant("boxy erased callable with hidden dictionaries was not a function worker");
+        if (worker_function.arg_count != value_function.arg_count) {
+            boxyLowerInvariant("boxy erased callable dictionary mapping saw mismatched function arity");
+        }
+
+        var mapped = std.AutoHashMap(Plan.TypeRepId, Plan.TypeRepId).init(self.parent.allocator);
+        defer mapped.deinit();
+        var seen = std.AutoHashMap(Plan.TypeRepId, void).init(self.parent.allocator);
+        defer seen.deinit();
+
+        const worker_children = self.parent.plan.childSlice(self.parent.plan.representations.items[@intFromEnum(worker_function.rep)].children);
+        const value_children = self.parent.plan.childSlice(self.parent.plan.representations.items[@intFromEnum(value_function.rep)].children);
+        const worker_args = worker_children[worker_function.args_start..][0..worker_function.arg_count];
+        const value_args = value_children[value_function.args_start..][0..value_function.arg_count];
+        for (worker_args, value_args) |worker_child, value_child| {
+            try self.collectErasedCaptureDictionaryReps(worker_child.rep, value_child.rep, &mapped, &seen);
+        }
+        try self.collectErasedCaptureDictionaryReps(worker_function.ret, value_function.ret, &mapped, &seen);
+
+        for (captures, result) |capture, *rep| {
+            if (capture.kind != .hidden_dict) continue;
+            rep.* = mapped.get(capture.rep) orelse
+                boxyLowerInvariant("boxy erased callable dictionary mapping did not cover a hidden dictionary capture");
+        }
+        return result;
+    }
+
+    fn collectErasedCaptureDictionaryReps(
+        self: *ProcBodyBuilder,
+        worker_rep_id: Plan.TypeRepId,
+        value_rep_id: Plan.TypeRepId,
+        mapped: *std.AutoHashMap(Plan.TypeRepId, Plan.TypeRepId),
+        seen_reps: *std.AutoHashMap(Plan.TypeRepId, void),
+    ) Allocator.Error!void {
+        const entry = try seen_reps.getOrPut(worker_rep_id);
+        if (entry.found_existing) return;
+
+        const worker_rep = self.parent.plan.representations.items[@intFromEnum(worker_rep_id)];
+        const value_rep = self.parent.plan.representations.items[@intFromEnum(value_rep_id)];
+
+        if (worker_rep.dictionaries.len != 0) {
+            const mapped_rep = self.canonicalDictionaryArgRep(value_rep_id);
+            const put = try mapped.getOrPut(worker_rep_id);
+            if (put.found_existing and put.value_ptr.* != mapped_rep) {
+                boxyLowerInvariant("boxy erased callable dictionary mapping assigned one worker rep to two reps");
+            }
+            put.value_ptr.* = mapped_rep;
+        }
+
+        if (worker_rep.children.len == 0) return;
+
+        if (value_rep.kind == .empty_tag_union) {
+            for (self.parent.plan.childSlice(worker_rep.children)) |worker_child| {
+                if (!try self.repSubtreeHasDictionary(worker_child.rep)) continue;
+                try self.collectErasedCaptureDictionaryReps(worker_child.rep, value_rep_id, mapped, seen_reps);
+            }
+            return;
+        }
+
+        const worker_children = self.parent.plan.childSlice(worker_rep.children);
+        const value_children = self.parent.plan.childSlice(value_rep.children);
+        for (worker_children) |worker_child| {
+            if (!try self.repSubtreeHasDictionary(worker_child.rep)) continue;
+            if (self.findMatchingChildByRole(value_children, worker_child)) |value_child| {
+                try self.collectErasedCaptureDictionaryReps(worker_child.rep, value_child.rep, mapped, seen_reps);
+                continue;
+            }
+            if (self.structuralWrapperBackingRep(value_rep_id)) |value_backing| {
+                const backing_children = self.parent.plan.childSlice(self.parent.plan.representations.items[@intFromEnum(value_backing)].children);
+                if (self.findMatchingChildByRole(backing_children, worker_child)) |value_child| {
+                    try self.collectErasedCaptureDictionaryReps(worker_child.rep, value_child.rep, mapped, seen_reps);
+                    continue;
+                }
+            }
+            if (try self.findMatchingTagPayloadInRowExtension(value_children, worker_child)) |value_child| {
+                try self.collectErasedCaptureDictionaryReps(worker_child.rep, value_child.rep, mapped, seen_reps);
+                continue;
+            }
+            if (try self.findMatchingDictionaryChildBySourceType(value_children, worker_child)) |value_child| {
+                try self.collectErasedCaptureDictionaryReps(worker_child.rep, value_child.rep, mapped, seen_reps);
+                continue;
+            }
+            if (try self.workerChildCanMatchUnwrappedCallRepForDictionaries(worker_rep_id, worker_child)) {
+                try self.collectErasedCaptureDictionaryReps(worker_child.rep, value_rep_id, mapped, seen_reps);
+                continue;
+            }
+            if (worker_child.role == .tag_ext and value_children.len == 0 and value_rep.dictionaries.len != 0) {
+                try self.collectErasedCaptureDictionaryReps(worker_child.rep, value_rep_id, mapped, seen_reps);
+                continue;
+            }
+            boxyLowerInvariant("boxy erased callable dictionary mapping saw mismatched child roles");
+        }
     }
 
     fn repSubtreeHasDescriptor(self: *ProcBodyBuilder, rep_id: Plan.TypeRepId) Allocator.Error!bool {

@@ -8704,6 +8704,10 @@ fn generateLiteral(self: *Self, value: LIR.LiteralValue) Allocator.Error!void {
             "Wasm/codegen invariant violated: boxy LIR statement reached wasm codegen before boxy codegen is implemented",
             .{},
         ),
+        .boxy_dynamic_frac_literal => wasmInvariantFmt(
+            "Wasm/codegen invariant violated: boxy LIR statement reached wasm codegen before boxy codegen is implemented",
+            .{},
+        ),
         .bytes_literal => |bytes_idx| try self.generateBytesLiteral(bytes_idx),
         .null_ptr => {
             self.currentCode().append(self.allocator, Op.i32_const) catch return error.OutOfMemory;

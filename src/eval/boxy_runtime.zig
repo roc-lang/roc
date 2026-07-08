@@ -4346,6 +4346,39 @@ pub const BoxyRuntime = struct {
         return try self.allocBoxyDynamicPayload(hooks, payload, payload_layout, desc, target_layout);
     }
 
+    pub fn boxyDynamicFracLiteral(
+        self: *const BoxyRuntime,
+        hooks: anytype,
+        dec_bits: i128,
+        desc: *const LirProgram.BoxyTypeDesc,
+        target_layout: layout_mod.Idx,
+    ) Error!Value {
+        const payload_layout = desc.payload_layout;
+        const dec = builtins.dec.RocDec{ .num = dec_bits };
+        const payload = switch (payload_layout) {
+            .f32 => blk: {
+                const val = try hooks.allocValue(.f32);
+                val.write(f32, @floatCast(dec.toF64()));
+                break :blk val;
+            },
+            .f64 => blk: {
+                const val = try hooks.allocValue(.f64);
+                val.write(f64, dec.toF64());
+                break :blk val;
+            },
+            .dec => blk: {
+                const val = try hooks.allocValue(.dec);
+                val.write(i128, dec_bits);
+                break :blk val;
+            },
+            else => return self.invariantFailed(
+                "boxy dynamic fractional literal descriptor resolved to a non-fractional payload layout",
+                .{},
+            ),
+        };
+        return try self.allocBoxyDynamicPayload(hooks, payload, payload_layout, desc, target_layout);
+    }
+
     /// Produce the value and target-local descriptor for boxing a payload into
     /// dynamic storage, honoring relabels of already-dynamic payloads.
     pub fn boxyBoxValue(
