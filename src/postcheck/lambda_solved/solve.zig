@@ -175,26 +175,26 @@ const Solver = struct {
         try self.program.expr_tys.ensureTotalCapacity(self.allocator, self.expr_tys.len);
         for (self.expr_tys, 0..) |maybe_ty, index| {
             const ty = maybe_ty orelse try self.lowerTypeFresh(self.lifted.exprs[index].ty);
-            try self.program.expr_tys.append(self.allocator, self.program.types.root(ty));
+            try self.program.expr_tys.append(self.allocator, self.program.types.rootCompressed(ty));
         }
 
         try self.program.pat_tys.ensureTotalCapacity(self.allocator, self.pat_tys.len);
         for (self.pat_tys, 0..) |maybe_ty, index| {
             const ty = maybe_ty orelse try self.lowerTypeFresh(self.lifted.pats[index].ty);
-            try self.program.pat_tys.append(self.allocator, self.program.types.root(ty));
+            try self.program.pat_tys.append(self.allocator, self.program.types.rootCompressed(ty));
         }
 
         try self.program.local_tys.ensureTotalCapacity(self.allocator, self.local_tys.len);
         for (self.local_tys) |maybe_ty| {
             const ty = maybe_ty orelse Common.invariant("Lambda Solved local type slot was not initialized");
-            try self.program.local_tys.append(self.allocator, self.program.types.root(ty));
+            try self.program.local_tys.append(self.allocator, self.program.types.rootCompressed(ty));
         }
 
         for (self.program.layout_requests.items) |*request| {
-            request.ty = self.program.types.root(request.ty);
+            request.ty = self.program.types.rootCompressed(request.ty);
         }
         for (self.program.runtime_schema_requests.items) |*request| {
-            request.ty = self.program.types.root(request.ty);
+            request.ty = self.program.types.rootCompressed(request.ty);
         }
     }
 
@@ -241,7 +241,7 @@ const Solver = struct {
     fn fnRetType(self: *Solver, fn_id: Lifted.FnId) Type.TypeVarId {
         const raw = @intFromEnum(fn_id);
         if (raw >= self.program.fn_tys.items.len) Common.invariant("Lambda Solved layout request referenced a missing function");
-        const fn_ty = self.program.types.rootContent(self.program.fn_tys.items[raw]);
+        const fn_ty = self.program.types.rootContentCompressed(self.program.fn_tys.items[raw]);
         return switch (fn_ty) {
             .func => |func| func.ret,
             else => Common.invariant("Lambda Solved layout request referenced a non-function"),
@@ -250,7 +250,7 @@ const Solver = struct {
 
     fn solveFn(self: *Solver, fn_id: Lifted.FnId, fn_: Lifted.Fn) Allocator.Error!void {
         const fn_ty = self.program.fn_tys.items[@intFromEnum(fn_id)];
-        const fn_content = self.program.types.rootContent(fn_ty);
+        const fn_content = self.program.types.rootContentCompressed(fn_ty);
         const func = switch (fn_content) {
             .func => |func| func,
             else => Common.invariant("Lambda Solved function table contains a non-function type"),
@@ -277,6 +277,8 @@ const Solver = struct {
     }
 
     fn closeUnfilledCallableSlots(self: *Solver) Allocator.Error!void {
+        self.program.types.compressAllRoots();
+
         const count = self.program.types.vars.items.len;
         const done = try self.allocator.alloc(bool, count);
         defer self.allocator.free(done);
@@ -287,7 +289,11 @@ const Solver = struct {
         @memset(active, false);
 
         for (0..count) |index| {
-            try self.closeCallableSlotsInType(@enumFromInt(@as(u32, @intCast(index))), done, active);
+            const ty: Type.TypeVarId = @enumFromInt(@as(u32, @intCast(index)));
+            switch (self.program.types.get(ty)) {
+                .link => {},
+                else => try self.closeCallableSlotsInType(ty, done, active),
+            }
         }
     }
 
@@ -297,7 +303,7 @@ const Solver = struct {
         done: []bool,
         active: []bool,
     ) Allocator.Error!void {
-        const root = self.program.types.root(ty);
+        const root = self.program.types.rootCompressed(ty);
         const index = @intFromEnum(root);
         if (done[index] or active[index]) return;
 
@@ -359,7 +365,7 @@ const Solver = struct {
         done: []bool,
         active: []bool,
     ) Allocator.Error!void {
-        const root = self.program.types.root(callable);
+        const root = self.program.types.rootCompressed(callable);
         switch (self.program.types.get(root)) {
             .unbound => self.program.types.set(root, .{ .lambda_set = .empty() }),
             .lambda_set,
@@ -633,7 +639,7 @@ const Solver = struct {
             .expect_err => |expect_err| _ = try self.inferExpr(expect_err.msg),
             .comptime_branch_taken => |taken| _ = try self.expectExpr(taken.body, expected),
         }
-        return self.program.types.root(expected);
+        return self.program.types.rootCompressed(expected);
     }
 
     fn inferStmt(self: *Solver, stmt_id: Lifted.StmtId) Allocator.Error!void {
@@ -793,8 +799,8 @@ const Solver = struct {
     }
 
     fn unifyGeneratedOpaqueBacking(self: *Solver, generated_ty: Type.TypeVarId, expected_ty: Type.TypeVarId) Allocator.Error!void {
-        const generated = self.program.types.root(generated_ty);
-        const expected = self.program.types.root(expected_ty);
+        const generated = self.program.types.rootCompressed(generated_ty);
+        const expected = self.program.types.rootCompressed(expected_ty);
         if (generated == expected) return;
 
         const generated_score = generatedBackingScore(self.program.types.get(generated)) orelse {
@@ -819,7 +825,7 @@ const Solver = struct {
         const slot = try self.expectExprSlot(expr_id, expected);
         const inferred = try self.inferExpr(expr_id);
         try self.unify(slot, inferred);
-        return self.program.types.root(slot);
+        return self.program.types.rootCompressed(slot);
     }
 
     fn exprSlot(self: *Solver, expr_id: Lifted.ExprId) Allocator.Error!Type.TypeVarId {
@@ -844,7 +850,7 @@ const Solver = struct {
         const index = @intFromEnum(expr_id);
         if (self.expr_tys[index]) |ty| {
             try self.unify(ty, expected);
-            return self.program.types.root(ty);
+            return self.program.types.rootCompressed(ty);
         }
 
         const expr = self.lifted.exprs[index];
@@ -855,14 +861,14 @@ const Solver = struct {
         };
         try self.unify(ty, expected);
         self.expr_tys[index] = ty;
-        return self.program.types.root(ty);
+        return self.program.types.rootCompressed(ty);
     }
 
     fn expectPat(self: *Solver, pat_id: Lifted.PatId, expected: Type.TypeVarId) Allocator.Error!Type.TypeVarId {
         const index = @intFromEnum(pat_id);
         if (self.pat_tys[index]) |ty| {
             try self.unify(ty, expected);
-            return self.program.types.root(ty);
+            return self.program.types.rootCompressed(ty);
         }
 
         const pat = self.lifted.pats[index];
@@ -873,7 +879,7 @@ const Solver = struct {
         };
         try self.unify(ty, expected);
         self.pat_tys[index] = ty;
-        return self.program.types.root(ty);
+        return self.program.types.rootCompressed(ty);
     }
 
     fn functionShape(self: *Solver, ty: Type.TypeVarId) Allocator.Error!FunctionShape {
@@ -926,7 +932,7 @@ const Solver = struct {
         ty: Type.TypeVarId,
         active: *std.AutoHashMap(Type.TypeVarId, void),
     ) Allocator.Error!void {
-        const root = self.program.types.root(ty);
+        const root = self.program.types.rootCompressed(ty);
         if (active.contains(root)) return;
         try active.put(root, {});
         defer _ = active.remove(root);
@@ -1041,14 +1047,14 @@ const Solver = struct {
     }
 
     fn namedBacking(self: *Solver, ty: Type.TypeVarId) Allocator.Error!?Type.TypeVarId {
-        return switch (self.program.types.rootContent(ty)) {
+        return switch (self.program.types.rootContentCompressed(ty)) {
             .named => |named| if (named.backing) |backing| backing.ty else null,
             else => null,
         };
     }
 
     fn hasBuiltinOwner(self: *Solver, ty: Type.TypeVarId, owner: static_dispatch.BuiltinOwner) bool {
-        return switch (self.program.types.rootContent(ty)) {
+        return switch (self.program.types.rootContentCompressed(ty)) {
             .named => |named| if (named.builtin_owner) |builtin_owner| builtin_owner == owner else false,
             else => false,
         };
@@ -1058,7 +1064,7 @@ const Solver = struct {
         if (!isGeneratedOpaqueEvidenceOwner(named.builtin_owner)) return 0;
 
         const backing = named.backing orelse return 0;
-        return generatedBackingScore(self.program.types.rootContent(backing.ty)) orelse 2;
+        return generatedBackingScore(self.program.types.rootContentCompressed(backing.ty)) orelse 2;
     }
 
     fn bindLowLevelTypes(
@@ -1188,11 +1194,11 @@ const Solver = struct {
     }
 
     fn shapeContent(self: *Solver, ty: Type.TypeVarId) Allocator.Error!Type.Content {
-        var current = self.program.types.root(ty);
+        var current = self.program.types.rootCompressed(ty);
         while (true) {
             switch (self.program.types.get(current)) {
                 .named => |named| if (named.backing) |backing| {
-                    current = self.program.types.root(backing.ty);
+                    current = self.program.types.rootCompressed(backing.ty);
                     continue;
                 } else return self.program.types.get(current),
                 else => return self.program.types.get(current),
@@ -1201,8 +1207,8 @@ const Solver = struct {
     }
 
     fn unify(self: *Solver, lhs: Type.TypeVarId, rhs: Type.TypeVarId) Allocator.Error!void {
-        const a = self.program.types.root(lhs);
-        const b = self.program.types.root(rhs);
+        const a = self.program.types.rootCompressed(lhs);
+        const b = self.program.types.rootCompressed(rhs);
         if (a == b) return;
 
         const left = self.program.types.get(a);
@@ -1234,12 +1240,12 @@ const Solver = struct {
 
         if (transparentAliasBacking(left)) |backing| {
             try self.unify(backing, b);
-            self.program.types.set(a, .{ .link = self.program.types.root(backing) });
+            self.program.types.set(a, .{ .link = self.program.types.rootCompressed(backing) });
             return;
         }
         if (transparentAliasBacking(right)) |backing| {
             try self.unify(a, backing);
-            self.program.types.set(b, .{ .link = self.program.types.root(backing) });
+            self.program.types.set(b, .{ .link = self.program.types.rootCompressed(backing) });
             return;
         }
 
@@ -1490,7 +1496,7 @@ const Solver = struct {
         ty: Type.TypeVarId,
         active: *std.AutoHashMap(Type.TypeVarId, void),
     ) Allocator.Error!void {
-        const root = self.program.types.root(ty);
+        const root = self.program.types.rootCompressed(ty);
         if (active.contains(root)) {
             writeBytes(hasher, "cycle");
             writeU32(hasher, @intFromEnum(root));
