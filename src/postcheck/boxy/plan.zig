@@ -1693,16 +1693,12 @@ const Builder = struct {
 
             const arg_types = try self.allocator.alloc(TypeRef, call_args.len);
             defer self.allocator.free(arg_types);
-            const source_fn_view = self.moduleForId(direct.source_fn_type.module);
-            const source_function = checkedFunctionPayload(source_fn_view, direct.source_fn_type.ty);
-            if (source_function.args.len != call_args.len) {
-                boxyPlanInvariant("boxy direct call source function type arity disagreed with hidden descriptor args");
+            for (call_args, arg_types) |arg_expr_id, *arg_type| {
+                const arg_expr = call_view.checked_bodies.expr(arg_expr_id);
+                arg_type.* = typeRef(call_view, arg_expr.ty);
             }
-            for (source_function.args, arg_types) |arg_ty, *arg_type| {
-                arg_type.* = .{ .module = direct.source_fn_type.module, .ty = arg_ty };
-            }
-            self.plan.direct_calls.items[direct_index].hidden_desc_args =
-                try self.materializeWorkerCallHiddenDescriptorArgs(direct.worker, arg_types, typeRef(call_view, call_expr.ty));
+            const hidden_desc_args = try self.materializeWorkerCallHiddenDescriptorArgs(direct.worker, arg_types, typeRef(call_view, call_expr.ty));
+            self.plan.direct_calls.items[direct_index].hidden_desc_args = hidden_desc_args;
         }
     }
 
@@ -1762,8 +1758,8 @@ const Builder = struct {
                 const arg_expr = call_view.checked_bodies.expr(arg_expr_id);
                 arg_type.* = typeRef(call_view, arg_expr.ty);
             }
-            self.plan.direct_calls.items[direct_index].hidden_dict_args =
-                try self.materializeWorkerCallHiddenDictionaryArgs(direct.worker, arg_types, typeRef(call_view, call_expr.ty));
+            const hidden_dict_args = try self.materializeWorkerCallHiddenDictionaryArgs(direct.worker, arg_types, typeRef(call_view, call_expr.ty));
+            self.plan.direct_calls.items[direct_index].hidden_dict_args = hidden_dict_args;
         }
     }
 
@@ -2916,7 +2912,8 @@ const Builder = struct {
                     self.directTargetIsLocalProc(view, target)
                 else
                     false;
-                if (call.direct_target == null or local_proc_direct_target) {
+                const local_proc_worker_call = local_proc_direct_target and self.directTargetHasNoCaptures(view, call.direct_target.?);
+                if (call.direct_target == null or (local_proc_direct_target and !local_proc_worker_call)) {
                     try self.analyzeExprTypes(view, call.func);
                 } else {
                     const func = view.checked_bodies.expr(call.func);
@@ -2924,7 +2921,9 @@ const Builder = struct {
                 }
                 try self.analyzeExprSliceTypes(view, call.args);
                 _ = try self.analyzeType(view, call.source_fn_ty_payload);
-                if (local_proc_direct_target) {
+                if (local_proc_worker_call) {
+                    try self.analyzeDirectCallTarget(view, expr_id, call);
+                } else if (local_proc_direct_target) {
                     try self.recordNestedCallableUse(view, call.direct_target.?, call.func);
                 } else {
                     try self.analyzeDirectCallTarget(view, expr_id, call);
@@ -3428,6 +3427,28 @@ const Builder = struct {
         return switch (self.resolvedValueRecord(view, target).ref) {
             .local_proc => true,
             else => false,
+        };
+    }
+
+    fn directTargetHasNoCaptures(
+        self: *Builder,
+        view: ModuleView,
+        target: checked.ResolvedValueId,
+    ) bool {
+        const source = self.workerSourceForDirectTarget(view, target);
+        return switch (source) {
+            .nested_expr => |expr_ref| self.nestedCallableHasNoCaptures(expr_ref),
+            else => false,
+        };
+    }
+
+    fn nestedCallableHasNoCaptures(self: *Builder, expr_ref: ExprRef) bool {
+        const view = self.moduleForId(expr_ref.module);
+        const expr = view.checked_bodies.expr(expr_ref.expr);
+        return switch (expr.data) {
+            .lambda => true,
+            .closure => |closure| closure.captures.len == 0,
+            else => boxyPlanInvariant("nested callable capture lookup did not reference a lambda or closure"),
         };
     }
 
