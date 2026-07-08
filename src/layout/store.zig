@@ -1994,6 +1994,47 @@ pub const Store = struct {
         };
     }
 
+    /// Like `layoutContainsRefcounted`, but treats `box_of_zst` as refcounted.
+    ///
+    /// A `box_of_zst` is the erased box representation: its payload layout is
+    /// erased to zero-sized, but at runtime it holds a real refcounted heap
+    /// allocation (the boxed concrete payload). `layoutContainsRefcounted`
+    /// reports it as unrefcounted because a standalone `box_of_zst` local names
+    /// a canonical null box, but the descriptor-guided boxy runtime — which
+    /// maintains refcounts of the actual erased allocations — must treat it as
+    /// refcounted so a container of erased boxes increfs its elements on clone
+    /// and decrefs them on drop. Reference counting a canonical null box is a
+    /// null-safe no-op, so this is correct for both uses. This mirrors the
+    /// refcount presence the interpreter computes for the same runtime.
+    pub fn layoutContainsRcErasedBox(self: *const Self, l: Layout) bool {
+        return switch (l.tag) {
+            .scalar => l.getScalar().tag == .str,
+            .list, .list_of_zst, .box, .box_of_zst, .erased_callable => true,
+            .ptr => false,
+            .zst => false,
+            .struct_ => blk: {
+                const sd = self.getStructData(l.getStruct().idx);
+                const struct_idx = l.getStruct().idx;
+                var i: u32 = 0;
+                while (i < sd.fields.count) : (i += 1) {
+                    if (self.getStructFieldIsPadding(struct_idx, i)) continue;
+                    if (self.layoutContainsRcErasedBox(self.getLayout(self.getStructFieldLayout(struct_idx, i)))) break :blk true;
+                }
+                break :blk false;
+            },
+            .tag_union => blk: {
+                const tu_data = self.getTagUnionData(l.getTagUnion().idx);
+                const variants = self.getTagUnionVariants(tu_data);
+                var i: u32 = 0;
+                while (i < variants.len) : (i += 1) {
+                    if (self.layoutContainsRcErasedBox(self.getLayout(variants.get(i).payload_layout))) break :blk true;
+                }
+                break :blk false;
+            },
+            .closure => self.layoutContainsRcErasedBox(self.getLayout(l.getClosure().captures_layout_idx)),
+        };
+    }
+
     /// Compute whether a struct contains refcounted data from its already-committed
     /// field layouts. Used to populate `StructData.contains_refcounted` at commit time.
     fn computeStructContainsRefcounted(self: *const Self, fields: []const StructField) bool {
@@ -2018,6 +2059,22 @@ pub const Store = struct {
 
     pub fn rcHelperPlan(self: *const Self, helper_key: @import("./rc_helper.zig").HelperKey) @import("./rc_helper.zig").Plan {
         return rc_helper.Resolver.init(self).plan(helper_key);
+    }
+
+    /// Like `rcHelperPlan`, but treats erased boxes (`box_of_zst`) as
+    /// refcounted container elements/fields/payloads. Used by the
+    /// descriptor-guided boxy runtime's concrete RC path so it matches the
+    /// interpreter; not used to decide which RC statements a program lowers to.
+    pub fn rcHelperPlanErasedBox(self: *const Self, helper_key: @import("./rc_helper.zig").HelperKey) @import("./rc_helper.zig").Plan {
+        return rc_helper.Resolver.initErasedBox(self).plan(helper_key);
+    }
+
+    pub fn rcHelperStructFieldPlanErasedBox(self: *const Self, struct_plan: @import("./rc_helper.zig").StructPlan, field_index: u32) ?@import("./rc_helper.zig").FieldPlan {
+        return rc_helper.Resolver.initErasedBox(self).structFieldPlan(struct_plan, field_index);
+    }
+
+    pub fn rcHelperTagUnionVariantPlanErasedBox(self: *const Self, tag_plan: @import("./rc_helper.zig").TagUnionPlan, variant_index: u32) ?@import("./rc_helper.zig").HelperKey {
+        return rc_helper.Resolver.initErasedBox(self).tagUnionVariantPlan(tag_plan, variant_index);
     }
 
     pub fn rcHelperStructFieldCount(self: *const Self, struct_plan: @import("./rc_helper.zig").StructPlan) u32 {

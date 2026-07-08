@@ -134,6 +134,13 @@ fn updateModeImmForArg0(unique_args: u64) i64 {
 
 fn builtinInternalListAbi(ls: *const LayoutStore, comptime _: []const u8, list_layout_idx: layout.Idx) BuiltinListAbi {
     const abi = ls.builtinListAbi(list_layout_idx);
+    // An erased `box_of_zst` element carries a real refcounted heap allocation,
+    // so a list of erased boxes maintains its elements' refcounts. The plain
+    // `builtinListAbi` reports `box_of_zst` as unrefcounted (its canonical null
+    // form), which would skip refcounting the boxes on clone/drop and corrupt
+    // them. This matches the interpreter, which drives the same runtime.
+    const elements_refcounted = abi.contains_refcounted or
+        (abi.elem_layout_idx != null and ls.getLayout(abi.elem_layout_idx.?).tag == .box_of_zst);
     return .{
         .elem_layout_idx = abi.elem_layout_idx,
         .elem_layout = abi.elem_layout,
@@ -142,7 +149,7 @@ fn builtinInternalListAbi(ls: *const LayoutStore, comptime _: []const u8, list_l
             .alignment = layout.RocAlignment.fromByteUnits(@intCast(abi.elem_alignment)),
         },
         .alignment_bytes = abi.elem_alignment,
-        .elements_refcounted = abi.contains_refcounted,
+        .elements_refcounted = elements_refcounted,
     };
 }
 
