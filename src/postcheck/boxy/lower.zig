@@ -2111,22 +2111,21 @@ const ProcedureBuilder = struct {
     }
 
     /// Whether this dictionary slot is fulfilled by the runtime's structural
-    /// comparison: the source type is an anonymous structural type (no method
-    /// namespace) and the requirement is the equality method.
+    /// comparison: the requirement is the equality method and the source type
+    /// resolves no `is_eq` method of its own (an anonymous structural type, or a
+    /// nominal that neither declares nor derives equality).
     fn staticDictionarySlotIsStructuralEq(
         self: *ProcedureBuilder,
         rep_id: Plan.TypeRepId,
         requirement: Plan.DictionaryRequirement,
     ) bool {
-        const source_rep = self.plan.representations.items[@intFromEnum(rep_id)];
-        const source_module = procedureModuleById(self.modules, source_rep.source_type.module);
-        if (methodOwnerForProcedureType(source_module, source_rep.source_type.ty) != null) return false;
         const requirement_module = procedureModuleById(self.modules, requirement.source_type.module);
         const method_text = requirement_module.canonical_names.methodNameText(requirement.fn_name);
-        if (!std.mem.eql(u8, method_text, "is_eq")) {
-            boxyLowerInvariant("static boxy dictionary on a structural type required a non-equality method");
-        }
-        return true;
+        if (!std.mem.eql(u8, method_text, "is_eq")) return false;
+        const source_rep = self.plan.representations.items[@intFromEnum(rep_id)];
+        const source_module = procedureModuleById(self.modules, source_rep.source_type.module);
+        const owner = methodOwnerForProcedureType(source_module, source_rep.source_type.ty) orelse return true;
+        return self.lookupMethodTarget(source_module, owner, requirement_module, requirement.fn_name) == null;
     }
 
     fn methodWorkerForStaticDictionary(
@@ -16204,6 +16203,9 @@ const ProcBodyBuilder = struct {
     }
 
     fn canonicalDictionaryRep(self: *const ProcBodyBuilder, rep_id: Plan.TypeRepId) Plan.TypeRepId {
+        // A transparent nominal owns the method namespace its dictionary slots
+        // dispatch through, so only aliases are unwrapped; the nominal identity
+        // is preserved for method resolution.
         var current = rep_id;
         var depth: u16 = 0;
         while (true) {
@@ -16211,17 +16213,8 @@ const ProcBodyBuilder = struct {
             depth += 1;
 
             const rep = self.parent.plan.representations.items[@intFromEnum(current)];
-            switch (rep.kind) {
-                .alias => current = self.requiredSingleChild(current, .alias_backing).rep,
-                .nominal => |kind| switch (kind) {
-                    .transparent => {
-                        if (rep.declared_fields.len != 0) return current;
-                        current = self.requiredSingleChild(current, .nominal_backing).rep;
-                    },
-                    .opaque_nominal, .builtin_other => return current,
-                },
-                else => return current,
-            }
+            if (rep.kind != .alias) return current;
+            current = self.requiredSingleChild(current, .alias_backing).rep;
         }
     }
 
@@ -16648,12 +16641,17 @@ const ProcBodyBuilder = struct {
     }
 
     fn canonicalDictionaryArgRep(self: *ProcBodyBuilder, rep_id: Plan.TypeRepId) Plan.TypeRepId {
+        // A transparent nominal owns the method namespace its dictionary slots
+        // dispatch through, so only aliases are unwrapped; the nominal identity
+        // is preserved for method resolution.
         var current = rep_id;
         var depth: u16 = 0;
         while (true) {
             if (depth == 1024) boxyLowerInvariant("dictionary argument wrapper chain exceeded boxy lowerer limit");
             depth += 1;
-            current = self.structuralWrapperBackingRep(current) orelse return current;
+            const rep = self.parent.plan.representations.items[@intFromEnum(current)];
+            if (rep.kind != .alias) return current;
+            current = self.requiredSingleChild(current, .alias_backing).rep;
         }
     }
 

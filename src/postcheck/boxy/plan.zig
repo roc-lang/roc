@@ -2113,8 +2113,14 @@ const Builder = struct {
         while (requirement_index < worker_dictionaries.len) : (requirement_index += 1) {
             const requirement = self.plan.dictionaries.items[worker_dictionaries.start + requirement_index];
             const requirement_view = self.moduleForId(requirement.source_type.module);
-            const lookup = self.lookupMethodTarget(source_view, owner, requirement_view, requirement.fn_name) orelse
+            const lookup = self.lookupMethodTarget(source_view, owner, requirement_view, requirement.fn_name) orelse {
+                // An equality slot with no resolvable method dispatches to the
+                // runtime's structural comparison, so there is no worker to plan.
+                const requirement_names = requirement_view.canonical_names orelse
+                    boxyPlanInvariant("static dictionary requirement module had no canonical names");
+                if (std.mem.eql(u8, requirement_names.methodNameText(requirement.fn_name), "is_eq")) continue;
                 boxyPlanInvariant("static boxy dictionary could not resolve a checked method target");
+            };
             const source = self.workerSourceForMethodTarget(lookup);
             const source_fn_type = TypeRef{ .module = lookup.view.key, .ty = lookup.target.callable_ty };
             _ = try self.analyzeType(lookup.view, lookup.target.callable_ty);
@@ -2424,13 +2430,18 @@ const Builder = struct {
     }
 
     fn canonicalDictionaryArgRep(self: *Builder, rep_id: TypeRepId) TypeRepId {
+        // Aliases are pure transparency, but a transparent nominal owns the
+        // method namespace its dictionary slots dispatch through, so only
+        // aliases are unwrapped here; the nominal identity is preserved.
         var current = rep_id;
         var depth: u16 = 0;
         while (true) {
             if (depth == 1024) boxyPlanInvariant("dictionary argument wrapper chain exceeded boxy planner limit");
             depth += 1;
 
-            current = self.structuralWrapperBackingRep(current) orelse return current;
+            const rep = self.plan.representations.items[@intFromEnum(current)];
+            if (rep.kind != .alias) return current;
+            current = requiredSingleChild(&self.plan, current, .alias_backing).rep;
         }
     }
 
