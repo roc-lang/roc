@@ -295,12 +295,12 @@ test "boxy abi descriptor copy materializes a template with local captures" {
 }
 
 fn sumTwoU64s(
+    ops: *builtins.host_abi.RocOps,
     args: [*]const ?*const anyopaque,
-    arg_count: usize,
     ret: ?*anyopaque,
     ret_desc: *?*const anyopaque,
 ) callconv(.c) void {
-    std.debug.assert(arg_count == 2);
+    _ = ops;
     const a: *align(1) const u64 = @ptrCast(args[0].?);
     const b: *align(1) const u64 = @ptrCast(args[1].?);
     const out: *align(1) u64 = @ptrCast(ret.?);

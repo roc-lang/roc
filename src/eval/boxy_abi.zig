@@ -13,12 +13,13 @@
 //! (`initGlobalFromSidecarView`) — and register a native callee per worker
 //! proc for dictionary dispatch (`roc_boxy_register_proc`).
 //!
-//! Dictionary callee ABI: a registered `BoxyProcFn` receives the fully
-//! adapted argument list as an array of value pointers (explicit args first,
-//! then hidden descriptor pointers, then nested dictionary pointers, each
-//! passed as a pointer to a pointer-sized slot; zero-sized arguments pass
-//! null), writes its result bytes through `ret` in the registered return
-//! layout, and stores the result's descriptor (or null) through `ret_desc`.
+//! Dictionary callee ABI: a registered `BoxyProcFn` receives the active
+//! `RocOps`, then the fully adapted argument list as an array of value
+//! pointers (explicit args first, then hidden descriptor pointers, then nested
+//! dictionary pointers, each passed as a pointer to a pointer-sized slot;
+//! zero-sized arguments pass null), writes its result bytes through `ret` in
+//! the registered return layout, and stores the result's descriptor (or null)
+//! through `ret_desc`.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -41,10 +42,14 @@ const Error = boxy_runtime.Error;
 const BoxyTypeDesc = LirProgram.BoxyTypeDesc;
 const BoxyDict = LirProgram.BoxyDict;
 
-/// Native callee for one dictionary worker proc.
+/// Native callee for one dictionary worker proc. `ops` threads the active
+/// `RocOps`; `args` points at one pointer per explicit argument, each
+/// addressing that argument's bytes in its own layout; `ret` receives the
+/// worker's result; `ret_desc` receives the result descriptor (null when the
+/// worker produces none).
 pub const BoxyProcFn = *const fn (
+    ops: *RocOps,
     args: [*]const ?*const anyopaque,
-    arg_count: usize,
     ret: ?*anyopaque,
     ret_desc: *?*const anyopaque,
 ) callconv(.c) void;
@@ -308,9 +313,11 @@ fn writeResult(g: *GlobalBoxyRuntime, out: ?[*]u8, result: Value, result_layout:
 
 /// Register the native callee and return layout for one dictionary worker
 /// proc. `roc_boxy_call_dict` dispatches slots that reference `proc_id` to
-/// `callee`.
+/// `callee`. An entrypoint registers every worker at startup; a program that
+/// never installs the runtime (no descriptors or dictionaries) also never
+/// dispatches a dictionary call, so registration is a no-op there.
 pub fn roc_boxy_register_proc(proc_id: u32, callee: BoxyProcFn, ret_layout: u32) callconv(.c) void {
-    const g = requireGlobal();
+    const g = global orelse return;
     g.procs.put(g.gpa, proc_id, .{ .callee = callee, .ret_layout = layoutIdx(ret_layout) }) catch abiCrash(g, "proc registration");
 }
 
@@ -794,8 +801,8 @@ pub fn roc_boxy_call_dict(
             const ret_value = hooks(g).allocValue(registered.ret_layout) catch abiCrash(g, "dictionary call result buffer");
             var ret_desc: ?*const anyopaque = null;
             registered.callee(
+                g.runtime.roc_ops,
                 arg_ptrs.ptr,
-                arg_ptrs.len,
                 if (ret_size == 0) null else @ptrCast(ret_value.ptr),
                 &ret_desc,
             );

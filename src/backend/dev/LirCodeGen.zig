@@ -878,6 +878,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Used to find call targets during second pass
         proc_registry: std.AutoHashMap(u32, CompiledProc),
 
+        /// Code offset of the dictionary-dispatch thunk generated for each
+        /// procedure that a boxy dictionary worker slot can dispatch to
+        /// (proc-spec id -> thunk code offset). The thunk adapts the
+        /// `roc_boxy_call_dict` worker ABI to the procedure's native ABI. An
+        /// entrypoint registers every entry through `roc_boxy_register_proc` so
+        /// a runtime dictionary call resolves the worker's thunk by proc id.
+        boxy_dict_thunks: std.AutoHashMap(u32, usize),
+
         /// Registry of compiled RC helpers keyed by canonical RC helper identity.
         compiled_rc_helpers: std.AutoHashMap(u64, usize),
 
@@ -1249,6 +1257,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .stmt_locations = std.AutoHashMap(u32, usize).init(allocator),
                 .line_entries = .empty,
                 .proc_registry = std.AutoHashMap(u32, CompiledProc).init(allocator),
+                .boxy_dict_thunks = std.AutoHashMap(u32, usize).init(allocator),
                 .compiled_rc_helpers = std.AutoHashMap(u64, usize).init(allocator),
                 .rc_helper_worklist = std.ArrayList(RcHelperVariant).empty,
                 .rc_helper_scheduled = std.AutoHashMap(u64, void).init(allocator),
@@ -1280,6 +1289,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.stmt_locations.deinit();
             self.line_entries.deinit(self.allocator);
             self.proc_registry.deinit();
+            self.boxy_dict_thunks.deinit();
             self.compiled_rc_helpers.deinit();
             self.rc_helper_worklist.deinit(self.allocator);
             self.rc_helper_scheduled.deinit();
@@ -1313,6 +1323,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.join_points.clearRetainingCapacity();
             self.stmt_locations.clearRetainingCapacity();
             self.proc_registry.clearRetainingCapacity();
+            self.boxy_dict_thunks.clearRetainingCapacity();
             self.compiled_rc_helpers.clearRetainingCapacity();
             self.rc_helper_worklist.clearRetainingCapacity();
             self.rc_helper_scheduled.clearRetainingCapacity();
@@ -14296,6 +14307,35 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             try self.patchPendingCalls();
             try self.patchPendingProcAddrs();
+
+            // Emit a dictionary-dispatch thunk for each worker a boxy method
+            // slot can dispatch to, once every procedure has a resolved code
+            // address. Programs without boxy dictionary dispatch never emit a
+            // dictionary call, so the runtime flag stays clear and no thunks
+            // are produced.
+            if (self.boxy_runtime_used) {
+                try self.generateBoxyDictProcThunks(proc_specs);
+            }
+        }
+
+        /// Generate one dictionary-dispatch thunk per non-hosted `.roc`
+        /// procedure and record its code offset. `roc_boxy_call_dict` resolves
+        /// a worker slot to a procedure id and invokes the registered thunk,
+        /// which reconstructs the procedure's native ABI from the worker call's
+        /// argument-pointer array.
+        fn generateBoxyDictProcThunks(self: *Self, proc_specs: []const LirProcSpec) Allocator.Error!void {
+            for (proc_specs, 0..) |proc, i| {
+                // Erased-callable adapters carry their own uniform ABI and are
+                // dispatched through `roc_boxy_call_erased`; hosted procedures
+                // resolve through the host dispatch table. Neither is a boxy
+                // dictionary worker.
+                if (proc.abi == .erased_callable or proc.hosted != null) continue;
+                const proc_id: lir.LIR.LirProcSpecId = @enumFromInt(i);
+                const compiled = self.proc_registry.get(@intFromEnum(proc_id)) orelse continue;
+                if (compiled.code_start == unresolved_proc_code_start) continue;
+                const thunk_offset = try self.generateBoxyDictProcThunk(proc_id);
+                try self.boxy_dict_thunks.put(@intFromEnum(proc_id), thunk_offset);
+            }
         }
 
         /// Returns object-file symbol metadata for a compiled LIR procedure.
@@ -17189,6 +17229,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try self.codegen.emit.movRegReg(.w64, .X20, .X1);
                     try self.codegen.emit.movRegReg(.w64, .X21, .X2);
                     self.roc_ops_reg = .X19;
+                    if (self.boxy_runtime_used) try self.emitBoxyDictProcRegistrations();
                     try self.generateEntrypointProcCall(entry_proc, arg_layouts, ret_layout, .X20, .X21);
                 } else {
                     // Object files export natural C-ABI entrypoints; the
@@ -17286,6 +17327,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try self.codegen.emit.movRegReg(.w64, .R13, .RDX);
                     }
                     self.roc_ops_reg = .R12;
+                    if (self.boxy_runtime_used) try self.emitBoxyDictProcRegistrations();
                     try self.generateEntrypointProcCall(entry_proc, arg_layouts, ret_layout, .RBX, .R13);
                 } else {
                     // Object files export natural C-ABI entrypoints; the
@@ -17364,6 +17406,272 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .epilogue_offset = epilogue_offset,
                 .uses_frame_pointer = true,
             };
+        }
+
+        /// Generate a dictionary-dispatch thunk for `proc_id` and return its
+        /// code offset. The thunk has the C ABI
+        /// `fn(ops, args, ret, ret_desc)` that `roc_boxy_call_dict` invokes
+        /// for a worker slot: `args` is an array of pointers to the fully
+        /// adapted argument values, `ret` receives the procedure's result, and
+        /// `ret_desc` receives the result descriptor. The thunk rebuilds the
+        /// procedure's native calling convention from those pieces and calls
+        /// it. Frame construction mirrors `generateEntrypointWrapper`: the body
+        /// is generated first to discover callee-saved usage, then the prologue
+        /// is prepended and the body's relocations and internal patches are
+        /// shifted to their final positions.
+        fn generateBoxyDictProcThunk(self: *Self, proc_id: lir.LIR.LirProcSpecId) Allocator.Error!usize {
+            const func_start = self.codegen.currentOffset();
+
+            if (arch == .aarch64 or arch == .aarch64_be) {
+                const saved_callee_saved_used = self.codegen.callee_saved_used;
+                const saved_callee_saved_available = self.codegen.callee_saved_available;
+                const saved_roc_ops_reg = self.roc_ops_reg;
+                const saved_early_return_patches_len = self.early_return_patches.items.len;
+
+                const x19_bit = @as(u32, 1) << @intFromEnum(aarch64.GeneralReg.X19);
+                const x20_bit = @as(u32, 1) << @intFromEnum(aarch64.GeneralReg.X20);
+                const x21_bit = @as(u32, 1) << @intFromEnum(aarch64.GeneralReg.X21);
+                self.codegen.callee_saved_used = x19_bit | x20_bit | x21_bit;
+                self.codegen.callee_saved_available &= ~(x19_bit | x20_bit | x21_bit);
+                self.codegen.stack_offset = 16 + CodeGen.CALLEE_SAVED_AREA_SIZE;
+
+                const body_start = self.codegen.currentOffset();
+                const relocs_before = self.codegen.relocations.items.len;
+
+                try self.generateBoxyDictThunkBody(proc_id);
+
+                const body_epilogue_offset = self.codegen.currentOffset();
+                const actual_locals: u32 = @intCast(self.codegen.stack_offset - 16 - CodeGen.CALLEE_SAVED_AREA_SIZE);
+                {
+                    var builder = CodeGen.DeferredFrameBuilder.init();
+                    builder.setCalleeSavedMask(self.codegen.callee_saved_used);
+                    builder.setStackSize(actual_locals);
+                    try builder.emitEpilogue(&self.codegen.emit);
+                }
+
+                const body_end = self.codegen.currentOffset();
+                const body_bytes = self.allocator.dupe(u8, self.codegen.emit.buf.items[body_start..body_end]) catch return error.OutOfMemory;
+                defer self.allocator.free(body_bytes);
+
+                self.codegen.emit.buf.shrinkRetainingCapacity(body_start);
+
+                const prologue_start = self.codegen.currentOffset();
+                {
+                    var frame_builder = CodeGen.DeferredFrameBuilder.init();
+                    frame_builder.setCalleeSavedMask(self.codegen.callee_saved_used);
+                    frame_builder.setStackSize(actual_locals);
+                    _ = try frame_builder.emitPrologue(&self.codegen.emit);
+                }
+                const prologue_size_val = self.codegen.currentOffset() - prologue_start;
+
+                self.codegen.emit.buf.appendSlice(self.allocator, body_bytes) catch return error.OutOfMemory;
+
+                for (self.codegen.relocations.items[relocs_before..]) |*reloc| {
+                    reloc.adjustOffset(prologue_size_val);
+                }
+                self.shiftNestedCompiledRcHelperOffsets(body_start, body_end, prologue_size_val, std.math.maxInt(u64));
+                self.shiftPendingCalls(body_start, body_end, prologue_size_val);
+                self.shiftPendingProcAddrs(body_start, body_end, prologue_size_val);
+                self.repatchInternalCalls(body_start, body_end, prologue_size_val, body_start);
+                self.repatchInternalAddrPatches(body_start, body_end, prologue_size_val, body_start);
+
+                for (self.early_return_patches.items[saved_early_return_patches_len..]) |*patch| {
+                    patch.* += prologue_size_val;
+                }
+                const final_epilogue = body_epilogue_offset - body_start + prologue_size_val + prologue_start;
+                for (self.early_return_patches.items[saved_early_return_patches_len..]) |patch| {
+                    self.codegen.patchJump(patch, final_epilogue);
+                }
+                self.early_return_patches.shrinkRetainingCapacity(saved_early_return_patches_len);
+
+                self.codegen.callee_saved_used = saved_callee_saved_used;
+                self.codegen.callee_saved_available = saved_callee_saved_available;
+                self.roc_ops_reg = saved_roc_ops_reg;
+            } else {
+                const saved_callee_saved_used = self.codegen.callee_saved_used;
+                const saved_callee_saved_available = self.codegen.callee_saved_available;
+                const saved_roc_ops_reg = self.roc_ops_reg;
+                const saved_early_return_patches_len = self.early_return_patches.items.len;
+
+                const rbx_bit = @as(u32, 1) << @intFromEnum(x86_64.GeneralReg.RBX);
+                const r12_bit = @as(u32, 1) << @intFromEnum(x86_64.GeneralReg.R12);
+                const r13_bit = @as(u32, 1) << @intFromEnum(x86_64.GeneralReg.R13);
+                self.codegen.callee_saved_used = rbx_bit | r12_bit | r13_bit;
+                self.codegen.callee_saved_available &= ~(rbx_bit | r12_bit | r13_bit);
+                self.codegen.stack_offset = -CodeGen.CALLEE_SAVED_AREA_SIZE;
+
+                const body_start = self.codegen.currentOffset();
+                const relocs_before = self.codegen.relocations.items.len;
+
+                try self.generateBoxyDictThunkBody(proc_id);
+
+                const body_epilogue_offset = self.codegen.currentOffset();
+                const actual_locals_x86: u32 = @intCast(-self.codegen.stack_offset - CodeGen.CALLEE_SAVED_AREA_SIZE);
+                {
+                    var builder = CodeGen.DeferredFrameBuilder.init();
+                    builder.setCalleeSavedMask(self.codegen.callee_saved_used);
+                    builder.setStackSize(actual_locals_x86);
+                    try builder.emitEpilogue(&self.codegen.emit);
+                }
+
+                const body_end = self.codegen.currentOffset();
+                const body_bytes = self.allocator.dupe(u8, self.codegen.emit.buf.items[body_start..body_end]) catch return error.OutOfMemory;
+                defer self.allocator.free(body_bytes);
+
+                self.codegen.emit.buf.shrinkRetainingCapacity(body_start);
+
+                const prologue_start_x86 = self.codegen.currentOffset();
+                try self.codegen.emitPrologueWithAlloc(actual_locals_x86);
+                const prologue_size_x86 = self.codegen.currentOffset() - prologue_start_x86;
+
+                self.codegen.emit.buf.appendSlice(self.allocator, body_bytes) catch return error.OutOfMemory;
+
+                for (self.codegen.relocations.items[relocs_before..]) |*reloc| {
+                    reloc.adjustOffset(prologue_size_x86);
+                }
+                self.shiftNestedCompiledRcHelperOffsets(body_start, body_end, prologue_size_x86, std.math.maxInt(u64));
+                self.shiftPendingCalls(body_start, body_end, prologue_size_x86);
+                self.shiftPendingProcAddrs(body_start, body_end, prologue_size_x86);
+                self.repatchInternalCalls(body_start, body_end, prologue_size_x86, body_start);
+                self.repatchInternalAddrPatches(body_start, body_end, prologue_size_x86, body_start);
+
+                for (self.early_return_patches.items[saved_early_return_patches_len..]) |*patch| {
+                    patch.* += prologue_size_x86;
+                }
+                const final_epilogue = body_epilogue_offset - body_start + prologue_size_x86 + prologue_start_x86;
+                for (self.early_return_patches.items[saved_early_return_patches_len..]) |patch| {
+                    self.codegen.patchJump(patch, final_epilogue);
+                }
+                self.early_return_patches.shrinkRetainingCapacity(saved_early_return_patches_len);
+
+                self.codegen.callee_saved_used = saved_callee_saved_used;
+                self.codegen.callee_saved_available = saved_callee_saved_available;
+                self.roc_ops_reg = saved_roc_ops_reg;
+            }
+
+            return func_start;
+        }
+
+        /// Emit the body of a dictionary-dispatch thunk: capture the worker
+        /// call's `ops`, argument-pointer array, result pointer, and result
+        /// descriptor pointer; rebuild the procedure's arguments from the
+        /// pointer array; call the compiled procedure; store the result; and
+        /// clear the result descriptor.
+        fn generateBoxyDictThunkBody(self: *Self, proc_id: lir.LIR.LirProcSpecId) Allocator.Error!void {
+            const proc_spec = self.store.getProcSpec(proc_id);
+            const compiled = try self.compiledProcForId(proc_id);
+            const param_refs = self.store.getLocalSpan(proc_spec.args);
+
+            // Spill the incoming argument-array, result, and result-descriptor
+            // pointers to the frame before any of these registers can be
+            // clobbered by argument setup or the procedure call.
+            const args_ptr_slot = self.codegen.allocStackSlot(8);
+            const ret_ptr_slot = self.codegen.allocStackSlot(8);
+            const ret_desc_ptr_slot = self.codegen.allocStackSlot(8);
+            try self.emitStore(.w64, frame_ptr, args_ptr_slot, self.getArgumentRegister(1));
+            try self.emitStore(.w64, frame_ptr, ret_ptr_slot, self.getArgumentRegister(2));
+            try self.emitStore(.w64, frame_ptr, ret_desc_ptr_slot, self.getArgumentRegister(3));
+
+            // Claim the RocOps register. RocOps-threaded modes pass live ops in
+            // the first argument register; the object-file symbol ABI threads a
+            // null RocOps through the callee-saved register exactly as an
+            // entrypoint does.
+            const roc_ops_save_reg: GeneralReg = if (comptime target.toCpuArch() == .aarch64) .X20 else .R12;
+            if (self.generation_mode.threadsRocOps()) {
+                const roc_ops_arg = self.getArgumentRegister(0);
+                if (roc_ops_arg != roc_ops_save_reg) {
+                    try self.codegen.emit.movRegReg(.w64, roc_ops_save_reg, roc_ops_arg);
+                }
+            } else {
+                try self.codegen.emitLoadImm(roc_ops_save_reg, 0);
+            }
+            self.roc_ops_reg = roc_ops_save_reg;
+
+            // Rebuild each argument from the pointer array. Every entry points
+            // to the argument's bytes in the value's layout, so the bytes are
+            // copied into a stack slot and treated exactly as a
+            // freshly-materialized entrypoint argument.
+            const arg_infos_start = self.scratch_arg_infos.top();
+            defer self.scratch_arg_infos.clearFrom(arg_infos_start);
+            for (param_refs, 0..) |param_ref, i| {
+                const arg_layout = self.localLayout(param_ref);
+                const slot_size = self.entrypointParamSlotSize(arg_layout);
+                if (slot_size == 0) {
+                    try self.scratch_arg_infos.append(.{
+                        .loc = .{ .immediate_i64 = 0 },
+                        .layout_idx = arg_layout,
+                        .num_regs = 0,
+                    });
+                    continue;
+                }
+
+                const slot_offset = self.codegen.allocStackSlot(@intCast(slot_size));
+                const ptr_reg = try self.allocTempGeneral();
+                try self.emitLoad(.w64, ptr_reg, frame_ptr, args_ptr_slot);
+                try self.emitLoad(.w64, ptr_reg, ptr_reg, @intCast(i * 8));
+                try self.copyBytesFromMemToStackOffset(
+                    ptr_reg,
+                    0,
+                    slot_offset,
+                    self.getLayoutSize(arg_layout),
+                    slot_size,
+                );
+                self.codegen.freeGeneral(ptr_reg);
+
+                const loc = self.stackLocationForLayout(arg_layout, slot_offset);
+                try self.scratch_arg_infos.append(.{
+                    .loc = loc,
+                    .layout_idx = arg_layout,
+                    .num_regs = self.calcArgRegCount(loc, arg_layout),
+                });
+            }
+
+            const arg_infos = self.scratch_arg_infos.sliceFromStart(arg_infos_start);
+            const result_loc = try self.callCompiledOffsetWithArgInfos(compiled.code_start, arg_infos, proc_spec.ret_layout);
+
+            if (self.getLayoutSize(proc_spec.ret_layout) > 0) {
+                const ret_ptr_reg = try self.allocTempGeneral();
+                try self.emitLoad(.w64, ret_ptr_reg, frame_ptr, ret_ptr_slot);
+                try self.storeResultToSavedPtr(result_loc, proc_spec.ret_layout, ret_ptr_reg, 1);
+                self.codegen.freeGeneral(ret_ptr_reg);
+            }
+
+            // The native procedure carries no separate descriptor return, so
+            // the worker call's result descriptor is cleared. A dictionary call
+            // site that needs a concrete descriptor supplies its own target
+            // descriptor, which `roc_boxy_call_dict` applies during result
+            // materialization.
+            {
+                const desc_ptr_reg = try self.allocTempGeneral();
+                try self.emitLoad(.w64, desc_ptr_reg, frame_ptr, ret_desc_ptr_slot);
+                const zero_reg = try self.allocTempGeneral();
+                try self.codegen.emitLoadImm(zero_reg, 0);
+                try self.emitStore(.w64, desc_ptr_reg, 0, zero_reg);
+                self.codegen.freeGeneral(zero_reg);
+                self.codegen.freeGeneral(desc_ptr_reg);
+            }
+        }
+
+        /// Emit `roc_boxy_register_proc` calls that bind each dictionary worker
+        /// procedure to its dispatch thunk. Emitted at entrypoint startup after
+        /// the boxy runtime is installed so the runtime's proc table is
+        /// populated before any dictionary dispatch.
+        fn emitBoxyDictProcRegistrations(self: *Self) Allocator.Error!void {
+            var it = self.boxy_dict_thunks.iterator();
+            while (it.next()) |entry| {
+                const proc_id: lir.LIR.LirProcSpecId = @enumFromInt(entry.key_ptr.*);
+                const thunk_offset = entry.value_ptr.*;
+                const ret_layout = self.runtimeRepresentationLayoutIdx(self.store.getProcSpec(proc_id).ret_layout);
+
+                const addr_reg = try self.allocTempGeneral();
+                try self.emitInternalCodeAddress(thunk_offset, addr_reg);
+                var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                try builder.addImmArg(@intCast(entry.key_ptr.*));
+                try builder.addRegArg(addr_reg);
+                try builder.addImmArg(@intFromEnum(ret_layout));
+                try self.callBoxyBuiltin(&builder, .register_proc);
+                self.codegen.freeGeneral(addr_reg);
+            }
         }
 
         const EntrypointArgOrder = struct {
@@ -17602,6 +17910,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             // arguments, so it is safe here after the runtime init.
             if (self.boxy_runtime_used) {
                 try self.emitBoxyRuntimeInit();
+                try self.emitBoxyDictProcRegistrations();
             }
 
             const arg_infos_start = self.scratch_arg_infos.top();
@@ -17845,6 +18154,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             // call is idempotent, so emitting it per entrypoint is safe.
             if (self.boxy_runtime_used) {
                 try self.emitBoxyRuntimeInit();
+                try self.emitBoxyDictProcRegistrations();
             }
 
             // Pass 2: x86_64 reads the caller's stack slots at a fixed frame
